@@ -41,6 +41,7 @@ public sealed class SkipOnMacOsArm64TheoryAttribute : TheoryAttribute
 public class IndexCommandRunnerTests
 {
     private static readonly TimeSpan LegacyEnvironmentHookWorkerBudget = TimeSpan.FromSeconds(30);
+    private static readonly object FullScanContentLoadHookGate = new();
 
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
@@ -2254,29 +2255,38 @@ public sealed class Caller
             RunGit(projectRoot, "add", "feature.cs");
             RunGit(projectRoot, "commit", "-m", "next");
 
-            IndexCommandRunner.FullScanExtractionSchedulingForTesting = (enabled, why) =>
+            lock (FullScanContentLoadHookGate)
             {
-                parallelized = enabled;
-                reason = why;
-            };
-            IndexCommandRunner.FullScanFileContentLoadForTesting = path => loadedPaths.Add(path);
+                try
+                {
+                    IndexCommandRunner.FullScanExtractionSchedulingForTesting = (enabled, why) =>
+                    {
+                        parallelized = enabled;
+                        reason = why;
+                    };
+                    IndexCommandRunner.FullScanFileContentLoadForTesting = path => loadedPaths.Add(path);
 
-            var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--json"]);
+                    var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--json"]);
 
-            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
-            Assert.Equal("success", refreshJson.GetProperty("status").GetString());
-            Assert.True(refreshJson.GetProperty("head_changed").GetBoolean());
-            Assert.False(parallelized);
-            Assert.Null(reason);
-            Assert.Equal(2, refreshJson.GetProperty("summary").GetProperty("files_skipped").GetInt32());
-            Assert.DoesNotContain("app.cs", loadedPaths);
-            Assert.DoesNotContain("app.ts", loadedPaths);
-            Assert.Contains("feature.cs", loadedPaths);
+                    Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+                    Assert.Equal("success", refreshJson.GetProperty("status").GetString());
+                    Assert.True(refreshJson.GetProperty("head_changed").GetBoolean());
+                    Assert.False(parallelized);
+                    Assert.Null(reason);
+                    Assert.Equal(2, refreshJson.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+                    Assert.DoesNotContain("app.cs", loadedPaths);
+                    Assert.DoesNotContain("app.ts", loadedPaths);
+                    Assert.Contains("feature.cs", loadedPaths);
+                }
+                finally
+                {
+                    IndexCommandRunner.FullScanExtractionSchedulingForTesting = null;
+                    IndexCommandRunner.FullScanFileContentLoadForTesting = null;
+                }
+            }
         }
         finally
         {
-            IndexCommandRunner.FullScanExtractionSchedulingForTesting = null;
-            IndexCommandRunner.FullScanFileContentLoadForTesting = null;
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
@@ -2298,18 +2308,73 @@ public sealed class Caller
             File.WriteAllText(Path.Combine(projectRoot, "tsconfig.json"), "{ \"compilerOptions\": { \"baseUrl\": \".\", \"paths\": {} } }\n");
             File.SetLastWriteTimeUtc(Path.Combine(projectRoot, "tsconfig.json"), DateTime.UtcNow.AddSeconds(2));
 
-            IndexCommandRunner.FullScanFileContentLoadForTesting = path => loadedPaths.Add(path);
+            lock (FullScanContentLoadHookGate)
+            {
+                try
+                {
+                    IndexCommandRunner.FullScanFileContentLoadForTesting = path => loadedPaths.Add(path);
 
-            var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--json"]);
+                    var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--json"]);
 
-            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
-            Assert.Equal("success", refreshJson.GetProperty("status").GetString());
-            Assert.Contains("app.ts", loadedPaths);
-            Assert.Contains("tsconfig.json", loadedPaths);
+                    Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+                    Assert.Equal("success", refreshJson.GetProperty("status").GetString());
+                    Assert.Contains("app.ts", loadedPaths);
+                    Assert.Contains("tsconfig.json", loadedPaths);
+                }
+                finally
+                {
+                    IndexCommandRunner.FullScanFileContentLoadForTesting = null;
+                }
+            }
         }
         finally
         {
-            IndexCommandRunner.FullScanFileContentLoadForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScanAfterTypeScriptConfigContentChangeWithStableStat_ReprocessesUnchangedTypeScriptFiles()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_tsconfig_stable_stat");
+        var loadedPaths = new List<string>();
+        try
+        {
+            var configPath = Path.Combine(projectRoot, "tsconfig.json");
+            File.WriteAllText(Path.Combine(projectRoot, "app.ts"), "export interface AppApi { run(): void; }\n");
+            File.WriteAllText(configPath, "{ \"compilerOptions\": { \"baseUrl\": \".\" } }\n");
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var originalStat = new FileInfo(configPath);
+            var replacement = "{ \"compilerOptions\": { \"baseUrl\": \"x\" } }\n";
+            Assert.Equal(originalStat.Length, Encoding.UTF8.GetByteCount(replacement));
+            File.WriteAllText(configPath, replacement);
+            File.SetLastWriteTimeUtc(configPath, originalStat.LastWriteTimeUtc);
+
+            lock (FullScanContentLoadHookGate)
+            {
+                try
+                {
+                    IndexCommandRunner.FullScanFileContentLoadForTesting = path => loadedPaths.Add(path);
+
+                    var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--json"]);
+
+                    Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+                    Assert.Equal("success", refreshJson.GetProperty("status").GetString());
+                    Assert.Contains("app.ts", loadedPaths);
+                    Assert.Contains("tsconfig.json", loadedPaths);
+                }
+                finally
+                {
+                    IndexCommandRunner.FullScanFileContentLoadForTesting = null;
+                }
+            }
+        }
+        finally
+        {
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }

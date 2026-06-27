@@ -1216,6 +1216,41 @@ public static partial class IndexCommandRunner
         }
     }
 
+    private static long? TryGetUnchangedFileIdFromChecksum(
+        DbWriter writer,
+        string absolutePath,
+        string relativePath,
+        string? language,
+        long? maxBytes)
+    {
+        if (language == null)
+            return null;
+
+        try
+        {
+            var info = new FileInfo(absolutePath);
+            if (!info.Exists)
+                return null;
+            if (!FileIndexer.TryComputeChecksum(absolutePath, maxBytes ?? FileIndexer.DefaultMaxFileSizeBytes, out var checksum))
+                return null;
+
+            return writer.GetUnchangedFileId(
+                relativePath,
+                info.LastWriteTimeUtc,
+                checksum,
+                size: info.Length,
+                language: language);
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
     private readonly record struct FullScanFileTarget(
         string FilePath,
         string RelativePath,

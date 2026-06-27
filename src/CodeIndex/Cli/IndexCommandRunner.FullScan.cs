@@ -1192,19 +1192,22 @@ public static partial class IndexCommandRunner
                 if (!IsJavaScriptTypeScriptConfigPath(target.IndexPath))
                     continue;
 
-                var existingId = TryGetUnchangedFileIdFromStat(
+                var existingId = TryGetUnchangedFileIdFromChecksum(
                     writer,
                     target.FilePath,
                     target.IndexPath,
                     target.Language,
-                    allowReuse: true,
-                    out _);
+                    options.MaxFileSizeBytes);
                 if (existingId == null)
                     return true;
             }
 
             return false;
         }
+
+        bool TargetRequiresJavaScriptTypeScriptRefresh(string? language, string indexPath)
+            => javaScriptTypeScriptRefreshRequired
+               && (IsJavaScriptTypeScriptLanguage(language) || IsJavaScriptTypeScriptConfigPath(indexPath));
 
         bool CanReuseCSharpPrepassTargetWithoutRead(CSharpStaticInterfacePrepass.FileTarget target)
         {
@@ -1295,10 +1298,9 @@ public static partial class IndexCommandRunner
 
             var target = fileTargets[fileIndex];
             var language = target.Language;
-            var languageRequiresRefresh = javaScriptTypeScriptRefreshRequired
-                && IsJavaScriptTypeScriptLanguage(language);
+            var targetRequiresRefresh = TargetRequiresJavaScriptTypeScriptRefresh(language, target.IndexPath);
             var allowReuse = symbolKindFilterMatchesPrior
-                && !languageRequiresRefresh
+                && !targetRequiresRefresh
                 && !priorSymbolsOnlyGraphOmitted
                 && (language != "csharp" || csharpSymbolNameContractMatchesCurrent)
                 && (language != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
@@ -1690,8 +1692,7 @@ public static partial class IndexCommandRunner
                         long? existingId = null;
                         if (!options.Rebuild && !startedWithNoIndexedFiles && !options.SymbolsOnly)
                         {
-                            var languageRequiresRefresh = javaScriptTypeScriptRefreshRequired
-                                && IsJavaScriptTypeScriptLanguage(record.Lang);
+                            var targetRequiresRefresh = TargetRequiresJavaScriptTypeScriptRefresh(record.Lang, record.Path);
                             existingId = writer.GetUnchangedFileId(
                                 record.Path,
                                 record.Modified,
@@ -1701,7 +1702,7 @@ public static partial class IndexCommandRunner
                                 language: record.Lang,
                                 generated: record.Generated,
                                 allowReuse: symbolKindFilterMatchesPrior
-                                    && !languageRequiresRefresh
+                                    && !targetRequiresRefresh
                                     && !priorSymbolsOnlyGraphOmitted
                                     && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                                     && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
