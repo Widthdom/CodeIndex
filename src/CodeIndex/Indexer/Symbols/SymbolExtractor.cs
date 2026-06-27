@@ -3620,10 +3620,14 @@ public static partial class SymbolExtractor
                         {
                             var names = name.Split(',');
                             for (var index = 0; index < names.Length; index++)
-                                names[index] = names[index].Trim();
+                            {
+                                var candidate = names[index].Trim();
+                                if (candidate.Length == 0)
+                                    continue;
 
-                            if (names.Any(static candidate => candidate.Length > 0))
-                                fortranProcedureNames = names.Where(static candidate => candidate.Length > 0).ToList();
+                                fortranProcedureNames ??= new List<string>(names.Length);
+                                fortranProcedureNames.Add(candidate);
+                            }
                         }
 
                         if (lang == "cpp"
