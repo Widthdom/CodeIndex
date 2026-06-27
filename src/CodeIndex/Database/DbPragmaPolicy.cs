@@ -5,6 +5,8 @@ namespace CodeIndex.Database;
 
 internal static class DbPragmaPolicy
 {
+    internal const string TempStoreMemoryPragmaSql = "PRAGMA temp_store=MEMORY";
+    internal const string AutoVacuumIncrementalPragmaSql = "PRAGMA auto_vacuum=INCREMENTAL";
     internal const int DefaultBusyTimeoutMs = 5000;
     internal const int MaxBusyTimeoutMs = 3_600_000;
 
@@ -34,10 +36,10 @@ internal static class DbPragmaPolicy
         Action<string> execute,
         DbConnectionPragmaSettings settings)
     {
-        execute($"PRAGMA cache_size=-{settings.CacheSizeKb}");
-        execute("PRAGMA temp_store=MEMORY");
+        execute(CacheSizePragmaSql(settings.CacheSizeKb));
+        execute(TempStoreMemoryPragmaSql);
         if (settings.MmapSizeBytes.HasValue)
-            execute($"PRAGMA mmap_size={settings.MmapSizeBytes.Value}");
+            execute(MmapSizePragmaSql(settings.MmapSizeBytes.Value));
     }
 
     internal static void ExecuteSynchronousPragmaWithFallback(
@@ -64,6 +66,30 @@ internal static class DbPragmaPolicy
             environmentVariable,
             DefaultBusyTimeoutMs,
             MaxBusyTimeoutMs);
+
+    internal static string ReadBusyTimeoutPragmaSql(string environmentVariable)
+        => BusyTimeoutPragmaSql(ReadBusyTimeoutMs(environmentVariable));
+
+    internal static string BusyTimeoutPragmaSql(int busyTimeoutMs)
+    {
+        if (busyTimeoutMs is < 0 or > MaxBusyTimeoutMs)
+            throw new ArgumentOutOfRangeException(nameof(busyTimeoutMs), busyTimeoutMs, $"SQLite busy_timeout must be between 0 and {MaxBusyTimeoutMs} milliseconds.");
+        return $"PRAGMA busy_timeout={busyTimeoutMs}";
+    }
+
+    internal static string CacheSizePragmaSql(int cacheSizeKb)
+    {
+        if (cacheSizeKb <= 0)
+            throw new ArgumentOutOfRangeException(nameof(cacheSizeKb), cacheSizeKb, "SQLite cache_size kilobytes must be positive.");
+        return $"PRAGMA cache_size=-{cacheSizeKb}";
+    }
+
+    internal static string MmapSizePragmaSql(long mmapSizeBytes)
+    {
+        if (mmapSizeBytes < 0)
+            throw new ArgumentOutOfRangeException(nameof(mmapSizeBytes), mmapSizeBytes, "SQLite mmap_size bytes must be non-negative.");
+        return $"PRAGMA mmap_size={mmapSizeBytes}";
+    }
 
     private static int ReadPositiveIntEnvironment(string name, int fallback, int maximum)
         => EnvironmentOptionParser.ReadInt32(name, fallback, minimum: 1, maximum).Value;
