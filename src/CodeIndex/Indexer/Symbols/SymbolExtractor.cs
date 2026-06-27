@@ -10460,8 +10460,7 @@ public static partial class SymbolExtractor
                         effectiveContainer = containerPath[^1];
                         symbol.ContainerKind = effectiveContainer.Kind;
                         symbol.ContainerName = effectiveContainer.Name;
-                        var effectiveParentPath = containerPath.Take(containerPath.Count - 1);
-                        symbol.ContainerQualifiedName = BuildQualifiedContainerName(effectiveParentPath);
+                        symbol.ContainerQualifiedName = BuildQualifiedContainerName(containerPath, containerPath.Count - 1);
                     }
                     else
                     {
@@ -10531,15 +10530,22 @@ public static partial class SymbolExtractor
     }
 
     private static IReadOnlyList<SymbolRecord> GetEffectiveContainerPath(
-        IEnumerable<SymbolRecord> containers,
+        Stack<SymbolRecord> containers,
         SymbolRecord symbol,
         string[]? rawLines = null,
         CSharpLexState[]? csharpLineStartStates = null)
     {
-        var orderedContainers = containers.Reverse().ToList();
-        var containingContainers = orderedContainers
-            .Where(container => ContainsSymbol(container, symbol, rawLines, csharpLineStartStates))
-            .ToList();
+        if (containers.Count == 0)
+            return [];
+
+        var orderedContainers = containers.ToArray();
+        var containingContainers = new List<SymbolRecord>(orderedContainers.Length);
+        for (var i = orderedContainers.Length - 1; i >= 0; i--)
+        {
+            var container = orderedContainers[i];
+            if (ContainsSymbol(container, symbol, rawLines, csharpLineStartStates))
+                containingContainers.Add(container);
+        }
 
         if (containingContainers.Count == 0)
             return [];
@@ -10548,22 +10554,35 @@ public static partial class SymbolExtractor
         {
             var enumIndex = containingContainers.FindLastIndex(container => container.Kind == "enum");
             if (enumIndex >= 0)
-                return containingContainers.Take(enumIndex + 1).ToList();
+                containingContainers.RemoveRange(enumIndex + 1, containingContainers.Count - enumIndex - 1);
         }
 
         return containingContainers;
     }
 
-    private static string? BuildQualifiedContainerName(IEnumerable<SymbolRecord> containers)
-    {
-        var names = containers
-            .Select(container => container.Name)
-            .Where(name => !string.IsNullOrWhiteSpace(name))
-            .ToList();
+    private static string? BuildQualifiedContainerName(IReadOnlyList<SymbolRecord> containers) =>
+        BuildQualifiedContainerName(containers, containers.Count);
 
-        return names.Count > 0
-            ? string.Join(".", names)
-            : null;
+    private static string? BuildQualifiedContainerName(IReadOnlyList<SymbolRecord> containers, int count)
+    {
+        if (count <= 0)
+            return null;
+
+        StringBuilder? builder = null;
+        for (var i = 0; i < count; i++)
+        {
+            var name = containers[i].Name;
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            builder ??= new StringBuilder(name.Length);
+            if (builder.Length > 0)
+                builder.Append('.');
+
+            builder.Append(name);
+        }
+
+        return builder?.ToString();
     }
 
     private static string? BuildInheritedFamilyKey(SymbolRecord container, string? qualifiedContainerName) =>
@@ -10571,20 +10590,36 @@ public static partial class SymbolExtractor
             ? qualifiedContainerName
             : null;
 
-    private static string? BuildSelfFamilyKey(SymbolRecord symbol, IEnumerable<SymbolRecord> containers)
+    private static string? BuildSelfFamilyKey(SymbolRecord symbol, IReadOnlyList<SymbolRecord> containers)
     {
         if (!SupportsCrossFileFamily(symbol))
             return null;
 
-        var names = containers
-            .Select(container => container.Name)
-            .Where(name => !string.IsNullOrWhiteSpace(name))
-            .Append(symbol.Name)
-            .ToList();
+        var symbolName = symbol.Name;
+        if (containers.Count == 0)
+            return symbolName;
 
-        return names.Count > 0
-            ? string.Join(".", names)
-            : null;
+        StringBuilder? builder = null;
+        for (var i = 0; i < containers.Count; i++)
+        {
+            var name = containers[i].Name;
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            builder ??= new StringBuilder(name.Length + symbolName.Length + 1);
+            if (builder.Length > 0)
+                builder.Append('.');
+
+            builder.Append(name);
+        }
+
+        builder ??= new StringBuilder(symbolName.Length);
+        if (builder.Length > 0)
+            builder.Append('.');
+
+        builder.Append(symbolName);
+
+        return builder?.ToString();
     }
 
     private static bool SupportsCrossFileFamily(SymbolRecord symbol) =>
