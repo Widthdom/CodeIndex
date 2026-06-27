@@ -1675,7 +1675,7 @@ public partial class QueryCommandRunnerTests
         Assert.Null(options.EndLine);
         Assert.Equal(0, options.ContextBefore);
         Assert.Equal(0, options.ContextAfter);
-        Assert.Equal(SearchSnippetFormatter.DefaultSnippetLines, options.SnippetLines);
+        Assert.Equal(0, options.SnippetLines);
         Assert.NotNull(options.ParseError);
         Assert.Contains("Error: --limit requires an integer between 1 and 10000", options.ParseError);
         Assert.Contains("Hint: retry with `--limit 1` or another value up to 10000.", options.ParseError);
@@ -1684,13 +1684,12 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("Error: --before requires an integer between 0 and 1000", options.ParseError);
         Assert.Contains("Hint: retry with `--before 0` or another value up to 1000.", options.ParseError);
         Assert.Contains("Error: --after requires an integer between 0 and 1000", options.ParseError);
-        Assert.Contains("Error: --snippet-lines requires an integer between 1 and 20", options.ParseError);
         Assert.Equal(string.Empty, stderr);
     }
 
     [Theory]
     [InlineData("--limit", "not-a-number", "between 1 and 10000")]
-    [InlineData("--snippet-lines", "0", "between 1 and 20")]
+    [InlineData("--snippet-lines", "21", "must be less than or equal to 20")]
     [InlineData("--max-line-width", "-1", "between 0 and 4096")]
     public void ParseArgs_InvalidNumericOptionsIncludeBoundsContext_Issue2071(string flag, string value, string expectedRange)
     {
@@ -2854,7 +2853,7 @@ public partial class QueryCommandRunnerTests
     [Theory]
     [InlineData("search-limit", "search", "--limit requires an integer between 1 and 10000")]
     [InlineData("search-top", "search", "--limit requires an integer between 1 and 10000")]
-    [InlineData("search-snippet-lines", "search", "--snippet-lines requires an integer between 1 and 20")]
+    [InlineData("search-snippet-lines", "search", "--snippet-lines requires an integer between 0 and 20")]
     [InlineData("impact-depth", "impact", "--depth requires an integer between 0 and 64")]
     [InlineData("excerpt-start", "excerpt", "--start requires an integer between 1 and 10000000")]
     [InlineData("excerpt-end", "excerpt", "--end requires an integer between 1 and 10000000")]
@@ -2867,6 +2866,29 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Contains(expectedErrorFragment, stderr);
         Assert.Contains("Hint: fix the invalid or missing option value", stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
+        Assert.DoesNotContain("database not found", stderr);
+    }
+
+    [Theory]
+    [InlineData("references")]
+    [InlineData("callers")]
+    [InlineData("callees")]
+    [InlineData("impact")]
+    public void QueryEntrypoints_SnippetLinesZeroStaysIssueDraftOnly_Issue4064(string command)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => command switch
+        {
+            "references" => QueryCommandRunner.RunReferences(["QueryCommandRunner", "--snippet-lines", "0"], _jsonOptions),
+            "callers" => QueryCommandRunner.RunCallers(["QueryCommandRunner", "--snippet-lines", "0"], _jsonOptions),
+            "callees" => QueryCommandRunner.RunCallees(["QueryCommandRunner", "--snippet-lines", "0"], _jsonOptions),
+            "impact" => QueryCommandRunner.RunImpact(["QueryCommandRunner", "--snippet-lines", "0"], _jsonOptions),
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        });
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--snippet-lines 0 is only supported with `cdidx search --format issue-drafts`", stderr);
         Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
         Assert.DoesNotContain("database not found", stderr);
     }
@@ -2895,7 +2917,7 @@ public partial class QueryCommandRunnerTests
     [InlineData("search", "-5", "--limit", "--limit requires an integer between 1 and 10000")]
     [InlineData("search", "0", "--top", "--limit requires an integer between 1 and 10000")]
     [InlineData("search", "-5", "--top", "--limit requires an integer between 1 and 10000")]
-    [InlineData("search", "0", "--snippet-lines", "--snippet-lines requires an integer between 1 and 20")]
+    [InlineData("search", "21", "--snippet-lines", "--snippet-lines must be less than or equal to 20")]
     [InlineData("impact", "-1", "--max-hops", "--max-hops requires an integer between 0 and 64")]
     [InlineData("impact", "-1", "--depth", "--depth requires an integer between 0 and 64")]
     [InlineData("excerpt", "0", "--start", "--start requires an integer between 1 and 10000000")]

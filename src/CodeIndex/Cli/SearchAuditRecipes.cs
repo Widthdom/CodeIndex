@@ -1546,6 +1546,11 @@ internal sealed record SearchRecipeListJsonResult(
     [property: JsonPropertyName("count")] int Count,
     [property: JsonPropertyName("recipes")] List<SearchRecipeListItemJsonResult> Recipes);
 
+internal sealed record SearchRecipeNameListJsonResult(
+    [property: JsonPropertyName("api_version")] string ApiVersion,
+    [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("names")] List<string> Names);
+
 internal sealed record SearchRecipeCompactListJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
     [property: JsonPropertyName("count")] int Count,
@@ -1699,6 +1704,20 @@ internal sealed record SearchRecipeCountRunJsonResult(
     [property: JsonPropertyName("result_count")] int ResultCount,
     [property: JsonPropertyName("file_count")] int FileCount,
     [property: JsonPropertyName("queries")] List<SearchRecipeCountQueryJsonResult> Queries);
+
+internal sealed record SearchRecipeCountSummaryRunJsonResult(
+    [property: JsonPropertyName("api_version")] string ApiVersion,
+    [property: JsonPropertyName("recipe")] string Recipe,
+    [property: JsonPropertyName("scope")] string Scope,
+    [property: JsonPropertyName("query_count")] int QueryCount,
+    [property: JsonPropertyName("result_count")] int ResultCount,
+    [property: JsonPropertyName("file_count")] int FileCount,
+    [property: JsonPropertyName("queries")] List<SearchRecipeCountSummaryQueryJsonResult> Queries);
+
+internal sealed record SearchRecipeCountSummaryQueryJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("file_count")] int FileCount);
 
 internal sealed record SearchRecipeCountQueryJsonResult(
     [property: JsonPropertyName("name")] string Name,

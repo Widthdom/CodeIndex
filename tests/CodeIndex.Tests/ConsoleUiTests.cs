@@ -155,6 +155,37 @@ public class ConsoleUiTests
     }
 
     [Fact]
+    public void PrintCommandUsage_AuditAndRecipesExposeLowOutputControls_Issue4064()
+    {
+        var (_, auditOutput, _) = ConsoleCapture.Capture(() =>
+        {
+            ConsoleUi.PrintCommandUsage("audit");
+            return 0;
+        });
+        var (_, recipesOutput, _) = ConsoleCapture.Capture(() =>
+        {
+            ConsoleUi.PrintCommandUsage("recipes");
+            return 0;
+        });
+
+        foreach (var flag in new[]
+        {
+            "--results-only",
+            "--search-fields",
+            "--per-file-limit",
+            "--total-limit",
+            "--max-json-bytes",
+            "--snippet-lines",
+        })
+        {
+            Assert.Contains(flag, auditOutput);
+        }
+
+        Assert.Contains("[--names|--summary-only]", recipesOutput);
+        Assert.Contains("--max-json-bytes", recipesOutput);
+    }
+
+    [Fact]
     public void PrintCommandUsage_InspectSplitsQueryAndLinePathModes_Issue3916()
     {
         using var capture = ConsoleCapture.Start(captureOut: true);
@@ -2222,7 +2253,7 @@ public class ConsoleUiTests
         {
             "cdidx search <query>|--query <query>|-- <query>",
             "--recipe <name|name/query>",
-            "--list-recipes [--query <filter>]",
+            "--list-recipes [--query <filter>] [--names|--summary-only]",
             "--named-query <name>=<query>",
             "[--include-query <name>]",
             "[--exclude-query <name>]",

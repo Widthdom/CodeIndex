@@ -1443,6 +1443,65 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_ListRecipesNamesJsonEmitsDeterministicSmallPayload_Issue4064()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--list-recipes", "--names", "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var root = document.RootElement;
+        var names = root.GetProperty("names")
+            .EnumerateArray()
+            .Select(name => name.GetString()!)
+            .ToArray();
+
+        Assert.Equal(root.GetProperty("count").GetInt32(), names.Length);
+        Assert.Contains("risky-code", names);
+        Assert.Equal(names.OrderBy(name => name, StringComparer.Ordinal).ToArray(), names);
+        Assert.False(root.TryGetProperty("recipes", out _));
+
+        var (capExitCode, capStdout, capStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--list-recipes", "--names", "--json", "--max-json-bytes", "1"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, capExitCode);
+        Assert.Equal(string.Empty, capStdout);
+        Assert.Contains("recipe-name list JSON output", capStderr, StringComparison.Ordinal);
+
+        var (textCapExitCode, textCapStdout, textCapStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--list-recipes", "--names", "--max-json-bytes", "1"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, textCapExitCode);
+        Assert.Equal(string.Empty, textCapStdout);
+        Assert.Contains("--max-json-bytes is only supported with JSON recipe-list output", textCapStderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunSearch_ListRecipesSummaryOnlyJsonOmitsChildQueries_Issue4064()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--list-recipes", "--summary-only", "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var root = document.RootElement;
+        var recipe = root
+            .GetProperty("recipes")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "risky-code");
+
+        Assert.True(root.GetProperty("count").GetInt32() >= 1);
+        Assert.True(recipe.GetProperty("query_count").GetInt32() >= 1);
+        Assert.False(recipe.TryGetProperty("queries", out _));
+    }
+
+    [Fact]
     public void RunSearch_RiskyCodeRecipeExcludesHelpTextByDefault_Issue3918()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_recipe_help_text_origin_3918");
@@ -2574,6 +2633,75 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(2, query.GetProperty("file_count").GetInt32());
             Assert.False(query.GetProperty("truncated").GetBoolean());
             Assert.Equal(2, query.GetProperty("top_files").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RecipeCountSummaryOnlyJsonOmitsRecipeMetadata_Issue4064()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_count_summary_4064");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/a.cs",
+                "csharp",
+                """
+                public sealed class A
+                {
+                    public void Run(Exception ex)
+                    {
+                        Console.WriteLine(ex.Message);
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/b.cs",
+                "csharp",
+                """
+                public sealed class B
+                {
+                    public void Run(Exception ex)
+                    {
+                        logger.LogWarning(ex.Message);
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--format", "count", "--summary-only", "--origin", "code"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var query = Assert.Single(root.GetProperty("queries").EnumerateArray());
+
+            Assert.Equal("risky-code", root.GetProperty("recipe").GetString());
+            Assert.Equal("source", root.GetProperty("scope").GetString());
+            Assert.Equal(1, root.GetProperty("query_count").GetInt32());
+            Assert.Equal(2, root.GetProperty("result_count").GetInt32());
+            Assert.Equal(2, root.GetProperty("file_count").GetInt32());
+            Assert.Equal("raw-diagnostic-echo", query.GetProperty("name").GetString());
+            Assert.Equal(2, query.GetProperty("count").GetInt32());
+            Assert.Equal(2, query.GetProperty("file_count").GetInt32());
+            Assert.False(query.TryGetProperty("query", out _));
+            Assert.False(query.TryGetProperty("top_files", out _));
+
+            var (capExitCode, capStdout, capStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--format", "count", "--summary-only", "--origin", "code", "--max-json-bytes", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, capExitCode);
+            Assert.Equal(string.Empty, capStdout);
+            Assert.Contains("recipe count summary JSON output", capStderr, StringComparison.Ordinal);
         }
         finally
         {
@@ -4003,6 +4131,73 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("minimum_omitted_result_count: `1`", body, StringComparison.Ordinal);
             Assert.Contains("## Replay command", body, StringComparison.Ordinal);
             Assert.DoesNotContain("public sealed class", body, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RecipeIssueDraftsSnippetLinesZeroOmitsSnippetsAndHonorsByteLimit_Issue4064()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_issue_drafts_snippetless_4064");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/a.cs",
+                "csharp",
+                """
+                public sealed class A
+                {
+                    public void Run(System.Exception ex)
+                    {
+                        System.Console.Error.WriteLine(ex.Message);
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "--recipe", "risky-code/raw-diagnostic-echo",
+                    "--db", dbPath,
+                    "--format", "issue-drafts",
+                    "--limit", "1",
+                    "--snippet-lines", "0",
+                    "--max-json-bytes", "20000"
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var draft = Assert.Single(document.RootElement.GetProperty("drafts").EnumerateArray());
+            var evidence = Assert.Single(draft.GetProperty("evidence").EnumerateArray());
+            var body = draft.GetProperty("body").GetString();
+
+            Assert.Equal("src/a.cs", evidence.GetProperty("path").GetString());
+            Assert.True(evidence.GetProperty("line").GetInt32() > 0);
+            Assert.Equal(string.Empty, evidence.GetProperty("snippet").GetString());
+            Assert.Contains("- `src/a.cs:", body, StringComparison.Ordinal);
+            Assert.DoesNotContain("```text", body, StringComparison.Ordinal);
+            Assert.Contains("--snippet-lines 0", body, StringComparison.Ordinal);
+
+            var (capExitCode, capStdout, capStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "--recipe", "risky-code/raw-diagnostic-echo",
+                    "--db", dbPath,
+                    "--format", "issue-drafts",
+                    "--limit", "1",
+                    "--snippet-lines", "0",
+                    "--max-json-bytes", "1"
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, capExitCode);
+            Assert.Equal(string.Empty, capStdout);
+            Assert.Contains("issue-draft JSON output", capStderr, StringComparison.Ordinal);
         }
         finally
         {

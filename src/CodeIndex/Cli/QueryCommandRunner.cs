@@ -300,6 +300,7 @@ public static partial class QueryCommandRunner
         "--actionable",
         "--by-bucket",
         "--all",
+        "--names",
         "--summary-only",
         "--cycles",
         "--group-by-name",
@@ -464,6 +465,14 @@ public static partial class QueryCommandRunner
                 "Use these hints when exporting issue draft JSON for a plain search.");
             return CommandExitCodes.UsageError;
         }
+        if (options.SnippetLines == 0 && options.OutputFormat != OutputFormatIssueDrafts)
+        {
+            WriteUsageError(
+                "--snippet-lines 0 is only supported with --format issue-drafts.",
+                GetUsageLineOrThrow("search"),
+                "Use `--format issue-drafts --snippet-lines 0` for path/line-only draft evidence, or pass a positive snippet line count for search output.");
+            return CommandExitCodes.UsageError;
+        }
         if (options.IssueTitle != null && options.RecipeName != null)
         {
             WriteUsageError(
@@ -478,6 +487,30 @@ public static partial class QueryCommandRunner
                 "--count cannot be combined with --format issue-drafts.",
                 GetUsageLineOrThrow("search"),
                 "Issue-draft export needs result evidence; remove --count.");
+            return CommandExitCodes.UsageError;
+        }
+        if (options.NamesOnly && !options.ListRecipes)
+        {
+            WriteUsageError(
+                "--names is only supported with `cdidx recipes` or `cdidx search --list-recipes`.",
+                GetUsageLineOrThrow("search"),
+                "Use `cdidx recipes --names --json` for a small deterministic recipe-name list.");
+            return CommandExitCodes.UsageError;
+        }
+        if (options.NamesOnly && options.SummaryOnly)
+        {
+            WriteUsageError(
+                "--names cannot be combined with --summary-only.",
+                GetUsageLineOrThrow("search"),
+                "Use one recipe-list shape at a time.");
+            return CommandExitCodes.UsageError;
+        }
+        if (options.SummaryOnly && !options.ListRecipes && !(options.RecipeName != null && options.CountOnly))
+        {
+            WriteUsageError(
+                "--summary-only is only supported with `cdidx recipes` / `cdidx search --list-recipes`, or recipe count output.",
+                GetUsageLineOrThrow("search"),
+                "Use `cdidx recipes --summary-only --json` or `cdidx search --recipe <name> --format count --summary-only`.");
             return CommandExitCodes.UsageError;
         }
         if (options.OutputFormat == OutputFormatIssueDrafts && options.JsonOutputFormat == JsonOutputFormatArray)
@@ -635,12 +668,15 @@ public static partial class QueryCommandRunner
                     "Use plain `--json` for the grouped recipe object.");
                 return CommandExitCodes.UsageError;
             }
-            if (options.MaxJsonBytes.HasValue && (!options.Json || options.JsonOutputFormat != JsonOutputFormatNdjson || options.OutputFormat != OutputFormatJson))
+            if (options.MaxJsonBytes.HasValue
+                && !(options.Json && options.JsonOutputFormat != JsonOutputFormatArray && options.OutputFormat == OutputFormatIssueDrafts)
+                && !(options.Json && options.JsonOutputFormat == JsonOutputFormatNdjson && options.OutputFormat == OutputFormatJson)
+                && !(options.Json && options.CountOnly && options.SummaryOnly))
             {
                 WriteUsageError(
-                    "--max-json-bytes is only supported with NDJSON recipe row output.",
+                    "--max-json-bytes is only supported with NDJSON recipe rows, issue-draft JSON, or summary-only recipe count JSON.",
                     GetUsageLineOrThrow("search"),
-                    "Use `--recipe <name> --json=ndjson --max-json-bytes <n>` or `--results-only --max-json-bytes <n>` for bounded recipe streams.");
+                    "Use `--recipe <name> --json=ndjson --max-json-bytes <n>`, `--format issue-drafts --max-json-bytes <n>`, or `--format count --summary-only --max-json-bytes <n>`.");
                 return CommandExitCodes.UsageError;
             }
             if (options.ResultsOnly && options.JsonOutputFormat != JsonOutputFormatNdjson)
@@ -822,12 +858,14 @@ public static partial class QueryCommandRunner
                 "Use `--results-only --json=ndjson`, or remove --results-only when using --json=array.");
             return CommandExitCodes.UsageError;
         }
-        if (options.MaxJsonBytes.HasValue && (!options.Json || options.JsonOutputFormat != JsonOutputFormatNdjson || options.OutputFormat != OutputFormatJson))
+        if (options.MaxJsonBytes.HasValue
+            && !(options.Json && options.JsonOutputFormat != JsonOutputFormatArray && options.OutputFormat == OutputFormatIssueDrafts)
+            && (!options.Json || options.JsonOutputFormat != JsonOutputFormatNdjson || options.OutputFormat != OutputFormatJson))
         {
             WriteUsageError(
                 "--max-json-bytes is only supported with NDJSON search output.",
                 GetUsageLineOrThrow("search"),
-                "Use `--json=ndjson --max-json-bytes <n>` for bounded streaming output.");
+                "Use `--json=ndjson --max-json-bytes <n>` for bounded streaming output, or `--format issue-drafts --max-json-bytes <n>` for bounded draft export.");
             return CommandExitCodes.UsageError;
         }
         if (options.CountBy != null && options.CountBy is not "path" and not "file" and not "symbol" and not "origin")
@@ -1549,11 +1587,43 @@ public static partial class QueryCommandRunner
 
     private static int WriteSearchRecipeList(QueryCommandOptions options, JsonSerializerOptions jsonOptions)
     {
+        var emitsJson = options.Json || options.OutputFormat == OutputFormatCompact;
+        if (options.MaxJsonBytes.HasValue && !emitsJson)
+        {
+            WriteUsageError(
+                "--max-json-bytes is only supported with JSON recipe-list output.",
+                GetUsageLineOrThrow("search"),
+                "Add `--json` or `--format compact`, or remove --max-json-bytes for text recipe output.");
+            return CommandExitCodes.UsageError;
+        }
+
         var recipes = SearchAuditRecipes.All
             .Select(recipe => ToFilteredSearchRecipeListItem(recipe, options.Query))
             .OfType<SearchRecipeListItemJsonResult>()
             .ToList();
-        if (options.OutputFormat == OutputFormatCompact)
+        if (options.NamesOnly)
+        {
+            var names = recipes
+                .Select(recipe => recipe.Name)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToList();
+            if (options.Json)
+            {
+                var json = JsonSerializer.Serialize(
+                    new SearchRecipeNameListJsonResult(JsonOutputContract.ApiVersion, names.Count, names),
+                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeNameListJsonResult);
+                return WriteJsonObjectWithOptionalByteLimit(
+                    json,
+                    options,
+                    "recipe-name list",
+                    "Use a larger --max-json-bytes value or remove recipe filters.");
+            }
+
+            foreach (var name in names)
+                Console.WriteLine(name);
+            return CommandExitCodes.Success;
+        }
+        if (options.OutputFormat == OutputFormatCompact || (options.SummaryOnly && options.Json))
         {
             var compactRecipes = recipes
                 .Select(recipe => new SearchRecipeCompactListItemJsonResult(
@@ -1565,17 +1635,31 @@ public static partial class QueryCommandRunner
                     recipe.DefaultPathPatterns,
                     recipe.DefaultExcludePaths))
                 .ToList();
-            Console.WriteLine(JsonSerializer.Serialize(
+            var json = JsonSerializer.Serialize(
                 new SearchRecipeCompactListJsonResult(JsonOutputContract.ApiVersion, compactRecipes.Count, compactRecipes),
-                CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeCompactListJsonResult));
+                CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeCompactListJsonResult);
+            return WriteJsonObjectWithOptionalByteLimit(
+                json,
+                options,
+                "recipe summary",
+                "Use `cdidx recipes --names --json` for the smallest recipe-list JSON.");
+        }
+        if (options.SummaryOnly)
+        {
+            foreach (var recipe in recipes)
+                Console.WriteLine($"{recipe.Name}: {recipe.Description} (queries: {recipe.Queries.Count}, scope: {recipe.DefaultScope})");
             return CommandExitCodes.Success;
         }
         if (options.Json)
         {
-            Console.WriteLine(JsonSerializer.Serialize(
+            var json = JsonSerializer.Serialize(
                 new SearchRecipeListJsonResult(JsonOutputContract.ApiVersion, recipes.Count, recipes),
-                CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeListJsonResult));
-            return CommandExitCodes.Success;
+                CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeListJsonResult);
+            return WriteJsonObjectWithOptionalByteLimit(
+                json,
+                options,
+                "recipe list",
+                "Use `cdidx recipes --names --json` or `cdidx recipes --summary-only --json` for smaller output.");
         }
 
         foreach (var recipe in recipes)
@@ -1601,6 +1685,29 @@ public static partial class QueryCommandRunner
             }
         }
 
+        return CommandExitCodes.Success;
+    }
+
+    private static int WriteJsonObjectWithOptionalByteLimit(
+        string json,
+        QueryCommandOptions options,
+        string outputDescription,
+        string hint)
+    {
+        if (options.MaxJsonBytes.HasValue)
+        {
+            var byteCount = Encoding.UTF8.GetByteCount(json) + Environment.NewLine.Length;
+            if (byteCount > options.MaxJsonBytes.Value)
+            {
+                WriteUsageError(
+                    $"{outputDescription} JSON output is {byteCount.ToString(CultureInfo.InvariantCulture)} bytes and exceeds --max-json-bytes {options.MaxJsonBytes.Value.ToString(CultureInfo.InvariantCulture)}.",
+                    GetUsageLineOrThrow("search"),
+                    hint);
+                return CommandExitCodes.UsageError;
+            }
+        }
+
+        Console.WriteLine(json);
         return CommandExitCodes.Success;
     }
 
@@ -2114,7 +2221,7 @@ public static partial class QueryCommandRunner
                 .Where(queryResult => queryResult.Count > 0)
                 .Select(queryResult => ToSearchIssueDraft(recipe, queryResult, preflight, options))
                 .ToList();
-            Console.WriteLine(JsonSerializer.Serialize(
+            var json = JsonSerializer.Serialize(
                 new SearchIssueDraftExportJsonResult(
                     JsonOutputContract.ApiVersion,
                     ToSearchRecipeListItem(recipe, selection.Queries),
@@ -2129,8 +2236,12 @@ public static partial class QueryCommandRunner
                         options.DuplicateConfidence,
                         options.DuplicateThreshold),
                     drafts),
-                CliJsonSerializerContextFactory.Create(jsonOptions).SearchIssueDraftExportJsonResult));
-            return CommandExitCodes.Success;
+                CliJsonSerializerContextFactory.Create(jsonOptions).SearchIssueDraftExportJsonResult);
+            return WriteJsonObjectWithOptionalByteLimit(
+                json,
+                options,
+                "issue-draft",
+                "Reduce --limit, use --snippet-lines 0, or increase --max-json-bytes.");
         });
     }
 
@@ -2160,7 +2271,32 @@ public static partial class QueryCommandRunner
 
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(
+                if (options.SummaryOnly)
+                {
+                    var summaryQueries = queryCounts
+                        .Select(query => new SearchRecipeCountSummaryQueryJsonResult(
+                            query.Name,
+                            query.Count,
+                            query.FileCount))
+                        .ToList();
+                    var summaryJson = JsonSerializer.Serialize(
+                        new SearchRecipeCountSummaryRunJsonResult(
+                            JsonOutputContract.ApiVersion,
+                            recipe.Name,
+                            scope.Name,
+                            selection.Queries.Count,
+                            total,
+                            fileCount,
+                            summaryQueries),
+                        CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeCountSummaryRunJsonResult);
+                    return WriteJsonObjectWithOptionalByteLimit(
+                        summaryJson,
+                        options,
+                        "recipe count summary",
+                        "Use a larger --max-json-bytes value or narrow the recipe/query selection.");
+                }
+
+                var json = JsonSerializer.Serialize(
                     new SearchRecipeCountRunJsonResult(
                         JsonOutputContract.ApiVersion,
                         ToSearchRecipeListItem(recipe, selection.Queries),
@@ -2169,7 +2305,12 @@ public static partial class QueryCommandRunner
                         total,
                         fileCount,
                         queryCounts),
-                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeCountRunJsonResult));
+                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeCountRunJsonResult);
+                return WriteJsonObjectWithOptionalByteLimit(
+                    json,
+                    options,
+                    "recipe count",
+                    "Use `--summary-only` to omit recipe metadata from count output.");
             }
             else
             {
@@ -2252,7 +2393,7 @@ public static partial class QueryCommandRunner
                 ? []
                 : new List<SearchIssueDraftJsonResult> { ToAdHocSearchIssueDraft(options, queryResult, preflight) };
 
-            Console.WriteLine(JsonSerializer.Serialize(
+            var json = JsonSerializer.Serialize(
                 new SearchIssueDraftExportJsonResult(
                     JsonOutputContract.ApiVersion,
                     null,
@@ -2267,8 +2408,12 @@ public static partial class QueryCommandRunner
                         options.DuplicateConfidence,
                         options.DuplicateThreshold),
                     drafts),
-                CliJsonSerializerContextFactory.Create(jsonOptions).SearchIssueDraftExportJsonResult));
-            return CommandExitCodes.Success;
+                CliJsonSerializerContextFactory.Create(jsonOptions).SearchIssueDraftExportJsonResult);
+            return WriteJsonObjectWithOptionalByteLimit(
+                json,
+                options,
+                "issue-draft",
+                "Reduce --limit, use --snippet-lines 0, or increase --max-json-bytes.");
         });
     }
 
@@ -2836,7 +2981,7 @@ public static partial class QueryCommandRunner
             .Distinct(StringComparer.Ordinal)
             .Take(10)
             .ToList();
-        var evidence = BuildSearchIssueDraftEvidence(queryResult);
+        var evidence = BuildSearchIssueDraftEvidence(queryResult, includeSnippets: options.SnippetLines > 0);
         var missingLabels = BuildMissingIssueDraftLabels(labels, preflight);
         var labelWarning = BuildIssueDraftLabelWarning(missingLabels, preflight);
         var duplicateProbeTriage = BuildSearchIssueDraftTriage(queryResult, preflight.Checked, 0);
@@ -2891,7 +3036,7 @@ public static partial class QueryCommandRunner
             .Distinct(StringComparer.Ordinal)
             .Take(10)
             .ToList();
-        var evidence = BuildSearchIssueDraftEvidence(queryResult);
+        var evidence = BuildSearchIssueDraftEvidence(queryResult, includeSnippets: options.SnippetLines > 0);
         var missingLabels = BuildMissingIssueDraftLabels(labels, preflight);
         var labelWarning = BuildIssueDraftLabelWarning(missingLabels, preflight);
         var duplicateProbeTriage = BuildSearchIssueDraftTriage(queryResult, preflight.Checked, 0);
@@ -2962,7 +3107,8 @@ public static partial class QueryCommandRunner
     }
 
     private static List<SearchIssueDraftEvidenceJsonResult> BuildSearchIssueDraftEvidence(
-        SearchRecipeQueryResultJsonResult queryResult)
+        SearchRecipeQueryResultJsonResult queryResult,
+        bool includeSnippets)
     {
         var evidence = new List<SearchIssueDraftEvidenceJsonResult>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -2976,8 +3122,10 @@ public static partial class QueryCommandRunner
             if (!seen.Add(key))
                 continue;
 
-            var snippet = BuildSearchIssueDraftEvidenceSnippet(result);
-            if (string.IsNullOrWhiteSpace(snippet))
+            var snippet = includeSnippets
+                ? BuildSearchIssueDraftEvidenceSnippet(result)
+                : string.Empty;
+            if (includeSnippets && string.IsNullOrWhiteSpace(snippet))
                 continue;
 
             evidence.Add(new SearchIssueDraftEvidenceJsonResult(result.Path, line, snippet));
@@ -3163,6 +3311,9 @@ public static partial class QueryCommandRunner
         foreach (var item in evidence)
         {
             sb.AppendLine($"- `{item.Path}:{item.Line.ToString(CultureInfo.InvariantCulture)}`");
+            if (string.IsNullOrWhiteSpace(item.Snippet))
+                continue;
+
             sb.AppendLine("```text");
             sb.AppendLine(item.Snippet);
             sb.AppendLine("```");
@@ -4394,6 +4545,8 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.InvalidArgument;
         if (TryWriteParseError(options, "references"))
             return CommandExitCodes.UsageError;
+        if (TryWriteSnippetLinesZeroUnsupportedError(options, "references"))
+            return CommandExitCodes.UsageError;
         if (!TryResolveNameExactMode(options, "references", out var exact, out var exactError))
         {
             CommandErrorWriter.WriteStderr(exactError);
@@ -4541,6 +4694,8 @@ public static partial class QueryCommandRunner
         if (TryWriteUnsupportedOptionError("callers", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("callers"), options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "callers"))
+            return CommandExitCodes.UsageError;
+        if (TryWriteSnippetLinesZeroUnsupportedError(options, "callers"))
             return CommandExitCodes.UsageError;
         if (TryRejectNonCallGraphKindForGraphCommand("callers", options.Kind))
             return CommandExitCodes.UsageError;
@@ -4693,6 +4848,8 @@ public static partial class QueryCommandRunner
         if (TryWriteUnsupportedOptionError("callees", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("callees"), options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "callees"))
+            return CommandExitCodes.UsageError;
+        if (TryWriteSnippetLinesZeroUnsupportedError(options, "callees"))
             return CommandExitCodes.UsageError;
         if (TryRejectNonCallGraphKindForGraphCommand("callees", options.Kind))
             return CommandExitCodes.UsageError;
@@ -7817,6 +7974,8 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "impact"))
             return CommandExitCodes.UsageError;
+        if (TryWriteSnippetLinesZeroUnsupportedError(options, "impact"))
+            return CommandExitCodes.UsageError;
         if (TryWriteBlankQueryError(options, "impact"))
             return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
@@ -10441,6 +10600,7 @@ public static partial class QueryCommandRunner
         var extraNames = new List<string>();
         bool impactDeprecatedDepthUsed = false;
         List<string>? mapSections = null;
+        bool summaryOnly = false;
         bool mapSummaryOnly = false;
         bool dependencyCycles = false;
         bool dependencySuppressNoise = false;
@@ -10451,6 +10611,7 @@ public static partial class QueryCommandRunner
         var excludeRecipeQueries = new List<string>();
         bool showExcluded = false;
         bool listRecipes = false;
+        bool namesOnly = false;
         string? openIssuesPath = null;
         string auditScope = SearchAuditRecipes.DefaultAuditScope;
         bool auditScopeExplicit = false;
@@ -10867,6 +11028,9 @@ public static partial class QueryCommandRunner
                 case "--list-recipes":
                     listRecipes = true;
                     break;
+                case "--names":
+                    namesOnly = true;
+                    break;
                 case "--source-only":
                     sourceOnly = true;
                     auditScope = SearchAuditRecipes.DefaultAuditScope;
@@ -11144,6 +11308,7 @@ public static partial class QueryCommandRunner
                         AddParseError(sectionsError!);
                     break;
                 case "--summary-only":
+                    summaryOnly = true;
                     mapSummaryOnly = true;
                     break;
                 case "--fields":
@@ -11685,7 +11850,7 @@ public static partial class QueryCommandRunner
                 case "--snippet-lines":
                     if (!TryReadRawOptionValue(args, ref i, "--snippet-lines", inlineValue, out var snippetLinesValue, out var missingSnippetLinesError))
                         AddParseError(missingSnippetLinesError!);
-                    else if (TryParsePositiveInt(snippetLinesValue!, "--snippet-lines", out var parsedSnippetLines, out var snippetLinesError))
+                    else if (TryParseNonNegativeInt(snippetLinesValue!, "--snippet-lines", out var parsedSnippetLines, out var snippetLinesError))
                     {
                         WarnIfDuplicateSingleValueOption("--snippet-lines", snippetLinesValue!);
                         snippetLines = parsedSnippetLines;
@@ -11905,6 +12070,7 @@ public static partial class QueryCommandRunner
             SymbolSortMode = symbolSortMode,
             ExtraNames = extraNames,
             MapSections = mapSections,
+            SummaryOnly = summaryOnly,
             MapSummaryOnly = mapSummaryOnly,
             DependencyCycles = dependencyCycles,
             DependencySuppressNoise = dependencySuppressNoise,
@@ -11915,6 +12081,7 @@ public static partial class QueryCommandRunner
             ExcludeRecipeQueries = excludeRecipeQueries,
             ShowExcluded = showExcluded,
             ListRecipes = listRecipes,
+            NamesOnly = namesOnly,
             OpenIssuesPath = openIssuesPath,
             AuditScope = auditScope,
             AuditScopeExplicit = auditScopeExplicit,
@@ -13698,6 +13865,18 @@ public static partial class QueryCommandRunner
         return true;
     }
 
+    private static bool TryWriteSnippetLinesZeroUnsupportedError(QueryCommandOptions options, string commandName)
+    {
+        if (options.SnippetLines != 0)
+            return false;
+
+        WriteUsageError(
+            "--snippet-lines 0 is only supported with `cdidx search --format issue-drafts`.",
+            GetUsageLineOrThrow(commandName),
+            "Pass a positive snippet line count for this command, for example `--snippet-lines 1`.");
+        return true;
+    }
+
     private static void WriteValidationError(string message, string hint)
         => CommandErrorWriter.Write(message, hint);
 
@@ -15430,7 +15609,7 @@ public static partial class QueryCommandRunner
         ["--focus-column"] = "pass a 1-based column number to keep visible, e.g. `--focus-column 80`.",
         ["--focus-length"] = "pass a positive integer for the focused span width, e.g. `--focus-length 1` (default 1).",
         ["--name"] = "pass a literal symbol name, e.g. `--name UserService`. Repeat `--name` to add more names.",
-        ["--snippet-lines"] = "pass an integer between 1 and 20, e.g. `--snippet-lines 8` (default 8).",
+        ["--snippet-lines"] = "pass an integer between 1 and 20, e.g. `--snippet-lines 8` (default 8); issue-draft output also accepts 0 for path/line-only evidence.",
         ["--snippet-focus"] = "pass one of `leftmost`, `quality`, or `proximity`, e.g. `--snippet-focus quality` (default quality).",
         ["--max-line-width"] = "pass a non-negative integer (`0` disables clamping), e.g. `--max-line-width 512` (default 512).",
         ["--stale-after"] = "pass a compact positive duration, e.g. `--stale-after 30m`, `--stale-after 2h`, or `--stale-after 7d`.",
@@ -15857,6 +16036,7 @@ public sealed class QueryCommandOptions
     public SymbolSortMode SymbolSortMode { get; init; } = SymbolSortMode.Name;
     public List<string> ExtraNames { get; init; } = [];
     public List<string>? MapSections { get; init; }
+    public bool SummaryOnly { get; init; }
     public bool MapSummaryOnly { get; init; }
     public bool DependencyCycles { get; init; }
     public bool DependencySuppressNoise { get; init; }
@@ -15867,6 +16047,7 @@ public sealed class QueryCommandOptions
     public List<string> ExcludeRecipeQueries { get; init; } = [];
     public bool ShowExcluded { get; init; }
     public bool ListRecipes { get; init; }
+    public bool NamesOnly { get; init; }
     public string? OpenIssuesPath { get; init; }
     public string AuditScope { get; init; } = SearchAuditRecipes.DefaultAuditScope;
     public bool AuditScopeExplicit { get; init; }

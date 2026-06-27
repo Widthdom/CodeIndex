@@ -976,6 +976,8 @@ cdidx search "FileMode.Create" --exact-substring --require-after "File.Move" --g
 cdidx search "DangerousCall" --exact-substring --require-before "GuardBefore" --guard-scope same-line --json=array  # require a guard earlier on the same line
 cdidx search --list-recipes                             # show reusable audit recipes
 cdidx search --list-recipes --query sqlite              # filter recipe discovery by recipe/query text, labels, severity, or paths
+cdidx search --list-recipes --names --json              # small deterministic recipe-name payload
+cdidx recipes --summary-only --json                     # compact recipe-list alias for automation
 cdidx search --recipe risky-code --json                 # run a curated audit query set and return grouped JSON
 cdidx search --recipe bounded-read-evidence --json      # show positive evidence for bounded file-read helper paths
 cdidx search --recipe risky-code/raw-diagnostic-echo --json  # run one child query from a recipe
@@ -983,6 +985,8 @@ cdidx search --recipe risky-code --include-query raw-diagnostic-echo --exclude-q
 cdidx search --recipe risky-code --show-excluded --json      # include recipe scope/exclusion diagnostics
 cdidx search --recipe risky-code/raw-diagnostic-echo --format compact --limit 20  # summary-first compact JSON with next_cursor
 cdidx search --recipe risky-code/raw-diagnostic-echo --format compact --cursor <next_cursor>
+cdidx audit risky-code --results-only --search-fields path,line,query_name,recipe --json=ndjson --max-json-bytes 65536  # minimal audit rows
+cdidx search --recipe risky-code --format count --summary-only --max-json-bytes 20000  # compact recipe counts
 cdidx search --named-query pack="dotnet pack" --named-query push="nuget push" --format compact  # named ad hoc batch with compact snippets
 cdidx search "catch (Exception" --group-by file --count --json    # rank broad audit hits by file
 cdidx search "JsonDocument.Parse" --group-by symbol --count --json # rank broad audit hits by enclosing symbol
@@ -994,6 +998,7 @@ cdidx search "TODO" --first-per-file --sample 25 --json=ndjson --max-json-bytes 
 cdidx search "ExecuteReader" --next-steps                  # print inspect/excerpt follow-up commands for top hits
 cdidx search --recipe risky-code --format issue-drafts --open-issues open-issues.json  # issue draft JSON with duplicate preflight
 cdidx search --recipe risky-code --format issue-drafts --open-issues github --repo Widthdom/CodeIndex  # preflight against live open GitHub issues
+cdidx search --recipe risky-code --format issue-drafts --snippet-lines 0 --max-json-bytes 20000  # path/line-only issue drafts
 cdidx search "Thread.Yield" --format issue-drafts --issue-title "Thread.Yield audit" --issue-label audit  # ad hoc issue draft JSON
 cdidx search "--open-reports" --path README.md --count  # quoted literal that starts with --
 cdidx search --query "--path" --path README.md          # search for an option-looking literal
@@ -1064,11 +1069,16 @@ JSON output.
 Recipe runs support text output, aggregate JSON with `--json` / `--format json`,
 NDJSON row streams with `--json=ndjson` or `--results-only`, count-only output
 with `--format count`, compact summaries with `--format compact`, and
-`--format issue-drafts`; `--list-recipes` supports text, JSON, or
-`--format compact`. Recipe row streams can be projected with `--search-fields`
-including `query_name` and `recipe`, bounded across child queries with
-`--total-limit`, and byte-bounded with `--max-json-bytes` for NDJSON only.
-Recipe count aggregations support `--count-by path|file|symbol|origin`,
+`--format issue-drafts`; `--list-recipes` supports text, full JSON,
+`--format compact`, `--names`, and `--summary-only`. For automation-friendly
+recipe discovery, use `cdidx recipes --names --json` for a deterministic name
+list or `cdidx recipes --summary-only --json` for compact metadata. Recipe row
+streams can be projected with `--search-fields` including `query_name` and
+`recipe`, bounded across child queries with `--total-limit`, and byte-bounded
+with `--max-json-bytes` for NDJSON. Recipe count output can use
+`--format count --summary-only --max-json-bytes <n>` to emit only recipe/scope
+names, aggregate counts, and per-query counts. Recipe count aggregations support
+`--count-by path|file|symbol|origin`,
 `--group-by file|symbol|origin --count`, and
 `--unique path|file|symbol|origin`.
 Other search export formats and `--json=array` are rejected for recipe modes
@@ -1096,8 +1106,11 @@ the payload still includes `duplicate_preflight.checked: false`. Use
 `--duplicate-confidence low|medium|high` or `--duplicate-threshold <0..1>` to
 tune duplicate preflight strictness; the JSON summary reports `confidence` and
 `minimum_score`. Draft bodies include evidence paths, representative source
-snippets, omitted-result metadata, and recipe metadata. These drafts are triage
-aids; review duplicate guidance and current open issues before filing.
+snippets, omitted-result metadata, and recipe metadata. Add `--snippet-lines 0`
+for path/line-only evidence and combine issue-draft export with
+`--max-json-bytes <n>` when an automation budget must fail closed. These drafts
+are triage aids; review duplicate guidance and current open issues before
+filing.
 
 ### Debugging queries
 
@@ -1469,7 +1482,7 @@ same source location.
 | `--audit-scope <source\|all>` | `search`, `unused` | Choose audit path scope. For recipe search, `source` applies recipe production-code path and exclusion metadata. For ad hoc and named-query searches, `source` adds `src/**`, default doc/test/changelog exclusions, and `--exclude-tests` when no user path was supplied. `all` intentionally searches every indexed path unless other filters exclude it. JSON output reports the effective scope, path filters, and exclusions where applicable. |
 | `--source-only` | `search` | Shorthand for `--audit-scope source` on ad hoc and named searches. Use it for implementation-code searches without selecting a recipe. |
 | `--show-excluded` | `search --recipe <name>` | Include `scope.excluded_diagnostics` in recipe output so broad audits can see which default include patterns, default exclusions, user exclusions, and test filtering were applied. |
-| `--list-recipes` | `search` | List available search audit recipes with query text, recommended labels, exact-match mode, false-positive guidance, query-specific audit taxonomy metadata, supported formats, filter support, and limit semantics. Add `--query <filter>` to filter by recipe/query names, query text, labels, severity, path metadata, or descriptions. |
+| `--list-recipes` | `search` | List available search audit recipes with query text, recommended labels, exact-match mode, false-positive guidance, query-specific audit taxonomy metadata, supported formats, filter support, and limit semantics. Add `--query <filter>` to filter by recipe/query names, query text, labels, severity, path metadata, or descriptions. Use `--names --json` for the smallest deterministic recipe-name payload or `--summary-only --json` for compact recipe metadata. |
 | `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate`, `deps` | Exclude glob-style path patterns. `*` and `?` are wildcards (repeatable) |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate`, `deps` | Exclude likely test files and prefer production code. For `deps`, source and target files are both filtered. |
 | `--exclude-comments` | `search` | Exclude matches whose only retained origin is a comment |
@@ -3631,6 +3644,8 @@ cdidx search "FileMode.Create" --exact-substring --require-after "File.Move" --g
 cdidx search "DangerousCall" --exact-substring --require-before "GuardBefore" --guard-scope same-line --json=array  # 同じ行の前方 guard を要求
 cdidx search --list-recipes                             # 再利用可能な audit recipe を表示
 cdidx search --list-recipes --query sqlite              # recipe/query text、label、severity、path で recipe 発見を絞る
+cdidx search --list-recipes --names --json              # 小さく決定的な recipe 名 payload
+cdidx recipes --summary-only --json                     # automation 向けの compact recipe list alias
 cdidx search --recipe risky-code --json                 # curated audit query set を実行し、grouped JSON を返す
 cdidx search --recipe bounded-read-evidence --json      # 上限付き file-read helper 経路の陽性根拠を表示
 cdidx search --recipe risky-code/raw-diagnostic-echo --json  # recipe 内の child query を1つだけ実行
@@ -3638,6 +3653,8 @@ cdidx search --recipe risky-code --include-query raw-diagnostic-echo --exclude-q
 cdidx search --recipe risky-code --show-excluded --json      # recipe scope / exclusion diagnostics を含める
 cdidx search --recipe risky-code/raw-diagnostic-echo --format compact --limit 20  # summary-first compact JSON と next_cursor
 cdidx search --recipe risky-code/raw-diagnostic-echo --format compact --cursor <next_cursor>
+cdidx audit risky-code --results-only --search-fields path,line,query_name,recipe --json=ndjson --max-json-bytes 65536  # 最小限の audit row
+cdidx search --recipe risky-code --format count --summary-only --max-json-bytes 20000  # compact な recipe count
 cdidx search --named-query pack="dotnet pack" --named-query push="nuget push" --format compact  # 名前付き ad hoc batch と compact snippet
 cdidx search "catch (Exception" --group-by file --count --json    # 広い audit hit を file 別にランク付け
 cdidx search "JsonDocument.Parse" --group-by symbol --count --json # 広い audit hit を enclosing symbol 別にランク付け
@@ -3649,6 +3666,7 @@ cdidx search "TODO" --first-per-file --sample 25 --json=ndjson --max-json-bytes 
 cdidx search "ExecuteReader" --next-steps                  # 上位 hit の inspect / excerpt follow-up command を表示
 cdidx search --recipe risky-code --format issue-drafts --open-issues open-issues.json  # duplicate preflight 付き issue draft JSON
 cdidx search --recipe risky-code --format issue-drafts --open-issues github --repo Widthdom/CodeIndex  # GitHub の live open issue と照合
+cdidx search --recipe risky-code --format issue-drafts --snippet-lines 0 --max-json-bytes 20000  # path / line のみの issue draft
 cdidx search "Thread.Yield" --format issue-drafts --issue-title "Thread.Yield audit" --issue-label audit  # ad hoc issue draft JSON
 cdidx search "--open-reports" --path README.md --count  # `--` で始まる引用済みリテラル
 cdidx search --query "--path" --path README.md          # オプションに見えるリテラルを検索
@@ -3712,10 +3730,13 @@ summary、query count、query ごとの count、`truncated` flag、該当する�
 recipe run が対応する形式は text output、`--json` / `--format json` の aggregate JSON、
 `--json=ndjson` または `--results-only` の NDJSON row stream、`--format count` の
 count-only output、`--format compact` の compact summary、`--format issue-drafts` です。
-`--list-recipes` は text、JSON、`--format compact` に対応します。recipe row stream は
+`--list-recipes` は text、full JSON、`--format compact`、`--names`、`--summary-only` に対応します。
+automation 向けの recipe 発見では、決定的な名前一覧だけなら `cdidx recipes --names --json`、
+compact metadata が必要なら `cdidx recipes --summary-only --json` を使います。recipe row stream は
 `query_name` と `recipe` を含む `--search-fields` で投影でき、`--total-limit` で
-child query 全体の emitted row 数を制限でき、NDJSON の場合だけ `--max-json-bytes` で
-byte 数を制限できます。recipe の count aggregation は `--count-by path|file|symbol|origin`、
+child query 全体の emitted row 数を制限でき、NDJSON では `--max-json-bytes` で byte 数を制限できます。
+recipe count output は `--format count --summary-only --max-json-bytes <n>` により、recipe / scope 名、
+aggregate count、query ごとの count だけを出力できます。recipe の count aggregation は `--count-by path|file|symbol|origin`、
 `--group-by file|symbol|origin --count`、`--unique path|file|symbol|origin` に対応します。
 その他の search export format と `--json=array` は、recipe output が query または
 list metadata ごとに grouped されるため usage error で拒否します。
@@ -3741,8 +3762,10 @@ duplicate-preflight metadata を持つ issue draft object を出力します。
 `duplicate_preflight.checked: false` が含まれます。duplicate preflight の厳しさは
 `--duplicate-confidence low|medium|high` または `--duplicate-threshold <0..1>` で調整でき、
 JSON summary には `confidence` と `minimum_score` が出力されます。draft body は evidence path、
-代表的な source snippet、omitted-result metadata、recipe metadata を含みます。これらの draft は triage aid なので、
-起票前に duplicate guidance と現在の open issue を確認してください。
+代表的な source snippet、omitted-result metadata、recipe metadata を含みます。path / line だけの evidence にしたい場合は
+`--snippet-lines 0` を追加し、automation budget を超える出力を閉じたい場合は issue-draft export に
+`--max-json-bytes <n>` を併用します。これらの draft は triage aid なので、起票前に duplicate guidance と
+現在の open issue を確認してください。
 
 ### クエリのデバッグ
 
@@ -4110,7 +4133,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--audit-scope <source\|all>` | `search`, `unused` | audit path scope を選ぶ。Recipe search の `source` は recipe の本番コード向け path / exclusion metadata を適用する。Ad hoc / named-query search の `source` は user path がない場合に `src/**`、既定の docs/tests/changelog exclusion、`--exclude-tests` を追加する。`all` は他の filter で除外しない限り、すべての indexed path を意図的に検索する。JSON 出力には該当する場合、有効な scope、path filter、exclusion が含まれる。 |
 | `--source-only` | `search` | ad hoc / named search で `--audit-scope source` を指定する shorthand。recipe を選ばずに実装コードだけを検索したい場合に使う。 |
 | `--show-excluded` | `search --recipe <name>` | recipe output に `scope.excluded_diagnostics` を含め、広い audit で default include pattern、default exclusion、user exclusion、test filter の適用状況を確認できるようにする。 |
-| `--list-recipes` | `search` | 利用可能な search audit recipe を query text、推奨 label、exact-match mode、false-positive guidance、query 固有の audit taxonomy metadata、対応 format、filter support、limit semantics 付きで一覧表示する。`--query <filter>` を追加すると recipe/query 名、query text、label、severity、path metadata、説明で絞り込める。 |
+| `--list-recipes` | `search` | 利用可能な search audit recipe を query text、推奨 label、exact-match mode、false-positive guidance、query 固有の audit taxonomy metadata、対応 format、filter support、limit semantics 付きで一覧表示する。`--query <filter>` を追加すると recipe/query 名、query text、label、severity、path metadata、説明で絞り込める。最小の決定的な recipe 名 payload には `--names --json`、compact recipe metadata には `--summary-only --json` を使う。 |
 | `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate`, `deps` | glob 形式のパスパターンを除外する。`*` と `?` がワイルドカード。繰り返し指定可 |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate`, `deps` | テストらしいパスを除外し、本番コードを優先。`deps` では source file と target file の両方をフィルタする。 |
 | `--exclude-comments` | `search` | 保持される一致 origin がコメントだけの検索結果を除外する |
