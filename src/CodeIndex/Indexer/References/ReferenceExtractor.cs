@@ -1060,7 +1060,7 @@ public static partial class ReferenceExtractor
         if (maxReferenceCount is not { } limit)
         {
             truncated = false;
-            return references.ToList();
+            return CopyPluginReferences(references, references.Count);
         }
 
         if (limit <= 0)
@@ -1070,11 +1070,18 @@ public static partial class ReferenceExtractor
         }
 
         var retainedCount = Math.Min(references.Count, limit);
-        var retained = new List<ReferenceRecord>(retainedCount);
-        for (var i = 0; i < retainedCount; i++)
-            retained.Add(references[i]);
         truncated = references.Count > retainedCount;
-        return retained;
+        return CopyPluginReferences(references, retainedCount);
+    }
+
+    private static List<ReferenceRecord> CopyPluginReferences(
+        IReadOnlyList<ReferenceRecord> references,
+        int count)
+    {
+        var copiedReferences = new List<ReferenceRecord>(count);
+        for (var i = 0; i < count; i++)
+            copiedReferences.Add(references[i]);
+        return copiedReferences;
     }
 
     private sealed class BoundedReferenceList(int maxReferenceCount) : List<ReferenceRecord>

@@ -2435,15 +2435,23 @@ public static partial class SymbolExtractor
             && !PatternCache.ContainsKey(pluginLanguage)
             && ExtractorPluginRegistry.TryGetSymbolExtractor(pluginLanguage, out var pluginExtractor))
         {
-            symbols = pluginExtractor.Extract(
+            var pluginSymbols = pluginExtractor.Extract(
                     fileId,
                     preparedContent,
-                    new ExtractionContext(pluginLanguage, filePath))
-                .ToList();
+                    new ExtractionContext(pluginLanguage, filePath));
+            symbols = CopyPluginSymbols(pluginSymbols);
             return true;
         }
 
         return false;
+    }
+
+    private static List<SymbolRecord> CopyPluginSymbols(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var copiedSymbols = new List<SymbolRecord>(symbols.Count);
+        for (var i = 0; i < symbols.Count; i++)
+            copiedSymbols.Add(symbols[i]);
+        return copiedSymbols;
     }
 
     /// <summary>
