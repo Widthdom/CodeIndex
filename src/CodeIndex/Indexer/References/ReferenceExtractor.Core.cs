@@ -27,6 +27,7 @@ public static partial class ReferenceExtractor
             path,
             request.ContentIsNormalized,
             request.HasOversizeLine,
+            request.ConflictMarkerLine,
             request.CancellationToken,
             out var structuralMetadataReferences))
             return structuralMetadataReferences;
@@ -37,6 +38,7 @@ public static partial class ReferenceExtractor
             isRazorFile,
             request.ContentIsNormalized,
             request.HasOversizeLine,
+            request.ConflictMarkerLine,
             out var preparedInput))
             return [];
         request.CancellationToken.ThrowIfCancellationRequested();
@@ -83,7 +85,7 @@ public static partial class ReferenceExtractor
         var definitionNamesByLine = BuildDefinitionNamesByLine(language, symbols, request.ReportDiagnostic);
         var allDefinitionNames = BuildAllDefinitionNames(language, symbols, request.ReportDiagnostic);
         var fileDefinitionNames = isRazorFile
-            ? new HashSet<string>(symbols.Select(symbol => symbol.Name), StringComparer.Ordinal)
+            ? BuildFileDefinitionNames(symbols)
             : null;
         var sqlDefinitionLeafSpansByLine = language == "sql"
             ? SqlReferenceExtractor.BuildDefinitionLeafSpansByLine(lines, symbols)
@@ -92,12 +94,7 @@ public static partial class ReferenceExtractor
             ? SqlReferenceExtractor.BuildWindowFunctionCallSiteSuppressions(structuralLines)
             : null;
         var cobolCallableSymbols = language == "cobol"
-            ? symbols
-                .Where(symbol => symbol.Kind == "function")
-                .OrderBy(symbol => symbol.Line)
-                .ThenBy(symbol => symbol.StartLine)
-                .ThenBy(symbol => symbol.Name, StringComparer.OrdinalIgnoreCase)
-                .ToList()
+            ? BuildCobolCallableSymbols(symbols)
             : null;
         // Include 'property' so expression-bodied and block-bodied property accessors
         // attribute their calls to the property rather than falling through to the
@@ -119,10 +116,7 @@ public static partial class ReferenceExtractor
         // C# の enum はコンストラクタ自体を持てず `CSharpCtorChainRegex` が一致しないので副作用は無い。
         var enclosingTypeCandidates = BuildEnclosingTypeCandidates(symbols, request.ReportDiagnostic);
         var rustEnumCandidates = language == "rust"
-            ? symbols
-                .Where(symbol => symbol.Kind == "enum" && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
-                .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
-                .ToList()
+            ? BuildRustEnumCandidates(symbols)
             : null;
         var pythonDefinitionContainersByLineAndKind = language == "python"
             ? BuildPythonDefinitionContainersByLineAndKind(symbols)
@@ -151,9 +145,12 @@ public static partial class ReferenceExtractor
         var dockerfileVariableNames = DockerfileReferenceExtractor.BuildVariableNames(language, symbols);
         var shellCallableNames = ShellReferenceExtractor.BuildCallableNames(language, symbols);
         var shellGlobalAliasNames = ShellReferenceExtractor.BuildGlobalAliasNames(language, symbols);
-        var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols, csharpKnownTypeNames, lines, structuralLines);
-        var csharpUsingNamespaces = BuildCSharpUsingNamespaces(language, symbols);
-        var csharpUsingStatics = BuildCSharpUsingStatics(language, symbols);
+        IReadOnlyList<(int StartLine, int EndLine)> csharpNamespaceScopes = language == "csharp"
+            ? BuildCSharpNamespaceScopes(symbols)
+            : Array.Empty<(int StartLine, int EndLine)>();
+        var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols, csharpKnownTypeNames, csharpNamespaceScopes, lines, structuralLines);
+        var csharpUsingNamespaces = BuildCSharpUsingNamespaces(language, symbols, csharpNamespaceScopes);
+        var csharpUsingStatics = BuildCSharpUsingStatics(language, symbols, csharpNamespaceScopes);
         var csharpValueReceiverNames = BuildCSharpValueReceiverNamesByContainingType(language, symbols);
         var csharpFunctionValueReceiverNames = BuildCSharpValueReceiverNamesByFunctionStartLine(
             language,

@@ -233,6 +233,7 @@ public static partial class IndexCommandRunner
         string phasePath,
         bool contentIsNormalized,
         bool? hasOversizeLine,
+        int? conflictMarkerLine,
         SymbolExtractionWorkerClient worker,
         CancellationToken cancellationToken)
     {
@@ -241,7 +242,7 @@ public static partial class IndexCommandRunner
         {
             using var regexTimeouts = BoundedRegex.CaptureTimeouts(lang, "symbol_extraction");
             var symbols = contentIsNormalized && hasOversizeLine is { } knownHasOversizeLine
-                ? SymbolExtractor.ExtractNormalized(fileId, lang, content, knownHasOversizeLine, filePath, projectRoot, cancellationToken)
+                ? SymbolExtractor.ExtractNormalized(fileId, lang, content, knownHasOversizeLine, filePath, projectRoot, cancellationToken, conflictMarkerLine)
                 : SymbolExtractor.Extract(fileId, lang, content, filePath, projectRoot, cancellationToken);
             return new SymbolExtractionResult(symbols, BuildRegexTimeoutIssue(issuePath, regexTimeouts));
         }
@@ -255,6 +256,7 @@ public static partial class IndexCommandRunner
             projectRoot,
             contentIsNormalized,
             hasOversizeLine,
+            conflictMarkerLine,
             timeout,
             cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
@@ -865,10 +867,18 @@ public static partial class IndexCommandRunner
         var discovery = DiscoverFullScanFiles(indexer, projectRoot, options, spinnerFrames, cancellationToken);
         var scanResult = discovery.ScanResult;
         var files = discovery.Files;
-        var fileTargets = files.Select(filePath => FullScanFileTarget.Create(
-            projectRoot,
-            filePath,
-            FileIndexer.GetReusableDetectedLanguage(filePath, scanResult.FileLanguages))).ToArray();
+        var fileTargets = new FullScanFileTarget[files.Count];
+        var languageCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < files.Count; i++)
+        {
+            var filePath = files[i];
+            var language = FileIndexer.GetReusableDetectedLanguage(filePath, scanResult.FileLanguages);
+            fileTargets[i] = FullScanFileTarget.Create(projectRoot, filePath, language);
+            if (language == null)
+                continue;
+
+            languageCounts[language] = languageCounts.TryGetValue(language, out var count) ? count + 1 : 1;
+        }
         var knownReadableFileSizes = new Dictionary<string, long>(StringComparer.Ordinal);
         var errorList = discovery.ErrorList;
         var warningList = discovery.WarningList;
@@ -900,7 +910,9 @@ public static partial class IndexCommandRunner
         if (!options.Json && !options.Quiet)
             purgeCts = ConsoleUi.StartSpinner("Cleaning up stale entries...", spinnerFrames);
         var purged = 0;
-        var retainedPaths = fileTargets.Select(target => target.IndexPath).ToHashSet(StringComparer.Ordinal);
+        var retainedPaths = new HashSet<string>(fileTargets.Length, StringComparer.Ordinal);
+        foreach (var target in fileTargets)
+            retainedPaths.Add(target.IndexPath);
         var indexedJavaScriptTypeScriptConfigPathsBeforePurge = writer.GetIndexedJavaScriptTypeScriptConfigPaths();
         if (scanResult.HadErrors)
         {
@@ -1233,16 +1245,22 @@ public static partial class IndexCommandRunner
                 () => currentCSharpWorkspaceFile);
             try
             {
-                var csharpPrepassTargets = fileTargets
-                    .Where(static target => target.Language == "csharp")
-                    .Select(static target => new CSharpStaticInterfacePrepass.FileTarget(
+                var csharpPrepassCapacity = languageCounts.TryGetValue("csharp", out var csharpFileCount) ? csharpFileCount : 0;
+                var csharpPrepassTargets = new List<CSharpStaticInterfacePrepass.FileTarget>(csharpPrepassCapacity);
+                foreach (var target in fileTargets)
+                {
+                    if (target.Language != "csharp")
+                        continue;
+
+                    csharpPrepassTargets.Add(new CSharpStaticInterfacePrepass.FileTarget(
                         target.FilePath,
                         target.RelativePath,
                         target.DisplayRelativePath,
                         target.IndexPath,
-                        target.Language))
-                    .ToArray();
-                if (csharpPrepassTargets.Length == 0)
+                        target.Language));
+                }
+
+                if (csharpPrepassTargets.Count == 0)
                 {
                     csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols([], false);
                 }
@@ -1417,7 +1435,7 @@ public static partial class IndexCommandRunner
                                         references = [];
                                         activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
                                         issues = AppendIssueIfMissing(
-                                            FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine),
+                                            FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine, loaded.ConflictMarkerLine),
                                             generatedSuppressionIssue);
                                         extractionResults.Add(
                                             FullScanFileWorkItem.Precomputed(
@@ -1445,6 +1463,7 @@ public static partial class IndexCommandRunner
                                         activeJsonExtractionPhases[workerIndex],
                                         true,
                                         hasOversizeLine,
+                                        loaded.ConflictMarkerLine,
                                         workerSymbolExtractionWorker,
                                         extractionCancellationToken);
                                     symbols = symbolExtraction.Symbols;
@@ -1480,12 +1499,13 @@ public static partial class IndexCommandRunner
                                             record.Path,
                                             record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
                                             extractionCancellationToken,
-                                            maxReferenceCount: options.MaxReferencesPerFile + 1);
+                                            maxReferenceCount: options.MaxReferencesPerFile + 1,
+                                            conflictMarkerLine: loaded.ConflictMarkerLine);
                                         references = referenceExtraction.References;
                                         referenceRegexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                                     }
                                     activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
-                                    issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine);
+                                    issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine, loaded.ConflictMarkerLine);
                                     if (symbolRegexTimeoutIssue != null)
                                         issues = AppendIssue(issues, symbolRegexTimeoutIssue);
                                     if (referenceRegexTimeoutIssue != null)
@@ -1502,7 +1522,7 @@ public static partial class IndexCommandRunner
                                 else
                                 {
                                     activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
-                                    issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine);
+                                    issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine, loaded.ConflictMarkerLine);
                                 }
                                 extractionResults.Add(
                                     parallelizeExtraction
@@ -1523,6 +1543,7 @@ public static partial class IndexCommandRunner
                                             record,
                                             content,
                                             hasOversizeLine,
+                                            loaded.ConflictMarkerLine,
                                             warning,
                                             chunks,
                                             symbols,
@@ -1794,6 +1815,7 @@ public static partial class IndexCommandRunner
                                 currentJsonIndexFile,
                                 true,
                                 item.HasOversizeLine,
+                                item.ConflictMarkerLine,
                                 mainSymbolExtractionWorker,
                                 cancellationToken)).Symbols
                             : ReassignSymbolFileIds(item.Symbols, fileId);
@@ -1881,7 +1903,8 @@ public static partial class IndexCommandRunner
                                     record.Path,
                                     record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
                                     cancellationToken,
-                                    maxReferenceCount: options.MaxReferencesPerFile + 1);
+                                    maxReferenceCount: options.MaxReferencesPerFile + 1,
+                                    conflictMarkerLine: item.ConflictMarkerLine);
                                 references = referenceExtraction.References;
                                 regexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                             }
@@ -2172,11 +2195,6 @@ public static partial class IndexCommandRunner
         }
         warnings += AddPostExtractionHookWarnings(postExtractionHooks, warningList);
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
-        var languageCounts = fileTargets
-            .Select(static target => target.Language)
-            .Where(static language => language != null)
-            .GroupBy(static language => language!, StringComparer.Ordinal)
-            .ToDictionary(static group => group.Key, static group => group.Count(), StringComparer.Ordinal);
         var signalReader = new DbReader(writer.Connection);
         var sqlGraphContractSignalAfter = signalReader.GetSqlGraphContractSignal(lang: null);
         var hotspotFamilySignalAfter = signalReader.GetHotspotFamilySignal(lang: null);

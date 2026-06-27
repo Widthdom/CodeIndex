@@ -10,14 +10,7 @@ public static partial class SymbolExtractor
 {
     private static void ExtractCppSameLineClassBodyMembers(long fileId, string[] lines, List<SymbolRecord> symbols)
     {
-        var classSymbols = symbols
-            .Where(symbol =>
-                symbol.Kind is "class" or "struct"
-                && symbol.BodyStartLine.HasValue
-                && symbol.BodyEndLine.HasValue
-                && symbol.StartLine == symbol.BodyStartLine.Value
-                && symbol.EndLine == symbol.BodyEndLine.Value)
-            .ToList();
+        var classSymbols = BuildCppSameLineClassSymbolSnapshot(symbols);
 
         foreach (var classSymbol in classSymbols)
         {
@@ -35,17 +28,45 @@ public static partial class SymbolExtractor
             if (body.Length == 0)
                 continue;
 
-            var existingMemberNames = symbols
-                .Where(symbol =>
-                    symbol.Kind == "function"
-                    && symbol.Line == classSymbol.StartLine
-                    && symbol.ContainerKind == classSymbol.Kind
-                    && symbol.ContainerName == classSymbol.Name)
-                .Select(symbol => symbol.Name)
-                .ToHashSet(StringComparer.Ordinal);
+            var existingMemberNames = BuildCppSameLineClassMemberNameSet(symbols, classSymbol);
             foreach (var segment in EnumerateTrimmedCppSegments(body))
                 TryAddCppSameLineClassMemberSymbol(fileId, classSymbol, segment, lineIndex + 1, symbols, existingMemberNames);
         }
+    }
+
+    private static List<SymbolRecord> BuildCppSameLineClassSymbolSnapshot(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var classSymbols = new List<SymbolRecord>();
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is ("class" or "struct")
+                && symbol.BodyStartLine.HasValue
+                && symbol.BodyEndLine.HasValue
+                && symbol.StartLine == symbol.BodyStartLine.Value
+                && symbol.EndLine == symbol.BodyEndLine.Value)
+            {
+                classSymbols.Add(symbol);
+            }
+        }
+
+        return classSymbols;
+    }
+
+    private static HashSet<string> BuildCppSameLineClassMemberNameSet(IReadOnlyList<SymbolRecord> symbols, SymbolRecord classSymbol)
+    {
+        var existingMemberNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind == "function"
+                && symbol.Line == classSymbol.StartLine
+                && symbol.ContainerKind == classSymbol.Kind
+                && symbol.ContainerName == classSymbol.Name)
+            {
+                existingMemberNames.Add(symbol.Name);
+            }
+        }
+
+        return existingMemberNames;
     }
 
     private static IEnumerable<string> EnumerateTrimmedCppSegments(string body)

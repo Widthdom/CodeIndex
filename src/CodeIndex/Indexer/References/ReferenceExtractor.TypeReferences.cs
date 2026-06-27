@@ -100,33 +100,12 @@ public static partial class ReferenceExtractor
         List<ReferenceRecord> references,
         HashSet<string> seen)
     {
-        var interfaceMembersByType = workspaceSymbols
-            .Where(IsCSharpStaticInterfaceMemberContract)
-            .GroupBy(symbol => symbol.ContainerName!, StringComparer.Ordinal)
-            .ToDictionary(
-                group => group.Key,
-                group => group
-                    .Select(symbol => new CSharpStaticInterfaceMemberContract(
-                        symbol.Name,
-                        symbol.Kind,
-                        GetCSharpCallableParameterShape(symbol.Signature),
-                        NormalizeCSharpTypeArgumentShape(symbol.ReturnType ?? string.Empty)))
-                    .ToList(),
-                StringComparer.Ordinal);
+        var interfaceMembersByType = BuildCSharpStaticInterfaceMemberContractsByType(workspaceSymbols);
         if (interfaceMembersByType.Count == 0)
             return;
 
         var interfaceGenericParameters = BuildCSharpInterfaceGenericParameterLookup(workspaceSymbols);
-        var staticMembersByContainer = symbols
-            .Where(symbol => symbol.Kind is "function" or "operator" or "property"
-                             && !string.IsNullOrWhiteSpace(symbol.ContainerName)
-                             && !string.IsNullOrWhiteSpace(symbol.Signature)
-                             && ContainsCSharpWord(symbol.Signature!, "static"))
-            .GroupBy(symbol => symbol.ContainerName!, StringComparer.Ordinal)
-            .ToDictionary(
-                group => group.Key,
-                group => group.ToList(),
-                StringComparer.Ordinal);
+        var staticMembersByContainer = BuildCSharpStaticMembersByContainer(symbols);
 
         foreach (var typeSymbol in symbols)
         {
@@ -156,7 +135,7 @@ public static partial class ReferenceExtractor
                     if (!IsCSharpStaticMemberImplementationCandidate(typeSymbol, implementation))
                         continue;
 
-                    if (!interfaceMembers.Any(contract => MatchesCSharpStaticInterfaceMemberContract(contract, implementation, implementedInterface.TypeArguments)))
+                    if (!AnyCSharpStaticInterfaceMemberContractMatches(interfaceMembers, implementation, implementedInterface.TypeArguments))
                         continue;
 
                     var lineIndex = implementation.StartLine - 1;
@@ -177,6 +156,72 @@ public static partial class ReferenceExtractor
                 }
             }
         }
+    }
+
+    private static Dictionary<string, List<CSharpStaticInterfaceMemberContract>> BuildCSharpStaticInterfaceMemberContractsByType(
+        IReadOnlyList<SymbolRecord> workspaceSymbols)
+    {
+        var contractsByType = new Dictionary<string, List<CSharpStaticInterfaceMemberContract>>(StringComparer.Ordinal);
+        foreach (var symbol in workspaceSymbols)
+        {
+            if (!IsCSharpStaticInterfaceMemberContract(symbol))
+                continue;
+
+            var containerName = symbol.ContainerName!;
+            if (!contractsByType.TryGetValue(containerName, out var contracts))
+            {
+                contracts = new List<CSharpStaticInterfaceMemberContract>();
+                contractsByType.Add(containerName, contracts);
+            }
+
+            contracts.Add(new CSharpStaticInterfaceMemberContract(
+                symbol.Name,
+                symbol.Kind,
+                GetCSharpCallableParameterShape(symbol.Signature),
+                NormalizeCSharpTypeArgumentShape(symbol.ReturnType ?? string.Empty)));
+        }
+
+        return contractsByType;
+    }
+
+    private static Dictionary<string, List<SymbolRecord>> BuildCSharpStaticMembersByContainer(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var staticMembersByContainer = new Dictionary<string, List<SymbolRecord>>(StringComparer.Ordinal);
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is not ("function" or "operator" or "property")
+                || string.IsNullOrWhiteSpace(symbol.ContainerName)
+                || string.IsNullOrWhiteSpace(symbol.Signature)
+                || !ContainsCSharpWord(symbol.Signature!, "static"))
+            {
+                continue;
+            }
+
+            var containerName = symbol.ContainerName!;
+            if (!staticMembersByContainer.TryGetValue(containerName, out var staticMembers))
+            {
+                staticMembers = new List<SymbolRecord>();
+                staticMembersByContainer.Add(containerName, staticMembers);
+            }
+
+            staticMembers.Add(symbol);
+        }
+
+        return staticMembersByContainer;
+    }
+
+    private static bool AnyCSharpStaticInterfaceMemberContractMatches(
+        IReadOnlyList<CSharpStaticInterfaceMemberContract> interfaceMembers,
+        SymbolRecord implementation,
+        IReadOnlyDictionary<string, string> typeArguments)
+    {
+        foreach (var contract in interfaceMembers)
+        {
+            if (MatchesCSharpStaticInterfaceMemberContract(contract, implementation, typeArguments))
+                return true;
+        }
+
+        return false;
     }
 
     private static bool IsCSharpStaticInterfaceMemberContract(SymbolRecord symbol)
@@ -250,10 +295,16 @@ public static partial class ReferenceExtractor
             return string.Empty;
 
         var parameterList = signature!.Substring(parameterStart, parameterEnd - parameterStart);
-        return string.Join(
-            ",",
-            SplitTopLevelCommaSpans(parameterList)
-                .Select(span => NormalizeCSharpParameterTypeShape(parameterList.Substring(span.Start, span.Length))));
+        var parameterShape = new StringBuilder(parameterList.Length);
+        foreach (var span in SplitTopLevelCommaSpans(parameterList))
+        {
+            if (parameterShape.Length > 0)
+                parameterShape.Append(',');
+
+            parameterShape.Append(NormalizeCSharpParameterTypeShape(parameterList.Substring(span.Start, span.Length)));
+        }
+
+        return parameterShape.ToString();
     }
 
     private static string NormalizeCSharpParameterTypeShape(string parameter)
@@ -407,10 +458,21 @@ public static partial class ReferenceExtractor
                 continue;
             }
 
-            var parameters = ExtractCSharpGenericArgumentList(symbol.Signature!, symbol.Name)
-                .Select(ExtractCSharpGenericParameterName)
-                .Where(static name => !string.IsNullOrWhiteSpace(name))
-                .ToList()!;
+            var parameters = ExtractCSharpGenericArgumentList(symbol.Signature!, symbol.Name);
+            var parameterCount = 0;
+            for (var index = 0; index < parameters.Count; index++)
+            {
+                var name = ExtractCSharpGenericParameterName(parameters[index]);
+                if (string.IsNullOrWhiteSpace(name))
+                    continue;
+
+                parameters[parameterCount] = name;
+                parameterCount++;
+            }
+
+            if (parameterCount < parameters.Count)
+                parameters.RemoveRange(parameterCount, parameters.Count - parameterCount);
+
             if (parameters.Count > 0)
                 lookup[symbol.Name] = parameters;
         }
@@ -462,12 +524,10 @@ public static partial class ReferenceExtractor
         if (!interfaceGenericParameters.TryGetValue(interfaceName, out var parameters) || parameters.Count == 0)
             return map;
 
-        var arguments = ExtractCSharpGenericArgumentList(rawSegment, interfaceName)
-            .Select(NormalizeCSharpTypeArgumentShape)
-            .ToList();
+        var arguments = ExtractCSharpGenericArgumentList(rawSegment, interfaceName);
         var count = Math.Min(parameters.Count, arguments.Count);
         for (var i = 0; i < count; i++)
-            map[parameters[i]] = arguments[i];
+            map[parameters[i]] = NormalizeCSharpTypeArgumentShape(arguments[i]);
 
         return map;
     }
@@ -487,10 +547,15 @@ public static partial class ReferenceExtractor
             return [];
 
         var list = text.Substring(genericStart + 1, genericEnd - genericStart - 1);
-        return SplitTopLevelCommaSpans(list)
-            .Select(span => list.Substring(span.Start, span.Length).Trim())
-            .Where(static item => item.Length > 0)
-            .ToList();
+        var arguments = new List<string>();
+        foreach (var span in SplitTopLevelCommaSpans(list))
+        {
+            var item = list.Substring(span.Start, span.Length).Trim();
+            if (item.Length > 0)
+                arguments.Add(item);
+        }
+
+        return arguments;
     }
 
     private static string ExtractCSharpGenericParameterName(string parameter)
@@ -675,13 +740,14 @@ public static partial class ReferenceExtractor
         internal InnermostContainerResolver(IReadOnlyList<SymbolRecord> candidates)
         {
             this.candidates = candidates;
-            candidatesByStart = candidates
-                .Select((symbol, index) => (Symbol: symbol, SpanLength: GetContainerSpanLength(symbol), OriginalIndex: index))
-                .OrderBy(item => item.Symbol.BodyStartLine!.Value)
-                .ThenBy(item => item.Symbol.BodyEndLine!.Value)
-                .ThenBy(item => item.SpanLength)
-                .ThenBy(item => item.OriginalIndex)
-                .ToList();
+            candidatesByStart = new List<(SymbolRecord Symbol, int SpanLength, int OriginalIndex)>(candidates.Count);
+            for (var index = 0; index < candidates.Count; index++)
+            {
+                var symbol = candidates[index];
+                candidatesByStart.Add((symbol, GetContainerSpanLength(symbol), index));
+            }
+
+            candidatesByStart.Sort(CompareCandidatesByStart);
         }
 
         internal SymbolRecord? Find(int lineNumber)
@@ -719,6 +785,25 @@ public static partial class ReferenceExtractor
 
         private static int GetContainerSpanLength(SymbolRecord symbol) =>
             (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine);
+
+        private static int CompareCandidatesByStart(
+            (SymbolRecord Symbol, int SpanLength, int OriginalIndex) left,
+            (SymbolRecord Symbol, int SpanLength, int OriginalIndex) right)
+        {
+            var compare = left.Symbol.BodyStartLine!.Value.CompareTo(right.Symbol.BodyStartLine!.Value);
+            if (compare != 0)
+                return compare;
+
+            compare = left.Symbol.BodyEndLine!.Value.CompareTo(right.Symbol.BodyEndLine!.Value);
+            if (compare != 0)
+                return compare;
+
+            compare = left.SpanLength.CompareTo(right.SpanLength);
+            if (compare != 0)
+                return compare;
+
+            return left.OriginalIndex.CompareTo(right.OriginalIndex);
+        }
 
         private readonly record struct ActiveContainer(SymbolRecord Symbol, int SpanLength, int OriginalIndex) : IComparable<ActiveContainer>
         {

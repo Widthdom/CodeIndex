@@ -732,6 +732,51 @@ public class DbWriter
         }
     }
 
+    /// <summary>
+    /// Read-only unchanged lookup for callers that have only filesystem stat data.
+    /// filesystem stat だけを持つ呼び出し元向けの read-only 変更なし判定。
+    /// </summary>
+    public long? GetUnchangedFileIdByStat(
+        string relativePath,
+        DateTime modified,
+        long size,
+        string? language,
+        bool allowReuse = true)
+    {
+        if (!allowReuse)
+            return null;
+        if (!SymbolExtractorVersionMatchesCurrent(language))
+            return null;
+        if (HasStaleIssueMetadata(relativePath))
+            return null;
+
+        var cmd = RentCommand(
+            @"SELECT id
+              FROM files
+              WHERE path = @path
+                AND modified = @modified
+                AND size = @size
+              LIMIT 1",
+            static c =>
+            {
+                c.Parameters.Add("@path", SqliteType.Text);
+                c.Parameters.Add("@modified", SqliteType.Text);
+                c.Parameters.Add("@size", SqliteType.Integer);
+            });
+        try
+        {
+            cmd.Parameters["@path"].Value = relativePath;
+            cmd.Parameters["@modified"].Value = modified;
+            cmd.Parameters["@size"].Value = size;
+            var raw = cmd.ExecuteScalar();
+            return raw is long id ? id : null;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
+    }
+
     private bool HasStaleIssueMetadata(string relativePath)
     {
         if (!HasIssueMetadataColumns())
@@ -739,17 +784,25 @@ public class DbWriter
             return false;
         }
 
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
+        var cmd = RentCommand(
+            @"
             SELECT 1
             FROM file_issues i
             JOIN files f ON i.file_id = f.id
             WHERE f.path = @path
               AND i.kind IN ('replacement_char', 'non_utf8_likely')
               AND (i.origin IS NULL OR i.severity IS NULL)
-            LIMIT 1";
-        SqliteCommandPolicy.AddText(cmd, "@path", relativePath);
-        return cmd.ExecuteScalar() != null;
+            LIMIT 1",
+            static c => c.Parameters.Add("@path", SqliteType.Text));
+        try
+        {
+            cmd.Parameters["@path"].Value = relativePath;
+            return cmd.ExecuteScalar() != null;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     private bool HasIssueMetadataColumns() =>
@@ -763,26 +816,50 @@ public class DbWriter
     /// </summary>
     public bool HasAnyFilesWithLanguage(string lang)
     {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "SELECT 1 FROM files WHERE lang = @lang LIMIT 1";
-        SqliteCommandPolicy.AddText(cmd, "@lang", lang);
-        return cmd.ExecuteScalar() != null;
+        var cmd = RentCommand(
+            "SELECT 1 FROM files WHERE lang = @lang LIMIT 1",
+            static c => c.Parameters.Add("@lang", SqliteType.Text));
+        try
+        {
+            cmd.Parameters["@lang"].Value = lang;
+            return cmd.ExecuteScalar() != null;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     public int CountSymbolsForFile(long fileId)
     {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(*) FROM symbols WHERE file_id = @file_id";
-        SqliteCommandPolicy.AddInt64(cmd, "@file_id", fileId);
-        return SqliteCommandPolicy.ReadInt32Scalar(cmd, "symbols count for file");
+        var cmd = RentCommand(
+            "SELECT COUNT(*) FROM symbols WHERE file_id = @file_id",
+            static c => c.Parameters.Add("@file_id", SqliteType.Integer));
+        try
+        {
+            cmd.Parameters["@file_id"].Value = fileId;
+            return SqliteCommandPolicy.ReadInt32Scalar(cmd, "symbols count for file");
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     public int CountReferencesForFile(long fileId)
     {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE file_id = @file_id";
-        SqliteCommandPolicy.AddInt64(cmd, "@file_id", fileId);
-        return SqliteCommandPolicy.ReadInt32Scalar(cmd, "symbol reference count for file");
+        var cmd = RentCommand(
+            "SELECT COUNT(*) FROM symbol_references WHERE file_id = @file_id",
+            static c => c.Parameters.Add("@file_id", SqliteType.Integer));
+        try
+        {
+            cmd.Parameters["@file_id"].Value = fileId;
+            return SqliteCommandPolicy.ReadInt32Scalar(cmd, "symbol reference count for file");
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     public bool HasExtractionCapViolationForFile(long fileId, int maxSymbolsPerFile, int maxReferencesPerFile)
@@ -794,8 +871,8 @@ public class DbWriter
         int maxReferencesPerFile,
         bool? generatedExtractionSuppressed)
     {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
+        var cmd = RentCommand(
+            @"
             SELECT CASE WHEN
                 (SELECT COUNT(*) FROM symbols WHERE file_id = @file_id) > @max_symbols
                 OR EXISTS (
@@ -822,22 +899,51 @@ public class DbWriter
                         )
                     ) <> @generated_suppressed
                 )
-            THEN 1 ELSE 0 END";
-        SqliteCommandPolicy.AddInt64(cmd, "@file_id", fileId);
-        SqliteCommandPolicy.AddInt32(cmd, "@max_symbols", maxSymbolsPerFile);
-        SqliteCommandPolicy.AddInt32(cmd, "@max_references", maxReferencesPerFile);
-        SqliteCommandPolicy.AddNullableBoolean(cmd, "@generated_suppressed", generatedExtractionSuppressed);
-        SqliteCommandPolicy.AddText(cmd, "@generated_issue_kind", FileIndexer.GeneratedCodeExtractionSkippedIssueKind);
-        return SqliteCommandPolicy.ReadInt32Scalar(cmd, "reusable file blocking issue") != 0;
+            THEN 1 ELSE 0 END",
+            static c =>
+            {
+                c.Parameters.Add("@file_id", SqliteType.Integer);
+                c.Parameters.Add("@max_symbols", SqliteType.Integer);
+                c.Parameters.Add("@max_references", SqliteType.Integer);
+                c.Parameters.Add("@generated_suppressed", SqliteType.Integer);
+                c.Parameters.Add("@generated_issue_kind", SqliteType.Text);
+            });
+        try
+        {
+            cmd.Parameters["@file_id"].Value = fileId;
+            cmd.Parameters["@max_symbols"].Value = maxSymbolsPerFile;
+            cmd.Parameters["@max_references"].Value = maxReferencesPerFile;
+            cmd.Parameters["@generated_suppressed"].Value = generatedExtractionSuppressed.HasValue
+                ? (generatedExtractionSuppressed.Value ? 1 : 0)
+                : DBNull.Value;
+            cmd.Parameters["@generated_issue_kind"].Value = FileIndexer.GeneratedCodeExtractionSkippedIssueKind;
+            return SqliteCommandPolicy.ReadInt32Scalar(cmd, "reusable file blocking issue") != 0;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     public bool HasIssueForFile(long fileId, string kind)
     {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "SELECT 1 FROM file_issues WHERE file_id = @file_id AND kind = @kind LIMIT 1";
-        SqliteCommandPolicy.AddInt64(cmd, "@file_id", fileId);
-        SqliteCommandPolicy.AddText(cmd, "@kind", kind);
-        return cmd.ExecuteScalar() != null;
+        var cmd = RentCommand(
+            "SELECT 1 FROM file_issues WHERE file_id = @file_id AND kind = @kind LIMIT 1",
+            static c =>
+            {
+                c.Parameters.Add("@file_id", SqliteType.Integer);
+                c.Parameters.Add("@kind", SqliteType.Text);
+            });
+        try
+        {
+            cmd.Parameters["@file_id"].Value = fileId;
+            cmd.Parameters["@kind"].Value = kind;
+            return cmd.ExecuteScalar() != null;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     public IReadOnlyList<string> GetIndexedLanguages()
@@ -846,17 +952,25 @@ public class DbWriter
         if (!TableExists("files"))
             return languages;
 
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
+        var cmd = RentCommand(
+            @"
             SELECT DISTINCT f.lang
             FROM files f
             WHERE f.lang IS NOT NULL
               AND f.lang <> ''
               AND EXISTS (SELECT 1 FROM symbols s WHERE s.file_id = f.id)
-            ORDER BY f.lang";
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
-            languages.Add(reader.GetString(0));
+            ORDER BY f.lang",
+            static _ => { });
+        try
+        {
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+                languages.Add(reader.GetString(0));
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
         return languages;
     }
 
@@ -934,10 +1048,12 @@ public class DbWriter
             return 0;
 
         var staleIds = new List<long>();
-        using (var cmd = _conn.CreateCommand())
+        var cmd = RentCommand(
+            "SELECT id, path FROM files WHERE path <> @path",
+            static c => c.Parameters.Add("@path", SqliteType.Text));
+        try
         {
-            cmd.CommandText = "SELECT id, path FROM files WHERE path <> @path";
-            SqliteCommandPolicy.Add(cmd, "@path", retainedRelativePath);
+            cmd.Parameters["@path"].Value = retainedRelativePath;
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
@@ -953,6 +1069,10 @@ public class DbWriter
                 if (!File.Exists(LongPath.EnsureWindowsPrefix(absolutePath)))
                     staleIds.Add(id);
             }
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
         }
 
         return DeleteStaleFileIds(staleIds);
@@ -1060,8 +1180,8 @@ public class DbWriter
 
     public IReadOnlyList<string> GetIndexedJavaScriptTypeScriptConfigPaths()
     {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = """
+        var cmd = RentCommand(
+            """
             SELECT path
             FROM files
             WHERE lower(path) = 'jsconfig.json'
@@ -1073,12 +1193,20 @@ public class DbWriter
                OR lower(path) LIKE '%/jsconfig.%.json'
                OR lower(path) LIKE '%/tsconfig.%.json'
             ORDER BY path
-            """;
-        var paths = new List<string>();
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
-            paths.Add(reader.GetString(0));
-        return paths;
+            """,
+            static _ => { });
+        try
+        {
+            var paths = new List<string>();
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+                paths.Add(reader.GetString(0));
+            return paths;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     /// <summary>
@@ -1227,7 +1355,7 @@ public class DbWriter
         {
             CheckBatchCancellationAndReportProgress("insert_symbols", i, symbols.Count, cancellationToken);
             int end = Math.Min(i + rowsPerStatement, symbols.Count);
-            var foldedNameCache = new Dictionary<string, string?>(StringComparer.Ordinal);
+            var foldedNameCache = CreateFoldedNameCache(end - i, namesPerRow: 1);
             try
             {
                 // Only create a batch transaction when not already inside an outer transaction
@@ -1262,7 +1390,7 @@ public class DbWriter
     private void InsertSymbolsWithRowSkip(IReadOnlyList<SymbolRecord> symbols, int start, int end, SqliteException batchException, CancellationToken cancellationToken)
     {
         using var transaction = !IsInTransaction() ? BeginTransaction(cancellationToken, "insert symbols row skip") : null;
-        var foldedNameCache = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var foldedNameCache = CreateFoldedNameCache(end - start, namesPerRow: 1);
         for (int i = start; i < end; i++)
         {
             CheckBatchCancellationAndReportProgress("insert_symbols_row_skip", i, end, cancellationToken);
@@ -1345,7 +1473,7 @@ public class DbWriter
     private void InsertChunkBatch(IReadOnlyList<ChunkRecord> chunks, int start, int end)
     {
         using var cmd = _conn.CreateCommand();
-        var sql = new StringBuilder();
+        var sql = CreateBatchSqlBuilder(end - start, estimatedCharsPerRow: 64);
         sql.Append("INSERT INTO chunks (file_id, chunk_index, start_line, end_line, content) VALUES ");
         for (int j = start; j < end; j++)
         {
@@ -1368,7 +1496,7 @@ public class DbWriter
     private void InsertSymbolBatch(IReadOnlyList<SymbolRecord> symbols, int start, int end, Dictionary<string, string?> foldedNameCache)
     {
         using var cmd = _conn.CreateCommand();
-        var sql = new StringBuilder();
+        var sql = CreateBatchSqlBuilder(end - start, estimatedCharsPerRow: 320);
         sql.Append(@"
                 INSERT INTO symbols (
                     file_id, kind, sub_kind, name, line, start_line, start_column, end_line,
@@ -1428,8 +1556,7 @@ public class DbWriter
     public List<SymbolRecord> LoadCSharpStaticInterfaceContractSymbols(IReadOnlySet<string>? excludedPaths = null)
     {
         var symbols = new List<SymbolRecord>();
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
+        const string sql = @"
             SELECT
                 f.path,
                 s.file_id, s.kind, s.name, s.line,
@@ -1454,33 +1581,41 @@ public class DbWriter
                     )
               )";
 
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        var cmd = RentCommand(sql, static _ => { });
+        try
         {
-            var path = reader.GetString(0);
-            if (excludedPaths?.Contains(path) == true)
-                continue;
-
-            symbols.Add(new SymbolRecord
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
             {
-                FileId = reader.GetInt64(1),
-                Kind = reader.GetString(2),
-                Name = reader.GetString(3),
-                Line = reader.GetInt32(4),
-                StartLine = reader.GetInt32(5),
-                StartColumn = reader.IsDBNull(6) ? null : reader.GetInt32(6),
-                EndLine = reader.GetInt32(7),
-                BodyStartLine = reader.IsDBNull(8) ? null : reader.GetInt32(8),
-                BodyEndLine = reader.IsDBNull(9) ? null : reader.GetInt32(9),
-                Signature = reader.IsDBNull(10) ? null : reader.GetString(10),
-                ContainerKind = reader.IsDBNull(11) ? null : reader.GetString(11),
-                ContainerName = reader.IsDBNull(12) ? null : reader.GetString(12),
-                ContainerQualifiedName = reader.IsDBNull(13) ? null : reader.GetString(13),
-                FamilyKey = reader.IsDBNull(14) ? null : reader.GetString(14),
-                Visibility = reader.IsDBNull(15) ? null : reader.GetString(15),
-                ReturnType = reader.IsDBNull(16) ? null : reader.GetString(16),
-                IsMetadataTarget = reader.IsDBNull(17) ? null : reader.GetInt32(17) != 0,
-            });
+                var path = reader.GetString(0);
+                if (excludedPaths?.Contains(path) == true)
+                    continue;
+
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = reader.GetInt64(1),
+                    Kind = reader.GetString(2),
+                    Name = reader.GetString(3),
+                    Line = reader.GetInt32(4),
+                    StartLine = reader.GetInt32(5),
+                    StartColumn = reader.IsDBNull(6) ? null : reader.GetInt32(6),
+                    EndLine = reader.GetInt32(7),
+                    BodyStartLine = reader.IsDBNull(8) ? null : reader.GetInt32(8),
+                    BodyEndLine = reader.IsDBNull(9) ? null : reader.GetInt32(9),
+                    Signature = reader.IsDBNull(10) ? null : reader.GetString(10),
+                    ContainerKind = reader.IsDBNull(11) ? null : reader.GetString(11),
+                    ContainerName = reader.IsDBNull(12) ? null : reader.GetString(12),
+                    ContainerQualifiedName = reader.IsDBNull(13) ? null : reader.GetString(13),
+                    FamilyKey = reader.IsDBNull(14) ? null : reader.GetString(14),
+                    Visibility = reader.IsDBNull(15) ? null : reader.GetString(15),
+                    ReturnType = reader.IsDBNull(16) ? null : reader.GetString(16),
+                    IsMetadataTarget = reader.IsDBNull(17) ? null : reader.GetInt32(17) != 0,
+                });
+            }
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
         }
 
         return symbols;
@@ -1491,8 +1626,7 @@ public class DbWriter
         if (paths.Count == 0)
             return false;
 
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
+        const string sql = @"
             SELECT f.path
             FROM symbols s
             JOIN files f ON f.id = s.file_id
@@ -1502,11 +1636,19 @@ public class DbWriter
               AND s.signature LIKE '%static%'
               AND (s.signature LIKE '%abstract%' OR s.signature LIKE '%virtual%')";
 
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        var cmd = RentCommand(sql, static _ => { });
+        try
         {
-            if (paths.Contains(reader.GetString(0)))
-                return true;
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                if (paths.Contains(reader.GetString(0)))
+                    return true;
+            }
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
         }
 
         return false;
@@ -1531,7 +1673,7 @@ public class DbWriter
         {
             CheckBatchCancellationAndReportProgress("insert_references", i, references.Count, cancellationToken);
             int end = Math.Min(i + rowsPerStatement, references.Count);
-            var foldedNameCache = new Dictionary<string, string?>(StringComparer.Ordinal);
+            var foldedNameCache = CreateFoldedNameCache(end - i, namesPerRow: 2);
             // Always open a chunk-scoped transaction or SAVEPOINT so reference_lines and
             // symbol_references share one rollback boundary; without it a mid-chunk failure
             // under an outer transaction would orphan committed reference_lines (#1518).
@@ -1539,7 +1681,7 @@ public class DbWriter
             var referenceLineIds = UpsertReferenceLines(references, i, end, cancellationToken);
 
             using var cmd = _conn.CreateCommand();
-            var sql = new StringBuilder();
+            var sql = CreateBatchSqlBuilder(end - i, estimatedCharsPerRow: 256);
             sql.Append(@"
                 INSERT INTO symbol_references (
                     file_id, symbol_name, reference_kind, line, column_number,
@@ -1612,7 +1754,8 @@ public class DbWriter
 
     private Dictionary<(long FileId, int Line, string Context), long> UpsertReferenceLines(IReadOnlyList<ReferenceRecord> references, int start, int end, CancellationToken cancellationToken)
     {
-        var contextsByLine = new Dictionary<(long FileId, int Line, string Context), string>();
+        var batchCount = end - start;
+        var contextsByLine = new Dictionary<(long FileId, int Line, string Context), string>(batchCount);
         for (int i = start; i < end; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1627,7 +1770,7 @@ public class DbWriter
             CheckBatchCancellationAndReportProgress("upsert_reference_lines", i, rows.Length, cancellationToken);
             int batchEnd = Math.Min(i + rowsPerStatement, rows.Length);
             using var cmd = _conn.CreateCommand();
-            var sql = new StringBuilder();
+            var sql = CreateBatchSqlBuilder(batchEnd - i, estimatedCharsPerRow: 64);
             sql.Append("INSERT INTO reference_lines (file_id, line, context) VALUES ");
             for (int j = i; j < batchEnd; j++)
             {
@@ -1646,19 +1789,22 @@ public class DbWriter
             cmd.ExecuteNonQuery();
         }
 
-        var lineIds = new Dictionary<(long FileId, int Line, string Context), long>();
+        var lineIds = new Dictionary<(long FileId, int Line, string Context), long>(rows.Length);
         int keysPerStatement = GetRowsPerInsertStatement(columnCount: 3);
         for (int i = 0; i < rows.Length; i += keysPerStatement)
         {
             CheckBatchCancellationAndReportProgress("lookup_reference_lines", i, rows.Length, cancellationToken);
             int keyEnd = Math.Min(i + keysPerStatement, rows.Length);
             using var cmd = _conn.CreateCommand();
-            var predicates = new List<string>(keyEnd - i);
+            var predicates = CreateBatchSqlBuilder(keyEnd - i, estimatedCharsPerRow: 96);
             for (int j = i; j < keyEnd; j++)
             {
+                if (j > i)
+                    predicates.Append(" OR ");
+
                 var suffix = j - i;
                 var ((fileId, line, _), context) = rows[j];
-                predicates.Add($"(file_id = @lookupFid{suffix} AND line = @lookupLine{suffix} AND context = @lookupContext{suffix})");
+                predicates.Append($"(file_id = @lookupFid{suffix} AND line = @lookupLine{suffix} AND context = @lookupContext{suffix})");
                 cmd.Parameters.Add($"@lookupFid{suffix}", SqliteType.Integer).Value = fileId;
                 cmd.Parameters.Add($"@lookupLine{suffix}", SqliteType.Integer).Value = line;
                 cmd.Parameters.Add($"@lookupContext{suffix}", SqliteType.Text).Value = context;
@@ -1667,7 +1813,7 @@ public class DbWriter
             cmd.CommandText = $@"
                 SELECT id, file_id, line, context
                 FROM reference_lines
-                WHERE {string.Join(" OR ", predicates)}";
+                WHERE {predicates}";
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
@@ -1686,8 +1832,8 @@ public class DbWriter
 
     internal void RefreshMutualRecursionFlags()
     {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
+        var cmd = RentCommand(
+            @"
             UPDATE symbol_references AS r
             SET is_mutual_recursion = CASE
                 WHEN r.is_self_reference = 0
@@ -1725,24 +1871,37 @@ public class DbWriter
                  )
                 THEN 1
                 ELSE 0
-            END";
-        cmd.ExecuteNonQuery();
+            END",
+            static _ => { });
+        try
+        {
+            cmd.ExecuteNonQuery();
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     public int RebuildTypeScriptAugmentationReferences(string? projectRoot = null)
     {
         using var transaction = BeginTransaction();
 
-        using (var deleteCmd = _conn.CreateCommand())
+        var deleteCmd = RentCommand(
+            "DELETE FROM symbol_references WHERE reference_kind = 'augmentation'",
+            static _ => { });
+        try
         {
-            deleteCmd.CommandText = "DELETE FROM symbol_references WHERE reference_kind = 'augmentation'";
             deleteCmd.ExecuteNonQuery();
+        }
+        finally
+        {
+            ReleaseCommand(deleteCmd);
         }
 
         var references = new List<ReferenceRecord>();
-        using (var cmd = _conn.CreateCommand())
-        {
-            cmd.CommandText = @"
+        var cmd = RentCommand(
+            @"
                 SELECT s.file_id,
                        f.path,
                        s.name,
@@ -1758,8 +1917,10 @@ public class DbWriter
                   AND s.name IS NOT NULL
                   AND s.name <> ''
                   AND s.kind = 'interface'
-                ORDER BY s.name, s.file_id, s.line";
-
+                ORDER BY s.name, s.file_id, s.line",
+            static _ => { });
+        try
+        {
             using var reader = cmd.ExecuteReader();
             var declarations = new List<(long FileId, string Path, string Name, int Line, int Column, string Signature, string Kind, string ContainerName, string? Visibility)>();
             while (reader.Read())
@@ -1797,6 +1958,10 @@ public class DbWriter
                     });
                 }
             }
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
         }
 
         InsertReferences(references);
@@ -1922,31 +2087,55 @@ public class DbWriter
     {
         // Always delete existing issues — if the file is now clean, old issues must be removed
         // 常に既存問題を削除 — ファイルが修正済みなら古い問題を残さない
-        using var delCmd = _conn.CreateCommand();
-        delCmd.CommandText = "DELETE FROM file_issues WHERE file_id = @fid";
-        SqliteCommandPolicy.Add(delCmd, "@fid", fileId);
-        delCmd.ExecuteNonQuery();
+        var delCmd = RentCommand(
+            "DELETE FROM file_issues WHERE file_id = @fid",
+            static c => c.Parameters.Add("@fid", SqliteType.Integer));
+        try
+        {
+            delCmd.Parameters["@fid"].Value = fileId;
+            delCmd.ExecuteNonQuery();
+        }
+        finally
+        {
+            ReleaseCommand(delCmd);
+        }
 
         if (issues.Count == 0) return;
 
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "INSERT INTO file_issues (file_id, kind, line, message, origin, severity) VALUES (@fid, @kind, @line, @message, @origin, @severity)";
-        var pFid = cmd.Parameters.Add("@fid", SqliteType.Integer);
-        var pKind = cmd.Parameters.Add("@kind", SqliteType.Text);
-        var pLine = cmd.Parameters.Add("@line", SqliteType.Integer);
-        var pMessage = cmd.Parameters.Add("@message", SqliteType.Text);
-        var pOrigin = cmd.Parameters.Add("@origin", SqliteType.Text);
-        var pSeverity = cmd.Parameters.Add("@severity", SqliteType.Text);
-
-        foreach (var issue in issues)
+        var cmd = RentCommand(
+            "INSERT INTO file_issues (file_id, kind, line, message, origin, severity) VALUES (@fid, @kind, @line, @message, @origin, @severity)",
+            static c =>
+            {
+                c.Parameters.Add("@fid", SqliteType.Integer);
+                c.Parameters.Add("@kind", SqliteType.Text);
+                c.Parameters.Add("@line", SqliteType.Integer);
+                c.Parameters.Add("@message", SqliteType.Text);
+                c.Parameters.Add("@origin", SqliteType.Text);
+                c.Parameters.Add("@severity", SqliteType.Text);
+            });
+        try
         {
-            pFid.Value = fileId;
-            pKind.Value = issue.Kind;
-            pLine.Value = issue.Line;
-            pMessage.Value = issue.Message;
-            pOrigin.Value = issue.Origin ?? (object)DBNull.Value;
-            pSeverity.Value = issue.Severity ?? (object)DBNull.Value;
-            cmd.ExecuteNonQuery();
+            var pFid = cmd.Parameters["@fid"];
+            var pKind = cmd.Parameters["@kind"];
+            var pLine = cmd.Parameters["@line"];
+            var pMessage = cmd.Parameters["@message"];
+            var pOrigin = cmd.Parameters["@origin"];
+            var pSeverity = cmd.Parameters["@severity"];
+
+            foreach (var issue in issues)
+            {
+                pFid.Value = fileId;
+                pKind.Value = issue.Kind;
+                pLine.Value = issue.Line;
+                pMessage.Value = issue.Message;
+                pOrigin.Value = issue.Origin ?? (object)DBNull.Value;
+                pSeverity.Value = issue.Severity ?? (object)DBNull.Value;
+                cmd.ExecuteNonQuery();
+            }
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
         }
     }
 
@@ -1981,14 +2170,7 @@ public class DbWriter
     public int PurgeStaleFiles(string projectRoot, Action? beforeCommit = null)
     {
         // Collect all paths currently in DB / DB内の全パスを収集
-        var dbPaths = new List<(long id, string path)>();
-        using (var cmd = _conn.CreateCommand())
-        {
-            cmd.CommandText = "SELECT id, path FROM files";
-            using var reader = cmd.ExecuteTrackedReader();
-            while (reader.TrackedRead())
-                dbPaths.Add((reader.GetInt64(0), reader.GetString(1)));
-        }
+        var dbPaths = LoadCurrentFilePaths();
 
         // Identify stale files (no longer on disk) / ディスク上に存在しないファイルを特定
         var staleIds = new List<long>();
@@ -2006,24 +2188,7 @@ public class DbWriter
         if (staleIds.Count == 0)
             return 0;
 
-        // Delete all stale files in a single transaction for atomicity and performance
-        // アトミック性とパフォーマンスのため、全古いファイルを1トランザクションで削除
-        // CASCADE on chunks/symbols + FTS triggers handle all cleanup automatically
-        // chunks/symbolsのCASCADE + FTSトリガーが全クリーンアップを自動処理する
-        using var txn = BeginTransaction();
-        using var deleteCmd = _conn.CreateCommand();
-        deleteCmd.CommandText = "DELETE FROM files WHERE id = @id";
-        var pId = deleteCmd.Parameters.Add("@id", SqliteType.Integer);
-        deleteCmd.Prepare();
-        foreach (var id in staleIds)
-        {
-            pId.Value = id;
-            deleteCmd.ExecuteNonQuery();
-        }
-        beforeCommit?.Invoke();
-        txn.Commit();
-
-        return staleIds.Count;
+        return DeleteFilesById(staleIds, beforeCommit);
     }
 
     /// <summary>
@@ -2035,35 +2200,13 @@ public class DbWriter
     public int PurgeFilesOutsideRetainedSet(IReadOnlySet<string> retainedRelativePaths)
     {
         var staleIds = new List<long>();
-        using (var cmd = _conn.CreateCommand())
+        foreach (var (id, path) in LoadCurrentFilePaths())
         {
-            cmd.CommandText = "SELECT id, path FROM files";
-            using var reader = cmd.ExecuteTrackedReader();
-            while (reader.TrackedRead())
-            {
-                var id = reader.GetInt64(0);
-                var path = reader.GetString(1);
-                if (!retainedRelativePaths.Contains(path))
-                    staleIds.Add(id);
-            }
+            if (!retainedRelativePaths.Contains(path))
+                staleIds.Add(id);
         }
 
-        if (staleIds.Count == 0)
-            return 0;
-
-        using var txn = BeginTransaction();
-        using var deleteCmd = _conn.CreateCommand();
-        deleteCmd.CommandText = "DELETE FROM files WHERE id = @id";
-        var pId = deleteCmd.Parameters.Add("@id", SqliteType.Integer);
-        deleteCmd.Prepare();
-        foreach (var id in staleIds)
-        {
-            pId.Value = id;
-            deleteCmd.ExecuteNonQuery();
-        }
-        txn.Commit();
-
-        return staleIds.Count;
+        return DeleteFilesById(staleIds);
     }
 
     /// <summary>
@@ -2088,39 +2231,70 @@ public class DbWriter
         IReadOnlySet<string> attributePrunedDirectories)
     {
         var staleIds = new List<long>();
-        using (var cmd = _conn.CreateCommand())
+        foreach (var (id, path) in LoadCurrentFilePaths())
         {
-            cmd.CommandText = "SELECT id, path FROM files";
-            using var reader = cmd.ExecuteTrackedReader();
-            while (reader.TrackedRead())
-            {
-                var id = reader.GetInt64(0);
-                var path = reader.GetString(1);
-                if (retainedRelativePaths.Contains(path))
-                    continue;
+            if (retainedRelativePaths.Contains(path))
+                continue;
 
-                if (HasListedParentDirectory(path, listedDirectories)
-                    || IsUnderAttributePrunedDirectory(path, attributePrunedDirectories))
-                    staleIds.Add(id);
-            }
+            if (HasListedParentDirectory(path, listedDirectories)
+                || IsUnderAttributePrunedDirectory(path, attributePrunedDirectories))
+                staleIds.Add(id);
         }
 
         if (staleIds.Count == 0)
             return 0;
 
-        using var txn = BeginTransaction();
-        using var deleteCmd = _conn.CreateCommand();
-        deleteCmd.CommandText = "DELETE FROM files WHERE id = @id";
-        var pId = deleteCmd.Parameters.Add("@id", SqliteType.Integer);
-        deleteCmd.Prepare();
-        foreach (var id in staleIds)
-        {
-            pId.Value = id;
-            deleteCmd.ExecuteNonQuery();
-        }
-        txn.Commit();
+        return DeleteFilesById(staleIds);
+    }
 
-        return staleIds.Count;
+    private List<(long id, string path)> LoadCurrentFilePaths()
+    {
+        var cmd = RentCommand("SELECT id, path FROM files", static _ => { });
+        try
+        {
+            var dbPaths = new List<(long id, string path)>();
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+                dbPaths.Add((reader.GetInt64(0), reader.GetString(1)));
+            return dbPaths;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
+    }
+
+    private int DeleteFilesById(IReadOnlyList<long> fileIds, Action? beforeCommit = null)
+    {
+        if (fileIds.Count == 0)
+            return 0;
+
+        // Delete all stale files in a single transaction for atomicity and performance.
+        // アトミック性とパフォーマンスのため、全古いファイルを1トランザクションで削除。
+        // CASCADE on chunks/symbols + FTS triggers handle all cleanup automatically.
+        // chunks/symbolsのCASCADE + FTSトリガーが全クリーンアップを自動処理する。
+        using var txn = BeginTransaction();
+        var deleteCmd = RentCommand(
+            "DELETE FROM files WHERE id = @id",
+            static c => c.Parameters.Add("@id", SqliteType.Integer));
+        try
+        {
+            var pId = deleteCmd.Parameters["@id"];
+            if (_commandCache is null)
+                deleteCmd.Prepare();
+            foreach (var id in fileIds)
+            {
+                pId.Value = id;
+                deleteCmd.ExecuteNonQuery();
+            }
+            beforeCommit?.Invoke();
+            txn.Commit();
+            return fileIds.Count;
+        }
+        finally
+        {
+            ReleaseCommand(deleteCmd);
+        }
     }
 
     private static bool HasListedParentDirectory(string path, IReadOnlySet<string> listedDirectories)
@@ -2171,18 +2345,28 @@ public class DbWriter
         if (supportedLanguages.Count == 0)
             return 0;
 
-        using var cmd = _conn.CreateCommand();
-        var inParams = BuildSupportedLanguageParameters(cmd, supportedLanguages);
-        cmd.CommandText = $@"
+        var values = SnapshotSupportedLanguages(supportedLanguages);
+        var inParams = BuildSupportedLanguageParameterNames(values.Count);
+        var cmd = RentCommand(
+            $@"
             SELECT COUNT(*)
             FROM symbol_references
             WHERE file_id IN (
                 SELECT f.id FROM files f
                 WHERE f.lang IS NOT NULL
                   AND f.lang NOT IN ({string.Join(", ", inParams)})
-            )";
-        var raw = cmd.ExecuteScalar();
-        return raw is long l ? (int)l : (raw is int i ? i : 0);
+            )",
+            c => AddSupportedLanguageParameters(c, values.Count));
+        try
+        {
+            BindSupportedLanguageParameterValues(cmd, values);
+            var raw = cmd.ExecuteScalar();
+            return raw is long l ? (int)l : (raw is int i ? i : 0);
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     /// <summary>
@@ -2198,17 +2382,26 @@ public class DbWriter
         if (supportedLanguages.Count == 0)
             return 0;
 
-        using var cmd = _conn.CreateCommand();
-        var inParams = BuildSupportedLanguageParameters(cmd, supportedLanguages);
-
-        cmd.CommandText = $@"
+        var values = SnapshotSupportedLanguages(supportedLanguages);
+        var inParams = BuildSupportedLanguageParameterNames(values.Count);
+        var cmd = RentCommand(
+            $@"
             DELETE FROM symbol_references
             WHERE file_id IN (
                 SELECT f.id FROM files f
                 WHERE f.lang IS NOT NULL
                   AND f.lang NOT IN ({string.Join(", ", inParams)})
-            )";
-        return cmd.ExecuteNonQuery();
+            )",
+            c => AddSupportedLanguageParameters(c, values.Count));
+        try
+        {
+            BindSupportedLanguageParameterValues(cmd, values);
+            return cmd.ExecuteNonQuery();
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     /// <summary>
@@ -2217,13 +2410,26 @@ public class DbWriter
     /// </summary>
     public int PurgeAllReferences()
     {
-        using var referenceCmd = _conn.CreateCommand();
-        referenceCmd.CommandText = "DELETE FROM symbol_references";
-        var deletedReferences = referenceCmd.ExecuteNonQuery();
+        var referenceCmd = RentCommand("DELETE FROM symbol_references", static _ => { });
+        int deletedReferences;
+        try
+        {
+            deletedReferences = referenceCmd.ExecuteNonQuery();
+        }
+        finally
+        {
+            ReleaseCommand(referenceCmd);
+        }
 
-        using var lineCmd = _conn.CreateCommand();
-        lineCmd.CommandText = "DELETE FROM reference_lines";
-        lineCmd.ExecuteNonQuery();
+        var lineCmd = RentCommand("DELETE FROM reference_lines", static _ => { });
+        try
+        {
+            lineCmd.ExecuteNonQuery();
+        }
+        finally
+        {
+            ReleaseCommand(lineCmd);
+        }
 
         return deletedReferences;
     }
@@ -2668,29 +2874,46 @@ public class DbWriter
         }
 
         using var txn = !IsInTransaction() ? BeginTransaction() : null;
-        using var update = _conn.CreateCommand();
         bool hasMetadataTargetSource = ColumnExists("symbols", "metadata_target_source");
-        update.CommandText = hasMetadataTargetSource
+        string updateSql = hasMetadataTargetSource
             ? "UPDATE symbols SET is_metadata_target = @flag, metadata_target_source = @source WHERE id = @id"
             : "UPDATE symbols SET is_metadata_target = @flag WHERE id = @id";
-        var pFlag = update.Parameters.Add("@flag", SqliteType.Integer);
-        var pSource = hasMetadataTargetSource ? update.Parameters.Add("@source", SqliteType.Text) : null;
-        var pId = update.Parameters.Add("@id", SqliteType.Integer);
-        update.Prepare();
-        foreach (var row in rows)
-        {
-            bool target = targets.Contains(row.Id);
-            pFlag.Value = target ? 1 : 0;
-            if (pSource != null)
+        var update = RentCommand(
+            updateSql,
+            c =>
             {
-                pSource.Value = extractorTargets.Contains(row.Id)
-                    ? SymbolRecord.MetadataTargetSourceExtractor
-                    : target
-                        ? SymbolRecord.MetadataTargetSourceResolver
-                        : DBNull.Value;
+                c.Parameters.Add("@flag", SqliteType.Integer);
+                if (hasMetadataTargetSource)
+                    c.Parameters.Add("@source", SqliteType.Text);
+                c.Parameters.Add("@id", SqliteType.Integer);
+            });
+        try
+        {
+            if (_commandCache == null)
+                update.Prepare();
+
+            var pFlag = update.Parameters["@flag"];
+            var pSource = hasMetadataTargetSource ? update.Parameters["@source"] : null;
+            var pId = update.Parameters["@id"];
+            foreach (var row in rows)
+            {
+                bool target = targets.Contains(row.Id);
+                pFlag.Value = target ? 1 : 0;
+                if (pSource != null)
+                {
+                    pSource.Value = extractorTargets.Contains(row.Id)
+                        ? SymbolRecord.MetadataTargetSourceExtractor
+                        : target
+                            ? SymbolRecord.MetadataTargetSourceResolver
+                            : DBNull.Value;
+                }
+                pId.Value = row.Id;
+                update.ExecuteNonQuery();
             }
-            pId.Value = row.Id;
-            update.ExecuteNonQuery();
+        }
+        finally
+        {
+            ReleaseCommand(update);
         }
         txn?.Commit();
     }
@@ -2703,8 +2926,7 @@ public class DbWriter
         bool hasQualified = ColumnExists("symbols", "container_qualified_name");
         bool hasMetadataTargetSource = ColumnExists("symbols", "metadata_target_source");
 
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = hasQualified
+        string sql = hasQualified
             ? $@"SELECT s.id, s.file_id, s.name, s.signature, s.container_qualified_name,
                     s.is_metadata_target, {(hasMetadataTargetSource ? "s.metadata_target_source" : "NULL")}
                 FROM symbols s
@@ -2715,20 +2937,28 @@ public class DbWriter
                 FROM symbols s
                 JOIN files f ON f.id = s.file_id
                 WHERE f.lang = 'csharp' AND s.kind = 'class' AND s.name IS NOT NULL";
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
+        var cmd = RentCommand(sql, static _ => { });
+        try
         {
-            bool extractorMetadataTarget = !reader.IsDBNull(5)
-                && reader.GetInt64(5) == 1
-                && !reader.IsDBNull(6)
-                && string.Equals(reader.GetString(6), SymbolRecord.MetadataTargetSourceExtractor, StringComparison.Ordinal);
-            rows.Add(new CSharpClassRow(
-                reader.GetInt64(0),
-                reader.GetInt64(1),
-                reader.GetString(2),
-                reader.IsDBNull(3) ? null : reader.GetString(3),
-                reader.IsDBNull(4) ? null : reader.GetString(4),
-                extractorMetadataTarget));
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+            {
+                bool extractorMetadataTarget = !reader.IsDBNull(5)
+                    && reader.GetInt64(5) == 1
+                    && !reader.IsDBNull(6)
+                    && string.Equals(reader.GetString(6), SymbolRecord.MetadataTargetSourceExtractor, StringComparison.Ordinal);
+                rows.Add(new CSharpClassRow(
+                    reader.GetInt64(0),
+                    reader.GetInt64(1),
+                    reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetString(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    extractorMetadataTarget));
+            }
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
         }
         return rows;
     }
@@ -2772,23 +3002,30 @@ public class DbWriter
         if (!TableExists("symbols"))
             return (perFile, global);
 
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"SELECT s.file_id, s.name, s.signature
+        const string sql = @"SELECT s.file_id, s.name, s.signature
             FROM symbols s
             JOIN files f ON f.id = s.file_id
             WHERE f.lang = 'csharp' AND s.kind = 'import' AND s.name IS NOT NULL";
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
+        var cmd = RentCommand(sql, static _ => { });
+        try
         {
-            long fileId = reader.GetInt64(0);
-            string rawName = reader.GetString(1);
-            string? signature = reader.IsDBNull(2) ? null : reader.GetString(2);
-            if (!perFile.TryGetValue(fileId, out var bag))
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
             {
-                bag = new FileImportSet();
-                perFile[fileId] = bag;
+                long fileId = reader.GetInt64(0);
+                string rawName = reader.GetString(1);
+                string? signature = reader.IsDBNull(2) ? null : reader.GetString(2);
+                if (!perFile.TryGetValue(fileId, out var bag))
+                {
+                    bag = new FileImportSet();
+                    perFile[fileId] = bag;
+                }
+                RegisterCSharpImport(bag, global, rawName, signature);
             }
-            RegisterCSharpImport(bag, global, rawName, signature);
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
         }
         return (perFile, global);
     }
@@ -3580,21 +3817,40 @@ public class DbWriter
 
     private void SetMetaCore(string key, string? value)
     {
-        using var cmd = _conn.CreateCommand();
-        cmd.Transaction = _activeTransaction;
-        cmd.CommandText = @"INSERT INTO codeindex_meta (key, value) VALUES (@key, @value)
-                            ON CONFLICT(key) DO UPDATE SET value = excluded.value";
-        cmd.Parameters.Add("@key", SqliteType.Text).Value = key;
-        cmd.Parameters.Add("@value", SqliteType.Text).Value = (object?)value ?? DBNull.Value;
-        cmd.ExecuteNonQuery();
+        var cmd = RentCommand(
+            @"INSERT INTO codeindex_meta (key, value) VALUES (@key, @value)
+                            ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            static c =>
+            {
+                c.Parameters.Add("@key", SqliteType.Text);
+                c.Parameters.Add("@value", SqliteType.Text);
+            });
+        try
+        {
+            cmd.Parameters["@key"].Value = key;
+            cmd.Parameters["@value"].Value = (object?)value ?? DBNull.Value;
+            cmd.ExecuteNonQuery();
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     private string? GetMetaString(string key)
     {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
-        SqliteCommandPolicy.Add(cmd, "@key", key);
-        return cmd.ExecuteScalar() as string;
+        var cmd = RentCommand(
+            "SELECT value FROM codeindex_meta WHERE key = @key",
+            static c => c.Parameters.Add("@key", SqliteType.Text));
+        try
+        {
+            cmd.Parameters["@key"].Value = key;
+            return cmd.ExecuteScalar() as string;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
     public void ClearReadyFlags() => Execute("PRAGMA user_version = 0");
 
@@ -3602,10 +3858,18 @@ public class DbWriter
 
     private bool TableExists(string name)
     {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = @name";
-        SqliteCommandPolicy.Add(cmd, "@name", name);
-        return cmd.ExecuteScalar() != null;
+        var cmd = RentCommand(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = @name",
+            static c => c.Parameters.Add("@name", SqliteType.Text));
+        try
+        {
+            cmd.Parameters["@name"].Value = name;
+            return cmd.ExecuteScalar() != null;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     /// <summary>
@@ -3652,26 +3916,36 @@ public class DbWriter
         if (requireCurrentSymbolExtractorVersions && !SymbolExtractorVersionsMatchCurrent())
             return false;
 
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
+        var cmd = RentCommand(
+            @"
             SELECT
                 (SELECT COUNT(*) FROM symbols WHERE name_folded IS NULL)
               + (SELECT COUNT(*) FROM symbol_references WHERE symbol_name IS NOT NULL AND symbol_name_folded IS NULL)
-              + (SELECT COUNT(*) FROM symbol_references WHERE container_name IS NOT NULL AND container_name_folded IS NULL)";
-        var raw = cmd.ExecuteScalar();
-        long missing = raw is long l ? l : (raw is int i ? i : 0);
-        if (missing != 0)
-            return false;
+              + (SELECT COUNT(*) FROM symbol_references WHERE container_name IS NOT NULL AND container_name_folded IS NULL)",
+            static _ => { });
+        try
+        {
+            var raw = cmd.ExecuteScalar();
+            long missing = raw is long l ? l : (raw is int i ? i : 0);
+            if (missing != 0)
+                return false;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
 
         return !requireCurrentFoldKeys || AllFoldedColumnValuesMatchCurrentFold();
     }
 
     public bool AllFoldedColumnValuesMatchCurrentFold()
     {
-        using (var cmd = _conn.CreateCommand())
+        var symbols = RentCommand(
+            "SELECT name, name_folded FROM symbols WHERE name IS NOT NULL",
+            static _ => { });
+        try
         {
-            cmd.CommandText = "SELECT name, name_folded FROM symbols WHERE name IS NOT NULL";
-            using var reader = cmd.ExecuteTrackedReader();
+            using var reader = symbols.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
                 var expected = NameFold.Fold(reader.GetString(0));
@@ -3680,14 +3954,20 @@ public class DbWriter
                     return false;
             }
         }
-
-        using (var cmd = _conn.CreateCommand())
+        finally
         {
-            cmd.CommandText = @"
+            ReleaseCommand(symbols);
+        }
+
+        var references = RentCommand(
+            @"
                 SELECT symbol_name, symbol_name_folded, container_name, container_name_folded
                 FROM symbol_references
-                WHERE symbol_name IS NOT NULL OR container_name IS NOT NULL";
-            using var reader = cmd.ExecuteTrackedReader();
+                WHERE symbol_name IS NOT NULL OR container_name IS NOT NULL",
+            static _ => { });
+        try
+        {
+            using var reader = references.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
                 if (!reader.IsDBNull(0))
@@ -3706,6 +3986,10 @@ public class DbWriter
                         return false;
                 }
             }
+        }
+        finally
+        {
+            ReleaseCommand(references);
         }
 
         return true;
@@ -3825,16 +4109,19 @@ public class DbWriter
         var lastSymbolId = rewriteAll ? GetFoldBackfillCheckpoint(FoldBackfillLastSymbolIdMetaKey) : 0;
         var lastReferenceId = rewriteAll ? GetFoldBackfillCheckpoint(FoldBackfillLastReferenceIdMetaKey) : 0;
 
-        using var symbols = _conn.CreateCommand();
-        symbols.CommandText = rewriteAll && phase != "references"
+        var symbolsSql = rewriteAll && phase != "references"
             ? "SELECT COUNT(*) FROM symbols WHERE name IS NOT NULL AND id > @lastSymbolId"
             : rewriteAll
             ? "SELECT 0"
             : "SELECT COUNT(*) FROM symbols WHERE name IS NOT NULL AND name_folded IS NULL";
-        SqliteCommandPolicy.Add(symbols, "@lastSymbolId", lastSymbolId);
+        var symbolsUsesCheckpoint = rewriteAll && phase != "references";
+        var symbols = RentCommand(
+            symbolsSql,
+            symbolsUsesCheckpoint
+                ? static c => c.Parameters.Add("@lastSymbolId", SqliteType.Integer)
+                : static _ => { });
 
-        using var references = _conn.CreateCommand();
-        references.CommandText = rewriteAll
+        var referencesSql = rewriteAll
             ? @"SELECT COUNT(*)
                 FROM symbol_references
                 WHERE id > @lastReferenceId
@@ -3843,9 +4130,26 @@ public class DbWriter
                 FROM symbol_references
                 WHERE (symbol_name IS NOT NULL AND symbol_name_folded IS NULL)
                    OR (container_name IS NOT NULL AND container_name_folded IS NULL)";
-        SqliteCommandPolicy.Add(references, "@lastReferenceId", phase == "references" ? lastReferenceId : 0);
+        var references = RentCommand(
+            referencesSql,
+            rewriteAll
+                ? static c => c.Parameters.Add("@lastReferenceId", SqliteType.Integer)
+                : static _ => { });
 
-        return (ToInt32Count(symbols.ExecuteScalar()), ToInt32Count(references.ExecuteScalar()));
+        try
+        {
+            if (symbolsUsesCheckpoint)
+                symbols.Parameters["@lastSymbolId"].Value = lastSymbolId;
+            if (rewriteAll)
+                references.Parameters["@lastReferenceId"].Value = phase == "references" ? lastReferenceId : 0;
+
+            return (ToInt32Count(symbols.ExecuteScalar()), ToInt32Count(references.ExecuteScalar()));
+        }
+        finally
+        {
+            ReleaseCommand(references);
+            ReleaseCommand(symbols);
+        }
     }
 
     private static int ToInt32Count(object? value)
@@ -3862,38 +4166,58 @@ public class DbWriter
 
         var lastSymbolId = rewriteAll ? GetFoldBackfillCheckpoint(FoldBackfillLastSymbolIdMetaKey) : 0;
         var rows = new List<(long Id, string Name)>();
-        using (var cmd = _conn.CreateCommand())
+        var selectSql = rewriteAll
+            ? "SELECT id, name FROM symbols WHERE name IS NOT NULL AND id > @lastSymbolId ORDER BY id"
+            : "SELECT id, name FROM symbols WHERE name IS NOT NULL AND name_folded IS NULL";
+        var select = RentCommand(
+            selectSql,
+            rewriteAll
+                ? static c => c.Parameters.Add("@lastSymbolId", SqliteType.Integer)
+                : static _ => { });
+        try
         {
-            cmd.CommandText = rewriteAll
-                ? "SELECT id, name FROM symbols WHERE name IS NOT NULL AND id > @lastSymbolId ORDER BY id"
-                : "SELECT id, name FROM symbols WHERE name IS NOT NULL AND name_folded IS NULL";
-            SqliteCommandPolicy.Add(cmd, "@lastSymbolId", lastSymbolId);
-            using var reader = cmd.ExecuteTrackedReader();
+            if (rewriteAll)
+                select.Parameters["@lastSymbolId"].Value = lastSymbolId;
+            using var reader = select.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 rows.Add((reader.GetInt64(0), reader.GetString(1)));
             }
         }
+        finally
+        {
+            ReleaseCommand(select);
+        }
 
         if (rows.Count == 0)
             return 0;
 
-        using var update = _conn.CreateCommand();
-        update.CommandText = "UPDATE symbols SET name_folded = @folded WHERE id = @id";
-        var pFolded = update.Parameters.Add("@folded", SqliteType.Text);
-        var pId = update.Parameters.Add("@id", SqliteType.Integer);
-        update.Prepare();
-
-        foreach (var row in rows)
+        var update = RentCommand(
+            "UPDATE symbols SET name_folded = @folded WHERE id = @id",
+            static c =>
+            {
+                c.Parameters.Add("@folded", SqliteType.Text);
+                c.Parameters.Add("@id", SqliteType.Integer);
+            });
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            pFolded.Value = (object?)NameFold.Fold(row.Name) ?? DBNull.Value;
-            pId.Value = row.Id;
-            update.ExecuteNonQuery();
-            if (rewriteAll)
-                SetMeta(FoldBackfillLastSymbolIdMetaKey, row.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            FoldBackfillRowUpdatedForTesting?.Invoke();
+            var pFolded = update.Parameters["@folded"];
+            var pId = update.Parameters["@id"];
+            foreach (var row in rows)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                pFolded.Value = (object?)NameFold.Fold(row.Name) ?? DBNull.Value;
+                pId.Value = row.Id;
+                update.ExecuteNonQuery();
+                if (rewriteAll)
+                    SetMeta(FoldBackfillLastSymbolIdMetaKey, row.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                FoldBackfillRowUpdatedForTesting?.Invoke();
+            }
+        }
+        finally
+        {
+            ReleaseCommand(update);
         }
 
         return rows.Count;
@@ -3903,20 +4227,26 @@ public class DbWriter
     {
         var lastReferenceId = rewriteAll ? GetFoldBackfillCheckpoint(FoldBackfillLastReferenceIdMetaKey) : 0;
         var rows = new List<(long Id, string? SymbolName, string? ContainerName)>();
-        using (var cmd = _conn.CreateCommand())
-        {
-            cmd.CommandText = rewriteAll
-                ? @"SELECT id, symbol_name, container_name
+        var selectSql = rewriteAll
+            ? @"SELECT id, symbol_name, container_name
                     FROM symbol_references
                     WHERE id > @lastReferenceId
                       AND (symbol_name IS NOT NULL OR container_name IS NOT NULL)
                     ORDER BY id"
-                : @"SELECT id, symbol_name, container_name
+            : @"SELECT id, symbol_name, container_name
                     FROM symbol_references
                     WHERE (symbol_name IS NOT NULL AND symbol_name_folded IS NULL)
                        OR (container_name IS NOT NULL AND container_name_folded IS NULL)";
-            SqliteCommandPolicy.Add(cmd, "@lastReferenceId", lastReferenceId);
-            using var reader = cmd.ExecuteTrackedReader();
+        var select = RentCommand(
+            selectSql,
+            rewriteAll
+                ? static c => c.Parameters.Add("@lastReferenceId", SqliteType.Integer)
+                : static _ => { });
+        try
+        {
+            if (rewriteAll)
+                select.Parameters["@lastReferenceId"].Value = lastReferenceId;
+            using var reader = select.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -3926,30 +4256,45 @@ public class DbWriter
                     reader.IsDBNull(2) ? null : reader.GetString(2)));
             }
         }
+        finally
+        {
+            ReleaseCommand(select);
+        }
 
         if (rows.Count == 0)
             return 0;
 
-        using var update = _conn.CreateCommand();
-        update.CommandText = @"UPDATE symbol_references
+        var update = RentCommand(
+            @"UPDATE symbol_references
                                SET symbol_name_folded = @symbolNameFolded,
                                    container_name_folded = @containerNameFolded
-                               WHERE id = @id";
-        var pSymbolNameFolded = update.Parameters.Add("@symbolNameFolded", SqliteType.Text);
-        var pContainerNameFolded = update.Parameters.Add("@containerNameFolded", SqliteType.Text);
-        var pId = update.Parameters.Add("@id", SqliteType.Integer);
-        update.Prepare();
-
-        foreach (var row in rows)
+                               WHERE id = @id",
+            static c =>
+            {
+                c.Parameters.Add("@symbolNameFolded", SqliteType.Text);
+                c.Parameters.Add("@containerNameFolded", SqliteType.Text);
+                c.Parameters.Add("@id", SqliteType.Integer);
+            });
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            pSymbolNameFolded.Value = (object?)NameFold.Fold(row.SymbolName) ?? DBNull.Value;
-            pContainerNameFolded.Value = (object?)NameFold.Fold(row.ContainerName) ?? DBNull.Value;
-            pId.Value = row.Id;
-            update.ExecuteNonQuery();
-            if (rewriteAll)
-                SetMeta(FoldBackfillLastReferenceIdMetaKey, row.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            FoldBackfillRowUpdatedForTesting?.Invoke();
+            var pSymbolNameFolded = update.Parameters["@symbolNameFolded"];
+            var pContainerNameFolded = update.Parameters["@containerNameFolded"];
+            var pId = update.Parameters["@id"];
+            foreach (var row in rows)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                pSymbolNameFolded.Value = (object?)NameFold.Fold(row.SymbolName) ?? DBNull.Value;
+                pContainerNameFolded.Value = (object?)NameFold.Fold(row.ContainerName) ?? DBNull.Value;
+                pId.Value = row.Id;
+                update.ExecuteNonQuery();
+                if (rewriteAll)
+                    SetMeta(FoldBackfillLastReferenceIdMetaKey, row.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                FoldBackfillRowUpdatedForTesting?.Invoke();
+            }
+        }
+        finally
+        {
+            ReleaseCommand(update);
         }
 
         return rows.Count;
@@ -3982,6 +4327,29 @@ public class DbWriter
         }
 
         return (object?)folded ?? DBNull.Value;
+    }
+
+    private static Dictionary<string, string?> CreateFoldedNameCache(int rowCount, int namesPerRow)
+    {
+        if (rowCount <= 0 || namesPerRow <= 0)
+            return new Dictionary<string, string?>(StringComparer.Ordinal);
+
+        var capacity = rowCount > int.MaxValue / namesPerRow
+            ? int.MaxValue
+            : rowCount * namesPerRow;
+        return new Dictionary<string, string?>(capacity, StringComparer.Ordinal);
+    }
+
+    private static StringBuilder CreateBatchSqlBuilder(int rowCount, int estimatedCharsPerRow)
+    {
+        const int BaseCapacity = 256;
+        if (rowCount <= 0 || estimatedCharsPerRow <= 0)
+            return new StringBuilder(BaseCapacity);
+
+        var rowCapacity = rowCount > (int.MaxValue - BaseCapacity) / estimatedCharsPerRow
+            ? int.MaxValue - BaseCapacity
+            : rowCount * estimatedCharsPerRow;
+        return new StringBuilder(BaseCapacity + rowCapacity);
     }
 
     private static int GetRowsPerInsertStatement(int columnCount)
@@ -4054,10 +4422,29 @@ public class DbWriter
             Execute($"PRAGMA user_version = {next}", transaction);
     }
 
-    private static List<string> BuildSupportedLanguageParameters(SqliteCommand cmd, IReadOnlyCollection<string> supportedLanguages)
+    private static IReadOnlyList<string> SnapshotSupportedLanguages(IReadOnlyCollection<string> supportedLanguages)
+        => supportedLanguages as IReadOnlyList<string> ?? supportedLanguages.ToList();
+
+    private static List<string> BuildSupportedLanguageParameterNames(int count)
     {
-        var values = supportedLanguages as IReadOnlyList<string> ?? supportedLanguages.ToList();
-        return SqliteDynamicSql.AddParameters(cmd, "lang", values, SqliteType.Text, "supported language filters");
+        SqliteDynamicSql.EnsureParameterBudget(count, "supported language filters");
+        var names = new List<string>(count);
+        for (var i = 0; i < count; i++)
+            names.Add(SqliteDynamicSql.BuildParameterName("lang", i));
+        return names;
+    }
+
+    private static void AddSupportedLanguageParameters(SqliteCommand cmd, int count)
+    {
+        SqliteDynamicSql.EnsureParameterBudget(count, "supported language filters");
+        for (var i = 0; i < count; i++)
+            cmd.Parameters.Add(SqliteDynamicSql.BuildParameterName("lang", i), SqliteType.Text);
+    }
+
+    private static void BindSupportedLanguageParameterValues(SqliteCommand cmd, IReadOnlyList<string> supportedLanguages)
+    {
+        for (var i = 0; i < supportedLanguages.Count; i++)
+            cmd.Parameters[SqliteDynamicSql.BuildParameterName("lang", i)].Value = supportedLanguages[i];
     }
 
     private bool IsInTransaction() => _transactionDepth > 0;

@@ -3119,11 +3119,10 @@ public partial class McpServer
                 return null;
 
             size = info.Length;
-            return writer.GetUnchangedFileId(
+            return writer.GetUnchangedFileIdByStat(
                 relativePath,
                 info.LastWriteTimeUtc,
-                checksum: null,
-                size: info.Length,
+                info.Length,
                 language: language);
         }
         catch (IOException)
@@ -6045,15 +6044,19 @@ public partial class McpServer
         if (memorySamples != null)
             memorySamples.Add(CaptureMcpIndexMemorySample("scan", runStopwatch));
         var files = scanResult.Files;
-        var fileTargets = files.Select(filePath => CSharpStaticInterfacePrepass.FileTarget.Create(
-            projectPath,
-            filePath,
-            FileIndexer.GetReusableDetectedLanguage(filePath, scanResult.FileLanguages))).ToArray();
+        var fileTargets = new CSharpStaticInterfacePrepass.FileTarget[files.Count];
+        var csharpPrepassTargets = new List<CSharpStaticInterfacePrepass.FileTarget>();
+        for (var i = 0; i < files.Count; i++)
+        {
+            var filePath = files[i];
+            var language = FileIndexer.GetReusableDetectedLanguage(filePath, scanResult.FileLanguages);
+            var target = CSharpStaticInterfacePrepass.FileTarget.Create(projectPath, filePath, language);
+            fileTargets[i] = target;
+            if (language == "csharp")
+                csharpPrepassTargets.Add(target);
+        }
         var knownReadableFileSizes = new Dictionary<string, long>(StringComparer.Ordinal);
         await EmitProgressNotificationAsync(progressToken, 0, files.Count, "Index scan complete; indexing files.").ConfigureAwait(false);
-        var csharpPrepassTargets = fileTargets
-            .Where(static target => target.Language == "csharp")
-            .ToArray();
         bool CanReuseCSharpPrepassTargetWithoutRead(CSharpStaticInterfacePrepass.FileTarget target)
         {
             if (!symbolKindFilterMatchesPrior || !csharpSymbolNameContractMatchesCurrent)
@@ -6079,7 +6082,7 @@ public partial class McpServer
         }
 
         CSharpStaticInterfaceWorkspaceSymbols csharpWorkspace;
-        if (csharpPrepassTargets.Length == 0)
+        if (csharpPrepassTargets.Count == 0)
         {
             csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols([], false);
         }
@@ -6204,7 +6207,7 @@ public partial class McpServer
                     writer.InsertSymbols([], requestToken);
                     writer.InsertReferences([], requestToken);
                     var issues = IndexCommandRunner.AppendIssueIfMissing(
-                        FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine),
+                        FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine, loaded.ConflictMarkerLine),
                         generatedSuppressionIssue);
                     writer.InsertIssues(fileId, issues);
                     WriteProjectRootOnce();
@@ -6227,7 +6230,8 @@ public partial class McpServer
                         loaded.HasOversizeLine,
                         filePath,
                         projectPath,
-                        requestToken);
+                        requestToken,
+                        loaded.ConflictMarkerLine);
                     symbolRegexTimeoutIssue = IndexCommandRunner.BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                 }
                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
@@ -6261,7 +6265,8 @@ public partial class McpServer
                             record.Path,
                             record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
                             requestToken,
-                            maxReferenceCount: maxReferencesPerFile + 1);
+                            maxReferenceCount: maxReferencesPerFile + 1,
+                            conflictMarkerLine: loaded.ConflictMarkerLine);
                         regexTimeoutIssue = IndexCommandRunner.BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                     }
                     postExtractionHooks.Value.OnReferencesExtracted(fileContext, references);
@@ -6274,7 +6279,7 @@ public partial class McpServer
                     writer.InsertReferences(references, requestToken);
                     // Keep MCP index parity with CLI index: persist file-level validation issues too.
                     // MCPインデックスもCLIインデックスと同等に、ファイル検証issueを保存する。
-                    IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine);
+                    IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine, loaded.ConflictMarkerLine);
                     if (symbolRegexTimeoutIssue != null)
                         issues = IndexCommandRunner.AppendIssue(issues, symbolRegexTimeoutIssue);
                     if (regexTimeoutIssue != null)

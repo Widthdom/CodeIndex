@@ -13,11 +13,7 @@ public static partial class SymbolExtractor
     // mutable scanner state.
     private static void ExtractCSharpEnumMembers(long fileId, string[] rawLines, string[] enumScannerLines, string[] csharpMatchLines, List<SymbolRecord> symbols)
     {
-        var enumDeclarations = symbols
-            .Where(s => s.Kind == "enum" && s.BodyStartLine != null && s.BodyEndLine != null)
-            .OrderBy(s => s.StartLine)
-            .ThenByDescending(s => s.EndLine)
-            .ToList();
+        var enumDeclarations = BuildEnumDeclarationSnapshot(symbols);
 
         foreach (var enumSymbol in enumDeclarations)
         {

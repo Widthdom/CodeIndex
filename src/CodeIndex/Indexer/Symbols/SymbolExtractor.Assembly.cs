@@ -263,13 +263,17 @@ public static partial class SymbolExtractor
         List<SymbolRecord> sectionSymbols,
         int lineCount)
     {
-        var sections = sectionSymbols.OrderBy(symbol => symbol.StartLine).ThenBy(symbol => symbol.StartColumn ?? 0).ToList();
-        var functions = functionSymbols.OrderBy(symbol => symbol.StartLine).ThenBy(symbol => symbol.StartColumn ?? 0).ToList();
+        var sections = BuildSortedAssemblyRangeSymbols(sectionSymbols);
+        var functions = BuildSortedAssemblyRangeSymbols(functionSymbols);
+
+        var sectionIndex = 0;
         for (var i = 0; i < functions.Count; i++)
         {
             var current = functions[i];
             var nextFunctionStartLine = i + 1 < functions.Count ? functions[i + 1].StartLine : lineCount + 1;
-            var nextSectionStartLine = sections.FirstOrDefault(symbol => symbol.StartLine > current.StartLine)?.StartLine ?? lineCount + 1;
+            while (sectionIndex < sections.Count && sections[sectionIndex].StartLine <= current.StartLine)
+                sectionIndex++;
+            var nextSectionStartLine = sectionIndex < sections.Count ? sections[sectionIndex].StartLine : lineCount + 1;
             var nextStartLine = Math.Min(nextFunctionStartLine, nextSectionStartLine);
             current.BodyStartLine = current.StartLine;
             current.BodyEndLine = Math.Max(current.StartLine, nextStartLine - 1);
@@ -284,5 +288,33 @@ public static partial class SymbolExtractor
             current.BodyEndLine = Math.Max(current.StartLine, nextStartLine - 1);
             current.EndLine = current.BodyEndLine.Value;
         }
+    }
+
+    private static List<SymbolRecord> BuildSortedAssemblyRangeSymbols(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var entries = new List<(SymbolRecord Symbol, int OriginalIndex)>(symbols.Count);
+        for (var index = 0; index < symbols.Count; index++)
+            entries.Add((symbols[index], index));
+
+        entries.Sort(CompareAssemblyRangeSymbolEntries);
+
+        var sorted = new List<SymbolRecord>(entries.Count);
+        foreach (var entry in entries)
+            sorted.Add(entry.Symbol);
+        return sorted;
+    }
+
+    private static int CompareAssemblyRangeSymbolEntries(
+        (SymbolRecord Symbol, int OriginalIndex) left,
+        (SymbolRecord Symbol, int OriginalIndex) right)
+    {
+        var startLineComparison = left.Symbol.StartLine.CompareTo(right.Symbol.StartLine);
+        if (startLineComparison != 0)
+            return startLineComparison;
+
+        var startColumnComparison = (left.Symbol.StartColumn ?? 0).CompareTo(right.Symbol.StartColumn ?? 0);
+        return startColumnComparison != 0
+            ? startColumnComparison
+            : left.OriginalIndex.CompareTo(right.OriginalIndex);
     }
 }

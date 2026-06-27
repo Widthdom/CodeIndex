@@ -35,6 +35,20 @@ public class ChunkSplitterTests
     }
 
     [Fact]
+    public void SplitNormalized_KnownSmallLineCount_ReturnsSingleChunk()
+    {
+        var content = "line 1\nline 2\nline 3\n";
+
+        var chunks = ChunkSplitter.SplitNormalized(1, content, hasOversizeLine: false, lineCount: 3);
+
+        var chunk = Assert.Single(chunks);
+        Assert.Equal(0, chunk.ChunkIndex);
+        Assert.Equal(1, chunk.StartLine);
+        Assert.Equal(3, chunk.EndLine);
+        Assert.Equal("line 1\nline 2\nline 3", chunk.Content);
+    }
+
+    [Fact]
     public void Split_LargeFile_CreatesOverlappingChunks()
     {
         // 160 lines: chunk 0 = 1-80, chunk 1 = 71-150, chunk 2 = 141-160

@@ -677,11 +677,20 @@ public static partial class IndexCommandRunner
         string? projectRoot = null,
         List<string>? diagnostics = null,
         IReadOnlyDictionary<string, long>? knownFileSizes = null)
+        => MeasureReadableFileBytes(paths, static path => path, projectRoot, diagnostics, knownFileSizes);
+
+    internal static FileByteReadSummary MeasureReadableFileBytes(
+        IEnumerable<string> paths,
+        Func<string, string> pathSelector,
+        string? projectRoot = null,
+        List<string>? diagnostics = null,
+        IReadOnlyDictionary<string, long>? knownFileSizes = null)
     {
         long total = 0;
         long skipped = 0;
-        foreach (var path in paths)
+        foreach (var sourcePath in paths)
         {
+            var path = pathSelector(sourcePath);
             if (knownFileSizes != null && knownFileSizes.TryGetValue(path, out var knownSize))
             {
                 total += knownSize;
@@ -1191,11 +1200,10 @@ public static partial class IndexCommandRunner
                 return null;
 
             size = info.Length;
-            return writer.GetUnchangedFileId(
+            return writer.GetUnchangedFileIdByStat(
                 relativePath,
                 info.LastWriteTimeUtc,
-                checksum: null,
-                size: info.Length,
+                info.Length,
                 language: language);
         }
         catch (IOException)
@@ -1241,6 +1249,7 @@ public static partial class IndexCommandRunner
         FileRecord? Record,
         string? Content,
         bool? HasOversizeLine,
+        int? ConflictMarkerLine,
         string? Warning,
         IReadOnlyList<ChunkRecord>? Chunks,
         IReadOnlyList<SymbolRecord>? Symbols,
@@ -1256,6 +1265,7 @@ public static partial class IndexCommandRunner
             FileRecord record,
             string? content,
             bool hasOversizeLine,
+            int conflictMarkerLine,
             string? warning,
             IReadOnlyList<ChunkRecord>? chunks,
             IReadOnlyList<SymbolRecord>? symbols,
@@ -1270,6 +1280,7 @@ public static partial class IndexCommandRunner
                 record,
                 content,
                 hasOversizeLine,
+                conflictMarkerLine,
                 warning,
                 chunks,
                 symbols,
@@ -1298,6 +1309,7 @@ public static partial class IndexCommandRunner
                 record,
                 null,
                 null,
+                null,
                 warning,
                 chunks,
                 symbols,
@@ -1309,10 +1321,10 @@ public static partial class IndexCommandRunner
         }
 
         public static FullScanFileWorkItem Failure(string filePath, string relativePath, Exception exception)
-            => new(filePath, relativePath, null, null, null, null, null, null, null, null, null, false, exception);
+            => new(filePath, relativePath, null, null, null, null, null, null, null, null, null, null, false, exception);
 
         public static FullScanFileWorkItem Skipped(string filePath, string relativePath, string warning)
-            => new(filePath, relativePath, null, null, null, warning, null, null, null, null, null, false, null);
+            => new(filePath, relativePath, null, null, null, null, warning, null, null, null, null, null, false, null);
     }
 
     private sealed record FoldOnlyRemediation(

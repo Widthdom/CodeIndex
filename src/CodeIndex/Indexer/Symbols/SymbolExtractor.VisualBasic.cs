@@ -10,15 +10,7 @@ public static partial class SymbolExtractor
 {
     private static void ExtractVisualBasicEnumMembers(long fileId, string[] lines, List<SymbolRecord> symbols)
     {
-        var enumDeclarations = symbols
-            .Where(symbol =>
-                symbol.FileId == fileId
-                && symbol.Kind == "enum"
-                && symbol.BodyStartLine != null
-                && symbol.BodyEndLine != null)
-            .OrderBy(symbol => symbol.StartLine)
-            .ThenByDescending(symbol => symbol.EndLine)
-            .ToList();
+        var enumDeclarations = BuildEnumDeclarationSnapshot(symbols, fileId);
 
         foreach (var enumSymbol in enumDeclarations)
         {

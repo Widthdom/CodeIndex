@@ -320,7 +320,10 @@ public static partial class SymbolExtractor
         if (symbols.Count <= StructuredDataMaxSymbols)
             return symbols;
 
-        var retained = symbols.Take(StructuredDataMaxSymbols).ToList();
+        var retained = new List<SymbolRecord>(StructuredDataMaxSymbols);
+        for (var index = 0; index < StructuredDataMaxSymbols; index++)
+            retained.Add(symbols[index]);
+
         var added = false;
         AddStructuredDataDiagnosticSymbol(
             retained,

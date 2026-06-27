@@ -71,14 +71,14 @@ public static class ChunkSplitter
         // 防御的 CRLF 正規化と行頭不可視文字剥離 — BuildRecord で正規化済みだが、
         // 本メソッドは public で直接呼ばれうる。行頭以外はそのまま残す。
         // Closes #183/#2117.
-        content = FileIndexer.NormalizeContentForPrepass(content);
+        var normalized = FileContentLoader.NormalizeForIndexing(content);
         // Re-check for empty after invisible/CRLF strip so marker-only input yields no chunks,
         // matching the no-chunks contract for empty files.
         // 不可視文字/CRLF剥離後に再度空判定し、markerのみの入力が空ファイルと同じく0チャンクになるようにする。
-        if (content.Length == 0)
+        if (normalized.Content.Length == 0)
             return [];
 
-        return SplitNormalized(fileId, content, HasOversizeLine(content));
+        return SplitNormalized(fileId, normalized.Content, normalized.HasOversizeLine, normalized.LineCount);
     }
 
     internal static List<ChunkRecord> SplitNormalized(long fileId, string content, bool hasOversizeLine, int? lineCount = null)
@@ -105,6 +105,9 @@ public static class ChunkSplitter
 
     private static List<ChunkRecord> SplitNormalizedCore(long fileId, string content, int? lineCount)
     {
+        if (lineCount is > 0 and <= ChunkSize)
+            return CreateSingleChunk(fileId, content, lineCount.Value);
+
         // Track line start offsets instead of materializing every line string. Large
         // source files can still be valid and under the file-size cap, and chunking
         // should only allocate the persisted chunk bodies rather than a duplicate
@@ -147,6 +150,26 @@ public static class ChunkSplitter
         }
 
         return chunks;
+    }
+
+    private static List<ChunkRecord> CreateSingleChunk(long fileId, string content, int lineCount)
+    {
+        var effectiveContentLength = content.EndsWith('\n') ? content.Length - 1 : content.Length;
+        var chunkContent = effectiveContentLength == content.Length
+            ? content
+            : content[..effectiveContentLength];
+
+        return
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = lineCount,
+                Content = chunkContent,
+            },
+        ];
     }
 
     private static List<int> GetLineStartOffsets(string content, int? lineCount)

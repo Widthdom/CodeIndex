@@ -22,6 +22,8 @@ public partial class FileIndexer
     internal static Func<string, FileSystemInfo?>? ResolveDirectoryLinkTargetForTesting { get; set; }
 
     private static readonly string[] HotspotFamilyMarkerLanguages = ["csharp", "vb", "fsharp", "msbuild"];
+    private const string ConflictStartMarker = "<<<<<<<";
+    private const string ConflictEndMarker = ">>>>>>>";
     private const int ConflictMarkerScanLimitBytes = 50 * 1024;
     private const int DockerfileJsonFormIssueLimit = 32;
     private const int MaxDirectoryTraversalDepth = 128;
@@ -849,9 +851,16 @@ public partial class FileIndexer
         }
 
         private static List<PatternToken> FoldAsciiTokens(IReadOnlyList<PatternToken> tokens)
-            => tokens
-                .Select(token => new PatternToken(FoldAsciiChar(token.Value), token.Escaped))
-                .ToList();
+        {
+            var foldedTokens = new List<PatternToken>(tokens.Count);
+            for (var index = 0; index < tokens.Count; index++)
+            {
+                var token = tokens[index];
+                foldedTokens.Add(new PatternToken(FoldAsciiChar(token.Value), token.Escaped));
+            }
+
+            return foldedTokens;
+        }
 
         private static string FoldAscii(string value)
         {
@@ -2243,7 +2252,7 @@ public partial class FileIndexer
         cancellationToken.ThrowIfCancellationRequested();
         var files = new List<string>();
         var fileLanguages = new Dictionary<string, string>(StringComparer.Ordinal);
-        var errors = new List<ScanError>();
+        var errors = new List<ScanError>(_submoduleLoadWarnings.Count);
         var nonIndexablePaths = new HashSet<string>(StringComparer.Ordinal);
         var unknownExtensionFiles = new HashSet<string>(StringComparer.Ordinal);
         var probeFailedFilePaths = new HashSet<string>(StringComparer.Ordinal);
@@ -2283,16 +2292,40 @@ public partial class FileIndexer
             scanState.Results,
             scanState.FileLanguages,
             scanState.Errors,
-            scanState.NonIndexablePaths.ToList(),
-            scanState.UnknownExtensionFiles.OrderBy(path => path, StringComparer.Ordinal).ToList(),
-            scanState.ProbeFailedFilePaths.ToList(),
-            scanState.ListedDirectories.ToList(),
-            scanState.FullyScannedDirectories.ToList(),
-            scanState.CheckpointedDirectories.Concat(scanState.FullyScannedDirectories).ToHashSet(StringComparer.Ordinal),
-            _ancestorIgnoreDirectories.ToList(),
-            scanState.AttributePrunedDirectories.ToList(),
-            scanState.NestedRepositories.OrderBy(path => path, StringComparer.Ordinal).ToList(),
-            scanState.DanglingSymlinks.OrderBy(path => path, StringComparer.Ordinal).ToList());
+            MaterializePathSet(scanState.NonIndexablePaths),
+            MaterializeSortedPathSet(scanState.UnknownExtensionFiles),
+            MaterializePathSet(scanState.ProbeFailedFilePaths),
+            MaterializePathSet(scanState.ListedDirectories),
+            MaterializePathSet(scanState.FullyScannedDirectories),
+            MaterializeCheckpointedDirectorySet(scanState.CheckpointedDirectories, scanState.FullyScannedDirectories),
+            new List<string>(_ancestorIgnoreDirectories),
+            MaterializePathSet(scanState.AttributePrunedDirectories),
+            MaterializeSortedPathSet(scanState.NestedRepositories),
+            MaterializeSortedPathSet(scanState.DanglingSymlinks));
+    }
+
+    private static List<string> MaterializePathSet(HashSet<string> paths) => paths.Count == 0 ? [] : new List<string>(paths);
+
+    private static List<string> MaterializeSortedPathSet(HashSet<string> paths)
+    {
+        if (paths.Count == 0)
+            return [];
+
+        var sorted = new List<string>(paths);
+        sorted.Sort(StringComparer.Ordinal);
+        return sorted;
+    }
+
+    private static HashSet<string> MaterializeCheckpointedDirectorySet(
+        HashSet<string> checkpointedDirectories,
+        HashSet<string> fullyScannedDirectories)
+    {
+        var result = new HashSet<string>(
+            checkpointedDirectories.Count + fullyScannedDirectories.Count,
+            StringComparer.Ordinal);
+        result.UnionWith(checkpointedDirectories);
+        result.UnionWith(fullyScannedDirectories);
+        return result;
     }
 
     private bool ScanDirectory(
@@ -3116,14 +3149,17 @@ public partial class FileIndexer
         if (!IsPathEqualOrParent(ignoreRuleRoot, projectRoot))
             return [];
 
-        var directories = new Stack<string>();
+        var directories = new List<string>();
         var root = Path.GetFullPath(ignoreRuleRoot);
         var current = Directory.GetParent(Path.GetFullPath(projectRoot));
         while (current != null)
         {
-            directories.Push(current.FullName);
+            directories.Add(current.FullName);
             if (PathsEqual(current.FullName, root))
-                return directories.ToList();
+            {
+                directories.Reverse();
+                return directories;
+            }
 
             current = current.Parent;
         }
@@ -3500,6 +3536,7 @@ public partial class FileIndexer
             loaded.Content,
             loaded.RawBytes,
             loaded.HasOversizeLine,
+            loaded.ConflictMarkerLine,
             loaded.Warning,
             loaded.Inspection);
     }
@@ -3779,7 +3816,8 @@ public partial class FileIndexer
         string content,
         string? language,
         FileContentInspection inspection,
-        bool? hasOversizeLine = null)
+        bool? hasOversizeLine = null,
+        int? conflictMarkerLine = null)
     {
         var issues = new List<FileIssue>();
 
@@ -3817,13 +3855,14 @@ public partial class FileIndexer
                 AddUtf16HeuristicIssue(issues, relativePath, utf16BigEndian);
         }
 
-        if (TryGetConflictMarkerLine(content, out var conflictMarkerLine))
+        var effectiveConflictMarkerLine = conflictMarkerLine ?? GetConflictMarkerLine(content);
+        if (effectiveConflictMarkerLine > 0)
         {
             issues.Add(new FileIssue
             {
                 Path = relativePath,
                 Kind = "conflict_markers",
-                Line = conflictMarkerLine,
+                Line = effectiveConflictMarkerLine,
                 Message = "Git conflict markers detected; resolve the conflict before indexing symbols or references",
             });
         }
@@ -3837,7 +3876,7 @@ public partial class FileIndexer
         // `null_byte` / `mixed_line_endings` / `cr_only_line_endings` がすべて誤検出する
         // ためスキップする。
         if (!isUtf16)
-            AddRawByteContentIssues(issues, relativePath, rawBytes);
+            AddRawByteContentIssues(issues, relativePath, inspection.RawByteContent);
 
         AddOversizeContentIssues(issues, relativePath, content, hasOversizeLine);
         var effectiveLanguage = language ?? TryDetectLanguage(relativePath, content).Language;
@@ -4203,10 +4242,13 @@ public partial class FileIndexer
         }
     }
 
-    private static void AddRawByteContentIssues(List<FileIssue> issues, string relativePath, byte[] rawBytes)
+    private static void AddRawByteContentIssues(
+        List<FileIssue> issues,
+        string relativePath,
+        RawByteContentInspection rawByteInspection)
     {
         // BOM marker / BOMマーカー
-        if (rawBytes.Length >= 3 && rawBytes[0] == 0xEF && rawBytes[1] == 0xBB && rawBytes[2] == 0xBF && !ShouldSuppressUtf8BomIssue(relativePath))
+        if (rawByteInspection.HasUtf8Bom && !ShouldSuppressUtf8BomIssue(relativePath))
         {
             issues.Add(new FileIssue
             {
@@ -4218,8 +4260,6 @@ public partial class FileIndexer
                 Severity = FileIssue.SeverityWarning,
             });
         }
-
-        var rawByteInspection = InspectRawByteContentIssues(rawBytes);
 
         // NULL bytes (likely binary content) / NULLバイト（バイナリ混入の可能性）
         if (rawByteInspection.HasNullByte)
@@ -4239,56 +4279,10 @@ public partial class FileIndexer
     private static bool ShouldSuppressUtf8BomIssue(string relativePath)
         => string.Equals(Path.GetExtension(relativePath), ".sln", StringComparison.OrdinalIgnoreCase);
 
-    private readonly record struct RawByteContentIssueInspection(
-        bool HasNullByte,
-        bool HasCrlf,
-        bool HasLfOnly,
-        bool HasCrOnly);
-
-    private static RawByteContentIssueInspection InspectRawByteContentIssues(byte[] rawBytes)
-    {
-        // Line-ending classification — check raw bytes before LF normalization so
-        // bare CR (legacy Mac) and three-way mixes are not silently flattened by
-        // the `\r\n` → `\n` then `\r` → `\n` pass in BuildRecordWithRawBytes.
-        // 改行コードの判定 — LF 正規化前の rawBytes で確認。BuildRecordWithRawBytes が
-        // `\r\n`→`\n`、`\r`→`\n` の順で潰してしまうため、生バイトで CR-only (旧 Mac)
-        // と 3 種混在を見分ける。
-        var hasCrlf = false;
-        var hasLfOnly = false;
-        var hasCrOnly = false;
-        var hasNullByte = false;
-        for (int i = 0; i < rawBytes.Length; i++)
-        {
-            var value = rawBytes[i];
-            if (value == 0)
-            {
-                hasNullByte = true;
-            }
-
-            if (value == 0x0D)
-            {
-                if (i + 1 < rawBytes.Length && rawBytes[i + 1] == 0x0A)
-                {
-                    hasCrlf = true;
-                    i++; // skip the LF after CR
-                }
-                else
-                {
-                    hasCrOnly = true;
-                }
-            }
-            else if (value == 0x0A)
-            {
-                hasLfOnly = true;
-            }
-        }
-        return new RawByteContentIssueInspection(hasNullByte, hasCrlf, hasLfOnly, hasCrOnly);
-    }
-
     private static void AddLineEndingIssues(
         List<FileIssue> issues,
         string relativePath,
-        RawByteContentIssueInspection inspection)
+        RawByteContentInspection inspection)
     {
         var distinctEndingTypes = (inspection.HasCrlf ? 1 : 0)
             + (inspection.HasLfOnly ? 1 : 0)
@@ -4404,16 +4398,17 @@ public partial class FileIndexer
         public long LimitBytes { get; } = limitBytes;
     }
 
-    public static bool HasConflictMarkers(string content) =>
-        TryGetConflictMarkerLine(content, out _);
+    public static bool HasConflictMarkers(string content) => GetConflictMarkerLine(content) > 0;
+
+    internal static int GetConflictMarkerLine(string content)
+        => TryGetConflictMarkerLine(content, out var line) ? line : 0;
 
     private static bool TryGetConflictMarkerLine(string content, out int line)
     {
         line = 0;
         if (string.IsNullOrEmpty(content))
             return false;
-        if (!content.Contains("<<<<<<<", StringComparison.Ordinal)
-            && !content.Contains(">>>>>>>", StringComparison.Ordinal))
+        if (!ContainsConflictMarkerCandidate(content))
             return false;
 
         var byteCount = 0;
@@ -4435,8 +4430,8 @@ public partial class FileIndexer
             if (lineLength > 0 && content[lineStart + lineLength - 1] == '\r')
                 lineLength--;
             var currentLine = content.AsSpan(lineStart, lineLength);
-            if (currentLine.StartsWith("<<<<<<<", StringComparison.Ordinal)
-                || currentLine.StartsWith(">>>>>>>", StringComparison.Ordinal))
+            if (currentLine.StartsWith(ConflictStartMarker, StringComparison.Ordinal)
+                || currentLine.StartsWith(ConflictEndMarker, StringComparison.Ordinal))
             {
                 line = lineNumber;
                 return true;
@@ -4444,6 +4439,29 @@ public partial class FileIndexer
 
             lineStart = i + 1;
             lineNumber++;
+        }
+
+        return false;
+    }
+
+    private static bool ContainsConflictMarkerCandidate(string content)
+    {
+        var searchStart = 0;
+        while (searchStart < content.Length)
+        {
+            var relativeIndex = content.AsSpan(searchStart).IndexOfAny('<', '>');
+            if (relativeIndex < 0)
+                return false;
+
+            var candidateIndex = searchStart + relativeIndex;
+            var marker = content[candidateIndex];
+            var candidate = content.AsSpan(candidateIndex);
+            if (marker == '<' && candidate.StartsWith(ConflictStartMarker, StringComparison.Ordinal))
+                return true;
+            if (marker == '>' && candidate.StartsWith(ConflictEndMarker, StringComparison.Ordinal))
+                return true;
+
+            searchStart = candidateIndex + 1;
         }
 
         return false;

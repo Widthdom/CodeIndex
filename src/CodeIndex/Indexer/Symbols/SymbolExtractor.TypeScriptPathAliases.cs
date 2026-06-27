@@ -435,14 +435,52 @@ public static partial class SymbolExtractor
         CommandErrorWriter.WriteStderr("cdidx: warning: " + message);
     }
 
-    private static IReadOnlyList<TypeScriptPathAliasRule> SortTypeScriptPathAliasRules(IReadOnlyList<TypeScriptPathAliasRule> rules) =>
-        rules
-            .OrderBy(static rule => rule.Pattern.Contains('*', StringComparison.Ordinal) ? 1 : 0)
-            .ThenByDescending(static rule => GetTypeScriptPathAliasLiteralLength(rule.Pattern))
-            .ToList();
+    private static IReadOnlyList<TypeScriptPathAliasRule> SortTypeScriptPathAliasRules(IReadOnlyList<TypeScriptPathAliasRule> rules)
+    {
+        var indexedRules = new List<(TypeScriptPathAliasRule Rule, int Index, int WildcardRank, int LiteralLength)>(rules.Count);
+        for (var i = 0; i < rules.Count; i++)
+        {
+            var rule = rules[i];
+            indexedRules.Add((
+                rule,
+                i,
+                rule.Pattern.Contains('*', StringComparison.Ordinal) ? 1 : 0,
+                GetTypeScriptPathAliasLiteralLength(rule.Pattern)));
+        }
 
-    private static int GetTypeScriptPathAliasLiteralLength(string pattern) =>
-        pattern.Count(static ch => ch != '*');
+        indexedRules.Sort(CompareTypeScriptPathAliasRules);
+
+        var sortedRules = new List<TypeScriptPathAliasRule>(indexedRules.Count);
+        foreach (var (rule, _, _, _) in indexedRules)
+            sortedRules.Add(rule);
+        return sortedRules;
+    }
+
+    private static int CompareTypeScriptPathAliasRules(
+        (TypeScriptPathAliasRule Rule, int Index, int WildcardRank, int LiteralLength) left,
+        (TypeScriptPathAliasRule Rule, int Index, int WildcardRank, int LiteralLength) right)
+    {
+        var wildcardComparison = left.WildcardRank.CompareTo(right.WildcardRank);
+        if (wildcardComparison != 0)
+            return wildcardComparison;
+
+        var literalLengthComparison = right.LiteralLength.CompareTo(left.LiteralLength);
+        return literalLengthComparison != 0
+            ? literalLengthComparison
+            : left.Index.CompareTo(right.Index);
+    }
+
+    private static int GetTypeScriptPathAliasLiteralLength(string pattern)
+    {
+        var count = 0;
+        foreach (var ch in pattern)
+        {
+            if (ch != '*')
+                count++;
+        }
+
+        return count;
+    }
 
     private static bool TryGetTypeScriptExtendsPath(JsonElement root, string configDirectory, out string extendsPath)
     {

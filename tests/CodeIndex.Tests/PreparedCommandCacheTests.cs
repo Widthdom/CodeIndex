@@ -393,6 +393,732 @@ public class PreparedCommandCacheTests : IDisposable
     }
 
     [Fact]
+    public void DbWriter_WithCache_GetUnchangedFileIdByStatReusesCacheAcrossFiles()
+    {
+        var writer = new DbWriter(_db);
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        writer.UpsertFile(new FileRecord
+        {
+            Path = "src/stat-x.py",
+            Lang = "python",
+            Size = 1,
+            Lines = 1,
+            Modified = modified,
+        });
+        writer.UpsertFile(new FileRecord
+        {
+            Path = "src/stat-y.py",
+            Lang = "python",
+            Size = 2,
+            Lines = 1,
+            Modified = modified,
+        });
+
+        Assert.NotNull(writer.GetUnchangedFileIdByStat("src/stat-x.py", modified, 1, "python"));
+        Assert.NotNull(writer.GetUnchangedFileIdByStat("src/stat-y.py", modified, 2, "python"));
+        Assert.Null(writer.GetUnchangedFileIdByStat("src/missing-stat.py", modified, 3, "python"));
+        Assert.True(_db.PreparedCommands.HitCount > 0);
+    }
+
+    [Fact]
+    public void DbWriter_WithCache_StaleIssueMetadataLookupReusesCacheAcrossFiles()
+    {
+        var writer = new DbWriter(_db);
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var firstFile = new FileRecord
+        {
+            Path = "src/legacy-a.py",
+            Lang = "python",
+            Size = 1,
+            Lines = 1,
+            Modified = modified,
+        };
+        var secondFile = new FileRecord
+        {
+            Path = "src/legacy-b.py",
+            Lang = "python",
+            Size = 2,
+            Lines = 1,
+            Modified = modified,
+        };
+        var firstFileId = writer.UpsertFile(firstFile);
+        var secondFileId = writer.UpsertFile(secondFile);
+        writer.InsertIssues(firstFileId,
+        [
+            new FileIssue
+            {
+                Path = firstFile.Path,
+                Kind = "replacement_char",
+                Line = 1,
+                Message = "legacy replacement_char row without metadata",
+            },
+        ]);
+        writer.InsertIssues(secondFileId,
+        [
+            new FileIssue
+            {
+                Path = secondFile.Path,
+                Kind = "non_utf8_likely",
+                Line = 0,
+                Message = "legacy non_utf8_likely row without metadata",
+            },
+        ]);
+        var hitsBefore = _db.PreparedCommands.HitCount;
+
+        Assert.Null(writer.GetUnchangedFileIdByStat(firstFile.Path, modified, firstFile.Size, "python"));
+        Assert.Null(writer.GetUnchangedFileIdByStat(secondFile.Path, modified, secondFile.Size, "python"));
+
+        Assert.True(_db.PreparedCommands.HitCount > hitsBefore);
+    }
+
+    [Fact]
+    public void DbWriter_WithCache_HasReusableFileBlockingIssueForFileReusesCacheAcrossFiles()
+    {
+        var writer = new DbWriter(_db);
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var firstFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reuse-a.py",
+            Lang = "python",
+            Size = 1,
+            Lines = 1,
+            Modified = modified,
+        });
+        var secondFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reuse-b.py",
+            Lang = "python",
+            Size = 2,
+            Lines = 1,
+            Modified = modified,
+        });
+
+        var hitsBefore = _db.PreparedCommands.HitCount;
+
+        Assert.False(writer.HasReusableFileBlockingIssueForFile(firstFileId, 10, 10, generatedExtractionSuppressed: false));
+        Assert.False(writer.HasReusableFileBlockingIssueForFile(secondFileId, 10, 10, generatedExtractionSuppressed: false));
+
+        Assert.True(_db.PreparedCommands.HitCount > hitsBefore);
+    }
+
+    [Fact]
+    public void DbWriter_WithCache_HasAnyFilesWithLanguageReusesCacheAcrossLanguages()
+    {
+        var writer = new DbWriter(_db);
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        writer.UpsertFile(new FileRecord
+        {
+            Path = "src/lang-a.cs",
+            Lang = "csharp",
+            Size = 1,
+            Lines = 1,
+            Modified = modified,
+        });
+        writer.UpsertFile(new FileRecord
+        {
+            Path = "src/lang-b.sql",
+            Lang = "sql",
+            Size = 2,
+            Lines = 1,
+            Modified = modified,
+        });
+
+        var hitsBefore = _db.PreparedCommands.HitCount;
+
+        Assert.True(writer.HasAnyFilesWithLanguage("csharp"));
+        Assert.True(writer.HasAnyFilesWithLanguage("sql"));
+        Assert.False(writer.HasAnyFilesWithLanguage("python"));
+
+        Assert.True(_db.PreparedCommands.HitCount > hitsBefore);
+    }
+
+    [Fact]
+    public void DbWriter_WithCache_GetIndexedJavaScriptTypeScriptConfigPathsReusesCache()
+    {
+        var writer = new DbWriter(_db);
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        writer.UpsertFile(new FileRecord
+        {
+            Path = "tsconfig.json",
+            Lang = "json",
+            Size = 1,
+            Lines = 1,
+            Modified = modified,
+        });
+        writer.UpsertFile(new FileRecord
+        {
+            Path = "packages/app/jsconfig.build.json",
+            Lang = "json",
+            Size = 2,
+            Lines = 1,
+            Modified = modified,
+        });
+
+        var first = writer.GetIndexedJavaScriptTypeScriptConfigPaths();
+        var hitsBefore = _db.PreparedCommands.HitCount;
+        var second = writer.GetIndexedJavaScriptTypeScriptConfigPaths();
+
+        Assert.Equal(first, second);
+        Assert.Equal(
+            new[] { "packages/app/jsconfig.build.json", "tsconfig.json" },
+            second);
+        Assert.True(_db.PreparedCommands.HitCount > hitsBefore);
+    }
+
+    [Fact]
+    public void DbWriter_WithCache_PurgeDirectoryStemScanReusesCacheAcrossCalls()
+    {
+        var writer = new DbWriter(_db);
+        var projectRoot = Path.Combine(Path.GetTempPath(), $"prepcache_purge_stem_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "target.py"), "# retained\n");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "target.cs"), "// existing rename source\n");
+
+            var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            writer.UpsertFile(new FileRecord
+            {
+                Path = "src/target.py",
+                Lang = "python",
+                Size = 1,
+                Lines = 1,
+                Checksum = "current",
+                Modified = modified,
+            });
+            writer.UpsertFile(new FileRecord
+            {
+                Path = "src/target.cs",
+                Lang = "csharp",
+                Size = 1,
+                Lines = 1,
+                Checksum = "old",
+                Modified = modified,
+            });
+            writer.UpsertFile(new FileRecord
+            {
+                Path = "src/other.cs",
+                Lang = "csharp",
+                Size = 1,
+                Lines = 1,
+                Checksum = "other",
+                Modified = modified,
+            });
+
+            Assert.Equal(0, writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, "src/target.py"));
+            var hitsBefore = _db.PreparedCommands.HitCount;
+
+            Assert.Equal(0, writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, "src/target.py"));
+
+            Assert.True(_db.PreparedCommands.HitCount > hitsBefore);
+        }
+        finally
+        {
+            if (Directory.Exists(projectRoot))
+                TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void DbWriter_WithCache_InsertIssuesReusesDeleteAndInsertCommandsAcrossFiles()
+    {
+        var writer = new DbWriter(_db);
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var firstFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/issues-a.py",
+            Lang = "python",
+            Size = 1,
+            Lines = 1,
+            Modified = modified,
+        });
+        var secondFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/issues-b.py",
+            Lang = "python",
+            Size = 2,
+            Lines = 1,
+            Modified = modified,
+        });
+        var issues = new[]
+        {
+            new FileIssue
+            {
+                Path = "src/issues.py",
+                Kind = "non_utf8_likely",
+                Line = 0,
+                Message = "non UTF-8 bytes",
+                Origin = "validation",
+                Severity = "warning",
+            },
+        };
+        var hitsBefore = _db.PreparedCommands.HitCount;
+
+        writer.InsertIssues(firstFileId, issues);
+        writer.InsertIssues(secondFileId, issues);
+        writer.InsertIssues(secondFileId, []);
+
+        Assert.True(_db.PreparedCommands.HitCount >= hitsBefore + 3);
+    }
+
+    [Fact]
+    public void DbWriter_WithCache_CSharpStaticInterfaceContractQueriesReuseCacheAcrossCalls()
+    {
+        var writer = new DbWriter(_db);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/IShape.cs",
+            Lang = "csharp",
+            Size = 120,
+            Lines = 6,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        writer.InsertSymbols(new[]
+        {
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "interface",
+                Name = "IShape",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 6,
+                Signature = "public interface IShape",
+                ContainerQualifiedName = "Demo.IShape",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Create",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+                Signature = "public static abstract IShape Create();",
+                ContainerKind = "interface",
+                ContainerName = "IShape",
+                ContainerQualifiedName = "Demo.IShape",
+            },
+        });
+
+        var first = writer.LoadCSharpStaticInterfaceContractSymbols();
+        Assert.Contains(first, s => s.Kind == "interface" && s.Name == "IShape");
+        Assert.Contains(first, s => s.Kind == "function" && s.Name == "Create");
+        Assert.True(writer.HasCSharpStaticInterfaceContractSymbolsInPaths(
+            new HashSet<string>(StringComparer.Ordinal) { "src/IShape.cs" }));
+
+        var hitsBefore = _db.PreparedCommands.HitCount;
+
+        var second = writer.LoadCSharpStaticInterfaceContractSymbols();
+        Assert.True(writer.HasCSharpStaticInterfaceContractSymbolsInPaths(
+            new HashSet<string>(StringComparer.Ordinal) { "src/IShape.cs" }));
+
+        Assert.Equal(first.Count, second.Count);
+        Assert.True(_db.PreparedCommands.HitCount >= hitsBefore + 2);
+    }
+
+    [Fact]
+    public void DbWriter_WithCache_CSharpMetadataResolverReusesReadAndUpdateCommandsAcrossRuns()
+    {
+        var writer = new DbWriter(_db);
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var baseFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/A/BaseAttribute.cs",
+            Lang = "csharp",
+            Size = 80,
+            Lines = 4,
+            Modified = modified,
+        });
+        var childFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/A/ChildAttribute.cs",
+            Lang = "csharp",
+            Size = 100,
+            Lines = 4,
+            Modified = modified,
+        });
+        writer.InsertSymbols(new[]
+        {
+            new SymbolRecord
+            {
+                FileId = baseFileId,
+                Kind = "class",
+                Name = "BaseAttribute",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 4,
+                Signature = "public class BaseAttribute : System.Attribute",
+                ContainerQualifiedName = "A.BaseAttribute",
+                IsMetadataTarget = true,
+                MetadataTargetSource = SymbolRecord.MetadataTargetSourceExtractor,
+            },
+            new SymbolRecord
+            {
+                FileId = childFileId,
+                Kind = "class",
+                Name = "ChildAttribute",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 4,
+                Signature = "public class ChildAttribute : BaseAttribute",
+                ContainerQualifiedName = "A.ChildAttribute",
+            },
+        });
+
+        writer.ResolveCSharpMetadataTargets();
+        using (var cmd = _db.Connection.CreateCommand())
+        {
+            cmd.CommandText = @"
+                SELECT s.is_metadata_target, s.metadata_target_source
+                FROM symbols s
+                JOIN files f ON f.id = s.file_id
+                WHERE f.path = 'src/A/ChildAttribute.cs' AND s.name = 'ChildAttribute'";
+            using var reader = cmd.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.Equal(1L, reader.GetInt64(0));
+            Assert.Equal(SymbolRecord.MetadataTargetSourceResolver, reader.GetString(1));
+        }
+
+        var hitsBefore = _db.PreparedCommands.HitCount;
+
+        writer.ResolveCSharpMetadataTargets();
+
+        Assert.True(_db.PreparedCommands.HitCount >= hitsBefore + 3);
+    }
+
+    [Fact]
+    public void DbWriter_WithCache_FileCountIssueAndLanguageQueriesReuseCommands()
+    {
+        var writer = new DbWriter(_db);
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var firstFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/count-a.cs",
+            Lang = "csharp",
+            Size = 40,
+            Lines = 2,
+            Modified = modified,
+        });
+        var secondFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/count-b.py",
+            Lang = "python",
+            Size = 30,
+            Lines = 2,
+            Modified = modified,
+        });
+        writer.InsertSymbols(new[]
+        {
+            new SymbolRecord
+            {
+                FileId = firstFileId,
+                Kind = "class",
+                Name = "CountA",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 2,
+            },
+            new SymbolRecord
+            {
+                FileId = secondFileId,
+                Kind = "function",
+                Name = "count_b",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 2,
+            },
+        });
+        writer.InsertReferences(new[]
+        {
+            new ReferenceRecord
+            {
+                FileId = firstFileId,
+                SymbolName = "CountA",
+                ReferenceKind = "type_reference",
+                Line = 2,
+                Column = 12,
+                Context = "var value = CountA;",
+            },
+        });
+        writer.InsertIssues(firstFileId, new[]
+        {
+            new FileIssue
+            {
+                Path = "src/count-a.cs",
+                Kind = "non_utf8_likely",
+                Line = 0,
+                Message = "test issue",
+            },
+        });
+
+        Assert.Equal(1, writer.CountSymbolsForFile(firstFileId));
+        Assert.Equal(1, writer.CountReferencesForFile(firstFileId));
+        Assert.True(writer.HasIssueForFile(firstFileId, "non_utf8_likely"));
+        Assert.Contains("csharp", writer.GetIndexedLanguages());
+
+        var hitsBefore = _db.PreparedCommands.HitCount;
+
+        Assert.Equal(1, writer.CountSymbolsForFile(secondFileId));
+        Assert.Equal(0, writer.CountReferencesForFile(secondFileId));
+        Assert.False(writer.HasIssueForFile(secondFileId, "non_utf8_likely"));
+        Assert.Contains("python", writer.GetIndexedLanguages());
+
+        Assert.True(_db.PreparedCommands.HitCount >= hitsBefore + 4);
+    }
+
+    [Fact]
+    public void DbWriter_WithCache_MetaHelpersReuseCommandsAcrossKeys()
+    {
+        var writer = new DbWriter(_db);
+        var currentTypeScriptAugmentationVersion =
+            DbContext.TypeScriptAugmentationVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+        writer.SetMeta(DbContext.TypeScriptAugmentationVersionMetaKey, currentTypeScriptAugmentationVersion);
+        Assert.True(writer.TypeScriptAugmentationVersionMatchesCurrent());
+        Assert.True(writer.HasMetaTable());
+
+        var hitsBefore = _db.PreparedCommands.HitCount;
+
+        writer.SetMeta("prepared_cache_meta_a", "1");
+        writer.SetMeta(DbContext.TypeScriptAugmentationVersionMetaKey, currentTypeScriptAugmentationVersion);
+        Assert.True(writer.TypeScriptAugmentationVersionMatchesCurrent());
+        Assert.True(writer.HasMetaTable());
+
+        Assert.True(_db.PreparedCommands.HitCount >= hitsBefore + 6);
+    }
+
+    [Fact]
+    public void DbWriter_WithCache_FoldBackfillQueriesReuseCommands()
+    {
+        var writer = new DbWriter(_db);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/fold.cs",
+            Lang = "csharp",
+            Size = 80,
+            Lines = 4,
+            Checksum = "fold",
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        writer.InsertSymbols(new[]
+        {
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "FoldTarget",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 4,
+            },
+        });
+        writer.InsertReferences(new[]
+        {
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "FoldTarget",
+                ReferenceKind = "type_reference",
+                Line = 3,
+                Column = 12,
+                ContainerName = "FoldCaller",
+                Context = "var value = FoldTarget;",
+            },
+        });
+
+        Assert.True(writer.AllFoldedColumnsBackfilled(requireCurrentFoldKeys: true));
+        Assert.Equal((1, 1), writer.CountBackfillFoldedColumns(rewriteAll: true));
+        Assert.Equal((1, 1), writer.BackfillFoldedColumns(rewriteAll: true));
+
+        var hitsBefore = _db.PreparedCommands.HitCount;
+
+        Assert.True(writer.AllFoldedColumnsBackfilled(requireCurrentFoldKeys: true));
+        Assert.Equal((1, 1), writer.CountBackfillFoldedColumns(rewriteAll: true));
+        Assert.Equal((1, 1), writer.BackfillFoldedColumns(rewriteAll: true));
+
+        Assert.True(_db.PreparedCommands.HitCount > hitsBefore);
+    }
+
+    [Fact]
+    public void DbWriter_WithCache_PurgeFileScansAndDeletesReuseCommands()
+    {
+        var writer = new DbWriter(_db);
+        var projectRoot = Path.Combine(Path.GetTempPath(), $"prepcache_purge_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(projectRoot);
+        try
+        {
+            var now = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            writer.UpsertFile(new FileRecord
+            {
+                Path = "deleted/a.cs",
+                Lang = "csharp",
+                Size = 10,
+                Lines = 1,
+                Checksum = "purge-a",
+                Modified = now,
+            });
+            Assert.Equal(1, writer.PurgeStaleFiles(projectRoot));
+
+            writer.UpsertFile(new FileRecord
+            {
+                Path = "dropped/b.py",
+                Lang = "python",
+                Size = 10,
+                Lines = 1,
+                Checksum = "purge-b",
+                Modified = now,
+            });
+            var hitsBefore = _db.PreparedCommands.HitCount;
+
+            Assert.Equal(1, writer.PurgeFilesOutsideRetainedSet(new HashSet<string>(StringComparer.Ordinal)));
+
+            writer.UpsertFile(new FileRecord
+            {
+                Path = "listed/c.ts",
+                Lang = "typescript",
+                Size = 10,
+                Lines = 1,
+                Checksum = "purge-c",
+                Modified = now,
+            });
+            Assert.Equal(
+                1,
+                writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(
+                    new HashSet<string>(StringComparer.Ordinal),
+                    new HashSet<string>(StringComparer.Ordinal) { "listed" },
+                    new HashSet<string>(StringComparer.Ordinal)));
+
+            Assert.True(_db.PreparedCommands.HitCount > hitsBefore);
+        }
+        finally
+        {
+            try { Directory.Delete(projectRoot, recursive: true); } catch { /* ignore */ }
+        }
+    }
+
+    [Fact]
+    public void DbWriter_WithCache_ReferenceGraphMaintenanceReusesCommands()
+    {
+        var writer = new DbWriter(_db);
+        var now = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var csharpFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/calls.cs",
+            Lang = "csharp",
+            Size = 80,
+            Lines = 4,
+            Checksum = "calls",
+            Modified = now,
+        });
+        writer.InsertReferences(
+            [
+                new ReferenceRecord
+                {
+                    FileId = csharpFileId,
+                    SymbolName = "Target",
+                    ReferenceKind = "call",
+                    Line = 1,
+                    Column = 12,
+                    ContainerName = "Source",
+                    Context = "Target();",
+                },
+                new ReferenceRecord
+                {
+                    FileId = csharpFileId,
+                    SymbolName = "Source",
+                    ReferenceKind = "call",
+                    Line = 2,
+                    Column = 12,
+                    ContainerName = "Target",
+                    Context = "Source();",
+                },
+            ],
+            refreshMutualRecursionFlags: false);
+
+        writer.RefreshMutualRecursionFlags();
+        var hitsBeforeRefresh = _db.PreparedCommands.HitCount;
+        writer.RefreshMutualRecursionFlags();
+        Assert.True(_db.PreparedCommands.HitCount > hitsBeforeRefresh);
+
+        var firstTsFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/first.ts",
+            Lang = "typescript",
+            Size = 80,
+            Lines = 2,
+            Checksum = "ts-first",
+            Modified = now,
+        });
+        var secondTsFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/second.ts",
+            Lang = "typescript",
+            Size = 80,
+            Lines = 2,
+            Checksum = "ts-second",
+            Modified = now,
+        });
+        writer.InsertSymbols(
+            [
+                new SymbolRecord { FileId = firstTsFileId, Kind = "interface", Name = "Merged", Line = 1, StartLine = 1, EndLine = 2, Signature = "interface Merged { a: number }" },
+                new SymbolRecord { FileId = secondTsFileId, Kind = "interface", Name = "Merged", Line = 1, StartLine = 1, EndLine = 2, Signature = "interface Merged { b: string }" },
+            ]);
+
+        Assert.Equal(2, writer.RebuildTypeScriptAugmentationReferences());
+        var hitsBeforeRebuild = _db.PreparedCommands.HitCount;
+        Assert.Equal(2, writer.RebuildTypeScriptAugmentationReferences());
+        Assert.True(_db.PreparedCommands.HitCount > hitsBeforeRebuild);
+
+        writer.PurgeAllReferences();
+        var hitsBeforePurge = _db.PreparedCommands.HitCount;
+        Assert.Equal(0, writer.PurgeAllReferences());
+        Assert.True(_db.PreparedCommands.HitCount > hitsBeforePurge);
+    }
+
+    [Fact]
+    public void DbWriter_WithCache_UnsupportedReferenceCleanupReusesCommands()
+    {
+        var writer = new DbWriter(_db);
+        var unsupportedFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "legacy/old.lang",
+            Lang = "legacy",
+            Size = 80,
+            Lines = 3,
+            Checksum = "unsupported",
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        writer.InsertReferences(
+            [
+                new ReferenceRecord
+                {
+                    FileId = unsupportedFileId,
+                    SymbolName = "LegacyCall",
+                    ReferenceKind = "call",
+                    Line = 2,
+                    Column = 8,
+                    ContainerName = "LegacyCaller",
+                    Context = "LegacyCall();",
+                },
+            ],
+            refreshMutualRecursionFlags: false);
+
+        var supportedLanguages = new[] { "csharp", "typescript" };
+
+        Assert.Equal(1, writer.CountUnsupportedReferences(supportedLanguages));
+        var hitsBeforeCount = _db.PreparedCommands.HitCount;
+        Assert.Equal(1, writer.CountUnsupportedReferences(supportedLanguages));
+        Assert.True(_db.PreparedCommands.HitCount > hitsBeforeCount);
+
+        Assert.Equal(1, writer.PurgeUnsupportedReferences(supportedLanguages));
+        var hitsBeforePurge = _db.PreparedCommands.HitCount;
+        Assert.Equal(0, writer.PurgeUnsupportedReferences(supportedLanguages));
+        Assert.True(_db.PreparedCommands.HitCount > hitsBeforePurge);
+    }
+
+    [Fact]
     public void DbWriter_WithCache_GetUnchangedFileIdTouchUpdatesTimestamp()
     {
         // GetUnchangedFileId now performs lookup and timestamp touch in one

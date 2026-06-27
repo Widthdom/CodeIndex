@@ -66,6 +66,38 @@ public static partial class SymbolExtractor
         };
     }
 
+    private static List<SymbolRecord> BuildEnumDeclarationSnapshot(IReadOnlyList<SymbolRecord> symbols, long? fileId = null)
+    {
+        var candidates = new List<(SymbolRecord Symbol, int OriginalIndex)>();
+        for (var index = 0; index < symbols.Count; index++)
+        {
+            var symbol = symbols[index];
+            if (fileId is { } requestedFileId && symbol.FileId != requestedFileId)
+                continue;
+
+            if (symbol.Kind == "enum" && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
+                candidates.Add((symbol, index));
+        }
+
+        candidates.Sort(static (left, right) =>
+        {
+            var comparison = left.Symbol.StartLine.CompareTo(right.Symbol.StartLine);
+            if (comparison != 0)
+                return comparison;
+
+            comparison = right.Symbol.EndLine.CompareTo(left.Symbol.EndLine);
+            if (comparison != 0)
+                return comparison;
+
+            return left.OriginalIndex.CompareTo(right.OriginalIndex);
+        });
+
+        var snapshot = new List<SymbolRecord>(candidates.Count);
+        foreach (var candidate in candidates)
+            snapshot.Add(candidate.Symbol);
+        return snapshot;
+    }
+
     // THREAD-SAFETY: Symbol extraction is intentionally stateless per call. Shared Regex
     // instances and lookup tables are initialized once by the CLR and must be treated as
     // immutable after type initialization; per-file extraction state belongs in local
@@ -2349,6 +2381,7 @@ public static partial class SymbolExtractor
         string content,
         bool contentIsNormalized,
         bool? hasOversizeLine,
+        int? conflictMarkerLine,
         string? filePath,
         string? projectRoot,
         CancellationToken cancellationToken,
@@ -2387,7 +2420,7 @@ public static partial class SymbolExtractor
         if (hasOversizeLine ?? ChunkSplitter.HasOversizeLine(content))
             return true;
 
-        if (FileIndexer.HasConflictMarkers(content))
+        if ((conflictMarkerLine ?? FileIndexer.GetConflictMarkerLine(content)) > 0)
             return true;
 
         if (!contentIsNormalized)
@@ -2402,15 +2435,23 @@ public static partial class SymbolExtractor
             && !PatternCache.ContainsKey(pluginLanguage)
             && ExtractorPluginRegistry.TryGetSymbolExtractor(pluginLanguage, out var pluginExtractor))
         {
-            symbols = pluginExtractor.Extract(
+            var pluginSymbols = pluginExtractor.Extract(
                     fileId,
                     preparedContent,
-                    new ExtractionContext(pluginLanguage, filePath))
-                .ToList();
+                    new ExtractionContext(pluginLanguage, filePath));
+            symbols = CopyPluginSymbols(pluginSymbols);
             return true;
         }
 
         return false;
+    }
+
+    private static List<SymbolRecord> CopyPluginSymbols(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var copiedSymbols = new List<SymbolRecord>(symbols.Count);
+        for (var i = 0; i < symbols.Count; i++)
+            copiedSymbols.Add(symbols[i]);
+        return copiedSymbols;
     }
 
     /// <summary>
@@ -2429,17 +2470,27 @@ public static partial class SymbolExtractor
             content,
             contentIsNormalized: false,
             hasOversizeLine: null,
+            conflictMarkerLine: null,
             filePath,
             projectRoot,
             cancellationToken);
 
-    internal static List<SymbolRecord> ExtractNormalized(long fileId, string? lang, string content, bool hasOversizeLine, string? filePath = null, string? projectRoot = null, CancellationToken cancellationToken = default)
+    internal static List<SymbolRecord> ExtractNormalized(
+        long fileId,
+        string? lang,
+        string content,
+        bool hasOversizeLine,
+        string? filePath = null,
+        string? projectRoot = null,
+        CancellationToken cancellationToken = default,
+        int? conflictMarkerLine = null)
         => ExtractCore(
             fileId,
             lang,
             content,
             contentIsNormalized: true,
             hasOversizeLine,
+            conflictMarkerLine,
             filePath,
             projectRoot,
             cancellationToken);
@@ -2450,6 +2501,7 @@ public static partial class SymbolExtractor
         string content,
         bool contentIsNormalized,
         bool? hasOversizeLine,
+        int? conflictMarkerLine,
         string? filePath = null,
         string? projectRoot = null,
         CancellationToken cancellationToken = default)
@@ -2461,6 +2513,7 @@ public static partial class SymbolExtractor
             content,
             contentIsNormalized,
             hasOversizeLine,
+            conflictMarkerLine,
             filePath,
             projectRoot,
             cancellationToken,
@@ -3575,10 +3628,14 @@ public static partial class SymbolExtractor
                         {
                             var names = name.Split(',');
                             for (var index = 0; index < names.Length; index++)
-                                names[index] = names[index].Trim();
+                            {
+                                var candidate = names[index].Trim();
+                                if (candidate.Length == 0)
+                                    continue;
 
-                            if (names.Any(static candidate => candidate.Length > 0))
-                                fortranProcedureNames = names.Where(static candidate => candidate.Length > 0).ToList();
+                                fortranProcedureNames ??= new List<string>(names.Length);
+                                fortranProcedureNames.Add(candidate);
+                            }
                         }
 
                         if (lang == "cpp"
@@ -4603,17 +4660,34 @@ public static partial class SymbolExtractor
 
     private static void ClassifyScalaCompanions(List<SymbolRecord> symbols)
     {
-        var topLevelClasses = symbols
-            .Where(symbol => symbol.Kind == "class"
-                && string.IsNullOrWhiteSpace(symbol.ContainerKind)
-                && !string.IsNullOrWhiteSpace(symbol.Name))
-            .GroupBy(symbol => symbol.Name, StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
-
-        foreach (var scalaObject in symbols.Where(symbol => symbol.Kind == "object"
-                     && string.IsNullOrWhiteSpace(symbol.ContainerKind)
-                     && !string.IsNullOrWhiteSpace(symbol.Name)))
+        var topLevelClasses = new Dictionary<string, List<SymbolRecord>>(StringComparer.Ordinal);
+        foreach (var symbol in symbols)
         {
+            if (symbol.Kind != "class"
+                || !string.IsNullOrWhiteSpace(symbol.ContainerKind)
+                || string.IsNullOrWhiteSpace(symbol.Name))
+            {
+                continue;
+            }
+
+            if (!topLevelClasses.TryGetValue(symbol.Name, out var companionClasses))
+            {
+                companionClasses = new List<SymbolRecord>();
+                topLevelClasses.Add(symbol.Name, companionClasses);
+            }
+
+            companionClasses.Add(symbol);
+        }
+
+        foreach (var scalaObject in symbols)
+        {
+            if (scalaObject.Kind != "object"
+                || !string.IsNullOrWhiteSpace(scalaObject.ContainerKind)
+                || string.IsNullOrWhiteSpace(scalaObject.Name))
+            {
+                continue;
+            }
+
             if (!topLevelClasses.TryGetValue(scalaObject.Name, out var companionClasses))
                 continue;
 
@@ -5143,11 +5217,8 @@ public static partial class SymbolExtractor
                 continue;
 
             var headerEnd = FindSqlRoutineHeaderEndLine(structuralLines, i);
-            var header = string.Join('\n', structuralLines.Skip(i).Take(headerEnd - i + 1));
-            var owner = symbols
-                .Where(symbol => symbol.Kind == "function" && symbol.Line >= i + 1 && symbol.Line <= headerEnd + 1)
-                .OrderBy(symbol => symbol.Line)
-                .FirstOrDefault();
+            var header = LineRangeText.Join(structuralLines, i, headerEnd);
+            var owner = FindSqlRoutineOwnerSymbol(symbols, i + 1, headerEnd + 1);
             var ownerName = owner?.Name;
             var ownerBodyStart = owner?.BodyStartLine;
             var ownerBodyEnd = owner?.BodyEndLine;
@@ -5171,6 +5242,21 @@ public static partial class SymbolExtractor
                 }
             }
         }
+    }
+
+    private static SymbolRecord? FindSqlRoutineOwnerSymbol(List<SymbolRecord> symbols, int startLine, int endLine)
+    {
+        SymbolRecord? owner = null;
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "function" || symbol.Line < startLine || symbol.Line > endLine)
+                continue;
+
+            if (owner == null || symbol.Line < owner.Line)
+                owner = symbol;
+        }
+
+        return owner;
     }
 
     private static int FindSqlRoutineHeaderEndLine(string[] lines, int startLineIndex)
@@ -5362,21 +5448,47 @@ public static partial class SymbolExtractor
            && IsJavaScriptTypeScriptIdentifierStart(name[3])
            && char.IsUpper(name[3]);
 
+    private static HashSet<string> BuildSymbolLineKeySet(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var existing = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var symbol in symbols)
+            existing.Add($"{symbol.Kind}:{symbol.Name}:{symbol.Line}");
+        return existing;
+    }
+
+    private static HashSet<string> BuildSymbolKindNameKeySet(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var existing = new HashSet<string>(symbols.Count, StringComparer.Ordinal);
+        foreach (var symbol in symbols)
+            existing.Add($"{symbol.Kind}:{symbol.Name}");
+        return existing;
+    }
+
+    private static List<SymbolRecord> BuildPropertySymbolSnapshot(IReadOnlyList<SymbolRecord> symbols, int lineCount)
+    {
+        var properties = new List<SymbolRecord>();
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind == "property"
+                && symbol.Line >= 1
+                && symbol.Line <= lineCount)
+            {
+                properties.Add(symbol);
+            }
+        }
+
+        return properties;
+    }
+
     private static void ExtractPhpPropertyHookSupplementalSymbols(
         long fileId,
         string[] lines,
         string[] structuralLines,
         List<SymbolRecord> symbols)
     {
-        var existing = new HashSet<string>(
-            symbols.Select(symbol => $"{symbol.Kind}:{symbol.Name}:{symbol.Line}"),
-            StringComparer.Ordinal);
+        var existing = BuildSymbolLineKeySet(symbols);
 
-        foreach (var property in symbols
-                     .Where(symbol => symbol.Kind == "property"
-                                      && symbol.Line >= 1
-                                      && symbol.Line <= lines.Length)
-                     .ToArray())
+        foreach (var property in BuildPropertySymbolSnapshot(symbols, lines.Length))
         {
             var lineIndex = property.Line - 1;
             var openBraceColumn = structuralLines[lineIndex].IndexOf('{', StringComparison.Ordinal);
@@ -5445,15 +5557,9 @@ public static partial class SymbolExtractor
         string[] structuralLines,
         List<SymbolRecord> symbols)
     {
-        var existing = new HashSet<string>(
-            symbols.Select(symbol => $"{symbol.Kind}:{symbol.Name}:{symbol.Line}"),
-            StringComparer.Ordinal);
+        var existing = BuildSymbolLineKeySet(symbols);
 
-        foreach (var property in symbols
-                     .Where(symbol => symbol.Kind == "property"
-                                      && symbol.Line >= 1
-                                      && symbol.Line <= lines.Length)
-                     .ToArray())
+        foreach (var property in BuildPropertySymbolSnapshot(symbols, lines.Length))
         {
             var lineIndex = property.Line - 1;
             var propertyLine = lines[lineIndex];
@@ -5645,9 +5751,7 @@ public static partial class SymbolExtractor
 
     private static void ExtractCppFriendDeclarationSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
     {
-        var declared = new HashSet<string>(
-            symbols.Select(symbol => $"{symbol.Kind}:{symbol.Name}"),
-            StringComparer.Ordinal);
+        var declared = BuildSymbolKindNameKeySet(symbols);
         var inBlockComment = false;
 
         for (var i = 0; i < lines.Length; i++)
@@ -8745,26 +8849,16 @@ public static partial class SymbolExtractor
         List<SymbolRecord> symbols,
         List<PendingRecordPrimaryComponents> pendingRecordPrimaryComponents)
     {
+        if (pendingRecordPrimaryComponents.Count == 0)
+            return;
+
         foreach (var pending in pendingRecordPrimaryComponents)
         {
-            var parentSymbol = symbols.LastOrDefault(symbol =>
-                symbol.FileId == pending.FileId
-                && symbol.Kind == pending.Kind
-                && symbol.Name == pending.RecordName
-                && symbol.StartLine == pending.RecordStartLine);
+            var parentSymbol = FindRecordPrimaryComponentParent(symbols, pending);
             if (parentSymbol == null)
                 continue;
 
-            var existingComponentNames = symbols
-                .Where(symbol =>
-                    symbol.FileId == pending.FileId
-                    && symbol.Kind == "property"
-                    && symbol.ContainerKind == pending.Kind
-                    && symbol.ContainerName == pending.RecordName
-                    && symbol.StartLine >= parentSymbol.StartLine
-                    && symbol.EndLine <= parentSymbol.EndLine)
-                .Select(symbol => symbol.Name)
-                .ToHashSet(StringComparer.Ordinal);
+            var existingComponentNames = BuildExistingRecordPrimaryComponentNameSet(symbols, pending, parentSymbol);
 
             foreach (var component in pending.Components)
             {
@@ -8787,6 +8881,47 @@ public static partial class SymbolExtractor
                 });
             }
         }
+    }
+
+    private static SymbolRecord? FindRecordPrimaryComponentParent(
+        IReadOnlyList<SymbolRecord> symbols,
+        PendingRecordPrimaryComponents pending)
+    {
+        for (var i = symbols.Count - 1; i >= 0; i--)
+        {
+            var symbol = symbols[i];
+            if (symbol.FileId == pending.FileId
+                && symbol.Kind == pending.Kind
+                && symbol.Name == pending.RecordName
+                && symbol.StartLine == pending.RecordStartLine)
+            {
+                return symbol;
+            }
+        }
+
+        return null;
+    }
+
+    private static HashSet<string> BuildExistingRecordPrimaryComponentNameSet(
+        IReadOnlyList<SymbolRecord> symbols,
+        PendingRecordPrimaryComponents pending,
+        SymbolRecord parentSymbol)
+    {
+        var existingComponentNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var symbol in symbols)
+        {
+            if (symbol.FileId == pending.FileId
+                && symbol.Kind == "property"
+                && symbol.ContainerKind == pending.Kind
+                && symbol.ContainerName == pending.RecordName
+                && symbol.StartLine >= parentSymbol.StartLine
+                && symbol.EndLine <= parentSymbol.EndLine)
+            {
+                existingComponentNames.Add(symbol.Name);
+            }
+        }
+
+        return existingComponentNames;
     }
 
     private static bool TryGetRecordPrimaryComponents(
@@ -10257,16 +10392,7 @@ public static partial class SymbolExtractor
                 continue;
             }
 
-            var container = symbols
-                .Where(candidate =>
-                candidate.FileId == symbol.FileId
-                && candidate.Kind == symbol.ContainerKind
-                && candidate.Name == symbol.ContainerName
-                && candidate.StartLine <= symbol.StartLine
-                && candidate.EndLine >= symbol.EndLine)
-                .OrderByDescending(candidate => candidate.StartLine)
-                .ThenBy(candidate => candidate.EndLine)
-                .FirstOrDefault();
+            var container = FindDeclaredContainerSymbol(symbols, symbol);
             if (container == null)
                 continue;
 
@@ -10276,25 +10402,42 @@ public static partial class SymbolExtractor
         }
     }
 
+    private static SymbolRecord? FindDeclaredContainerSymbol(IReadOnlyList<SymbolRecord> symbols, SymbolRecord symbol)
+    {
+        SymbolRecord? best = null;
+        foreach (var candidate in symbols)
+        {
+            if (candidate.FileId != symbol.FileId
+                || candidate.Kind != symbol.ContainerKind
+                || candidate.Name != symbol.ContainerName
+                || candidate.StartLine > symbol.StartLine
+                || candidate.EndLine < symbol.EndLine)
+            {
+                continue;
+            }
+
+            if (best == null
+                || candidate.StartLine > best.StartLine
+                || (candidate.StartLine == best.StartLine && candidate.EndLine < best.EndLine))
+            {
+                best = candidate;
+            }
+        }
+
+        return best;
+    }
+
     private static void AssignContainers(
         List<SymbolRecord> symbols,
         string[]? rawLines = null,
         CSharpLexState[]? csharpLineStartStates = null)
     {
-        var ordered = symbols
-            .Select((symbol, originalIndex) => new { Symbol = symbol, OriginalIndex = originalIndex })
-            .OrderBy(entry => entry.Symbol.StartLine)
-            .ThenBy(entry => entry.Symbol.StartColumn.HasValue ? 0 : 1)
-            .ThenBy(entry => entry.Symbol.StartColumn ?? int.MaxValue)
-            .ThenByDescending(entry => entry.Symbol.EndLine)
-            .ThenByDescending(entry => entry.Symbol.Signature?.Length ?? 0)
-            .ThenBy(entry => entry.OriginalIndex)
-            .Select(entry => entry.Symbol)
-            .ToList();
+        var ordered = BuildContainerAssignmentOrder(symbols);
 
         var stack = new Stack<SymbolRecord>();
-        foreach (var symbol in ordered)
+        foreach (var orderedSymbol in ordered)
         {
+            var symbol = orderedSymbol.Symbol;
             while (stack.Count > 0 && !IsFileScopedNamespace(stack.Peek()) && symbol.StartLine > stack.Peek().EndLine)
                 stack.Pop();
 
@@ -10329,8 +10472,7 @@ public static partial class SymbolExtractor
                         effectiveContainer = containerPath[^1];
                         symbol.ContainerKind = effectiveContainer.Kind;
                         symbol.ContainerName = effectiveContainer.Name;
-                        var effectiveParentPath = containerPath.Take(containerPath.Count - 1);
-                        symbol.ContainerQualifiedName = BuildQualifiedContainerName(effectiveParentPath);
+                        symbol.ContainerQualifiedName = BuildQualifiedContainerName(containerPath, containerPath.Count - 1);
                     }
                     else
                     {
@@ -10360,16 +10502,62 @@ public static partial class SymbolExtractor
         }
     }
 
+    private readonly record struct ContainerAssignmentSortEntry(SymbolRecord Symbol, int OriginalIndex);
+
+    private static List<ContainerAssignmentSortEntry> BuildContainerAssignmentOrder(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var ordered = new List<ContainerAssignmentSortEntry>(symbols.Count);
+        for (var i = 0; i < symbols.Count; i++)
+            ordered.Add(new ContainerAssignmentSortEntry(symbols[i], i));
+
+        ordered.Sort(CompareContainerAssignmentSortEntries);
+        return ordered;
+    }
+
+    private static int CompareContainerAssignmentSortEntries(ContainerAssignmentSortEntry left, ContainerAssignmentSortEntry right)
+    {
+        var compare = left.Symbol.StartLine.CompareTo(right.Symbol.StartLine);
+        if (compare != 0)
+            return compare;
+
+        var leftStartColumnRank = left.Symbol.StartColumn.HasValue ? 0 : 1;
+        var rightStartColumnRank = right.Symbol.StartColumn.HasValue ? 0 : 1;
+        compare = leftStartColumnRank.CompareTo(rightStartColumnRank);
+        if (compare != 0)
+            return compare;
+
+        compare = (left.Symbol.StartColumn ?? int.MaxValue).CompareTo(right.Symbol.StartColumn ?? int.MaxValue);
+        if (compare != 0)
+            return compare;
+
+        compare = right.Symbol.EndLine.CompareTo(left.Symbol.EndLine);
+        if (compare != 0)
+            return compare;
+
+        compare = (right.Symbol.Signature?.Length ?? 0).CompareTo(left.Symbol.Signature?.Length ?? 0);
+        if (compare != 0)
+            return compare;
+
+        return left.OriginalIndex.CompareTo(right.OriginalIndex);
+    }
+
     private static IReadOnlyList<SymbolRecord> GetEffectiveContainerPath(
-        IEnumerable<SymbolRecord> containers,
+        Stack<SymbolRecord> containers,
         SymbolRecord symbol,
         string[]? rawLines = null,
         CSharpLexState[]? csharpLineStartStates = null)
     {
-        var orderedContainers = containers.Reverse().ToList();
-        var containingContainers = orderedContainers
-            .Where(container => ContainsSymbol(container, symbol, rawLines, csharpLineStartStates))
-            .ToList();
+        if (containers.Count == 0)
+            return [];
+
+        var orderedContainers = containers.ToArray();
+        var containingContainers = new List<SymbolRecord>(orderedContainers.Length);
+        for (var i = orderedContainers.Length - 1; i >= 0; i--)
+        {
+            var container = orderedContainers[i];
+            if (ContainsSymbol(container, symbol, rawLines, csharpLineStartStates))
+                containingContainers.Add(container);
+        }
 
         if (containingContainers.Count == 0)
             return [];
@@ -10378,22 +10566,35 @@ public static partial class SymbolExtractor
         {
             var enumIndex = containingContainers.FindLastIndex(container => container.Kind == "enum");
             if (enumIndex >= 0)
-                return containingContainers.Take(enumIndex + 1).ToList();
+                containingContainers.RemoveRange(enumIndex + 1, containingContainers.Count - enumIndex - 1);
         }
 
         return containingContainers;
     }
 
-    private static string? BuildQualifiedContainerName(IEnumerable<SymbolRecord> containers)
-    {
-        var names = containers
-            .Select(container => container.Name)
-            .Where(name => !string.IsNullOrWhiteSpace(name))
-            .ToList();
+    private static string? BuildQualifiedContainerName(IReadOnlyList<SymbolRecord> containers) =>
+        BuildQualifiedContainerName(containers, containers.Count);
 
-        return names.Count > 0
-            ? string.Join(".", names)
-            : null;
+    private static string? BuildQualifiedContainerName(IReadOnlyList<SymbolRecord> containers, int count)
+    {
+        if (count <= 0)
+            return null;
+
+        StringBuilder? builder = null;
+        for (var i = 0; i < count; i++)
+        {
+            var name = containers[i].Name;
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            builder ??= new StringBuilder(name.Length);
+            if (builder.Length > 0)
+                builder.Append('.');
+
+            builder.Append(name);
+        }
+
+        return builder?.ToString();
     }
 
     private static string? BuildInheritedFamilyKey(SymbolRecord container, string? qualifiedContainerName) =>
@@ -10401,20 +10602,36 @@ public static partial class SymbolExtractor
             ? qualifiedContainerName
             : null;
 
-    private static string? BuildSelfFamilyKey(SymbolRecord symbol, IEnumerable<SymbolRecord> containers)
+    private static string? BuildSelfFamilyKey(SymbolRecord symbol, IReadOnlyList<SymbolRecord> containers)
     {
         if (!SupportsCrossFileFamily(symbol))
             return null;
 
-        var names = containers
-            .Select(container => container.Name)
-            .Where(name => !string.IsNullOrWhiteSpace(name))
-            .Append(symbol.Name)
-            .ToList();
+        var symbolName = symbol.Name;
+        if (containers.Count == 0)
+            return symbolName;
 
-        return names.Count > 0
-            ? string.Join(".", names)
-            : null;
+        StringBuilder? builder = null;
+        for (var i = 0; i < containers.Count; i++)
+        {
+            var name = containers[i].Name;
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            builder ??= new StringBuilder(name.Length + symbolName.Length + 1);
+            if (builder.Length > 0)
+                builder.Append('.');
+
+            builder.Append(name);
+        }
+
+        builder ??= new StringBuilder(symbolName.Length);
+        if (builder.Length > 0)
+            builder.Append('.');
+
+        builder.Append(symbolName);
+
+        return builder?.ToString();
     }
 
     private static bool SupportsCrossFileFamily(SymbolRecord symbol) =>
@@ -10874,12 +11091,7 @@ public static partial class SymbolExtractor
 
     private static void ExtractRustAssociatedTypeDefaultSymbols(long fileId, string[] lines, string[] structuralLines, List<SymbolRecord> symbols)
     {
-        var traits = symbols
-            .Where(symbol => symbol.Kind is "interface" or "protocol"
-                && symbol.BodyStartLine is > 0
-                && symbol.BodyEndLine is > 0)
-            .OrderBy(symbol => symbol.StartLine)
-            .ToList();
+        var traits = BuildRustAssociatedTypeContainerSnapshot(symbols);
 
         foreach (var trait in traits)
         {
@@ -10919,6 +11131,34 @@ public static partial class SymbolExtractor
                 depth = Math.Max(1, depth + CountBraceDelta(structuralLines[lineIndex]));
             }
         }
+    }
+
+    private static List<SymbolRecord> BuildRustAssociatedTypeContainerSnapshot(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var candidates = new List<(SymbolRecord Symbol, int OriginalIndex)>();
+        for (var index = 0; index < symbols.Count; index++)
+        {
+            var symbol = symbols[index];
+            if (symbol.Kind is ("interface" or "protocol")
+                && symbol.BodyStartLine is > 0
+                && symbol.BodyEndLine is > 0)
+            {
+                candidates.Add((symbol, index));
+            }
+        }
+
+        candidates.Sort(static (left, right) =>
+        {
+            var comparison = left.Symbol.StartLine.CompareTo(right.Symbol.StartLine);
+            return comparison != 0
+                ? comparison
+                : left.OriginalIndex.CompareTo(right.OriginalIndex);
+        });
+
+        var snapshot = new List<SymbolRecord>(candidates.Count);
+        foreach (var candidate in candidates)
+            snapshot.Add(candidate.Symbol);
+        return snapshot;
     }
 
     private static bool TryFindRustBraceBodyBounds(string[] structuralLines, int startLineIndex, out int bodyStartLineIndex, out int bodyEndLineIndex)

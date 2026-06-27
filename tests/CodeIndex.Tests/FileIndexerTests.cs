@@ -6181,6 +6181,18 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void ValidateContent_ConflictEndMarkerOnly_EmitsConflictMarkerIssue()
+    {
+        var content = "first\n>>>>>>> feature\n";
+        var raw = System.Text.Encoding.UTF8.GetBytes(content);
+
+        var issues = FileIndexer.ValidateContent("Example.cs", raw, content);
+
+        var conflictMarkers = Assert.Single(issues, i => i.Kind == "conflict_markers");
+        Assert.Equal(2, conflictMarkers.Line);
+    }
+
+    [Fact]
     public void Extractors_ConflictMarkers_ReturnEmptySymbolsAndReferences()
     {
         var content = """

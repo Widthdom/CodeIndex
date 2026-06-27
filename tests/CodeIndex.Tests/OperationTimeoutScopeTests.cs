@@ -25,10 +25,11 @@ public sealed class OperationTimeoutScopeTests
         using var cts = new CancellationTokenSource();
         using var scope = OperationTimeoutScope.Create(
             OperationTimeoutCategories.McpRequest,
-            TimeSpan.FromSeconds(30),
+            TimeSpan.FromMinutes(5),
             cts.Token);
 
-        await cts.CancelAsync();
+        cts.Cancel();
+        Assert.True(scope.Token.IsCancellationRequested);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             async () => await Task.Delay(TimeSpan.FromSeconds(5), scope.Token));
 

@@ -20,20 +20,13 @@ public static partial class ReferenceExtractor
         string language,
         IReadOnlyList<SymbolRecord> symbols,
         IReadOnlySet<string> csharpKnownTypeNames,
+        IReadOnlyList<(int StartLine, int EndLine)> namespaceScopes,
         IReadOnlyList<string>? lines = null,
         IReadOnlyList<string>? aliasScanLines = null)
     {
         var aliases = new List<CSharpUsingAliasRecord>();
         if (language != "csharp")
             return aliases;
-
-        var namespaceScopes = symbols
-            .Where(symbol => symbol.Kind == "namespace")
-            .Select(symbol => (
-                StartLine: symbol.BodyStartLine ?? symbol.StartLine,
-                EndLine: symbol.BodyEndLine ?? symbol.EndLine))
-            .Where(scope => scope.StartLine > 0 && scope.EndLine >= scope.StartLine)
-            .ToList();
 
         foreach (var symbol in symbols)
         {
@@ -62,11 +55,9 @@ public static partial class ReferenceExtractor
                     continue;
 
                 var lineNumber = i + 1;
-                if (aliases.Any(existing => existing.Line == lineNumber
-                    && string.Equals(existing.AliasName, NormalizeCSharpIdentifier(match.Groups["alias"].Value), StringComparison.Ordinal)))
-                {
+                var aliasName = NormalizeCSharpIdentifier(match.Groups["alias"].Value);
+                if (HasCSharpUsingAliasRecord(aliases, lineNumber, aliasName))
                     continue;
-                }
 
                 AddCSharpUsingAliasRecord(aliases, namespaceScopes, lineNumber, match, csharpKnownTypeNames);
             }
@@ -74,6 +65,38 @@ public static partial class ReferenceExtractor
 
         aliases.Sort(static (left, right) => left.Line.CompareTo(right.Line));
         return aliases;
+    }
+
+    private static List<(int StartLine, int EndLine)> BuildCSharpNamespaceScopes(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var scopes = new List<(int StartLine, int EndLine)>();
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "namespace")
+                continue;
+
+            var startLine = symbol.BodyStartLine ?? symbol.StartLine;
+            var endLine = symbol.BodyEndLine ?? symbol.EndLine;
+            if (startLine > 0 && endLine >= startLine)
+                scopes.Add((startLine, endLine));
+        }
+
+        return scopes;
+    }
+
+    private static bool HasCSharpUsingAliasRecord(
+        IReadOnlyList<CSharpUsingAliasRecord> aliases,
+        int lineNumber,
+        string aliasName)
+    {
+        foreach (var existing in aliases)
+        {
+            if (existing.Line == lineNumber
+                && string.Equals(existing.AliasName, aliasName, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
     }
 
     private static void AddCSharpUsingAliasRecord(
@@ -124,19 +147,14 @@ public static partial class ReferenceExtractor
         return trimmed;
     }
 
-    private static List<CSharpUsingNamespaceRecord> BuildCSharpUsingNamespaces(string language, IReadOnlyList<SymbolRecord> symbols)
+    private static List<CSharpUsingNamespaceRecord> BuildCSharpUsingNamespaces(
+        string language,
+        IReadOnlyList<SymbolRecord> symbols,
+        IReadOnlyList<(int StartLine, int EndLine)> namespaceScopes)
     {
         var imports = new List<CSharpUsingNamespaceRecord>();
         if (language != "csharp")
             return imports;
-
-        var namespaceScopes = symbols
-            .Where(symbol => symbol.Kind == "namespace")
-            .Select(symbol => (
-                StartLine: symbol.BodyStartLine ?? symbol.StartLine,
-                EndLine: symbol.BodyEndLine ?? symbol.EndLine))
-            .Where(scope => scope.StartLine > 0 && scope.EndLine >= scope.StartLine)
-            .ToList();
 
         foreach (var symbol in symbols)
         {
@@ -176,19 +194,14 @@ public static partial class ReferenceExtractor
         return imports;
     }
 
-    private static List<CSharpUsingStaticRecord> BuildCSharpUsingStatics(string language, IReadOnlyList<SymbolRecord> symbols)
+    private static List<CSharpUsingStaticRecord> BuildCSharpUsingStatics(
+        string language,
+        IReadOnlyList<SymbolRecord> symbols,
+        IReadOnlyList<(int StartLine, int EndLine)> namespaceScopes)
     {
         var imports = new List<CSharpUsingStaticRecord>();
         if (language != "csharp")
             return imports;
-
-        var namespaceScopes = symbols
-            .Where(symbol => symbol.Kind == "namespace")
-            .Select(symbol => (
-                StartLine: symbol.BodyStartLine ?? symbol.StartLine,
-                EndLine: symbol.BodyEndLine ?? symbol.EndLine))
-            .Where(scope => scope.StartLine > 0 && scope.EndLine >= scope.StartLine)
-            .ToList();
 
         foreach (var symbol in symbols)
         {
@@ -327,6 +340,21 @@ public static partial class ReferenceExtractor
         return names;
     }
 
+    private static HashSet<string> BuildCSharpNonEnumTypeNames(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is not ("class" or "struct" or "interface" or "delegate"))
+                continue;
+
+            if (!string.IsNullOrWhiteSpace(symbol.Name))
+                names.Add(symbol.Name);
+        }
+
+        return names;
+    }
+
     private static HashSet<string>? BuildCallableDefinitionNames(string language, IReadOnlyList<SymbolRecord> symbols)
     {
         if (language != "csharp")
@@ -446,7 +474,7 @@ public static partial class ReferenceExtractor
                 var start = Math.Max(symbol.BodyStartLine.Value - 1, 0);
                 var end = Math.Min(symbol.BodyEndLine.Value - 1, structuralLines.Count - 1);
                 var blockScopes = BuildCSharpBlockScopes(structuralLines, start, end);
-                var bodyText = string.Join("\n", structuralLines.Skip(start).Take(end - start + 1));
+                var bodyText = LineRangeText.Join(structuralLines, start, end);
                 if (symbol.Kind == "function")
                     AddCSharpParameterNames(names, symbol.Signature, symbol.BodyStartLine.Value, 0, symbol.BodyEndLine.Value, int.MaxValue, seenNames);
                 for (var i = start; i <= end; i++)
@@ -583,12 +611,7 @@ public static partial class ReferenceExtractor
         if (language != "csharp")
             return lookup;
 
-        var conflictingNonEnumTypeNames = new HashSet<string>(
-            symbols
-                .Where(symbol => symbol.Kind is "class" or "struct" or "interface" or "delegate")
-                .Select(symbol => symbol.Name)
-                .Where(name => !string.IsNullOrWhiteSpace(name))!,
-            StringComparer.Ordinal);
+        var conflictingNonEnumTypeNames = BuildCSharpNonEnumTypeNames(symbols);
 
         foreach (var symbol in symbols)
         {
@@ -632,12 +655,7 @@ public static partial class ReferenceExtractor
         if (language != "csharp")
             return lookup;
 
-        var conflictingNonEnumTypeNames = new HashSet<string>(
-            symbols
-                .Where(symbol => symbol.Kind is "class" or "struct" or "interface" or "delegate")
-                .Select(symbol => symbol.Name)
-                .Where(name => !string.IsNullOrWhiteSpace(name))!,
-            StringComparer.Ordinal);
+        var conflictingNonEnumTypeNames = BuildCSharpNonEnumTypeNames(symbols);
 
         foreach (var symbol in symbols)
         {

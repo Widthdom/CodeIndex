@@ -86,11 +86,22 @@ internal static class SqlNameResolver
         if (leafName.Length == 0)
             return normalizedSymbolName;
 
-        var candidates = EnumerateQualifiedNames(context)
-            .Where(candidate => string.Equals(GetLeafName(candidate), leafName, StringComparison.OrdinalIgnoreCase))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        if (candidates.Count == 0)
+        List<string>? candidates = null;
+        HashSet<string>? seenCandidates = null;
+        foreach (var candidate in EnumerateQualifiedNames(context))
+        {
+            if (!string.Equals(GetLeafName(candidate), leafName, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            seenCandidates ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (!seenCandidates.Add(candidate))
+                continue;
+
+            candidates ??= [];
+            candidates.Add(candidate);
+        }
+
+        if (candidates == null || candidates.Count == 0)
             return normalizedSymbolName;
         if (candidates.Count == 1)
             return candidates[0];
@@ -98,12 +109,21 @@ internal static class SqlNameResolver
         var normalizedContainerName = NormalizeQualifiedName(containerName);
         if (normalizedContainerName.Length > 0)
         {
-            var nonContainerCandidates = candidates
-                .Where(candidate => !string.Equals(candidate, normalizedContainerName, StringComparison.OrdinalIgnoreCase))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            if (nonContainerCandidates.Count == 1)
-                return nonContainerCandidates[0];
+            string? nonContainerCandidate = null;
+            var nonContainerCandidateCount = 0;
+            foreach (var candidate in candidates)
+            {
+                if (string.Equals(candidate, normalizedContainerName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                nonContainerCandidate = candidate;
+                nonContainerCandidateCount++;
+                if (nonContainerCandidateCount > 1)
+                    break;
+            }
+
+            if (nonContainerCandidateCount == 1)
+                return nonContainerCandidate!;
         }
 
         return normalizedSymbolName;
@@ -594,13 +614,26 @@ internal static class SqlNameResolver
             if (zeroBasedColumn < segment.StartIndex || zeroBasedColumn >= segment.EndIndexExclusive)
                 continue;
 
-            var matchedSegments = segments.Take(i + 1).ToList();
-            var normalizedName = string.Join(".", matchedSegments.Select(part => part.Name));
+            var segmentCount = i + 1;
+            var names = new List<string>(segmentCount);
+            var caseSensitiveSegments = new List<bool>(segmentCount);
+            var normalizedNameBuilder = new StringBuilder();
+            for (var segmentIndex = 0; segmentIndex < segmentCount; segmentIndex++)
+            {
+                var part = segments[segmentIndex];
+                if (normalizedNameBuilder.Length > 0)
+                    normalizedNameBuilder.Append('.');
+
+                normalizedNameBuilder.Append(part.Name);
+                names.Add(part.Name);
+                caseSensitiveSegments.Add(part.HasCaseSensitiveQuote);
+            }
+
             match = new QualifiedNameMatch(
-                normalizedName,
-                i + 1,
-                matchedSegments.Select(part => part.Name).ToList(),
-                matchedSegments.Select(part => part.HasCaseSensitiveQuote).ToList(),
+                normalizedNameBuilder.ToString(),
+                segmentCount,
+                names,
+                caseSensitiveSegments,
                 startIndex,
                 segment.EndIndexExclusive,
                 segment.StartIndex,

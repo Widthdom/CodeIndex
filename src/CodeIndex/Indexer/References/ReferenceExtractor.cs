@@ -925,7 +925,8 @@ public static partial class ReferenceExtractor
         string? path = null,
         IReadOnlyList<SymbolRecord>? workspaceSymbols = null,
         CancellationToken cancellationToken = default,
-        int? maxReferenceCount = null)
+        int? maxReferenceCount = null,
+        int? conflictMarkerLine = null)
         => ExtractDetailedNormalized(
             fileId,
             lang,
@@ -935,7 +936,8 @@ public static partial class ReferenceExtractor
             path,
             workspaceSymbols,
             cancellationToken,
-            maxReferenceCount).References;
+            maxReferenceCount,
+            conflictMarkerLine).References;
 
     public static ReferenceExtractionResult ExtractDetailed(
         long fileId,
@@ -952,6 +954,7 @@ public static partial class ReferenceExtractor
             content,
             contentIsNormalized: false,
             hasOversizeLine: null,
+            conflictMarkerLine: null,
             symbols,
             path,
             workspaceSymbols,
@@ -967,13 +970,15 @@ public static partial class ReferenceExtractor
         string? path = null,
         IReadOnlyList<SymbolRecord>? workspaceSymbols = null,
         CancellationToken cancellationToken = default,
-        int? maxReferenceCount = null)
+        int? maxReferenceCount = null,
+        int? conflictMarkerLine = null)
         => ExtractDetailedCore(
             fileId,
             lang,
             content,
             contentIsNormalized: true,
             hasOversizeLine,
+            conflictMarkerLine,
             symbols,
             path,
             workspaceSymbols,
@@ -986,6 +991,7 @@ public static partial class ReferenceExtractor
         string content,
         bool contentIsNormalized,
         bool? hasOversizeLine,
+        int? conflictMarkerLine,
         IReadOnlyList<SymbolRecord> symbols,
         string? path,
         IReadOnlyList<SymbolRecord>? workspaceSymbols,
@@ -1041,7 +1047,8 @@ public static partial class ReferenceExtractor
             maxReferenceCount,
             builtInDiagnostics.Add,
             contentIsNormalized,
-            hasOversizeLine)),
+            hasOversizeLine,
+            conflictMarkerLine)),
             builtInDiagnostics);
     }
 
@@ -1053,7 +1060,7 @@ public static partial class ReferenceExtractor
         if (maxReferenceCount is not { } limit)
         {
             truncated = false;
-            return references.ToList();
+            return CopyPluginReferences(references, references.Count);
         }
 
         if (limit <= 0)
@@ -1063,11 +1070,18 @@ public static partial class ReferenceExtractor
         }
 
         var retainedCount = Math.Min(references.Count, limit);
-        var retained = new List<ReferenceRecord>(retainedCount);
-        for (var i = 0; i < retainedCount; i++)
-            retained.Add(references[i]);
         truncated = references.Count > retainedCount;
-        return retained;
+        return CopyPluginReferences(references, retainedCount);
+    }
+
+    private static List<ReferenceRecord> CopyPluginReferences(
+        IReadOnlyList<ReferenceRecord> references,
+        int count)
+    {
+        var copiedReferences = new List<ReferenceRecord>(count);
+        for (var i = 0; i < count; i++)
+            copiedReferences.Add(references[i]);
+        return copiedReferences;
     }
 
     private sealed class BoundedReferenceList(int maxReferenceCount) : List<ReferenceRecord>
@@ -1182,6 +1196,81 @@ public static partial class ReferenceExtractor
         return names;
     }
 
+    private static HashSet<string> BuildFileDefinitionNames(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var names = new HashSet<string>(symbols.Count, StringComparer.Ordinal);
+        foreach (var symbol in symbols)
+            names.Add(symbol.Name);
+        return names;
+    }
+
+    private static List<SymbolRecord> BuildCobolCallableSymbols(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var callableSymbols = new List<(SymbolRecord Symbol, int OriginalIndex)>();
+        for (var index = 0; index < symbols.Count; index++)
+        {
+            var symbol = symbols[index];
+            if (symbol.Kind == "function")
+                callableSymbols.Add((symbol, index));
+        }
+
+        callableSymbols.Sort(CompareCobolCallableSymbolEntries);
+
+        var sorted = new List<SymbolRecord>(callableSymbols.Count);
+        foreach (var entry in callableSymbols)
+            sorted.Add(entry.Symbol);
+        return sorted;
+    }
+
+    private static int CompareCobolCallableSymbolEntries(
+        (SymbolRecord Symbol, int OriginalIndex) left,
+        (SymbolRecord Symbol, int OriginalIndex) right)
+    {
+        var lineComparison = left.Symbol.Line.CompareTo(right.Symbol.Line);
+        if (lineComparison != 0)
+            return lineComparison;
+
+        var startLineComparison = left.Symbol.StartLine.CompareTo(right.Symbol.StartLine);
+        if (startLineComparison != 0)
+            return startLineComparison;
+
+        var nameComparison = string.Compare(left.Symbol.Name, right.Symbol.Name, StringComparison.OrdinalIgnoreCase);
+        return nameComparison != 0
+            ? nameComparison
+            : left.OriginalIndex.CompareTo(right.OriginalIndex);
+    }
+
+    private static List<SymbolRecord> BuildRustEnumCandidates(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var candidates = new List<(SymbolRecord Symbol, int OriginalIndex)>();
+        for (var index = 0; index < symbols.Count; index++)
+        {
+            var symbol = symbols[index];
+            if (symbol.Kind == "enum" && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
+                candidates.Add((symbol, index));
+        }
+
+        candidates.Sort(CompareRustEnumCandidateEntries);
+
+        var sorted = new List<SymbolRecord>(candidates.Count);
+        foreach (var entry in candidates)
+            sorted.Add(entry.Symbol);
+        return sorted;
+    }
+
+    private static int CompareRustEnumCandidateEntries(
+        (SymbolRecord Symbol, int OriginalIndex) left,
+        (SymbolRecord Symbol, int OriginalIndex) right)
+    {
+        var spanComparison = GetRustEnumCandidateSpan(left.Symbol).CompareTo(GetRustEnumCandidateSpan(right.Symbol));
+        return spanComparison != 0
+            ? spanComparison
+            : left.OriginalIndex.CompareTo(right.OriginalIndex);
+    }
+
+    private static int GetRustEnumCandidateSpan(SymbolRecord symbol)
+        => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine);
+
     private static StringComparer GetDefinitionNamesComparer(string language)
         => language == "sql"
             ? StringComparer.OrdinalIgnoreCase
@@ -1287,9 +1376,35 @@ public static partial class ReferenceExtractor
                 $"Swift property lookup used the first {MaxReferenceLookupSymbols:N0} symbols and skipped additional symbols.");
         }
 
-        return byLine.ToDictionary(
-            pair => pair.Key,
-            pair => pair.Value.OrderByDescending(symbol => symbol.StartColumn ?? 0).ToArray());
+        var result = new Dictionary<int, SymbolRecord[]>(byLine.Count);
+        foreach (var pair in byLine)
+            result.Add(pair.Key, SortSwiftPropertyDefinitionCandidates(pair.Value));
+
+        return result;
+    }
+
+    private static SymbolRecord[] SortSwiftPropertyDefinitionCandidates(IReadOnlyList<SymbolRecord> candidates)
+    {
+        var entries = new List<(SymbolRecord Symbol, int OriginalIndex)>(candidates.Count);
+        for (var index = 0; index < candidates.Count; index++)
+            entries.Add((candidates[index], index));
+
+        entries.Sort(CompareSwiftPropertyDefinitionCandidateEntries);
+
+        var sorted = new SymbolRecord[entries.Count];
+        for (var index = 0; index < entries.Count; index++)
+            sorted[index] = entries[index].Symbol;
+        return sorted;
+    }
+
+    private static int CompareSwiftPropertyDefinitionCandidateEntries(
+        (SymbolRecord Symbol, int OriginalIndex) left,
+        (SymbolRecord Symbol, int OriginalIndex) right)
+    {
+        var startColumnComparison = (right.Symbol.StartColumn ?? 0).CompareTo(left.Symbol.StartColumn ?? 0);
+        return startColumnComparison != 0
+            ? startColumnComparison
+            : left.OriginalIndex.CompareTo(right.OriginalIndex);
     }
 
     private static List<SymbolRecord> BuildBoundedContainerCandidates(
@@ -1299,10 +1414,11 @@ public static partial class ReferenceExtractor
         string diagnosticMessage,
         Action<ReferenceExtractionDiagnostic>? reportDiagnostic)
     {
-        var candidates = new List<SymbolRecord>(Math.Min(symbols.Count, MaxReferenceContainerCandidates));
+        var candidates = new List<ReferenceContainerCandidateSortEntry>(Math.Min(symbols.Count, MaxReferenceContainerCandidates));
         var truncated = false;
-        foreach (var symbol in symbols)
+        for (var symbolIndex = 0; symbolIndex < symbols.Count; symbolIndex++)
         {
+            var symbol = symbols[symbolIndex];
             if (!predicate(symbol))
                 continue;
 
@@ -1312,16 +1428,38 @@ public static partial class ReferenceExtractor
                 continue;
             }
 
-            candidates.Add(symbol);
+            candidates.Add(new ReferenceContainerCandidateSortEntry(
+                symbol,
+                GetReferenceContainerCandidateSpanLength(symbol),
+                symbolIndex));
         }
 
         if (truncated)
             ReportReferenceLookupBudgetHit(reportDiagnostic, diagnosticKind, diagnosticMessage);
 
-        return candidates
-            .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
-            .ToList();
+        candidates.Sort(CompareReferenceContainerCandidateSortEntries);
+
+        var sorted = new List<SymbolRecord>(candidates.Count);
+        foreach (var candidate in candidates)
+            sorted.Add(candidate.Symbol);
+
+        return sorted;
     }
+
+    private readonly record struct ReferenceContainerCandidateSortEntry(SymbolRecord Symbol, int SpanLength, int OriginalIndex);
+
+    private static int CompareReferenceContainerCandidateSortEntries(
+        ReferenceContainerCandidateSortEntry left,
+        ReferenceContainerCandidateSortEntry right)
+    {
+        var compare = left.SpanLength.CompareTo(right.SpanLength);
+        return compare != 0
+            ? compare
+            : left.OriginalIndex.CompareTo(right.OriginalIndex);
+    }
+
+    private static int GetReferenceContainerCandidateSpanLength(SymbolRecord symbol)
+        => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine);
 
     private static void ReportReferenceLookupBudgetHit(
         Action<ReferenceExtractionDiagnostic>? reportDiagnostic,
