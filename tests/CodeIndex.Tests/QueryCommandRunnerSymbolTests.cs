@@ -1237,6 +1237,41 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunUnused_CompactJsonByBucketEmitsSummariesOnly_Issue4067()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--compact", "--by-bucket", "--lang", "csharp"],
+                _jsonOptions));
+
+            Assert.True(
+                exitCode == CommandExitCodes.Success,
+                $"exit={exitCode}, stdout={stdout}, stderr={stderr}");
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(string.IsNullOrWhiteSpace(stdout));
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var likelyUnused = json
+                .GetProperty("by_bucket")
+                .GetProperty("likely_unused_private");
+
+            Assert.True(json.GetProperty("compact").GetBoolean());
+            Assert.False(json.TryGetProperty("symbols", out _));
+            Assert.Equal(JsonValueKind.Object, likelyUnused.ValueKind);
+            Assert.Equal(1, likelyUnused.GetProperty("count").GetInt32());
+            Assert.Equal("Hidden", likelyUnused.GetProperty("representative").GetProperty("name").GetString());
+            Assert.False(likelyUnused.TryGetProperty("symbols", out _));
+            Assert.Contains(json.GetProperty("omitted_sections").EnumerateArray(), section => section.GetString() == "by_bucket.symbols");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunUnused_CompactJsonOmitsSymbolBodiesAndShowsFilters_Issue3395()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();

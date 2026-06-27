@@ -24,6 +24,8 @@ public static partial class QueryCommandRunner
     internal const int DefaultQueryLimit = 20;
     internal const int DefaultMapLimit = 10;
     internal const int DefaultCompactSectionLimit = 5;
+    internal const int MapIssueDraftLineThreshold = 800;
+    internal const long MapIssueDraftByteThreshold = 64 * 1024;
     private const int MaxNamedSearchQueryNameLength = 128;
     internal const int DefaultImpactLimit = 50;
     internal const int DefaultDependencyCycleGraphLimit = 50;
@@ -314,6 +316,7 @@ public static partial class QueryCommandRunner
         "--pretty",
         "--compact",
         "--body-only",
+        "--outline-only",
         "--first-per-file",
         "--results-only",
         "--next-steps",
@@ -340,6 +343,7 @@ public static partial class QueryCommandRunner
         OutputFormatText,
         OutputFormatJson,
         OutputFormatCompact,
+        OutputFormatIssueDrafts,
     };
     private static readonly HashSet<string> SymbolOutputFormats = new(StringComparer.Ordinal)
     {
@@ -6144,13 +6148,14 @@ public static partial class QueryCommandRunner
         var options = ParseArgs(
             cmdArgs,
             jsonDefault: false,
+            allowIssueDraftsFormat: true,
             validateDefaultSnippetLines: false,
             validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("map", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("map")))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "map"))
             return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedOutputFormat("map", options, RepoMapOutputFormats, "Use `--format json` or `--format compact` for map output; use `cdidx files --count` when you need only a file count."))
+        if (TryWriteUnsupportedOutputFormat("map", options, RepoMapOutputFormats, "Use `--format json`, `--format compact`, or `--format issue-drafts` for map output; use `cdidx files --count` when you need only a file count."))
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("map", options))
             return CommandExitCodes.UsageError;
@@ -6176,6 +6181,11 @@ public static partial class QueryCommandRunner
             // フィルタ指定時に該当0件なら未検出を返す。フィルタなしの空DBは正常（ヘルスチェック用途）。
             var hasFilter = options.PathPatterns.Count > 0 || options.ExcludePaths.Count > 0
                 || options.ExcludeTests || options.Lang != null;
+            if (options.OutputFormat == OutputFormatIssueDrafts)
+            {
+                Console.WriteLine(BuildRepoMapIssueDraftsPayload(map, options, jsonOptions));
+                return map.FileCount == 0 && hasFilter ? ZeroResultExitCode(options) : CommandExitCodes.Success;
+            }
             if (map.FileCount == 0 && hasFilter)
             {
                 if (options.Json)
@@ -6283,6 +6293,134 @@ public static partial class QueryCommandRunner
         if (options.Compact && compactTruncation != null)
             AddCompactJsonFields(payload, GetCompactSectionLimit(options), compactTruncation);
         return payload;
+    }
+
+    private static string BuildRepoMapIssueDraftsPayload(RepoMapResult map, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+    {
+        var candidates = map.LargestFiles
+            .Where(IsRepoMapOversizedFileCandidate)
+            .Select(BuildRepoMapIssueDraftJson)
+            .ToArray();
+        var sourceLimit = options.Compact ? GetCompactSourceLimit(GetCompactSectionLimit(options)) : options.Limit;
+        var largestFilesTruncated = map.FileCount > map.LargestFiles.Count && map.LargestFiles.Count >= sourceLimit;
+        var payload = new JsonObject
+        {
+            ["api_version"] = JsonOutputContract.ApiVersion,
+            ["format"] = OutputFormatIssueDrafts,
+            ["count"] = candidates.Length,
+            ["issue_drafts"] = new JsonArray(candidates),
+            ["groups"] = BuildRepoMapIssueDraftGroupsJson(candidates),
+            ["thresholds"] = new JsonObject
+            {
+                ["line_threshold"] = MapIssueDraftLineThreshold,
+                ["byte_threshold"] = MapIssueDraftByteThreshold,
+            },
+            ["truncation"] = new JsonObject
+            {
+                ["largest_files"] = new JsonObject
+                {
+                    ["source_section"] = "largest_files",
+                    ["returned"] = map.LargestFiles.Count,
+                    ["source_limit"] = sourceLimit,
+                    ["total_files"] = map.FileCount,
+                    ["truncated"] = largestFilesTruncated,
+                },
+            },
+            ["query_context"] = BuildQueryContextJson(options, jsonOptions),
+        };
+        if (map.ProjectRoot != null)
+            payload["project_root"] = map.ProjectRoot;
+        if (map.GitHead != null)
+            payload["git_head"] = map.GitHead;
+        if (map.GitIsDirty != null)
+            payload["git_is_dirty"] = map.GitIsDirty;
+        if (map.IndexedHeadCommit != null)
+            payload["indexed_head_commit"] = map.IndexedHeadCommit;
+        if (map.WorktreeHeadChanged != null)
+            payload["worktree_head_changed"] = map.WorktreeHeadChanged;
+        return payload.ToJsonString(GetJsonNodeSerializationOptions(jsonOptions));
+    }
+
+    private static JsonObject BuildRepoMapIssueDraftGroupsJson(IReadOnlyList<JsonObject> candidates)
+    {
+        var representativePaths = new JsonArray();
+        foreach (var candidate in candidates.Take(DefaultCompactSectionLimit))
+        {
+            var path = candidate["candidate"]?["path"]?.GetValue<string>();
+            if (path != null)
+                representativePaths.Add(path);
+        }
+
+        return new JsonObject
+        {
+            ["oversized_file"] = new JsonObject
+            {
+                ["kind"] = "oversized_file",
+                ["count"] = candidates.Count,
+                ["source_section"] = "largest_files",
+                ["representative_paths"] = representativePaths,
+                ["representative_paths_truncated"] = candidates.Count > representativePaths.Count,
+            },
+        };
+    }
+
+    private static bool IsRepoMapOversizedFileCandidate(RepoFileSummaryResult file)
+        => file.Lines >= MapIssueDraftLineThreshold || file.Size >= MapIssueDraftByteThreshold;
+
+    private static JsonObject BuildRepoMapIssueDraftJson(RepoFileSummaryResult file)
+    {
+        var reasonTags = new JsonArray();
+        if (file.Lines >= MapIssueDraftLineThreshold)
+            reasonTags.Add("line_threshold_exceeded");
+        if (file.Size >= MapIssueDraftByteThreshold)
+            reasonTags.Add("byte_threshold_exceeded");
+
+        return new JsonObject
+        {
+            ["kind"] = "oversized_file",
+            ["title"] = $"Split oversized file: {file.Path}",
+            ["body"] = BuildRepoMapIssueDraftBody(file, reasonTags),
+            ["labels"] = new JsonArray("maintenance", "refactor"),
+            ["candidate"] = new JsonObject
+            {
+                ["path"] = file.Path,
+                ["lang"] = file.Lang,
+                ["lines"] = file.Lines,
+                ["size_bytes"] = file.Size,
+                ["symbol_count"] = file.SymbolCount,
+                ["reference_count"] = file.ReferenceCount,
+                ["line_threshold"] = MapIssueDraftLineThreshold,
+                ["byte_threshold"] = MapIssueDraftByteThreshold,
+                ["line_threshold_exceeded"] = file.Lines >= MapIssueDraftLineThreshold,
+                ["byte_threshold_exceeded"] = file.Size >= MapIssueDraftByteThreshold,
+                ["reason_tags"] = reasonTags.DeepClone(),
+                ["source_section"] = "largest_files",
+            },
+        };
+    }
+
+    private static string BuildRepoMapIssueDraftBody(RepoFileSummaryResult file, JsonArray reasonTags)
+    {
+        var reasons = string.Join(", ", reasonTags.Select(tag => tag?.GetValue<string>()).Where(tag => tag != null));
+        var builder = new StringBuilder();
+        builder.AppendLine("## Summary");
+        builder.AppendLine();
+        builder.AppendLine($"`{file.Path}` is an oversized maintenance candidate from `cdidx map --format issue-drafts`.");
+        builder.AppendLine();
+        builder.AppendLine("## Evidence");
+        builder.AppendLine();
+        builder.AppendLine($"- Lines: {file.Lines.ToString(CultureInfo.InvariantCulture)} (threshold: >= {MapIssueDraftLineThreshold.ToString(CultureInfo.InvariantCulture)})");
+        builder.AppendLine($"- Size: {file.Size.ToString(CultureInfo.InvariantCulture)} bytes (threshold: >= {MapIssueDraftByteThreshold.ToString(CultureInfo.InvariantCulture)})");
+        builder.AppendLine($"- Symbols: {file.SymbolCount.ToString(CultureInfo.InvariantCulture)}");
+        builder.AppendLine($"- References: {file.ReferenceCount.ToString(CultureInfo.InvariantCulture)}");
+        builder.AppendLine($"- Reason tags: {reasons}");
+        builder.AppendLine();
+        builder.AppendLine("## Checklist");
+        builder.AppendLine();
+        builder.AppendLine("- [ ] Identify cohesive regions, types, or command paths that can move together.");
+        builder.AppendLine("- [ ] Preserve public behavior and CLI/MCP output contracts.");
+        builder.AppendLine("- [ ] Add or keep focused tests for moved behavior.");
+        return builder.ToString().TrimEnd();
     }
 
     private static readonly HashSet<string> RepoMapSummaryJsonProperties = new(StringComparer.Ordinal)
@@ -9851,14 +9989,20 @@ public static partial class QueryCommandRunner
         {
             payload["compact"] = true;
             payload["representative_symbols"] = BuildUnusedRepresentativeSymbolsJson(resultList);
-            payload["omitted_sections"] = new JsonArray(JsonValue.Create("symbols"));
+            var omittedSections = new JsonArray(JsonValue.Create("symbols"));
+            if (byBucket)
+            {
+                payload["by_bucket"] = BuildUnusedBucketSummariesJson(resultList);
+                omittedSections.Add("by_bucket.symbols");
+            }
+            payload["omitted_sections"] = omittedSections;
         }
         else
         {
             payload["symbols"] = JsonSerializer.SerializeToNode(resultList, CliJsonSerializerContextFactory.Create(jsonOptions).ListUnusedSymbolResult);
+            if (byBucket)
+                payload["by_bucket"] = BuildUnusedResultsByBucketJson(resultList, jsonOptions);
         }
-        if (byBucket)
-            payload["by_bucket"] = BuildUnusedResultsByBucketJson(resultList, jsonOptions);
 
         if (!hasReferencesTable)
         {
@@ -9872,7 +10016,52 @@ public static partial class QueryCommandRunner
             payload["query_context"] = unusedScope != null
                 ? BuildUnusedQueryContextJson(queryOptions, unusedScope, jsonOptions)
                 : BuildQueryContextJson(queryOptions, jsonOptions);
-        return payload.ToJsonString(jsonOptions);
+        return payload.ToJsonString(GetJsonNodeSerializationOptions(jsonOptions));
+    }
+
+    internal static JsonObject BuildUnusedBucketSummariesJson(IEnumerable<UnusedSymbolResult> results)
+    {
+        var grouped = results
+            .GroupBy(result => result.UnusedBucket, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
+        var summaries = new JsonObject();
+        foreach (var bucket in OrderedUnusedBuckets)
+        {
+            grouped.TryGetValue(bucket, out var bucketResults);
+            bucketResults ??= [];
+            var summary = new JsonObject
+            {
+                ["count"] = bucketResults.Count,
+                ["confidence"] = GetUnusedBucketConfidence(bucket),
+                ["description"] = GetUnusedBucketDescription(bucket),
+            };
+            var representative = bucketResults.FirstOrDefault();
+            if (representative != null)
+            {
+                summary["representative"] = new JsonObject
+                {
+                    ["name"] = representative.Name,
+                    ["kind"] = representative.Kind,
+                    ["path"] = representative.Path,
+                    ["line"] = representative.Line,
+                    ["confidence"] = representative.UnusedConfidence,
+                };
+            }
+            summaries[bucket] = summary;
+        }
+
+        return summaries;
+    }
+
+    private static JsonSerializerOptions GetJsonNodeSerializationOptions(JsonSerializerOptions jsonOptions)
+    {
+        if (jsonOptions.TypeInfoResolver != null)
+            return jsonOptions;
+
+        return new JsonSerializerOptions(jsonOptions)
+        {
+            TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
+        };
     }
 
     private static JsonObject BuildUnusedQueryContextJson(QueryCommandOptions options, UnusedAuditScopeFilters unusedScope, JsonSerializerOptions jsonOptions)
@@ -10674,6 +10863,12 @@ public static partial class QueryCommandRunner
                     inspectFields = ["definitions"];
                     json = true;
                     outputFormat = OutputFormatJson;
+                    break;
+                case "--outline-only":
+                    inspectFields = ["file", "definitions", "nearby_symbols"];
+                    json = true;
+                    if (outputFormat == OutputFormatText)
+                        outputFormat = OutputFormatJson;
                     break;
                 case "--workspace-db":
                     if (TryReadStringOptionValue(args, ref i, "--workspace-db", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var workspaceDbPath, out var workspaceDbError))
@@ -15411,6 +15606,7 @@ public static partial class QueryCommandRunner
         ["--cursor"] = "pass the `next_cursor` returned by a prior paged response, such as a recipe search cursor, `outline:<offset>`, or `unused:<offset>`.",
         ["--kind"] = "pass a kind identifier, e.g. `--kind function`. definition/symbols/outline/hotspots/unused take a symbol kind; references/callers/callees take a reference kind such as `call`, `instantiate`, or `subscribe`. Run the command's `--help` for the kind list.",
         ["--outline-fields"] = "pass outline symbol field names such as `name,line,signature`, or `all` for the full symbol payload.",
+        ["--outline-only"] = "for inspect, return file, definitions, and nearby_symbols JSON only; add `--body` when definition body snippets are needed.",
         ["--bucket"] = "pass one unused-symbol bucket: likely_unused_private, maybe_unused_nonpublic, public_or_exported_no_refs, or reflection_or_config_suspect.",
         ["--confidence"] = "pass one unused-symbol confidence threshold: medium or low.",
         ["--min-confidence"] = "pass one unused-symbol confidence threshold: medium or low.",
