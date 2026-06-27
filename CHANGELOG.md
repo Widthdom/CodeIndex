@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.34.3] - 2026-06-27
+
+#### Fixed
+
+- **TypeScript config refresh now checks config content before skipping unchanged files** — full scans compare `tsconfig` / `jsconfig` checksums before reusing TypeScript files, so platform timestamp quirks no longer leave path-alias metadata stale.
+
 ### [1.34.2] - 2026-06-27
 
 #### Fixed
@@ -4688,6 +4694,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.34.3] - 2026-06-27
+
+#### 修正
+
+- **TypeScript config refresh が未変更ファイルを skip する前に config 内容を確認するようになりました** — full scan は TypeScript ファイルを再利用する前に `tsconfig` / `jsconfig` の checksum を比較するため、プラットフォームごとの timestamp 差異で path alias metadata が古いまま残らなくなります。
+
 ### [1.34.2] - 2026-06-27
 
 #### 修正
@@ -9347,7 +9359,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.34.2...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.34.3...HEAD
+[1.34.3]: https://github.com/Widthdom/CodeIndex/compare/v1.34.2...v1.34.3
 [1.34.2]: https://github.com/Widthdom/CodeIndex/compare/v1.34.1...v1.34.2
 [1.34.1]: https://github.com/Widthdom/CodeIndex/compare/v1.34.0...v1.34.1
 [1.34.0]: https://github.com/Widthdom/CodeIndex/compare/v1.33.2...v1.34.0
