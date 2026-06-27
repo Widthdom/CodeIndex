@@ -210,41 +210,42 @@ public static partial class SymbolExtractor
                     continue;
 
                 string? emitKind = null;
-                List<string>? emittedNames = null;
+                string? singleEmittedName = null;
+                IEnumerable<string>? emittedNames = null;
                 if (attrNameLower == "src" && IsHtmlSrcResourceTag(tagNameLower))
                 {
                     emitKind = "import";
-                    emittedNames = [attrValue.Trim()];
+                    singleEmittedName = attrValue.Trim();
                 }
                 else if (attrNameLower == "srcset" && IsHtmlSrcsetResourceTag(tagNameLower))
                 {
                     emitKind = "import";
-                    emittedNames = EnumerateHtmlSrcsetUrls(attrValue).ToList();
+                    emittedNames = EnumerateHtmlSrcsetUrls(attrValue);
                 }
                 else if ((attrNameLower == "href" || attrNameLower == "xlink:href") && IsHtmlHrefResourceTag(tagNameLower))
                 {
                     emitKind = "import";
-                    emittedNames = [attrValue.Trim()];
+                    singleEmittedName = attrValue.Trim();
                 }
                 else if (attrNameLower == "data" && tagNameLower == "object")
                 {
                     emitKind = "import";
-                    emittedNames = [attrValue.Trim()];
+                    singleEmittedName = attrValue.Trim();
                 }
                 else if (attrNameLower == "poster" && tagNameLower == "video")
                 {
                     emitKind = "import";
-                    emittedNames = [attrValue.Trim()];
+                    singleEmittedName = attrValue.Trim();
                 }
                 else if (attrNameLower == "id" && !attrName.Contains(':') && !attrName.Contains('-') && !attrName.Contains('.'))
                 {
                     emitKind = "property";
-                    emittedNames = [attrValue.Trim()];
+                    singleEmittedName = attrValue.Trim();
                 }
                 else if (attrNameLower is "class" or "classname")
                 {
                     emitKind = "reference";
-                    emittedNames = EnumerateHtmlClassNames(attrValue).ToList();
+                    emittedNames = EnumerateHtmlClassNames(attrValue);
                 }
                 else if (attrNameLower == "name" && tagNameLower == "slot")
                 {
@@ -252,7 +253,7 @@ public static partial class SymbolExtractor
                     if (slotName.Length > 0)
                     {
                         emitKind = "property";
-                        emittedNames = [slotName];
+                        singleEmittedName = slotName;
                         sawNamedSlotDeclaration = true;
                     }
                 }
@@ -262,11 +263,11 @@ public static partial class SymbolExtractor
                     if (slotName.Length > 0)
                     {
                         emitKind = "reference";
-                        emittedNames = [slotName];
+                        singleEmittedName = slotName;
                     }
                 }
 
-                if (emitKind == null || emittedNames == null || emittedNames.Count == 0)
+                if (emitKind == null || (singleEmittedName == null && emittedNames == null))
                     continue;
 
                 // Anchor the symbol at the attribute value so cross-line tags like
@@ -277,12 +278,13 @@ public static partial class SymbolExtractor
                 var anchor = attrValueStart >= 0 ? attrValueStart : pos;
                 var startLine = FindHtmlLineNumber(lineStarts, anchor);
                 var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
-                foreach (var emittedName in emittedNames)
+
+                void AddEmittedName(string emittedName)
                 {
                     symbols.Add(new SymbolRecord
                     {
                         FileId = fileId,
-                        Kind = emitKind,
+                        Kind = emitKind!,
                         Name = emittedName,
                         Line = startLine,
                         StartLine = startLine,
@@ -290,6 +292,18 @@ public static partial class SymbolExtractor
                         Signature = lines[signatureIndex].Trim(),
                     });
                 }
+
+                if (singleEmittedName != null)
+                {
+                    AddEmittedName(singleEmittedName);
+                    continue;
+                }
+
+                if (emittedNames == null)
+                    continue;
+
+                foreach (var emittedName in emittedNames)
+                    AddEmittedName(emittedName);
             }
 
             if (tagNameLower == "slot" && !sawNamedSlotDeclaration)
