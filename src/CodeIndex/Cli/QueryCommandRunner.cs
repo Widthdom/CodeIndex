@@ -8592,7 +8592,7 @@ public static partial class QueryCommandRunner
             truncatedReason,
             Math.Min(candidateRowCount, candidateEdgeLimit),
             candidateEdgeLimit,
-            "bounded_candidate_edges");
+            "bounded_approximate_candidate_edges");
     }
 
     private static void AddDependencyCycleAnalysisJsonFields(JsonObject payload, DependencyCycleAnalysis analysis)

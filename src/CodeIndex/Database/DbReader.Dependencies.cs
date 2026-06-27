@@ -579,9 +579,9 @@ public partial class DbReader
         using var cmd = _conn.CreateCommand();
         var constrainedAlias = reverse ? "dst" : "src";
         var sql = @"
-            SELECT DISTINCT src.path AS source_path,
-                            dst.path AS target_path,
-                            r.symbol_name
+            WITH candidate_edges AS (
+                SELECT DISTINCT src.path AS source_path,
+                                dst.path AS target_path
             FROM symbol_references r
             JOIN files src ON r.file_id = src.id
             JOIN symbols s ON s.name = r.symbol_name
@@ -611,7 +611,42 @@ public partial class DbReader
             sql += $" AND NOT {DependencyTestPathCondition("src.path")}";
             sql += $" AND NOT {DependencyTestPathCondition("dst.path")}";
         }
-        sql += " LIMIT @limit";
+        sql += @"
+                LIMIT @limit
+            ),
+            candidate_symbols AS (
+                SELECT candidate_edges.source_path,
+                       candidate_edges.target_path,
+                       r.symbol_name
+                FROM candidate_edges
+                JOIN files src ON src.path = candidate_edges.source_path
+                JOIN symbol_references r ON r.file_id = src.id
+                JOIN symbols s ON s.name = r.symbol_name
+                JOIN files dst ON s.file_id = dst.id
+                 AND dst.path = candidate_edges.target_path
+                WHERE src.path != dst.path
+                  AND src.lang = dst.lang
+            ),
+            distinct_edge_symbols AS (
+                SELECT DISTINCT source_path,
+                                target_path,
+                                symbol_name
+                FROM candidate_symbols
+            ),
+            ranked_edge_symbols AS (
+                SELECT source_path,
+                       target_path,
+                       symbol_name,
+                       ROW_NUMBER() OVER (PARTITION BY source_path, target_path ORDER BY symbol_name) AS symbol_rank
+                FROM distinct_edge_symbols
+            )
+            SELECT source_path,
+                   target_path,
+                   COUNT(*) AS reference_count,
+                   COALESCE(GROUP_CONCAT(CASE WHEN symbol_rank <= @symbolSampleLimit THEN symbol_name END), '') AS symbols
+            FROM ranked_edge_symbols
+            GROUP BY source_path, target_path
+            ORDER BY source_path, target_path";
 
         cmd.CommandText = sql;
         if (lang != null)
@@ -627,39 +662,21 @@ public partial class DbReader
                 SqliteCommandPolicy.Add(cmd, $"@excludePath{i}", BuildPathLikePattern(excludePathPatterns[i]));
         }
         SqliteCommandPolicy.Add(cmd, "@limit", limit);
+        SqliteCommandPolicy.Add(cmd, "@symbolSampleLimit", DependencySymbolSampleLimit);
 
         var results = new List<FileDependencyResult>();
-        var resultIndexes = new Dictionary<(string SourcePath, string TargetPath), int>();
-        var symbolsByEdge = new Dictionary<(string SourcePath, string TargetPath), SortedSet<string>>();
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
             cancellationToken.ThrowIfCancellationRequested();
             candidateRowCount++;
-            var sourcePath = reader.GetString(0);
-            var targetPath = reader.GetString(1);
-            var key = (sourcePath, targetPath);
-            if (!resultIndexes.ContainsKey(key))
+            results.Add(new FileDependencyResult
             {
-                resultIndexes[key] = results.Count;
-                results.Add(new FileDependencyResult
-                {
-                    SourcePath = sourcePath,
-                    TargetPath = targetPath,
-                    ReferenceCount = 1,
-                    Symbols = string.Empty,
-                });
-            }
-
-            if (!symbolsByEdge.TryGetValue(key, out var symbols))
-                symbolsByEdge[key] = symbols = new SortedSet<string>(StringComparer.Ordinal);
-            symbols.Add(reader.GetString(2));
-        }
-
-        foreach (var (key, index) in resultIndexes)
-        {
-            if (symbolsByEdge.TryGetValue(key, out var symbols))
-                results[index].Symbols = string.Join(",", symbols.Take(DependencySymbolSampleLimit));
+                SourcePath = reader.GetString(0),
+                TargetPath = reader.GetString(1),
+                ReferenceCount = reader.GetInt32(2),
+                Symbols = reader.GetString(3),
+            });
         }
         return results;
     }

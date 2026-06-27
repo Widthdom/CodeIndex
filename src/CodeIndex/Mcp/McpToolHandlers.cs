@@ -4904,7 +4904,7 @@ public partial class McpServer
                     payload["truncated_reason"] = truncatedReason;
                 payload["candidate_edge_count"] = Math.Min(cycleCandidateRowsRead, cycleCandidateLimit);
                 payload["candidate_edge_limit"] = cycleCandidateLimit;
-                payload["cycle_detection_mode"] = "bounded_candidate_edges";
+                payload["cycle_detection_mode"] = "bounded_approximate_candidate_edges";
             }
             payload["format"] = format;
             payload["includeGenerated"] = includeGenerated;
