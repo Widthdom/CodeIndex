@@ -25,6 +25,37 @@ public partial class DbReader
     private const string UnusedBucketMaybeNonPublic = "maybe_unused_nonpublic";
     private const string UnusedBucketPublicOrExported = "public_or_exported_no_refs";
     private const string UnusedBucketReflectionOrConfig = "reflection_or_config_suspect";
+    private const string UnusedContractDomainPrivate = "private_or_file_local";
+    private const string UnusedContractDomainNonPublic = "nonpublic_internal";
+    private const string UnusedContractDomainPublicApi = "public_api_surface";
+    private const string UnusedContractDomainCli = "cli_contract";
+    private const string UnusedContractDomainJson = "json_contract";
+    private const string UnusedContractDomainMcp = "mcp_contract";
+    private const string UnusedContractDomainLsp = "lsp_contract";
+    private const string UnusedContractDomainConfig = "configuration_contract";
+    private const string UnusedContractDomainSerialization = "serialization_or_reflection_contract";
+    private const string UnusedContractDomainGenerated = "generated_code";
+    private const string UnusedContractDomainDocumentation = "documentation_surface";
+    private const string UnusedContractDomainTest = "test_contract";
+    private const string UnusedContractDomainFrameworkOverride = "framework_override";
+    private const string UnusedContractDomainExceptionDiagnostic = "exception_diagnostic";
+    internal static readonly string[] OrderedUnusedContractDomains =
+    [
+        UnusedContractDomainPrivate,
+        UnusedContractDomainNonPublic,
+        UnusedContractDomainPublicApi,
+        UnusedContractDomainCli,
+        UnusedContractDomainJson,
+        UnusedContractDomainMcp,
+        UnusedContractDomainLsp,
+        UnusedContractDomainConfig,
+        UnusedContractDomainSerialization,
+        UnusedContractDomainGenerated,
+        UnusedContractDomainDocumentation,
+        UnusedContractDomainTest,
+        UnusedContractDomainFrameworkOverride,
+        UnusedContractDomainExceptionDiagnostic,
+    ];
     private static readonly HashSet<string> ReflectionPropertyAttributeNames = new(StringComparer.Ordinal)
     {
         "jsonpropertyname",
@@ -142,6 +173,43 @@ public partial class DbReader
         "/obj/",
         "/bin/",
     ];
+    private static readonly string[] UnusedCliPathMarkers = ["/cli/", "/commands/", "/commandline/"];
+    private static readonly string[] UnusedMcpPathMarkers = ["/mcp/"];
+    private static readonly string[] UnusedLspPathMarkers = ["/lsp/", "/languageserver/"];
+    private static readonly string[] UnusedJsonContractTerms =
+    [
+        "Json",
+        "Dto",
+        "DTO",
+        "Request",
+        "Response",
+        "Result",
+        "Results",
+        "Payload",
+        "Envelope",
+        "Contract",
+        "Schema",
+    ];
+    private static readonly HashSet<string> UnusedFrameworkOverrideMemberNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CanRead",
+        "CanSeek",
+        "CanWrite",
+        "Length",
+        "Position",
+        "Flush",
+        "FlushAsync",
+        "Read",
+        "ReadAsync",
+        "ReadByte",
+        "Seek",
+        "SetLength",
+        "Write",
+        "WriteAsync",
+        "WriteByte",
+        "Dispose",
+        "DisposeAsync",
+    };
     private static readonly HashSet<string> UnusedExceptionMetadataNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "CharactersRead",
@@ -229,6 +297,7 @@ public partial class DbReader
     }
 
     private readonly record struct UnusedCandidateChunk(int StartLine, int EndLine, string Content);
+    private readonly record struct UnusedContractDomainClassification(string Domain, List<string> Tags);
 
     private sealed class NormalizedSymbolSearchQueryList : List<string>
     {
@@ -4059,6 +4128,8 @@ public partial class DbReader
 
         var isIntentionalSurfaceSuspect = surfaceTags.Count > 0;
         var classification = ClassifyUnusedSymbol(candidate.IsPublicOrExported, isIntentionalSurfaceSuspect, candidate.Visibility);
+        var reasonTags = BuildUnusedReasonTags(candidate.IsPublicOrExported, isIntentionalSurfaceSuspect, candidate.Visibility, surfaceTags);
+        var contractDomain = ClassifyUnusedContractDomain(candidate, kind, classification.Bucket, surfaceTags);
         return new UnusedSymbolResult
         {
             Path = candidate.Path,
@@ -4076,7 +4147,9 @@ public partial class DbReader
             UnusedBucket = classification.Bucket,
             UnusedConfidence = classification.Confidence,
             UnusedReason = classification.Reason,
-            UnusedReasonTags = BuildUnusedReasonTags(candidate.IsPublicOrExported, isIntentionalSurfaceSuspect, candidate.Visibility, surfaceTags),
+            UnusedReasonTags = reasonTags,
+            UnusedContractDomain = contractDomain.Domain,
+            UnusedContractDomainTags = contractDomain.Tags,
         };
     }
 
@@ -4601,6 +4674,7 @@ public partial class DbReader
         var includesSql = false;
         var bucketCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         var confidenceCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var contractDomainCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         const int batchSize = UnusedPublicOverfetchMaximum;
         for (var bucket = 0; bucket <= 3; bucket++)
         {
@@ -4618,7 +4692,7 @@ public partial class DbReader
                     if (!MatchesUnusedFilters(result, bucketFilter, minConfidence))
                         continue;
 
-                    AddUnusedCountResult(result, paths, bucketCounts, confidenceCounts, ref count, ref includesSql);
+                    AddUnusedCountResult(result, paths, bucketCounts, confidenceCounts, contractDomainCounts, ref count, ref includesSql);
                 }
 
                 if (batch.Count < batchSize)
@@ -4626,7 +4700,7 @@ public partial class DbReader
             }
         }
 
-        return CreateUnusedCountResult(count, paths.Count, includesSql, bucketCounts, confidenceCounts);
+        return CreateUnusedCountResult(count, paths.Count, includesSql, bucketCounts, confidenceCounts, contractDomainCounts);
     }
 
     private UnusedCountResult CountUnusedSymbolsDetailedWithoutSqlResolver(string? kind, string? lang,
@@ -4639,6 +4713,7 @@ public partial class DbReader
         var includesSql = false;
         var bucketCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         var confidenceCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var contractDomainCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         var fileContentByFileId = new Dictionary<long, string>();
         const int batchSize = UnusedPublicOverfetchMaximum;
         for (var bucket = 0; bucket <= 3; bucket++)
@@ -4661,7 +4736,7 @@ public partial class DbReader
                     if (!MatchesUnusedFilters(result, bucketFilter, minConfidence))
                         continue;
 
-                    AddUnusedCountResult(result, paths, bucketCounts, confidenceCounts, ref count, ref includesSql);
+                    AddUnusedCountResult(result, paths, bucketCounts, confidenceCounts, contractDomainCounts, ref count, ref includesSql);
                 }
 
                 if (batch.Count < batchSize)
@@ -4669,7 +4744,7 @@ public partial class DbReader
             }
         }
 
-        return CreateUnusedCountResult(count, paths.Count, includesSql, bucketCounts, confidenceCounts);
+        return CreateUnusedCountResult(count, paths.Count, includesSql, bucketCounts, confidenceCounts, contractDomainCounts);
     }
 
     private static void AddUnusedCountResult(
@@ -4677,6 +4752,7 @@ public partial class DbReader
         HashSet<string> paths,
         Dictionary<string, int> bucketCounts,
         Dictionary<string, int> confidenceCounts,
+        Dictionary<string, int> contractDomainCounts,
         ref int count,
         ref bool includesSql)
     {
@@ -4686,6 +4762,8 @@ public partial class DbReader
             includesSql = true;
         IncrementUnusedCount(bucketCounts, result.UnusedBucket);
         IncrementUnusedCount(confidenceCounts, result.UnusedConfidence);
+        if (!string.IsNullOrWhiteSpace(result.UnusedContractDomain))
+            IncrementUnusedCount(contractDomainCounts, result.UnusedContractDomain);
     }
 
     private static void IncrementUnusedCount(Dictionary<string, int> counts, string key)
@@ -4701,16 +4779,24 @@ public partial class DbReader
         int fileCount,
         bool includesSql,
         Dictionary<string, int> bucketCounts,
-        Dictionary<string, int> confidenceCounts)
+        Dictionary<string, int> confidenceCounts,
+        Dictionary<string, int> contractDomainCounts)
         => new(
             count,
             fileCount,
             includesSql,
             OrderUnusedBucketCounts(bucketCounts),
-            OrderUnusedConfidenceCounts(confidenceCounts));
+            OrderUnusedConfidenceCounts(confidenceCounts),
+            OrderUnusedContractDomainCounts(contractDomainCounts));
 
     private static UnusedCountResult EmptyUnusedCountResult()
-        => CreateUnusedCountResult(0, 0, includesSql: false, new Dictionary<string, int>(StringComparer.Ordinal), new Dictionary<string, int>(StringComparer.Ordinal));
+        => CreateUnusedCountResult(
+            0,
+            0,
+            includesSql: false,
+            new Dictionary<string, int>(StringComparer.Ordinal),
+            new Dictionary<string, int>(StringComparer.Ordinal),
+            new Dictionary<string, int>(StringComparer.Ordinal));
 
     private static QueryCountResult ToQueryCountResult(UnusedCountResult result)
         => new(result.Count, result.FileCount, result.IncludesSql);
@@ -4734,6 +4820,24 @@ public partial class DbReader
         {
             if (counts.TryGetValue(confidence, out var count))
                 ordered[confidence] = count;
+        }
+
+        foreach (var pair in counts.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+        {
+            if (!ordered.ContainsKey(pair.Key))
+                ordered[pair.Key] = pair.Value;
+        }
+
+        return ordered;
+    }
+
+    private static Dictionary<string, int> OrderUnusedContractDomainCounts(Dictionary<string, int> counts)
+    {
+        var ordered = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var domain in OrderedUnusedContractDomains)
+        {
+            if (counts.TryGetValue(domain, out var count))
+                ordered[domain] = count;
         }
 
         foreach (var pair in counts.OrderBy(pair => pair.Key, StringComparer.Ordinal))
@@ -5997,6 +6101,154 @@ public partial class DbReader
         else
             tags.Add("non_public");
         return tags;
+    }
+
+    private static UnusedContractDomainClassification ClassifyUnusedContractDomain(
+        UnusedCandidateSymbol candidate,
+        string kind,
+        string bucket,
+        IReadOnlyList<string> surfaceTags)
+    {
+        var tags = new List<string>();
+        if (string.Equals(bucket, UnusedBucketReflectionOrConfig, StringComparison.Ordinal))
+            AddUnusedSurfaceTag(tags, "intentional_surface_suspect");
+        foreach (var surfaceTag in surfaceTags)
+            AddUnusedSurfaceTag(tags, surfaceTag);
+
+        if (IsPrivateLikeVisibility(candidate.Visibility))
+            return CreateUnusedContractDomain(UnusedContractDomainPrivate, tags, "private_or_file_local");
+
+        if (!candidate.IsPublicOrExported && surfaceTags.Count == 0)
+            return CreateUnusedContractDomain(UnusedContractDomainNonPublic, tags, "nonpublic_or_protected");
+
+        AddUnusedSurfaceTag(tags, candidate.IsPublicOrExported ? "public_or_exported" : "nonpublic_or_protected");
+
+        if (HasUnusedSurfaceTag(surfaceTags, "documentation_heading") || IsMarkdownHeadingSymbol(candidate, kind))
+            return CreateUnusedContractDomain(UnusedContractDomainDocumentation, tags, "documentation_heading");
+
+        if (IsUnusedTestContractSurface(candidate))
+            return CreateUnusedContractDomain(UnusedContractDomainTest, tags, "test_surface");
+
+        if (HasUnusedSurfaceTag(surfaceTags, "generated_surface") || IsGeneratedSurface(candidate))
+            return CreateUnusedContractDomain(UnusedContractDomainGenerated, tags, "generated_surface");
+
+        if (HasUnusedSurfaceTag(surfaceTags, "exception_metadata") || IsExceptionDiagnosticSurface(candidate, kind))
+            return CreateUnusedContractDomain(UnusedContractDomainExceptionDiagnostic, tags, "exception_metadata");
+
+        if (IsFrameworkOverrideSurface(candidate))
+            return CreateUnusedContractDomain(UnusedContractDomainFrameworkOverride, tags, "framework_override");
+
+        if (IsMcpContractSurface(candidate))
+            return CreateUnusedContractDomain(UnusedContractDomainMcp, tags, "mcp_tool_contract");
+
+        if (IsLspContractSurface(candidate))
+            return CreateUnusedContractDomain(UnusedContractDomainLsp, tags, "lsp_protocol_contract");
+
+        if (IsCliContractSurface(candidate))
+            return CreateUnusedContractDomain(UnusedContractDomainCli, tags, "cli_option_or_result");
+
+        if (IsConfigurationContractSurface(candidate, kind, surfaceTags))
+            return CreateUnusedContractDomain(UnusedContractDomainConfig, tags, "configuration_or_metadata_contract");
+
+        if (IsJsonContractSurface(candidate, surfaceTags))
+            return CreateUnusedContractDomain(UnusedContractDomainJson, tags, "json_output_or_input_contract");
+
+        if (HasUnusedSurfaceTag(surfaceTags, "reflection_or_config_suspect"))
+            return CreateUnusedContractDomain(UnusedContractDomainSerialization, tags, "reflection_or_serialization_contract");
+
+        return candidate.IsPublicOrExported
+            ? CreateUnusedContractDomain(UnusedContractDomainPublicApi, tags, "public_api_surface")
+            : CreateUnusedContractDomain(UnusedContractDomainNonPublic, tags, "nonpublic_or_protected");
+    }
+
+    private static UnusedContractDomainClassification CreateUnusedContractDomain(string domain, List<string> tags, params string[] domainTags)
+    {
+        AddUnusedSurfaceTag(tags, domain);
+        foreach (var tag in domainTags)
+            AddUnusedSurfaceTag(tags, tag);
+        return new UnusedContractDomainClassification(domain, tags);
+    }
+
+    private static bool HasUnusedSurfaceTag(IReadOnlyList<string> tags, string tag)
+        => tags.Contains(tag, StringComparer.Ordinal);
+
+    private static bool IsUnusedTestContractSurface(UnusedCandidateSymbol candidate)
+    {
+        return ContainsAny(candidate.Path, ["/test/", "/tests/", ".tests/"])
+            || EndsWithAny(candidate.ContainerName, ["Test", "Tests", "Fixture"])
+            || EndsWithAny(candidate.ContainerQualifiedName, ["Test", "Tests", "Fixture"])
+            || IsTestHookName(candidate.Name);
+    }
+
+    private static bool IsExceptionDiagnosticSurface(UnusedCandidateSymbol candidate, string kind)
+    {
+        return IsExceptionMetadataProperty(candidate, kind)
+            || (IsDataMemberUnusedKind(kind)
+                && (EndsWithAny(candidate.ContainerName, ["Exception"])
+                    || EndsWithAny(candidate.ContainerQualifiedName, ["Exception"])))
+            || (IsTypeLikeUnusedKind(kind) && EndsWithAny(candidate.Name, ["Exception"]));
+    }
+
+    private static bool IsFrameworkOverrideSurface(UnusedCandidateSymbol candidate)
+    {
+        if (ContainsAny(candidate.Signature, [" override ", " override\t", " override\r", " override\n"]))
+            return true;
+
+        if (!UnusedFrameworkOverrideMemberNames.Contains(candidate.Name))
+            return false;
+
+        return EndsWithAny(candidate.ContainerName, ["Stream", "TextReader", "TextWriter"])
+            || EndsWithAny(candidate.ContainerQualifiedName, ["Stream", "TextReader", "TextWriter"])
+            || ContainsAny(candidate.Signature, ["Stream", "TextReader", "TextWriter"]);
+    }
+
+    private static bool IsMcpContractSurface(UnusedCandidateSymbol candidate)
+    {
+        return ContainsAny(candidate.Path, UnusedMcpPathMarkers)
+            || ContainsAny(candidate.ContainerName, ["Mcp", "JsonRpc"])
+            || ContainsAny(candidate.ContainerQualifiedName, ["Mcp", "JsonRpc"])
+            || ContainsAny(candidate.Signature, ["Mcp", "JsonRpc"]);
+    }
+
+    private static bool IsLspContractSurface(UnusedCandidateSymbol candidate)
+    {
+        return ContainsAny(candidate.Path, UnusedLspPathMarkers)
+            || ContainsAny(candidate.ContainerName, ["Lsp", "LanguageServer"])
+            || ContainsAny(candidate.ContainerQualifiedName, ["Lsp", "LanguageServer"])
+            || ContainsAny(candidate.Signature, ["Lsp", "LanguageServer"]);
+    }
+
+    private static bool IsCliContractSurface(UnusedCandidateSymbol candidate)
+    {
+        var hasCliContext = ContainsAny(candidate.Path, UnusedCliPathMarkers)
+            || ContainsAny(candidate.ContainerQualifiedName, ["Cli", "CommandLine"])
+            || ContainsAny(candidate.Signature, ["CommandLine", "System.CommandLine", "Option<", "Argument<"]);
+        if (hasCliContext)
+            return true;
+
+        return EndsWithAny(candidate.Name, ["Command", "Flag", "Flags", "Usage", "ExitCode", "ErrorCode"])
+            || EndsWithAny(candidate.ContainerName, ["Command", "Flag", "Flags", "Usage", "ExitCode", "ErrorCode"]);
+    }
+
+    private static bool IsConfigurationContractSurface(UnusedCandidateSymbol candidate, string kind, IReadOnlyList<string> surfaceTags)
+    {
+        return HasUnusedSurfaceTag(surfaceTags, "config_or_metadata_surface")
+            || HasUnusedSurfaceTag(surfaceTags, "config_or_metadata_member")
+            || IsConfigOrManifestSurface(candidate, kind)
+            || IsConfigOrMetadataMember(candidate, kind);
+    }
+
+    private static bool IsJsonContractSurface(UnusedCandidateSymbol candidate, IReadOnlyList<string> surfaceTags)
+    {
+        return HasUnusedSurfaceTag(surfaceTags, "serialization_contract")
+            || HasUnusedSurfaceTag(surfaceTags, "contract_member")
+            || HasUnusedSurfaceTag(surfaceTags, "source_generated_json_context")
+            || ContainsAny(candidate.Path, UnusedContractPathSegments)
+            || EndsWithAny(candidate.Name, UnusedRecordContractSuffixes)
+            || EndsWithAny(candidate.ContainerName, UnusedRecordContractSuffixes)
+            || ContainsAny(candidate.Name, UnusedJsonContractTerms)
+            || ContainsAny(candidate.ContainerName, UnusedJsonContractTerms)
+            || ContainsAny(candidate.Signature, ["JsonProperty", "JsonInclude", "JsonSerializerContext", "DataContract", "DataMember", "XmlElement", "XmlAttribute", "YamlMember", "MessagePackObject", "ProtoContract"]);
     }
 
     private static bool IsPrivateLikeVisibility(string? visibility)

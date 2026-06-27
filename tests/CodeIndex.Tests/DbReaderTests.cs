@@ -14633,10 +14633,14 @@ public class DbReaderTests : IDisposable
         Assert.Equal(["Hidden", "InternalOnly", "PathResolver", "ConnectionString", "AdoptionService", "AppSettings", "TokenService", "ApplyConfiguration", "UseIOptions"], unused.Select(symbol => symbol.Name).ToArray());
         Assert.Equal("likely_unused_private", unused[0].UnusedBucket);
         Assert.Equal("medium", unused[0].UnusedConfidence);
+        Assert.Equal("private_or_file_local", unused[0].UnusedContractDomain);
         Assert.Equal("maybe_unused_nonpublic", unused[1].UnusedBucket);
         Assert.Equal("low", unused[1].UnusedConfidence);
+        Assert.Equal("nonpublic_internal", unused[1].UnusedContractDomain);
         Assert.Equal("public_or_exported_no_refs", unused[2].UnusedBucket);
+        Assert.Equal("public_api_surface", unused[2].UnusedContractDomain);
         Assert.Equal("reflection_or_config_suspect", unused[3].UnusedBucket);
+        Assert.Equal("configuration_contract", unused[3].UnusedContractDomain);
         Assert.Contains("serialization, config", unused[3].UnusedReason);
         Assert.Equal("public_or_exported_no_refs", unused[4].UnusedBucket);
         Assert.Equal("reflection_or_config_suspect", unused[5].UnusedBucket);
@@ -14699,10 +14703,13 @@ public class DbReaderTests : IDisposable
 
         var dto = Assert.Single(unused, symbol => symbol.Name == "SearchResponseDto");
         Assert.Equal("reflection_or_config_suspect", dto.UnusedBucket);
+        Assert.Equal("json_contract", dto.UnusedContractDomain);
         Assert.Contains("serialization_contract", dto.UnusedReasonTags);
+        Assert.Contains("json_output_or_input_contract", dto.UnusedContractDomainTags!);
 
         var jsonContext = Assert.Single(unused, symbol => symbol.Name == "SearchJsonContext");
         Assert.Equal("reflection_or_config_suspect", jsonContext.UnusedBucket);
+        Assert.Equal("json_contract", jsonContext.UnusedContractDomain);
         Assert.Contains("source_generated_json_context", jsonContext.UnusedReasonTags);
     }
 
