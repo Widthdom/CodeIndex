@@ -465,6 +465,8 @@ JSON-form instruction payloads.
 For `replacement_char`, JSON and MCP responses include `origin` (`source_literal`
 or `decode_replacement`) and `severity` so agents can distinguish intentional
 U+FFFD literals from likely encoding damage.
+Human-readable output prints the same markers in brackets and adds
+`test_fixture` when a finding comes from a test or fixture path.
 Use `--severity warning` to hide informational source literals and focus on
 findings that indicate likely encoding damage.
 Use `--exclude-tests` and repeatable `--exclude-path` to keep validation output
@@ -3094,7 +3096,9 @@ placeholder、Dockerfile の JSON-form instruction payload の parse / truncatio
 診断などです。
 `replacement_char` の JSON / MCP response には `origin` (`source_literal` /
 `decode_replacement`) と `severity` が入り、意図的な U+FFFD literal と
-エンコーディング破損の可能性を agent が区別できます。`--severity warning`
+エンコーディング破損の可能性を agent が区別できます。human-readable output
+にも同じ marker が角括弧で表示され、test / fixture path の finding には
+`test_fixture` が付きます。`--severity warning`
 を使うと、informational な source literal を隠して、エンコーディング破損の
 可能性がある finding に集中できます。fixture や generated sample が issue list を
 支配する場合は、`--exclude-tests` と繰り返し指定できる `--exclude-path` で

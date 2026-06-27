@@ -10050,13 +10050,57 @@ public static partial class QueryCommandRunner
                 foreach (var issue in issues)
                 {
                     var location = issue.Line > 0 ? $":{issue.Line}" : "";
-                    Console.WriteLine($"  {issue.Kind,-20} {issue.Path}{location}  {issue.Message}");
+                    var metadata = FormatValidateIssueMetadata(issue);
+                    Console.WriteLine($"  {issue.Kind,-20} {issue.Path}{location}  {metadata}{issue.Message}");
                 }
                 var kindCounts = issues.GroupBy(i => i.Kind).Select(g => $"{g.Key}: {g.Count()}");
                 CommandErrorWriter.WriteStderr($"\n({issues.Count} issues: {string.Join(", ", kindCounts)})");
             }
             return CommandExitCodes.Success;
         });
+    }
+
+    private static string FormatValidateIssueMetadata(FileIssue issue)
+    {
+        var tags = new List<string>(3);
+        if (!string.IsNullOrWhiteSpace(issue.Severity))
+            tags.Add(issue.Severity);
+        if (!string.IsNullOrWhiteSpace(issue.Origin))
+            tags.Add(issue.Origin);
+        if (IsValidateTestOrFixturePath(issue.Path))
+            tags.Add("test_fixture");
+
+        return tags.Count == 0
+            ? string.Empty
+            : $"[{string.Join(", ", tags)}] ";
+    }
+
+    private static bool IsValidateTestOrFixturePath(string path)
+    {
+        var normalized = path.Replace('\\', '/');
+        var lower = normalized.ToLowerInvariant();
+        return lower.StartsWith("test/", StringComparison.Ordinal)
+            || lower.StartsWith("tests/", StringComparison.Ordinal)
+            || lower.StartsWith("fixture/", StringComparison.Ordinal)
+            || lower.StartsWith("fixtures/", StringComparison.Ordinal)
+            || lower.Contains("/test/", StringComparison.Ordinal)
+            || lower.Contains("/tests/", StringComparison.Ordinal)
+            || lower.Contains("/fixture/", StringComparison.Ordinal)
+            || lower.Contains("/fixtures/", StringComparison.Ordinal)
+            || lower.StartsWith("test.", StringComparison.Ordinal)
+            || lower.StartsWith("tests.", StringComparison.Ordinal)
+            || lower.StartsWith("test_", StringComparison.Ordinal)
+            || lower.StartsWith("tests_", StringComparison.Ordinal)
+            || lower.Contains("/test.", StringComparison.Ordinal)
+            || lower.Contains("/tests.", StringComparison.Ordinal)
+            || lower.Contains("/test_", StringComparison.Ordinal)
+            || lower.Contains("/tests_", StringComparison.Ordinal)
+            || lower.Contains("_test.", StringComparison.Ordinal)
+            || lower.Contains("_tests.", StringComparison.Ordinal)
+            || lower == "conftest.py"
+            || lower.EndsWith("/conftest.py", StringComparison.Ordinal)
+            || lower.Contains(".spec.", StringComparison.Ordinal)
+            || lower.Contains(".test.", StringComparison.Ordinal);
     }
 
     public static int RunLanguages(string[] cmdArgs, JsonSerializerOptions jsonOptions)

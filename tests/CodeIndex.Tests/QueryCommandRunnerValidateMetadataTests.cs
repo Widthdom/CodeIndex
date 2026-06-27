@@ -48,6 +48,55 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunValidate_HumanOutputLabelsSourceLiteralTestFixtures_Issue4068()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_validate_fixture_label_4068");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            Directory.CreateDirectory(Path.Combine(projectRoot, "tests", "fixtures"));
+            Directory.CreateDirectory(Path.Combine(projectRoot, "tests_utils"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "tests", "fixtures", "literal.cs"),
+                "class Literal { const char Value = '\uFFFD'; }\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "foo.test.cs"),
+                "class FooTest { const char Value = '\uFFFD'; }\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "tests_utils", "helper.cs"),
+                "class Helper { const char Value = '\uFFFD'; }\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "conftest.py"),
+                "VALUE = '\uFFFD'\n");
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--db", dbPath, "--json", "--quiet"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+                ["--db", dbPath, "--kind", "replacement_char"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("replacement_char", stdout);
+            Assert.Contains("conftest.py", stdout);
+            Assert.Contains("src/foo.test.cs", stdout);
+            Assert.Contains("tests/fixtures/literal.cs", stdout);
+            Assert.Contains("tests_utils/helper.cs", stdout);
+            Assert.Contains("[info, source_literal, test_fixture]", stdout);
+            Assert.Contains("U+FFFD source literal", stdout);
+            Assert.Contains("(4 issues: replacement_char: 4)", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunValidate_FormatLspIncludesRangeAndDiagnosticMetadata_Issue3949()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_validate_lsp_metadata_3949");
