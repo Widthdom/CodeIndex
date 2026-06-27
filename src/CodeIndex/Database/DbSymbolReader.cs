@@ -1821,13 +1821,13 @@ public partial class DbReader
             LIMIT @limit";
 
         cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("@path", path);
-        cmd.Parameters.AddWithValue("@line", line);
-        cmd.Parameters.AddWithValue("@limit", limit);
+        SqliteCommandPolicy.Add(cmd, "@path", path);
+        SqliteCommandPolicy.Add(cmd, "@line", line);
+        SqliteCommandPolicy.Add(cmd, "@limit", limit);
         if (kind != null)
-            cmd.Parameters.AddWithValue("@kind", kind);
+            SqliteCommandPolicy.Add(cmd, "@kind", kind);
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            SqliteCommandPolicy.Add(cmd, "@lang", lang);
 
         var results = new List<SymbolResult>();
         using var reader = cmd.ExecuteTrackedReader();
