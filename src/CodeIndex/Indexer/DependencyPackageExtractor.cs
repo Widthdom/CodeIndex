@@ -47,8 +47,11 @@ internal static class DependencyPackageExtractor
 
     public static List<SymbolRecord> ExtractSymbols(long fileId, string content, string[] lines, string? path, string language)
     {
-        return ExtractPackages(content, lines, path, language)
-            .Select(package => new SymbolRecord
+        var packages = ExtractPackages(content, lines, path, language);
+        var symbols = new List<SymbolRecord>(packages.Count);
+        foreach (var package in packages)
+        {
+            symbols.Add(new SymbolRecord
             {
                 FileId = fileId,
                 Kind = "package",
@@ -63,14 +66,19 @@ internal static class DependencyPackageExtractor
                 ContainerName = package.Scope,
                 ContainerQualifiedName = package.Scope,
                 FamilyKey = "package:" + NormalizePackageName(package.Name),
-            })
-            .ToList();
+            });
+        }
+
+        return symbols;
     }
 
     public static List<ReferenceRecord> ExtractReferences(long fileId, string content, string[] lines, string? path, string language)
     {
-        return ExtractPackages(content, lines, path, language)
-            .Select(package => new ReferenceRecord
+        var packages = ExtractPackages(content, lines, path, language);
+        var references = new List<ReferenceRecord>(packages.Count);
+        foreach (var package in packages)
+        {
+            references.Add(new ReferenceRecord
             {
                 FileId = fileId,
                 SymbolName = package.Name,
@@ -80,8 +88,10 @@ internal static class DependencyPackageExtractor
                 Context = GetContext(lines, package.Line),
                 ContainerKind = package.Scope == null ? null : "project",
                 ContainerName = package.Scope,
-            })
-            .ToList();
+            });
+        }
+
+        return references;
     }
 
     internal static List<DependencyPackageInfo> ExtractPackages(string content, string[] lines, string? path, string language)
