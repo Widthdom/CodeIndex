@@ -13,6 +13,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [1.34.4] - 2026-06-27
 
+#### Fixed
+
+- **Full-scan content-load tests now record parallel extraction safely** — TypeScript config refresh regression tests now use a thread-safe collection and share the static hook gate, so release-matrix full test runs no longer miss file-load events from parallel workers.
+
 ### [1.34.3] - 2026-06-27
 
 #### Fixed
@@ -4697,6 +4701,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
 ### [1.34.4] - 2026-06-27
+
+#### 修正
+
+- **full-scan content-load テストが parallel extraction を安全に記録するようになりました** — TypeScript config refresh 回帰テストは thread-safe な collection と共通 static hook gate を使うため、release matrix の full test run で parallel worker からの file-load event を取りこぼさなくなります。
 
 ### [1.34.3] - 2026-06-27
 
