@@ -1,9 +1,9 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
-using System.Text.RegularExpressions;
 using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
+using Regex = CodeIndex.Indexer.BoundedRegex;
 
 namespace CodeIndex.Cli;
 

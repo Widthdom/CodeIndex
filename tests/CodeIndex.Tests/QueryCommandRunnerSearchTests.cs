@@ -1333,14 +1333,26 @@ public partial class QueryCommandRunnerTests
             .GetProperty("queries")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "regex-construction");
+        var staticRegexIsMatchQuery = recipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "static-regex-is-match");
         var staticRegexMatchQuery = recipe
             .GetProperty("queries")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "static-regex-match");
+        var staticRegexMatchesQuery = recipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "static-regex-matches");
         var staticRegexReplaceQuery = recipe
             .GetProperty("queries")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "static-regex-replace");
+        var staticRegexSplitQuery = recipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "static-regex-split");
         var boundedRegexAliasQuery = recipe
             .GetProperty("queries")
             .EnumerateArray()
@@ -1384,10 +1396,18 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(0, emptyCatchQuery.GetProperty("result_kinds").GetArrayLength());
         Assert.Equal("new Regex(", regexQuery.GetProperty("query").GetString());
         Assert.Contains(regexQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("bounded-regex-alias", StringComparison.Ordinal));
+        Assert.Equal(" Regex.IsMatch(", staticRegexIsMatchQuery.GetProperty("query").GetString());
+        Assert.Contains(staticRegexIsMatchQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("shared timeout policy", StringComparison.Ordinal));
+        Assert.Contains(recipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "static-regex-is-match-negated");
+        Assert.Contains(recipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "static-regex-is-match-parenthesized");
         Assert.Equal(" Regex.Match(", staticRegexMatchQuery.GetProperty("query").GetString());
         Assert.Contains(staticRegexMatchQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("shared timeout policy", StringComparison.Ordinal));
+        Assert.Equal(" Regex.Matches(", staticRegexMatchesQuery.GetProperty("query").GetString());
+        Assert.Contains(staticRegexMatchesQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("shared timeout policy", StringComparison.Ordinal));
         Assert.Equal(" Regex.Replace(", staticRegexReplaceQuery.GetProperty("query").GetString());
         Assert.Contains(staticRegexReplaceQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("shared timeout policy", StringComparison.Ordinal));
+        Assert.Equal(" Regex.Split(", staticRegexSplitQuery.GetProperty("query").GetString());
+        Assert.Contains(staticRegexSplitQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("shared timeout policy", StringComparison.Ordinal));
         Assert.Equal("info", boundedRegexAliasQuery.GetProperty("severity").GetString());
         Assert.Contains(boundedRegexAliasQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("aliases CodeIndex.Indexer.BoundedRegex", StringComparison.Ordinal));
         var broadCatchTaxonomy = broadCatchQuery.GetProperty("broad_catch_taxonomy");
@@ -1405,7 +1425,11 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(authBearerQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("bearer tokens", StringComparison.Ordinal));
         Assert.Contains(dogfoodRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "exception-message-classifier");
         Assert.Contains(dogfoodRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "plugin-activator");
-        Assert.Contains(dogfoodRegexQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("static Regex APIs", StringComparison.Ordinal));
+        Assert.Equal(" Regex.", dogfoodRegexQuery.GetProperty("query").GetString());
+        Assert.Contains(dogfoodRegexQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("raw System.Text.RegularExpressions.Regex static APIs", StringComparison.Ordinal));
+        Assert.Contains(dogfoodRegexQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("BoundedRegex aliases and instance names ending in Regex are filtered out", StringComparison.Ordinal));
+        Assert.Contains(dogfoodRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "static-regex-api-negated");
+        Assert.Contains(dogfoodRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "static-regex-api-parenthesized");
         Assert.Contains(dogfoodSqlQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("identifier", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(recipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "file-read-all-text");
         Assert.Contains(recipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "file-read-all-bytes");
@@ -1418,8 +1442,11 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "sqlite-quoted-identifier");
         Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "sqlite-typed-parameter");
         Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "fully-qualified-regex-construction");
+        Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "static-regex-is-match");
         Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "static-regex-match");
+        Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "static-regex-matches");
         Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "static-regex-replace");
+        Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "static-regex-split");
         Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "sync-over-async");
         Assert.Contains(xmlRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "dtd-processing");
         Assert.Contains(traversalRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "enumerate-files");
@@ -1600,8 +1627,21 @@ public partial class QueryCommandRunnerTests
                 "regex-construction",
                 "bounded-regex-alias",
                 "fully-qualified-regex-construction",
+                "static-regex-is-match",
+                "static-regex-is-match-negated",
+                "static-regex-is-match-parenthesized",
                 "static-regex-match",
+                "static-regex-match-negated",
+                "static-regex-match-parenthesized",
+                "static-regex-matches",
+                "static-regex-matches-negated",
+                "static-regex-matches-parenthesized",
                 "static-regex-replace",
+                "static-regex-replace-negated",
+                "static-regex-replace-parenthesized",
+                "static-regex-split",
+                "static-regex-split-negated",
+                "static-regex-split-parenthesized",
                 "regex-timeout-handling",
                 "environment-secret-source",
                 "authorization-handling",
@@ -1625,6 +1665,8 @@ public partial class QueryCommandRunnerTests
             [
                 "exception-message-classifier",
                 "static-regex-api",
+                "static-regex-api-negated",
+                "static-regex-api-parenthesized",
                 "relaxed-json-encoder",
                 "temp-file-name",
                 "overwrite-file-move",
@@ -1650,7 +1692,7 @@ public partial class QueryCommandRunnerTests
             SearchAuditRecipes.DefaultAuditScope,
             ["src/**"],
             expectedSourceExcludes,
-            ["sqlite-addwithvalue", "sqlite-quoted-identifier", "sqlite-typed-parameter", "regex-construction", "bounded-regex-alias", "fully-qualified-regex-construction", "static-regex-match", "static-regex-replace", "cancellation-token-none", "sync-over-async"]);
+            ["sqlite-addwithvalue", "sqlite-quoted-identifier", "sqlite-typed-parameter", "regex-construction", "bounded-regex-alias", "fully-qualified-regex-construction", "static-regex-is-match", "static-regex-is-match-negated", "static-regex-is-match-parenthesized", "static-regex-match", "static-regex-match-negated", "static-regex-match-parenthesized", "static-regex-matches", "static-regex-matches-negated", "static-regex-matches-parenthesized", "static-regex-replace", "static-regex-replace-negated", "static-regex-replace-parenthesized", "static-regex-split", "static-regex-split-negated", "static-regex-split-parenthesized", "cancellation-token-none", "sync-over-async"]);
         AssertRecipe(
             "xml-parser-security",
             SearchAuditRecipes.DefaultAuditScope,
@@ -1913,6 +1955,23 @@ public partial class QueryCommandRunnerTests
                 """);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
+                "src/instance.cs",
+                "csharp",
+                """
+                using System;
+                using System.Text.RegularExpressions;
+
+                public sealed class InstanceRegexUse
+                {
+                    private static readonly Regex TokenRegex = new("token", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+
+                    public bool ContainsToken(string input) => TokenRegex.IsMatch(input);
+                    public bool HasToken(string input) => TokenRegex.Match(input).Success;
+                    public int CountTokens(string input) => TokenRegex.Matches(input).Count;
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
                 "src/bounded.cs",
                 "csharp",
                 """
@@ -1921,7 +1980,9 @@ public partial class QueryCommandRunnerTests
                 public sealed class BoundedRegexUse
                 {
                     public object Build() => new Regex("token");
+                    public bool ContainsToken(string input) => Regex.IsMatch(input, "token");
                     public bool HasToken(string input) => Regex.Match(input, "token").Success;
+                    public int CountTokens(string input) => Regex.Matches(input, "token").Count;
                     public string Clean(string input) => Regex.Replace(input, "token", "value");
                 }
                 """);
@@ -1934,8 +1995,13 @@ public partial class QueryCommandRunnerTests
 
                 public sealed class StaticRawRegexUse
                 {
+                    public bool ContainsToken(string input) => Regex.IsMatch(input, "token");
+                    public bool MissingToken(string input) => !Regex.IsMatch(input, "token");
                     public bool HasToken(string input) => Regex.Match(input, "token").Success;
+                    public bool HasTokenInGroup(string input) => (Regex.Match(input, "token")).Success;
+                    public int CountTokens(string input) => Regex.Matches(input, "token").Count;
                     public string Clean(string input) => Regex.Replace(input, "token", "value");
+                    public string[] SplitTokens(string input) => Regex.Split(input, "token");
                 }
                 """);
             TestProjectHelper.InsertIndexedFile(
@@ -1962,7 +2028,7 @@ public partial class QueryCommandRunnerTests
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 [
                     "--recipe", "risky-code",
-                    "--include-query", "regex-construction,bounded-regex-alias,fully-qualified-regex-construction,static-regex-match,static-regex-replace",
+                    "--include-query", "regex-construction,bounded-regex-alias,fully-qualified-regex-construction,static-regex-is-match,static-regex-is-match-negated,static-regex-match,static-regex-match-parenthesized,static-regex-matches,static-regex-replace,static-regex-split",
                     "--db", dbPath,
                     "--json",
                     "--limit", "10",
@@ -1982,14 +2048,44 @@ public partial class QueryCommandRunnerTests
                 .ToList();
             var boundedAlias = queries.Single(item => item.GetProperty("name").GetString() == "bounded-regex-alias");
             var fullyQualified = queries.Single(item => item.GetProperty("name").GetString() == "fully-qualified-regex-construction");
+            var staticIsMatchPaths = queries
+                .Single(item => item.GetProperty("name").GetString() == "static-regex-is-match")
+                .GetProperty("results")
+                .EnumerateArray()
+                .Select(item => item.GetProperty("path").GetString())
+                .ToList();
             var staticMatchPaths = queries
                 .Single(item => item.GetProperty("name").GetString() == "static-regex-match")
                 .GetProperty("results")
                 .EnumerateArray()
                 .Select(item => item.GetProperty("path").GetString())
                 .ToList();
+            var staticNegatedIsMatchPaths = queries
+                .Single(item => item.GetProperty("name").GetString() == "static-regex-is-match-negated")
+                .GetProperty("results")
+                .EnumerateArray()
+                .Select(item => item.GetProperty("path").GetString())
+                .ToList();
+            var staticParenthesizedMatchPaths = queries
+                .Single(item => item.GetProperty("name").GetString() == "static-regex-match-parenthesized")
+                .GetProperty("results")
+                .EnumerateArray()
+                .Select(item => item.GetProperty("path").GetString())
+                .ToList();
+            var staticMatchesPaths = queries
+                .Single(item => item.GetProperty("name").GetString() == "static-regex-matches")
+                .GetProperty("results")
+                .EnumerateArray()
+                .Select(item => item.GetProperty("path").GetString())
+                .ToList();
             var staticReplacePaths = queries
                 .Single(item => item.GetProperty("name").GetString() == "static-regex-replace")
+                .GetProperty("results")
+                .EnumerateArray()
+                .Select(item => item.GetProperty("path").GetString())
+                .ToList();
+            var staticSplitPaths = queries
+                .Single(item => item.GetProperty("name").GetString() == "static-regex-split")
                 .GetProperty("results")
                 .EnumerateArray()
                 .Select(item => item.GetProperty("path").GetString())
@@ -2001,15 +2097,32 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("src/bounded.cs", Assert.Single(boundedAlias.GetProperty("results").EnumerateArray()).GetProperty("path").GetString());
             Assert.Contains(boundedAlias.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("aliases CodeIndex.Indexer.BoundedRegex", StringComparison.Ordinal));
             Assert.Equal("src/full.cs", Assert.Single(fullyQualified.GetProperty("results").EnumerateArray()).GetProperty("path").GetString());
+            Assert.Contains("src/static-raw.cs", staticIsMatchPaths);
+            Assert.DoesNotContain("src/bounded.cs", staticIsMatchPaths);
+            Assert.DoesNotContain("src/instance.cs", staticIsMatchPaths);
+            Assert.Contains("src/static-raw.cs", staticNegatedIsMatchPaths);
+            Assert.DoesNotContain("src/bounded.cs", staticNegatedIsMatchPaths);
+            Assert.DoesNotContain("src/instance.cs", staticNegatedIsMatchPaths);
             Assert.Contains("src/static-raw.cs", staticMatchPaths);
             Assert.DoesNotContain("src/bounded.cs", staticMatchPaths);
+            Assert.DoesNotContain("src/instance.cs", staticMatchPaths);
+            Assert.Contains("src/static-raw.cs", staticParenthesizedMatchPaths);
+            Assert.DoesNotContain("src/bounded.cs", staticParenthesizedMatchPaths);
+            Assert.DoesNotContain("src/instance.cs", staticParenthesizedMatchPaths);
+            Assert.Contains("src/static-raw.cs", staticMatchesPaths);
+            Assert.DoesNotContain("src/bounded.cs", staticMatchesPaths);
+            Assert.DoesNotContain("src/instance.cs", staticMatchesPaths);
             Assert.Contains("src/static-raw.cs", staticReplacePaths);
             Assert.DoesNotContain("src/bounded.cs", staticReplacePaths);
+            Assert.DoesNotContain("src/instance.cs", staticReplacePaths);
+            Assert.Contains("src/static-raw.cs", staticSplitPaths);
+            Assert.DoesNotContain("src/bounded.cs", staticSplitPaths);
+            Assert.DoesNotContain("src/instance.cs", staticSplitPaths);
 
             var (dotnetExitCode, dotnetStdout, dotnetStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 [
                     "--recipe", "dotnet-risk-patterns",
-                    "--include-query", "regex-construction,bounded-regex-alias,fully-qualified-regex-construction,static-regex-match,static-regex-replace",
+                    "--include-query", "regex-construction,bounded-regex-alias,fully-qualified-regex-construction,static-regex-is-match,static-regex-is-match-negated,static-regex-match,static-regex-match-parenthesized,static-regex-matches,static-regex-replace,static-regex-split",
                     "--db", dbPath,
                     "--json",
                     "--limit", "10",
@@ -2029,8 +2142,32 @@ public partial class QueryCommandRunnerTests
                 .ToList();
             var dotnetBoundedAlias = dotnetQueries.Single(item => item.GetProperty("name").GetString() == "bounded-regex-alias");
             var dotnetFullyQualified = dotnetQueries.Single(item => item.GetProperty("name").GetString() == "fully-qualified-regex-construction");
+            var dotnetStaticIsMatchPaths = dotnetQueries
+                .Single(item => item.GetProperty("name").GetString() == "static-regex-is-match")
+                .GetProperty("results")
+                .EnumerateArray()
+                .Select(item => item.GetProperty("path").GetString())
+                .ToList();
             var dotnetStaticMatchPaths = dotnetQueries
                 .Single(item => item.GetProperty("name").GetString() == "static-regex-match")
+                .GetProperty("results")
+                .EnumerateArray()
+                .Select(item => item.GetProperty("path").GetString())
+                .ToList();
+            var dotnetStaticNegatedIsMatchPaths = dotnetQueries
+                .Single(item => item.GetProperty("name").GetString() == "static-regex-is-match-negated")
+                .GetProperty("results")
+                .EnumerateArray()
+                .Select(item => item.GetProperty("path").GetString())
+                .ToList();
+            var dotnetStaticParenthesizedMatchPaths = dotnetQueries
+                .Single(item => item.GetProperty("name").GetString() == "static-regex-match-parenthesized")
+                .GetProperty("results")
+                .EnumerateArray()
+                .Select(item => item.GetProperty("path").GetString())
+                .ToList();
+            var dotnetStaticMatchesPaths = dotnetQueries
+                .Single(item => item.GetProperty("name").GetString() == "static-regex-matches")
                 .GetProperty("results")
                 .EnumerateArray()
                 .Select(item => item.GetProperty("path").GetString())
@@ -2041,15 +2178,62 @@ public partial class QueryCommandRunnerTests
                 .EnumerateArray()
                 .Select(item => item.GetProperty("path").GetString())
                 .ToList();
+            var dotnetStaticSplitPaths = dotnetQueries
+                .Single(item => item.GetProperty("name").GetString() == "static-regex-split")
+                .GetProperty("results")
+                .EnumerateArray()
+                .Select(item => item.GetProperty("path").GetString())
+                .ToList();
 
             Assert.Contains("src/raw.cs", dotnetConstructionPaths);
             Assert.DoesNotContain("src/bounded.cs", dotnetConstructionPaths);
             Assert.Equal("src/bounded.cs", Assert.Single(dotnetBoundedAlias.GetProperty("results").EnumerateArray()).GetProperty("path").GetString());
             Assert.Equal("src/full.cs", Assert.Single(dotnetFullyQualified.GetProperty("results").EnumerateArray()).GetProperty("path").GetString());
+            Assert.Contains("src/static-raw.cs", dotnetStaticIsMatchPaths);
+            Assert.DoesNotContain("src/bounded.cs", dotnetStaticIsMatchPaths);
+            Assert.DoesNotContain("src/instance.cs", dotnetStaticIsMatchPaths);
+            Assert.Contains("src/static-raw.cs", dotnetStaticNegatedIsMatchPaths);
+            Assert.DoesNotContain("src/bounded.cs", dotnetStaticNegatedIsMatchPaths);
+            Assert.DoesNotContain("src/instance.cs", dotnetStaticNegatedIsMatchPaths);
             Assert.Contains("src/static-raw.cs", dotnetStaticMatchPaths);
             Assert.DoesNotContain("src/bounded.cs", dotnetStaticMatchPaths);
+            Assert.DoesNotContain("src/instance.cs", dotnetStaticMatchPaths);
+            Assert.Contains("src/static-raw.cs", dotnetStaticParenthesizedMatchPaths);
+            Assert.DoesNotContain("src/bounded.cs", dotnetStaticParenthesizedMatchPaths);
+            Assert.DoesNotContain("src/instance.cs", dotnetStaticParenthesizedMatchPaths);
+            Assert.Contains("src/static-raw.cs", dotnetStaticMatchesPaths);
+            Assert.DoesNotContain("src/bounded.cs", dotnetStaticMatchesPaths);
+            Assert.DoesNotContain("src/instance.cs", dotnetStaticMatchesPaths);
             Assert.Contains("src/static-raw.cs", dotnetStaticReplacePaths);
             Assert.DoesNotContain("src/bounded.cs", dotnetStaticReplacePaths);
+            Assert.DoesNotContain("src/instance.cs", dotnetStaticReplacePaths);
+            Assert.Contains("src/static-raw.cs", dotnetStaticSplitPaths);
+            Assert.DoesNotContain("src/bounded.cs", dotnetStaticSplitPaths);
+            Assert.DoesNotContain("src/instance.cs", dotnetStaticSplitPaths);
+
+            var (dogfoodExitCode, dogfoodStdout, dogfoodStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "--recipe", "dogfood-risk-patterns/static-regex-api",
+                    "--db", dbPath,
+                    "--json",
+                    "--limit", "20",
+                    "--lang", "csharp"
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, dogfoodExitCode);
+            Assert.Equal(string.Empty, dogfoodStderr);
+            using var dogfoodDocument = ParseJsonOutput(dogfoodStdout);
+            var dogfoodQuery = Assert.Single(dogfoodDocument.RootElement.GetProperty("queries").EnumerateArray());
+            var dogfoodPaths = dogfoodQuery
+                .GetProperty("results")
+                .EnumerateArray()
+                .Select(item => item.GetProperty("path").GetString())
+                .ToList();
+
+            Assert.Contains("src/static-raw.cs", dogfoodPaths);
+            Assert.DoesNotContain("src/bounded.cs", dogfoodPaths);
+            Assert.DoesNotContain("src/instance.cs", dogfoodPaths);
         }
         finally
         {
