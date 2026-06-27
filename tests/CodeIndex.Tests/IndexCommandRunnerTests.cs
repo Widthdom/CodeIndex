@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
@@ -2239,7 +2240,7 @@ public sealed class Caller
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_head_changed_skip_before_extract");
         bool? parallelized = null;
         string? reason = null;
-        var loadedPaths = new List<string>();
+        var loadedPaths = new ConcurrentBag<string>();
         try
         {
             RunGit(projectRoot, "init");
@@ -2296,7 +2297,7 @@ public sealed class Caller
     public void Run_FullScanAfterTypeScriptConfigChange_ReprocessesUnchangedTypeScriptFiles()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_tsconfig_refresh");
-        var loadedPaths = new List<string>();
+        var loadedPaths = new ConcurrentBag<string>();
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "app.ts"), "export interface AppApi { run(): void; }\n");
@@ -2338,7 +2339,7 @@ public sealed class Caller
     public void Run_FullScanAfterTypeScriptConfigContentChangeWithStableStat_ReprocessesUnchangedTypeScriptFiles()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_tsconfig_stable_stat");
-        var loadedPaths = new List<string>();
+        var loadedPaths = new ConcurrentBag<string>();
         try
         {
             var configPath = Path.Combine(projectRoot, "tsconfig.json");
@@ -2384,7 +2385,7 @@ public sealed class Caller
     public void Run_FullScanAfterDerivedTypeScriptConfigDelete_ReprocessesUnchangedTypeScriptFiles()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_tsconfig_base_delete");
-        var loadedPaths = new List<string>();
+        var loadedPaths = new ConcurrentBag<string>();
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "app.ts"), "export interface AppApi { run(): void; }\n");
@@ -2395,17 +2396,26 @@ public sealed class Caller
 
             File.Delete(Path.Combine(projectRoot, "tsconfig.base.json"));
 
-            IndexCommandRunner.FullScanFileContentLoadForTesting = path => loadedPaths.Add(path);
+            lock (FullScanContentLoadHookGate)
+            {
+                try
+                {
+                    IndexCommandRunner.FullScanFileContentLoadForTesting = path => loadedPaths.Add(path);
 
-            var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--json"]);
+                    var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--json"]);
 
-            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
-            Assert.Equal("success", refreshJson.GetProperty("status").GetString());
-            Assert.Contains("app.ts", loadedPaths);
+                    Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+                    Assert.Equal("success", refreshJson.GetProperty("status").GetString());
+                    Assert.Contains("app.ts", loadedPaths);
+                }
+                finally
+                {
+                    IndexCommandRunner.FullScanFileContentLoadForTesting = null;
+                }
+            }
         }
         finally
         {
-            IndexCommandRunner.FullScanFileContentLoadForTesting = null;
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
