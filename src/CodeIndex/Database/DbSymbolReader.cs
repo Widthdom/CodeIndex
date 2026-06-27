@@ -17,7 +17,6 @@ public partial class DbReader
     internal const int DefinitionBodyMaxRequestedLines = 1_000;
     internal const int DefinitionBodyMaxBytes = 16 * 1024;
 
-    private const double GenericHotspotNamePenalty = 0.35;
     private const string GenericHotspotNamePenaltySqlLiteral = "0.35";
     private const string GenericHotspotNamesSql = "('add','append','build','call','combine','convert','create','execute','get','getstring','getvalue','getvalues','handle','invoke','load','parse','process','read','resolve','run','set','start','stop','tolist','tostring','tryparse','update','write')";
 

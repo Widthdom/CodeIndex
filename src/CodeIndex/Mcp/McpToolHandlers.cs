@@ -467,24 +467,6 @@ public partial class McpServer
         payload["format"] = "compact";
     }
 
-    private static bool AddLimitMetadata<T>(JsonObject payload, List<T> results, int limit, int offset = 0, bool includePagination = false)
-    {
-        var truncated = results.Count > limit;
-        if (truncated)
-            results.RemoveRange(limit, results.Count - limit);
-
-        payload["count"] = results.Count;
-        payload["truncated"] = truncated;
-        payload["more_available"] = truncated;
-        if (includePagination)
-        {
-            payload["offset"] = offset;
-            if (truncated)
-                payload["next_offset"] = offset + results.Count;
-        }
-        return truncated;
-    }
-
     /// <summary>
     /// Return true when the requested reference kind is NOT a call-graph kind (i.e. metadata
     /// `attribute` / `annotation`, compile-time `type_reference`, or structural `import`) —
@@ -3003,19 +2985,6 @@ public partial class McpServer
                 payload["sql_graph_contract_degraded_reason"] = signal.DegradedReason;
             }
         }
-    }
-
-    private static void AddExactSignalAliases(JsonObject payload)
-    {
-        if (payload["exact_index_available"] is JsonNode snakeExact && payload["exactIndexAvailable"] is null)
-            payload["exactIndexAvailable"] = snakeExact.DeepClone();
-        else if (payload["exactIndexAvailable"] is JsonNode camelExact && payload["exact_index_available"] is null)
-            payload["exact_index_available"] = camelExact.DeepClone();
-
-        if (payload["degraded_reason"] is JsonNode snakeReason && payload["degradedReason"] is null)
-            payload["degradedReason"] = snakeReason.DeepClone();
-        else if (payload["degradedReason"] is JsonNode camelReason && payload["degraded_reason"] is null)
-            payload["degraded_reason"] = camelReason.DeepClone();
     }
 
     private static bool IsBareVerbatimQueryToken(string value)
