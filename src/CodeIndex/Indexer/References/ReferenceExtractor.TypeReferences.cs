@@ -1525,6 +1525,46 @@ public static partial class ReferenceExtractor
         return best;
     }
 
+    private static Dictionary<int, List<SymbolRecord>>? BuildCSharpSameLineContainerCandidatesByLine(
+        string language,
+        IReadOnlyList<SymbolRecord> candidates)
+    {
+        if (language != "csharp")
+            return null;
+
+        Dictionary<int, List<SymbolRecord>>? candidatesByLine = null;
+        foreach (var candidate in candidates)
+        {
+            if (candidate.BodyStartLine == null
+                || candidate.BodyEndLine == null
+                || candidate.StartLine != candidate.EndLine
+                || string.IsNullOrEmpty(candidate.Signature))
+            {
+                continue;
+            }
+
+            candidatesByLine ??= new Dictionary<int, List<SymbolRecord>>();
+            if (!candidatesByLine.TryGetValue(candidate.StartLine, out var lineCandidates))
+            {
+                lineCandidates = [];
+                candidatesByLine.Add(candidate.StartLine, lineCandidates);
+            }
+
+            lineCandidates.Add(candidate);
+        }
+
+        return candidatesByLine;
+    }
+
+    private static SymbolRecord? FindInnermostSameLineCSharpContainer(
+        IReadOnlyDictionary<int, List<SymbolRecord>>? candidatesByLine,
+        string structuralLine,
+        int lineNumber,
+        int column)
+        => candidatesByLine != null && candidatesByLine.TryGetValue(lineNumber, out var candidates)
+            ? FindInnermostSameLineCSharpContainer(candidates, structuralLine, lineNumber, column)
+            : null;
+
     private static SymbolRecord? FindInnermostCSharpDeclarationRangeContainer(
         IReadOnlyList<SymbolRecord> candidates,
         string structuralLine,

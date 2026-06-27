@@ -103,6 +103,7 @@ public static partial class ReferenceExtractor
         // プロパティ自身に帰属させる (issue #233 参照)。
         var containerCandidates = BuildReferenceContainerCandidates(symbols, request.ReportDiagnostic);
         var containerResolver = new InnermostContainerResolver(containerCandidates);
+        var csharpSameLineContainerCandidatesByLine = BuildCSharpSameLineContainerCandidatesByLine(language, containerCandidates);
         if (language == "solidity")
             return ExtractSolidityReferences(fileId, lines, preparedLines, containerResolver);
 
@@ -1104,6 +1105,7 @@ public static partial class ReferenceExtractor
             if (language == "sql")
                 sqlDefinitionLeafSpansByLine?.TryGetValue(lineNumber, out sqlDefinitionLeafSpans);
             var container = containerResolver.Find(lineNumber);
+            var csharpLineHasWhereClause = language == "csharp" && CSharpWhereClauseRegex.IsMatch(preparedLine);
 
             // Per-line Java same-line ctor synthesis. When `public Leaf(){super(0); doWork();}`
             // is entirely on one line, SymbolExtractor does not emit a function symbol for the
@@ -1164,7 +1166,7 @@ public static partial class ReferenceExtractor
 
                 if (language == "csharp")
                 {
-                    if (CSharpWhereClauseRegex.IsMatch(preparedLine))
+                    if (csharpLineHasWhereClause)
                     {
                         var declarationRangeContainer = FindInnermostCSharpDeclarationRangeContainer(
                             containerCandidates,
@@ -1176,14 +1178,14 @@ public static partial class ReferenceExtractor
                     }
 
                     var sameLineContainer = FindInnermostSameLineCSharpContainer(
-                        containerCandidates,
+                        csharpSameLineContainerCandidatesByLine,
                         structuralLines[i],
                         lineNumber,
                         column);
                     if (sameLineContainer != null)
                         return sameLineContainer;
 
-                    if (CSharpWhereClauseRegex.IsMatch(preparedLine)
+                    if (csharpLineHasWhereClause
                         && container?.Kind == "function"
                         && container.StartLine == lineNumber
                         && (!TryFindCSharpFunctionNameColumn(structuralLines[i], container.Name, out var containerNameColumn)
@@ -2023,6 +2025,8 @@ public static partial class ReferenceExtractor
                     return false;
                 if (language == "typescript" && TypeScriptReferenceExtractor.IsSatisfiesTypeOperand(preparedLine, callIndex))
                     return false;
+                if (ShouldSuppressDefinitionCall(normalizedName, callIndex))
+                    return false;
 
                 var callContainer = ResolveContainerForCall(callIndex);
                 if (IsConstructorCallName(language, preparedLine, callIndex))
@@ -2046,8 +2050,6 @@ public static partial class ReferenceExtractor
                     if (!(language == "scala" && string.Equals(name, "foreach", StringComparison.Ordinal)))
                         return false;
                 }
-                if (ShouldSuppressDefinitionCall(normalizedName, callIndex))
-                    return false;
 
                 // issue #293: reclassify C# attribute / Java/Kotlin/Scala/TypeScript annotation
                 // usages with arguments so they do not pollute the call-graph as phantom `call` rows.
