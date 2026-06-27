@@ -720,13 +720,14 @@ public static partial class ReferenceExtractor
         internal InnermostContainerResolver(IReadOnlyList<SymbolRecord> candidates)
         {
             this.candidates = candidates;
-            candidatesByStart = candidates
-                .Select((symbol, index) => (Symbol: symbol, SpanLength: GetContainerSpanLength(symbol), OriginalIndex: index))
-                .OrderBy(item => item.Symbol.BodyStartLine!.Value)
-                .ThenBy(item => item.Symbol.BodyEndLine!.Value)
-                .ThenBy(item => item.SpanLength)
-                .ThenBy(item => item.OriginalIndex)
-                .ToList();
+            candidatesByStart = new List<(SymbolRecord Symbol, int SpanLength, int OriginalIndex)>(candidates.Count);
+            for (var index = 0; index < candidates.Count; index++)
+            {
+                var symbol = candidates[index];
+                candidatesByStart.Add((symbol, GetContainerSpanLength(symbol), index));
+            }
+
+            candidatesByStart.Sort(CompareCandidatesByStart);
         }
 
         internal SymbolRecord? Find(int lineNumber)
@@ -764,6 +765,25 @@ public static partial class ReferenceExtractor
 
         private static int GetContainerSpanLength(SymbolRecord symbol) =>
             (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine);
+
+        private static int CompareCandidatesByStart(
+            (SymbolRecord Symbol, int SpanLength, int OriginalIndex) left,
+            (SymbolRecord Symbol, int SpanLength, int OriginalIndex) right)
+        {
+            var compare = left.Symbol.BodyStartLine!.Value.CompareTo(right.Symbol.BodyStartLine!.Value);
+            if (compare != 0)
+                return compare;
+
+            compare = left.Symbol.BodyEndLine!.Value.CompareTo(right.Symbol.BodyEndLine!.Value);
+            if (compare != 0)
+                return compare;
+
+            compare = left.SpanLength.CompareTo(right.SpanLength);
+            if (compare != 0)
+                return compare;
+
+            return left.OriginalIndex.CompareTo(right.OriginalIndex);
+        }
 
         private readonly record struct ActiveContainer(SymbolRecord Symbol, int SpanLength, int OriginalIndex) : IComparable<ActiveContainer>
         {

@@ -1407,10 +1407,11 @@ public static partial class ReferenceExtractor
         string diagnosticMessage,
         Action<ReferenceExtractionDiagnostic>? reportDiagnostic)
     {
-        var candidates = new List<SymbolRecord>(Math.Min(symbols.Count, MaxReferenceContainerCandidates));
+        var candidates = new List<ReferenceContainerCandidateSortEntry>(Math.Min(symbols.Count, MaxReferenceContainerCandidates));
         var truncated = false;
-        foreach (var symbol in symbols)
+        for (var symbolIndex = 0; symbolIndex < symbols.Count; symbolIndex++)
         {
+            var symbol = symbols[symbolIndex];
             if (!predicate(symbol))
                 continue;
 
@@ -1420,16 +1421,38 @@ public static partial class ReferenceExtractor
                 continue;
             }
 
-            candidates.Add(symbol);
+            candidates.Add(new ReferenceContainerCandidateSortEntry(
+                symbol,
+                GetReferenceContainerCandidateSpanLength(symbol),
+                symbolIndex));
         }
 
         if (truncated)
             ReportReferenceLookupBudgetHit(reportDiagnostic, diagnosticKind, diagnosticMessage);
 
-        return candidates
-            .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
-            .ToList();
+        candidates.Sort(CompareReferenceContainerCandidateSortEntries);
+
+        var sorted = new List<SymbolRecord>(candidates.Count);
+        foreach (var candidate in candidates)
+            sorted.Add(candidate.Symbol);
+
+        return sorted;
     }
+
+    private readonly record struct ReferenceContainerCandidateSortEntry(SymbolRecord Symbol, int SpanLength, int OriginalIndex);
+
+    private static int CompareReferenceContainerCandidateSortEntries(
+        ReferenceContainerCandidateSortEntry left,
+        ReferenceContainerCandidateSortEntry right)
+    {
+        var compare = left.SpanLength.CompareTo(right.SpanLength);
+        return compare != 0
+            ? compare
+            : left.OriginalIndex.CompareTo(right.OriginalIndex);
+    }
+
+    private static int GetReferenceContainerCandidateSpanLength(SymbolRecord symbol)
+        => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine);
 
     private static void ReportReferenceLookupBudgetHit(
         Action<ReferenceExtractionDiagnostic>? reportDiagnostic,
