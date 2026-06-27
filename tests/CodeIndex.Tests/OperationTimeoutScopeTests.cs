@@ -25,7 +25,7 @@ public sealed class OperationTimeoutScopeTests
         using var cts = new CancellationTokenSource();
         using var scope = OperationTimeoutScope.Create(
             OperationTimeoutCategories.McpRequest,
-            TimeSpan.FromSeconds(30),
+            TimeSpan.FromMinutes(5),
             cts.Token);
 
         cts.Cancel();
