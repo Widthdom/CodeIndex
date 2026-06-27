@@ -295,10 +295,16 @@ public static partial class ReferenceExtractor
             return string.Empty;
 
         var parameterList = signature!.Substring(parameterStart, parameterEnd - parameterStart);
-        return string.Join(
-            ",",
-            SplitTopLevelCommaSpans(parameterList)
-                .Select(span => NormalizeCSharpParameterTypeShape(parameterList.Substring(span.Start, span.Length))));
+        var parameterShape = new StringBuilder(parameterList.Length);
+        foreach (var span in SplitTopLevelCommaSpans(parameterList))
+        {
+            if (parameterShape.Length > 0)
+                parameterShape.Append(',');
+
+            parameterShape.Append(NormalizeCSharpParameterTypeShape(parameterList.Substring(span.Start, span.Length)));
+        }
+
+        return parameterShape.ToString();
     }
 
     private static string NormalizeCSharpParameterTypeShape(string parameter)
