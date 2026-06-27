@@ -6174,10 +6174,23 @@ public partial class DbReader
 
     private static bool IsUnusedTestContractSurface(UnusedCandidateSymbol candidate)
     {
-        return ContainsAny(candidate.Path, ["/test/", "/tests/", ".tests/"])
+        return IsUnusedTestPath(candidate.Path)
             || EndsWithAny(candidate.ContainerName, ["Test", "Tests", "Fixture"])
             || EndsWithAny(candidate.ContainerQualifiedName, ["Test", "Tests", "Fixture"])
             || IsTestHookName(candidate.Name);
+    }
+
+    private static bool IsUnusedTestPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return false;
+
+        var normalized = path.Replace('\\', '/');
+        return normalized.StartsWith("test/", StringComparison.OrdinalIgnoreCase)
+            || normalized.StartsWith("tests/", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("/test/", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("/tests/", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains(".tests/", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsExceptionDiagnosticSurface(UnusedCandidateSymbol candidate, string kind)
