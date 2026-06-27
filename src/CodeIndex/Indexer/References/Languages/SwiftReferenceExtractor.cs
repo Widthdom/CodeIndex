@@ -133,8 +133,13 @@ internal static class SwiftReferenceExtractor
         if (aliases.Count == 0 || TypeAliasRegex.IsMatch(preparedLine))
             return;
 
-        foreach (var alias in aliases.Select(binding => binding.Alias).Distinct(StringComparer.Ordinal))
+        var emittedAliases = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var bindingCandidate in aliases)
         {
+            var alias = bindingCandidate.Alias;
+            if (!emittedAliases.Add(alias))
+                continue;
+
             var searchStart = 0;
             while (searchStart < preparedLine.Length)
             {
