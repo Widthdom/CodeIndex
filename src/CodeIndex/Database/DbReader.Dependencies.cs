@@ -560,6 +560,110 @@ public partial class DbReader
         return results;
     }
 
+    public List<FileDependencyResult> GetFileDependencyCycleCandidates(
+        int limit,
+        out int candidateRowCount,
+        string? lang = null,
+        IReadOnlyList<string>? pathPatterns = null,
+        IReadOnlyList<string>? excludePathPatterns = null,
+        bool excludeTests = false,
+        bool reverse = false,
+        CancellationToken cancellationToken = default)
+    {
+        candidateRowCount = 0;
+        lang = NormalizeQueryLanguage(lang);
+        if (!_hasReferencesTable || limit <= 0)
+            return [];
+
+        cancellationToken.ThrowIfCancellationRequested();
+        using var cmd = _conn.CreateCommand();
+        var constrainedAlias = reverse ? "dst" : "src";
+        var sql = @"
+            SELECT DISTINCT src.path AS source_path,
+                            dst.path AS target_path,
+                            r.symbol_name
+            FROM symbol_references r
+            JOIN files src ON r.file_id = src.id
+            JOIN symbols s ON s.name = r.symbol_name
+            JOIN files dst ON s.file_id = dst.id
+            WHERE src.path != dst.path
+              AND src.lang = dst.lang";
+        sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "src", "depsCycleSourceLang")}";
+        sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "dst", "depsCycleTargetLang")}";
+        AppendDependencyGeneratedFilter(ref sql, "src");
+        AppendDependencyGeneratedFilter(ref sql, "dst");
+        if (lang != null)
+            sql += " AND src.lang = @lang AND dst.lang = @lang";
+        if (pathPatterns is { Count: > 0 })
+        {
+            var ors = new List<string>(pathPatterns.Count);
+            for (int i = 0; i < pathPatterns.Count; i++)
+                ors.Add($"{constrainedAlias}.path LIKE @pathPattern{i} ESCAPE '\\'");
+            sql += " AND (" + string.Join(" OR ", ors) + ")";
+        }
+        if (excludePathPatterns is { Count: > 0 })
+        {
+            for (int i = 0; i < excludePathPatterns.Count; i++)
+                sql += $" AND {constrainedAlias}.path NOT LIKE @excludePath{i} ESCAPE '\\'";
+        }
+        if (excludeTests)
+        {
+            sql += $" AND NOT {DependencyTestPathCondition("src.path")}";
+            sql += $" AND NOT {DependencyTestPathCondition("dst.path")}";
+        }
+        sql += " LIMIT @limit";
+
+        cmd.CommandText = sql;
+        if (lang != null)
+            SqliteCommandPolicy.Add(cmd, "@lang", lang);
+        if (pathPatterns is { Count: > 0 })
+        {
+            for (int i = 0; i < pathPatterns.Count; i++)
+                SqliteCommandPolicy.Add(cmd, $"@pathPattern{i}", BuildPathLikePattern(pathPatterns[i]));
+        }
+        if (excludePathPatterns is { Count: > 0 })
+        {
+            for (int i = 0; i < excludePathPatterns.Count; i++)
+                SqliteCommandPolicy.Add(cmd, $"@excludePath{i}", BuildPathLikePattern(excludePathPatterns[i]));
+        }
+        SqliteCommandPolicy.Add(cmd, "@limit", limit);
+
+        var results = new List<FileDependencyResult>();
+        var resultIndexes = new Dictionary<(string SourcePath, string TargetPath), int>();
+        var symbolsByEdge = new Dictionary<(string SourcePath, string TargetPath), SortedSet<string>>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            candidateRowCount++;
+            var sourcePath = reader.GetString(0);
+            var targetPath = reader.GetString(1);
+            var key = (sourcePath, targetPath);
+            if (!resultIndexes.ContainsKey(key))
+            {
+                resultIndexes[key] = results.Count;
+                results.Add(new FileDependencyResult
+                {
+                    SourcePath = sourcePath,
+                    TargetPath = targetPath,
+                    ReferenceCount = 1,
+                    Symbols = string.Empty,
+                });
+            }
+
+            if (!symbolsByEdge.TryGetValue(key, out var symbols))
+                symbolsByEdge[key] = symbols = new SortedSet<string>(StringComparer.Ordinal);
+            symbols.Add(reader.GetString(2));
+        }
+
+        foreach (var (key, index) in resultIndexes)
+        {
+            if (symbolsByEdge.TryGetValue(key, out var symbols))
+                results[index].Symbols = string.Join(",", symbols.Take(DependencySymbolSampleLimit));
+        }
+        return results;
+    }
+
     private static string DependencyTestPathCondition(string pathSql)
         => "(" + TestPathCondition.Replace("f.path", pathSql) + $" OR lower({pathSql}) LIKE '%.test%/%')";
 

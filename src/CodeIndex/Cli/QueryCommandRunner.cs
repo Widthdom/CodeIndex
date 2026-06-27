@@ -8165,6 +8165,9 @@ public static partial class QueryCommandRunner
     }
 
     public static int RunDeps(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+        => RunDeps(cmdArgs, jsonOptions, CancellationToken.None);
+
+    public static int RunDeps(string[] cmdArgs, JsonSerializerOptions jsonOptions, CancellationToken cancellationToken)
     {
         var previewOptionError = ValidatePreviewOptions("deps", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
         if (previewOptionError != null)
@@ -8194,14 +8197,32 @@ public static partial class QueryCommandRunner
 
         return WithDb(options, jsonOptions, reader =>
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (TryWriteInvalidWorkspaceDependencyDatabaseError(options, out var workspaceDbExitCode))
                 return workspaceDbExitCode;
 
             var reverse = cmdArgs.Any(a => a == "--reverse");
-            var results = GetWorkspaceFileDependencies(reader, options, reverse, options.Limit);
-            var cycleCandidates = options.DependencyCycles
-                ? GetWorkspaceFileDependencies(reader, options, reverse, GetDependencyCycleGraphLimit(options.Limit))
-                : results;
+            List<FileDependencyResult> results;
+            List<FileDependencyResult> cycleCandidates;
+            var cycleCandidateRowCount = 0;
+            var cycleCandidateLimit = GetDependencyCycleGraphLimit(options.Limit);
+            if (options.DependencyCycles)
+            {
+                cycleCandidates = GetWorkspaceFileDependencyCycleCandidates(
+                    reader,
+                    options,
+                    reverse,
+                    checked(cycleCandidateLimit + 1),
+                    out cycleCandidateRowCount,
+                    cancellationToken);
+                results = cycleCandidates.Take(cycleCandidateLimit).ToList();
+                cycleCandidates = results;
+            }
+            else
+            {
+                results = GetWorkspaceFileDependencies(reader, options, reverse, options.Limit);
+                cycleCandidates = results;
+            }
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             if (results.Count == 0)
             {
@@ -8228,11 +8249,19 @@ public static partial class QueryCommandRunner
             List<List<string>> cycles = [];
             List<FileDependencyResult> outputEdges;
             DependencySymbolFilterResult symbolFilter;
+            DependencyCycleAnalysis? dependencyCycleAnalysis = null;
             if (options.DependencyCycles)
             {
                 symbolFilter = ApplyDependencySymbolFilters(cycleCandidates, options);
-                outputEdges = FilterCycleEdges(symbolFilter.Edges, out cycles).Take(options.Limit).ToList();
-                cycles = cycles.Take(options.Limit).ToList();
+                var analysis = AnalyzeDependencyCycles(
+                    symbolFilter.Edges,
+                    cycleCandidateLimit,
+                    cycleCandidateRowCount,
+                    options.Limit,
+                    cancellationToken);
+                outputEdges = analysis.Edges;
+                cycles = analysis.Cycles;
+                dependencyCycleAnalysis = analysis;
             }
             else
             {
@@ -8278,6 +8307,8 @@ public static partial class QueryCommandRunner
                 if (options.Json)
                 {
                     var payload = new JsonObject { ["count"] = 0, ["cycles"] = new JsonArray() };
+                    if (dependencyCycleAnalysis != null)
+                        AddDependencyCycleAnalysisJsonFields(payload, dependencyCycleAnalysis);
                     AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary);
                     AddFreshnessHint(payload, reader);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
@@ -8285,6 +8316,8 @@ public static partial class QueryCommandRunner
                 else
                 {
                     CommandErrorWriter.WriteStderr(BuildZeroResultLine("No dependency cycles found", options));
+                    if (dependencyCycleAnalysis is { Truncated: true })
+                        CommandErrorWriter.WriteStderr(BuildDependencyCycleTruncationWarning(dependencyCycleAnalysis));
                     WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
                 }
                 return ZeroResultExitCode(options);
@@ -8292,7 +8325,17 @@ public static partial class QueryCommandRunner
 
             if (depsFormat is OutputFormatDot or OutputFormatGraphMl or OutputFormatJsonGraph)
             {
-                WriteDependencyGraph(outputEdges, depsFormat, jsonOptions, reader, options, sqlGraphSignal, symbolFilter.Summary);
+                WriteDependencyGraph(
+                    outputEdges,
+                    depsFormat,
+                    jsonOptions,
+                    reader,
+                    options,
+                    sqlGraphSignal,
+                    symbolFilter.Summary,
+                    dependencyCycleAnalysis == null ? null : payload => AddDependencyCycleAnalysisJsonFields(payload, dependencyCycleAnalysis));
+                if ((depsFormat is OutputFormatDot or OutputFormatGraphMl) && dependencyCycleAnalysis is { Truncated: true })
+                    CommandErrorWriter.WriteStderr(BuildDependencyCycleTruncationWarning(dependencyCycleAnalysis));
                 return CommandExitCodes.Success;
             }
 
@@ -8303,7 +8346,11 @@ public static partial class QueryCommandRunner
                     ["count"] = options.DependencyCycles ? cycles.Count : outputEdges.Count,
                 };
                 if (options.DependencyCycles)
+                {
                     payload["cycles"] = BuildDependencyCyclesJson(cycles);
+                    if (dependencyCycleAnalysis != null)
+                        AddDependencyCycleAnalysisJsonFields(payload, dependencyCycleAnalysis);
+                }
                 else
                     payload["edges"] = JsonSerializer.SerializeToNode(outputEdges, CliJsonSerializerContextFactory.Create(jsonOptions).ListFileDependencyResult);
                 AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary);
@@ -8316,7 +8363,10 @@ public static partial class QueryCommandRunner
                 {
                     foreach (var cycle in cycles)
                         Console.WriteLine(string.Join(" -> ", cycle.Concat([cycle[0]])));
-                    CommandErrorWriter.WriteStderr($"({cycles.Count} dependency cycles)");
+                    var truncationNote = dependencyCycleAnalysis is { Truncated: true }
+                        ? $"; {BuildDependencyCycleTruncationSummary(dependencyCycleAnalysis)}"
+                        : string.Empty;
+                    CommandErrorWriter.WriteStderr($"({cycles.Count} dependency cycles{truncationNote})");
                     WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
                     return CommandExitCodes.Success;
                 }
@@ -8330,7 +8380,7 @@ public static partial class QueryCommandRunner
                 WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
             }
             return CommandExitCodes.Success;
-        });
+        }, cancellationToken: cancellationToken);
     }
 
     private static bool TryExtractDepsFormat(string[] args, out string format, out string[] parseArgs, out string? error)
@@ -8395,8 +8445,11 @@ public static partial class QueryCommandRunner
     }
 
     internal static List<FileDependencyResult> FilterCycleEdges(List<FileDependencyResult> results, out List<List<string>> cycles)
+        => FilterCycleEdges(results, out cycles, CancellationToken.None);
+
+    private static List<FileDependencyResult> FilterCycleEdges(IReadOnlyList<FileDependencyResult> results, out List<List<string>> cycles, CancellationToken cancellationToken)
     {
-        cycles = FindDependencyCycles(results);
+        cycles = FindDependencyCycles(results, cancellationToken);
         if (cycles.Count == 0)
             return [];
         var cycleNodes = cycles.SelectMany(cycle => cycle).ToHashSet(StringComparer.Ordinal);
@@ -8406,10 +8459,15 @@ public static partial class QueryCommandRunner
     }
 
     internal static List<List<string>> FindDependencyCycles(IReadOnlyList<FileDependencyResult> edges)
+        => FindDependencyCycles(edges, CancellationToken.None);
+
+    private static List<List<string>> FindDependencyCycles(IReadOnlyList<FileDependencyResult> edges, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var adjacency = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var edge in edges)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!adjacency.TryGetValue(edge.SourcePath, out var targets))
                 adjacency[edge.SourcePath] = targets = [];
             targets.Add(edge.TargetPath);
@@ -8425,6 +8483,7 @@ public static partial class QueryCommandRunner
 
         void Visit(string node)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             indexes[node] = index;
             lowLinks[node] = index;
             index++;
@@ -8433,6 +8492,7 @@ public static partial class QueryCommandRunner
 
             foreach (var target in adjacency[node])
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (!indexes.ContainsKey(target))
                 {
                     Visit(target);
@@ -8462,8 +8522,11 @@ public static partial class QueryCommandRunner
         }
 
         foreach (var node in adjacency.Keys.OrderBy(path => path, StringComparer.Ordinal).ToList())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!indexes.ContainsKey(node))
                 Visit(node);
+        }
 
         return cycles;
     }
@@ -8481,6 +8544,75 @@ public static partial class QueryCommandRunner
         }
         return array;
     }
+
+    private sealed record DependencyCycleAnalysis(
+        List<FileDependencyResult> Edges,
+        List<List<string>> Cycles,
+        bool Truncated,
+        string TerminationReason,
+        string? TruncatedReason,
+        int CandidateEdgeCount,
+        int CandidateEdgeLimit,
+        string DetectionMode);
+
+    private static DependencyCycleAnalysis AnalyzeDependencyCycles(
+        IReadOnlyList<FileDependencyResult> candidateEdges,
+        int candidateEdgeLimit,
+        int candidateRowCount,
+        int displayLimit,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var edges = FilterCycleEdges(candidateEdges, out var allCycles, cancellationToken);
+        var cyclesTruncated = allCycles.Count > displayLimit;
+        var candidateTruncated = candidateRowCount > candidateEdgeLimit;
+        var cycles = allCycles.Take(displayLimit).ToList();
+        var cycleNodes = cycles.SelectMany(static cycle => cycle).ToHashSet(StringComparer.Ordinal);
+        var outputEdges = edges
+            .Where(edge => cycleNodes.Count == 0 || (cycleNodes.Contains(edge.SourcePath) && cycleNodes.Contains(edge.TargetPath)))
+            .Take(displayLimit)
+            .ToList();
+        var truncatedReason = candidateTruncated
+            ? "candidate_edge_limit"
+            : cyclesTruncated
+                ? "display_limit"
+                : null;
+        var terminationReason = truncatedReason switch
+        {
+            "candidate_edge_limit" => "candidate_limit_reached",
+            "display_limit" => "display_limit_reached",
+            _ => "completed",
+        };
+
+        return new DependencyCycleAnalysis(
+            outputEdges,
+            cycles,
+            candidateTruncated || cyclesTruncated,
+            terminationReason,
+            truncatedReason,
+            Math.Min(candidateRowCount, candidateEdgeLimit),
+            candidateEdgeLimit,
+            "bounded_candidate_edges");
+    }
+
+    private static void AddDependencyCycleAnalysisJsonFields(JsonObject payload, DependencyCycleAnalysis analysis)
+    {
+        payload["truncated"] = analysis.Truncated;
+        payload["termination_reason"] = analysis.TerminationReason;
+        if (analysis.TruncatedReason != null)
+            payload["truncated_reason"] = analysis.TruncatedReason;
+        payload["candidate_edge_count"] = analysis.CandidateEdgeCount;
+        payload["candidate_edge_limit"] = analysis.CandidateEdgeLimit;
+        payload["cycle_detection_mode"] = analysis.DetectionMode;
+    }
+
+    private static string BuildDependencyCycleTruncationSummary(DependencyCycleAnalysis analysis)
+        => analysis.TruncatedReason == "display_limit"
+            ? $"partial: showing first {analysis.Cycles.Count} cycles"
+            : $"partial: candidate edge limit reached after {analysis.CandidateEdgeCount} candidate edges";
+
+    private static string BuildDependencyCycleTruncationWarning(DependencyCycleAnalysis analysis)
+        => $"Warning: dependency cycle detection returned partial results ({BuildDependencyCycleTruncationSummary(analysis)}).";
 
     private static DependencySymbolFilterResult ApplyDependencySymbolFilters(IReadOnlyList<FileDependencyResult> edges, QueryCommandOptions options)
     {
@@ -8615,7 +8747,8 @@ public static partial class QueryCommandRunner
         DbReader reader,
         QueryCommandOptions options,
         SqlGraphContractSignal sqlGraphSignal,
-        DependencySymbolFilterSummary symbolFilter)
+        DependencySymbolFilterSummary symbolFilter,
+        Action<JsonObject>? addExtraJsonFields = null)
     {
         switch (format)
         {
@@ -8635,7 +8768,7 @@ public static partial class QueryCommandRunner
                 Console.WriteLine("</graph></graphml>");
                 break;
             case OutputFormatJsonGraph:
-                WriteDependencyJsonGraph(edges, jsonOptions, reader, options, sqlGraphSignal, symbolFilter);
+                WriteDependencyJsonGraph(edges, jsonOptions, reader, options, sqlGraphSignal, symbolFilter, addExtraJsonFields);
                 break;
         }
     }
@@ -8646,7 +8779,8 @@ public static partial class QueryCommandRunner
         DbReader reader,
         QueryCommandOptions options,
         SqlGraphContractSignal sqlGraphSignal,
-        DependencySymbolFilterSummary symbolFilter)
+        DependencySymbolFilterSummary symbolFilter,
+        Action<JsonObject>? addExtraJsonFields = null)
     {
         var seenNodes = new HashSet<string>(StringComparer.Ordinal);
         var nodes = new List<string>();
@@ -8669,6 +8803,7 @@ public static partial class QueryCommandRunner
                 ["symbols"] = BuildDependencySymbolsJson(edge.Symbols),
             }).ToArray()),
         };
+        addExtraJsonFields?.Invoke(payload);
         AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter);
         AddFreshnessHint(payload, reader);
         Console.WriteLine(payload.ToJsonString(jsonOptions));
@@ -8719,6 +8854,71 @@ public static partial class QueryCommandRunner
             .ThenBy(result => result.TargetPath, StringComparer.Ordinal)
             .Take(limit)
             .ToList();
+    }
+
+    private static List<FileDependencyResult> GetWorkspaceFileDependencyCycleCandidates(
+        DbReader primaryReader,
+        QueryCommandOptions options,
+        bool reverse,
+        int limit,
+        out int candidateRowCount,
+        CancellationToken cancellationToken)
+    {
+        candidateRowCount = 0;
+        var results = primaryReader.GetFileDependencyCycleCandidates(
+            limit,
+            out var primaryCandidateRows,
+            options.Lang,
+            options.PathPatterns,
+            options.ExcludePaths,
+            options.ExcludeTests,
+            reverse,
+            cancellationToken);
+        candidateRowCount += primaryCandidateRows;
+        if (options.WorkspaceDbPaths.Count == 0)
+            return results.Take(limit).ToList();
+
+        var memberDbs = BuildWorkspaceDependencyDatabaseList(options);
+        var primaryDb = memberDbs[0];
+        TagFileDependencyResults(results, primaryDb);
+        if (results.Count >= limit)
+            return results.Take(limit).ToList();
+        foreach (var normalizedDbPath in memberDbs.Skip(1))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            using var db = new DbContext(normalizedDbPath, cancellationToken);
+            db.TryMigrateForRead();
+            var reader = new DbReader(db) { IncludeGenerated = primaryReader.IncludeGenerated };
+            var memberResults = reader.GetFileDependencyCycleCandidates(
+                limit,
+                out var memberCandidateRows,
+                options.Lang,
+                options.PathPatterns,
+                options.ExcludePaths,
+                options.ExcludeTests,
+                reverse,
+                cancellationToken);
+            candidateRowCount += memberCandidateRows;
+            TagFileDependencyResults(memberResults, normalizedDbPath);
+            results.AddRange(memberResults);
+            if (results.Count >= limit)
+                return results.Take(limit).ToList();
+        }
+
+        foreach (var sourceDb in memberDbs)
+            foreach (var targetDb in memberDbs)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (string.Equals(sourceDb, targetDb, StringComparison.Ordinal))
+                    continue;
+                var crossDbResults = GetCrossDatabaseFileDependencies(sourceDb, targetDb, options, reverse, limit);
+                candidateRowCount += crossDbResults.Count;
+                results.AddRange(crossDbResults);
+                if (results.Count >= limit)
+                    return results.Take(limit).ToList();
+            }
+
+        return results.Take(limit).ToList();
     }
 
     internal static List<string> BuildWorkspaceDependencyDatabaseList(QueryCommandOptions options)

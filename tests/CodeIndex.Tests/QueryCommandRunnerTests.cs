@@ -4213,6 +4213,54 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunDeps_CyclesJsonReportsCandidateLimitTruncation_Issue4065()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_cycle_candidate_limit");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            for (var i = 0; i < 60; i++)
+            {
+                var symbolName = $"Target{i}";
+                InsertFileWithSymbol(dbPath, $"src/Target{i}.cs", symbolName);
+                InsertFileWithReferences(dbPath, $"src/Source{i}.cs", [symbolName]);
+            }
+            MarkDependencyGraphReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", dbPath, "--json", "--cycles", "--limit", "1", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Empty(json.GetProperty("cycles").EnumerateArray());
+            Assert.True(json.GetProperty("truncated").GetBoolean());
+            Assert.Equal("candidate_limit_reached", json.GetProperty("termination_reason").GetString());
+            Assert.Equal("candidate_edge_limit", json.GetProperty("truncated_reason").GetString());
+            Assert.Equal(QueryCommandRunner.DefaultDependencyCycleGraphLimit, json.GetProperty("candidate_edge_count").GetInt32());
+            Assert.Equal(QueryCommandRunner.DefaultDependencyCycleGraphLimit, json.GetProperty("candidate_edge_limit").GetInt32());
+            Assert.Equal("bounded_candidate_edges", json.GetProperty("cycle_detection_mode").GetString());
+
+            var (textExitCode, textStdout, textStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", dbPath, "--cycles", "--limit", "1", "--lang", "csharp"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, textExitCode);
+            Assert.Equal(string.Empty, textStdout);
+            Assert.Contains("No dependency cycles found", textStderr, StringComparison.Ordinal);
+            Assert.Contains("Warning: dependency cycle detection returned partial results", textStderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunDeps_ExcludeTestsFiltersSourceAndTargetEdges_Issue3895()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_exclude_tests_targets");

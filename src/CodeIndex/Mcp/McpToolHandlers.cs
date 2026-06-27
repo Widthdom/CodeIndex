@@ -4839,15 +4839,34 @@ public partial class McpServer
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.GetFileDependencies(limit, lang, pathPatterns, excludePaths, excludeTests, reverse);
-            var cycleCandidates = cyclesOnly
-                ? reader.GetFileDependencies(QueryCommandRunner.GetDependencyCycleGraphLimit(limit), lang, pathPatterns, excludePaths, excludeTests, reverse)
-                : results;
+            var cycleCandidateLimit = QueryCommandRunner.GetDependencyCycleGraphLimit(limit);
+            var cycleCandidateRowCount = 0;
+            var results = cyclesOnly
+                ? reader.GetFileDependencyCycleCandidates(
+                    checked(cycleCandidateLimit + 1),
+                    out cycleCandidateRowCount,
+                    lang,
+                    pathPatterns,
+                    excludePaths,
+                    excludeTests,
+                    reverse)
+                : reader.GetFileDependencies(limit, lang, pathPatterns, excludePaths, excludeTests, reverse);
+            var cycleCandidateRowsRead = cyclesOnly ? cycleCandidateRowCount : 0;
+            var cycleCandidates = cyclesOnly ? results.Take(cycleCandidateLimit).ToList() : results;
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
             List<List<string>> cycles = [];
-            var outputEdges = cyclesOnly ? QueryCommandRunner.FilterCycleEdges(cycleCandidates, out cycles).Take(limit).ToList() : results;
+            var outputEdges = cyclesOnly ? QueryCommandRunner.FilterCycleEdges(cycleCandidates, out cycles) : results;
+            var cycleCandidateTruncated = cyclesOnly && cycleCandidateRowsRead > cycleCandidateLimit;
+            var cycleDisplayTruncated = cyclesOnly && cycles.Count > limit;
             if (cyclesOnly)
+            {
                 cycles = cycles.Take(limit).ToList();
+                var cycleNodes = cycles.SelectMany(static cycle => cycle).ToHashSet(StringComparer.Ordinal);
+                outputEdges = outputEdges
+                    .Where(edge => cycleNodes.Count == 0 || (cycleNodes.Contains(edge.SourcePath) && cycleNodes.Contains(edge.TargetPath)))
+                    .Take(limit)
+                    .ToList();
+            }
             var sqlGraphSignalPaths = cyclesOnly
                 ? cycles.Count > 0
                     ? cycles.SelectMany(static cycle => cycle)
@@ -4867,6 +4886,26 @@ public partial class McpServer
                 payload["graph"] = BuildJsonGraphPayload(outputEdges);
             else
                 payload["edges"] = JsonSerializer.SerializeToNode(outputEdges, _jsonOptions);
+            if (cyclesOnly)
+            {
+                payload["truncated"] = cycleCandidateTruncated || cycleDisplayTruncated;
+                var truncatedReason = cycleCandidateTruncated
+                    ? "candidate_edge_limit"
+                    : cycleDisplayTruncated
+                        ? "display_limit"
+                        : null;
+                payload["termination_reason"] = truncatedReason switch
+                {
+                    "candidate_edge_limit" => "candidate_limit_reached",
+                    "display_limit" => "display_limit_reached",
+                    _ => "completed",
+                };
+                if (truncatedReason != null)
+                    payload["truncated_reason"] = truncatedReason;
+                payload["candidate_edge_count"] = Math.Min(cycleCandidateRowsRead, cycleCandidateLimit);
+                payload["candidate_edge_limit"] = cycleCandidateLimit;
+                payload["cycle_detection_mode"] = "bounded_candidate_edges";
+            }
             payload["format"] = format;
             payload["includeGenerated"] = includeGenerated;
             payload["generated_code_filter_supported"] = true;
@@ -4874,7 +4913,7 @@ public partial class McpServer
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
             var summary = payload["count"]!.GetValue<int>() > 0
                 ? cyclesOnly ? $"Found {ConsoleUi.Counted(cycles.Count, "dependency cycle")}." : $"Found {ConsoleUi.Counted(results.Count, "dependency edge")}."
-                : "No file dependencies found.";
+                : cyclesOnly ? "No dependency cycles found." : "No file dependencies found.";
             if (results.Count == 0)
                 AddFreshnessHint(payload, reader);
             adjustments.ApplyTo(payload);
