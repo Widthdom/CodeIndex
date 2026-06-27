@@ -350,12 +350,13 @@ public static partial class SymbolExtractor
         string[] lines,
         List<SymbolRecord> symbols)
     {
-        var classSymbols = symbols
-            .Where(static symbol => symbol.Kind == "class" && symbol.BodyStartLine.HasValue)
-            .ToList();
-
-        foreach (var classSymbol in classSymbols)
+        var initialSymbolCount = symbols.Count;
+        for (var symbolIndex = 0; symbolIndex < initialSymbolCount; symbolIndex++)
         {
+            var classSymbol = symbols[symbolIndex];
+            if (classSymbol.Kind != "class" || !classSymbol.BodyStartLine.HasValue)
+                continue;
+
             var classLineIndex = Math.Max(0, classSymbol.Line - 1);
             var classIndent = CountIndent(lines[classLineIndex]);
             int? memberIndent = null;
@@ -535,7 +536,10 @@ public static partial class SymbolExtractor
         string[] lines,
         List<SymbolRecord> symbols)
     {
-        var seen = new HashSet<string>(symbols.Select(static symbol => $"{symbol.Line}:{symbol.Kind}:{symbol.Name}"), StringComparer.Ordinal);
+        var seen = new HashSet<string>(symbols.Count, StringComparer.Ordinal);
+        foreach (var symbol in symbols)
+            seen.Add($"{symbol.Line}:{symbol.Kind}:{symbol.Name}");
+
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
