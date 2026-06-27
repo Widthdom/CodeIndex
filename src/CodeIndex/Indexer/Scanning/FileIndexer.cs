@@ -851,9 +851,16 @@ public partial class FileIndexer
         }
 
         private static List<PatternToken> FoldAsciiTokens(IReadOnlyList<PatternToken> tokens)
-            => tokens
-                .Select(token => new PatternToken(FoldAsciiChar(token.Value), token.Escaped))
-                .ToList();
+        {
+            var foldedTokens = new List<PatternToken>(tokens.Count);
+            for (var index = 0; index < tokens.Count; index++)
+            {
+                var token = tokens[index];
+                foldedTokens.Add(new PatternToken(FoldAsciiChar(token.Value), token.Escaped));
+            }
+
+            return foldedTokens;
+        }
 
         private static string FoldAscii(string value)
         {
@@ -3142,14 +3149,17 @@ public partial class FileIndexer
         if (!IsPathEqualOrParent(ignoreRuleRoot, projectRoot))
             return [];
 
-        var directories = new Stack<string>();
+        var directories = new List<string>();
         var root = Path.GetFullPath(ignoreRuleRoot);
         var current = Directory.GetParent(Path.GetFullPath(projectRoot));
         while (current != null)
         {
-            directories.Push(current.FullName);
+            directories.Add(current.FullName);
             if (PathsEqual(current.FullName, root))
-                return directories.ToList();
+            {
+                directories.Reverse();
+                return directories;
+            }
 
             current = current.Parent;
         }
