@@ -3206,6 +3206,7 @@ public partial class McpServer
                         AssemblyPath = hook.AssemblyPath,
                         TypeName = hook.TypeName,
                         CallbackBudgetMs = (long)Math.Round(postExtractionHookSnapshot.CallbackBudget.TotalMilliseconds, MidpointRounding.AwayFromZero),
+                        LoadContextLifecycle = PostExtractionHookRunner.HookLoadContextLifecycle,
                     })
                     .ToList();
             }

@@ -1424,6 +1424,8 @@ public class PostExtractionHookStatus
     public string TypeName { get; set; } = string.Empty;
     [JsonPropertyName("callback_budget_ms")]
     public long CallbackBudgetMs { get; set; }
+    [JsonPropertyName("load_context_lifecycle")]
+    public string LoadContextLifecycle { get; set; } = PostExtractionHookRunner.HookLoadContextLifecycle;
 }
 
 public class RepoMapResult

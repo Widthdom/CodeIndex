@@ -131,6 +131,8 @@ public sealed class ExtractorRegistryStatus
     public int ReferenceExtractorCount { get; init; }
     [JsonPropertyName("retained_load_context_count")]
     public int RetainedLoadContextCount { get; init; }
+    [JsonPropertyName("load_context_lifecycle")]
+    public string LoadContextLifecycle { get; init; } = ExtractorPluginRegistry.PluginLoadContextLifecycle;
     [JsonPropertyName("skipped_file_count")]
     public int SkippedFileCount { get; init; }
     [JsonPropertyName("diagnostic_count")]

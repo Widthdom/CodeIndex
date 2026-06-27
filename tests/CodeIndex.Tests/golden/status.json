@@ -109,6 +109,7 @@
     "symbol_extractor_count": 0,
     "reference_extractor_count": 0,
     "retained_load_context_count": 0,
+    "load_context_lifecycle": "collectible_retained_while_extractors_registered",
     "skipped_file_count": 0,
     "diagnostic_count": 0,
     "diagnostic_limit": 20,

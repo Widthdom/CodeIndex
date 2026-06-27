@@ -48,6 +48,7 @@ public sealed class PostExtractionHookRunner : IDisposable
     internal const int MaxDiscoveryLimit = 4096;
     internal const long MaxDiscoveryMaxBytes = 512L * 1024 * 1024;
     internal const int DefaultTypeInspectionLimit = 4096;
+    internal const string HookLoadContextLifecycle = "collectible_unloaded_on_runner_dispose";
 
     private readonly List<LoadedPostExtractionHook> hooks;
     private readonly ConcurrentQueue<PostExtractionHookDiagnostic> diagnostics = new();
