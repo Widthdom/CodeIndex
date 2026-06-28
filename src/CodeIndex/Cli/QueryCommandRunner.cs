@@ -8647,7 +8647,7 @@ public static partial class QueryCommandRunner
                 }
                 else if (options.Json)
                 {
-                    var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "edges", graphTableAvailable: true, degraded: !zeroSqlGraphSignal.Ready, queryOptions: options, extraFields: payload => AddDependencySchemaJsonFields(payload, options, jsonOptions, zeroSqlGraphSignal, zeroSymbolFilter));
+                    var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: options.SummaryOnly ? null : "edges", graphTableAvailable: true, degraded: !zeroSqlGraphSignal.Ready, queryOptions: options, extraFields: payload => AddDependencySchemaJsonFields(payload, options, jsonOptions, zeroSqlGraphSignal, zeroSymbolFilter));
                     if (options.SummaryOnly)
                         payload["summary_only"] = true;
                     var writeExitCode = WriteDepsJsonPayload(payload, options, jsonOptions);
@@ -8707,7 +8707,7 @@ public static partial class QueryCommandRunner
                     var payload = BuildJsonZeroResultPayload(
                         reader,
                         jsonOptions,
-                        resultsKey: "edges",
+                        resultsKey: options.SummaryOnly ? null : "edges",
                         graphTableAvailable: true,
                         degraded: !sqlGraphSignal.Ready,
                         queryOptions: options,
@@ -14589,7 +14589,7 @@ public static partial class QueryCommandRunner
         var payload = BuildJsonZeroResultPayload(
             reader,
             jsonOptions,
-            resultsKey: countOnly ? null : "hotspots",
+            resultsKey: countOnly || queryOptions?.SummaryOnly == true ? null : "hotspots",
             includeFiles: countOnly,
             graphTableAvailable: graphAvailable,
             degraded: !graphAvailable,

@@ -274,7 +274,7 @@ public static partial class QueryCommandRunner
                         var payload = BuildJsonZeroResultPayload(
                             reader,
                             jsonOptions,
-                            resultsKey: "hotspots",
+                            resultsKey: options.SummaryOnly ? null : "hotspots",
                             graphTableAvailable: reader._hasReferencesTable,
                             degraded: !reader._hasReferencesTable || !fileHotspotSignal.Ready,
                             extraFields: payload =>
@@ -457,7 +457,7 @@ public static partial class QueryCommandRunner
                     var payload = BuildJsonZeroResultPayload(
                         reader,
                         jsonOptions,
-                        resultsKey: "hotspots",
+                        resultsKey: options.SummaryOnly ? null : "hotspots",
                         graphTableAvailable: true,
                         degraded: !hotspotSignal.Ready,
                         extraFields: payload =>
