@@ -1,4 +1,6 @@
+using System.Text;
 using System.Text.Encodings.Web;
+using System.Text.Json;
 using CodeIndex.Diagnostics;
 
 namespace CodeIndex.Tests;
@@ -37,6 +39,33 @@ public class LocalJsonlJsonWriterOptionsTests
                 "src/CodeIndex/Mcp/AuditLogSink.cs",
                 "tests/CodeIndex.Tests/LocalJsonlJsonWriterOptionsTests.cs",
             });
+    }
+
+    [Fact]
+    public void Create_PreservesHtmlLikeCharactersWhileKeepingJsonlLineParseable()
+    {
+        const string message = "tail<>&\"' / </script><script>alert(\"x\")</script>\nnext";
+
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer, LocalJsonlJsonWriterOptions.Create()))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("message", message);
+            writer.WriteEndObject();
+        }
+
+        var jsonl = Encoding.UTF8.GetString(buffer.ToArray());
+
+        Assert.Contains("</script><script>", jsonl);
+        Assert.Contains("<>&", jsonl);
+        Assert.DoesNotContain("\\u003C", jsonl);
+        Assert.DoesNotContain("\\u003E", jsonl);
+        Assert.DoesNotContain("\\u0026", jsonl);
+        Assert.DoesNotContain("\n", jsonl);
+        Assert.Contains("\\n", jsonl);
+
+        using var document = JsonDocument.Parse(jsonl);
+        Assert.Equal(message, document.RootElement.GetProperty("message").GetString());
     }
 
     private static void AssertOnlyAllowedFilesContain(
