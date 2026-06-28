@@ -4758,21 +4758,53 @@ public partial class DbReader
     };
 
     public UnusedCountResult CountUnusedSymbolsDetailed(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, string? bucketFilter = null, string? minConfidence = null)
+        => CountUnusedSymbolsDetailedCore(
+            kind,
+            lang,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            visibilityFilters,
+            excludeVisibilityFilters,
+            bucketFilter,
+            minConfidence,
+            resultFilter: null);
+
+    public UnusedCountResult CountUnusedSymbolsDetailedFiltered(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters, string? bucketFilter, string? minConfidence, Func<UnusedSymbolResult, bool> resultFilter)
+    {
+        ArgumentNullException.ThrowIfNull(resultFilter);
+        return CountUnusedSymbolsDetailedCore(
+            kind,
+            lang,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            visibilityFilters,
+            excludeVisibilityFilters,
+            bucketFilter,
+            minConfidence,
+            resultFilter);
+    }
+
+    private UnusedCountResult CountUnusedSymbolsDetailedCore(string? kind, string? lang,
+        IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests,
+        IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters,
+        string? bucketFilter, string? minConfidence, Func<UnusedSymbolResult, bool>? resultFilter)
     {
         if (!_hasReferencesTable)
             return EmptyUnusedCountResult();
         if (lang != null && !ReferenceExtractor.SupportsLanguage(lang))
             return EmptyUnusedCountResult();
         if (!ScopeMayIncludeSqlSymbols(kind, lang, pathPatterns, excludePathPatterns, excludeTests))
-            return CountUnusedSymbolsDetailedWithoutSqlResolver(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters, bucketFilter, minConfidence);
+            return CountUnusedSymbolsDetailedWithoutSqlResolver(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters, bucketFilter, minConfidence, resultFilter);
 
-        return CountUnusedSymbolsDetailedWithSqlResolver(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters, bucketFilter, minConfidence);
+        return CountUnusedSymbolsDetailedWithSqlResolver(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters, bucketFilter, minConfidence, resultFilter);
     }
 
     private UnusedCountResult CountUnusedSymbolsDetailedWithSqlResolver(string? kind, string? lang,
         IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests,
         IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters,
-        string? bucketFilter, string? minConfidence)
+        string? bucketFilter, string? minConfidence, Func<UnusedSymbolResult, bool>? resultFilter)
     {
         var count = 0;
         var paths = new HashSet<string>(StringComparer.Ordinal);
@@ -4796,6 +4828,8 @@ public partial class DbReader
                 {
                     if (!MatchesUnusedFilters(result, bucketFilter, minConfidence))
                         continue;
+                    if (resultFilter != null && !resultFilter(result))
+                        continue;
 
                     AddUnusedCountResult(result, paths, bucketCounts, confidenceCounts, contractDomainCounts, ref count, ref includesSql);
                 }
@@ -4811,7 +4845,7 @@ public partial class DbReader
     private UnusedCountResult CountUnusedSymbolsDetailedWithoutSqlResolver(string? kind, string? lang,
         IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests,
         IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters,
-        string? bucketFilter, string? minConfidence)
+        string? bucketFilter, string? minConfidence, Func<UnusedSymbolResult, bool>? resultFilter)
     {
         var count = 0;
         var paths = new HashSet<string>(StringComparer.Ordinal);
@@ -4839,6 +4873,8 @@ public partial class DbReader
 
                     var result = CreateUnusedSymbolResult(candidate);
                     if (!MatchesUnusedFilters(result, bucketFilter, minConfidence))
+                        continue;
+                    if (resultFilter != null && !resultFilter(result))
                         continue;
 
                     AddUnusedCountResult(result, paths, bucketCounts, confidenceCounts, contractDomainCounts, ref count, ref includesSql);
@@ -5060,7 +5096,8 @@ public partial class DbReader
             visibilityFilters,
             excludeVisibilityFilters,
             bucketFilter,
-            minConfidence));
+            minConfidence,
+            resultFilter: null));
     }
 
     private QueryCountResult CountFilteredUnusedSymbolsWithoutSqlResolver(string? kind, string? lang,
@@ -5077,7 +5114,8 @@ public partial class DbReader
             visibilityFilters,
             excludeVisibilityFilters,
             bucketFilter,
-            minConfidence));
+            minConfidence,
+            resultFilter: null));
     }
 
     private QueryCountResult CountUnusedSymbolsWithoutSqlResolver(string? kind, string? lang,
