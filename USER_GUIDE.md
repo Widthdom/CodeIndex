@@ -1553,7 +1553,7 @@ same source location.
 | `--since <datetime>` | `search`, `definition`, `symbols`, `files` | Filter to files modified since this ISO 8601 timestamp. Offsetless values (e.g. `2024-01-01T00:00:00`) are treated as UTC so the same flag resolves to the same instant in every timezone; append `Z` or an explicit offset (`+09:00`) to be explicit. |
 | `--no-dedup` | `search` | Disable overlapping-chunk deduplication and return every raw chunk hit; useful for debugging chunk boundaries or measuring raw match density |
 | `--reverse` | `deps` | Reverse lookup: show files that depend ON the matched path |
-| `--cycles` | `deps` | Return dependency cycles from a bounded approximate candidate-edge scan. `--limit` controls displayed cycles; cycle detection examines up to `max(--limit, 50)` lightweight candidate edges and JSON reports `truncated`, `termination_reason`, `truncated_reason`, `candidate_edge_count`, `candidate_edge_limit`, and `cycle_detection_mode` when results are partial. |
+| `--cycles` | `deps` | Return dependency cycles from a bounded approximate candidate-edge scan. `--limit` controls displayed cycles and the candidate budget (`max(--limit, 50)`). When `truncated_reason` is `candidate_edge_limit`, returned cycles are a bounded sample, not a complete or ranked cycle set. JSON includes `truncated`, `termination_reason`, `truncated_reason`, `candidate_edge_count`, `candidate_edge_limit`, `cycle_detection_mode`, `cycle_result_scope`, `cycle_result_note`, and `next_step_flags`; use suggested flags such as `--limit`, `--suppress-noise`, `--symbol`, `--symbol-family`, or `--path` to expand or narrow the scan. |
 | `--strict-not-found` | Query commands | Return exit code `2` when a valid query produces zero rows. Without this flag, zero-result queries exit `0` and keep their normal empty/zero-result output. |
 | `--top <n>` | Query commands | Alias for `--limit` |
 | `--max-results <n>` | `search` | Alias for `--limit` |
@@ -4217,7 +4217,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--since <datetime>` | `search`, `definition`, `symbols`, `files` | 指定タイムスタンプ以降に変更されたファイルのみ（ISO 8601）。オフセットなしの値（例: `2024-01-01T00:00:00`）は UTC として解釈されるため、どのタイムゾーンから呼び出しても同じ UTC 時点になります。明示したい場合は末尾に `Z` または `+09:00` 等のオフセットを付与してください。 |
 | `--no-dedup` | `search` | overlap chunk の重複排除を無効化し、全 raw chunk hit を返す。chunk 境界の debug や raw match density 計測向け |
 | `--reverse` | `deps` | 逆引き: 指定パスに依存しているファイルを表示 |
-| `--cycles` | `deps` | 上限付きの近似候補 edge scan から依存 cycle を返す。`--limit` は表示する cycle 数を制御し、cycle 検出は最大 `max(--limit, 50)` 件の軽量候補 edge を調べる。結果が部分的な場合、JSON は `truncated`、`termination_reason`、`truncated_reason`、`candidate_edge_count`、`candidate_edge_limit`、`cycle_detection_mode` を返す。 |
+| `--cycles` | `deps` | 上限付きの近似候補 edge scan から依存 cycle を返す。`--limit` は表示する cycle 数と候補 budget（`max(--limit, 50)`）を制御する。`truncated_reason` が `candidate_edge_limit` の場合、返される cycle は上限内のサンプルであり、完全な cycle 集合やランキング済み集合ではない。JSON は `truncated`、`termination_reason`、`truncated_reason`、`candidate_edge_count`、`candidate_edge_limit`、`cycle_detection_mode`、`cycle_result_scope`、`cycle_result_note`、`next_step_flags` を返す。`--limit`、`--suppress-noise`、`--symbol`、`--symbol-family`、`--path` などの候補フラグで scan を広げるか絞り込む。 |
 | `--workspace-db <path>` | `deps` | file dependency query に別の CodeIndex DB を追加する。最大 7 個の distinct な追加 DB（`--db` を含め合計 8 個）まで繰り返し指定でき、JSON edge には同じ相対パスを区別できるよう `source_db` / `target_db` が含まれる。 |
 | `--top <n>` | クエリ系 | `--limit` のエイリアス |
 | `--max-results <n>` | `search` | `--limit` のエイリアス |

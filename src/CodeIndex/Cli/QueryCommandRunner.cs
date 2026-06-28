@@ -29,6 +29,7 @@ public static partial class QueryCommandRunner
     private const int MaxNamedSearchQueryNameLength = 128;
     internal const int DefaultImpactLimit = 50;
     internal const int DefaultDependencyCycleGraphLimit = 50;
+    internal const string DependencyCycleDetectionMode = "bounded_approximate_candidate_edges";
     internal const int MaxWorkspaceDependencyDatabaseCount = 8;
     internal const int MaxWorkspaceDependencyDatabasePairCount = MaxWorkspaceDependencyDatabaseCount * (MaxWorkspaceDependencyDatabaseCount - 1);
     internal const int FindAllCandidateFileLimit = 4096;
@@ -71,11 +72,14 @@ public static partial class QueryCommandRunner
     };
     private static readonly HashSet<string> DependencyNoiseSymbols = new(StringComparer.OrdinalIgnoreCase)
     {
+        "Append",
+        "AppendLine",
         "Array",
         "Console",
         "DateTime",
         "Dictionary",
         "Directory",
+        "Encoding",
         "Enumerable",
         "File",
         "IEnumerable",
@@ -88,6 +92,7 @@ public static partial class QueryCommandRunner
         "String",
         "StringBuilder",
         "Task",
+        "ToString",
         "Write",
         "WriteLine",
     };
@@ -8682,6 +8687,8 @@ public static partial class QueryCommandRunner
                         ? $"; {BuildDependencyCycleTruncationSummary(dependencyCycleAnalysis)}"
                         : string.Empty;
                     CommandErrorWriter.WriteStderr($"({cycles.Count} dependency cycles{truncationNote})");
+                    if (dependencyCycleAnalysis is { Truncated: true })
+                        CommandErrorWriter.WriteStderr(BuildDependencyCycleTruncationWarning(dependencyCycleAnalysis));
                     WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
                     return CommandExitCodes.Success;
                 }
@@ -8868,6 +8875,7 @@ public static partial class QueryCommandRunner
         string? TruncatedReason,
         int CandidateEdgeCount,
         int CandidateEdgeLimit,
+        int DisplayLimit,
         string DetectionMode);
 
     private static DependencyCycleAnalysis AnalyzeDependencyCycles(
@@ -8907,18 +8915,42 @@ public static partial class QueryCommandRunner
             truncatedReason,
             Math.Min(candidateRowCount, candidateEdgeLimit),
             candidateEdgeLimit,
-            "bounded_approximate_candidate_edges");
+            displayLimit,
+            DependencyCycleDetectionMode);
     }
 
     private static void AddDependencyCycleAnalysisJsonFields(JsonObject payload, DependencyCycleAnalysis analysis)
+        => AddDependencyCycleAnalysisJsonFields(
+            payload,
+            analysis.Truncated,
+            analysis.TerminationReason,
+            analysis.TruncatedReason,
+            analysis.CandidateEdgeCount,
+            analysis.CandidateEdgeLimit,
+            analysis.DisplayLimit,
+            analysis.DetectionMode);
+
+    internal static void AddDependencyCycleAnalysisJsonFields(
+        JsonObject payload,
+        bool truncated,
+        string terminationReason,
+        string? truncatedReason,
+        int candidateEdgeCount,
+        int candidateEdgeLimit,
+        int displayLimit,
+        string detectionMode,
+        JsonArray? nextStepFlags = null)
     {
-        payload["truncated"] = analysis.Truncated;
-        payload["termination_reason"] = analysis.TerminationReason;
-        if (analysis.TruncatedReason != null)
-            payload["truncated_reason"] = analysis.TruncatedReason;
-        payload["candidate_edge_count"] = analysis.CandidateEdgeCount;
-        payload["candidate_edge_limit"] = analysis.CandidateEdgeLimit;
-        payload["cycle_detection_mode"] = analysis.DetectionMode;
+        payload["truncated"] = truncated;
+        payload["termination_reason"] = terminationReason;
+        if (truncatedReason != null)
+            payload["truncated_reason"] = truncatedReason;
+        payload["candidate_edge_count"] = candidateEdgeCount;
+        payload["candidate_edge_limit"] = candidateEdgeLimit;
+        payload["cycle_detection_mode"] = detectionMode;
+        payload["cycle_result_scope"] = BuildDependencyCycleResultScope(truncatedReason);
+        payload["cycle_result_note"] = BuildDependencyCycleResultNote(truncatedReason);
+        payload["next_step_flags"] = nextStepFlags ?? BuildDependencyCycleNextStepFlagsJson(truncatedReason, candidateEdgeLimit, displayLimit);
     }
 
     private static string BuildDependencyCycleTruncationSummary(DependencyCycleAnalysis analysis)
@@ -8927,7 +8959,124 @@ public static partial class QueryCommandRunner
             : $"partial: candidate edge limit reached after {analysis.CandidateEdgeCount} candidate edges";
 
     private static string BuildDependencyCycleTruncationWarning(DependencyCycleAnalysis analysis)
-        => $"Warning: dependency cycle detection returned partial results ({BuildDependencyCycleTruncationSummary(analysis)}).";
+    {
+        var nextSteps = BuildDependencyCycleNextStepFlags(
+            analysis.TruncatedReason,
+            analysis.CandidateEdgeLimit,
+            analysis.DisplayLimit);
+        var nextStepsText = nextSteps.Count == 0
+            ? string.Empty
+            : $" Next steps: {string.Join(", ", nextSteps)}.";
+        return "Warning: dependency cycle detection returned partial results "
+               + $"({BuildDependencyCycleTruncationSummary(analysis)}). "
+               + BuildDependencyCycleResultNote(analysis.TruncatedReason)
+               + nextStepsText;
+    }
+
+    private static string BuildDependencyCycleResultScope(string? truncatedReason)
+        => truncatedReason switch
+        {
+            "candidate_edge_limit" => "partial_candidate_edge_sample",
+            "display_limit" => "partial_display_limit",
+            _ => "complete_candidate_edges",
+        };
+
+    private static string BuildDependencyCycleResultNote(string? truncatedReason)
+        => truncatedReason switch
+        {
+            "candidate_edge_limit" => "Candidate edge limit reached before cdidx could prove cycle completeness; returned cycles are a bounded sample, not a complete or ranked cycle set.",
+            "display_limit" => "More cycles were detected than displayed; returned cycles are the first displayed cycles from the bounded candidate scan.",
+            _ => "Cycle detection completed for all candidate edges selected by the current filters.",
+        };
+
+    private static JsonArray BuildDependencyCycleNextStepFlagsJson(
+        string? truncatedReason,
+        int candidateEdgeLimit,
+        int displayLimit)
+        => new(BuildDependencyCycleNextStepFlags(truncatedReason, candidateEdgeLimit, displayLimit)
+            .Select(flag => JsonValue.Create(flag))
+            .ToArray<JsonNode?>());
+
+    internal static JsonArray BuildMcpDependencyCycleNextStepFlagsJson(
+        string? truncatedReason,
+        int candidateEdgeLimit,
+        int displayLimit)
+        => new(BuildMcpDependencyCycleNextStepFlags(truncatedReason, candidateEdgeLimit, displayLimit)
+            .Select(flag => JsonValue.Create(flag))
+            .ToArray<JsonNode?>());
+
+    private static List<string> BuildDependencyCycleNextStepFlags(
+        string? truncatedReason,
+        int candidateEdgeLimit,
+        int displayLimit)
+    {
+        var flags = new List<string>();
+        switch (truncatedReason)
+        {
+            case "candidate_edge_limit":
+                AddHigherLimitFlag(flags, candidateEdgeLimit);
+                flags.Add("--suppress-noise");
+                flags.Add("--symbol <name>");
+                flags.Add("--symbol-family <prefix>");
+                flags.Add("--path <narrower-glob>");
+                break;
+            case "display_limit":
+                AddHigherLimitFlag(flags, displayLimit);
+                flags.Add("--path <narrower-glob>");
+                break;
+        }
+
+        return flags;
+    }
+
+    private static List<string> BuildMcpDependencyCycleNextStepFlags(
+        string? truncatedReason,
+        int candidateEdgeLimit,
+        int displayLimit)
+    {
+        var flags = new List<string>();
+        switch (truncatedReason)
+        {
+            case "candidate_edge_limit":
+                AddHigherLimitArgument(flags, candidateEdgeLimit);
+                flags.Add("path=<narrower-glob>");
+                break;
+            case "display_limit":
+                AddHigherLimitArgument(flags, displayLimit);
+                flags.Add("path=<narrower-glob>");
+                break;
+        }
+
+        return flags;
+    }
+
+    private static void AddHigherLimitFlag(List<string> flags, int currentLimit)
+    {
+        var nextLimit = GetHigherDependencyCycleLimit(currentLimit);
+        if (nextLimit > currentLimit)
+            flags.Add($"--limit {nextLimit}");
+    }
+
+    private static void AddHigherLimitArgument(List<string> flags, int currentLimit)
+    {
+        var nextLimit = GetHigherDependencyCycleLimit(currentLimit);
+        if (nextLimit > currentLimit)
+            flags.Add($"limit={nextLimit}");
+    }
+
+    private static int GetHigherDependencyCycleLimit(int currentLimit)
+    {
+        var upperBound = NumericFlagUpperBounds.TryGetValue("--limit", out var maxLimit)
+            ? maxLimit
+            : int.MaxValue;
+        if (currentLimit >= upperBound)
+            return upperBound;
+
+        var doubled = currentLimit > upperBound / 2
+            ? upperBound
+            : currentLimit * 2;
+        return Math.Min(upperBound, Math.Max(currentLimit + 1, doubled));
+    }
 
     private static DependencySymbolFilterResult ApplyDependencySymbolFilters(IReadOnlyList<FileDependencyResult> edges, QueryCommandOptions options)
     {

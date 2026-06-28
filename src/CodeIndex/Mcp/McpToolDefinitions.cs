@@ -386,7 +386,7 @@ public partial class McpServer
                         ["includeGenerated"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include dependency edges whose source or target file is detected as generated code. Defaults to false, matching other query tools.", ["default"] = false },
                         ["reverse"] = new JsonObject { ["type"] = "boolean", ["description"] = "Reverse lookup: show files that depend ON the matched path", ["default"] = false },
                         ["format"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "edgelist", "json-graph" }, ["description"] = "Structured response format. `edgelist` preserves the existing edges array; `json-graph` returns nodes and edges.", ["default"] = "edgelist" },
-                        ["cycles"] = new JsonObject { ["type"] = "boolean", ["description"] = "Return dependency cycles instead of ordinary edge rows.", ["default"] = false }
+                        ["cycles"] = new JsonObject { ["type"] = "boolean", ["description"] = "Return dependency cycles instead of ordinary edge rows. Cycle results come from a bounded candidate-edge scan; inspect `cycle_result_scope`, `cycle_result_note`, and MCP-argument-style `next_step_flags` such as `limit=120` when `truncated` is true. / 通常の edge 行ではなく依存 cycle を返す。cycle 結果は上限付きの候補 edge scan から得られるため、`truncated` が true の場合は `cycle_result_scope`、`cycle_result_note`、`limit=120` など MCP 引数形式の `next_step_flags` を確認する。", ["default"] = false }
                     }
                 },
                 ReadOnlyAnnotations()),

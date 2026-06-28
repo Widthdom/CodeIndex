@@ -4858,23 +4858,30 @@ public partial class McpServer
                 payload["edges"] = JsonSerializer.SerializeToNode(outputEdges, _jsonOptions);
             if (cyclesOnly)
             {
-                payload["truncated"] = cycleCandidateTruncated || cycleDisplayTruncated;
                 var truncatedReason = cycleCandidateTruncated
                     ? "candidate_edge_limit"
                     : cycleDisplayTruncated
                         ? "display_limit"
                         : null;
-                payload["termination_reason"] = truncatedReason switch
+                var terminationReason = truncatedReason switch
                 {
                     "candidate_edge_limit" => "candidate_limit_reached",
                     "display_limit" => "display_limit_reached",
                     _ => "completed",
                 };
-                if (truncatedReason != null)
-                    payload["truncated_reason"] = truncatedReason;
-                payload["candidate_edge_count"] = Math.Min(cycleCandidateRowsRead, cycleCandidateLimit);
-                payload["candidate_edge_limit"] = cycleCandidateLimit;
-                payload["cycle_detection_mode"] = "bounded_approximate_candidate_edges";
+                QueryCommandRunner.AddDependencyCycleAnalysisJsonFields(
+                    payload,
+                    cycleCandidateTruncated || cycleDisplayTruncated,
+                    terminationReason,
+                    truncatedReason,
+                    Math.Min(cycleCandidateRowsRead, cycleCandidateLimit),
+                    cycleCandidateLimit,
+                    limit,
+                    QueryCommandRunner.DependencyCycleDetectionMode,
+                    QueryCommandRunner.BuildMcpDependencyCycleNextStepFlagsJson(
+                        truncatedReason,
+                        cycleCandidateLimit,
+                        limit));
             }
             payload["format"] = format;
             payload["includeGenerated"] = includeGenerated;
