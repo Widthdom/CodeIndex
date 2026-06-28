@@ -73,7 +73,7 @@ paths among the largest function-level hotspots.
 This PR makes mechanical ownership moves for language-specific helpers: the
 JS/TS styled-factory candidate gate now lives in
 `SymbolExtractor.JavaScriptTypeScriptStyledFactory.cs`, and CSS/Sass scanner
-helpers live in `SymbolExtractor.Css.cs` instead of the shared
+helpers live in `SymbolExtractor.CssScanner.cs` instead of the shared
 `SymbolExtractor.cs` core. The extraction semantics remain unchanged; the goal
 is to move language-specific paths behind focused partials before larger
 extractor splits.
@@ -201,7 +201,7 @@ helper path が関数単位の大きな hotspot に含まれています。
 この PR では言語固有 helper の mechanical な ownership move を行います。JS/TS の
 styled-factory candidate gate を `SymbolExtractor.JavaScriptTypeScriptStyledFactory.cs`
 へ移し、CSS/Sass scanner helper を共有 `SymbolExtractor.cs` core ではなく
-`SymbolExtractor.Css.cs` に置きました。抽出 semantics は変更せず、今後の大きな
+`SymbolExtractor.CssScanner.cs` に置きました。抽出 semantics は変更せず、今後の大きな
 extractor split の前に、言語固有 path を focused partial の背後へ移すことが目的です。
 
 ## 分割順序
