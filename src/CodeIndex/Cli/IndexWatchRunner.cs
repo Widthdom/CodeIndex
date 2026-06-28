@@ -807,16 +807,17 @@ internal sealed class FileChangeBatcher
 
     private readonly object _gate = new();
     private readonly HashSet<string> _pending;
-    private DateTime _lastEventUtc = DateTime.MinValue;
+    private long _lastEventTimestamp;
+    private bool _hasLastEventTimestamp;
     private bool _overflowRequested;
     private string? _overflowReason;
     private readonly TimeSpan _debounce;
-    private readonly Func<DateTime> _clock;
+    private readonly TimeProvider _timeProvider;
     private readonly int _maxPendingPaths;
 
     public FileChangeBatcher(
         TimeSpan debounce,
-        Func<DateTime>? clock = null,
+        TimeProvider? timeProvider = null,
         bool ignoreCase = true,
         int maxPendingPaths = DefaultMaxPendingPaths)
     {
@@ -824,7 +825,7 @@ internal sealed class FileChangeBatcher
             throw new ArgumentOutOfRangeException(nameof(maxPendingPaths), "Maximum pending path count must be positive.");
 
         _debounce = debounce;
-        _clock = clock ?? (() => DateTime.UtcNow);
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _maxPendingPaths = maxPendingPaths;
         // On case-sensitive filesystems (Linux ext4), `foo.py` and `Foo.py` are distinct files,
         // so coalescing them via OrdinalIgnoreCase would drop one rename leg and leave the
@@ -840,7 +841,7 @@ internal sealed class FileChangeBatcher
         {
             if (_overflowRequested)
             {
-                _lastEventUtc = _clock();
+                RecordEventTimestampLocked();
                 return;
             }
 
@@ -856,7 +857,7 @@ internal sealed class FileChangeBatcher
                 _pending.Add(path);
             }
 
-            _lastEventUtc = _clock();
+            RecordEventTimestampLocked();
         }
     }
 
@@ -880,7 +881,7 @@ internal sealed class FileChangeBatcher
                 return false;
             }
 
-            if (_clock() - _lastEventUtc < _debounce)
+            if (_hasLastEventTimestamp && _timeProvider.GetElapsedTime(_lastEventTimestamp) < _debounce)
             {
                 batch = Array.Empty<string>();
                 fullRescan = false;
@@ -907,6 +908,12 @@ internal sealed class FileChangeBatcher
         _overflowRequested = true;
         if (!string.IsNullOrEmpty(reason))
             _overflowReason = IndexWatchRunner.FormatWatchDiagnosticText(reason);
-        _lastEventUtc = _clock();
+        RecordEventTimestampLocked();
+    }
+
+    private void RecordEventTimestampLocked()
+    {
+        _lastEventTimestamp = _timeProvider.GetTimestamp();
+        _hasLastEventTimestamp = true;
     }
 }
