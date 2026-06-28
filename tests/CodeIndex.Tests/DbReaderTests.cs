@@ -2571,6 +2571,36 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void AnalyzeFileLine_WithKindAndLanguageFilters_ReturnsSymbolAtLine_Issue4057()
+    {
+        InsertIndexedFile(
+            "src/issue4057/LineLookup.cs",
+            "csharp",
+            """
+            public class LineLookup
+            {
+                public void Outside() { }
+                public void Target()
+                {
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeFileLine(
+            "src/issue4057/LineLookup.cs",
+            line: 5,
+            limit: 5,
+            lang: "csharp",
+            kind: "function");
+
+        var definition = Assert.Single(analysis.Definitions);
+        Assert.Equal("Target", definition.Name);
+        Assert.Equal("function", definition.Kind);
+        Assert.Equal("csharp", definition.Lang);
+        Assert.Equal("src/issue4057/LineLookup.cs", definition.Path);
+    }
+
+    [Fact]
     public void SearchSymbols_CSharpOperatorsConversionsAndIndexersUseNavigableNames()
     {
         InsertIndexedFile("src/csharp_special_names.cs", "csharp",
