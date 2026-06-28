@@ -675,7 +675,12 @@ public static partial class QueryCommandRunner
             if (options.MaxJsonBytes.HasValue
                 && !(options.Json && options.JsonOutputFormat != JsonOutputFormatArray && options.OutputFormat == OutputFormatIssueDrafts)
                 && !(options.Json && options.JsonOutputFormat == JsonOutputFormatNdjson && options.OutputFormat == OutputFormatJson)
-                && !(options.Json && options.CountOnly && options.SummaryOnly))
+                && !(options.Json
+                    && options.CountOnly
+                    && options.SummaryOnly
+                    && options.GroupBy == null
+                    && options.CountBy == null
+                    && options.UniqueBy == null))
             {
                 WriteUsageError(
                     "--max-json-bytes is only supported with NDJSON recipe rows, issue-draft JSON, or summary-only recipe count JSON.",

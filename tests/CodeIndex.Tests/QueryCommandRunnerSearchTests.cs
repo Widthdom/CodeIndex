@@ -2710,6 +2710,14 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.UsageError, capExitCode);
             Assert.Equal(string.Empty, capStdout);
             Assert.Contains("recipe count summary JSON output", capStderr, StringComparison.Ordinal);
+
+            var (aggregationCapExitCode, aggregationCapStdout, aggregationCapStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--format", "count", "--summary-only", "--group-by", "file", "--origin", "code", "--max-json-bytes", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, aggregationCapExitCode);
+            Assert.Equal(string.Empty, aggregationCapStdout);
+            Assert.Contains("--max-json-bytes is only supported with NDJSON recipe rows, issue-draft JSON, or summary-only recipe count JSON.", aggregationCapStderr, StringComparison.Ordinal);
         }
         finally
         {
