@@ -33,8 +33,8 @@ public class IndexWatchRunnerTests
     [Fact]
     public void FileChangeBatcher_TryDrain_BeforeDebounceElapsed_ReturnsFalse()
     {
-        var now = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        var batcher = new FileChangeBatcher(TimeSpan.FromMilliseconds(500), () => now);
+        var timeProvider = new ManualTimeProvider();
+        var batcher = new FileChangeBatcher(TimeSpan.FromMilliseconds(500), timeProvider);
         batcher.Add("/repo/a.py");
         // Less than the debounce window has elapsed.
         Assert.False(batcher.TryDrain(out var batch, out var rescan, out _));
@@ -45,16 +45,15 @@ public class IndexWatchRunnerTests
     [Fact]
     public void FileChangeBatcher_TryDrain_AfterDebounceElapsed_ReturnsBatchOnce()
     {
-        var clock = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        DateTime Clock() => clock;
-        var batcher = new FileChangeBatcher(TimeSpan.FromMilliseconds(500), Clock);
+        var timeProvider = new ManualTimeProvider();
+        var batcher = new FileChangeBatcher(TimeSpan.FromMilliseconds(500), timeProvider);
 
         batcher.Add("/repo/a.py");
         batcher.Add("/repo/b.py");
         // Coalesce duplicates regardless of casing on case-insensitive filesystems.
         batcher.Add("/repo/A.py");
 
-        clock = clock.AddMilliseconds(600);
+        timeProvider.Advance(TimeSpan.FromMilliseconds(600));
         Assert.True(batcher.TryDrain(out var batch, out var rescan, out _));
         Assert.False(rescan);
         Assert.Equal(2, batch.Count);
@@ -70,14 +69,13 @@ public class IndexWatchRunnerTests
         // files; a rename event arrives as Add("foo.py") + Add("Foo.py") and BOTH must be
         // surfaced so the sub-update can purge the old name and index the new one.
         // 大小区別 FS では rename の old/new を別エントリで保持する必要がある。
-        var clock = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        DateTime Clock() => clock;
-        var batcher = new FileChangeBatcher(TimeSpan.FromMilliseconds(500), Clock, ignoreCase: false);
+        var timeProvider = new ManualTimeProvider();
+        var batcher = new FileChangeBatcher(TimeSpan.FromMilliseconds(500), timeProvider, ignoreCase: false);
 
         batcher.Add("/repo/foo.py");
         batcher.Add("/repo/Foo.py");
 
-        clock = clock.AddMilliseconds(600);
+        timeProvider.Advance(TimeSpan.FromMilliseconds(600));
         Assert.True(batcher.TryDrain(out var batch, out _, out _));
         Assert.Equal(2, batch.Count);
         Assert.Contains("/repo/foo.py", batch);
@@ -87,12 +85,12 @@ public class IndexWatchRunnerTests
     [Fact]
     public void FileChangeBatcher_RequestFullRescan_DrainsOverflowAndReason()
     {
-        var clock = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        var batcher = new FileChangeBatcher(TimeSpan.FromMilliseconds(100), () => clock);
+        var timeProvider = new ManualTimeProvider();
+        var batcher = new FileChangeBatcher(TimeSpan.FromMilliseconds(100), timeProvider);
         batcher.Add("/repo/a.py");
         batcher.RequestFullRescan("buffer overflowed");
 
-        clock = clock.AddMilliseconds(200);
+        timeProvider.Advance(TimeSpan.FromMilliseconds(200));
         Assert.True(batcher.TryDrain(out var batch, out var rescan, out var reason));
         Assert.True(rescan);
         Assert.Equal("buffer overflowed", reason);
@@ -102,8 +100,8 @@ public class IndexWatchRunnerTests
     [Fact]
     public void FileChangeBatcher_RequestFullRescan_SanitizesAndBoundsReason_Issue3804()
     {
-        var clock = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        var batcher = new FileChangeBatcher(TimeSpan.FromMilliseconds(100), () => clock);
+        var timeProvider = new ManualTimeProvider();
+        var batcher = new FileChangeBatcher(TimeSpan.FromMilliseconds(100), timeProvider);
         var rawReason = "watch failed for /Users/alice/private/project/secret.txt token=ghp_"
             + new string('a', 40)
             + " "
@@ -111,7 +109,7 @@ public class IndexWatchRunnerTests
 
         batcher.RequestFullRescan(rawReason);
 
-        clock = clock.AddMilliseconds(200);
+        timeProvider.Advance(TimeSpan.FromMilliseconds(200));
         Assert.True(batcher.TryDrain(out _, out var rescan, out var reason));
         Assert.True(rescan);
         Assert.NotNull(reason);
@@ -155,10 +153,10 @@ public class IndexWatchRunnerTests
     [Fact]
     public void FileChangeBatcher_Add_WhenPendingPathLimitExceeded_CollapsesToFullRescan()
     {
-        var clock = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var timeProvider = new ManualTimeProvider();
         var batcher = new FileChangeBatcher(
             TimeSpan.FromMilliseconds(100),
-            () => clock,
+            timeProvider,
             maxPendingPaths: 2);
 
         batcher.Add("/repo/a.py");
@@ -166,7 +164,7 @@ public class IndexWatchRunnerTests
         batcher.Add("/repo/c.py");
         batcher.Add("/repo/d.py");
 
-        clock = clock.AddMilliseconds(200);
+        timeProvider.Advance(TimeSpan.FromMilliseconds(200));
         Assert.True(batcher.TryDrain(out var batch, out var rescan, out var reason));
         Assert.True(rescan);
         Assert.Empty(batch);
@@ -177,23 +175,38 @@ public class IndexWatchRunnerTests
     [Fact]
     public void FileChangeBatcher_NewEventDuringWait_ExtendsDebounce()
     {
-        var clock = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        var batcher = new FileChangeBatcher(TimeSpan.FromMilliseconds(500), () => clock);
+        var timeProvider = new ManualTimeProvider();
+        var batcher = new FileChangeBatcher(TimeSpan.FromMilliseconds(500), timeProvider);
         batcher.Add("/repo/a.py");
 
-        clock = clock.AddMilliseconds(400);
+        timeProvider.Advance(TimeSpan.FromMilliseconds(400));
         // A new event before the window closes resets the timer.
         batcher.Add("/repo/b.py");
         Assert.False(batcher.TryDrain(out _, out _, out _));
 
-        clock = clock.AddMilliseconds(400);
+        timeProvider.Advance(TimeSpan.FromMilliseconds(400));
         // 400ms after the second event is still < 500ms; not ready yet.
         Assert.False(batcher.TryDrain(out _, out _, out _));
 
-        clock = clock.AddMilliseconds(200);
+        timeProvider.Advance(TimeSpan.FromMilliseconds(200));
         // Now > 500ms after the second event.
         Assert.True(batcher.TryDrain(out var batch, out _, out _));
         Assert.Equal(2, batch.Count);
+    }
+
+    [Fact]
+    public void FileChangeBatcher_TryDrain_UsesMonotonicElapsedTime_Issue4129()
+    {
+        var timeProvider = new ManualTimeProvider();
+        var batcher = new FileChangeBatcher(TimeSpan.FromMilliseconds(500), timeProvider);
+        batcher.Add("/repo/a.py");
+
+        timeProvider.AdjustUtc(TimeSpan.FromHours(-1));
+        timeProvider.Advance(TimeSpan.FromMilliseconds(600));
+
+        Assert.True(batcher.TryDrain(out var batch, out var rescan, out _));
+        Assert.False(rescan);
+        Assert.Equal(["/repo/a.py"], batch);
     }
 
     [Fact]
@@ -915,6 +928,32 @@ public class IndexWatchRunnerTests
 
         var mode = File.GetUnixFileMode(path) & DataDirectorySecurity.PermissionBits;
         Assert.Equal(DataDirectorySecurity.PrivateFileMode, mode);
+    }
+
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private DateTimeOffset utcNow = new(2025, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        private long timestamp;
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public override DateTimeOffset GetUtcNow() => utcNow;
+
+        public override long GetTimestamp() => timestamp;
+
+        internal void Advance(TimeSpan elapsed)
+        {
+            if (elapsed < TimeSpan.Zero)
+                throw new ArgumentOutOfRangeException(nameof(elapsed), elapsed, "Elapsed time must be non-negative.");
+
+            utcNow += elapsed;
+            timestamp += elapsed.Ticks;
+        }
+
+        internal void AdjustUtc(TimeSpan offset)
+        {
+            utcNow += offset;
+        }
     }
 
     private sealed class SignalingStringWriter : StringWriter
