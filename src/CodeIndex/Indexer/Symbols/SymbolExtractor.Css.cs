@@ -447,66 +447,195 @@ public static partial class SymbolExtractor
         && pattern.Kind == "class"
         && !matchLine.TrimStart().StartsWith('@');
 
-    // Reject JS/TS HOC candidate matches whose captured RHS uses the bare `styled.`
-    // or `styled(` forms without a tagged-template backtick on the same statement.
-    // The HOC regex accepts `styled[.(` `]` as the first post-identifier token so
-    // the real tagged-template bindings (`styled.div\`...\``, `styled(Box)\`...\``)
-    // still match, but it also lets through the factory-capture and plain-call
-    // shapes (`const F = styled.div;`, `const F = styled(Box);`) which do not
-    // declare a rendered component and must not be surfaced as function symbols.
-    // The gate reads the raw (unmasked) source because
-    // StructuralLineMasker.MaskJsTsTemplateLiteralContents replaces template
-    // delimiters with space, so the masked line cannot distinguish the shapes.
-    // The backtick scan is statement-local: only characters between the match end
-    // and the next `;` (or next statement) are inspected, so an unrelated template
-    // literal on another statement does not reopen the gate. The scanner is also
-    // multi-line aware — Prettier-style styled bindings place the backtick on the
-    // line after `styled.div` / `styled(Component)`, so the scan walks forward
-    // across raw lines while carrying block-comment state, bounded to a short
-    // lookahead window. A line that starts with a JS/TS statement-starter keyword
-    // (`const`, `let`, `var`, `function`, `class`, `return`, `import`, etc.)
-    // terminates the scan to model implicit ASI: `const X = styled.div\nconst Y =
-    // 5;` must stay rejected even though no `;` appears on the `styled.div` line.
-    // The scanner also understands line comments (`//`), block comments
-    // (`/* ... */`), and plain string literals (`'...'`, `"..."`), so a backtick
-    // that only lives inside a comment or string does not keep a non-template
-    // binding alive, and a `;` that only lives inside a comment does not fence
-    // a real backtick off from a subsequent tagged template on the same
-    // statement. Closes #240 follow-up (codex review #5, #7, #8, and #9 blockers).
-    // JS/TS 行における HOC 候補のうち、`styled.` / `styled(` を素のまま使い、同じ文内に
-    // タグ付きテンプレートのバッククォートを持たない形（`const F = styled.div;`、
-    // `const F = styled(Box);`）を弾く。HOC regex は識別子直後の `styled[.(`、`]`
-    // を受け付けるためタグ付きテンプレート形（`styled.div\`...\``、`styled(Box)\`...\``）
-    // はマッチさせつつ、factory 捕捉 / 素の呼び出し形も通過させてしまう。これらは
-    // コンポーネントを生成しないため function シンボルとして surface してはいけない。
-    // ゲートは raw 行（マスク前）を参照する — `StructuralLineMasker.MaskJsTsTemplateLiteralContents`
-    // がテンプレート区切りを空白にマスクするため、マスク後では形状を区別できないのが理由。
-    // バッククォート探索は文ローカル（match 終端から次の `;` または次の文まで）に限定し、
-    // 別の文として配置された無関係なテンプレートリテラルでゲートを誤って解除しない。
-    // さらに Prettier 整形のように `styled.div` / `styled(Component)` の次行にバッククォートを
-    // 置くケースへ対応するため、スキャナはブロックコメント状態を引き継ぎつつ複数行を前方走査する
-    // （行数上限付き）。継続行の最初の実トークンがタグ付きテンプレートの継続として妥当な
-    // 文字（バッククォート・`.`・`<`）でない場合は ASI による文終端として走査を打ち切る。
-    // これにより `const X = styled.div\nfoo(\`...\`)` や `const X = styled.div\nawait foo(\`...\`)`
-    // のような「次行が式文」のケースでも phantom `function` シンボルを出さない。さらに
-    // `const X = styled.div\nconst Y = 5;` のような「次行が宣言文」のケースも引き続き除外される。
-    // 加えて行コメント（`//`）・ブロックコメント（`/* ... */`）・通常の文字列リテラル
-    // （`'...'` / `"..."`）を構文として理解し、コメントや文字列内のバッククォートが非テンプレート
-    // 束縛を延命させたり、コメント内の `;` が同一文内の本物のバッククォートより先に文終端として
-    // 扱われて実タグ付きテンプレートを落とすことを防ぐ。
-    // Closes #240 follow-up（codex レビュー #5・#7・#8・#9・#10・#13 の blocker 対応）。
-    // The lookahead window is intentionally generous — Prettier-formatted
-    // styled bindings with long `.attrs((props) => ({ ... }))` argument
-    // objects routinely span more than ten lines before the backtick, and
-    // truncating the scan would silently drop the binding's `function`
-    // symbol. 32 lines is large enough for realistic shapes while still
-    // keeping the cost bounded per match.
-    // lookahead window は意図的に広めに取る — Prettier 整形で
-    // `.attrs((props) => ({ ... }))` の引数オブジェクトを持つ styled 束縛は
-    // 10 行を超えてからバッククォートに到達することが珍しくなく、走査を
-    // 短く打ち切ると binding の `function` シンボルを silently 落としてしまう。
-    // 32 行あれば実運用で見られる形は概ねカバーでき、1 マッチあたりの
-    // コストも有限に保てる。
-    private const int JsTsStyledFactoryGateMaxLookaheadLines = 32;
+    private static string[] MaskSassStylusBlockCommentLines(string language, string[] originalLines)
+    {
+        var maskedLines = new string[originalLines.Length];
+        if (language == "sass")
+        {
+            var state = new CssReferenceExtractor.SassLoudCommentState();
+            for (var i = 0; i < originalLines.Length; i++)
+                maskedLines[i] = CssReferenceExtractor.MaskSassBlockCommentLine(originalLines[i], state);
+            return maskedLines;
+        }
+
+        var inBlockComment = false;
+        for (var i = 0; i < originalLines.Length; i++)
+            maskedLines[i] = CssReferenceExtractor.MaskSassStylusBlockCommentLine(originalLines[i], ref inBlockComment);
+        return maskedLines;
+    }
+
+    private static bool[] FindCssQualifiedRuleAncestors(string[] lines)
+    {
+        var ancestors = new bool[lines.Length];
+        var contexts = new Stack<CssContextKind>();
+
+        for (int lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+        {
+            ancestors[lineIndex] = contexts.Contains(CssContextKind.QualifiedRule);
+            var line = lines[lineIndex];
+            var segmentStart = 0;
+            for (int cursor = 0; cursor < line.Length; cursor++)
+            {
+                var ch = line[cursor];
+                if (ch == '{')
+                {
+                    var segment = line[segmentStart..cursor].Trim();
+                    var contextKind = segment.StartsWith("@", StringComparison.Ordinal)
+                        ? CssContextKind.GroupingAtRule
+                        : CssContextKind.QualifiedRule;
+                    contexts.Push(contextKind);
+                    segmentStart = cursor + 1;
+                }
+                else if (ch == '}' && contexts.Count > 0)
+                {
+                    contexts.Pop();
+                    segmentStart = cursor + 1;
+                }
+                else if (ch == ';')
+                {
+                    segmentStart = cursor + 1;
+                }
+            }
+        }
+
+        return ancestors;
+    }
+
+    private static string[] MaskCssScannerLines(string[] originalLines)
+    {
+        var maskedLines = new string[originalLines.Length];
+        var inBlockComment = false;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var inUrlToken = false;
+        var urlParenDepth = 0;
+
+        for (int lineIndex = 0; lineIndex < originalLines.Length; lineIndex++)
+        {
+            var line = originalLines[lineIndex];
+            var chars = line.ToCharArray();
+            for (int i = 0; i < chars.Length; i++)
+            {
+                if (inBlockComment)
+                {
+                    chars[i] = ' ';
+                    if (i + 1 < chars.Length && line[i] == '*' && line[i + 1] == '/')
+                    {
+                        chars[i + 1] = ' ';
+                        inBlockComment = false;
+                        i++;
+                    }
+
+                    continue;
+                }
+
+                if (!inSingleQuote && !inDoubleQuote && i + 1 < chars.Length && line[i] == '/' && line[i + 1] == '*')
+                {
+                    chars[i] = ' ';
+                    chars[i + 1] = ' ';
+                    inBlockComment = true;
+                    i++;
+                    continue;
+                }
+
+                if (inUrlToken)
+                {
+                    chars[i] = ' ';
+
+                    if (line[i] == '"' && !inSingleQuote)
+                    {
+                        inDoubleQuote = !inDoubleQuote;
+                        continue;
+                    }
+
+                    if (line[i] == '\'' && !inDoubleQuote)
+                    {
+                        inSingleQuote = !inSingleQuote;
+                        continue;
+                    }
+
+                    if ((inSingleQuote || inDoubleQuote) && line[i] == '\\' && i + 1 < chars.Length)
+                    {
+                        chars[i + 1] = ' ';
+                        i++;
+                        continue;
+                    }
+
+                    if (!inSingleQuote && !inDoubleQuote)
+                    {
+                        if (line[i] == '(')
+                            urlParenDepth++;
+                        else if (line[i] == ')')
+                        {
+                            urlParenDepth--;
+                            if (urlParenDepth <= 0)
+                            {
+                                inUrlToken = false;
+                                urlParenDepth = 0;
+                            }
+                        }
+                    }
+
+                    continue;
+                }
+
+                if (!inSingleQuote
+                    && !inDoubleQuote
+                    && !inUrlToken
+                    && i + 3 < chars.Length
+                    && (line[i] == 'u' || line[i] == 'U')
+                    && (line[i + 1] == 'r' || line[i + 1] == 'R')
+                    && (line[i + 2] == 'l' || line[i + 2] == 'L')
+                    && line[i + 3] == '(')
+                {
+                    chars[i] = ' ';
+                    chars[i + 1] = ' ';
+                    chars[i + 2] = ' ';
+                    chars[i + 3] = ' ';
+                    inUrlToken = true;
+                    urlParenDepth = 1;
+                    i += 3;
+                    continue;
+                }
+
+                if (!inSingleQuote && !inDoubleQuote && !inUrlToken && i + 1 < chars.Length && line[i] == '/' && line[i + 1] == '/')
+                {
+                    for (int j = i; j < chars.Length; j++)
+                        chars[j] = ' ';
+
+                    break;
+                }
+
+                if ((inSingleQuote || inDoubleQuote) && line[i] == '\\' && i + 1 < chars.Length)
+                {
+                    chars[i] = ' ';
+                    chars[i + 1] = ' ';
+                    i++;
+                    continue;
+                }
+
+                if (line[i] == '"' && !inSingleQuote)
+                {
+                    chars[i] = ' ';
+                    inDoubleQuote = !inDoubleQuote;
+                    continue;
+                }
+
+                if (line[i] == '\'' && !inDoubleQuote)
+                {
+                    chars[i] = ' ';
+                    inSingleQuote = !inSingleQuote;
+                    continue;
+                }
+
+                if (inSingleQuote || inDoubleQuote)
+                    chars[i] = ' ';
+            }
+
+            maskedLines[lineIndex] = new string(chars);
+        }
+
+        return maskedLines;
+    }
 
 }
