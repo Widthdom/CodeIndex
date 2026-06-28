@@ -152,7 +152,7 @@ internal static class CdidxConfigFile
                 JsonCommentHandling.Skip,
                 allowTrailingCommas: true);
         }
-        catch (JsonException ex)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
             return new LoadResult(Path: path, Error: $"[cdidx] Invalid JSON in {FormatConfigDiagnosticPath(path)}: {FormatConfigExceptionMessage(ex)}");
         }

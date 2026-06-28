@@ -237,7 +237,7 @@ internal sealed class LspServer : IDisposable
         {
             document = BoundedJson.ParseDocument(payload, MaxLspFrameBytes, MaxJsonDepth);
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
             return Error(null, -32700, FormatParseErrorMessage(payload));
         }

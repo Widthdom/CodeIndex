@@ -1260,7 +1260,7 @@ internal static class SearchAuditRecipes
             AddDiagnostic(diagnostics, $"{sourceLabel} does not exist.");
             return false;
         }
-        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException or InvalidOperationException)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException or IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             AddDiagnostic(diagnostics, $"{sourceLabel} could not be loaded ({SafeDiagnosticFormatter.FormatExceptionCategory("recipe_load", ex)}).");
             return false;

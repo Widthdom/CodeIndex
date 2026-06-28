@@ -7421,12 +7421,15 @@ public partial class McpServer
                 return new SuggestionSamplingAttempt(null, BuildSamplingSchemaRejectionDiagnostic());
             return new SuggestionSamplingAttempt(new SuggestionSamplingResult(title, tags is { Length: > 0 } ? tags : null), null);
         }
-        catch (JsonException ex)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
+            var detail = ex is JsonException jsonException
+                ? JsonFrameParser.FormatExceptionDetail(jsonException)
+                : CommandErrorWriter.FormatSanitizedExceptionMessage(ex);
             return new SuggestionSamplingAttempt(
                 null,
                 BuildSamplingRejectionDiagnostic(
-                    $"Sampling response JSON rejected: {JsonFrameParser.FormatExceptionDetail(ex)}."));
+                    $"Sampling response JSON rejected: {detail}."));
         }
     }
 

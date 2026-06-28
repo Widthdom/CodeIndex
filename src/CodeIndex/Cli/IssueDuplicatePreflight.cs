@@ -126,7 +126,7 @@ internal sealed class IssueDuplicatePreflight
             error = $"invalid --open-issues file '{pathForError}' ({InvalidPreflightFileErrorCode}): {SanitizePreflightErrorDetail(ex.Message)}";
             return false;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException or NotSupportedException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException or ArgumentException or NotSupportedException)
         {
             preflight = new IssueDuplicatePreflight(false, null, []);
             error = $"could not read --open-issues file '{pathForError}': {CommandErrorWriter.FormatSanitizedException(ex)}";

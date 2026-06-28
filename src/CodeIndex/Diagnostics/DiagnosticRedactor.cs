@@ -360,7 +360,7 @@ internal static class DiagnosticRedactor
             redacted = Encoding.UTF8.GetString(stream.ToArray());
             return true;
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
             return false;
         }

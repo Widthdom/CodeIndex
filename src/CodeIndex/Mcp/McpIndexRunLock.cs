@@ -113,7 +113,7 @@ internal sealed class McpIndexRunLock : IDisposable
 
             return new HolderInfo(pid, since.ToUniversalTime(), IsProcessStillRunning(pid));
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException or NotSupportedException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException or ArgumentException or NotSupportedException)
         {
             return null;
         }

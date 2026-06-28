@@ -909,7 +909,7 @@ internal static class GitHubIssueReporter
             redactedJson = BoundApiErrorBodyForFormatting(node.ToJsonString());
             return true;
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
             return false;
         }

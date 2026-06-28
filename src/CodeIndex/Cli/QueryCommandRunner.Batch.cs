@@ -212,7 +212,7 @@ public static partial class QueryCommandRunner
             subArgs = values.Skip(1).ToArray();
             return true;
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
             CommandErrorWriter.WriteJsonOrHuman(
                 true,

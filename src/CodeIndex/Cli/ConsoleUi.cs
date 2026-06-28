@@ -821,6 +821,7 @@ public static class ConsoleUi
         catch (Exception ex) when (ex is IOException
             or UnauthorizedAccessException
             or JsonException
+            or InvalidDataException
             or InvalidOperationException)
         {
             return FallbackVersion;

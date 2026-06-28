@@ -81,7 +81,7 @@ public static partial class SymbolExtractor
 
             return symbols;
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
             return ExtractJsonFallbackSymbols(fileId, lines);
         }

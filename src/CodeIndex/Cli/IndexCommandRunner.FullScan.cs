@@ -486,11 +486,11 @@ public static partial class IndexCommandRunner
 
             return new ScanCheckpointLoadResult(directories, WarningMessage: null);
         }
-        catch (JsonException ex)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
             return IgnoredScanCheckpoint(
                 path,
-                $"malformed checkpoint JSON or depth exceeds {MaxScanCheckpointJsonDepth:N0} ({CommandErrorWriter.FormatSanitizedException(ex)})");
+                $"malformed checkpoint JSON, exceeded the JSON byte limit, or depth exceeds {MaxScanCheckpointJsonDepth:N0} ({CommandErrorWriter.FormatSanitizedException(ex)})");
         }
         catch (IOException ex)
         {

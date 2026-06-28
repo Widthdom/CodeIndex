@@ -192,12 +192,12 @@ public static partial class SymbolExtractor
                 JsonCommentHandling.Skip,
                 allowTrailingCommas: true);
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
             ReportTypeScriptPathAliasConfigSkippedWarning(
                 configPath,
                 TypeScriptPathAliasDiagnosticJsonInvalid,
-                $"it could not be parsed as JSON within the {MaxTypeScriptPathAliasConfigJsonDepth}-level depth limit");
+                $"it could not be parsed as JSON within the {MaxTypeScriptPathAliasConfigBytes}-byte size limit and {MaxTypeScriptPathAliasConfigJsonDepth}-level depth limit");
             return null;
         }
         catch

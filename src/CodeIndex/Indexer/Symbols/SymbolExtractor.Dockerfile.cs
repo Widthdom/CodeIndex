@@ -396,7 +396,7 @@ public static partial class SymbolExtractor
                     line);
             }
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
         }
     }
@@ -499,7 +499,7 @@ public static partial class SymbolExtractor
                 },
                 line);
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
         }
     }
@@ -675,7 +675,7 @@ public static partial class SymbolExtractor
 
             return count >= 2 ? last : null;
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
             return null;
         }

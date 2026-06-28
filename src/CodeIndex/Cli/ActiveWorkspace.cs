@@ -60,7 +60,7 @@ internal static class ActiveWorkspace
 
             return state;
         }
-        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
             WriteLoadWarning("state file", DescribeLoadFailure(ex));
             return null;
