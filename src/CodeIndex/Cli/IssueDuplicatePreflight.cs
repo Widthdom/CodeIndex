@@ -675,6 +675,7 @@ internal sealed class IssueDuplicatePreflight
             or OperationCanceledException
             or TimeoutException
             or JsonException
+            or InvalidDataException
             or IOException
             or InvalidOperationException
             or InvalidOpenIssuesFileException
