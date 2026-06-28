@@ -187,7 +187,7 @@ public class AuditLogSinkTests
     [Fact]
     public void SanitizeArgValue_RedactsBearerTokenInNonSecretValue_Issue4134()
     {
-        const string token = "AbCdEfGhIjKlMnOpQrStUvWxYz123456";
+        const string token = "AbCdEfGhIjKlMnOpQrStUvWxYz123456==";
         var state = new AuditLogSink.ArgValueSanitizationState();
 
         var sanitized = AuditLogSink.SanitizeArgValue(

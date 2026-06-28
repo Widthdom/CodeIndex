@@ -49,7 +49,7 @@ internal sealed class AuditLogSink : IDisposable
     private static readonly TimeSpan DisposeWriterTimeout = TimeSpan.FromSeconds(5);
 
     private static readonly Regex SecretValuePattern = new(
-        "(?i)(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|sk-(?:proj-)?[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}|\\bBearer\\s+[A-Za-z0-9._~+/=\\-]{16,}\\b|://[^/\\s:@]+:[^/\\s:@]+@|(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|authorization)=[^&\\s]+)",
+        "(?i)(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|sk-(?:proj-)?[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}|\\bBearer\\s+[A-Za-z0-9._~+/=\\-]{16,}(?=$|[^A-Za-z0-9._~+/=\\-])|://[^/\\s:@]+:[^/\\s:@]+@|(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|authorization)=[^&\\s]+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant,
         RegexTimeoutPolicy.RedactionRegexTimeout);
     private static readonly JsonDocumentOptions ArgValueScalarJsonDocumentOptions = new()
