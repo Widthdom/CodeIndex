@@ -175,6 +175,14 @@ CodeIndex exposes an opt-in `ActivitySource` named `CodeIndex`. MCP JSON-RPC fra
 
 Set `CDIDX_SLOW_QUERY_MS=<milliseconds>` to write slow SQLite command diagnostics to stderr. Query commands also accept `--profile` for a JSON profile block and `--slow-query-ms <milliseconds>` for command-scoped profiling. Slow-query SQL diagnostics are single-line, length-bounded, and redact SQL string/blob/numeric literals before they reach stderr or the global tool log; the logged SQL is intended for operation/shape debugging, not value recovery.
 
+### Resource-Boundary Contracts
+
+| Path | Contract |
+|---|---|
+| Worker protocol JSON | Isolated worker stdin frames are read through `BoundedLineReader`. The default frame cap is 32 MiB for both characters and UTF-8 bytes. When a larger `--max-file-bytes` setting needs JSON-escaping headroom, the protocol frame cap may expand up to `WorkerProtocolLineLimits.MaxExtendedLineUtf8Bytes` (384 MiB), never to `int.MaxValue`. `WorkerProtocolJsonValidator` rejects payloads over the negotiated character/UTF-8 byte cap before `JsonDocument.Parse`, parses with `DefaultMaxJsonDepth` (32), rejects more than 1,000,000 object properties, and rejects strings longer than the frame cap. |
+| User regex find | `find --regex` keeps the classic .NET regex engine for lookaround/backreference compatibility, adds `RegexOptions.CultureInvariant`, adds `IgnoreCase` unless `--exact` is set, and uses `BoundedRegex.DefaultMatchTimeout` per match. Timeouts surface as `E014_REGEX_MATCH_TIMEOUT` / `regex_timeout` in CLI JSON, and human output includes the same recovery hint. `find --all` additionally applies candidate-file and line-scan caps before walking the whole index. |
+| `MaxValue` sentinels | `int.MaxValue` may be used only as an internal sentinel when the next operation clamps before SQL limits, allocation, traversal, payload sizing, or timeout conversion. User-influenced values must be reduced to named practical constants before multiplication, buffer sizing, protocol framing, or query expansion. |
+
 ### Indexing pipeline
 
 ```
@@ -2465,6 +2473,14 @@ listener を入れた場合だけ span が emit されます。
 slow SQLite command diagnostic は `CDIDX_SLOW_QUERY_MS=<milliseconds>` で stderr に出せます。
 query コマンドも JSON profile block 用の `--profile` と command-scoped profiling 用の
 `--slow-query-ms <milliseconds>` を受け付けます。
+
+### リソース境界契約
+
+| 経路 | 契約 |
+|---|---|
+| worker protocol JSON | isolated worker の stdin frame は `BoundedLineReader` で読みます。既定の frame 上限は文字数・UTF-8 byte 数ともに 32 MiB です。大きな `--max-file-bytes` によって JSON escape 分の余裕が必要な場合、protocol frame 上限は `WorkerProtocolLineLimits.MaxExtendedLineUtf8Bytes`（384 MiB）まで拡張できますが、`int.MaxValue` までは拡張しません。`WorkerProtocolJsonValidator` は `JsonDocument.Parse` の前に合意済みの文字数 / UTF-8 byte 上限を超える payload を拒否し、`DefaultMaxJsonDepth`（32）で parse し、object property 1,000,000 件超と frame 上限を超える string を拒否します。 |
+| user regex find | `find --regex` は lookaround / backreference 互換性のため classic .NET regex engine を維持し、`RegexOptions.CultureInvariant` を付け、`--exact` でない場合は `IgnoreCase` も付け、各 match に `BoundedRegex.DefaultMatchTimeout` を使います。timeout は CLI JSON で `E014_REGEX_MATCH_TIMEOUT` / `regex_timeout` として返り、人間向け出力にも同じ recovery hint が出ます。`find --all` は index 全体を走査する前に candidate file と line scan の上限も適用します。 |
+| `MaxValue` sentinel | `int.MaxValue` は、次の操作が SQL limit、allocation、traversal、payload sizing、timeout conversion の前に clamp する場合だけ内部 sentinel として使えます。ユーザー影響値は multiplication、buffer sizing、protocol framing、query expansion の前に、名前付きの実用上限へ落としてください。 |
 
 ### インデックスパイプライン
 
