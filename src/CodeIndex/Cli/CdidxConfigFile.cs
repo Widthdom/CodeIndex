@@ -145,12 +145,12 @@ internal static class CdidxConfigFile
         JsonDocument document;
         try
         {
-            document = JsonDocument.Parse(text, new JsonDocumentOptions
-            {
-                CommentHandling = JsonCommentHandling.Skip,
-                AllowTrailingCommas = true,
-                MaxDepth = MaxConfigJsonDepth,
-            });
+            document = BoundedJson.ParseDocument(
+                text,
+                MaxConfigFileBytes,
+                MaxConfigJsonDepth,
+                JsonCommentHandling.Skip,
+                allowTrailingCommas: true);
         }
         catch (JsonException ex)
         {

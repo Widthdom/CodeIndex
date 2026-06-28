@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using CodeIndex.Diagnostics;
 using CodeIndex.Models;
 using Regex = CodeIndex.Indexer.BoundedRegex;
 
@@ -15,19 +16,18 @@ public static partial class SymbolExtractor
     internal const int StructuredDataMaxPathLength = 1024;
     internal const int StructuredDataMaxSignatureLength = 512;
     internal const int StructuredDataMaxJsonParseChars = 1_000_000;
-
-    private static readonly JsonDocumentOptions StructuredJsonDocumentOptions = new()
-    {
-        AllowTrailingCommas = true,
-        CommentHandling = JsonCommentHandling.Skip,
-        MaxDepth = StructuredDataMaxJsonDepth + 2,
-    };
+    internal const int StructuredDataMaxJsonParseUtf8Bytes = StructuredDataMaxJsonParseChars * 4;
 
     private static readonly JsonReaderOptions StructuredJsonReaderOptions = new()
     {
         AllowTrailingCommas = true,
         CommentHandling = JsonCommentHandling.Skip,
         MaxDepth = StructuredDataMaxJsonDepth + 2,
+    };
+
+    private static readonly JsonSerializerOptions StructuredJsonStringOptions = new()
+    {
+        MaxDepth = StructuredDataMaxJsonDepth,
     };
 
     private static readonly Regex JsonFallbackPropertyRegex = new(
@@ -54,7 +54,12 @@ public static partial class SymbolExtractor
 
         try
         {
-            using var document = JsonDocument.Parse(content, StructuredJsonDocumentOptions);
+            using var document = BoundedJson.ParseDocument(
+                content,
+                StructuredDataMaxJsonParseUtf8Bytes,
+                StructuredDataMaxJsonDepth + 2,
+                JsonCommentHandling.Skip,
+                allowTrailingCommas: true);
             var propertyLines = BuildJsonPropertyLineQueues(content);
 
             if (document.RootElement.ValueKind == JsonValueKind.Object)
@@ -496,7 +501,10 @@ public static partial class SymbolExtractor
     {
         try
         {
-            return JsonSerializer.Deserialize<string>("\"" + value + "\"") ?? value;
+            return BoundedJson.Deserialize<string>(
+                "\"" + value + "\"",
+                StructuredDataMaxJsonParseUtf8Bytes,
+                StructuredJsonStringOptions) ?? value;
         }
         catch (JsonException)
         {

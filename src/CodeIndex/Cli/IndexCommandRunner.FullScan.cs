@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Runtime.InteropServices;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using CodeIndex.Indexer.Hooks;
 using CodeIndex.Models;
@@ -470,8 +471,9 @@ public static partial class IndexCommandRunner
             if (text is null)
                 return IgnoredScanCheckpoint(path, $"file exceeds the scan checkpoint size limit of {MaxScanCheckpointBytes:N0} bytes");
 
-            var checkpoint = JsonSerializer.Deserialize<ScanCheckpoint>(
+            var checkpoint = BoundedJson.Deserialize<ScanCheckpoint>(
                 text,
+                MaxScanCheckpointBytes,
                 new JsonSerializerOptions { MaxDepth = MaxScanCheckpointJsonDepth });
             if (checkpoint is null)
                 return IgnoredScanCheckpoint(path, "JSON root is null or not a scan checkpoint object");

@@ -34,6 +34,7 @@ public static partial class QueryCommandRunner
     internal const int FindAllCandidateFileLimit = 4096;
     internal const int FindAllLineScanLimit = 250_000;
     internal const int BatchMaxLineChars = 1024 * 1024;
+    internal const int BatchMaxLineUtf8Bytes = BatchMaxLineChars * 4;
     internal const int BatchMaxArgumentCount = 256;
     internal const int BatchMaxArgumentChars = 8192;
     internal const int BatchMaxJsonDepth = 32;
@@ -65,10 +66,6 @@ public static partial class QueryCommandRunner
     internal static readonly TimeSpan MaxStaleAfter = TimeSpan.FromDays(30);
     internal const string MaxStaleAfterDisplay = "30d";
     internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
-    private static readonly JsonDocumentOptions BatchJsonDocumentOptions = new()
-    {
-        MaxDepth = BatchMaxJsonDepth,
-    };
     private static readonly HashSet<string> DependencyNoiseSymbols = new(StringComparer.OrdinalIgnoreCase)
     {
         "Array",

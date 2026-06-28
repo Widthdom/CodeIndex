@@ -593,9 +593,10 @@ internal static class IndexWatchRunner
 
         try
         {
-            using var doc = JsonDocument.Parse(
-                subRunJson.AsMemory(0, trimmedLength),
-                new JsonDocumentOptions { MaxDepth = MaxHumanSummaryJsonDepth });
+            using var doc = BoundedJson.ParseDocument(
+                subRunJson[..trimmedLength],
+                MaxHumanSummarySubRunJsonChars * 4,
+                MaxHumanSummaryJsonDepth);
             var root = doc.RootElement;
             if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("summary", out var summary)
                 || summary.ValueKind != JsonValueKind.Object)

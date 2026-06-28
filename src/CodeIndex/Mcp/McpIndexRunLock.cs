@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using CodeIndex.Cli;
+using CodeIndex.Diagnostics;
 
 namespace CodeIndex.Mcp;
 
@@ -10,11 +11,6 @@ internal sealed class McpIndexRunLock : IDisposable
     private const int MaxInfoBytes = 4 * 1024;
     internal const int MaxInfoJsonDepth = 16;
     private static readonly TimeSpan StaleInfoGracePeriod = TimeSpan.FromSeconds(2);
-    private static readonly JsonDocumentOptions InfoJsonDocumentOptions = new()
-    {
-        MaxDepth = MaxInfoJsonDepth,
-    };
-
     private readonly FileStream _stream;
     private readonly string _infoPath;
     private bool _disposed;
@@ -101,7 +97,7 @@ internal sealed class McpIndexRunLock : IDisposable
             if (!ExclusiveFileLock.TryReadHolderInfoText(infoPath, MaxInfoBytes, out var text))
                 return null;
 
-            using var document = JsonDocument.Parse(text!, InfoJsonDocumentOptions);
+            using var document = BoundedJson.ParseDocument(text!, MaxInfoBytes, MaxInfoJsonDepth);
             var root = document.RootElement;
             if (!root.TryGetProperty("pid", out var pidElement) || !pidElement.TryGetInt32(out var pid))
                 return null;

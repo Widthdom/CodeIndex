@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using CodeIndex.Mcp;
 using CodeIndex.Models;
 using CodeIndex.Security;
@@ -113,11 +114,6 @@ internal sealed class LspServer : IDisposable
     {
         MaxDepth = MaxJsonDepth,
     };
-    private static readonly JsonDocumentOptions LspJsonDocumentOptions = new()
-    {
-        MaxDepth = MaxJsonDepth,
-    };
-
     private readonly DbReader _reader;
     private readonly string _version;
     private readonly JsonSerializerOptions _jsonOptions;
@@ -232,14 +228,14 @@ internal sealed class LspServer : IDisposable
     internal JsonObject? HandleMessage(string payload)
     {
         // Run() normally obtains payloads through TryReadMessage, but internal callers can bypass
-        // that frame reader; keep JsonDocument.Parse under the same byte budget either way.
+        // that frame reader; keep the JSON parse under the same byte budget either way.
         if (payload.Length > MaxLspFrameBytes || Encoding.UTF8.GetByteCount(payload) > MaxLspFrameBytes)
             return Error(null, -32700, "Parse error");
 
         JsonDocument document;
         try
         {
-            document = JsonDocument.Parse(payload, LspJsonDocumentOptions);
+            document = BoundedJson.ParseDocument(payload, MaxLspFrameBytes, MaxJsonDepth);
         }
         catch (JsonException)
         {

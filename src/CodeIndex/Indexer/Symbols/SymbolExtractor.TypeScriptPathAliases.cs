@@ -26,13 +26,6 @@ public static partial class SymbolExtractor
     private const string TypeScriptPathAliasDiagnosticExpansionCandidateLimit = "path_alias_expansion_candidate_limit";
     private static readonly object TypeScriptPathAliasWarningLock = new();
     private static readonly HashSet<string> TypeScriptPathAliasReportedWarnings = new(StringComparer.Ordinal);
-    private static readonly JsonDocumentOptions TypeScriptPathAliasConfigJsonOptions = new()
-    {
-        AllowTrailingCommas = true,
-        CommentHandling = JsonCommentHandling.Skip,
-        MaxDepth = MaxTypeScriptPathAliasConfigJsonDepth,
-    };
-
     private sealed record TypeScriptPathAliasConfig(string ConfigPath, string ProjectDirectory, string BaseDirectory, bool HasBaseUrl, IReadOnlyList<TypeScriptPathAliasRule> Rules);
 
     private sealed record TypeScriptPathAliasRule(string Pattern, string BaseDirectory, IReadOnlyList<string> Targets);
@@ -192,9 +185,12 @@ public static partial class SymbolExtractor
                 return null;
             }
 
-            document = JsonDocument.Parse(
+            document = BoundedJson.ParseDocument(
                 configText,
-                TypeScriptPathAliasConfigJsonOptions);
+                MaxTypeScriptPathAliasConfigBytes,
+                MaxTypeScriptPathAliasConfigJsonDepth,
+                JsonCommentHandling.Skip,
+                allowTrailingCommas: true);
         }
         catch (JsonException)
         {

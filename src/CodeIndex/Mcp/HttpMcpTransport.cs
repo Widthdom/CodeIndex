@@ -631,7 +631,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         }
 
         request.Body = body;
-        request.RequestId = TryExtractJsonRpcId(body);
+        request.RequestId = TryExtractJsonRpcId(body, _maxRequestBodyBytes);
         if (await TryHandleOutOfBandFrameAsync(request, body, cancellationToken).ConfigureAwait(false))
             return;
 
@@ -1717,13 +1717,13 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         Volatile.Write(ref _lastRequestLogDropReason, $"{reason}:{category}:{exceptionType}");
     }
 
-    private static string? TryExtractJsonRpcId(string body)
+    private static string? TryExtractJsonRpcId(string body, int maxRequestBodyBytes)
     {
         try
         {
             // HandleContextAsync calls this only with a body returned by TryReadRequestBodyAsync,
             // so the full JSON parse is bounded by the HTTP request-body byte limit.
-            using var doc = JsonDocument.Parse(body, JsonFrameParser.CreateDocumentOptions(McpServer.MaxJsonDepth));
+            using var doc = BoundedJson.ParseDocument(body, maxRequestBodyBytes, McpServer.MaxJsonDepth);
             if (!doc.RootElement.TryGetProperty("id", out var id))
                 return null;
 
@@ -1735,7 +1735,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             };
             return LimitRequestLogField(requestId);
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
             return null;
         }

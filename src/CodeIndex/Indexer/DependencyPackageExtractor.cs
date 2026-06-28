@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
+using CodeIndex.Diagnostics;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
@@ -20,6 +21,9 @@ internal readonly record struct DependencyPackageInfo(
 
 internal static class DependencyPackageExtractor
 {
+    internal const int MaxJsonLockParseBytes = 16 * 1024 * 1024;
+    internal const int MaxJsonLockParseDepth = 64;
+
     private static readonly Regex RequirementNameRegex = new(
         @"^\s*(?<name>[A-Za-z0-9][A-Za-z0-9_.-]*)(?:\[[^\]]+\])?\s*(?<version>(?:===|==|~=|!=|<=|>=|<|>|=).+)?$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant,
@@ -190,9 +194,9 @@ internal static class DependencyPackageExtractor
         JsonDocument document;
         try
         {
-            document = JsonDocument.Parse(content);
+            document = BoundedJson.ParseDocument(content, MaxJsonLockParseBytes, MaxJsonLockParseDepth);
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
             return;
         }

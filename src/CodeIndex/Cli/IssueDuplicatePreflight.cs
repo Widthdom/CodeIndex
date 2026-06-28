@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using CodeIndex.Diagnostics;
 
 namespace CodeIndex.Cli;
 
@@ -112,9 +113,10 @@ internal sealed class IssueDuplicatePreflight
                 return false;
             }
 
-            var root = JsonNode.Parse(
+            var root = BoundedJson.ParseNode(
                 json,
-                documentOptions: new JsonDocumentOptions { MaxDepth = MaxOpenIssuesJsonDepth });
+                MaxOpenIssuesJsonBytes,
+                MaxOpenIssuesJsonDepth);
             preflight = new IssueDuplicatePreflight(true, fullPath, ParseOpenIssues(root));
             return true;
         }
@@ -507,7 +509,7 @@ internal sealed class IssueDuplicatePreflight
             var json = await ReadContentWithinLimitAsync(response.Content, MaxOpenIssuesJsonBytes, requestCancellation.Token)
                 .ConfigureAwait(false)
                 ?? throw new IOException($"GitHub open-issues response exceeds maximum supported size of {MaxOpenIssuesJsonBytes} bytes.");
-            var root = JsonNode.Parse(json, documentOptions: new JsonDocumentOptions { MaxDepth = MaxOpenIssuesJsonDepth });
+            var root = BoundedJson.ParseNode(json, MaxOpenIssuesJsonBytes, MaxOpenIssuesJsonDepth);
             var rawEntryCount = root is JsonArray array ? array.Count : 0;
             return new GitHubOpenIssuePageResult(ParseOpenIssues(root, skipPullRequests: true), rawEntryCount);
         }
@@ -554,7 +556,7 @@ internal sealed class IssueDuplicatePreflight
             var json = await ReadContentWithinLimitAsync(response.Content, MaxOpenIssuesJsonBytes, requestCancellation.Token)
                 .ConfigureAwait(false)
                 ?? throw new IOException($"GitHub labels response exceeds maximum supported size of {MaxOpenIssuesJsonBytes} bytes.");
-            var root = JsonNode.Parse(json, documentOptions: new JsonDocumentOptions { MaxDepth = MaxOpenIssuesJsonDepth });
+            var root = BoundedJson.ParseNode(json, MaxOpenIssuesJsonBytes, MaxOpenIssuesJsonDepth);
             var rawEntryCount = root is JsonArray array ? array.Count : 0;
             return new GitHubRepositoryLabelPageResult(ParseRepositoryLabels(root), rawEntryCount);
         }

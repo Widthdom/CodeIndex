@@ -73,11 +73,6 @@ public static class ConsoleUi
     internal const int MaxVersionJsonDepth = 8;
     private const string FallbackVersion = "0.0.0";
 
-    private static readonly JsonDocumentOptions VersionJsonDocumentOptions = new()
-    {
-        MaxDepth = MaxVersionJsonDepth,
-    };
-
     private static readonly (string Command, string Usage)[] CommandUsageLines =
     [
         ("index", "cdidx index <projectPath> [--db <path>] [--rebuild] [--optimize] [--symbols-only] [--verbose] [--dry-run [--dry-run-path-limit <n>]] [--force] [--quiet] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--notify <auto|bell|osc9|desktop|none>] [--max-file-bytes <bytes>] [--max-symbols-per-file <n>] [--max-references-per-file <n>] [--follow-symlinks <none|internal|all>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]] [--watch [--debounce <ms>] [--watch-pending-path-limit <n>]]"),
@@ -819,7 +814,7 @@ public static class ConsoleUi
             if (json is null)
                 return FallbackVersion;
 
-            using var doc = JsonDocument.Parse(json, VersionJsonDocumentOptions);
+            using var doc = BoundedJson.ParseDocument(json, MaxVersionJsonBytes, MaxVersionJsonDepth);
             if (doc.RootElement.TryGetProperty("version", out var ver))
                 return ver.GetString() ?? FallbackVersion;
         }

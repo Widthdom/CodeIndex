@@ -1,5 +1,6 @@
 using CodeIndex;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -1233,9 +1234,10 @@ internal static class SearchAuditRecipes
                 return false;
             }
 
-            var root = JsonNode.Parse(
+            var root = BoundedJson.ParseNode(
                 text,
-                documentOptions: new JsonDocumentOptions { MaxDepth = 16 });
+                MaxRecipeSourceBytes,
+                maxDepth: 16);
             var recipeArray = root as JsonArray ?? root?["recipes"] as JsonArray;
             if (recipeArray is null)
             {
