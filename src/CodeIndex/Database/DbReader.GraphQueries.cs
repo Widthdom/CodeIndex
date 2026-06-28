@@ -2203,7 +2203,6 @@ public partial class DbReader
                     SourcePath = reader.GetString(1),
                     TargetPath = reader.GetString(2),
                     ReferenceCount = reader.GetInt32(3),
-                    RankingScore = reader.GetInt32(3),
                     Symbols = reader.GetString(4),
                 }));
         }

@@ -1652,6 +1652,7 @@ public class FileDependencyResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? TargetDb { get; set; }
     public int ReferenceCount { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public double RankingScore { get; set; }
     public string Symbols { get; set; } = string.Empty;
 }
