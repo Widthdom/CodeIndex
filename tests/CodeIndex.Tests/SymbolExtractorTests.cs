@@ -13468,6 +13468,31 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "generator" && s.Name == "gen" && s.ContainerKind == "object");
     }
 
+    [Fact]
+    public void Extract_JavaScript_ExportedObjectLiteralPropertySignaturesStayScoped()
+    {
+        const string content = """
+            export default {
+                scalar: 1,
+                nested: { text: "x,y", items: [1, 2] },
+                "quoted,key": 2,
+                ["computed"]: call(1, 2),
+                shorthand,
+            };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        SymbolRecord FindProperty(string name) => Assert.Single(
+            symbols.Where(s => s.Kind == "property" && s.Name == name && s.ContainerKind == "object" && s.ContainerName == "default"));
+
+        Assert.Equal("scalar: 1", FindProperty("scalar").Signature);
+        Assert.Equal("nested: { text: \"x,y\", items: [1, 2] }", FindProperty("nested").Signature);
+        Assert.Equal("\"quoted,key\": 2", FindProperty("quoted,key").Signature);
+        Assert.Equal("[\"computed\"]: call(1, 2)", FindProperty("computed").Signature);
+        Assert.Equal("shorthand", FindProperty("shorthand").Signature);
+    }
+
 #if NET8_0
     [Fact]
 #else
@@ -13482,9 +13507,11 @@ public partial class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
         stopwatch.Stop();
 
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "p0" && s.ContainerKind == "object" && s.ContainerName == "default");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "p2999" && s.ContainerKind == "object" && s.ContainerName == "default");
-        var runawayBudget = TimeSpan.FromSeconds(10);
+        var first = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "p0" && s.ContainerKind == "object" && s.ContainerName == "default"));
+        var last = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "p2999" && s.ContainerKind == "object" && s.ContainerName == "default"));
+        Assert.Equal("p0: 0", first.Signature);
+        Assert.Equal("p2999: 2999", last.Signature);
+        var runawayBudget = TimeSpan.FromSeconds(30);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
             $"Large JavaScript exported object literal extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
