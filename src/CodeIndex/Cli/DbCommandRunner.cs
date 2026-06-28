@@ -966,7 +966,7 @@ public static class DbCommandRunner
     {
         cancellationToken.ThrowIfCancellationRequested();
         using var cmd = SqliteConnectionPolicy.CreateCommand(connection);
-        cmd.CommandText = $"PRAGMA busy_timeout={DbPragmaPolicy.ReadBusyTimeoutMs(DbContext.BusyTimeoutEnvironmentVariable)}";
+        cmd.CommandText = DbPragmaPolicy.ReadBusyTimeoutPragmaSql(DbContext.BusyTimeoutEnvironmentVariable);
         cmd.ExecuteNonQuery();
     }
 

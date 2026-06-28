@@ -598,7 +598,7 @@ public static class ReportCommandRunner
         if (!LoadTableNames(connection).Contains(tableName))
             return columns;
         using var cmd = SqliteConnectionPolicy.CreateCommand(connection);
-        cmd.CommandText = $"PRAGMA table_info(\"{tableName.Replace("\"", "\"\"", StringComparison.Ordinal)}\")";
+        cmd.CommandText = SqliteCommandPolicy.TableInfoPragmaSql(tableName);
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
             columns.Add(reader.GetString(1));
