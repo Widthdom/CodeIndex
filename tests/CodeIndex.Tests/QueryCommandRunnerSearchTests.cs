@@ -1478,6 +1478,14 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(CommandExitCodes.UsageError, textCapExitCode);
         Assert.Equal(string.Empty, textCapStdout);
         Assert.Contains("--max-json-bytes is only supported with JSON recipe-list output", textCapStderr, StringComparison.Ordinal);
+
+        var (compactNamesCapExitCode, compactNamesCapStdout, compactNamesCapStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--list-recipes", "--names", "--format", "compact", "--max-json-bytes", "1"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, compactNamesCapExitCode);
+        Assert.Equal(string.Empty, compactNamesCapStdout);
+        Assert.Contains("recipe-name list JSON output", compactNamesCapStderr, StringComparison.Ordinal);
     }
 
     [Fact]

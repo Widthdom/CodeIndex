@@ -1591,7 +1591,9 @@ public static partial class QueryCommandRunner
 
     private static int WriteSearchRecipeList(QueryCommandOptions options, JsonSerializerOptions jsonOptions)
     {
-        var emitsJson = options.Json || options.OutputFormat == OutputFormatCompact;
+        var emitsJson = options.NamesOnly
+            ? options.Json
+            : options.Json || options.OutputFormat == OutputFormatCompact;
         if (options.MaxJsonBytes.HasValue && !emitsJson)
         {
             WriteUsageError(
