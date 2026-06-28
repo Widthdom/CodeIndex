@@ -4295,6 +4295,14 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(QueryCommandRunner.DefaultDependencyCycleGraphLimit, json.GetProperty("candidate_edge_count").GetInt32());
             Assert.Equal(QueryCommandRunner.DefaultDependencyCycleGraphLimit, json.GetProperty("candidate_edge_limit").GetInt32());
             Assert.Equal("bounded_approximate_candidate_edges", json.GetProperty("cycle_detection_mode").GetString());
+            Assert.Equal("partial_candidate_edge_sample", json.GetProperty("cycle_result_scope").GetString());
+            Assert.Contains("not a complete or ranked cycle set", json.GetProperty("cycle_result_note").GetString(), StringComparison.Ordinal);
+            var nextStepFlags = json.GetProperty("next_step_flags").EnumerateArray().Select(flag => flag.GetString()).ToArray();
+            Assert.Contains("--limit 100", nextStepFlags);
+            Assert.Contains("--suppress-noise", nextStepFlags);
+            Assert.Contains("--symbol <name>", nextStepFlags);
+            Assert.Contains("--symbol-family <prefix>", nextStepFlags);
+            Assert.Contains("--path <narrower-glob>", nextStepFlags);
 
             var (textExitCode, textStdout, textStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
                 ["--db", dbPath, "--cycles", "--limit", "1", "--lang", "csharp"],
@@ -4304,6 +4312,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, textStdout);
             Assert.Contains("No dependency cycles found", textStderr, StringComparison.Ordinal);
             Assert.Contains("Warning: dependency cycle detection returned partial results", textStderr, StringComparison.Ordinal);
+            Assert.Contains("not a complete or ranked cycle set", textStderr, StringComparison.Ordinal);
+            Assert.Contains("Next steps: --limit 100, --suppress-noise", textStderr, StringComparison.Ordinal);
         }
         finally
         {
@@ -4528,6 +4538,49 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(5, symbolFilter.GetProperty("symbols_before").GetInt32());
             Assert.Equal(1, symbolFilter.GetProperty("symbols_after").GetInt32());
             Assert.Equal(4, symbolFilter.GetProperty("symbols_removed").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDeps_CyclesSuppressNoiseRemovesGenericAppendCycle_Issue4114()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_append_noise_cycle");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            InsertFileWithSymbolsAndReferences(dbPath, "src/BoundedLineReader.cs", ["Append"], ["Append"]);
+            InsertFileWithSymbolsAndReferences(dbPath, "src/BoundedTextWriter.cs", ["Append"], ["Append"]);
+            MarkDependencyGraphReady(dbPath);
+
+            var (defaultExitCode, defaultStdout, defaultStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", dbPath, "--json", "--cycles", "--limit", "10", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var defaultDocument = ParseJsonOutput(defaultStdout);
+
+            Assert.Equal(CommandExitCodes.Success, defaultExitCode);
+            Assert.Equal(string.Empty, defaultStderr);
+            Assert.True(defaultDocument.RootElement.GetProperty("count").GetInt32() >= 1);
+
+            var (filteredExitCode, filteredStdout, filteredStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", dbPath, "--json", "--cycles", "--limit", "10", "--lang", "csharp", "--suppress-noise"],
+                _jsonOptions));
+
+            using var filteredDocument = ParseJsonOutput(filteredStdout);
+            var json = filteredDocument.RootElement;
+            var symbolFilter = json.GetProperty("symbol_filter");
+
+            Assert.Equal(CommandExitCodes.Success, filteredExitCode);
+            Assert.Equal(string.Empty, filteredStderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Empty(json.GetProperty("cycles").EnumerateArray());
+            Assert.True(symbolFilter.GetProperty("suppress_noise").GetBoolean());
+            Assert.Equal(0, symbolFilter.GetProperty("edges_after").GetInt32());
+            Assert.True(symbolFilter.GetProperty("symbols_removed").GetInt32() > 0);
         }
         finally
         {

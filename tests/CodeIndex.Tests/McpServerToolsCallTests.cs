@@ -3682,10 +3682,17 @@ public partial class McpServerTests
         var structured = response["result"]!["structuredContent"]!;
         var cycle = Assert.Single(structured["cycles"]!.AsArray());
         var nodes = cycle!["nodes"]!.AsArray().Select(node => node!.GetValue<string>()).ToArray();
+        var nextStepFlags = structured["next_step_flags"]!.AsArray()
+            .Select(flag => flag!.GetValue<string>())
+            .ToArray();
 
         Assert.Equal(1, structured["count"]!.GetValue<int>());
         Assert.Equal(2, nodes.Length);
         Assert.All(nodes, node => Assert.StartsWith("src/Cycle", node));
+        Assert.Equal("partial_display_limit", structured["cycle_result_scope"]!.GetValue<string>());
+        Assert.Contains("limit=2", nextStepFlags);
+        Assert.Contains("path=<narrower-glob>", nextStepFlags);
+        Assert.DoesNotContain(nextStepFlags, flag => flag.StartsWith("--", StringComparison.Ordinal));
     }
 
     [Fact]
