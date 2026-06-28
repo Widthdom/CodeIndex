@@ -157,10 +157,15 @@ while `status --explain indexed_head_commit` calls out the legacy
 full-scan-only stamp so consumers can prefer `indexed_head_sha` after
 incremental indexing.
 
-Runtime diagnostics under `extractors` include `retained_load_context_count` so
-long-running processes can see how many plugin assembly load contexts are still
-held. `extractors.diagnostics[]` and `hook_diagnostics[]` include sanitized
-`category` machine codes alongside bounded paths and messages.
+Runtime diagnostics under `extractors` include `retained_load_context_count` and
+`load_context_lifecycle` so long-running processes can see how many plugin
+assembly load contexts are still held and why. Plugin contexts are collectible
+but retained while registered extractor instances remain active; rejected or
+unretained contexts are unloaded. `hooks[]` entries include `callback_budget_ms`
+and `load_context_lifecycle` to show that hook contexts are collectible and
+unloaded when the hook runner is disposed. `extractors.diagnostics[]` and
+`hook_diagnostics[]` include sanitized `category` machine codes alongside
+bounded paths and messages.
 Accepted extension trust overrides such as `CDIDX_TRUST_WORKSPACE_PLUGINS` and
 `CDIDX_HOOKS_DIR` are also reported in sanitized `trust_overrides[]` entries.
 
@@ -345,10 +350,14 @@ full-scan 限定 `indexed_head_commit` に fallback します。
 `status --explain indexed_head_commit` は legacy 向けの full-scan 限定 stamp であることを
 明示するため、incremental indexing 後の consumer は `indexed_head_sha` を優先できます。
 
-`extractors` の runtime diagnostics は `retained_load_context_count` を含むため、
-長時間実行プロセスは保持中の plugin assembly load context 数を確認できます。
-`extractors.diagnostics[]` と `hook_diagnostics[]` は、bounded な path と message に加えて
-sanitization 済みの `category` machine code を含みます。
+`extractors` の runtime diagnostics は `retained_load_context_count` と
+`load_context_lifecycle` を含むため、長時間実行プロセスは保持中の plugin assembly load
+context 数とその理由を確認できます。plugin context は collectible ですが、
+登録済み extractor instance が active な間は保持され、reject された context や保持されない
+context は unload されます。`hooks[]` entry は `callback_budget_ms` と
+`load_context_lifecycle` を含み、hook context が collectible で hook runner の dispose 時に
+unload されることを示します。`extractors.diagnostics[]` と `hook_diagnostics[]` は、
+bounded な path と message に加えて sanitization 済みの `category` machine code を含みます。
 受理された `CDIDX_TRUST_WORKSPACE_PLUGINS` や `CDIDX_HOOKS_DIR` などの
 拡張信頼境界 override は、sanitization 済みの `trust_overrides[]` entry としても報告されます。
 
