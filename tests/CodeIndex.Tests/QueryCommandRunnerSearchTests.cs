@@ -1889,7 +1889,8 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(string.Empty, stdout);
         Assert.Contains("unknown recipe query 'raw-sql' for recipe 'risky-code'", stderr);
         Assert.Contains("Suggestions across all recipes:", stderr);
-        Assert.Contains("dotnet-risk-patterns/sqlite-addwithvalue", stderr);
+        Assert.Contains("dogfood-risk-patterns/raw-sql-command-text", stderr);
+        Assert.Contains("sqlite-query-policy-surfaces/sqlite-policy-add-with-value", stderr);
     }
 
     [Fact]
