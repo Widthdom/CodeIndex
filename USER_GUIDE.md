@@ -1070,9 +1070,12 @@ query in the recipe. With `--json`, recipe runs emit one aggregate JSON payload
 grouped by recipe query instead of the usual newline-delimited search stream.
 Recipe and named-query JSON include per-query counts, `top_files`, and
 `truncated` metadata. Recipe JSON and compact output also return `next_cursor`
-when a single selected recipe query is truncated. Add `--show-excluded` to a
-recipe run when you need the effective path scope and exclusion diagnostics in
-JSON output.
+when a single selected recipe query is truncated. Recipe run summaries and
+count summaries include `query_freshness` with the number of queries that found
+positive evidence, the number that returned zero results, and `stale_query_names`
+so broad audit recipes can surface query drift without requiring the full
+recipe catalog JSON. Add `--show-excluded` to a recipe run when you need the
+effective path scope and exclusion diagnostics in JSON output.
 Recipe runs support text output, aggregate JSON with `--json` / `--format json`,
 NDJSON row streams with `--json=ndjson` or `--results-only`, count-only output
 with `--format count`, compact summaries with `--format compact`, and
@@ -1084,8 +1087,8 @@ streams can be projected with `--search-fields` including `query_name` and
 `recipe`, bounded across child queries with `--total-limit`, and byte-bounded
 with `--max-json-bytes` for NDJSON. Recipe count output can use
 `--format count --summary-only --max-json-bytes <n>` to emit only recipe/scope
-names, aggregate counts, and per-query counts. Recipe count aggregations support
-`--count-by path|file|symbol|origin`,
+names, aggregate counts, per-query counts, and query freshness. Recipe count
+aggregations support `--count-by path|file|symbol|origin`,
 `--group-by file|symbol|origin --count`, and
 `--unique path|file|symbol|origin`.
 Other search export formats and `--json=array` are rejected for recipe modes
@@ -1113,11 +1116,14 @@ the payload still includes `duplicate_preflight.checked: false`. Use
 `--duplicate-confidence low|medium|high` or `--duplicate-threshold <0..1>` to
 tune duplicate preflight strictness; the JSON summary reports `confidence` and
 `minimum_score`. Draft bodies include evidence paths, representative source
-snippets, omitted-result metadata, and recipe metadata. Add `--snippet-lines 0`
-for path/line-only evidence and combine issue-draft export with
-`--max-json-bytes <n>` when an automation budget must fail closed. These drafts
-are triage aids; review duplicate guidance and current open issues before
-filing.
+snippets, omitted-result metadata, and recipe metadata. Add `--summary-only`
+to recipe issue-draft export when agents only need compact top-level metadata:
+the output keeps issue-ready draft evidence and per-draft source metadata, omits
+the full top-level `recipe` metadata, emits `recipe_summary`, and includes
+`query_freshness` for zero-result child queries. Add `--snippet-lines 0` for
+path/line-only evidence and combine issue-draft export with `--max-json-bytes <n>`
+when an automation budget must fail closed. These drafts are triage aids; review
+duplicate guidance and current open issues before filing.
 
 ### Debugging queries
 
@@ -3748,7 +3754,9 @@ query ごとに grouped された 1 つの aggregate JSON payload を出力し�
 `truncated` の per-query metadata を返します。recipe の JSON / compact output は、単一の
 recipe query が truncated された場合に `next_cursor` も返します。`--format compact` は
 summary、query count、query ごとの count、`truncated` flag、該当する場合の `next_cursor`
-を返します。
+を返します。recipe run summary と count summary は `query_freshness` も返し、肯定的な根拠が
+見つかった query 数、結果 0 件の query 数、`stale_query_names` を示します。これにより、
+広範な audit recipe の query drift を full recipe catalog JSON なしで確認できます。
 `--show-excluded` を recipe と併用すると、有効な path scope と除外診断を出力に含めます。
 recipe run が対応する形式は text output、`--json` / `--format json` の aggregate JSON、
 `--json=ndjson` または `--results-only` の NDJSON row stream、`--format count` の
@@ -3759,7 +3767,7 @@ compact metadata が必要なら `cdidx recipes --summary-only --json` を使い
 `query_name` と `recipe` を含む `--search-fields` で投影でき、`--total-limit` で
 child query 全体の emitted row 数を制限でき、NDJSON では `--max-json-bytes` で byte 数を制限できます。
 recipe count output は `--format count --summary-only --max-json-bytes <n>` により、recipe / scope 名、
-aggregate count、query ごとの count だけを出力できます。recipe の count aggregation は `--count-by path|file|symbol|origin`、
+aggregate count、query ごとの count、query freshness だけを出力できます。recipe の count aggregation は `--count-by path|file|symbol|origin`、
 `--group-by file|symbol|origin --count`、`--unique path|file|symbol|origin` に対応します。
 その他の search export format と `--json=array` は、recipe output が query または
 list metadata ごとに grouped されるため usage error で拒否します。
@@ -3785,10 +3793,13 @@ duplicate-preflight metadata を持つ issue draft object を出力します。
 `duplicate_preflight.checked: false` が含まれます。duplicate preflight の厳しさは
 `--duplicate-confidence low|medium|high` または `--duplicate-threshold <0..1>` で調整でき、
 JSON summary には `confidence` と `minimum_score` が出力されます。draft body は evidence path、
-代表的な source snippet、omitted-result metadata、recipe metadata を含みます。path / line だけの evidence にしたい場合は
-`--snippet-lines 0` を追加し、automation budget を超える出力を閉じたい場合は issue-draft export に
-`--max-json-bytes <n>` を併用します。これらの draft は triage aid なので、起票前に duplicate guidance と
-現在の open issue を確認してください。
+代表的な source snippet、omitted-result metadata、recipe metadata を含みます。エージェントが compact な
+top-level metadata だけを必要とする場合は、recipe issue-draft export に `--summary-only` を追加します。
+この出力は Issue 作成に必要な draft evidence と draft ごとの source metadata を保ち、top-level の
+完全な `recipe` metadata を省略し、`recipe_summary` と zero-result child query 用の `query_freshness` を出力します。
+path / line だけの evidence にしたい場合は `--snippet-lines 0` を追加し、automation budget を超える出力を閉じたい場合は
+issue-draft export に `--max-json-bytes <n>` を併用します。これらの draft は triage aid なので、起票前に
+duplicate guidance と現在の open issue を確認してください。
 
 ### クエリのデバッグ
 

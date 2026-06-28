@@ -1740,8 +1740,14 @@ internal sealed record SearchRecipeRunSummaryJsonResult(
     [property: JsonPropertyName("emitted_result_count")] int EmittedResultCount,
     [property: JsonPropertyName("truncated_query_count")] int TruncatedQueryCount,
     [property: JsonPropertyName("minimum_omitted_result_count")] int MinimumOmittedResultCount,
+    [property: JsonPropertyName("query_freshness")] SearchRecipeQueryFreshnessJsonResult QueryFreshness,
     [property: JsonPropertyName("cursoring_available")] bool CursoringAvailable,
     [property: JsonPropertyName("cursoring_hint")] string CursoringHint);
+
+internal sealed record SearchRecipeQueryFreshnessJsonResult(
+    [property: JsonPropertyName("positive_evidence_query_count")] int PositiveEvidenceQueryCount,
+    [property: JsonPropertyName("zero_result_query_count")] int ZeroResultQueryCount,
+    [property: JsonPropertyName("stale_query_names")] List<string> StaleQueryNames);
 
 internal sealed record SearchNamedBatchRunJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
@@ -1804,6 +1810,7 @@ internal sealed record SearchRecipeCountSummaryRunJsonResult(
     [property: JsonPropertyName("query_count")] int QueryCount,
     [property: JsonPropertyName("result_count")] int ResultCount,
     [property: JsonPropertyName("file_count")] int FileCount,
+    [property: JsonPropertyName("query_freshness")] SearchRecipeQueryFreshnessJsonResult QueryFreshness,
     [property: JsonPropertyName("queries")] List<SearchRecipeCountSummaryQueryJsonResult> Queries);
 
 internal sealed record SearchRecipeCountSummaryQueryJsonResult(
@@ -1898,9 +1905,16 @@ internal sealed record SearchRecipeCompactResultJsonResult(
 internal sealed record SearchIssueDraftExportJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
     [property: JsonPropertyName("recipe")] SearchRecipeListItemJsonResult? Recipe,
+    [property: JsonPropertyName("recipe_summary")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    SearchRecipeCompactListItemJsonResult? RecipeSummary,
+    [property: JsonPropertyName("metadata_mode")] string MetadataMode,
     [property: JsonPropertyName("scope")] SearchRecipeScopeJsonResult? Scope,
     [property: JsonPropertyName("query_count")] int QueryCount,
     [property: JsonPropertyName("result_count")] int ResultCount,
+    [property: JsonPropertyName("query_freshness")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    SearchRecipeQueryFreshnessJsonResult? QueryFreshness,
     [property: JsonPropertyName("count")] int Count,
     [property: JsonPropertyName("duplicate_preflight")] SuggestionIssueDraftPreflightSummaryJsonResult DuplicatePreflight,
     [property: JsonPropertyName("drafts")] List<SearchIssueDraftJsonResult> Drafts);
