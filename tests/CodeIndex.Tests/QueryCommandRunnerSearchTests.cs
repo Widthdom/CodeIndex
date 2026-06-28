@@ -4485,6 +4485,64 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_RecipeIssueDraftsSummaryOnlyFreshnessUsesMatchedCountsWhenTotalLimited_Issue4118()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_issue_drafts_summary_total_limit_4118");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/a.cs",
+                "csharp",
+                """
+                public sealed class A
+                {
+                    public void Run()
+                    {
+                        try
+                        {
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Console.Error.WriteLine(ex.Message);
+                        }
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "--recipe", "risky-code",
+                    "--include-query", "raw-diagnostic-echo",
+                    "--include-query", "broad-exception-catch",
+                    "--db", dbPath,
+                    "--format", "issue-drafts",
+                    "--summary-only",
+                    "--total-limit", "1",
+                    "--snippet-lines", "0"
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var freshness = root.GetProperty("query_freshness");
+
+            Assert.Equal(1, root.GetProperty("count").GetInt32());
+            Assert.Equal(1, root.GetProperty("result_count").GetInt32());
+            Assert.Equal(2, freshness.GetProperty("positive_evidence_query_count").GetInt32());
+            Assert.Equal(0, freshness.GetProperty("zero_result_query_count").GetInt32());
+            Assert.Empty(freshness.GetProperty("stale_query_names").EnumerateArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_AdHocIssueDraftsUseTitleLabelsAndDuplicatePreflight_Issue3520()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_issue_drafts_ad_hoc");

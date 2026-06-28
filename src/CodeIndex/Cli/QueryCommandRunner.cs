@@ -2743,10 +2743,10 @@ public static partial class QueryCommandRunner
             "When a query is truncated, rerun a single child query with --recipe <recipe>/<query> --cursor <next_cursor> to page the next result set.");
 
     private static SearchRecipeQueryFreshnessJsonResult BuildSearchRecipeQueryFreshness(IReadOnlyList<SearchRecipeQueryResultJsonResult> queryResults)
-        => BuildSearchRecipeQueryFreshness(queryResults.Select(query => (query.Name, query.Count)));
+        => BuildSearchRecipeQueryFreshness(queryResults.Select(query => (query.Name, query.MinimumMatchedCount)));
 
     private static SearchRecipeQueryFreshnessJsonResult BuildSearchRecipeQueryFreshness(IReadOnlyList<SearchRecipeCompactQueryResultJsonResult> queryResults)
-        => BuildSearchRecipeQueryFreshness(queryResults.Select(query => (query.Name, query.Count)));
+        => BuildSearchRecipeQueryFreshness(queryResults.Select(query => (query.Name, query.MinimumMatchedCount)));
 
     private static SearchRecipeQueryFreshnessJsonResult BuildSearchRecipeQueryFreshness(IReadOnlyList<SearchRecipeCountQueryJsonResult> queryResults)
         => BuildSearchRecipeQueryFreshness(queryResults.Select(query => (query.Name, query.Count)));

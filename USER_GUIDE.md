@@ -1074,8 +1074,10 @@ when a single selected recipe query is truncated. Recipe run summaries and
 count summaries include `query_freshness` with the number of queries that found
 positive evidence, the number that returned zero results, and `stale_query_names`
 so broad audit recipes can surface query drift without requiring the full
-recipe catalog JSON. Add `--show-excluded` to a recipe run when you need the
-effective path scope and exclusion diagnostics in JSON output.
+recipe catalog JSON. Output-limited recipe runs use matched-count metadata for
+this summary, so queries with known omitted matches are not reported as stale.
+Add `--show-excluded` to a recipe run when you need the effective path scope and
+exclusion diagnostics in JSON output.
 Recipe runs support text output, aggregate JSON with `--json` / `--format json`,
 NDJSON row streams with `--json=ndjson` or `--results-only`, count-only output
 with `--format count`, compact summaries with `--format compact`, and
@@ -3756,7 +3758,8 @@ recipe query が truncated された場合に `next_cursor` も返します。`-
 summary、query count、query ごとの count、`truncated` flag、該当する場合の `next_cursor`
 を返します。recipe run summary と count summary は `query_freshness` も返し、肯定的な根拠が
 見つかった query 数、結果 0 件の query 数、`stale_query_names` を示します。これにより、
-広範な audit recipe の query drift を full recipe catalog JSON なしで確認できます。
+広範な audit recipe の query drift を full recipe catalog JSON なしで確認できます。出力制限された
+recipe run では matched-count metadata を使うため、省略済みの match がある query は stale として報告されません。
 `--show-excluded` を recipe と併用すると、有効な path scope と除外診断を出力に含めます。
 recipe run が対応する形式は text output、`--json` / `--format json` の aggregate JSON、
 `--json=ndjson` または `--results-only` の NDJSON row stream、`--format count` の
