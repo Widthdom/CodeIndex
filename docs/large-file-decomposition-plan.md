@@ -19,12 +19,55 @@ focused tests for the behavior it moves.
 | `src/CodeIndex/Mcp/McpToolHandlers.cs` | MCP tool argument parsing, command execution, and result shaping. | Query, index, status, and maintenance handlers share one large orchestration file. |
 | `src/CodeIndex/Indexer/Scanning/FileIndexer.cs` | File enumeration, ignore handling, language detection, validation, and record construction. | Filesystem policy and per-file extraction preparation are coupled. |
 
+## Issue #4061 Snapshot
+
+Issue #4061 refreshes the baseline with a fresh local index and tracks every
+split with the same dogfood queries before and after each move:
+
+```bash
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll files --bytes --path src/ --exclude-tests --limit 40 --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll hotspots --group-by file --path src/ --exclude-tests --limit 40 --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll symbols --sort size --lang csharp --exclude-tests --limit 120 --json
+```
+
+The pre-split snapshot on `origin/main` at
+`eaf0e9114c945598e44b11d8ac6010f2087ea046` still shows the same primary
+concentration points:
+
+| Rank | File or symbol | Dogfood signal |
+|---|---|---|
+| 1 | `QueryCommandRunner.cs` / `QueryCommandRunner` | 791,221 bytes, 15,893 file lines, 15,736 symbol lines, 3,233 file-hotspot refs |
+| 2 | `SymbolExtractor.cs` / `SymbolExtractor` | 630,225 bytes, 11,308 file lines, 11,294 symbol lines, 2,635 file-hotspot refs |
+| 3 | `SymbolExtractor.JavaScriptTypeScriptSupport.cs` / `SymbolExtractor` | 444,233 bytes, 11,661 file lines, 11,653 symbol lines, 665 file-hotspot refs |
+| 4 | `McpToolHandlers.cs` / `McpServer` | 383,924 bytes, 7,708 file lines, 7,689 symbol lines, 826 file-hotspot refs |
+| 5 | `DbSymbolReader.cs` | 289,445 bytes, 6,016 file lines, 855 file-hotspot refs |
+| 6 | `LanguageReferenceExtractionSupport.cs` / `LanguageReferenceExtractionSupport` | 229,143 bytes, 5,149 file lines, 5,143 symbol lines, 629 file-hotspot refs |
+| 7 | `McpServer.cs` / `McpServer` | 219,237 bytes, 4,417 file lines, 4,388 symbol lines, 926 file-hotspot refs |
+| 8 | `DbWriter.cs` / `DbWriter` | 200,679 bytes, 4,458 file lines, 4,441 symbol lines, 1,898 file-hotspot refs |
+| 9 | `FileIndexer.cs` / `FileIndexer` | 199,007 bytes, 5,022 file lines, 5,005 symbol lines, 871 file-hotspot refs |
+
+This PR starts the staged plan by moving the `hotspots` command implementation
+from `QueryCommandRunner.cs` into `QueryCommandRunner.Hotspots.cs`. The move is
+mechanical and preserves the CLI/MCP behavior contract; it exists to prove the
+tracking loop and reduce the first command-family ownership boundary without
+mixing it with parser or output changes.
+
+After that first split, the same dogfood queries report:
+
+| File or symbol | Before | After |
+|---|---:|---:|
+| `QueryCommandRunner.cs` file size | 791,221 bytes / 15,893 lines | 765,328 bytes / 15,439 lines |
+| `QueryCommandRunner` symbol size | 15,736 lines | 15,282 lines |
+| `QueryCommandRunner.cs` file-hotspot refs | 3,233 refs / 555 symbols | 3,194 refs / 551 symbols |
+| `QueryCommandRunner.Hotspots.cs` | not present | 25,993 bytes / 461 lines / 306 refs |
+
 ## Decomposition Sequence
 
 1. `QueryCommandRunner.cs`
    - Extract query option parsing and validation into command-family helpers.
    - Move result formatting helpers only after the parsing boundary is stable.
    - Keep CLI text, JSON, LSP, quickfix, and SARIF tests in the same PR as the moved command family.
+   - Current #4061 split: `hotspots` command execution lives in `QueryCommandRunner.Hotspots.cs`; keep follow-up command-family moves similarly mechanical.
 
 2. `SymbolExtractor.cs`
    - Separate shared extraction contracts from language-specific scanners.
@@ -88,12 +131,54 @@ public behavior を維持し、移動した挙動に対応する focused test �
 | `src/CodeIndex/Mcp/McpToolHandlers.cs` | MCP tool の argument parsing、command execution、result shaping。 | query、index、status、maintenance handler が 1 つの大きな orchestration file を共有している。 |
 | `src/CodeIndex/Indexer/Scanning/FileIndexer.cs` | file enumeration、ignore handling、language detection、validation、record construction。 | filesystem policy と per-file extraction preparation が結合している。 |
 
+## Issue #4061 のスナップショット
+
+issue #4061 では、fresh なローカル index でベースラインを更新し、各 split
+の前後を同じ dogfood query で追跡します。
+
+```bash
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll files --bytes --path src/ --exclude-tests --limit 40 --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll hotspots --group-by file --path src/ --exclude-tests --limit 40 --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll symbols --sort size --lang csharp --exclude-tests --limit 120 --json
+```
+
+`origin/main` の `eaf0e9114c945598e44b11d8ac6010f2087ea046` で取得した
+split 前のスナップショットでは、主要な集中箇所は引き続き次のとおりです。
+
+| 順位 | ファイルまたはシンボル | dogfood signal |
+|---|---|---|
+| 1 | `QueryCommandRunner.cs` / `QueryCommandRunner` | 791,221 bytes、15,893 file lines、15,736 symbol lines、3,233 file-hotspot refs |
+| 2 | `SymbolExtractor.cs` / `SymbolExtractor` | 630,225 bytes、11,308 file lines、11,294 symbol lines、2,635 file-hotspot refs |
+| 3 | `SymbolExtractor.JavaScriptTypeScriptSupport.cs` / `SymbolExtractor` | 444,233 bytes、11,661 file lines、11,653 symbol lines、665 file-hotspot refs |
+| 4 | `McpToolHandlers.cs` / `McpServer` | 383,924 bytes、7,708 file lines、7,689 symbol lines、826 file-hotspot refs |
+| 5 | `DbSymbolReader.cs` | 289,445 bytes、6,016 file lines、855 file-hotspot refs |
+| 6 | `LanguageReferenceExtractionSupport.cs` / `LanguageReferenceExtractionSupport` | 229,143 bytes、5,149 file lines、5,143 symbol lines、629 file-hotspot refs |
+| 7 | `McpServer.cs` / `McpServer` | 219,237 bytes、4,417 file lines、4,388 symbol lines、926 file-hotspot refs |
+| 8 | `DbWriter.cs` / `DbWriter` | 200,679 bytes、4,458 file lines、4,441 symbol lines、1,898 file-hotspot refs |
+| 9 | `FileIndexer.cs` / `FileIndexer` | 199,007 bytes、5,022 file lines、5,005 symbol lines、871 file-hotspot refs |
+
+この PR では staged plan の最初の move として、`hotspots` command 実装を
+`QueryCommandRunner.cs` から `QueryCommandRunner.Hotspots.cs` へ移しました。
+この移動は mechanical であり、CLI/MCP behavior contract は変更しません。
+parser や output 変更と混ぜずに、最初の command-family ownership boundary を
+小さくしつつ tracking loop を確認するための split です。
+
+この最初の split 後に同じ dogfood query で確認した結果は次のとおりです。
+
+| ファイルまたはシンボル | Before | After |
+|---|---:|---:|
+| `QueryCommandRunner.cs` file size | 791,221 bytes / 15,893 lines | 765,328 bytes / 15,439 lines |
+| `QueryCommandRunner` symbol size | 15,736 lines | 15,282 lines |
+| `QueryCommandRunner.cs` file-hotspot refs | 3,233 refs / 555 symbols | 3,194 refs / 551 symbols |
+| `QueryCommandRunner.Hotspots.cs` | なし | 25,993 bytes / 461 lines / 306 refs |
+
 ## 分割順序
 
 1. `QueryCommandRunner.cs`
    - query option parsing と validation を command-family helper へ抽出する。
    - parsing boundary が安定してから result formatting helper を移動する。
    - 移動した command family と同じ PR で CLI text、JSON、LSP、quickfix、SARIF test を維持する。
+   - 現在の #4061 split: `hotspots` command 実行は `QueryCommandRunner.Hotspots.cs` に置く。後続の command-family move も同じく mechanical に保つ。
 
 2. `SymbolExtractor.cs`
    - 共有 extraction contract と言語固有 scanner を分ける。
