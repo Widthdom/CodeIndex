@@ -5318,6 +5318,16 @@ public static partial class QueryCommandRunner
             parts.Add($"refs={result.ReferenceCount.Value}");
         if (result.HotspotScore.HasValue)
             parts.Add($"hotspot={result.HotspotScore.Value.ToString("0.###", CultureInfo.InvariantCulture)}");
+        if (result.RankingReferenceScore.HasValue)
+            parts.Add($"rank_refs={result.RankingReferenceScore.Value.ToString("0.###", CultureInfo.InvariantCulture)}");
+        if (result.RankingHotspotScore.HasValue)
+            parts.Add($"rank_hotspot={result.RankingHotspotScore.Value.ToString("0.###", CultureInfo.InvariantCulture)}");
+        if (result.GenericNamePenalty is < 1.0)
+            parts.Add($"name_penalty={result.GenericNamePenalty.Value.ToString("0.###", CultureInfo.InvariantCulture)}");
+        if (result.StructuralRankPenalty is < 1.0)
+            parts.Add($"struct_penalty={result.StructuralRankPenalty.Value.ToString("0.###", CultureInfo.InvariantCulture)}");
+        if (result.DefinitionSites is > 1)
+            parts.Add($"defs={result.DefinitionSites.Value}");
         if (result.SizeLines.HasValue)
             parts.Add($"size={result.SizeLines.Value}");
         if (result.ComplexityScore.HasValue)
