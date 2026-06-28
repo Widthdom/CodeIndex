@@ -61,6 +61,32 @@ After that first split, the same dogfood queries report:
 | `QueryCommandRunner.cs` file-hotspot refs | 3,233 refs / 555 symbols | 3,194 refs / 551 symbols |
 | `QueryCommandRunner.Hotspots.cs` | not present | 25,993 bytes / 461 lines / 306 refs |
 
+## Issue #4107 Snapshot
+
+Issue #4107 starts the SymbolExtractor stage of this plan on `origin/main` at
+`e043a7f04de511c0b965f09f70228831822f6eac`. The fresh dogfood snapshot still
+shows the symbol-extraction surface dominated by `SymbolExtractor.cs`,
+`SymbolExtractor.JavaScriptTypeScriptSupport.cs`, `SymbolExtractor.CSharpScanner.cs`,
+and `SymbolExtractor.Markup.cs`, with `ExtractCore` and JS/TS styled/class helper
+paths among the largest function-level hotspots.
+
+This PR makes mechanical ownership moves for language-specific helpers: the
+JS/TS styled-factory candidate gate now lives in
+`SymbolExtractor.JavaScriptTypeScriptStyledFactory.cs`, and CSS/Sass scanner
+helpers live in `SymbolExtractor.CssScanner.cs` instead of the shared
+`SymbolExtractor.cs` core. The extraction semantics remain unchanged; the goal
+is to move language-specific paths behind focused partials before larger
+extractor splits.
+
+## Issue #4106 Follow-up
+
+Issue #4106 continues the same staged QueryCommandRunner decomposition by
+moving the public `RunSearch` command orchestration into
+`QueryCommandRunner.Search.cs`. This is still a behavior-preserving move: the
+shared search helpers, result shaping helpers, and argument parser remain in the
+same partial class for follow-up splits, while the main runner loses the 734-line
+search entry point that the issue identified as a top hotspot.
+
 ## Decomposition Sequence
 
 1. `QueryCommandRunner.cs`
@@ -68,6 +94,7 @@ After that first split, the same dogfood queries report:
    - Move result formatting helpers only after the parsing boundary is stable.
    - Keep CLI text, JSON, LSP, quickfix, and SARIF tests in the same PR as the moved command family.
    - Current #4061 split: `hotspots` command execution lives in `QueryCommandRunner.Hotspots.cs`; keep follow-up command-family moves similarly mechanical.
+   - Current #4106 follow-up: `RunSearch` command orchestration lives in `QueryCommandRunner.Search.cs`; keep future search parsing, planning, result shaping, and rendering moves behavior-preserving and separately tested.
 
 2. `SymbolExtractor.cs`
    - Separate shared extraction contracts from language-specific scanners.
@@ -172,6 +199,29 @@ parser や output 変更と混ぜずに、最初の command-family ownership bou
 | `QueryCommandRunner.cs` file-hotspot refs | 3,233 refs / 555 symbols | 3,194 refs / 551 symbols |
 | `QueryCommandRunner.Hotspots.cs` | なし | 25,993 bytes / 461 lines / 306 refs |
 
+## Issue #4107 のスナップショット
+
+Issue #4107 では、この計画の SymbolExtractor 段階を `origin/main` の
+`e043a7f04de511c0b965f09f70228831822f6eac` から開始します。fresh な dogfood
+snapshot でも、symbol extraction surface は引き続き `SymbolExtractor.cs`、
+`SymbolExtractor.JavaScriptTypeScriptSupport.cs`、`SymbolExtractor.CSharpScanner.cs`、
+`SymbolExtractor.Markup.cs` に集中しており、`ExtractCore` と JS/TS の styled/class
+helper path が関数単位の大きな hotspot に含まれています。
+
+この PR では言語固有 helper の mechanical な ownership move を行います。JS/TS の
+styled-factory candidate gate を `SymbolExtractor.JavaScriptTypeScriptStyledFactory.cs`
+へ移し、CSS/Sass scanner helper を共有 `SymbolExtractor.cs` core ではなく
+`SymbolExtractor.CssScanner.cs` に置きました。抽出 semantics は変更せず、今後の大きな
+extractor split の前に、言語固有 path を focused partial の背後へ移すことが目的です。
+
+## Issue #4106 のフォローアップ
+
+Issue #4106 では、同じ段階的な QueryCommandRunner 分割の続きとして、公開
+`RunSearch` コマンドの実行制御を `QueryCommandRunner.Search.cs` へ移します。
+これは引き続き挙動を維持する移動です。共有の検索ヘルパー、結果整形ヘルパー、
+引数パーサーは後続分割用に同じ partial class へ残しつつ、issue で主要 hotspot
+とされた 734 行の検索入口を中心の runner から切り離します。
+
 ## 分割順序
 
 1. `QueryCommandRunner.cs`
@@ -179,6 +229,7 @@ parser や output 変更と混ぜずに、最初の command-family ownership bou
    - parsing boundary が安定してから result formatting helper を移動する。
    - 移動した command family と同じ PR で CLI text、JSON、LSP、quickfix、SARIF test を維持する。
    - 現在の #4061 split: `hotspots` command 実行は `QueryCommandRunner.Hotspots.cs` に置く。後続の command-family move も同じく mechanical に保つ。
+   - 現在の #4106 フォローアップ: `RunSearch` コマンドの実行制御は `QueryCommandRunner.Search.cs` に置く。後続の検索解析、計画、結果整形、出力描画の移動も挙動維持かつ個別 test 付きに保つ。
 
 2. `SymbolExtractor.cs`
    - 共有 extraction contract と言語固有 scanner を分ける。

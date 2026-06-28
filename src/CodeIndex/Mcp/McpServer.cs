@@ -889,7 +889,7 @@ public partial class McpServer : IDisposable
             }
             catch (Exception ex) when (ex is IOException or ObjectDisposedException or OperationCanceledException)
             {
-                WriteMcpLogLine(BuildResponseWriteErrorLog(DiagnosticSanitizer.ForMessage(ex.Message)));
+                WriteMcpLogLine(BuildResponseWriteErrorLog(DiagnosticRedactor.FormatExceptionMessage(ex)));
                 FlushDeferredFrameLogs();
             }
         }
@@ -914,7 +914,7 @@ public partial class McpServer : IDisposable
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or TimeoutException)
         {
-            WriteMcpLogLine(BuildResponseWriteErrorLog(DiagnosticSanitizer.ForMessage(ex.Message)));
+            WriteMcpLogLine(BuildResponseWriteErrorLog(DiagnosticRedactor.FormatExceptionMessage(ex)));
         }
     }
 
@@ -969,7 +969,7 @@ public partial class McpServer : IDisposable
 
     private string BuildInvalidUtf8ParseErrorResponse(DecoderFallbackException ex)
     {
-        DeferFrameLog(BuildInvalidUtf8ErrorLog(ex.Message));
+        DeferFrameLog(BuildInvalidUtf8ErrorLog(DiagnosticRedactor.FormatExceptionMessage(ex)));
         var errorResponse = CreateErrorResponse(hasId: true, id: null, code: -32700, message: "Parse error: invalid UTF-8 input",
             category: McpErrorEnvelope.CategoryParseError,
             suggestion: "Send one JSON-RPC 2.0 object per line encoded as valid UTF-8. Reject or re-encode malformed bytes before retrying.",
@@ -1059,7 +1059,7 @@ public partial class McpServer : IDisposable
             // stderr には診断用に詳細を残すが、ネットワークに出るレスポンスには
             // 例外型のみを返し、SQLite の "near 'foo': syntax error" などを通じた
             // 内容漏れを防ぐ（#1530）。
-            DeferFrameLog(BuildUnhandledLoopErrorLog(DiagnosticSanitizer.ForMessage(ex.Message)));
+            DeferFrameLog(BuildUnhandledLoopErrorLog(DiagnosticRedactor.FormatExceptionMessage(ex)));
             var classification = McpErrorEnvelope.ClassifyException(ex);
             var errorResponse = CreateErrorResponse(responseHasId, responseId, classification.JsonRpcCode,
                 BuildSanitizedLoopErrorMessage(ex),
@@ -1251,7 +1251,7 @@ public partial class McpServer : IDisposable
         }
         catch (Exception ex)
         {
-            DeferFrameLog(BuildResponseSerializationErrorLog(DiagnosticSanitizer.ForMessage(ex.Message)));
+            DeferFrameLog(BuildResponseSerializationErrorLog(DiagnosticRedactor.FormatExceptionMessage(ex)));
             return BuildMinimalInternalErrorResponse(hasId, id, ex);
         }
     }
@@ -1542,7 +1542,7 @@ public partial class McpServer : IDisposable
 
     private static TimeSpan? ReadKeepAliveIntervalFromEnvironment()
     {
-        var raw = Environment.GetEnvironmentVariable(KeepAliveIntervalEnvironmentVariable);
+        var raw = global::CodeIndex.EnvironmentAccess.GetProcessEnvironmentVariable(KeepAliveIntervalEnvironmentVariable);
         if (string.IsNullOrWhiteSpace(raw))
             return null;
         if (!double.TryParse(raw, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var seconds)
@@ -3027,16 +3027,15 @@ public partial class McpServer : IDisposable
         }
         catch (Exception ex)
         {
-            // Stderr captures the full ex.Message for local debugging, but the
-            // JSON-RPC tool result is sanitized down to the tool name +
-            // exception type. ex.Message can otherwise echo bound parameter
-            // values (e.g. SQLite errors quote the offending literal) or path
-            // / content fragments, which would leak to the client through the
-            // MCP transcript (#1530).
-            // stderr には ex.Message をそのまま残してローカルデバッグを支えるが、
-            // JSON-RPC のツール結果は tool 名 + 例外型のみに絞る。SQLite 例外などは
-            // バインド値や該当リテラルを含むため、生のメッセージをクライアントに渡すと
-            // パスや索引内容が漏れる（#1530）。
+            // Stderr keeps a sanitized local diagnostic, while the JSON-RPC tool
+            // result is reduced to the tool name + exception type. Raw exception
+            // messages can echo bound parameter values (e.g. SQLite errors quote
+            // the offending literal), paths, or content fragments, which would
+            // otherwise leak through the MCP transcript (#1530 / #4124).
+            // stderr には sanitize 済みのローカル診断だけを残し、JSON-RPC のツール結果は
+            // tool 名 + 例外型に絞る。SQLite 例外などの生メッセージはバインド値、
+            // 該当リテラル、パス、索引内容を含み得るため、MCP transcript へ流さない
+            // (#1530 / #4124)。
             DeferFrameLog(() =>
             {
                 WriteMcpLogLine(BuildToolErrorLog(toolName, ex));
@@ -4159,7 +4158,7 @@ public partial class McpServer : IDisposable
 
     private static int ReadPositiveIntEnvironmentLimit(string envVar, int defaultValue, int maximumValue, string description)
     {
-        var raw = Environment.GetEnvironmentVariable(envVar);
+        var raw = global::CodeIndex.EnvironmentAccess.GetProcessEnvironmentVariable(envVar);
         if (string.IsNullOrWhiteSpace(raw))
             return defaultValue;
 

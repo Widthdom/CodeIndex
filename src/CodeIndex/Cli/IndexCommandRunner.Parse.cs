@@ -503,7 +503,7 @@ public static partial class IndexCommandRunner
     private static int ReadIndexParallelismFromEnvironment()
     {
         var fallback = DefaultIndexParallelism();
-        var value = Environment.GetEnvironmentVariable(IndexParallelismEnvironmentVariable);
+        var value = CdidxEnvironment.GetProcessEnvironmentVariable(IndexParallelismEnvironmentVariable);
         if (string.IsNullOrWhiteSpace(value))
             return fallback;
 
@@ -583,7 +583,7 @@ public static partial class IndexCommandRunner
 
     private static long? ReadMaxFileSizeBytesFromEnvironment()
     {
-        var value = Environment.GetEnvironmentVariable(FileIndexer.MaxFileSizeEnvironmentVariable);
+        var value = CdidxEnvironment.GetProcessEnvironmentVariable(FileIndexer.MaxFileSizeEnvironmentVariable);
         if (string.IsNullOrWhiteSpace(value))
             return null;
 
@@ -657,7 +657,7 @@ public static partial class IndexCommandRunner
 
     private static CompletionNotificationMode ReadCompletionNotificationModeFromEnvironment()
     {
-        var value = Environment.GetEnvironmentVariable(CompletionNotificationEnvironmentVariable);
+        var value = CdidxEnvironment.GetProcessEnvironmentVariable(CompletionNotificationEnvironmentVariable);
         if (string.IsNullOrWhiteSpace(value))
             return CompletionNotificationMode.Auto;
 

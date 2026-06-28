@@ -178,7 +178,7 @@ internal static class GitHubIssueReporter
 
     internal static TimeSpan ResolveSubmitTimeout()
     {
-        var raw = Environment.GetEnvironmentVariable(TimeoutEnvironmentVariable);
+        var raw = CdidxEnvironment.GetProcessEnvironmentVariable(TimeoutEnvironmentVariable);
         if (string.IsNullOrWhiteSpace(raw))
             return DefaultTimeout;
 
@@ -468,7 +468,7 @@ internal static class GitHubIssueReporter
     /// </summary>
     internal static string? ResolveToken()
     {
-        var cdidxToken = Environment.GetEnvironmentVariable("CDIDX_GITHUB_TOKEN");
+        var cdidxToken = CdidxEnvironment.GetProcessEnvironmentVariable("CDIDX_GITHUB_TOKEN");
         if (!string.IsNullOrWhiteSpace(cdidxToken))
             return cdidxToken;
 
@@ -866,6 +866,7 @@ internal static class GitHubIssueReporter
         var sanitized = TryRedactSensitiveJsonFields(bounded, out var redactedJson)
             ? redactedJson
             : RedactSensitiveJsonLikeFields(bounded);
+        sanitized = DiagnosticRedactor.RedactSensitiveText(sanitized, "[redacted]");
         var normalized = sanitized.Replace("\r", " ").Replace("\n", " ").Trim();
         return normalized.Length == 0 ? "<empty response body>" : normalized;
     }

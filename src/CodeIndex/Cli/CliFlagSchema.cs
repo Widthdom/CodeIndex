@@ -125,7 +125,7 @@ internal static class CliFlagSchema
     ];
     private static readonly string[] RawKindsCommands = ["callers", "callees"];
     private static readonly string[] RankByCommands = ["callers", "callees"];
-    private static readonly string[] SymbolSortCommands = ["symbols"];
+    private static readonly string[] SymbolSortCommands = ["symbols", "outline"];
     private static readonly string[] ByBucketCommands = ["unused"];
     private static readonly string[] UnusedFilterCommands = ["unused"];
     private static readonly string[] CursorCommands = ["search", "outline", "unused"];
@@ -135,7 +135,7 @@ internal static class CliFlagSchema
     private static readonly string[] ByteFormatCommands = ["files", "map"];
     private static readonly string[] EntrypointConfidenceCommands = ["map"];
     private static readonly string[] MapSectionCommands = ["map"];
-    private static readonly string[] SummaryOnlyCommands = ["map", "search", "recipes", "audit"];
+    private static readonly string[] SummaryOnlyCommands = ["map", "search", "recipes", "audit", "deps", "hotspots"];
     private static readonly string[] DependencyCycleCommands = ["deps"];
     private static readonly string[] LanguagesFilterCommands = ["languages"];
 
@@ -272,7 +272,7 @@ internal static class CliFlagSchema
             new() { Name = "--actionable", Description = "Unused: preset for private medium-confidence cleanup candidates", Commands = Set(UnusedFilterCommands) },
             new() { Name = "--all", Description = "goto: return all matching LSP locations; find: search all indexed files instead of requiring --path", Commands = Set(AllResultCommands) },
             new() { Name = "--rank-by", ValuePlaceholder = "<weighted|count|kind>", Description = "Rank callers/callees by weighted structural score, raw count, or kind bucket", Commands = Set(RankByCommands) },
-            new() { Name = "--sort", ValuePlaceholder = "<hotspot|references|size|complexity|path>", Description = "Symbols: order audit output by a ranking signal", Commands = Set(SymbolSortCommands) },
+            new() { Name = "--sort", ValuePlaceholder = "<mode>", Description = "Symbols/outline: order audit output by a ranking signal; outline also accepts source, kind, span, and name", Commands = Set(SymbolSortCommands) },
             new() { Name = "--raw-kinds", Description = "Show raw reference kinds instead of logical graph kinds", Commands = Set(RawKindsCommands) },
             new() { Name = "--count", Description = "Count only", Commands = Set(CountCommands) },
             new() { Name = "--strict-not-found", Description = "Return exit code 2 when a valid query has zero rows", Commands = Set(StrictNotFoundCommands) },
@@ -281,7 +281,7 @@ internal static class CliFlagSchema
             new() { Name = "--bytes", Description = "Files: sort by size and show raw byte counts in human output; map: show raw byte counts", Commands = Set(ByteFormatCommands) },
             new() { Name = "--min-entrypoint-confidence", ValuePlaceholder = "<0.0..1.0>", Description = "Map: omit entrypoint candidates below this confidence", Commands = Set(EntrypointConfidenceCommands) },
             new() { Name = "--sections", ValuePlaceholder = "<tree,languages,hotspots,metrics>", Description = "Map: comma-separated response sections to include", Commands = Set(MapSectionCommands) },
-            new() { Name = "--summary-only", Description = "Map/Diff/Recipes/Audit: return only aggregate summary fields where supported", Commands = Set(SummaryOnlyCommands) },
+            new() { Name = "--summary-only", Description = "Map/Diff/Recipes/Audit/Deps/Hotspots: return only aggregate summary fields where supported", Commands = Set(SummaryOnlyCommands) },
             new() { Name = "--cycles", Description = "Deps: return dependency cycles from a bounded approximate candidate-edge scan", Commands = Set(DependencyCycleCommands) },
             new() { Name = "--suppress-noise", Description = "Deps: suppress generic framework/noise symbols in edge symbol samples", Commands = Set("deps") },
             new() { Name = "--symbol", ValuePlaceholder = "<name>", Description = "Deps: keep only edges with an exact sampled symbol name", Commands = Set("deps") },
@@ -339,7 +339,7 @@ internal static class CliFlagSchema
             new() { Name = "--sample", ValuePlaceholder = "<n>", Description = "Search: deterministically sample returned rows down to n results", Commands = Set("search") },
             new() { Name = "--per-file-limit", ValuePlaceholder = "<n>", Description = "Search/Audit grouped output: representative matches per file", Commands = Set("search", "audit") },
             new() { Name = "--total-limit", ValuePlaceholder = "<n>", Description = "Search/Audit recipes: cap emitted rows across all child queries", Commands = Set("search", "audit") },
-            new() { Name = "--max-json-bytes", ValuePlaceholder = "<n>", Description = "Search/Recipes/Audit JSON: fail before emitting more than this many JSON bytes", Commands = Set("search", "recipes", "audit") },
+            new() { Name = "--max-json-bytes", ValuePlaceholder = "<n>", Description = "Search/Recipes/Audit/Deps/Hotspots JSON: fail before emitting more than this many JSON bytes", Commands = Set("search", "recipes", "audit", "deps", "hotspots") },
             new() { Name = "--next-steps", Description = "Search: print inspect/excerpt follow-up commands for top hits", Commands = Set("search") },
             new() { Name = "--exclude-comments", Description = "Search: suppress comment-only matches after origin classification", Commands = Set("search") },
             new() { Name = "--exclude-strings", Description = "Search: suppress string, regex, and help-text matches after origin classification", Commands = Set("search") },
@@ -368,7 +368,7 @@ internal static class CliFlagSchema
             new() { Name = "--depth", ValuePlaceholder = "<n>", Description = "Map: cap module depth; impact: deprecated alias for --max-hops", Commands = Set("impact", "map") },
             new() { Name = "--with-paths", Description = "Impact: include shortest call chains per caller", Commands = Set("impact") },
             new() { Name = "--reverse", Description = "Reverse direction (show dependents)", Commands = Set("deps") },
-            new() { Name = "--group-by", ValuePlaceholder = "<file|symbol|origin|statement>", Description = "Search: group --count rows by file, symbol, or origin; hotspots: choose grouping unit", Commands = Set("hotspots", "search") },
+            new() { Name = "--group-by", ValuePlaceholder = "<file|symbol|origin|statement>", Description = "Search: group --count rows by file, symbol, or origin; hotspots: symbol/file grouping, with statement only for --lang sql", Commands = Set("hotspots", "search") },
             new() { Name = "--group-by-name", Description = "Hotspots: collapse same-name rows; JSON keeps capped paths plus full definition details", Commands = Set("hotspots") },
             new() { Name = "--check", Description = "Verify status freshness/readiness", Commands = Set("status") },
             new() { Name = "--config", Description = "Print effective configuration with source attribution", Commands = Set("status") },

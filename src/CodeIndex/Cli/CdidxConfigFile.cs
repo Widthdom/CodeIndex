@@ -620,7 +620,7 @@ internal static class CdidxConfigFile
                 CommandExitCodes.UsageError,
                 "run `cdidx validate-config` from the workspace whose config should be validated.");
 
-        var result = Load(Environment.CurrentDirectory, name => name == DisableEnvVar ? null : Environment.GetEnvironmentVariable(name));
+        var result = Load(Environment.CurrentDirectory, name => name == DisableEnvVar ? null : CdidxEnvironment.GetProcessEnvironmentVariable(name));
         if (result.Failed)
         {
             return CommandErrorWriter.WriteJsonOrHuman(
@@ -667,11 +667,11 @@ internal static class CdidxConfigFile
         if (remaining.Count > 0)
             return CommandErrorWriter.WriteJsonOrHuman(wantsJson, jsonOptions, "config show does not accept positional arguments.", CommandExitCodes.UsageError, "run `cdidx config show` from the workspace whose config should be shown.");
 
-        var disabled = string.Equals(Environment.GetEnvironmentVariable(DisableEnvVar), "1", StringComparison.Ordinal);
+        var disabled = string.Equals(CdidxEnvironment.GetProcessEnvironmentVariable(DisableEnvVar), "1", StringComparison.Ordinal);
         var discovery = DiscoverConfigFile(Environment.CurrentDirectory);
         var loadResult = disabled
             ? new LoadResult(null, Error: null)
-            : Load(Environment.CurrentDirectory, Environment.GetEnvironmentVariable);
+            : Load(Environment.CurrentDirectory, CdidxEnvironment.GetProcessEnvironmentVariable);
         var path = disabled ? null : discovery.Path;
         var active = ActiveWorkspace.Load();
         var workspaceManifest = WorkspaceManifestLoader.Discover(Environment.CurrentDirectory);
@@ -761,7 +761,7 @@ internal static class CdidxConfigFile
 
     private static string? ResolveActiveWorkspaceStatePathForStatus()
     {
-        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable)))
+        if (!string.IsNullOrWhiteSpace(CdidxEnvironment.GetProcessEnvironmentVariable(ActiveWorkspace.EnvironmentVariable)))
             return null;
 
         try
@@ -788,7 +788,7 @@ internal static class CdidxConfigFile
         foreach (var item in EnvironmentVariableInventory.Items.OrderBy(static item => item.Name, StringComparer.Ordinal))
         {
             var sensitive = item.Sensitivity == EnvironmentVariableInventory.SensitivitySecret;
-            var processValue = Environment.GetEnvironmentVariable(item.Name);
+            var processValue = CdidxEnvironment.GetProcessEnvironmentVariable(item.Name);
             var scopedValue = CdidxEnvironment.GetEnvironmentVariable(item.Name);
             var configSource = CdidxEnvironment.GetConfigSource(item.Name);
             var hasLoadedConfigValue = loadResult.Settings.TryGetValue(item.Name, out var loadedConfigValue);
@@ -902,7 +902,7 @@ internal static class CdidxConfigFile
         => $"[cdidx] {FormatConfigDiagnosticPath(path)}:";
 
     internal static string FormatConfigExceptionMessage(Exception ex)
-        => FormatConfigDiagnosticText(ex.Message, MaxConfigDiagnosticChars, redactPaths: true).Text;
+        => DiagnosticRedactor.FormatExceptionMessage(ex, MaxConfigDiagnosticChars);
 
     private static string FormatConfigKeyForDiagnostic(string key)
         => FormatConfigDiagnosticText(key, MaxUnknownConfigKeyChars, redactPaths: false).Text;

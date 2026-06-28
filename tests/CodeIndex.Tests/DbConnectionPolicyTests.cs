@@ -78,6 +78,20 @@ public class DbConnectionPolicyTests
     }
 
     [Fact]
+    public void DbPragmaPolicy_DynamicPragmaSqlHelpers_ConstrainValues_Issue4128()
+    {
+        Assert.Equal("PRAGMA synchronous=NORMAL", DbPragmaPolicy.SynchronousPragmaSql("normal"));
+        Assert.Equal("PRAGMA synchronous=EXTRA", DbPragmaPolicy.SynchronousPragmaSql(" EXTRA "));
+        Assert.Equal("PRAGMA wal_autocheckpoint=1000", DbPragmaPolicy.WalAutocheckpointPragmaSql(1000));
+        Assert.Equal("PRAGMA incremental_vacuum(123)", DbPragmaPolicy.IncrementalVacuumPragmaSql(123));
+
+        Assert.Throws<ArgumentException>(() => DbPragmaPolicy.SynchronousPragmaSql(""));
+        Assert.Throws<ArgumentOutOfRangeException>(() => DbPragmaPolicy.SynchronousPragmaSql("NORMAL; DROP TABLE files"));
+        Assert.Throws<ArgumentOutOfRangeException>(() => DbPragmaPolicy.WalAutocheckpointPragmaSql(-1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => DbPragmaPolicy.IncrementalVacuumPragmaSql(-1));
+    }
+
+    [Fact]
     public void DbPragmaPolicy_ReadBusyTimeoutPragmaSql_UsesBoundedEnvironmentValue_Issue4070()
     {
         using var scope = CdidxEnvironment.Push(new Dictionary<string, string>

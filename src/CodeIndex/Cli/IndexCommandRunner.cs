@@ -470,7 +470,7 @@ public static partial class IndexCommandRunner
 
     private static void WarnIfMemoryThresholdExceeded(IndexMemoryTimelineJsonResult? timeline)
     {
-        var rawThreshold = Environment.GetEnvironmentVariable("CDIDX_MEM_WARN_MB");
+        var rawThreshold = CdidxEnvironment.GetProcessEnvironmentVariable("CDIDX_MEM_WARN_MB");
         if (timeline == null || !long.TryParse(rawThreshold, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var thresholdMb) || thresholdMb <= 0)
             return;
 
@@ -592,7 +592,7 @@ public static partial class IndexCommandRunner
 
     internal static string FormatIndexRunDiagnostic(string code, Exception ex)
     {
-        var raw = $"{code}: {ex.GetType().Name}: {DiagnosticSanitizer.ForMessage(ex.Message, MaxIndexRunDiagnosticLength)}";
+        var raw = $"{code}: {ex.GetType().Name}: {DiagnosticRedactor.FormatExceptionMessage(ex, MaxIndexRunDiagnosticLength)}";
         return raw.Length <= MaxIndexRunDiagnosticLength
             ? raw
             : raw[..MaxIndexRunDiagnosticLength] + "...<truncated>";
@@ -603,7 +603,7 @@ public static partial class IndexCommandRunner
         if (string.IsNullOrWhiteSpace(target))
             return FormatIndexRunDiagnostic(code, ex);
 
-        var raw = $"{code}: {CollapseLineBreaks(target)}: {ex.GetType().Name}: {DiagnosticSanitizer.ForMessage(ex.Message, MaxIndexRunDiagnosticLength)}";
+        var raw = $"{code}: {CollapseLineBreaks(target)}: {ex.GetType().Name}: {DiagnosticRedactor.FormatExceptionMessage(ex, MaxIndexRunDiagnosticLength)}";
         return raw.Length <= MaxIndexRunDiagnosticLength
             ? raw
             : raw[..MaxIndexRunDiagnosticLength] + "...<truncated>";

@@ -31,12 +31,29 @@ public static partial class QueryCommandRunner
         if (!TryResolveHotspotsGroupBy(options.GroupBy, options.Lang, groupByName, out var groupBy, out var groupByError))
         {
             CommandErrorWriter.WriteStderr(groupByError);
-            CommandErrorWriter.WriteStderr("Usage: cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]");
+            CommandErrorWriter.WriteStderr("Usage: cdidx hotspots [--db <path>] [--json] [--summary-only] [--max-json-bytes <n>] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]");
+            return CommandExitCodes.UsageError;
+        }
+        if (options.MaxJsonBytes.HasValue && !options.Json)
+        {
+            WriteUsageError(
+                "--max-json-bytes is only supported with hotspots JSON output.",
+                GetUsageLineOrThrow("hotspots"),
+                "Use `cdidx hotspots --json --max-json-bytes <n>`.");
+            return CommandExitCodes.UsageError;
+        }
+        if (options.SummaryOnly && !options.Json)
+        {
+            WriteUsageError(
+                "--summary-only is only supported with hotspots JSON output.",
+                GetUsageLineOrThrow("hotspots"),
+                "Use `cdidx hotspots --json --summary-only`.");
             return CommandExitCodes.UsageError;
         }
 
         return WithDb(options, jsonOptions, reader =>
         {
+            WriteGraphLiveness("hotspots", options.CountOnly ? "count_hotspots" : "read_hotspots", options, groupBy: groupBy);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             var zeroResultSqlGraphSignal = NarrowSqlGraphContractSignal(
                 baseSqlGraphSignal,
@@ -46,6 +63,7 @@ public static partial class QueryCommandRunner
                 if (options.CountOnly)
                 {
                     var countSummary = reader.CountGroupedSymbolHotspots(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
+                    WriteGraphLiveness("hotspots", "write_output", options, groupBy: groupBy, rows: countSummary.Count);
                     var countSqlGraphSignal = countSummary.Count == 0
                         ? zeroResultSqlGraphSignal
                         : NarrowSqlGraphContractSignal(
@@ -62,8 +80,14 @@ public static partial class QueryCommandRunner
                                 ["definition_site_total"] = countSummary.DefinitionSiteTotal,
                                 ["grouped_by"] = HotspotsGroupedByNameKind,
                             };
+                        if (options.SummaryOnly)
+                            payload["summary_only"] = true;
                         AddSqlGraphContractJsonFields(payload, countSqlGraphSignal);
-                        Console.WriteLine(payload.ToJsonString(jsonOptions));
+                        AddHotspotsGroupingContractJsonFields(payload, groupBy, options, jsonOptions, countOnly: true);
+                        var writeExitCode = WriteHotspotsJsonPayload(payload, options, jsonOptions);
+                        return writeExitCode == CommandExitCodes.Success
+                            ? (countSummary.Count == 0 ? ZeroResultExitCode(options) : CommandExitCodes.Success)
+                            : writeExitCode;
                     }
                     else
                     {
@@ -74,6 +98,7 @@ public static partial class QueryCommandRunner
                 }
 
                 var groupedResults = reader.GetGroupedSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
+                WriteGraphLiveness("hotspots", "write_output", options, groupBy: groupBy, rows: groupedResults.Count);
                 var effectiveSqlGraphSignal = groupedResults.Count == 0
                     ? zeroResultSqlGraphSignal
                     : NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, groupedResults.Select(result => result.Symbol.Lang), options.Lang);
@@ -84,8 +109,11 @@ public static partial class QueryCommandRunner
                         if (options.Json)
                         {
                             var payload = BuildGroupedHotspotsZeroJsonPayload(reader, jsonOptions, countOnly: true, graphAvailable: reader._hasReferencesTable, queryOptions: options);
+                            if (options.SummaryOnly)
+                                payload["summary_only"] = true;
                             AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
-                            Console.WriteLine(payload.ToJsonString(jsonOptions));
+                            var writeExitCode = WriteHotspotsJsonPayload(payload, options, jsonOptions);
+                            return writeExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : writeExitCode;
                         }
                         else
                             WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, new ExactQuerySignal(true, HasMissingIndex: false, HasMissingTable: false, null));
@@ -93,8 +121,11 @@ public static partial class QueryCommandRunner
                     else if (options.Json)
                     {
                         var payload = BuildGroupedHotspotsZeroJsonPayload(reader, jsonOptions, countOnly: false, graphAvailable: reader._hasReferencesTable, queryOptions: options);
+                        if (options.SummaryOnly)
+                            payload["summary_only"] = true;
                         AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
-                        Console.WriteLine(payload.ToJsonString(jsonOptions));
+                        var writeExitCode = WriteHotspotsJsonPayload(payload, options, jsonOptions);
+                        return writeExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : writeExitCode;
                     }
                     else
                     {
@@ -112,33 +143,39 @@ public static partial class QueryCommandRunner
 
                 if (options.Json)
                 {
-                    var items = groupedResults
-                        .Select(g => new GroupedSymbolHotspotJsonResult(
-                            g.Symbol.Name,
-                            g.Symbol.Kind,
-                            g.Symbol.Path,
-                            g.Symbol.Line,
-                            g.ReferenceCount,
-                            g.ReferenceScore,
-                            g.RankingScore,
-                            g.GenericNamePenalty,
-                            g.Symbol.Visibility,
-                            g.Symbol.ContainerName,
-                            g.DefinitionSites,
-                            g.Paths,
-                            g.PathsTruncated,
-                            BuildGroupedHotspotRepresentative(g),
-                            g.DefinitionSiteDetails.Select(ToGroupedHotspotSiteJson).ToList()))
-                        .ToList();
                     var payload = new JsonObject
                     {
                         ["count"] = groupedResults.Count,
                         ["definition_site_total"] = definitionSiteTotal,
                         ["grouped_by"] = HotspotsGroupedByNameKind,
-                        ["hotspots"] = JsonSerializer.SerializeToNode(items, CliJsonSerializerContextFactory.Create(jsonOptions).ListGroupedSymbolHotspotJsonResult)
                     };
+                    if (options.SummaryOnly)
+                        payload["summary_only"] = true;
+                    else
+                    {
+                        var items = groupedResults
+                            .Select(g => new GroupedSymbolHotspotJsonResult(
+                                g.Symbol.Name,
+                                g.Symbol.Kind,
+                                g.Symbol.Path,
+                                g.Symbol.Line,
+                                g.ReferenceCount,
+                                g.ReferenceScore,
+                                g.RankingScore,
+                                g.GenericNamePenalty,
+                                g.Symbol.Visibility,
+                                g.Symbol.ContainerName,
+                                g.DefinitionSites,
+                                g.Paths,
+                                g.PathsTruncated,
+                                BuildGroupedHotspotRepresentative(g),
+                                g.DefinitionSiteDetails.Select(ToGroupedHotspotSiteJson).ToList()))
+                            .ToList();
+                        payload["hotspots"] = JsonSerializer.SerializeToNode(items, CliJsonSerializerContextFactory.Create(jsonOptions).ListGroupedSymbolHotspotJsonResult);
+                    }
                     AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
-                    Console.WriteLine(payload.ToJsonString(jsonOptions));
+                    AddHotspotsGroupingContractJsonFields(payload, groupBy, options, jsonOptions, countOnly: false);
+                    return WriteHotspotsJsonPayload(payload, options, jsonOptions);
                 }
                 else
                 {
@@ -161,6 +198,7 @@ public static partial class QueryCommandRunner
                 if (options.CountOnly)
                 {
                     var countSummary = reader.CountFileSymbolHotspots(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
+                    WriteGraphLiveness("hotspots", "write_output", options, groupBy: groupBy, rows: countSummary.Count);
                     var countSqlGraphSignal = countSummary.Count == 0
                         ? zeroResultSqlGraphSignal
                         : NarrowSqlGraphContractSignal(
@@ -175,11 +213,18 @@ public static partial class QueryCommandRunner
                             ["graph_table_available"] = reader._hasReferencesTable,
                             ["grouped_by"] = groupBy,
                         };
+                        if (options.SummaryOnly)
+                            payload["summary_only"] = true;
+                        payload["query_context"] = BuildQueryContextJson(options, jsonOptions);
                         AddHotspotFamilyJsonFields(payload, fileHotspotSignal);
                         AddSqlGraphContractJsonFields(payload, countSqlGraphSignal);
+                        AddHotspotsGroupingContractJsonFields(payload, groupBy, options, jsonOptions, countOnly: true);
                         if (countSummary.Count == 0)
                             AddFreshnessHint(payload, reader);
-                        Console.WriteLine(payload.ToJsonString(jsonOptions));
+                        var writeExitCode = WriteHotspotsJsonPayload(payload, options, jsonOptions);
+                        return writeExitCode == CommandExitCodes.Success
+                            ? (countSummary.Count == 0 ? ZeroResultExitCode(options) : CommandExitCodes.Success)
+                            : writeExitCode;
                     }
                     else
                     {
@@ -191,6 +236,7 @@ public static partial class QueryCommandRunner
                 }
 
                 var fileResults = reader.GetFileSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
+                WriteGraphLiveness("hotspots", "write_output", options, groupBy: groupBy, rows: fileResults.Count);
                 var effectiveSqlGraphSignal = fileResults.Count == 0
                     ? zeroResultSqlGraphSignal
                     : NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, fileResults.Select(result => result.Lang), options.Lang);
@@ -208,10 +254,14 @@ public static partial class QueryCommandRunner
                                 ["graph_table_available"] = reader._hasReferencesTable,
                                 ["grouped_by"] = groupBy,
                             };
+                            if (options.SummaryOnly)
+                                payload["summary_only"] = true;
+                            payload["query_context"] = BuildQueryContextJson(options, jsonOptions);
                             AddHotspotFamilyJsonFields(payload, fileHotspotSignal);
                             AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
                             AddFreshnessHint(payload, reader);
-                            Console.WriteLine(payload.ToJsonString(jsonOptions));
+                            var writeExitCode = WriteHotspotsJsonPayload(payload, options, jsonOptions);
+                            return writeExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : writeExitCode;
                         }
                         else
                         {
@@ -222,18 +272,24 @@ public static partial class QueryCommandRunner
                     }
                     else if (options.Json)
                     {
-                        Console.WriteLine(BuildJsonZeroResultPayload(
+                        var payload = BuildJsonZeroResultPayload(
                             reader,
                             jsonOptions,
-                            resultsKey: "hotspots",
+                            resultsKey: options.SummaryOnly ? null : "hotspots",
                             graphTableAvailable: reader._hasReferencesTable,
                             degraded: !reader._hasReferencesTable || !fileHotspotSignal.Ready,
+                            queryOptions: options,
                             extraFields: payload =>
                             {
                                 payload["grouped_by"] = groupBy;
                                 AddHotspotFamilyJsonFields(payload, fileHotspotSignal);
                                 AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
-                            }).ToJsonString(jsonOptions));
+                                AddHotspotsGroupingContractJsonFields(payload, groupBy, options, jsonOptions, countOnly: false);
+                            });
+                        if (options.SummaryOnly)
+                            payload["summary_only"] = true;
+                        var writeExitCode = WriteHotspotsJsonPayload(payload, options, jsonOptions);
+                        return writeExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : writeExitCode;
                     }
                     else
                     {
@@ -250,33 +306,38 @@ public static partial class QueryCommandRunner
 
                 if (options.Json)
                 {
-                    var hotspots = new JsonArray();
-                    foreach (var result in fileResults)
-                    {
-                        hotspots.Add(new JsonObject
-                        {
-                            ["path"] = result.Path,
-                            ["lang"] = result.Lang,
-                            ["reference_count"] = result.ReferenceCount,
-                            ["symbol_count"] = result.SymbolCount,
-                        });
-                    }
                     var payload = new JsonObject
                     {
                         ["count"] = fileResults.Count,
                         ["files"] = fileResults.Count,
                         ["grouped_by"] = groupBy,
-                        ["hotspots"] = hotspots,
                     };
+                    if (options.SummaryOnly)
+                        payload["summary_only"] = true;
+                    else
+                    {
+                        var hotspots = new JsonArray();
+                        foreach (var result in fileResults)
+                        {
+                            hotspots.Add(new JsonObject
+                            {
+                                ["path"] = result.Path,
+                                ["lang"] = result.Lang,
+                                ["reference_count"] = result.ReferenceCount,
+                                ["symbol_count"] = result.SymbolCount,
+                            });
+                        }
+                        payload["hotspots"] = hotspots;
+                    }
                     AddHotspotFamilyJsonFields(payload, fileHotspotSignal);
                     AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
-                    payload["query_context"] = BuildQueryContextJson(options, jsonOptions);
+                    AddHotspotsGroupingContractJsonFields(payload, groupBy, options, jsonOptions, countOnly: false);
                     if (options.Compact)
                     {
                         payload["compact"] = true;
                         payload["omitted_sections"] = new JsonArray();
                     }
-                    Console.WriteLine(payload.ToJsonString(jsonOptions));
+                    return WriteHotspotsJsonPayload(payload, options, jsonOptions);
                 }
                 else
                 {
@@ -295,6 +356,7 @@ public static partial class QueryCommandRunner
             if (options.CountOnly)
             {
                 var countSummary = reader.CountSymbolHotspots(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
+                WriteGraphLiveness("hotspots", "write_output", options, groupBy: groupBy, rows: countSummary.Count);
                 var countSqlGraphSignal = countSummary.Count == 0
                     ? zeroResultSqlGraphSignal
                     : NarrowSqlGraphContractSignal(
@@ -309,13 +371,20 @@ public static partial class QueryCommandRunner
                         ["graph_table_available"] = reader._hasReferencesTable,
                         ["grouped_by"] = groupBy,
                     };
+                    if (options.SummaryOnly)
+                        payload["summary_only"] = true;
+                    payload["query_context"] = BuildQueryContextJson(options, jsonOptions);
                     if (!reader._hasReferencesTable)
                         payload["degraded"] = true;
                     AddHotspotFamilyJsonFields(payload, hotspotSignal);
                     AddSqlGraphContractJsonFields(payload, countSqlGraphSignal);
+                    AddHotspotsGroupingContractJsonFields(payload, groupBy, options, jsonOptions, countOnly: true);
                     if (countSummary.Count == 0)
                         AddFreshnessHint(payload, reader);
-                    Console.WriteLine(payload.ToJsonString(jsonOptions));
+                    var writeExitCode = WriteHotspotsJsonPayload(payload, options, jsonOptions);
+                    return writeExitCode == CommandExitCodes.Success
+                        ? (countSummary.Count == 0 ? ZeroResultExitCode(options) : CommandExitCodes.Success)
+                        : writeExitCode;
                 }
                 else
                 {
@@ -329,6 +398,7 @@ public static partial class QueryCommandRunner
             }
 
             var results = reader.GetSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
+            WriteGraphLiveness("hotspots", "write_output", options, groupBy: groupBy, rows: results.Count);
             var sqlGraphSignal = results.Count == 0
                 ? zeroResultSqlGraphSignal
                 : NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Symbol.Lang), options.Lang);
@@ -352,34 +422,62 @@ public static partial class QueryCommandRunner
                             ["graph_table_available"] = reader._hasReferencesTable,
                             ["grouped_by"] = groupBy,
                         };
+                        if (options.SummaryOnly)
+                            payload["summary_only"] = true;
+                        payload["query_context"] = BuildQueryContextJson(options, jsonOptions);
                         if (!reader._hasReferencesTable)
                             payload["degraded"] = true;
                         AddHotspotFamilyJsonFields(payload, hotspotSignal);
                         AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+                        AddHotspotsGroupingContractJsonFields(payload, groupBy, options, jsonOptions, countOnly: true);
                         AddFreshnessHint(payload, reader);
-                        Console.WriteLine(payload.ToJsonString(jsonOptions));
+                        var writeExitCode = WriteHotspotsJsonPayload(payload, options, jsonOptions);
+                        return writeExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : writeExitCode;
                     }
                 }
                 else if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult(reader, "hotspots", json: true, graphAvailable: false, jsonOptions, queryOptions: options, extraFields: payload =>
-                    {
-                        payload["grouped_by"] = groupBy;
-                        AddHotspotFamilyJsonFields(payload, hotspotSignal);
-                        AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
-                    });
-                else if (options.Json)
-                    Console.WriteLine(BuildJsonZeroResultPayload(
+                {
+                    var payload = BuildJsonZeroResultPayload(
                         reader,
                         jsonOptions,
-                        resultsKey: "hotspots",
-                        graphTableAvailable: true,
-                        degraded: !hotspotSignal.Ready,
+                        resultsKey: options.SummaryOnly ? null : "hotspots",
+                        graphTableAvailable: false,
+                        degraded: true,
+                        queryOptions: options,
                         extraFields: payload =>
                         {
                             payload["grouped_by"] = groupBy;
                             AddHotspotFamilyJsonFields(payload, hotspotSignal);
                             AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
-                        }).ToJsonString(jsonOptions));
+                            AddHotspotsGroupingContractJsonFields(payload, groupBy, options, jsonOptions, countOnly: false);
+                        });
+                    if (options.SummaryOnly)
+                        payload["summary_only"] = true;
+                    payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
+                    var writeExitCode = WriteHotspotsJsonPayload(payload, options, jsonOptions);
+                    return writeExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : writeExitCode;
+                }
+                else if (options.Json)
+                {
+                    var payload = BuildJsonZeroResultPayload(
+                        reader,
+                        jsonOptions,
+                        resultsKey: options.SummaryOnly ? null : "hotspots",
+                        graphTableAvailable: true,
+                        degraded: !hotspotSignal.Ready,
+                        queryOptions: options,
+                        extraFields: payload =>
+                        {
+                            payload["grouped_by"] = groupBy;
+                            AddHotspotFamilyJsonFields(payload, hotspotSignal);
+                            AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+                            AddHotspotsGroupingContractJsonFields(payload, groupBy, options, jsonOptions, countOnly: false);
+                        });
+                    if (options.SummaryOnly)
+                        payload["summary_only"] = true;
+                    var writeExitCode = WriteHotspotsJsonPayload(payload, options, jsonOptions);
+                    return writeExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : writeExitCode;
+                }
                 else if (!options.Json)
                 {
                     CommandErrorWriter.WriteStderr(BuildZeroResultLine("No symbol hotspots found", options));
@@ -394,28 +492,34 @@ public static partial class QueryCommandRunner
 
             if (options.Json)
             {
-                var items = results
-                    .Select(r => new SymbolHotspotJsonResult(
-                        r.Symbol.Name,
-                        r.Symbol.Kind,
-                        r.Symbol.Path,
-                        r.Symbol.Line,
-                        r.ReferenceCount,
-                        r.ReferenceScore,
-                        r.RankingScore,
-                        r.GenericNamePenalty,
-                        r.Symbol.Visibility,
-                        r.Symbol.ContainerName))
-                    .ToList();
                 var payload = new JsonObject
                 {
                     ["count"] = results.Count,
                     ["grouped_by"] = groupBy,
-                    ["hotspots"] = JsonSerializer.SerializeToNode(items, CliJsonSerializerContextFactory.Create(jsonOptions).ListSymbolHotspotJsonResult)
                 };
+                if (options.SummaryOnly)
+                    payload["summary_only"] = true;
+                else
+                {
+                    var items = results
+                        .Select(r => new SymbolHotspotJsonResult(
+                            r.Symbol.Name,
+                            r.Symbol.Kind,
+                            r.Symbol.Path,
+                            r.Symbol.Line,
+                            r.ReferenceCount,
+                            r.ReferenceScore,
+                            r.RankingScore,
+                            r.GenericNamePenalty,
+                            r.Symbol.Visibility,
+                            r.Symbol.ContainerName))
+                        .ToList();
+                    payload["hotspots"] = JsonSerializer.SerializeToNode(items, CliJsonSerializerContextFactory.Create(jsonOptions).ListSymbolHotspotJsonResult);
+                }
                 AddHotspotFamilyJsonFields(payload, hotspotSignal);
                 AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
-                Console.WriteLine(payload.ToJsonString(jsonOptions));
+                AddHotspotsGroupingContractJsonFields(payload, groupBy, options, jsonOptions, countOnly: false);
+                return WriteHotspotsJsonPayload(payload, options, jsonOptions);
             }
             else
             {
@@ -432,6 +536,99 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.Success;
         });
     }
+
+    private static int WriteHotspotsJsonPayload(JsonObject payload, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+        => WriteJsonPayloadWithOptionalByteLimit(
+            payload,
+            options,
+            jsonOptions,
+            "hotspots",
+            "hotspots",
+            "Use --summary-only, reduce --limit, or increase --max-json-bytes.");
+
+    internal static void AddHotspotsGroupingContractJsonFields(JsonObject payload, string groupBy, QueryCommandOptions? queryOptions, JsonSerializerOptions jsonOptions, bool countOnly)
+    {
+        var groupingUnit = GetHotspotsGroupingUnit(groupBy);
+        var countKind = GetHotspotsCountKind(groupBy, countOnly);
+        var limitAppliesTo = GetHotspotsLimitAppliesTo(groupBy, countOnly);
+
+        payload["grouping_unit"] = groupingUnit;
+        payload["count_kind"] = countKind;
+        payload["limit_applies_to"] = limitAppliesTo;
+        payload["score_fields"] = BuildHotspotsScoreFieldsJson(groupBy);
+        payload["ranking_fields"] = BuildHotspotsRankingFieldsJson(groupBy);
+
+        if (queryOptions != null)
+        {
+            var queryContext = BuildQueryContextJson(queryOptions, jsonOptions);
+            AddHotspotsGroupingQueryContextFields(queryContext, groupBy, groupingUnit, countKind, limitAppliesTo);
+            payload["query_context"] = queryContext;
+        }
+    }
+
+    internal static void AddHotspotsGroupingQueryContextFields(JsonObject queryContext, string groupBy, string groupingUnit, string countKind, string limitAppliesTo)
+    {
+        queryContext["group_by"] = groupBy;
+        queryContext["grouping_unit"] = groupingUnit;
+        queryContext["count_kind"] = countKind;
+        queryContext["limit_applies_to"] = limitAppliesTo;
+    }
+
+    internal static string GetHotspotsGroupingUnit(string groupBy) => groupBy switch
+    {
+        HotspotsGroupedByFile => "file",
+        HotspotsGroupedByStatement => "sql_statement",
+        HotspotsGroupedByNameKind => "name_kind",
+        _ => "symbol",
+    };
+
+    internal static string GetHotspotsCountKind(string groupBy, bool countOnly)
+    {
+        var prefix = countOnly ? "total" : "returned";
+        return groupBy switch
+        {
+            HotspotsGroupedByFile => $"{prefix}_files",
+            HotspotsGroupedByStatement => $"{prefix}_sql_statements",
+            HotspotsGroupedByNameKind => $"{prefix}_name_kind_groups",
+            _ => $"{prefix}_symbols",
+        };
+    }
+
+    internal static string GetHotspotsLimitAppliesTo(string groupBy, bool countOnly)
+    {
+        if (countOnly)
+            return "none_count_ignores_limit";
+
+        return groupBy switch
+        {
+            HotspotsGroupedByFile => "files",
+            HotspotsGroupedByStatement => "sql_statements",
+            HotspotsGroupedByNameKind => "name_kind_groups",
+            _ => "symbols",
+        };
+    }
+
+    private static JsonArray BuildHotspotsScoreFieldsJson(string groupBy)
+    {
+        if (groupBy == HotspotsGroupedByFile)
+            return BuildStringArrayJson("reference_count");
+
+        return BuildStringArrayJson("reference_score", "reference_count", "ranking_score", "generic_name_penalty");
+    }
+
+    private static JsonArray BuildHotspotsRankingFieldsJson(string groupBy)
+    {
+        if (groupBy == HotspotsGroupedByFile)
+            return BuildStringArrayJson("reference_count", "path");
+
+        if (groupBy == HotspotsGroupedByNameKind)
+            return BuildStringArrayJson("ranking_score", "reference_score", "reference_count", "name", "kind");
+
+        return BuildStringArrayJson("ranking_score", "reference_score", "reference_count", "path", "line", "name", "kind", "symbol_id");
+    }
+
+    private static JsonArray BuildStringArrayJson(params string[] values)
+        => new(values.Select(value => JsonValue.Create(value)).ToArray<JsonNode?>());
 
     private static GroupedSymbolHotspotSiteJsonResult BuildGroupedHotspotRepresentative(GroupedHotspotResult result)
     {

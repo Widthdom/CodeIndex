@@ -25,7 +25,7 @@ internal static class ActiveWorkspace
 
     internal static ActiveWorkspaceState? Load()
     {
-        var envPath = Environment.GetEnvironmentVariable(EnvironmentVariable);
+        var envPath = CdidxEnvironment.GetProcessEnvironmentVariable(EnvironmentVariable);
         if (!string.IsNullOrWhiteSpace(envPath))
             return LoadFromEnvironment(envPath);
 
@@ -124,7 +124,7 @@ internal static class ActiveWorkspace
     {
         path = string.Empty;
         reason = string.Empty;
-        var configHome = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
+        var configHome = CdidxEnvironment.GetProcessEnvironmentVariable("XDG_CONFIG_HOME");
         string root;
         if (string.IsNullOrWhiteSpace(configHome))
         {

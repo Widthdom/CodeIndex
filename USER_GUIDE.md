@@ -279,7 +279,7 @@ sections below show examples and option details for the most common workflows.
 | Graph | `deps` | Show file-level dependency edges | `deps` |
 | Analysis | `impact` | Traverse transitive callers from a resolved symbol | `impact_analysis` |
 | Analysis | `unused` | Find symbols defined but not referenced, with confidence buckets | `unused_symbols` |
-| Analysis | `hotspots` | Rank high-impact symbols or statements by reference volume | `symbol_hotspots` |
+| Analysis | `hotspots` | Rank high-impact symbols/files by reference volume; SQL scopes can use statement grouping | `symbol_hotspots` |
 | Analysis | `validate` | Report encoding, line-ending, and file-content diagnostics in indexed files; U+FFFD rows include origin/severity metadata | `validate` |
 | Status | `status` | Show DB statistics, freshness, and readiness metadata | `status` |
 | Status | `languages` | List language extensions and symbol/reference/graph capabilities; add `--indexed-only` and `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` for workspace audits | `languages` |
@@ -527,11 +527,16 @@ cdidx hotspots --group-by=file --json
 cdidx hotspots --group-by-name --limit 30
 ```
 
-`hotspots` ranks symbols, files, or statements by incoming reference volume so
-you can find central code before refactoring. SQL scopes default to statement
-grouping; non-SQL scopes default to symbol grouping. If `status --json` reports
-`hotspot_family_ready: false`, duplicate-name grouping uses a conservative
-fallback until you re-index with a current binary.
+`hotspots` ranks symbols or files by incoming reference volume so you can find
+central code before refactoring. SQL scopes default to statement grouping, and
+explicit `--group-by statement` is accepted only with `--lang sql`; non-SQL
+scopes default to symbol grouping and should use `--group-by symbol` or
+`--group-by file`. JSON output includes `grouping_unit`, `count_kind`,
+`limit_applies_to`, `score_fields`, `ranking_fields`, and matching
+`query_context` fields so callers can tell whether `--limit` applies to
+returned symbols, files, SQL statements, or is ignored by `--count`. If
+`status --json` reports `hotspot_family_ready: false`, duplicate-name grouping
+uses a conservative fallback until you re-index with a current binary.
 
 ### Trace impact
 
@@ -1062,7 +1067,8 @@ cleanup, probe, diagnostic-sanitization, and worker boundaries from catches that
 should be narrowed or rethrown.
 Built-in recipes include `risky-code`, `json-parse-apis`,
 `auth-token-audit`, `dogfood-risk-patterns`, `dotnet-risk-patterns`,
-`xml-parser-security`, `filesystem-traversal`, `bounded-read-evidence`, and the
+`sqlite-query-policy-surfaces`, `xml-parser-security`, `filesystem-traversal`,
+`bounded-read-evidence`, and the
 opt-in broad `broad-token-audit` recipe.
 `--recipe <name>` applies normal search filters such as `--lang`, `--path`,
 `--exclude-path`, `--exclude-tests`, `--limit`, and snippet controls to every
@@ -1070,9 +1076,14 @@ query in the recipe. With `--json`, recipe runs emit one aggregate JSON payload
 grouped by recipe query instead of the usual newline-delimited search stream.
 Recipe and named-query JSON include per-query counts, `top_files`, and
 `truncated` metadata. Recipe JSON and compact output also return `next_cursor`
-when a single selected recipe query is truncated. Add `--show-excluded` to a
-recipe run when you need the effective path scope and exclusion diagnostics in
-JSON output.
+when a single selected recipe query is truncated. Recipe run summaries and
+count summaries include `query_freshness` with the number of queries that found
+positive evidence, the number that returned zero results, and `stale_query_names`
+so broad audit recipes can surface query drift without requiring the full
+recipe catalog JSON. Output-limited recipe runs use matched-count metadata for
+this summary, so queries with known omitted matches are not reported as stale.
+Add `--show-excluded` to a recipe run when you need the effective path scope and
+exclusion diagnostics in JSON output.
 Recipe runs support text output, aggregate JSON with `--json` / `--format json`,
 NDJSON row streams with `--json=ndjson` or `--results-only`, count-only output
 with `--format count`, compact summaries with `--format compact`, and
@@ -1084,8 +1095,8 @@ streams can be projected with `--search-fields` including `query_name` and
 `recipe`, bounded across child queries with `--total-limit`, and byte-bounded
 with `--max-json-bytes` for NDJSON. Recipe count output can use
 `--format count --summary-only --max-json-bytes <n>` to emit only recipe/scope
-names, aggregate counts, and per-query counts. Recipe count aggregations support
-`--count-by path|file|symbol|origin`,
+names, aggregate counts, per-query counts, and query freshness. Recipe count
+aggregations support `--count-by path|file|symbol|origin`,
 `--group-by file|symbol|origin --count`, and
 `--unique path|file|symbol|origin`.
 Other search export formats and `--json=array` are rejected for recipe modes
@@ -1113,11 +1124,14 @@ the payload still includes `duplicate_preflight.checked: false`. Use
 `--duplicate-confidence low|medium|high` or `--duplicate-threshold <0..1>` to
 tune duplicate preflight strictness; the JSON summary reports `confidence` and
 `minimum_score`. Draft bodies include evidence paths, representative source
-snippets, omitted-result metadata, and recipe metadata. Add `--snippet-lines 0`
-for path/line-only evidence and combine issue-draft export with
-`--max-json-bytes <n>` when an automation budget must fail closed. These drafts
-are triage aids; review duplicate guidance and current open issues before
-filing.
+snippets, omitted-result metadata, and recipe metadata. Add `--summary-only`
+to recipe issue-draft export when agents only need compact top-level metadata:
+the output keeps issue-ready draft evidence and per-draft source metadata, omits
+the full top-level `recipe` metadata, emits `recipe_summary`, and includes
+`query_freshness` for zero-result child queries. Add `--snippet-lines 0` for
+path/line-only evidence and combine issue-draft export with `--max-json-bytes <n>`
+when an automation budget must fail closed. These drafts are triage aids; review
+duplicate guidance and current open issues before filing.
 
 ### Debugging queries
 
@@ -1285,11 +1299,12 @@ cdidx outline src/CodeIndex/Cli/GitHelper.cs
 cdidx outline src/CodeIndex/Cli/GitHelper.cs --json
 cdidx outline src/CodeIndex/Cli/GitHelper.cs --json --kind function --limit 20 --outline-fields name,line,kind,signature
 cdidx outline src/CodeIndex/Cli/GitHelper.cs --json --cursor outline:20 --limit 20 --outline-fields name,line,kind,signature
+cdidx outline src/CodeIndex/Cli/QueryCommandRunner.cs --compact --kind function --sort size --limit 10
 ```
 
 Shows all symbols in a single file ordered deterministically by line, start column when available, kind, and name, with signature, visibility, and container nesting. Lets AI agents understand file structure in one call instead of reading the whole file or chaining `symbols` + `definition`.
 
-For large files, `outline --json` supports `--kind <kind[,kind]>`, `--limit` / `--top`, `--cursor <outline:offset>`, and `--outline-fields <csv>` so automation can request only the symbol page and fields it needs. Controlled JSON output includes `total_symbol_count`, `returned_symbol_count`, `cursor_offset`, `next_cursor`, and `has_more`; it also reports `kind_filter` and `selected_fields` when those filters are used. Pass `--outline-fields all` to keep the full symbol payload while still opting into the paging metadata.
+For large files, `outline --json` supports `--kind <kind[,kind]>`, `--sort <source|kind|references|size|complexity|path|name>`, `--limit` / `--top`, `--cursor <outline:offset>`, and `--outline-fields <csv>` so automation can request only the symbol page and fields it needs. Use `--sort size` (alias `span`) or `--sort complexity` to jump to large bodies first, and combine it with `--compact` for bounded giant-file triage. Controlled JSON output includes `total_symbol_count`, `returned_symbol_count`, `cursor_offset`, `next_cursor`, and `has_more`; it also reports `sort`, `kind_filter`, and `selected_fields` when those controls are used. Pass `--outline-fields all` to keep the full symbol payload while still opting into the paging metadata, or select `reference_count`, `size_lines`, `complexity_score`, and `sort_mode` for compact ranking evidence.
 
 ### Reconstruct a file excerpt
 
@@ -1463,7 +1478,9 @@ same source location.
 | `--json` | All commands except `mcp` | JSON output (for AI/machine use). `search --json` writes newline-delimited result objects followed by a final `{"done":true,"count":N,"interrupted":false}` sentinel, including zero-result output, so stream consumers can detect clean completion. |
 | `--pretty` | JSON-capable commands except `mcp` | Pretty-print JSON output with indentation. Default `search --json` remains newline-delimited; use `search --json=array --pretty` for an indented search result array. |
 | `--compact` | `map`, `inspect`, `outline` | Emit AI-oriented compact JSON with capped list sections and `truncation.sections.*` metadata. The default cap is 5 unless `--limit` / `--top` is supplied. |
-| `--outline-fields <csv>` | `outline` | Project outline JSON symbol fields such as `name`, `line`, `kind`, `signature`, `container`, `range`, or `body`; pass `all` for the full symbol payload with paging metadata. |
+| `--summary-only` | `map`, `recipes`, `audit`, `deps`, `hotspots`, and supported `search` JSON contexts | Emit aggregate/context JSON while omitting heavy result arrays where supported. For `deps`, use `--json` or `--format json-graph`; for `hotspots`, use `--json`. Large `deps` and `hotspots` queries emit `Progress:` diagnostics to stderr at `--limit 80+` or with `--verbose`. |
+| `--sort <mode>` | `symbols`, `outline` | For `outline`, sort one file's symbols by `source`, `kind`, `references`, `size` / `span`, `complexity`, `path`, or `name` before `--limit` / cursor paging. |
+| `--outline-fields <csv>` | `outline` | Project outline JSON symbol fields such as `name`, `line`, `kind`, `signature`, `container`, `range`, `body`, `reference_count`, `size_lines`, `complexity_score`, or `sort_mode`; pass `all` for the full symbol payload with paging metadata. |
 | `--fields <csv>` | `inspect` | Select top-level inspect JSON groups: `file`, `workspace`, `graph`, `definitions`, `body`, `source_excerpt`, `nearby_symbols`, `references`, `callers`, `callees`, or `all`. `body` includes definition bodies and maps to `definitions`. |
 | `--outline-only` | `inspect` | Shorthand for `--fields file,definitions,nearby_symbols`, useful for outline-first review of large classes/types before requesting body or graph evidence. |
 | `--body-only` | `inspect` | Shorthand for `--body --fields definitions`, useful when large audits need implementation text without graph context. |
@@ -1507,7 +1524,8 @@ same source location.
 | `--unique <path\|file\|symbol\|origin>` / `--count-by <path\|file\|symbol\|origin>` | `search` | Emit unique aggregation rows or count aggregation rows for broad audits, including recipe runs |
 | `--format grouped` / `--per-file-limit <n>` | `search` | Return file-grouped JSON with bounded representative matches per file |
 | `--search-fields <fields>` / `--results-only` | `search` | Project compact JSON fields, including recipe `query_name` and `recipe`, and emit result-only NDJSON for shell pipelines |
-| `--first-per-file` / `--sample <n>` / `--total-limit <n>` / `--max-json-bytes <n>` | `search` | Bound broad audit output by file, deterministic sample size, recipe total rows, or NDJSON byte budget |
+| `--first-per-file` / `--sample <n>` / `--total-limit <n>` | `search` | Bound broad audit output by file, deterministic sample size, or recipe total rows |
+| `--max-json-bytes <n>` | `search`, `recipes`, `audit`, `deps`, `hotspots` | Fail before emitting JSON that exceeds this UTF-8 byte budget. For large graph outputs, pair it with `deps --summary-only`, `deps --format json-graph --summary-only`, or `hotspots --summary-only`. |
 | `--next-steps` | `search` | Emit inspect/excerpt follow-up commands for top search hits |
 | `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate`, `deps`, `impact`, `unused`, `hotspots` | Include files detected as generated code; generated files are excluded from query results by default |
 | `--workspace-db <path>` | `deps` | Add another CodeIndex database to the file-dependency query. Repeat it for up to 7 distinct additional DBs (8 total including `--db`); JSON edges include `source_db` and `target_db` so same relative paths can be disambiguated. |
@@ -1553,7 +1571,7 @@ same source location.
 | `--since <datetime>` | `search`, `definition`, `symbols`, `files` | Filter to files modified since this ISO 8601 timestamp. Offsetless values (e.g. `2024-01-01T00:00:00`) are treated as UTC so the same flag resolves to the same instant in every timezone; append `Z` or an explicit offset (`+09:00`) to be explicit. |
 | `--no-dedup` | `search` | Disable overlapping-chunk deduplication and return every raw chunk hit; useful for debugging chunk boundaries or measuring raw match density |
 | `--reverse` | `deps` | Reverse lookup: show files that depend ON the matched path |
-| `--cycles` | `deps` | Return dependency cycles from a bounded approximate candidate-edge scan. `--limit` controls displayed cycles; cycle detection examines up to `max(--limit, 50)` lightweight candidate edges and JSON reports `truncated`, `termination_reason`, `truncated_reason`, `candidate_edge_count`, `candidate_edge_limit`, and `cycle_detection_mode` when results are partial. |
+| `--cycles` | `deps` | Return dependency cycles from a bounded approximate candidate-edge scan. `--limit` controls displayed cycles and the candidate budget (`max(--limit, 50)`). When `truncated_reason` is `candidate_edge_limit`, returned cycles are a bounded sample, not a complete or ranked cycle set. JSON includes `truncated`, `termination_reason`, `truncated_reason`, `candidate_edge_count`, `candidate_edge_limit`, `cycle_detection_mode`, `cycle_result_scope`, `cycle_result_note`, and `next_step_flags`; use suggested flags such as `--limit`, `--suppress-noise`, `--symbol`, `--symbol-family`, or `--path` to expand or narrow the scan. |
 | `--strict-not-found` | Query commands | Return exit code `2` when a valid query produces zero rows. Without this flag, zero-result queries exit `0` and keep their normal empty/zero-result output. |
 | `--top <n>` | Query commands | Alias for `--limit` |
 | `--max-results <n>` | `search` | Alias for `--limit` |
@@ -1892,7 +1910,7 @@ The database reflects the working tree at the time of the last index. After swit
 
 ## Supported languages
 
-All indexed languages are searchable through FTS5. Rows with **Symbols = yes** also support structured queries by function, class, import, or language-specific symbol name. Use `cdidx languages --indexed-only --json` to list only languages present in the current DB; JSON rows expose `symbol_extraction`, `reference_extraction`, `graph_queries`, `capability_gaps`, and `indexed_file_count`. Add `--language <name>`, `--extension <ext>`, or `--alias <alias>` to retrieve one language row by canonical name, recognized extension/filename pattern, or display alias. Add `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` to narrow the table to languages that support a structured capability or still have a capability gap.
+All indexed languages are searchable through FTS5. Rows with **Symbols = yes** also support structured queries by function, class, import, or language-specific symbol name. Use `cdidx languages --indexed-only --json` to list only languages present in the current DB; JSON rows expose `symbol_extraction`, `reference_extraction`, `graph_queries`, `capability_gaps`, `unsupported_guidance`, and `indexed_file_count`. When references or graph queries are unsupported, `unsupported_guidance` explains why empty reference/graph results are not authoritative and lists fallback commands. Add `--language <name>`, `--extension <ext>`, or `--alias <alias>` to retrieve one language row by canonical name, recognized extension/filename pattern, or display alias. Add `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` to narrow the table to languages that support a structured capability or still have a capability gap.
 
 | Language | Extensions | Symbols |
 |---|---|:---:|
@@ -2002,8 +2020,8 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 ### Language extraction matrix
 
 Use `cdidx languages --json` as the live capability probe. JSON rows expose
-`symbol_extraction`, `reference_extraction`, `graph_queries`, and
-`capability_gaps`; DB-backed probes such as `--indexed-only` and lookup by
+`symbol_extraction`, `reference_extraction`, `graph_queries`,
+`capability_gaps`, and `unsupported_guidance`; DB-backed probes such as `--indexed-only` and lookup by
 `--language`, `--extension`, or `--alias` also include `indexed_file_count`.
 Add `--indexed-only` when you only want languages present in the current DB, add
 `--language <name>`, `--extension <ext>`, or `--alias <alias>` when you need one
@@ -2012,6 +2030,9 @@ disambiguated language row, and add
 when auditing a specific structured capability or capability gap. This matrix
 explains the common extraction behavior so users know when to trust structured
 commands and when to fall back to `search`.
+Rows with unsupported references or graph queries include `unsupported_guidance`
+entries with the unsupported capability, an explanatory message, and
+`recommended_commands` for the next safe query.
 
 | Language family | Symbols | References / graph | Notes and example query |
 |---|---|---|---|
@@ -2450,12 +2471,12 @@ The MCP `tools/list` response includes an `examples` array for every registered 
 | `excerpt` | Reconstruct a specific line range from indexed chunks |
 | `map` | Summarize languages, modules, hotspots, and likely entrypoints |
 | `analyze_symbol` | Bundle definition, nearby symbols, references, callers, callees, file metadata, workspace trust metadata, and graph support metadata. Bundled `callers` / `callees` rows carry the same `referenceKind` (preferred summary, back-compat) plus `referenceKinds` (sorted distinct) and `hasMixedReferenceKinds` fields as the standalone tools, so mixed `call` + `subscribe` containers stay visible in the bundle. |
-| `outline` | Show all symbols in a single file ordered by line, start column, kind, and name, with signatures and container-depth nesting |
+| `outline` | Show all symbols in a single file ordered by source location by default, or sorted by size, complexity, kind, path, name, or reference count for large-file triage |
 | `status` | Database statistics |
 | `deps` | File-level dependency edges from the reference graph |
 | `impact_analysis` | Compute transitive callers of a symbol (inclusive `maxHops`: `maxHops: N` returns callers at hop 1..N — a chain A→B→C→D queried against D with `maxHops: 2` yields C at hop 1 and B at hop 2). The deprecated `maxDepth` alias is still accepted during the compatibility period and surfaces a warning. The symbol-level BFS walks only call-graph kinds (`call`, `instantiate`, `subscribe`) and excludes metadata-only edges (`attribute`, `annotation`, `type_reference`) so metadata cycles do not inflate caller counts. Use `maxHops: 0` to resolve the symbol only, or rely on single-type fallback to heuristic file-level dependency hints and partial-definition hints; those file hints may include metadata edges. Pass `withPaths: true` to also receive a `paths` array per caller (shortest chains `[resolvedRoot, intermediate..., callerName]`; diamond convergence surfaces every route, capped per row with a `paths_truncated` overflow flag). |
 | `unused_symbols` | Find symbols defined but never referenced, with confidence buckets for dead-code triage |
-| `symbol_hotspots` | Find high-impact hotspots. `groupBy` supports `symbol`, `file`, and `statement`; SQL scopes default to statement grouping while non-SQL scopes default to symbol grouping. |
+| `symbol_hotspots` | Find high-impact hotspots. `groupBy` supports `symbol` and `file`; `statement` is accepted only with `lang: "sql"`. Structured output includes `grouping_unit`, `count_kind`, `limit_applies_to`, `score_fields`, `ranking_fields`, and matching `query_context` fields. |
 | `batch_query` | Execute multiple queries in a single call (MCP only, max 10). The response includes a top-level `metadata` object with `submitted`, `executed`, `errors`, `total_elapsed_ms`, `success_count`, and `failure_count`; every entry in `results` carries `request_index`, optional client `slot_id`, `ok`, `elapsed_ms`, `summary`, and compact `args_summary` fields so callers can correlate partial failures and slow inner queries without relying on positional guesses. Scalar values in `args_summary` are bounded before full JSON materialization, so huge numbers and strings cannot inflate diagnostics. |
 | `validate` | Report encoding and file-content issues (U+FFFD with origin/severity, BOM, null bytes, mixed/CR-only line endings, UTF-16 BOM/heuristic detection, likely non-UTF8 encodings, Git LFS pointer placeholders, Dockerfile JSON-form diagnostics) |
 | `languages` | List all supported languages, file extensions, and capabilities |
@@ -2946,7 +2967,7 @@ cdidx index . --quiet
 | Graph | `deps` | file-level dependency edges を表示 | `deps` |
 | Analysis | `impact` | 解決した symbol から transitive callers を探索 | `impact_analysis` |
 | Analysis | `unused` | 参照されていない可能性がある symbols を confidence bucket 付きで表示 | `unused_symbols` |
-| Analysis | `hotspots` | reference volume で high-impact symbols/statements を ranking | `symbol_hotspots` |
+| Analysis | `hotspots` | reference volume で high-impact symbols/files を ranking。SQL scope は statement grouping も使用可 | `symbol_hotspots` |
 | Analysis | `validate` | indexed files の encoding / line-ending / file-content 診断を報告。U+FFFD 行には origin/severity metadata が付く | `validate` |
 | Status | `status` | DB stats、freshness、readiness metadata を表示 | `status` |
 | Status | `languages` | language extensions と symbol/graph capabilities を一覧 | `languages` |
@@ -3182,11 +3203,15 @@ cdidx hotspots --group-by=file --json
 cdidx hotspots --group-by-name --limit 30
 ```
 
-`hotspots` は incoming reference volume で symbols / files / statements を ranking し、
-refactor 前に中心的なコードを見つけます。SQL scope は既定で statement grouping、
-非 SQL scope は symbol grouping です。`status --json` が `hotspot_family_ready: false`
-を返す場合、current binary で再 index するまで duplicate-name grouping は保守的な
-fallback になります。
+`hotspots` は incoming reference volume で symbols / files を ranking し、refactor 前に
+中心的なコードを見つけます。SQL scope は既定で statement grouping になり、明示的な
+`--group-by statement` は `--lang sql` の場合だけ受け付けます。非 SQL scope は symbol
+grouping が既定で、`--group-by symbol` または `--group-by file` を使います。JSON 出力には
+`grouping_unit`、`count_kind`、`limit_applies_to`、`score_fields`、`ranking_fields` と対応する
+`query_context` fields が含まれ、`--limit` が返却 symbols / files / SQL statements のどれに
+適用されるか、または `--count` で無視されるかを判別できます。`status --json` が
+`hotspot_family_ready: false` を返す場合、current binary で再 index するまで
+duplicate-name grouping は保守的な fallback になります。
 
 ### Impact を追跡する
 
@@ -3726,8 +3751,9 @@ result level、正規化済みの repository-relative artifact URI を出力し�
 
 search audit recipe は、名前付き recipe を複数の curated search query に展開します。
 組み込み recipe には `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、`xml-parser-security`、
-`auth-token-audit`、`dogfood-risk-patterns`、`filesystem-traversal`、`bounded-read-evidence`、
-`broad-token-audit` があります。`--list-recipes` は利用可能な名前、
+`auth-token-audit`、`dogfood-risk-patterns`、`sqlite-query-policy-surfaces`、
+`filesystem-traversal`、`bounded-read-evidence`、`broad-token-audit` があります。
+`--list-recipes` は利用可能な名前、
 説明、推奨 label、query text、exact-match mode、false-positive guidance、guard filter、
 risk evidence、query 固有の audit taxonomy metadata を表示します。
 `--query <filter>` を追加すると、recipe/query 名、query text、label、severity、path metadata、
@@ -3748,7 +3774,10 @@ query ごとに grouped された 1 つの aggregate JSON payload を出力し�
 `truncated` の per-query metadata を返します。recipe の JSON / compact output は、単一の
 recipe query が truncated された場合に `next_cursor` も返します。`--format compact` は
 summary、query count、query ごとの count、`truncated` flag、該当する場合の `next_cursor`
-を返します。
+を返します。recipe run summary と count summary は `query_freshness` も返し、肯定的な根拠が
+見つかった query 数、結果 0 件の query 数、`stale_query_names` を示します。これにより、
+広範な audit recipe の query drift を full recipe catalog JSON なしで確認できます。出力制限された
+recipe run では matched-count metadata を使うため、省略済みの match がある query は stale として報告されません。
 `--show-excluded` を recipe と併用すると、有効な path scope と除外診断を出力に含めます。
 recipe run が対応する形式は text output、`--json` / `--format json` の aggregate JSON、
 `--json=ndjson` または `--results-only` の NDJSON row stream、`--format count` の
@@ -3759,7 +3788,7 @@ compact metadata が必要なら `cdidx recipes --summary-only --json` を使い
 `query_name` と `recipe` を含む `--search-fields` で投影でき、`--total-limit` で
 child query 全体の emitted row 数を制限でき、NDJSON では `--max-json-bytes` で byte 数を制限できます。
 recipe count output は `--format count --summary-only --max-json-bytes <n>` により、recipe / scope 名、
-aggregate count、query ごとの count だけを出力できます。recipe の count aggregation は `--count-by path|file|symbol|origin`、
+aggregate count、query ごとの count、query freshness だけを出力できます。recipe の count aggregation は `--count-by path|file|symbol|origin`、
 `--group-by file|symbol|origin --count`、`--unique path|file|symbol|origin` に対応します。
 その他の search export format と `--json=array` は、recipe output が query または
 list metadata ごとに grouped されるため usage error で拒否します。
@@ -3785,10 +3814,13 @@ duplicate-preflight metadata を持つ issue draft object を出力します。
 `duplicate_preflight.checked: false` が含まれます。duplicate preflight の厳しさは
 `--duplicate-confidence low|medium|high` または `--duplicate-threshold <0..1>` で調整でき、
 JSON summary には `confidence` と `minimum_score` が出力されます。draft body は evidence path、
-代表的な source snippet、omitted-result metadata、recipe metadata を含みます。path / line だけの evidence にしたい場合は
-`--snippet-lines 0` を追加し、automation budget を超える出力を閉じたい場合は issue-draft export に
-`--max-json-bytes <n>` を併用します。これらの draft は triage aid なので、起票前に duplicate guidance と
-現在の open issue を確認してください。
+代表的な source snippet、omitted-result metadata、recipe metadata を含みます。エージェントが compact な
+top-level metadata だけを必要とする場合は、recipe issue-draft export に `--summary-only` を追加します。
+この出力は Issue 作成に必要な draft evidence と draft ごとの source metadata を保ち、top-level の
+完全な `recipe` metadata を省略し、`recipe_summary` と zero-result child query 用の `query_freshness` を出力します。
+path / line だけの evidence にしたい場合は `--snippet-lines 0` を追加し、automation budget を超える出力を閉じたい場合は
+issue-draft export に `--max-json-bytes <n>` を併用します。これらの draft は triage aid なので、起票前に
+duplicate guidance と現在の open issue を確認してください。
 
 ### クエリのデバッグ
 
@@ -3952,11 +3984,12 @@ cdidx outline src/CodeIndex/Cli/GitHelper.cs
 cdidx outline src/CodeIndex/Cli/GitHelper.cs --json
 cdidx outline src/CodeIndex/Cli/GitHelper.cs --json --kind function --limit 20 --outline-fields name,line,kind,signature
 cdidx outline src/CodeIndex/Cli/GitHelper.cs --json --cursor outline:20 --limit 20 --outline-fields name,line,kind,signature
+cdidx outline src/CodeIndex/Cli/QueryCommandRunner.cs --compact --kind function --sort size --limit 10
 ```
 
 1ファイル内の全シンボルを行、利用可能な場合は開始列、種別、名前の決定的な順序で、シグネチャ・可視性・コンテナ深さに応じたネスト付きで表示します。ファイル全体を読んだり `symbols` + `definition` をチェーンしたりする代わりに、1回でファイル構造を把握できます。
 
-大きなファイル向けに、`outline --json` は `--kind <kind[,kind]>`、`--limit` / `--top`、`--cursor <outline:offset>`、`--outline-fields <csv>` に対応します。自動化側は必要な symbol page と field だけを取得できます。制御付き JSON 出力には `total_symbol_count`、`returned_symbol_count`、`cursor_offset`、`next_cursor`、`has_more` が入り、kind や field を指定した場合は `kind_filter` と `selected_fields` も返します。`--outline-fields all` を渡すと、symbol payload はフルのまま paging metadata だけを追加できます。
+大きなファイル向けに、`outline --json` は `--kind <kind[,kind]>`、`--sort <source|kind|references|size|complexity|path|name>`、`--limit` / `--top`、`--cursor <outline:offset>`、`--outline-fields <csv>` に対応します。自動化側は必要なシンボルページとフィールドだけを取得できます。`--sort size`（`span` alias）や `--sort complexity` を使うと大きい本体を先に確認でき、`--compact` と組み合わせると巨大ファイル調査向けの上限付きペイロードになります。制御付き JSON 出力には `total_symbol_count`、`returned_symbol_count`、`cursor_offset`、`next_cursor`、`has_more` が入り、sort、kind、field を指定した場合は `sort`、`kind_filter`、`selected_fields` も返します。`--outline-fields all` を渡すと、シンボルペイロードはフルのままページングメタデータだけを追加できます。ランキング根拠だけが必要な場合は `reference_count`、`size_lines`、`complexity_score`、`sort_mode` を選択できます。
 
 ### ファイル抜粋を再構成する
 
@@ -4130,7 +4163,9 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--json` | `mcp` を除く全コマンド | JSON出力（AI/機械向け） |
 | `--pretty` | `mcp` を除く JSON 対応コマンド | JSON 出力をインデント付きで整形。既定の `search --json` は newline-delimited のまま維持されるため、検索結果配列を整形したい場合は `search --json=array --pretty` を使う。 |
 | `--compact` | `map`、`inspect`、`outline` | list section を cap した AI 向け compact JSON を出力し、`truncation.sections.*` metadata を含める。既定 cap は 5 件で、`--limit` / `--top` 指定時はその値を使う。 |
-| `--outline-fields <csv>` | `outline` | outline JSON の symbol field を投影する。`name`、`line`、`kind`、`signature`、`container`、`range`、`body` などを指定でき、`all` を渡すと full symbol payload と paging metadata を返す。 |
+| `--summary-only` | `map`、`recipes`、`audit`、`deps`、`hotspots`、および対応する `search` JSON 文脈 | 対応コマンドで重い結果配列を省き、集計と文脈中心の JSON を返す。`deps` では `--json` または `--format json-graph`、`hotspots` では `--json` と組み合わせる。大きい `deps` / `hotspots` query は `--limit 80` 以上または `--verbose` 指定時に stderr へ `Progress:` 診断を出す。 |
+| `--sort <mode>` | `symbols`、`outline` | `outline` では 1ファイル内のシンボルを `source`、`kind`、`references`、`size` / `span`、`complexity`、`path`、`name` で並べ替えてから `--limit` / カーソルページングを適用する。 |
+| `--outline-fields <csv>` | `outline` | outline JSON のシンボルフィールドを投影する。`name`、`line`、`kind`、`signature`、`container`、`range`、`body`、`reference_count`、`size_lines`、`complexity_score`、`sort_mode` などを指定でき、`all` を渡すとシンボルペイロード全体とページングメタデータを返す。 |
 | `--fields <csv>` | `inspect` | inspect JSON の top-level group を選択。`file`、`workspace`、`graph`、`definitions`、`body`、`source_excerpt`、`nearby_symbols`、`references`、`callers`、`callees`、`all` を指定できる。`body` は definition body を含め、`definitions` に対応する。 |
 | `--outline-only` | `inspect` | `--fields file,definitions,nearby_symbols` の shorthand。大きな class / type を body や graph evidence なしでアウトライン優先で確認したい場合に使う。 |
 | `--body-only` | `inspect` | `--body --fields definitions` の shorthand。大規模 audit で graph context なしに実装本文だけが必要な場合に使う。 |
@@ -4173,7 +4208,8 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--unique <path\|file\|symbol\|origin>` / `--count-by <path\|file\|symbol\|origin>` | `search` | 広い audit や recipe run 向けに unique aggregation row または count aggregation row を出力する |
 | `--format grouped` / `--per-file-limit <n>` | `search` | file ごとに grouped JSON を返し、各 file の代表 match 数を制限する |
 | `--search-fields <fields>` / `--results-only` | `search` | recipe の `query_name` / `recipe` を含む compact JSON field を projection し、shell pipeline 向けの result-only NDJSON を出力する |
-| `--first-per-file` / `--sample <n>` / `--total-limit <n>` / `--max-json-bytes <n>` | `search` | file 単位、決定的 sample 数、recipe 全体の row 数、NDJSON byte budget で広い audit 出力を制限する |
+| `--first-per-file` / `--sample <n>` / `--total-limit <n>` | `search` | file 単位、決定的 sample 数、recipe 全体の row 数で広い audit 出力を制限する |
+| `--max-json-bytes <n>` | `search`、`recipes`、`audit`、`deps`、`hotspots` | 指定した UTF-8 byte 上限を超える JSON を出力する前に失敗する。大きい graph 出力では `deps --summary-only`、`deps --format json-graph --summary-only`、または `hotspots --summary-only` と組み合わせる。 |
 | `--next-steps` | `search` | 上位 search hit に対する inspect / excerpt follow-up command を出力する |
 | `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate`, `deps`, `impact`, `unused`, `hotspots` | 生成コードとして検出されたファイルを含める。生成ファイルは既定でクエリ結果から除外される |
 | `--snippet-lines <n>` | `search`, `references`, `callers`, `callees`, `impact` | search スニペット、または graph `--body` 抜粋の行数（デフォルト: 8、最大: 20） |
@@ -4217,7 +4253,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--since <datetime>` | `search`, `definition`, `symbols`, `files` | 指定タイムスタンプ以降に変更されたファイルのみ（ISO 8601）。オフセットなしの値（例: `2024-01-01T00:00:00`）は UTC として解釈されるため、どのタイムゾーンから呼び出しても同じ UTC 時点になります。明示したい場合は末尾に `Z` または `+09:00` 等のオフセットを付与してください。 |
 | `--no-dedup` | `search` | overlap chunk の重複排除を無効化し、全 raw chunk hit を返す。chunk 境界の debug や raw match density 計測向け |
 | `--reverse` | `deps` | 逆引き: 指定パスに依存しているファイルを表示 |
-| `--cycles` | `deps` | 上限付きの近似候補 edge scan から依存 cycle を返す。`--limit` は表示する cycle 数を制御し、cycle 検出は最大 `max(--limit, 50)` 件の軽量候補 edge を調べる。結果が部分的な場合、JSON は `truncated`、`termination_reason`、`truncated_reason`、`candidate_edge_count`、`candidate_edge_limit`、`cycle_detection_mode` を返す。 |
+| `--cycles` | `deps` | 上限付きの近似候補 edge scan から依存 cycle を返す。`--limit` は表示する cycle 数と候補 budget（`max(--limit, 50)`）を制御する。`truncated_reason` が `candidate_edge_limit` の場合、返される cycle は上限内のサンプルであり、完全な cycle 集合やランキング済み集合ではない。JSON は `truncated`、`termination_reason`、`truncated_reason`、`candidate_edge_count`、`candidate_edge_limit`、`cycle_detection_mode`、`cycle_result_scope`、`cycle_result_note`、`next_step_flags` を返す。`--limit`、`--suppress-noise`、`--symbol`、`--symbol-family`、`--path` などの候補フラグで scan を広げるか絞り込む。 |
 | `--workspace-db <path>` | `deps` | file dependency query に別の CodeIndex DB を追加する。最大 7 個の distinct な追加 DB（`--db` を含め合計 8 個）まで繰り返し指定でき、JSON edge には同じ相対パスを区別できるよう `source_db` / `target_db` が含まれる。 |
 | `--top <n>` | クエリ系 | `--limit` のエイリアス |
 | `--max-results <n>` | `search` | `--limit` のエイリアス |
@@ -4552,7 +4588,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 
 ## 対応言語
 
-全言語が FTS5 全文検索に対応しています。**シンボル = yes** の行は、関数・クラス・import 名などの構造化検索にも対応します。現在の DB に存在する言語だけを一覧するには `cdidx languages --indexed-only --json` を使います。JSON 行には `symbol_extraction`、`reference_extraction`、`graph_queries`、`capability_gaps`、`indexed_file_count` が含まれます。言語名・認識済み拡張子/ファイル名 pattern・表示 alias から 1 行を取得するには `--language <name>`、`--extension <ext>`、`--alias <alias>` を追加してください。
+全言語が FTS5 全文検索に対応しています。**シンボル = yes** の行は、関数・クラス・import 名などの構造化検索にも対応します。現在の DB に存在する言語だけを一覧するには `cdidx languages --indexed-only --json` を使います。JSON 行には `symbol_extraction`、`reference_extraction`、`graph_queries`、`capability_gaps`、`unsupported_guidance`、`indexed_file_count` が含まれます。参照抽出やグラフクエリが未対応の場合、`unsupported_guidance` は空の参照/グラフ結果を根拠として扱えない理由と代替コマンドを示します。言語名・認識済み拡張子/ファイル名 pattern・表示 alias から 1 行を取得するには `--language <name>`、`--extension <ext>`、`--alias <alias>` を追加してください。
 
 | 言語 | 拡張子 | シンボル |
 |---|---|:---:|
@@ -4662,12 +4698,14 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 ### 言語別 extraction matrix
 
 現在の capability は `cdidx languages --json` を live probe として確認してください。JSON 行には
-`symbol_extraction`、`reference_extraction`、`graph_queries`、`capability_gaps` が含まれます。`--indexed-only` や
+`symbol_extraction`、`reference_extraction`、`graph_queries`、`capability_gaps`、`unsupported_guidance` が含まれます。`--indexed-only` や
 `--language`、`--extension`、`--alias` による DB 参照付き lookup では `indexed_file_count` も含まれます。
 現在の DB に存在する言語だけを見たい場合は `--indexed-only`、言語名・拡張子・表示 alias から 1 行を特定したい場合は
 `--language <name>`、`--extension <ext>`、`--alias <alias>`、特定の構造化 capability や capability gap を監査する場合は
 `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` を追加します。この matrix は、構造化 command を信頼できる場面と
 `search` に戻るべき場面を判断するための概要です。
+参照抽出やグラフクエリが未対応の行では、`unsupported_guidance` に未対応の機能、説明メッセージ、
+次に安全に使う `recommended_commands` が入ります。
 
 | 言語ファミリ | Symbols | References / graph | メモと例 |
 |---|---|---|---|
@@ -5094,12 +5132,12 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `excerpt` | インデックス済みチャンクから特定行範囲を再構成 |
 | `map` | 言語、モジュール、ホットスポット、推定エントリポイントを要約 |
 | `analyze_symbol` | 定義、近傍シンボル、参照、caller、callee、ファイル情報、ワークスペース信頼メタデータ、graph 対応メタデータをまとめて返す。バンドルされた `callers` / `callees` 行にも単独の `callers` / `callees` と同じ `referenceKind`（後方互換の優先サマリー種別）、`referenceKinds`（distinct kind の昇順配列）、`hasMixedReferenceKinds` が付くため、`call` + `subscribe` が混在する container も要約 1 ラベルに潰れず見える。 |
-| `outline` | 1ファイルの全シンボルを行、開始列、種別、名前の順序で、シグネチャとコンテナ深さに応じたネスト付きで表示 |
+| `outline` | 1ファイルの全シンボルを既定ではソース位置順で表示し、大規模ファイル調査では size、complexity、kind、path、name、参照数でも並べ替え可能 |
 | `status` | データベース統計情報 |
 | `deps` | 参照グラフからファイル間依存エッジを表示 |
 | `impact_analysis` | シンボルの推移的 caller を算出（`maxHops` は inclusive で、`maxHops: N` 指定時は hop 1〜N の caller を返す。例: A→B→C→D のチェーンで D を `maxHops: 2` 検索すると C(hop=1) と B(hop=2) が返る）。非推奨 alias の `maxDepth` は互換期間中も受け付け、使用時は warning を返す。symbol-level BFS は call graph 種別（`call`、`instantiate`、`subscribe`）のみを辿り、metadata-only edge（`attribute`、`annotation`、`type_reference`）を除外するため、metadata cycle で caller 件数が膨らまない。`maxHops: 0` で symbol 解決のみを行い、単一定義の型は heuristic な file-level dependency hint にフォールバックし、複数定義時はヒントも返す。この file hint は metadata edge を含み得る。`withPaths: true` を渡すと、各 caller に最短経路 `[resolvedRoot, 中間..., callerName]` の `paths` 配列が付き、ダイヤモンド収束時もすべての経路を返す（1 行あたりの保持上限を超えると `paths_truncated` で通知） |
 | `unused_symbols` | 定義されているが参照されていないシンボルを bucket 付きで検索（デッドコード検出向け） |
-| `symbol_hotspots` | 影響の大きい hotspot を検索。`groupBy` は `symbol` / `file` / `statement` を指定でき、SQL scope は statement grouping、非 SQL scope は symbol grouping が既定。 |
+| `symbol_hotspots` | 影響の大きい hotspot を検索。`groupBy` は `symbol` / `file` を指定でき、`statement` は `lang: "sql"` の場合だけ受け付ける。structured output には `grouping_unit`、`count_kind`、`limit_applies_to`、`score_fields`、`ranking_fields` と対応する `query_context` fields が含まれる。 |
 | `batch_query` | 複数クエリを1回で実行（MCP専用、最大10件）。レスポンスにはトップレベル `metadata`（`submitted` / `executed` / `errors` / `total_elapsed_ms` / `success_count` / `failure_count`）と各 `results` エントリの `request_index`、任意の client `slot_id`、`ok`、`elapsed_ms`、`summary`、`args_summary` が含まれ、位置だけに依存せず部分失敗や遅い内部クエリを把握できます。`args_summary` の scalar 値は full JSON materialization の前に bounded 表示へ変換されるため、巨大な数値や文字列が診断を膨らませません。 |
 | `validate` | エンコーディングと file-content の問題（origin/severity 付き U+FFFD、BOM、null バイト、改行混在 / CR-only 行末、UTF-16 BOM / heuristic 検出、UTF-8 以外と推定されるエンコーディング、Git LFS pointer placeholder、Dockerfile JSON-form 診断）を報告 |
 | `languages` | 対応言語一覧を拡張子・機能付きで表示。`--indexed-only` と `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` で現在の DB、機能別、または capability gap 別に絞り込み可能 |

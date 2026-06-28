@@ -29,6 +29,8 @@ public static partial class QueryCommandRunner
     private const int MaxNamedSearchQueryNameLength = 128;
     internal const int DefaultImpactLimit = 50;
     internal const int DefaultDependencyCycleGraphLimit = 50;
+    internal const int GraphLivenessLimitThreshold = 80;
+    internal const string DependencyCycleDetectionMode = "bounded_approximate_candidate_edges";
     internal const int MaxWorkspaceDependencyDatabaseCount = 8;
     internal const int MaxWorkspaceDependencyDatabasePairCount = MaxWorkspaceDependencyDatabaseCount * (MaxWorkspaceDependencyDatabaseCount - 1);
     internal const int FindAllCandidateFileLimit = 4096;
@@ -68,11 +70,14 @@ public static partial class QueryCommandRunner
     internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
     private static readonly HashSet<string> DependencyNoiseSymbols = new(StringComparer.OrdinalIgnoreCase)
     {
+        "Append",
+        "AppendLine",
         "Array",
         "Console",
         "DateTime",
         "Dictionary",
         "Directory",
+        "Encoding",
         "Enumerable",
         "File",
         "IEnumerable",
@@ -85,6 +90,7 @@ public static partial class QueryCommandRunner
         "String",
         "StringBuilder",
         "Task",
+        "ToString",
         "Write",
         "WriteLine",
     };
@@ -137,10 +143,10 @@ public static partial class QueryCommandRunner
     internal const int MaxUnusedPaginationFetchLimit = MaxQueryResultLimit * MaxUnusedPaginationPages + 1;
     internal const int MaxUnusedPaginationOffset = MaxUnusedPaginationFetchLimit - MaxQueryResultLimit - 1;
     private const string SearchFilterNoMatchSentinel = "\0__cdidx_no_match__";
-    private const string HotspotsGroupedByNameKind = "name_kind";
-    private const string HotspotsGroupedBySymbol = "symbol";
-    private const string HotspotsGroupedByFile = "file";
-    private const string HotspotsGroupedByStatement = "statement";
+    internal const string HotspotsGroupedByNameKind = "name_kind";
+    internal const string HotspotsGroupedBySymbol = "symbol";
+    internal const string HotspotsGroupedByFile = "file";
+    internal const string HotspotsGroupedByStatement = "statement";
     private const string JsonOutputFormatNdjson = "ndjson";
     private const string JsonOutputFormatArray = "array";
     private sealed record StatusFieldExplanation(
@@ -360,740 +366,6 @@ public static partial class QueryCommandRunner
     };
     private const string FindUsage = "Usage: cdidx find <query> (--path <glob>|--all) [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--exact] [--regex] [--count]\n       cdidx find --query <query> (--path <glob>|--all) [...]\n       cdidx find [options] -- <query>";
 
-    public static int RunSearch(
-        string[] cmdArgs,
-        JsonSerializerOptions jsonOptions,
-        CancellationToken cancellationToken = default)
-    {
-        var previewOptionError = ValidatePreviewOptions("search", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
-        if (previewOptionError != null)
-        {
-            CommandErrorWriter.WriteStderr(previewOptionError);
-            return CommandExitCodes.UsageError;
-        }
-        var options = ParseArgs(
-            cmdArgs,
-            jsonDefault: false,
-            allowNamedQuery: true,
-            allowIssueDraftsFormat: true,
-            applySearchSourceDefaults: true);
-        if (TryWriteUnsupportedOptionError("search", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("search"), options.Query))
-            return CommandExitCodes.UsageError;
-        if (TryWriteParseError(options, "search"))
-            return CommandExitCodes.UsageError;
-        if (!TryResolveSearchExactMode(options, out var exact, out var exactError))
-        {
-            CommandErrorWriter.WriteStderr(exactError);
-            return CommandExitCodes.UsageError;
-        }
-        if (options.OpenIssuesPath != null && options.OutputFormat != OutputFormatIssueDrafts)
-        {
-            WriteUsageError(
-                "--open-issues can only be used with `cdidx search --format issue-drafts`.",
-                GetUsageLineOrThrow("search"),
-                "Use an open-issues JSON file from `gh issue list --state open --json number,title,labels,url`.");
-            return CommandExitCodes.UsageError;
-        }
-        if (options.OpenIssuesRepository != null && !IssueDuplicatePreflight.IsGitHubOpenIssuesSource(options.OpenIssuesPath))
-        {
-            WriteUsageError(
-                "--repo can only be used with `--open-issues github`.",
-                GetUsageLineOrThrow("search"),
-                "Use `--open-issues github --repo owner/name` to fetch open issues directly from GitHub.");
-            return CommandExitCodes.UsageError;
-        }
-        if (options.DuplicatePreflightTuningExplicit && options.OutputFormat != OutputFormatIssueDrafts)
-        {
-            WriteUsageError(
-                "--duplicate-confidence and --duplicate-threshold can only be used with `cdidx search --format issue-drafts`.",
-                GetUsageLineOrThrow("search"),
-                "Use these controls when exporting issue draft JSON with duplicate-preflight metadata.");
-            return CommandExitCodes.UsageError;
-        }
-        if ((options.IncludeRecipeQueries.Count > 0 || options.ExcludeRecipeQueries.Count > 0) && options.RecipeName == null)
-        {
-            WriteUsageError(
-                "--include-query and --exclude-query can only be used with --recipe.",
-                GetUsageLineOrThrow("search"),
-                "Use `--recipe risky-code --include-query raw-diagnostic-echo` to run a child query subset.");
-            return CommandExitCodes.UsageError;
-        }
-        if (options.SearchCursor.HasValue && options.RecipeName == null)
-        {
-            WriteUsageError(
-                "--cursor can only be used with --recipe.",
-                GetUsageLineOrThrow("search"),
-                "Use `--recipe risky-code/raw-diagnostic-echo --format compact --cursor <next_cursor>` to fetch the next page for one child query.");
-            return CommandExitCodes.UsageError;
-        }
-        if (options.UnusedCursorOffset.HasValue)
-        {
-            WriteUsageError(
-                "--cursor for search must be a search pagination cursor returned by recipe search.",
-                GetUsageLineOrThrow("search"),
-                "Use `--cursor <next_cursor>` only with `--recipe`; `unused:<offset>` cursors are for `cdidx unused`.");
-            return CommandExitCodes.UsageError;
-        }
-        if (options.OutlineCursorOffset.HasValue)
-        {
-            WriteUsageError(
-                "--cursor for search must be a search pagination cursor returned by recipe search.",
-                GetUsageLineOrThrow("search"),
-                "`outline:<offset>` cursors are for `cdidx outline <path>`.");
-            return CommandExitCodes.UsageError;
-        }
-        if (options.AuditScopeExplicit && options.RecipeName == null && options.ListRecipes)
-        {
-            WriteUsageError(
-                "--audit-scope cannot be combined with `cdidx search --list-recipes`.",
-                GetUsageLineOrThrow("search"),
-                "Use `--query <text>` with --list-recipes to filter recipe discovery, or run an ad hoc search with `--source-only`.");
-            return CommandExitCodes.UsageError;
-        }
-        if (options.ShowExcluded && options.RecipeName == null)
-        {
-            WriteUsageError(
-                "--show-excluded is only supported with `cdidx search --recipe <name>`.",
-                GetUsageLineOrThrow("search"),
-                "Use it with a recipe run to include the effective scope and exclusion diagnostics in JSON output.");
-            return CommandExitCodes.UsageError;
-        }
-        if ((options.IssueTitle != null || options.IssueLabels.Count > 0) && options.OutputFormat != OutputFormatIssueDrafts)
-        {
-            WriteUsageError(
-                "--issue-title and --issue-label can only be used with `cdidx search --format issue-drafts`.",
-                GetUsageLineOrThrow("search"),
-                "Use these hints when exporting issue draft JSON for a plain search.");
-            return CommandExitCodes.UsageError;
-        }
-        if (options.SnippetLines == 0 && options.OutputFormat != OutputFormatIssueDrafts)
-        {
-            WriteUsageError(
-                "--snippet-lines 0 is only supported with --format issue-drafts.",
-                GetUsageLineOrThrow("search"),
-                "Use `--format issue-drafts --snippet-lines 0` for path/line-only draft evidence, or pass a positive snippet line count for search output.");
-            return CommandExitCodes.UsageError;
-        }
-        if (options.IssueTitle != null && options.RecipeName != null)
-        {
-            WriteUsageError(
-                "--issue-title is only supported for ad hoc search issue drafts.",
-                GetUsageLineOrThrow("search"),
-                "Recipe issue-drafts produce one draft per recipe query, so their titles are derived from the recipe metadata.");
-            return CommandExitCodes.UsageError;
-        }
-        if (options.OutputFormat == OutputFormatIssueDrafts && options.CountOnly)
-        {
-            WriteUsageError(
-                "--count cannot be combined with --format issue-drafts.",
-                GetUsageLineOrThrow("search"),
-                "Issue-draft export needs result evidence; remove --count.");
-            return CommandExitCodes.UsageError;
-        }
-        if (options.NamesOnly && !options.ListRecipes)
-        {
-            WriteUsageError(
-                "--names is only supported with `cdidx recipes` or `cdidx search --list-recipes`.",
-                GetUsageLineOrThrow("search"),
-                "Use `cdidx recipes --names --json` for a small deterministic recipe-name list.");
-            return CommandExitCodes.UsageError;
-        }
-        if (options.NamesOnly && options.SummaryOnly)
-        {
-            WriteUsageError(
-                "--names cannot be combined with --summary-only.",
-                GetUsageLineOrThrow("search"),
-                "Use one recipe-list shape at a time.");
-            return CommandExitCodes.UsageError;
-        }
-        if (options.SummaryOnly && !options.ListRecipes && !(options.RecipeName != null && options.CountOnly))
-        {
-            WriteUsageError(
-                "--summary-only is only supported with `cdidx recipes` / `cdidx search --list-recipes`, or recipe count output.",
-                GetUsageLineOrThrow("search"),
-                "Use `cdidx recipes --summary-only --json` or `cdidx search --recipe <name> --format count --summary-only`.");
-            return CommandExitCodes.UsageError;
-        }
-        if (options.OutputFormat == OutputFormatIssueDrafts && options.JsonOutputFormat == JsonOutputFormatArray)
-        {
-            WriteUsageError(
-                "--json=array is not supported with --format issue-drafts because draft export is a JSON object.",
-                GetUsageLineOrThrow("search"),
-                "Use plain `--json` or omit --json when exporting issue drafts.");
-            return CommandExitCodes.UsageError;
-        }
-        if (options.SearchCursor.HasValue && options.OutputFormat == OutputFormatIssueDrafts)
-        {
-            WriteUsageError(
-                "--cursor cannot be combined with --format issue-drafts.",
-                GetUsageLineOrThrow("search"),
-                "Use --cursor with recipe JSON or compact output, then export issue drafts after choosing the desired query page.");
-            return CommandExitCodes.UsageError;
-        }
-        if (exact && options.Prefix)
-        {
-            WriteValidationError(
-                "--prefix cannot be combined with --exact / --exact-substring (exact uses instr(), not FTS5 prefix phrases).",
-                "Drop --prefix to keep the exact substring path, or drop --exact to opt into FTS5 prefix matching.");
-            return CommandExitCodes.UsageError;
-        }
-        if (options.GroupBy != null && (options.ListRecipes || options.NamedSearchQueries.Count > 0))
-        {
-            var mode = options.ListRecipes
-                ? "--list-recipes"
-                : "--named-query";
-            WriteUsageError(
-                $"--group-by is not supported with {mode}.",
-                GetUsageLineOrThrow("search"),
-                "Use `cdidx search <query> --group-by file --count` or remove --group-by for recipe-list and named-batch output.");
-            return CommandExitCodes.UsageError;
-        }
-        if (options.OutputFormat == OutputFormatGrouped && (options.ListRecipes || options.NamedSearchQueries.Count > 0 || options.RecipeName != null))
-        {
-            var mode = options.ListRecipes
-                ? "--list-recipes"
-                : options.NamedSearchQueries.Count > 0
-                    ? "--named-query"
-                    : "--recipe";
-            WriteUsageError(
-                "--format grouped is only supported for plain search output.",
-                GetUsageLineOrThrow("search"),
-                $"Remove {mode}, or run a plain `cdidx search <query> --format grouped`.");
-            return CommandExitCodes.UsageError;
-        }
-        if (options.ListRecipes)
-        {
-            if (options.RecipeName != null || options.NamedSearchQueries.Count > 0 || options.ExtraNames.Count > 0)
-            {
-                WriteUsageError(
-                    "--list-recipes cannot be combined with --recipe, --named-query, or extra positional arguments.",
-                    GetUsageLineOrThrow("search"),
-                    "Run `cdidx search --list-recipes --query <text>` to filter built-in audit recipes by recipe, query, label, severity, path, or search text.");
-                return CommandExitCodes.UsageError;
-            }
-            if (options.OutputFormat is not OutputFormatText and not OutputFormatJson and not OutputFormatCompact)
-            {
-                WriteUsageError(
-                    "--format count/csv/tsv/lsp/qf/sarif/issue-drafts is not supported with --list-recipes.",
-                    GetUsageLineOrThrow("search"),
-                    "Use plain text output, `--json` / `--format json` for the full recipe list, or `--format compact` for a compact summary.");
-                return CommandExitCodes.UsageError;
-            }
-            if (options.JsonOutputFormat == JsonOutputFormatArray)
-            {
-                WriteUsageError(
-                    "--json=array is not supported with --list-recipes because recipe-list output is a JSON object.",
-                    GetUsageLineOrThrow("search"),
-                    "Use plain `--json` for the recipe-list object.");
-                return CommandExitCodes.UsageError;
-            }
-
-            return WriteSearchRecipeList(options, jsonOptions);
-        }
-        if (options.NamedSearchQueries.Count > 0)
-        {
-            if (options.Query != null || options.RecipeName != null || options.ExtraNames.Count > 0)
-            {
-                WriteUsageError(
-                    "--named-query cannot be combined with a positional query, --query, --recipe, or extra positional arguments.",
-                    GetUsageLineOrThrow("search"),
-                    "Pass one or more `--named-query <name>=<query>` values, or run a plain `cdidx search <query>`.");
-                return CommandExitCodes.UsageError;
-            }
-            if (options.OpenIssuesPath != null)
-            {
-                WriteUsageError(
-                    "--open-issues can only be used with `cdidx search --recipe <name> --format issue-drafts`.",
-                    GetUsageLineOrThrow("search"),
-                    "Remove --open-issues for ad hoc named batches.");
-                return CommandExitCodes.UsageError;
-            }
-            if (options.CountOnly)
-            {
-                WriteUsageError(
-                    "--count is not supported with --named-query.",
-                    GetUsageLineOrThrow("search"),
-                    "Use `cdidx search --named-query <name>=<query> --json` for per-query counts.");
-                return CommandExitCodes.UsageError;
-            }
-            if (options.OutputFormat is not OutputFormatText and not OutputFormatJson and not OutputFormatCompact)
-            {
-                WriteUsageError(
-                    "--format count/csv/tsv/lsp/qf/sarif/issue-drafts is not supported with --named-query.",
-                    GetUsageLineOrThrow("search"),
-                    "Use plain text output, `--json`, or `--format compact` for grouped ad hoc results.");
-                return CommandExitCodes.UsageError;
-            }
-            if (options.JsonOutputFormat == JsonOutputFormatArray)
-            {
-                WriteUsageError(
-                    "--json=array is not supported with --named-query because named batch output is grouped by query.",
-                    GetUsageLineOrThrow("search"),
-                    "Use plain `--json` for the grouped named-query object.");
-                return CommandExitCodes.UsageError;
-            }
-
-            return RunSearchNamedBatch(options, jsonOptions, exact);
-        }
-        if (options.RecipeName != null)
-        {
-            if (options.Query != null || options.ExtraNames.Count > 0)
-            {
-                WriteUsageError(
-                    "--recipe expands into its own curated query set and cannot be combined with a search query.",
-                    GetUsageLineOrThrow("search"),
-                    "Remove the positional query, or run a plain `cdidx search <query>` without --recipe.");
-                return CommandExitCodes.UsageError;
-            }
-            if (options.Prefix)
-            {
-                WriteUsageError(
-                    "--prefix is not supported with --recipe because each recipe query defines its own match mode.",
-                    GetUsageLineOrThrow("search"),
-                    "Remove --prefix, or run the individual query from the recipe list yourself.");
-                return CommandExitCodes.UsageError;
-            }
-            if (options.OutputFormat is not OutputFormatText and not OutputFormatJson and not OutputFormatCount and not OutputFormatCompact and not OutputFormatIssueDrafts)
-            {
-                WriteUsageError(
-                    "--format csv/tsv/lsp/qf/sarif is not supported with --recipe.",
-                    GetUsageLineOrThrow("search"),
-                    "Use `--count` / `--format count` for count-only recipe output, `--json` for grouped recipe results, `--format compact` for summary-first compact JSON, or `--format issue-drafts` for draft exports.");
-                return CommandExitCodes.UsageError;
-            }
-            if (options.JsonOutputFormat == JsonOutputFormatArray)
-            {
-                WriteUsageError(
-                    "--json=array is not supported with --recipe because recipe output is grouped by query.",
-                    GetUsageLineOrThrow("search"),
-                    "Use plain `--json` for the grouped recipe object.");
-                return CommandExitCodes.UsageError;
-            }
-            if (options.MaxJsonBytes.HasValue
-                && !(options.Json && options.JsonOutputFormat != JsonOutputFormatArray && options.OutputFormat == OutputFormatIssueDrafts)
-                && !(options.Json && options.JsonOutputFormat == JsonOutputFormatNdjson && options.OutputFormat == OutputFormatJson)
-                && !(options.Json
-                    && options.CountOnly
-                    && options.SummaryOnly
-                    && options.GroupBy == null
-                    && options.CountBy == null
-                    && options.UniqueBy == null))
-            {
-                WriteUsageError(
-                    "--max-json-bytes is only supported with NDJSON recipe rows, issue-draft JSON, or summary-only recipe count JSON.",
-                    GetUsageLineOrThrow("search"),
-                    "Use `--recipe <name> --json=ndjson --max-json-bytes <n>`, `--format issue-drafts --max-json-bytes <n>`, or `--format count --summary-only --max-json-bytes <n>`.");
-                return CommandExitCodes.UsageError;
-            }
-            if (options.ResultsOnly && options.JsonOutputFormat != JsonOutputFormatNdjson)
-            {
-                WriteUsageError(
-                    "--results-only is only supported with NDJSON recipe output.",
-                    GetUsageLineOrThrow("search"),
-                    "Use `--recipe <name> --results-only --search-fields path,line,query_name`, or remove --results-only.");
-                return CommandExitCodes.UsageError;
-            }
-            if (options.GroupBy != null)
-            {
-                if (options.GroupBy is not "file" and not "symbol" and not "origin")
-                {
-                    WriteUsageError(
-                        "--group-by for recipe search must be one of file, symbol, or origin.",
-                        GetUsageLineOrThrow("search"),
-                        "Use `cdidx search --recipe <name> --group-by file --count`, `--group-by symbol --count`, or `--count-by origin`.");
-                    return CommandExitCodes.UsageError;
-                }
-                if (!options.CountOnly)
-                {
-                    WriteUsageError(
-                        "search --recipe --group-by requires --count.",
-                        GetUsageLineOrThrow("search"),
-                        "Add --count to request grouped recipe result counts, or remove --group-by to print matching snippets.");
-                    return CommandExitCodes.UsageError;
-                }
-            }
-            if (options.CountBy != null && options.CountBy is not "path" and not "file" and not "symbol" and not "origin")
-            {
-                WriteUsageError(
-                    "--count-by for recipe search must be one of path, file, symbol, or origin.",
-                    GetUsageLineOrThrow("search"),
-                    "Use `--count-by path`, `--count-by symbol`, or `--count-by origin`.");
-                return CommandExitCodes.UsageError;
-            }
-            if (options.UniqueBy != null && options.UniqueBy is not "path" and not "file" and not "symbol" and not "origin")
-            {
-                WriteUsageError(
-                    "--unique for recipe search must be one of path, file, symbol, or origin.",
-                    GetUsageLineOrThrow("search"),
-                    "Use `--unique path`, `--unique symbol`, or `--unique origin`.");
-                return CommandExitCodes.UsageError;
-            }
-            if (options.CountBy != null && options.UniqueBy != null)
-            {
-                WriteUsageError(
-                    "--count-by cannot be combined with --unique.",
-                    GetUsageLineOrThrow("search"),
-                    "Run one recipe aggregation mode at a time.");
-                return CommandExitCodes.UsageError;
-            }
-            if (options.GroupBy != null && (options.CountBy != null || options.UniqueBy != null))
-            {
-                WriteUsageError(
-                    "--group-by cannot be combined with --count-by or --unique.",
-                    GetUsageLineOrThrow("search"),
-                    "Use either `--group-by <field> --count`, `--count-by <field>`, or `--unique <field>`.");
-                return CommandExitCodes.UsageError;
-            }
-            if ((options.GroupBy != null || options.CountBy != null || options.UniqueBy != null) && (options.ResultsOnly || options.SearchFields != null))
-            {
-                WriteUsageError(
-                    "recipe aggregation cannot be combined with --results-only or --search-fields.",
-                    GetUsageLineOrThrow("search"),
-                    "Run the aggregation separately, or remove --count-by/--group-by to stream projected recipe rows.");
-                return CommandExitCodes.UsageError;
-            }
-
-            if (options.CountOnly)
-            {
-                if (options.GroupBy != null || options.CountBy != null || options.UniqueBy != null)
-                    return RunSearchRecipeAggregation(options, jsonOptions, exact);
-
-                return RunSearchRecipeCount(options, jsonOptions, exact);
-            }
-
-            if (options.CountBy != null || options.UniqueBy != null)
-                return RunSearchRecipeAggregation(options, jsonOptions, exact);
-
-            if (options.OutputFormat == OutputFormatIssueDrafts)
-                return RunSearchRecipeIssueDrafts(options, jsonOptions, exact, cancellationToken);
-
-            return RunSearchRecipe(options, jsonOptions, exact);
-        }
-        if (TryWriteBlankQueryError(options, "search"))
-            return CommandExitCodes.UsageError;
-        if (options.Query == null)
-        {
-            WriteUsageError(
-                "search requires a query argument",
-                GetUsageLineOrThrow("search"),
-                BuildMissingSearchQueryHint(cmdArgs));
-            return CommandExitCodes.UsageError;
-        }
-        if (options.Query.Length > QueryLimits.MaxQueryLength)
-        {
-            WriteUsageError(
-                QueryLimits.FormatQueryTooLongError(),
-                GetUsageLineOrThrow("search"),
-                "Shorten the search text or split generated input into smaller queries before running `cdidx search`.");
-            return CommandExitCodes.UsageError;
-        }
-        if (TryWriteUnexpectedExtraPositionals("search", options))
-            return CommandExitCodes.UsageError;
-        if (options.GroupBy != null)
-        {
-            if (options.GroupBy is not "file" and not "symbol" and not "origin")
-            {
-                WriteUsageError(
-                    "--group-by for search must be one of file, symbol, or origin.",
-                    GetUsageLineOrThrow("search"),
-                    "Use `cdidx search <query> --group-by file --count`, `--group-by symbol --count`, or `--count-by origin`.");
-                return CommandExitCodes.UsageError;
-            }
-            if (!options.CountOnly)
-            {
-                WriteUsageError(
-                    "search --group-by requires --count.",
-                    GetUsageLineOrThrow("search"),
-                    "Add --count to request grouped result counts, or remove --group-by to print matching snippets.");
-                return CommandExitCodes.UsageError;
-            }
-            if (options.OutputFormat is not OutputFormatText and not OutputFormatJson and not OutputFormatCount)
-            {
-                WriteUsageError(
-                    "--group-by for search only supports plain count output or JSON.",
-                    GetUsageLineOrThrow("search"),
-                    "Use `--count`, optionally with `--json`, instead of compact/location formats.");
-                return CommandExitCodes.UsageError;
-            }
-            if (options.JsonOutputFormat == JsonOutputFormatArray)
-            {
-                WriteUsageError(
-                    "--json=array is not supported with search --group-by because grouped count output is a JSON object.",
-                    GetUsageLineOrThrow("search"),
-                    "Use plain `--json` for the grouped-count object.");
-                return CommandExitCodes.UsageError;
-            }
-        }
-        if (options.CountBy != null && options.UniqueBy != null)
-        {
-            WriteUsageError(
-                "--count-by cannot be combined with --unique.",
-                GetUsageLineOrThrow("search"),
-                "Run one aggregation mode at a time.");
-            return CommandExitCodes.UsageError;
-        }
-        if (options.GroupBy != null && (options.CountBy != null || options.UniqueBy != null))
-        {
-            WriteUsageError(
-                "--group-by cannot be combined with --count-by or --unique.",
-                GetUsageLineOrThrow("search"),
-                "Use either `--group-by <field> --count`, `--count-by <field>`, or `--unique <field>`.");
-            return CommandExitCodes.UsageError;
-        }
-        if ((options.CountBy != null || options.UniqueBy != null) && options.JsonOutputFormat == JsonOutputFormatArray)
-        {
-            WriteUsageError(
-                "--json=array is not supported with search aggregation because aggregation output is a JSON object.",
-                GetUsageLineOrThrow("search"),
-                "Use plain `--json` for `--count-by` or `--unique` aggregation output.");
-            return CommandExitCodes.UsageError;
-        }
-        if (options.OutputFormat == OutputFormatGrouped && options.JsonOutputFormat == JsonOutputFormatArray)
-        {
-            WriteUsageError(
-                "--json=array is not supported with search --format grouped because grouped output is a JSON object.",
-                GetUsageLineOrThrow("search"),
-                "Use plain `--json` or omit --json when using `--format grouped`.");
-            return CommandExitCodes.UsageError;
-        }
-        if (options.ResultsOnly && options.JsonOutputFormat != JsonOutputFormatNdjson)
-        {
-            WriteUsageError(
-                "--results-only is only supported with NDJSON search output.",
-                GetUsageLineOrThrow("search"),
-                "Use `--results-only --json=ndjson`, or remove --results-only when using --json=array.");
-            return CommandExitCodes.UsageError;
-        }
-        if (options.MaxJsonBytes.HasValue
-            && !(options.Json && options.JsonOutputFormat != JsonOutputFormatArray && options.OutputFormat == OutputFormatIssueDrafts)
-            && (!options.Json || options.JsonOutputFormat != JsonOutputFormatNdjson || options.OutputFormat != OutputFormatJson))
-        {
-            WriteUsageError(
-                "--max-json-bytes is only supported with NDJSON search output.",
-                GetUsageLineOrThrow("search"),
-                "Use `--json=ndjson --max-json-bytes <n>` for bounded streaming output, or `--format issue-drafts --max-json-bytes <n>` for bounded draft export.");
-            return CommandExitCodes.UsageError;
-        }
-        if (options.CountBy != null && options.CountBy is not "path" and not "file" and not "symbol" and not "origin")
-        {
-            WriteUsageError(
-                "--count-by for search must be one of path, file, symbol, or origin.",
-                GetUsageLineOrThrow("search"),
-                "Use `--count-by path`, `--count-by symbol`, or `--count-by origin`.");
-            return CommandExitCodes.UsageError;
-        }
-        if (options.UniqueBy != null && options.UniqueBy is not "path" and not "file" and not "symbol" and not "origin")
-        {
-            WriteUsageError(
-                "--unique for search must be one of path, file, symbol, or origin.",
-                GetUsageLineOrThrow("search"),
-                "Use `--unique path`, `--unique symbol`, or `--unique origin`.");
-            return CommandExitCodes.UsageError;
-        }
-        if (options.OutputFormat == OutputFormatIssueDrafts)
-            return RunSearchIssueDrafts(options, jsonOptions, exact, cancellationToken);
-
-        var exactSubstringHint = SearchQueryAdvisor.BuildExactSubstringHint(options.Query, options.RawFts, exact, options.Prefix);
-        var ndjsonOptions = options.JsonOutputFormat == JsonOutputFormatNdjson ? GetCompactJsonOptions(jsonOptions) : jsonOptions;
-        int? jsonDoneCount = null;
-        var jsonDoneInterrupted = false;
-        DbReader? jsonDoneReader = null;
-        return WithDb(options, jsonOptions, reader =>
-        {
-            jsonDoneReader = reader;
-            if (options.GroupBy != null)
-            {
-                return RunGroupedSearchCount(reader, options, jsonOptions, exact, exactSubstringHint);
-            }
-            if (options.CountBy != null || options.UniqueBy != null)
-            {
-                return RunSearchAggregation(reader, options, jsonOptions, exact, exactSubstringHint);
-            }
-
-            if (options.CountOnly)
-            {
-                var counts = HasSearchOriginFilters(options)
-                    ? CountFilteredSearchResults(reader, options, exact)
-                    : reader.CountSearchResults(options.Query, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, options.GuardFilters, options.GuardWindow);
-                var queryDiagnostics = DbReader.AnalyzeFtsQuery(options.Query, options.RawFts, options.Prefix, options.Lang);
-                if (counts.Count == 0)
-                {
-                    if (options.Json)
-                    {
-                        Console.WriteLine(BuildCountJsonPayload(
-                            reader,
-                            jsonOptions,
-                            count: 0,
-                            files: 0,
-                            query: options.Query,
-                            queryOptions: options,
-                            ftsQueryDiagnostics: queryDiagnostics,
-                            exactSubstringHint: exactSubstringHint).ToJsonString(jsonOptions));
-                    }
-                    else
-                    {
-                        Console.WriteLine("0");
-                        WriteExactSubstringHintIfNeeded(exactSubstringHint);
-                    }
-                    return CommandExitCodes.Success;
-                }
-
-                if (options.Json)
-                {
-                    Console.WriteLine(BuildCountJsonPayload(
-                        reader,
-                        jsonOptions,
-                        counts.Count,
-                        counts.FileCount,
-                        query: options.Query,
-                        queryOptions: options,
-                        ftsQueryDiagnostics: queryDiagnostics,
-                        exactSubstringHint: exactSubstringHint).ToJsonString(jsonOptions));
-                }
-                else
-                {
-                    Console.WriteLine($"{counts.Count}");
-                    WriteExactSubstringHintIfNeeded(exactSubstringHint);
-                }
-                return CommandExitCodes.Success;
-            }
-
-            var ftsQueryDiagnostics = DbReader.AnalyzeFtsQuery(options.Query, options.RawFts, options.Prefix, options.Lang);
-            var displayRows = ReadSearchDisplayRows(reader, options, exact);
-            var selection = ApplySearchOutputSelection(displayRows, options);
-            displayRows = selection.Rows;
-            if (displayRows.Count == 0)
-            {
-                if (options.Json && (options.OutputFormat == OutputFormatCsv || options.OutputFormat == OutputFormatTsv))
-                {
-                    WriteDelimitedSearchResults([], options);
-                    return ZeroResultExitCode(options);
-                }
-                if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
-                    return ZeroResultExitCode(options);
-                if (options.Json)
-                {
-                    if (TryWriteEmptyFormattedResult(options, jsonOptions))
-                        return ZeroResultExitCode(options);
-                    if (options.JsonOutputFormat == JsonOutputFormatArray)
-                    {
-                        Console.WriteLine(JsonSerializer.Serialize(
-                            Array.Empty<CompactSearchResult>(),
-                            CliJsonSerializerContextFactory.Create(jsonOptions).CompactSearchResultArray));
-                    }
-                    else
-                    {
-                        var pathHint = BuildSearchPathGlobHint(reader, options);
-                        if (!options.ResultsOnly)
-                            Console.WriteLine(BuildJsonZeroResultPayload(reader, ndjsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint, extraFields: payload =>
-                            {
-                                AddSearchPathHint(payload, pathHint);
-                                AddBareTokenSearchHint(payload, options);
-                            }).ToJsonString(ndjsonOptions));
-                        jsonDoneCount = 0;
-                    }
-                }
-                else if (!options.Json)
-                {
-                    CommandErrorWriter.WriteStderr(BuildZeroResultLine("No results found", options));
-                    WriteLangHint(options.Lang, reader);
-                    WriteExactSubstringHintIfNeeded(exactSubstringHint);
-                    var pathHint = BuildSearchPathGlobHint(reader, options);
-                    WriteZeroResultHints(options, reader, filterHint: pathHint?.SuggestedAction);
-                }
-                return ZeroResultExitCode(options);
-            }
-
-            if (options.Json)
-            {
-                var compactResults = displayRows.Select(row => row.Compact).ToArray();
-                AttachExactSubstringHint(compactResults, exactSubstringHint);
-                AttachSearchNextSteps(compactResults, options);
-                if (options.SearchFields != null)
-                {
-                    WriteProjectedSearchResults(compactResults, options, jsonOptions, ndjsonOptions, out var projectedDoneCount, out var projectedInterrupted);
-                    jsonDoneCount = projectedDoneCount;
-                    jsonDoneInterrupted = projectedInterrupted;
-                    return CommandExitCodes.Success;
-                }
-                if (options.OutputFormat == OutputFormatCompact)
-                {
-                    WriteCompactSearchResults(compactResults, jsonOptions);
-                    return CommandExitCodes.Success;
-                }
-                if (options.OutputFormat == OutputFormatGrouped)
-                {
-                    WriteGroupedSearchResults(displayRows, options, jsonOptions);
-                    return CommandExitCodes.Success;
-                }
-                if (options.OutputFormat == OutputFormatCsv || options.OutputFormat == OutputFormatTsv)
-                {
-                    WriteDelimitedSearchResults(displayRows, options);
-                    return CommandExitCodes.Success;
-                }
-                if (TryWriteFormattedLocations(
-                    options,
-                    displayRows.SelectMany(row => ToSearchFormattedLocations(row, options.Query, exact)),
-                    jsonOptions))
-                    return CommandExitCodes.Success;
-                if (options.OutputFormat == OutputFormatLsp)
-                {
-                    WriteLspLocations(displayRows.SelectMany(row => ToSearchLspLocations(row, exact)), jsonOptions);
-                    return CommandExitCodes.Success;
-                }
-                if (options.OutputFormat == OutputFormatQf)
-                {
-                    WriteQuickfix(displayRows.SelectMany(row => ToSearchQuickfixItems(row, options.Query, exact)));
-                    return CommandExitCodes.Success;
-                }
-                if (options.OutputFormat == OutputFormatSarif)
-                {
-                    WriteSarif(displayRows.SelectMany(row => ToSearchSarifItems(row, options.Query, exact)), jsonOptions);
-                    return CommandExitCodes.Success;
-                }
-                if (options.JsonOutputFormat == JsonOutputFormatArray)
-                {
-                    Console.WriteLine(JsonSerializer.Serialize(
-                        compactResults,
-                        CliJsonSerializerContextFactory.Create(jsonOptions).CompactSearchResultArray));
-                }
-                else
-                {
-                    WriteSearchNdjsonResults(compactResults, options, ndjsonOptions, out var emittedCount, out var interrupted);
-                    jsonDoneCount = emittedCount;
-                    jsonDoneInterrupted = interrupted;
-                }
-            }
-            else
-            {
-                if (options.OutputFormat == OutputFormatGrouped)
-                {
-                    WriteGroupedSearchResultsHuman(displayRows, options);
-                }
-                else
-                {
-                    foreach (var row in displayRows)
-                    {
-                        var r = row.Result;
-                        Console.WriteLine($"{r.Path}:{r.StartLine}-{r.EndLine}{FormatSearchVisibilitySuffix(r.Visibility)}");
-                        var snippetLines = row.Compact.Snippet.Split('\n', StringSplitOptions.None);
-                        foreach (var line in snippetLines)
-                            Console.WriteLine($"  {line}");
-                        Console.WriteLine();
-                    }
-                }
-                var fileCount = displayRows.Select(row => row.Result.Path).Distinct().Count();
-                CommandErrorWriter.WriteStderr($"({displayRows.Count} results in {fileCount} files)");
-                WriteExactSubstringHintIfNeeded(exactSubstringHint);
-                WriteSearchNextSteps(displayRows, options);
-            }
-            return CommandExitCodes.Success;
-        }, exitCode =>
-        {
-            if (options.Json && options.JsonOutputFormat == JsonOutputFormatNdjson && jsonDoneCount.HasValue && !options.ResultsOnly)
-                WriteJsonStreamDone(jsonDoneCount.Value, ndjsonOptions, jsonDoneInterrupted, jsonDoneReader);
-        });
-    }
 
     private static int RunGroupedSearchCount(DbReader reader, QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool exact, SearchQueryHint? exactSubstringHint)
     {
@@ -1112,22 +384,32 @@ public static partial class QueryCommandRunner
                     null,
                     null))
                 .ToList();
+            var fileGroupSelection = ApplySearchGroupOutputSelection(fileCountGroups, options);
 
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(
-                    new SearchGroupedCountJsonResult(
-                        JsonOutputContract.ApiVersion,
-                        options.Query!,
-                        options.GroupBy!,
-                        totalCount,
-                        fileGroups.Count,
-                        fileCountGroups),
-                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchGroupedCountJsonResult));
+                var json = JsonSerializer.Serialize(
+                        new SearchGroupedCountJsonResult(
+                            JsonOutputContract.ApiVersion,
+                            options.Query!,
+                            options.GroupBy!,
+                            totalCount,
+                            fileGroups.Count,
+                            fileGroupSelection.Groups.Count,
+                            fileGroupSelection.TotalGroups,
+                            fileGroupSelection.Truncated,
+                            options.Limit,
+                            fileGroupSelection.Groups),
+                        CliJsonSerializerContextFactory.Create(jsonOptions).SearchGroupedCountJsonResult);
+                return WriteJsonObjectWithOptionalByteLimit(
+                    json,
+                    options,
+                    "grouped search count",
+                    "Reduce --limit or increase --max-json-bytes.");
             }
             else
             {
-                WriteSearchGroupedCounts(options.GroupBy!, fileCountGroups, totalCount, fileGroups.Count);
+                WriteSearchGroupedCounts(options.GroupBy!, fileGroupSelection.Groups, totalCount, fileGroups.Count, fileGroupSelection.TotalGroups);
                 WriteExactSubstringHintIfNeeded(exactSubstringHint);
             }
 
@@ -1137,23 +419,33 @@ public static partial class QueryCommandRunner
         var results = reader.Search(options.Query!, int.MaxValue, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, guardFilters: options.GuardFilters, guardWindow: options.GuardWindow, guardScope: options.GuardScope);
         var displayRows = BuildSearchDisplayRows(results, options, exact);
         var groups = BuildSearchGroupedCounts(options.GroupBy!, displayRows);
+        var fallbackGroupSelection = ApplySearchGroupOutputSelection(groups, options);
         var fileCount = displayRows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count();
 
         if (options.Json)
         {
-            Console.WriteLine(JsonSerializer.Serialize(
-                new SearchGroupedCountJsonResult(
-                    JsonOutputContract.ApiVersion,
-                    options.Query!,
-                    options.GroupBy!,
-                    displayRows.Count,
-                    fileCount,
-                    groups),
-                CliJsonSerializerContextFactory.Create(jsonOptions).SearchGroupedCountJsonResult));
+            var json = JsonSerializer.Serialize(
+                    new SearchGroupedCountJsonResult(
+                        JsonOutputContract.ApiVersion,
+                        options.Query!,
+                        options.GroupBy!,
+                        displayRows.Count,
+                        fileCount,
+                        fallbackGroupSelection.Groups.Count,
+                        fallbackGroupSelection.TotalGroups,
+                        fallbackGroupSelection.Truncated,
+                        options.Limit,
+                        fallbackGroupSelection.Groups),
+                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchGroupedCountJsonResult);
+            return WriteJsonObjectWithOptionalByteLimit(
+                json,
+                options,
+                "grouped search count",
+                "Reduce --limit or increase --max-json-bytes.");
         }
         else
         {
-            WriteSearchGroupedCounts(options.GroupBy!, groups, displayRows.Count, fileCount);
+            WriteSearchGroupedCounts(options.GroupBy!, fallbackGroupSelection.Groups, displayRows.Count, fileCount, fallbackGroupSelection.TotalGroups);
             WriteExactSubstringHintIfNeeded(exactSubstringHint);
         }
 
@@ -1235,7 +527,7 @@ public static partial class QueryCommandRunner
         return $"{result.Path}:{start}:{kind}:{result.EnclosingSymbolName}";
     }
 
-    private static void WriteSearchGroupedCounts(string groupBy, List<SearchGroupedCountItemJsonResult> groups, int totalCount, int fileCount)
+    private static void WriteSearchGroupedCounts(string groupBy, List<SearchGroupedCountItemJsonResult> groups, int totalCount, int fileCount, int? totalGroups = null)
     {
         foreach (var group in groups)
         {
@@ -1260,7 +552,10 @@ public static partial class QueryCommandRunner
             Console.WriteLine($"{group.Count,8} {location} {symbol}{container}");
         }
 
-        CommandErrorWriter.WriteStderr($"({totalCount} results in {fileCount} files; grouped by {groupBy})");
+        var truncation = totalGroups.HasValue && groups.Count < totalGroups.Value
+            ? $"; showing {groups.Count} of {totalGroups.Value} groups"
+            : string.Empty;
+        CommandErrorWriter.WriteStderr($"({totalCount} results in {fileCount} files; grouped by {groupBy}{truncation})");
     }
 
     private static int RunSearchAggregation(DbReader reader, QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool exact, SearchQueryHint? exactSubstringHint)
@@ -1269,34 +564,47 @@ public static partial class QueryCommandRunner
         var rows = BuildSearchDisplayRows(results, options, exact);
         var groupBy = NormalizeSearchAggregationKey(options.CountBy ?? options.UniqueBy!);
         var groups = BuildSearchGroupedCounts(groupBy, rows);
+        var selection = ApplySearchGroupOutputSelection(groups, options);
         var uniqueOnly = options.UniqueBy != null;
         var fileCount = rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count();
 
         if (options.Json)
         {
-            Console.WriteLine(JsonSerializer.Serialize(
-                new SearchAggregationJsonResult(
-                    JsonOutputContract.ApiVersion,
-                    options.Query!,
-                    uniqueOnly ? "unique" : "count_by",
-                    groupBy,
-                    rows.Count,
-                    fileCount,
-                    uniqueOnly,
-                    groups),
-                CliJsonSerializerContextFactory.Create(jsonOptions).SearchAggregationJsonResult));
+            var json = JsonSerializer.Serialize(
+                    new SearchAggregationJsonResult(
+                        JsonOutputContract.ApiVersion,
+                        options.Query!,
+                        uniqueOnly ? "unique" : "count_by",
+                        groupBy,
+                        rows.Count,
+                        fileCount,
+                        uniqueOnly,
+                        selection.Groups.Count,
+                        selection.TotalGroups,
+                        selection.Truncated,
+                        options.Limit,
+                        selection.Groups),
+                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchAggregationJsonResult);
+            return WriteJsonObjectWithOptionalByteLimit(
+                json,
+                options,
+                "search aggregation",
+                "Reduce --limit or increase --max-json-bytes.");
         }
         else
         {
             if (uniqueOnly)
             {
-                foreach (var group in groups)
+                foreach (var group in selection.Groups)
                     Console.WriteLine(group.Key);
-                CommandErrorWriter.WriteStderr($"({groups.Count} unique {groupBy} values from {rows.Count} results in {fileCount} files)");
+                var truncation = selection.Truncated
+                    ? $"showing {selection.Groups.Count} of {selection.TotalGroups}"
+                    : selection.Groups.Count.ToString(CultureInfo.InvariantCulture);
+                CommandErrorWriter.WriteStderr($"({truncation} unique {groupBy} values from {rows.Count} results in {fileCount} files)");
             }
             else
             {
-                WriteSearchGroupedCounts(groupBy, groups, rows.Count, fileCount);
+                WriteSearchGroupedCounts(groupBy, selection.Groups, rows.Count, fileCount, selection.TotalGroups);
             }
             WriteExactSubstringHintIfNeeded(exactSubstringHint);
         }
@@ -1344,21 +652,26 @@ public static partial class QueryCommandRunner
         return sampled;
     }
 
-    private static void WriteGroupedSearchResults(List<SearchDisplayRow> rows, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+    private static int WriteGroupedSearchResults(List<SearchDisplayRow> rows, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
     {
         var groups = BuildSearchFileGroups(rows, options);
         var totalMatches = rows.Count;
-        Console.WriteLine(JsonSerializer.Serialize(
-            new SearchFileGroupedJsonResult(
-                JsonOutputContract.ApiVersion,
-                options.Query!,
-                totalMatches,
-                groups.Count,
-                rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count(),
-                options.GroupedPerFileLimit,
-                groups.Any(group => group.Truncated),
-                groups),
-            CliJsonSerializerContextFactory.Create(jsonOptions).SearchFileGroupedJsonResult));
+        var json = JsonSerializer.Serialize(
+                new SearchFileGroupedJsonResult(
+                    JsonOutputContract.ApiVersion,
+                    options.Query!,
+                    totalMatches,
+                    groups.Count,
+                    rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count(),
+                    options.GroupedPerFileLimit,
+                    groups.Any(group => group.Truncated),
+                    groups),
+                CliJsonSerializerContextFactory.Create(jsonOptions).SearchFileGroupedJsonResult);
+        return WriteJsonObjectWithOptionalByteLimit(
+            json,
+            options,
+            "grouped search results",
+            "Reduce --limit, --per-file-limit, or increase --max-json-bytes.");
     }
 
     private static void WriteGroupedSearchResultsHuman(List<SearchDisplayRow> rows, QueryCommandOptions options)
@@ -1396,15 +709,24 @@ public static partial class QueryCommandRunner
             .ThenBy(group => group.Path, StringComparer.Ordinal)
             .ToList();
 
-    private static void WriteProjectedSearchResults(CompactSearchResult[] results, QueryCommandOptions options, JsonSerializerOptions jsonOptions, JsonSerializerOptions ndjsonOptions, out int emittedCount, out bool interrupted)
+    private static int WriteProjectedSearchResults(CompactSearchResult[] results, QueryCommandOptions options, JsonSerializerOptions jsonOptions, JsonSerializerOptions ndjsonOptions, out int emittedCount, out bool interrupted)
     {
         var projected = results.Select(result => BuildProjectedSearchResult(result, options.SearchFields!, queryName: null, recipeName: null)).ToArray();
         if (options.JsonOutputFormat == JsonOutputFormatArray)
         {
-            Console.WriteLine(JsonSerializer.Serialize(projected, jsonOptions));
             emittedCount = projected.Length;
             interrupted = false;
-            return;
+            using var writer = new StringWriter(CultureInfo.InvariantCulture);
+            WriteJsonArray(
+                writer,
+                projected,
+                (writer, result) => writer.Write(result.ToJsonString(jsonOptions)),
+                jsonOptions);
+            return WriteJsonObjectWithOptionalByteLimit(
+                writer.ToString().TrimEnd('\r', '\n'),
+                options,
+                "projected search result array",
+                "Reduce --limit, --search-fields, or use `--json=ndjson --max-json-bytes` for streaming output.");
         }
 
         emittedCount = 0;
@@ -1419,6 +741,8 @@ public static partial class QueryCommandRunner
             bytesWritten += Encoding.UTF8.GetByteCount(line) + Environment.NewLine.Length;
             emittedCount++;
         }
+
+        return CommandExitCodes.Success;
     }
 
     private static JsonObject BuildProjectedSearchResult(
@@ -1553,6 +877,64 @@ public static partial class QueryCommandRunner
 
     private sealed record SearchOutputSelection(List<SearchDisplayRow> Rows, int OriginalCount, bool Truncated);
 
+    private sealed record SearchGroupOutputSelection(
+        List<SearchGroupedCountItemJsonResult> Groups,
+        int TotalGroups,
+        bool Truncated);
+
+    private static SearchGroupOutputSelection ApplySearchGroupOutputSelection(List<SearchGroupedCountItemJsonResult> groups, QueryCommandOptions options)
+    {
+        var totalGroups = groups.Count;
+        if (groups.Count > options.Limit)
+            groups = groups.Take(options.Limit).ToList();
+
+        return new SearchGroupOutputSelection(groups, totalGroups, groups.Count < totalGroups);
+    }
+
+    private static bool SupportsSearchJsonByteLimit(QueryCommandOptions options)
+    {
+        if (!options.Json)
+            return false;
+        if (options.OutputFormat is OutputFormatCount or OutputFormatCompact or OutputFormatGrouped or OutputFormatIssueDrafts)
+            return true;
+        if (options.OutputFormat == OutputFormatJson)
+            return options.JsonOutputFormat is JsonOutputFormatNdjson or JsonOutputFormatArray;
+        return false;
+    }
+
+    private static bool TryWriteEmptySearchJsonWithOptionalByteLimit(QueryCommandOptions options, JsonSerializerOptions jsonOptions, out int exitCode)
+    {
+        exitCode = CommandExitCodes.Success;
+        if (!options.MaxJsonBytes.HasValue)
+            return false;
+
+        if (options.OutputFormat == OutputFormatCompact)
+        {
+            exitCode = WriteJsonObjectWithOptionalByteLimit(
+                "[]",
+                options,
+                "compact search results",
+                "Increase --max-json-bytes or remove the byte cap.");
+            return true;
+        }
+
+        if (options.OutputFormat == OutputFormatCount)
+        {
+            exitCode = WriteJsonObjectWithOptionalByteLimit(
+                new JsonObject
+                {
+                    ["count"] = 0,
+                    ["total_estimated"] = 0,
+                }.ToJsonString(jsonOptions),
+                options,
+                "search count",
+                "Increase --max-json-bytes or remove the byte cap.");
+            return true;
+        }
+
+        return false;
+    }
+
     private static int RunSearchNamedBatch(QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool userExact)
     {
         return WithDb(options, jsonOptions, reader =>
@@ -1561,14 +943,18 @@ public static partial class QueryCommandRunner
 
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(
+                var json = JsonSerializer.Serialize(
                     new SearchNamedBatchRunJsonResult(
                         JsonOutputContract.ApiVersion,
                         queryResults.Count,
                         total,
                         queryResults),
-                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchNamedBatchRunJsonResult));
-                return CommandExitCodes.Success;
+                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchNamedBatchRunJsonResult);
+                return WriteJsonObjectWithOptionalByteLimit(
+                    json,
+                    options,
+                    "named-query search",
+                    "Reduce --limit, use --snippet-lines 0, or increase --max-json-bytes.");
             }
 
             Console.WriteLine("Named search batch");
@@ -1634,14 +1020,7 @@ public static partial class QueryCommandRunner
         if (options.OutputFormat == OutputFormatCompact || (options.SummaryOnly && options.Json))
         {
             var compactRecipes = recipes
-                .Select(recipe => new SearchRecipeCompactListItemJsonResult(
-                    recipe.Name,
-                    recipe.Description,
-                    recipe.DefaultScope,
-                    recipe.Queries.Count,
-                    recipe.RecommendedLabels,
-                    recipe.DefaultPathPatterns,
-                    recipe.DefaultExcludePaths))
+                .Select(recipe => ToSearchRecipeCompactListItem(recipe, recipe.Queries))
                 .ToList();
             var json = JsonSerializer.Serialize(
                 new SearchRecipeCompactListJsonResult(JsonOutputContract.ApiVersion, compactRecipes.Count, compactRecipes),
@@ -1700,7 +1079,8 @@ public static partial class QueryCommandRunner
         string json,
         QueryCommandOptions options,
         string outputDescription,
-        string hint)
+        string hint,
+        string commandName = "search")
     {
         if (options.MaxJsonBytes.HasValue)
         {
@@ -1709,7 +1089,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     $"{outputDescription} JSON output is {byteCount.ToString(CultureInfo.InvariantCulture)} bytes and exceeds --max-json-bytes {options.MaxJsonBytes.Value.ToString(CultureInfo.InvariantCulture)}.",
-                    GetUsageLineOrThrow("search"),
+                    GetUsageLineOrThrow(commandName),
                     hint);
                 return CommandExitCodes.UsageError;
             }
@@ -1717,6 +1097,65 @@ public static partial class QueryCommandRunner
 
         Console.WriteLine(json);
         return CommandExitCodes.Success;
+    }
+
+    private static int WriteJsonPayloadWithOptionalByteLimit(
+        JsonObject payload,
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        string commandName,
+        string outputDescription,
+        string hint)
+        => WriteJsonObjectWithOptionalByteLimit(
+            payload.ToJsonString(jsonOptions),
+            options,
+            outputDescription,
+            hint,
+            commandName);
+
+    private static bool ShouldEmitGraphLiveness(QueryCommandOptions options)
+        => options.Verbose || options.Limit >= GraphLivenessLimitThreshold;
+
+    private static void WriteGraphLiveness(
+        string commandName,
+        string phase,
+        QueryCommandOptions options,
+        string? format = null,
+        string? groupBy = null,
+        int? rows = null,
+        int? cycleCount = null)
+    {
+        if (!ShouldEmitGraphLiveness(options))
+            return;
+
+        var parts = new List<string>
+        {
+            $"Progress: {commandName}",
+            $"phase={phase}",
+            $"limit={options.Limit.ToString(CultureInfo.InvariantCulture)}",
+        };
+        if (format != null)
+            parts.Add($"format={format}");
+        if (groupBy != null)
+            parts.Add($"group_by={groupBy}");
+        if (rows.HasValue)
+            parts.Add($"rows={rows.Value.ToString(CultureInfo.InvariantCulture)}");
+        if (cycleCount.HasValue)
+            parts.Add($"cycles={cycleCount.Value.ToString(CultureInfo.InvariantCulture)}");
+        if (options.PathPatterns.Count > 0)
+            parts.Add($"path_filters={options.PathPatterns.Count.ToString(CultureInfo.InvariantCulture)}");
+        if (options.ExcludePaths.Count > 0)
+            parts.Add($"exclude_filters={options.ExcludePaths.Count.ToString(CultureInfo.InvariantCulture)}");
+        if (options.ExcludeTests)
+            parts.Add("exclude_tests=true");
+        if (options.DependencyCycles)
+            parts.Add("cycles=true");
+        if (options.SummaryOnly)
+            parts.Add("summary_only=true");
+        if (options.MaxJsonBytes.HasValue)
+            parts.Add($"max_json_bytes={options.MaxJsonBytes.Value.ToString(CultureInfo.InvariantCulture)}");
+
+        CommandErrorWriter.WriteStderr(string.Join(" ", parts));
     }
 
     private static SearchRecipeListItemJsonResult? ToFilteredSearchRecipeListItem(SearchAuditRecipe recipe, string? filter)
@@ -2006,34 +1445,42 @@ public static partial class QueryCommandRunner
             if (options.OutputFormat == OutputFormatCompact)
             {
                 var compactQueryResults = CollectSearchRecipeCompactQueryResults(reader, selection.Queries, scope, options, userExact, out var compactTotal);
-                Console.WriteLine(JsonSerializer.Serialize(
-                    new SearchRecipeCompactRunJsonResult(
-                        JsonOutputContract.ApiVersion,
-                        ToSearchRecipeListItem(recipe, selection.Queries),
-                        scope,
-                        selection.Queries.Count,
-                        compactTotal,
-                        BuildSearchRecipeRunSummary(compactQueryResults, options.Limit, options.TotalLimit, compactTotal),
-                        compactQueryResults),
-                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeCompactRunJsonResult));
-                return CommandExitCodes.Success;
+                var json = JsonSerializer.Serialize(
+                        new SearchRecipeCompactRunJsonResult(
+                            JsonOutputContract.ApiVersion,
+                            ToSearchRecipeListItem(recipe, selection.Queries),
+                            scope,
+                            selection.Queries.Count,
+                            compactTotal,
+                            BuildSearchRecipeRunSummary(compactQueryResults, options.Limit, options.TotalLimit, compactTotal),
+                            compactQueryResults),
+                        CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeCompactRunJsonResult);
+                return WriteJsonObjectWithOptionalByteLimit(
+                    json,
+                    options,
+                    "recipe compact",
+                    "Reduce --limit, use --snippet-lines 0, or increase --max-json-bytes.");
             }
 
             var queryResults = CollectSearchRecipeQueryResults(reader, selection.Queries, scope, options, userExact, out var total);
 
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(
-                    new SearchRecipeRunJsonResult(
-                        JsonOutputContract.ApiVersion,
-                        ToSearchRecipeListItem(recipe, selection.Queries),
-                        scope,
-                        selection.Queries.Count,
-                        total,
-                        BuildSearchRecipeRunSummary(queryResults, options.Limit, options.TotalLimit, total),
-                        queryResults),
-                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeRunJsonResult));
-                return CommandExitCodes.Success;
+                var json = JsonSerializer.Serialize(
+                        new SearchRecipeRunJsonResult(
+                            JsonOutputContract.ApiVersion,
+                            ToSearchRecipeListItem(recipe, selection.Queries),
+                            scope,
+                            selection.Queries.Count,
+                            total,
+                            BuildSearchRecipeRunSummary(queryResults, options.Limit, options.TotalLimit, total),
+                            queryResults),
+                        CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeRunJsonResult);
+                return WriteJsonObjectWithOptionalByteLimit(
+                    json,
+                    options,
+                    "recipe search",
+                    "Reduce --limit, use --snippet-lines 0, or increase --max-json-bytes.");
             }
 
             Console.WriteLine($"Recipe: {recipe.Name}");
@@ -2113,19 +1560,24 @@ public static partial class QueryCommandRunner
 
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(
-                    new SearchRecipeAggregationRunJsonResult(
-                        JsonOutputContract.ApiVersion,
-                        ToSearchRecipeListItem(recipe, selection.Queries),
-                        scope,
-                        mode,
-                        groupBy,
-                        uniqueOnly,
-                        selection.Queries.Count,
-                        total,
-                        fileCount,
-                        queryResults),
-                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeAggregationRunJsonResult));
+                var json = JsonSerializer.Serialize(
+                        new SearchRecipeAggregationRunJsonResult(
+                            JsonOutputContract.ApiVersion,
+                            ToSearchRecipeListItem(recipe, selection.Queries),
+                            scope,
+                            mode,
+                            groupBy,
+                            uniqueOnly,
+                            selection.Queries.Count,
+                            total,
+                            fileCount,
+                            queryResults),
+                        CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeAggregationRunJsonResult);
+                return WriteJsonObjectWithOptionalByteLimit(
+                    json,
+                    options,
+                    "recipe aggregation",
+                    "Reduce --limit or increase --max-json-bytes.");
             }
             else
             {
@@ -2136,10 +1588,14 @@ public static partial class QueryCommandRunner
                     {
                         foreach (var group in query.Groups)
                             Console.WriteLine(group.Key);
+                        var truncation = query.GroupsTruncated
+                            ? $"showing {query.ReturnedGroups} of {query.TotalGroups}"
+                            : query.Groups.Count.ToString(CultureInfo.InvariantCulture);
+                        CommandErrorWriter.WriteStderr($"({truncation} unique {groupBy} values from {query.Count} results in {query.FileCount} files)");
                     }
                     else
                     {
-                        WriteSearchGroupedCounts(groupBy, query.Groups, query.Count, query.FileCount);
+                        WriteSearchGroupedCounts(groupBy, query.Groups, query.Count, query.FileCount, query.TotalGroups);
                     }
                     Console.WriteLine();
                 }
@@ -2229,13 +1685,18 @@ public static partial class QueryCommandRunner
                 .Where(queryResult => queryResult.Count > 0)
                 .Select(queryResult => ToSearchIssueDraft(recipe, queryResult, preflight, options))
                 .ToList();
+            var fullRecipeMetadata = options.SummaryOnly ? null : ToSearchRecipeListItem(recipe, selection.Queries);
+            var recipeSummaryMetadata = options.SummaryOnly ? ToSearchRecipeCompactListItem(recipe, selection.Queries) : null;
             var json = JsonSerializer.Serialize(
                 new SearchIssueDraftExportJsonResult(
                     JsonOutputContract.ApiVersion,
-                    ToSearchRecipeListItem(recipe, selection.Queries),
+                    fullRecipeMetadata,
+                    recipeSummaryMetadata,
+                    options.SummaryOnly ? "summary" : "full",
                     scope,
                     selection.Queries.Count,
                     total,
+                    BuildSearchRecipeQueryFreshness(queryResults),
                     drafts.Count,
                     new SuggestionIssueDraftPreflightSummaryJsonResult(
                         preflight.Checked,
@@ -2295,6 +1756,7 @@ public static partial class QueryCommandRunner
                             selection.Queries.Count,
                             total,
                             fileCount,
+                            BuildSearchRecipeQueryFreshness(queryCounts),
                             summaryQueries),
                         CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeCountSummaryRunJsonResult);
                     return WriteJsonObjectWithOptionalByteLimit(
@@ -2406,8 +1868,11 @@ public static partial class QueryCommandRunner
                     JsonOutputContract.ApiVersion,
                     null,
                     null,
+                    "none",
+                    null,
                     1,
                     rows.Count,
+                    null,
                     drafts.Count,
                     new SuggestionIssueDraftPreflightSummaryJsonResult(
                         preflight.Checked,
@@ -2676,6 +2141,7 @@ public static partial class QueryCommandRunner
                 paths.Add(path);
 
             var groups = BuildSearchGroupedCounts(groupBy, rows);
+            var selection = ApplySearchGroupOutputSelection(groups, options);
             total += rows.Count;
             queryResults.Add(new SearchRecipeAggregationQueryJsonResult(
                 recipeQuery.Name,
@@ -2684,7 +2150,11 @@ public static partial class QueryCommandRunner
                 recipeQuery.Severity,
                 rows.Count,
                 rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count(),
-                groups));
+                selection.Groups.Count,
+                selection.TotalGroups,
+                selection.Truncated,
+                options.Limit,
+                selection.Groups));
         }
 
         fileCount = paths.Count;
@@ -2715,6 +2185,7 @@ public static partial class QueryCommandRunner
             emittedResultCount,
             queryResults.Count(query => query.Truncated),
             queryResults.Sum(query => query.MinimumOmittedResultCount),
+            BuildSearchRecipeQueryFreshness(queryResults),
             queryResults.Any(query => query.Truncated && !string.IsNullOrWhiteSpace(query.NextCursor)),
             "When a query is truncated, rerun a single child query with --recipe <recipe>/<query> --cursor <next_cursor> to page the next result set.");
 
@@ -2729,8 +2200,31 @@ public static partial class QueryCommandRunner
             emittedResultCount,
             queryResults.Count(query => query.Truncated),
             queryResults.Sum(query => query.MinimumOmittedResultCount),
+            BuildSearchRecipeQueryFreshness(queryResults),
             queryResults.Any(query => query.Truncated && !string.IsNullOrWhiteSpace(query.NextCursor)),
             "When a query is truncated, rerun a single child query with --recipe <recipe>/<query> --cursor <next_cursor> to page the next result set.");
+
+    private static SearchRecipeQueryFreshnessJsonResult BuildSearchRecipeQueryFreshness(IReadOnlyList<SearchRecipeQueryResultJsonResult> queryResults)
+        => BuildSearchRecipeQueryFreshness(queryResults.Select(query => (query.Name, query.MinimumMatchedCount)));
+
+    private static SearchRecipeQueryFreshnessJsonResult BuildSearchRecipeQueryFreshness(IReadOnlyList<SearchRecipeCompactQueryResultJsonResult> queryResults)
+        => BuildSearchRecipeQueryFreshness(queryResults.Select(query => (query.Name, query.MinimumMatchedCount)));
+
+    private static SearchRecipeQueryFreshnessJsonResult BuildSearchRecipeQueryFreshness(IReadOnlyList<SearchRecipeCountQueryJsonResult> queryResults)
+        => BuildSearchRecipeQueryFreshness(queryResults.Select(query => (query.Name, query.Count)));
+
+    private static SearchRecipeQueryFreshnessJsonResult BuildSearchRecipeQueryFreshness(IEnumerable<(string Name, int Count)> queryResults)
+    {
+        var results = queryResults.ToList();
+        var staleQueryNames = results
+            .Where(query => query.Count == 0)
+            .Select(query => query.Name)
+            .ToList();
+        return new(
+            results.Count(query => query.Count > 0),
+            staleQueryNames.Count,
+            staleQueryNames);
+    }
 
     private static SearchRecipeScopeJsonResult BuildSearchRecipeScope(SearchAuditRecipe recipe, QueryCommandOptions options)
     {
@@ -3649,6 +3143,24 @@ public static partial class QueryCommandRunner
             query.BroadCatchTaxonomy,
             query.ExactSubstring)).ToList());
 
+    private static SearchRecipeCompactListItemJsonResult ToSearchRecipeCompactListItem(SearchAuditRecipe recipe, IReadOnlyList<SearchAuditRecipeQuery> queries) => new(
+        recipe.Name,
+        recipe.Description,
+        recipe.DefaultScope,
+        queries.Count,
+        recipe.RecommendedLabels,
+        [.. recipe.DefaultPathPatterns],
+        [.. recipe.DefaultExcludePaths]);
+
+    private static SearchRecipeCompactListItemJsonResult ToSearchRecipeCompactListItem(SearchRecipeListItemJsonResult recipe, IReadOnlyList<SearchRecipeQueryListItemJsonResult> queries) => new(
+        recipe.Name,
+        recipe.Description,
+        recipe.DefaultScope,
+        queries.Count,
+        recipe.RecommendedLabels,
+        recipe.DefaultPathPatterns,
+        recipe.DefaultExcludePaths);
+
     private static List<SearchRecipeGuardFilterJsonResult> ToSearchRecipeGuardFilterJsonResults(IReadOnlyList<SearchGuardFilter> guardFilters)
         => guardFilters
             .Select(filter => new SearchRecipeGuardFilterJsonResult(
@@ -4189,19 +3701,33 @@ public static partial class QueryCommandRunner
     private static JsonSerializerOptions GetCompactJsonOptions(JsonSerializerOptions jsonOptions)
         => jsonOptions.WriteIndented ? new JsonSerializerOptions(jsonOptions) { WriteIndented = false } : jsonOptions;
 
-    private static void WriteCompactSearchResults(IEnumerable<CompactSearchResult> results, JsonSerializerOptions jsonOptions)
+    private static int WriteCompactSearchResults(IEnumerable<CompactSearchResult> results, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+    {
+        using var writer = new StringWriter(CultureInfo.InvariantCulture);
+        WriteCompactSearchResults(writer, results, jsonOptions);
+        return WriteJsonObjectWithOptionalByteLimit(
+            writer.ToString().TrimEnd('\r', '\n'),
+            options,
+            "compact search results",
+            "Reduce --limit, --snippet-lines, or use `--json=ndjson --max-json-bytes` for streaming output.");
+    }
+
+    private static void WriteCompactSearchResults(TextWriter writer, IEnumerable<CompactSearchResult> results, JsonSerializerOptions jsonOptions)
     {
         var itemOptions = GetCompactJsonOptions(jsonOptions);
         var context = CliJsonSerializerContextFactory.Create(itemOptions);
         WriteJsonArray(
+            writer,
             results,
             (writer, result) => writer.Write(JsonSerializer.Serialize(result, context.CompactSearchResult)),
             jsonOptions);
     }
 
     private static void WriteJsonArray<T>(IEnumerable<T> items, Action<TextWriter, T> writeItem, JsonSerializerOptions jsonOptions)
+        => WriteJsonArray(Console.Out, items, writeItem, jsonOptions);
+
+    private static void WriteJsonArray<T>(TextWriter writer, IEnumerable<T> items, Action<TextWriter, T> writeItem, JsonSerializerOptions jsonOptions)
     {
-        var writer = Console.Out;
         if (!jsonOptions.WriteIndented)
         {
             writer.Write('[');
@@ -6705,7 +6231,58 @@ public static partial class QueryCommandRunner
         => options.OutlineFieldsExplicit
            || kindFilters.Count > 0
            || options.LimitExplicit
-           || options.OutlineCursorOffset.HasValue;
+           || options.OutlineCursorOffset.HasValue
+           || options.SortExplicit;
+
+    private static bool TryParseOutlineSortMode(string value, out OutlineSortMode sortMode)
+    {
+        switch (value.Trim().ToLowerInvariant().Replace("_", "-"))
+        {
+            case "source":
+            case "line":
+            case "lines":
+                sortMode = OutlineSortMode.Source;
+                return true;
+            case "name":
+                sortMode = OutlineSortMode.Name;
+                return true;
+            case "kind":
+                sortMode = OutlineSortMode.Kind;
+                return true;
+            case "references":
+            case "reference":
+            case "refs":
+            case "ref":
+                sortMode = OutlineSortMode.References;
+                return true;
+            case "size":
+            case "span":
+            case "spans":
+                sortMode = OutlineSortMode.Size;
+                return true;
+            case "complexity":
+                sortMode = OutlineSortMode.Complexity;
+                return true;
+            case "path":
+                sortMode = OutlineSortMode.Path;
+                return true;
+            default:
+                sortMode = OutlineSortMode.Source;
+                return false;
+        }
+    }
+
+    private static string FormatOutlineSortMode(OutlineSortMode sortMode)
+        => sortMode switch
+        {
+            OutlineSortMode.Name => "name",
+            OutlineSortMode.Kind => "kind",
+            OutlineSortMode.References => "references",
+            OutlineSortMode.Size => "size",
+            OutlineSortMode.Complexity => "complexity",
+            OutlineSortMode.Path => "path",
+            _ => "source",
+        };
 
     private static List<string> BuildOutlineKindFilters(string? rawKind)
     {
@@ -6728,6 +6305,100 @@ public static partial class QueryCommandRunner
         return symbols.Where(symbol => filterSet.Contains(symbol.Kind.ToLowerInvariant())).ToList();
     }
 
+    private static bool OutlineNeedsReferenceCounts(QueryCommandOptions options, OutlineSortMode sortMode)
+        => sortMode is OutlineSortMode.References or OutlineSortMode.Complexity
+           || (options.OutlineFieldsExplicit
+               && (options.OutlineFields is null
+                   || options.OutlineFields.Contains("reference_count", StringComparer.Ordinal)
+                   || options.OutlineFields.Contains("complexity_score", StringComparer.Ordinal)));
+
+    private static bool OutlineNeedsDerivedMetadata(QueryCommandOptions options, OutlineSortMode sortMode)
+        => sortMode != OutlineSortMode.Source
+           || options.SortExplicit
+           || options.OutlineFieldsExplicit;
+
+    private static List<OutlineSymbol> ApplyOutlineSort(IReadOnlyList<OutlineSymbol> symbols, OutlineSortMode sortMode, bool includeDerivedMetadata)
+    {
+        if (includeDerivedMetadata)
+        {
+            foreach (var symbol in symbols)
+                ApplyOutlineSortMetadata(symbol, sortMode);
+        }
+
+        if (sortMode == OutlineSortMode.Source)
+            return symbols.ToList();
+
+        if (!includeDerivedMetadata)
+        {
+            foreach (var symbol in symbols)
+                ApplyOutlineSortMetadata(symbol, sortMode);
+        }
+
+        return sortMode switch
+        {
+            OutlineSortMode.Name => symbols
+                .OrderBy(symbol => symbol.Name, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(symbol => symbol.Line)
+                .ThenBy(symbol => symbol.Kind, StringComparer.Ordinal)
+                .ToList(),
+            OutlineSortMode.Kind => symbols
+                .OrderBy(symbol => symbol.Kind, StringComparer.Ordinal)
+                .ThenByDescending(GetOutlineSizeLines)
+                .ThenBy(symbol => symbol.Line)
+                .ThenBy(symbol => symbol.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+            OutlineSortMode.References => symbols
+                .OrderByDescending(symbol => symbol.ReferenceCount ?? 0)
+                .ThenByDescending(GetOutlineSizeLines)
+                .ThenBy(symbol => symbol.Line)
+                .ThenBy(symbol => symbol.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+            OutlineSortMode.Size => symbols
+                .OrderByDescending(GetOutlineSizeLines)
+                .ThenBy(symbol => symbol.Line)
+                .ThenBy(symbol => symbol.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+            OutlineSortMode.Complexity => symbols
+                .OrderByDescending(GetOutlineComplexityScore)
+                .ThenByDescending(GetOutlineSizeLines)
+                .ThenBy(symbol => symbol.Line)
+                .ThenBy(symbol => symbol.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+            OutlineSortMode.Path => symbols
+                .OrderBy(symbol => symbol.Path, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(symbol => symbol.Line)
+                .ThenBy(symbol => symbol.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+            _ => symbols.ToList(),
+        };
+    }
+
+    private static void ApplyOutlineSortMetadata(OutlineSymbol symbol, OutlineSortMode sortMode)
+    {
+        symbol.SortMode = FormatOutlineSortMode(sortMode);
+        symbol.SizeLines = GetOutlineSizeLines(symbol);
+        symbol.ComplexityScore = GetOutlineComplexityScore(symbol);
+    }
+
+    private static int GetOutlineSizeLines(OutlineSymbol symbol)
+        => symbol.EndLine >= symbol.StartLine
+            ? Math.Max(1, symbol.EndLine - symbol.StartLine + 1)
+            : 1;
+
+    private static double GetOutlineComplexityScore(OutlineSymbol symbol)
+    {
+        var visibilityBonus = symbol.Visibility switch
+        {
+            "public" or "pub" or "open" or "export" => 8.0,
+            "protected" or "internal" or "protected internal" => 4.0,
+            _ => 0.0,
+        };
+        var kindBonus = symbol.Kind is "class" or "struct" or "interface" or "enum" or "namespace" or "record"
+            ? 6.0
+            : 0.0;
+        return (GetOutlineSizeLines(symbol) * 16.0) + ((symbol.ReferenceCount ?? 0) * 0.75) + visibilityBonus + kindBonus;
+    }
+
     private static List<OutlineSymbol> ApplyOutlineHumanPaging(IReadOnlyList<OutlineSymbol> symbols, QueryCommandOptions options)
     {
         if (!options.LimitExplicit && !options.OutlineCursorOffset.HasValue)
@@ -6741,6 +6412,7 @@ public static partial class QueryCommandRunner
         OutlineResult outline,
         IReadOnlyList<OutlineSymbol> filteredSymbols,
         IReadOnlyList<string> kindFilters,
+        OutlineSortMode sortMode,
         QueryCommandOptions options,
         JsonSerializerOptions jsonOptions,
         bool compact)
@@ -6757,7 +6429,7 @@ public static partial class QueryCommandRunner
             var compactOutline = BuildOutlineView(outline, remainingSymbols, totalMatchingSymbols);
             var compactTruncation = ApplyOutlineCompactCaps(compactOutline, compactLimit);
             var payload = JsonSerializer.SerializeToNode(compactOutline, CliJsonSerializerContextFactory.Create(jsonOptions).OutlineResult)!.AsObject();
-            AddOutlinePagingJsonFields(payload, kindFilters, totalMatchingSymbols, offset, compactOutline.Symbols.Count, jsonOptions);
+            AddOutlinePagingJsonFields(payload, kindFilters, sortMode, options.SortExplicit, totalMatchingSymbols, offset, compactOutline.Symbols.Count, jsonOptions);
             ApplyOutlineFieldSelection(payload, compactOutline.Symbols, options, jsonOptions);
             AddCompactJsonFields(payload, compactLimit, compactTruncation);
             return payload;
@@ -6769,7 +6441,7 @@ public static partial class QueryCommandRunner
             : remainingSymbols;
         var pagedOutline = BuildOutlineView(outline, pageSymbols, totalMatchingSymbols);
         var pagedPayload = JsonSerializer.SerializeToNode(pagedOutline, CliJsonSerializerContextFactory.Create(jsonOptions).OutlineResult)!.AsObject();
-        AddOutlinePagingJsonFields(pagedPayload, kindFilters, totalMatchingSymbols, offset, pageSymbols.Count, jsonOptions);
+        AddOutlinePagingJsonFields(pagedPayload, kindFilters, sortMode, options.SortExplicit, totalMatchingSymbols, offset, pageSymbols.Count, jsonOptions);
         ApplyOutlineFieldSelection(pagedPayload, pageSymbols, options, jsonOptions);
         return pagedPayload;
     }
@@ -6787,6 +6459,8 @@ public static partial class QueryCommandRunner
     private static void AddOutlinePagingJsonFields(
         JsonObject payload,
         IReadOnlyList<string> kindFilters,
+        OutlineSortMode sortMode,
+        bool sortExplicit,
         int totalSymbolCount,
         int offset,
         int returnedSymbolCount,
@@ -6801,6 +6475,8 @@ public static partial class QueryCommandRunner
         payload["has_more"] = hasMore;
         if (kindFilters.Count > 0)
             payload["kind_filter"] = JsonSerializer.SerializeToNode(kindFilters.ToList(), CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+        if (sortExplicit || sortMode != OutlineSortMode.Source)
+            payload["sort"] = FormatOutlineSortMode(sortMode);
     }
 
     private static void ApplyOutlineFieldSelection(
@@ -6882,6 +6558,18 @@ public static partial class QueryCommandRunner
                     break;
                 case "return_type":
                     payload["return_type"] = symbol.ReturnType;
+                    break;
+                case "sort_mode":
+                    payload["sort_mode"] = symbol.SortMode;
+                    break;
+                case "reference_count":
+                    payload["reference_count"] = symbol.ReferenceCount;
+                    break;
+                case "size_lines":
+                    payload["size_lines"] = symbol.SizeLines;
+                    break;
+                case "complexity_score":
+                    payload["complexity_score"] = symbol.ComplexityScore;
                     break;
             }
         }
@@ -7336,7 +7024,8 @@ public static partial class QueryCommandRunner
             jsonDefault: false,
             validateDefaultLimit: false,
             validateDefaultSnippetLines: false,
-            validateDefaultMaxLineWidth: false);
+            validateDefaultMaxLineWidth: false,
+            allowOutlineSort: true);
         if (TryWriteUnsupportedOptionError("outline", cmdArgs[1..], CliFlagSchema.GetAcceptedFlagNamesForCommand("outline")))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "outline"))
@@ -7355,9 +7044,14 @@ public static partial class QueryCommandRunner
         }
 
         var filePath = DbPathResolver.ResolveQueryFilePath(options.DbPath, cmdArgs[0], options.DbPathExplicit);
+        var outlineSortMode = options.SortExplicit && options.SortValue != null && TryParseOutlineSortMode(options.SortValue, out var parsedSortMode)
+            ? parsedSortMode
+            : OutlineSortMode.Source;
+        var includeReferenceCounts = OutlineNeedsReferenceCounts(options, outlineSortMode);
+        var includeDerivedMetadata = OutlineNeedsDerivedMetadata(options, outlineSortMode);
         return WithDb(options, jsonOptions, reader =>
         {
-            var outline = reader.GetOutline(filePath);
+            var outline = reader.GetOutline(filePath, includeReferenceCounts: includeReferenceCounts);
             if (outline == null)
             {
                 if (options.Json)
@@ -7369,16 +7063,17 @@ public static partial class QueryCommandRunner
 
             var kindFilters = BuildOutlineKindFilters(options.Kind);
             var filteredSymbols = ApplyOutlineKindFilters(outline.Symbols, kindFilters);
+            var displaySourceSymbols = ApplyOutlineSort(filteredSymbols, outlineSortMode, includeDerivedMetadata);
             if (options.Json)
             {
                 if (options.Compact)
                 {
-                    var payload = BuildOutlineJsonPayload(outline, filteredSymbols, kindFilters, options, jsonOptions, compact: true);
+                    var payload = BuildOutlineJsonPayload(outline, displaySourceSymbols, kindFilters, outlineSortMode, options, jsonOptions, compact: true);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else if (HasOutlineJsonControls(options, kindFilters))
                 {
-                    var payload = BuildOutlineJsonPayload(outline, filteredSymbols, kindFilters, options, jsonOptions, compact: false);
+                    var payload = BuildOutlineJsonPayload(outline, displaySourceSymbols, kindFilters, outlineSortMode, options, jsonOptions, compact: false);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
@@ -7398,7 +7093,7 @@ public static partial class QueryCommandRunner
                     .Where(group => group.Count() > 1)
                     .Select(group => group.Key)
                     .ToHashSet(StringComparer.Ordinal);
-                var displaySymbols = ApplyOutlineHumanPaging(filteredSymbols, options);
+                var displaySymbols = ApplyOutlineHumanPaging(displaySourceSymbols, options);
                 foreach (var sym in displaySymbols)
                 {
                     // Indent nested symbols by computed tree depth / コンテナ連鎖の深さでインデント
@@ -8506,6 +8201,23 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteWorkspaceDependencyFanOutError(options))
             return CommandExitCodes.UsageError;
+        var emitsJson = DepsEmitsJson(options, depsFormat);
+        if (options.MaxJsonBytes.HasValue && !emitsJson)
+        {
+            WriteUsageError(
+                "--max-json-bytes is only supported with deps JSON output.",
+                GetUsageLineOrThrow("deps"),
+                "Use `cdidx deps --json --max-json-bytes <n>` or `cdidx deps --format json-graph --max-json-bytes <n>`.");
+            return CommandExitCodes.UsageError;
+        }
+        if (options.SummaryOnly && !emitsJson)
+        {
+            WriteUsageError(
+                "--summary-only is only supported with deps JSON output.",
+                GetUsageLineOrThrow("deps"),
+                "Use `cdidx deps --json --summary-only` or `cdidx deps --format json-graph --summary-only`.");
+            return CommandExitCodes.UsageError;
+        }
 
         return WithDb(options, jsonOptions, reader =>
         {
@@ -8520,6 +8232,7 @@ public static partial class QueryCommandRunner
             var cycleCandidateLimit = GetDependencyCycleGraphLimit(options.Limit);
             if (options.DependencyCycles)
             {
+                WriteGraphLiveness("deps", "read_cycle_candidates", options, depsFormat);
                 cycleCandidates = GetWorkspaceFileDependencyCycleCandidates(
                     reader,
                     options,
@@ -8532,9 +8245,11 @@ public static partial class QueryCommandRunner
             }
             else
             {
-                results = GetWorkspaceFileDependencies(reader, options, reverse, options.Limit);
+                WriteGraphLiveness("deps", "read_edges", options, depsFormat);
+                results = GetWorkspaceFileDependencies(reader, options, reverse, options.Limit, cancellationToken);
                 cycleCandidates = results;
             }
+            WriteGraphLiveness("deps", "shape_output", options, depsFormat, rows: results.Count);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             if (results.Count == 0)
             {
@@ -8542,13 +8257,33 @@ public static partial class QueryCommandRunner
                 var zeroSymbolFilter = ApplyDependencySymbolFilters([], options).Summary;
                 if (depsFormat is OutputFormatJsonGraph)
                 {
-                    WriteDependencyGraph([], depsFormat, jsonOptions, reader, options, zeroSqlGraphSignal, zeroSymbolFilter);
-                    return ZeroResultExitCode(options);
+                    var writeExitCode = WriteDependencyGraph([], depsFormat, jsonOptions, reader, options, zeroSqlGraphSignal, zeroSymbolFilter);
+                    return writeExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : writeExitCode;
                 }
                 if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult(reader, "edges", json: true, graphAvailable: false, jsonOptions, queryOptions: options, extraFields: payload => AddDependencySchemaJsonFields(payload, options, jsonOptions, zeroSqlGraphSignal, zeroSymbolFilter));
+                {
+                    var payload = BuildJsonZeroResultPayload(
+                        reader,
+                        jsonOptions,
+                        resultsKey: options.SummaryOnly ? null : "edges",
+                        graphTableAvailable: false,
+                        degraded: true,
+                        queryOptions: options,
+                        extraFields: payload => AddDependencySchemaJsonFields(payload, options, jsonOptions, zeroSqlGraphSignal, zeroSymbolFilter));
+                    if (options.SummaryOnly)
+                        payload["summary_only"] = true;
+                    payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
+                    var writeExitCode = WriteDepsJsonPayload(payload, options, jsonOptions);
+                    return writeExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : writeExitCode;
+                }
                 else if (options.Json)
-                    Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "edges", graphTableAvailable: true, degraded: !zeroSqlGraphSignal.Ready, queryOptions: options, extraFields: payload => AddDependencySchemaJsonFields(payload, options, jsonOptions, zeroSqlGraphSignal, zeroSymbolFilter)).ToJsonString(jsonOptions));
+                {
+                    var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: options.SummaryOnly ? null : "edges", graphTableAvailable: true, degraded: !zeroSqlGraphSignal.Ready, queryOptions: options, extraFields: payload => AddDependencySchemaJsonFields(payload, options, jsonOptions, zeroSqlGraphSignal, zeroSymbolFilter));
+                    if (options.SummaryOnly)
+                        payload["summary_only"] = true;
+                    var writeExitCode = WriteDepsJsonPayload(payload, options, jsonOptions);
+                    return writeExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : writeExitCode;
+                }
                 else
                 {
                     CommandErrorWriter.WriteStderr(BuildZeroResultLine("No file dependencies found", options));
@@ -8565,6 +8300,7 @@ public static partial class QueryCommandRunner
             if (options.DependencyCycles)
             {
                 symbolFilter = ApplyDependencySymbolFilters(cycleCandidates, options);
+                WriteGraphLiveness("deps", "analyze_cycles", options, depsFormat, rows: symbolFilter.Edges.Count);
                 var analysis = AnalyzeDependencyCycles(
                     symbolFilter.Edges,
                     cycleCandidateLimit,
@@ -8594,18 +8330,23 @@ public static partial class QueryCommandRunner
             {
                 if (depsFormat is OutputFormatDot or OutputFormatGraphMl or OutputFormatJsonGraph)
                 {
-                    WriteDependencyGraph(outputEdges, depsFormat, jsonOptions, reader, options, sqlGraphSignal, symbolFilter.Summary);
+                    var writeExitCode = WriteDependencyGraph(outputEdges, depsFormat, jsonOptions, reader, options, sqlGraphSignal, symbolFilter.Summary);
+                    return writeExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : writeExitCode;
                 }
                 else if (options.Json)
                 {
-                    Console.WriteLine(BuildJsonZeroResultPayload(
+                    var payload = BuildJsonZeroResultPayload(
                         reader,
                         jsonOptions,
-                        resultsKey: "edges",
+                        resultsKey: options.SummaryOnly ? null : "edges",
                         graphTableAvailable: true,
                         degraded: !sqlGraphSignal.Ready,
                         queryOptions: options,
-                        extraFields: payload => AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary)).ToJsonString(jsonOptions));
+                        extraFields: payload => AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary));
+                    if (options.SummaryOnly)
+                        payload["summary_only"] = true;
+                    var writeExitCode = WriteDepsJsonPayload(payload, options, jsonOptions);
+                    return writeExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : writeExitCode;
                 }
                 else
                 {
@@ -8618,12 +8359,18 @@ public static partial class QueryCommandRunner
             {
                 if (options.Json)
                 {
-                    var payload = new JsonObject { ["count"] = 0, ["cycles"] = new JsonArray() };
+                    var payload = new JsonObject { ["count"] = 0 };
+                    if (options.SummaryOnly)
+                        payload["summary_only"] = true;
+                    else
+                        payload["cycles"] = new JsonArray();
                     if (dependencyCycleAnalysis != null)
                         AddDependencyCycleAnalysisJsonFields(payload, dependencyCycleAnalysis);
                     AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary);
                     AddFreshnessHint(payload, reader);
-                    Console.WriteLine(payload.ToJsonString(jsonOptions));
+                    WriteGraphLiveness("deps", "write_output", options, depsFormat, rows: outputEdges.Count, cycleCount: 0);
+                    var writeExitCode = WriteDepsJsonPayload(payload, options, jsonOptions);
+                    return writeExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : writeExitCode;
                 }
                 else
                 {
@@ -8637,7 +8384,8 @@ public static partial class QueryCommandRunner
 
             if (depsFormat is OutputFormatDot or OutputFormatGraphMl or OutputFormatJsonGraph)
             {
-                WriteDependencyGraph(
+                WriteGraphLiveness("deps", "write_output", options, depsFormat, rows: outputEdges.Count, cycleCount: cycles.Count);
+                var writeExitCode = WriteDependencyGraph(
                     outputEdges,
                     depsFormat,
                     jsonOptions,
@@ -8648,7 +8396,7 @@ public static partial class QueryCommandRunner
                     dependencyCycleAnalysis == null ? null : payload => AddDependencyCycleAnalysisJsonFields(payload, dependencyCycleAnalysis));
                 if ((depsFormat is OutputFormatDot or OutputFormatGraphMl) && dependencyCycleAnalysis is { Truncated: true })
                     CommandErrorWriter.WriteStderr(BuildDependencyCycleTruncationWarning(dependencyCycleAnalysis));
-                return CommandExitCodes.Success;
+                return writeExitCode;
             }
 
             if (options.Json)
@@ -8657,17 +8405,21 @@ public static partial class QueryCommandRunner
                 {
                     ["count"] = options.DependencyCycles ? cycles.Count : outputEdges.Count,
                 };
+                if (options.SummaryOnly)
+                    payload["summary_only"] = true;
                 if (options.DependencyCycles)
                 {
-                    payload["cycles"] = BuildDependencyCyclesJson(cycles);
+                    if (!options.SummaryOnly)
+                        payload["cycles"] = BuildDependencyCyclesJson(cycles);
                     if (dependencyCycleAnalysis != null)
                         AddDependencyCycleAnalysisJsonFields(payload, dependencyCycleAnalysis);
                 }
-                else
+                else if (!options.SummaryOnly)
                     payload["edges"] = JsonSerializer.SerializeToNode(outputEdges, CliJsonSerializerContextFactory.Create(jsonOptions).ListFileDependencyResult);
                 AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary);
                 AddFreshnessHint(payload, reader);
-                Console.WriteLine(payload.ToJsonString(jsonOptions));
+                WriteGraphLiveness("deps", "write_output", options, depsFormat, rows: outputEdges.Count, cycleCount: cycles.Count);
+                return WriteDepsJsonPayload(payload, options, jsonOptions);
             }
             else
             {
@@ -8679,6 +8431,8 @@ public static partial class QueryCommandRunner
                         ? $"; {BuildDependencyCycleTruncationSummary(dependencyCycleAnalysis)}"
                         : string.Empty;
                     CommandErrorWriter.WriteStderr($"({cycles.Count} dependency cycles{truncationNote})");
+                    if (dependencyCycleAnalysis is { Truncated: true })
+                        CommandErrorWriter.WriteStderr(BuildDependencyCycleTruncationWarning(dependencyCycleAnalysis));
                     WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
                     return CommandExitCodes.Success;
                 }
@@ -8865,6 +8619,7 @@ public static partial class QueryCommandRunner
         string? TruncatedReason,
         int CandidateEdgeCount,
         int CandidateEdgeLimit,
+        int DisplayLimit,
         string DetectionMode);
 
     private static DependencyCycleAnalysis AnalyzeDependencyCycles(
@@ -8904,18 +8659,42 @@ public static partial class QueryCommandRunner
             truncatedReason,
             Math.Min(candidateRowCount, candidateEdgeLimit),
             candidateEdgeLimit,
-            "bounded_approximate_candidate_edges");
+            displayLimit,
+            DependencyCycleDetectionMode);
     }
 
     private static void AddDependencyCycleAnalysisJsonFields(JsonObject payload, DependencyCycleAnalysis analysis)
+        => AddDependencyCycleAnalysisJsonFields(
+            payload,
+            analysis.Truncated,
+            analysis.TerminationReason,
+            analysis.TruncatedReason,
+            analysis.CandidateEdgeCount,
+            analysis.CandidateEdgeLimit,
+            analysis.DisplayLimit,
+            analysis.DetectionMode);
+
+    internal static void AddDependencyCycleAnalysisJsonFields(
+        JsonObject payload,
+        bool truncated,
+        string terminationReason,
+        string? truncatedReason,
+        int candidateEdgeCount,
+        int candidateEdgeLimit,
+        int displayLimit,
+        string detectionMode,
+        JsonArray? nextStepFlags = null)
     {
-        payload["truncated"] = analysis.Truncated;
-        payload["termination_reason"] = analysis.TerminationReason;
-        if (analysis.TruncatedReason != null)
-            payload["truncated_reason"] = analysis.TruncatedReason;
-        payload["candidate_edge_count"] = analysis.CandidateEdgeCount;
-        payload["candidate_edge_limit"] = analysis.CandidateEdgeLimit;
-        payload["cycle_detection_mode"] = analysis.DetectionMode;
+        payload["truncated"] = truncated;
+        payload["termination_reason"] = terminationReason;
+        if (truncatedReason != null)
+            payload["truncated_reason"] = truncatedReason;
+        payload["candidate_edge_count"] = candidateEdgeCount;
+        payload["candidate_edge_limit"] = candidateEdgeLimit;
+        payload["cycle_detection_mode"] = detectionMode;
+        payload["cycle_result_scope"] = BuildDependencyCycleResultScope(truncatedReason);
+        payload["cycle_result_note"] = BuildDependencyCycleResultNote(truncatedReason);
+        payload["next_step_flags"] = nextStepFlags ?? BuildDependencyCycleNextStepFlagsJson(truncatedReason, candidateEdgeLimit, displayLimit);
     }
 
     private static string BuildDependencyCycleTruncationSummary(DependencyCycleAnalysis analysis)
@@ -8924,7 +8703,124 @@ public static partial class QueryCommandRunner
             : $"partial: candidate edge limit reached after {analysis.CandidateEdgeCount} candidate edges";
 
     private static string BuildDependencyCycleTruncationWarning(DependencyCycleAnalysis analysis)
-        => $"Warning: dependency cycle detection returned partial results ({BuildDependencyCycleTruncationSummary(analysis)}).";
+    {
+        var nextSteps = BuildDependencyCycleNextStepFlags(
+            analysis.TruncatedReason,
+            analysis.CandidateEdgeLimit,
+            analysis.DisplayLimit);
+        var nextStepsText = nextSteps.Count == 0
+            ? string.Empty
+            : $" Next steps: {string.Join(", ", nextSteps)}.";
+        return "Warning: dependency cycle detection returned partial results "
+               + $"({BuildDependencyCycleTruncationSummary(analysis)}). "
+               + BuildDependencyCycleResultNote(analysis.TruncatedReason)
+               + nextStepsText;
+    }
+
+    private static string BuildDependencyCycleResultScope(string? truncatedReason)
+        => truncatedReason switch
+        {
+            "candidate_edge_limit" => "partial_candidate_edge_sample",
+            "display_limit" => "partial_display_limit",
+            _ => "complete_candidate_edges",
+        };
+
+    private static string BuildDependencyCycleResultNote(string? truncatedReason)
+        => truncatedReason switch
+        {
+            "candidate_edge_limit" => "Candidate edge limit reached before cdidx could prove cycle completeness; returned cycles are a bounded sample, not a complete or ranked cycle set.",
+            "display_limit" => "More cycles were detected than displayed; returned cycles are the first displayed cycles from the bounded candidate scan.",
+            _ => "Cycle detection completed for all candidate edges selected by the current filters.",
+        };
+
+    private static JsonArray BuildDependencyCycleNextStepFlagsJson(
+        string? truncatedReason,
+        int candidateEdgeLimit,
+        int displayLimit)
+        => new(BuildDependencyCycleNextStepFlags(truncatedReason, candidateEdgeLimit, displayLimit)
+            .Select(flag => JsonValue.Create(flag))
+            .ToArray<JsonNode?>());
+
+    internal static JsonArray BuildMcpDependencyCycleNextStepFlagsJson(
+        string? truncatedReason,
+        int candidateEdgeLimit,
+        int displayLimit)
+        => new(BuildMcpDependencyCycleNextStepFlags(truncatedReason, candidateEdgeLimit, displayLimit)
+            .Select(flag => JsonValue.Create(flag))
+            .ToArray<JsonNode?>());
+
+    private static List<string> BuildDependencyCycleNextStepFlags(
+        string? truncatedReason,
+        int candidateEdgeLimit,
+        int displayLimit)
+    {
+        var flags = new List<string>();
+        switch (truncatedReason)
+        {
+            case "candidate_edge_limit":
+                AddHigherLimitFlag(flags, candidateEdgeLimit);
+                flags.Add("--suppress-noise");
+                flags.Add("--symbol <name>");
+                flags.Add("--symbol-family <prefix>");
+                flags.Add("--path <narrower-glob>");
+                break;
+            case "display_limit":
+                AddHigherLimitFlag(flags, displayLimit);
+                flags.Add("--path <narrower-glob>");
+                break;
+        }
+
+        return flags;
+    }
+
+    private static List<string> BuildMcpDependencyCycleNextStepFlags(
+        string? truncatedReason,
+        int candidateEdgeLimit,
+        int displayLimit)
+    {
+        var flags = new List<string>();
+        switch (truncatedReason)
+        {
+            case "candidate_edge_limit":
+                AddHigherLimitArgument(flags, candidateEdgeLimit);
+                flags.Add("path=<narrower-glob>");
+                break;
+            case "display_limit":
+                AddHigherLimitArgument(flags, displayLimit);
+                flags.Add("path=<narrower-glob>");
+                break;
+        }
+
+        return flags;
+    }
+
+    private static void AddHigherLimitFlag(List<string> flags, int currentLimit)
+    {
+        var nextLimit = GetHigherDependencyCycleLimit(currentLimit);
+        if (nextLimit > currentLimit)
+            flags.Add($"--limit {nextLimit}");
+    }
+
+    private static void AddHigherLimitArgument(List<string> flags, int currentLimit)
+    {
+        var nextLimit = GetHigherDependencyCycleLimit(currentLimit);
+        if (nextLimit > currentLimit)
+            flags.Add($"limit={nextLimit}");
+    }
+
+    private static int GetHigherDependencyCycleLimit(int currentLimit)
+    {
+        var upperBound = NumericFlagUpperBounds.TryGetValue("--limit", out var maxLimit)
+            ? maxLimit
+            : int.MaxValue;
+        if (currentLimit >= upperBound)
+            return upperBound;
+
+        var doubled = currentLimit > upperBound / 2
+            ? upperBound
+            : currentLimit * 2;
+        return Math.Min(upperBound, Math.Max(currentLimit + 1, doubled));
+    }
 
     private static DependencySymbolFilterResult ApplyDependencySymbolFilters(IReadOnlyList<FileDependencyResult> edges, QueryCommandOptions options)
     {
@@ -9040,6 +8936,18 @@ public static partial class QueryCommandRunner
     private static JsonArray BuildDependencySymbolsJson(string symbols)
         => new(SplitDependencySymbols(symbols).Select(symbol => JsonValue.Create(symbol)).ToArray<JsonNode?>());
 
+    private static bool DepsEmitsJson(QueryCommandOptions options, string depsFormat)
+        => depsFormat == OutputFormatJsonGraph || (options.Json && depsFormat == OutputFormatEdgeList);
+
+    private static int WriteDepsJsonPayload(JsonObject payload, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+        => WriteJsonPayloadWithOptionalByteLimit(
+            payload,
+            options,
+            jsonOptions,
+            "deps",
+            "deps",
+            "Use --summary-only, reduce --limit, or increase --max-json-bytes.");
+
     private sealed record DependencySymbolFilterResult(List<FileDependencyResult> Edges, DependencySymbolFilterSummary Summary);
 
     private sealed record DependencySymbolFilterSummary(
@@ -9052,7 +8960,7 @@ public static partial class QueryCommandRunner
         int SymbolsBefore,
         int SymbolsAfter);
 
-    private static void WriteDependencyGraph(
+    private static int WriteDependencyGraph(
         IReadOnlyList<FileDependencyResult> edges,
         string format,
         JsonSerializerOptions jsonOptions,
@@ -9069,7 +8977,7 @@ public static partial class QueryCommandRunner
                 foreach (var edge in edges)
                     Console.WriteLine($"  \"{EscapeDot(edge.SourcePath)}\" -> \"{EscapeDot(edge.TargetPath)}\" [label=\"{edge.ReferenceCount}\"];");
                 Console.WriteLine("}");
-                break;
+                return CommandExitCodes.Success;
             case OutputFormatGraphMl:
                 Console.WriteLine("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
                 Console.WriteLine("<graphml xmlns=\"http://graphml.graphdrawing.org/xmlns\"><graph edgedefault=\"directed\">");
@@ -9078,14 +8986,15 @@ public static partial class QueryCommandRunner
                 foreach (var edge in edges)
                     Console.WriteLine($"<edge source=\"{System.Security.SecurityElement.Escape(edge.SourcePath)}\" target=\"{System.Security.SecurityElement.Escape(edge.TargetPath)}\"><data key=\"references\">{edge.ReferenceCount}</data></edge>");
                 Console.WriteLine("</graph></graphml>");
-                break;
+                return CommandExitCodes.Success;
             case OutputFormatJsonGraph:
-                WriteDependencyJsonGraph(edges, jsonOptions, reader, options, sqlGraphSignal, symbolFilter, addExtraJsonFields);
-                break;
+                return WriteDependencyJsonGraph(edges, jsonOptions, reader, options, sqlGraphSignal, symbolFilter, addExtraJsonFields);
+            default:
+                return CommandExitCodes.Success;
         }
     }
 
-    private static void WriteDependencyJsonGraph(
+    private static int WriteDependencyJsonGraph(
         IReadOnlyList<FileDependencyResult> edges,
         JsonSerializerOptions jsonOptions,
         DbReader reader,
@@ -9104,21 +9013,24 @@ public static partial class QueryCommandRunner
                 nodes.Add(edge.TargetPath);
         }
 
-        var payload = new JsonObject
+        var payload = new JsonObject { ["count"] = edges.Count };
+        if (options.SummaryOnly)
+            payload["summary_only"] = true;
+        else
         {
-            ["nodes"] = new JsonArray(nodes.Select(node => (JsonNode?)new JsonObject { ["id"] = node }).ToArray()),
-            ["edges"] = new JsonArray(edges.Select(edge => (JsonNode?)new JsonObject
+            payload["nodes"] = new JsonArray(nodes.Select(node => (JsonNode?)new JsonObject { ["id"] = node }).ToArray());
+            payload["edges"] = new JsonArray(edges.Select(edge => (JsonNode?)new JsonObject
             {
                 ["source"] = edge.SourcePath,
                 ["target"] = edge.TargetPath,
                 ["reference_count"] = edge.ReferenceCount,
                 ["symbols"] = BuildDependencySymbolsJson(edge.Symbols),
-            }).ToArray()),
-        };
+            }).ToArray());
+        }
         addExtraJsonFields?.Invoke(payload);
         AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter);
         AddFreshnessHint(payload, reader);
-        Console.WriteLine(payload.ToJsonString(jsonOptions));
+        return WriteDepsJsonPayload(payload, options, jsonOptions);
     }
 
     private static string EscapeDot(string value) => value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal);
@@ -9131,9 +9043,11 @@ public static partial class QueryCommandRunner
             : requestedLimit;
     }
 
-    private static List<FileDependencyResult> GetWorkspaceFileDependencies(DbReader primaryReader, QueryCommandOptions options, bool reverse, int limit)
+    private static List<FileDependencyResult> GetWorkspaceFileDependencies(DbReader primaryReader, QueryCommandOptions options, bool reverse, int limit, CancellationToken cancellationToken)
     {
-        var results = primaryReader.GetFileDependencies(limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, reverse);
+        cancellationToken.ThrowIfCancellationRequested();
+        var results = primaryReader.GetFileDependencies(limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, reverse, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         if (options.WorkspaceDbPaths.Count == 0)
             return results;
 
@@ -9142,10 +9056,11 @@ public static partial class QueryCommandRunner
         TagFileDependencyResults(results, primaryDb);
         foreach (var normalizedDbPath in memberDbs.Skip(1))
         {
-            using var db = new DbContext(normalizedDbPath);
+            cancellationToken.ThrowIfCancellationRequested();
+            using var db = new DbContext(normalizedDbPath, cancellationToken);
             db.TryMigrateForRead();
             var reader = new DbReader(db) { IncludeGenerated = primaryReader.IncludeGenerated };
-            var memberResults = reader.GetFileDependencies(limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, reverse);
+            var memberResults = reader.GetFileDependencies(limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, reverse, cancellationToken);
             TagFileDependencyResults(memberResults, normalizedDbPath);
             results.AddRange(memberResults);
         }
@@ -9153,6 +9068,7 @@ public static partial class QueryCommandRunner
         foreach (var sourceDb in memberDbs)
             foreach (var targetDb in memberDbs)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (string.Equals(sourceDb, targetDb, StringComparison.Ordinal))
                     continue;
                 results.AddRange(GetCrossDatabaseFileDependencies(sourceDb, targetDb, options, reverse, limit));
@@ -10277,7 +10193,8 @@ public static partial class QueryCommandRunner
                     hasSymbols,
                     hasReferences,
                     hasReferences,
-                    BuildLanguageCapabilityGaps(hasSymbols, hasReferences, hasReferences));
+                    LanguageCapabilitySupport.BuildGaps(hasSymbols, hasReferences, hasReferences),
+                    LanguageCapabilitySupport.BuildUnsupportedGuidance(lang, hasSymbols, hasReferences, hasReferences));
                 allLangs[lang] = info;
             }
             info.Extensions.Add(ext);
@@ -10328,6 +10245,7 @@ public static partial class QueryCommandRunner
                     kv.Value.References,
                     kv.Value.Graph,
                     kv.Value.CapabilityGaps,
+                    kv.Value.UnsupportedGuidance,
                     GetIndexedLanguageCount(indexedLanguageCounts, kv.Key))).ToList();
                 Console.WriteLine(JsonSerializer.Serialize(new LanguagesJsonResult(entries), CliJsonSerializerContextFactory.Create(jsonOptions).LanguagesJsonResult));
             }
@@ -10387,7 +10305,14 @@ public static partial class QueryCommandRunner
         }
     }
 
-    private sealed record LanguageSupportInfo(List<string> Extensions, List<string> Aliases, bool Symbols, bool References, bool Graph, List<string> CapabilityGaps);
+    private sealed record LanguageSupportInfo(
+        List<string> Extensions,
+        List<string> Aliases,
+        bool Symbols,
+        bool References,
+        bool Graph,
+        List<string> CapabilityGaps,
+        List<LanguageUnsupportedGuidance> UnsupportedGuidance);
 
     private static bool HasLanguageLookup(QueryCommandOptions options)
         => options.LanguageLookups.Count > 0 || options.LanguageExtensionLookups.Count > 0 || options.LanguageAliasLookups.Count > 0;
@@ -10465,18 +10390,6 @@ public static partial class QueryCommandRunner
             LanguageCapabilitySearchOnly;
     }
 
-    private static List<string> BuildLanguageCapabilityGaps(bool symbols, bool references, bool graph)
-    {
-        var gaps = new List<string>();
-        if (!symbols)
-            gaps.Add("missing-symbols");
-        if (!references)
-            gaps.Add("missing-references");
-        if (!graph)
-            gaps.Add("missing-graph");
-        return gaps;
-    }
-
     private static bool TryNormalizeSearchAuditScope(string value, out string scope)
     {
         scope = value.Trim().ToLowerInvariant();
@@ -10521,7 +10434,8 @@ public static partial class QueryCommandRunner
         bool validateDefaultLimit = true,
         bool validateDefaultSnippetLines = true,
         bool validateDefaultMaxLineWidth = true,
-        bool applySearchSourceDefaults = false)
+        bool applySearchSourceDefaults = false,
+        bool allowOutlineSort = false)
     {
         string? dbPath = null;
         string? dataDir = null;
@@ -10620,6 +10534,8 @@ public static partial class QueryCommandRunner
         bool strict = false;
         var rankMode = ReferenceRankMode.Weighted;
         var symbolSortMode = SymbolSortMode.Name;
+        string? sortValue = null;
+        bool sortExplicit = false;
         var extraNames = new List<string>();
         bool impactDeprecatedDepthUsed = false;
         List<string>? mapSections = null;
@@ -11316,13 +11232,27 @@ public static partial class QueryCommandRunner
                         AddParseError(rankByError!);
                     break;
                 case "--sort":
-                    if (TryReadStringOptionValue(args, ref i, "--sort", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var sortValue, out var sortError))
+                    if (TryReadStringOptionValue(args, ref i, "--sort", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var sortRawValue, out var sortError))
                     {
-                        WarnIfDuplicateSingleValueOption("--sort", sortValue!);
-                        if (TryParseSymbolSortMode(sortValue!, out var parsedSortMode))
+                        WarnIfDuplicateSingleValueOption("--sort", sortRawValue!);
+                        var normalizedSortValue = sortRawValue!;
+                        if (allowOutlineSort && TryParseOutlineSortMode(normalizedSortValue, out _))
+                        {
+                            sortExplicit = true;
+                        }
+                        else if (!allowOutlineSort && TryParseSymbolSortMode(normalizedSortValue, out var parsedSortMode))
+                        {
                             symbolSortMode = parsedSortMode;
+                            sortExplicit = true;
+                        }
                         else
-                            AddParseError($"Error: --sort must be one of hotspot, references, size, complexity, path; got '{sortValue}'.");
+                        {
+                            var allowedSortValues = allowOutlineSort
+                                ? "source, kind, references, size, span, complexity, path, or name"
+                                : "hotspot, references, size, complexity, path";
+                            AddParseError($"Error: --sort must be one of {allowedSortValues}; got '{normalizedSortValue}'.");
+                        }
+                        sortValue = normalizedSortValue;
                     }
                     else
                         AddParseError(sortError!);
@@ -12097,6 +12027,8 @@ public static partial class QueryCommandRunner
             StatusConfig = statusConfig,
             RankMode = rankMode,
             SymbolSortMode = symbolSortMode,
+            SortValue = sortValue,
+            SortExplicit = sortExplicit,
             ExtraNames = extraNames,
             MapSections = mapSections,
             SummaryOnly = summaryOnly,
@@ -12417,7 +12349,22 @@ public static partial class QueryCommandRunner
                 case "container_name":
                 case "visibility":
                 case "return_type":
+                case "sort_mode":
+                case "reference_count":
+                case "size_lines":
+                case "complexity_score":
                     AddField(field);
+                    break;
+                case "refs":
+                case "references":
+                    AddField("reference_count");
+                    break;
+                case "size":
+                case "span":
+                    AddField("size_lines");
+                    break;
+                case "complexity":
+                    AddField("complexity_score");
                     break;
                 case "range":
                 case "lines":
@@ -12434,7 +12381,7 @@ public static partial class QueryCommandRunner
                     AddField("container_name");
                     break;
                 default:
-                    addParseError($"Error: unsupported --outline-fields value '{ConsoleUi.FormatBoundedValue(rawField)}'. Use one or more of all, kind, name, display_name, path, line, start_line, end_line, depth, body_start_line, body_end_line, signature, signature_truncated, signature_original_length, container_kind, container_name, visibility, return_type, or aliases range, lines, body, body_range, container.");
+                    addParseError($"Error: unsupported --outline-fields value '{ConsoleUi.FormatBoundedValue(rawField)}'. Use one or more of all, kind, name, display_name, path, line, start_line, end_line, depth, body_start_line, body_end_line, signature, signature_truncated, signature_original_length, container_kind, container_name, visibility, return_type, sort_mode, reference_count, size_lines, complexity_score, or aliases range, lines, body, body_range, container, refs, size, span, complexity.");
                     continue;
             }
         }
@@ -12766,7 +12713,7 @@ public static partial class QueryCommandRunner
         return false;
     }
 
-    private static bool TryResolveHotspotsGroupBy(string? requestedGroupBy, string? lang, bool groupByName, out string groupBy, out string error)
+    internal static bool TryResolveHotspotsGroupBy(string? requestedGroupBy, string? lang, bool groupByName, out string groupBy, out string error)
     {
         groupBy = string.Empty;
         error = string.Empty;
@@ -12793,15 +12740,23 @@ public static partial class QueryCommandRunner
         {
             case HotspotsGroupedBySymbol:
             case HotspotsGroupedByFile:
-            case HotspotsGroupedByStatement:
                 groupBy = requestedGroupBy;
                 return true;
+            case HotspotsGroupedByStatement:
+                if (IsSqlLanguageFilter(lang))
+                {
+                    groupBy = requestedGroupBy;
+                    return true;
+                }
+
+                error = "Error: hotspots --group-by statement is only supported with --lang sql. Use --group-by symbol or --group-by file for non-SQL hotspot grouping.";
+                return false;
             case "name":
             case HotspotsGroupedByNameKind:
                 groupBy = HotspotsGroupedByNameKind;
                 return true;
             default:
-                error = $"Error: unsupported hotspots --group-by value '{ConsoleUi.FormatBoundedValue(requestedGroupBy)}'. Use symbol, file, or statement.";
+                error = $"Error: unsupported hotspots --group-by value '{ConsoleUi.FormatBoundedValue(requestedGroupBy)}'. Use symbol, file, or --lang sql --group-by statement.";
                 return false;
         }
     }
@@ -13167,7 +13122,7 @@ public static partial class QueryCommandRunner
         var unauthorized = FindException<UnauthorizedAccessException>(ex);
         if (unauthorized != null)
         {
-            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database access denied: {unauthorized.Message}");
+            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database access denied: {CommandErrorWriter.FormatSanitizedExceptionMessage(unauthorized)}");
             CommandErrorWriter.WriteStderr(MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent()));
             return;
         }
@@ -13175,7 +13130,7 @@ public static partial class QueryCommandRunner
         var io = FindException<IOException>(ex);
         if (io != null)
         {
-            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database I/O error: {io.Message}");
+            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database I/O error: {CommandErrorWriter.FormatSanitizedExceptionMessage(io)}");
             CommandErrorWriter.WriteStderr(MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent()));
             return;
         }
@@ -13185,19 +13140,19 @@ public static partial class QueryCommandRunner
         {
             if (sqlite.SqliteErrorCode == 14)
             {
-                CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database access/open denied: {sqlite.Message}");
+                CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database access/open denied: {CommandErrorWriter.FormatSanitizedExceptionMessage(sqlite)}");
                 CommandErrorWriter.WriteStderr(MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent()));
                 return;
             }
 
             if (sqlite.SqliteErrorCode == 11)
             {
-                CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: SQLite reported database corruption: {sqlite.Message}");
+                CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: SQLite reported database corruption: {CommandErrorWriter.FormatSanitizedExceptionMessage(sqlite)}");
                 CommandErrorWriter.WriteStderr("Hint: rebuild the index with `cdidx index <projectPath> --rebuild`, or delete the broken `.cdidx/codeindex.db*` files and run `cdidx index <projectPath>` again.");
                 return;
             }
 
-            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: SQLite database error ({sqlite.SqliteErrorCode}): {sqlite.Message}");
+            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: SQLite database error ({sqlite.SqliteErrorCode}): {CommandErrorWriter.FormatSanitizedExceptionMessage(sqlite)}");
             CommandErrorWriter.WriteStderr(MacProfileDetector.IsPermissionStyleSqliteError(sqlite)
                 ? MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent())
                 : "Hint: check `--db`, verify the index was written by a compatible cdidx version, or rebuild it with `cdidx index <projectPath> --rebuild`.");
@@ -14448,7 +14403,7 @@ public static partial class QueryCommandRunner
         var payload = BuildJsonZeroResultPayload(
             reader,
             jsonOptions,
-            resultsKey: countOnly ? null : "hotspots",
+            resultsKey: countOnly || queryOptions?.SummaryOnly == true ? null : "hotspots",
             includeFiles: countOnly,
             graphTableAvailable: graphAvailable,
             degraded: !graphAvailable,
@@ -14458,6 +14413,7 @@ public static partial class QueryCommandRunner
                 zeroPayload["definition_site_total"] = 0;
                 zeroPayload["grouped_by"] = HotspotsGroupedByNameKind;
             });
+        AddHotspotsGroupingContractJsonFields(payload, HotspotsGroupedByNameKind, queryOptions, jsonOptions, countOnly);
         if (!graphAvailable)
             payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
         return payload;
@@ -16064,6 +16020,8 @@ public sealed class QueryCommandOptions
     public bool StatusConfig { get; init; }
     public ReferenceRankMode RankMode { get; init; } = ReferenceRankMode.Weighted;
     public SymbolSortMode SymbolSortMode { get; init; } = SymbolSortMode.Name;
+    public string? SortValue { get; init; }
+    public bool SortExplicit { get; init; }
     public List<string> ExtraNames { get; init; } = [];
     public List<string>? MapSections { get; init; }
     public bool SummaryOnly { get; init; }

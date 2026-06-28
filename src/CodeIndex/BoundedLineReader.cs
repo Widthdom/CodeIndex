@@ -30,6 +30,7 @@ internal enum BoundedTextFileReadFailureKind
     BytesExceeded,
     LinesExceeded,
     LineLengthExceeded,
+    InvalidUtf8,
     ReadFailed,
 }
 
@@ -127,7 +128,7 @@ internal static class BoundedLineReader
                 accumulator.Write(buffer, 0, read);
             }
 
-            var text = new UTF8Encoding(false, throwOnInvalidBytes: false).GetString(accumulator.ToArray());
+            var text = new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(accumulator.ToArray());
             if (text.Length > 0 && text[0] == '\uFEFF')
                 text = text[1..];
 
@@ -170,9 +171,18 @@ internal static class BoundedLineReader
             lines = result;
             return true;
         }
+        catch (DecoderFallbackException ex)
+        {
+            var reason = $"it is not valid UTF-8 ({ex.GetType().Name}: {DiagnosticSanitizer.ForMessage(ex.Message)})";
+            failure = new(
+                BoundedTextFileReadFailureKind.InvalidUtf8,
+                reason,
+                ExceptionType: ex.GetType().Name);
+            return false;
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
         {
-            var reason = $"it could not be read ({ex.GetType().Name}: {DiagnosticSanitizer.ForMessage(ex.Message)})";
+            var reason = $"it could not be read ({DiagnosticRedactor.FormatExceptionDetail(ex)})";
             failure = new(
                 BoundedTextFileReadFailureKind.ReadFailed,
                 reason,

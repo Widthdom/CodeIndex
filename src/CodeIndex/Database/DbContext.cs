@@ -452,7 +452,7 @@ public class DbContext : IDisposable
             if (!string.Equals(journalMode, "wal", StringComparison.OrdinalIgnoreCase))
                 CommandErrorWriter.WriteStderr($"Warning: WAL mode not enabled (got '{journalMode}')");
             ExecuteSynchronousPragmaWithFallback(Execute);
-            Execute($"PRAGMA wal_autocheckpoint={DefaultWalAutocheckpointPages}");
+            Execute(DbPragmaPolicy.WalAutocheckpointPragmaSql(DefaultWalAutocheckpointPages));
             ApplyPrivateDatabaseFileModes(dbPath);
             Execute("PRAGMA optimize=0x10002");
             WarnIfBatchInProgress();
@@ -491,7 +491,7 @@ public class DbContext : IDisposable
                     if (!string.Equals(journalMode, "wal", StringComparison.OrdinalIgnoreCase))
                         CommandErrorWriter.WriteStderr($"Warning: WAL mode not enabled (got '{journalMode}')");
                     ExecuteSynchronousPragmaWithFallback(Execute);
-                    Execute($"PRAGMA wal_autocheckpoint={DefaultWalAutocheckpointPages}");
+                    Execute(DbPragmaPolicy.WalAutocheckpointPragmaSql(DefaultWalAutocheckpointPages));
                     ApplyPrivateDatabaseFileModes(dbPath);
                     Execute("PRAGMA optimize=0x10002");
                     WarnIfBatchInProgress();
@@ -734,7 +734,7 @@ public class DbContext : IDisposable
         if (!dryRun && before.AutoVacuumMode == 2)
         {
             ReportMaintenanceProgress("vacuum", "incremental_vacuum", _connection.DataSource);
-            Execute($"PRAGMA incremental_vacuum({before.FreelistCount})");
+            Execute(DbPragmaPolicy.IncrementalVacuumPragmaSql(before.FreelistCount));
         }
         else if (!dryRun)
         {
@@ -2858,9 +2858,7 @@ public class DbContext : IDisposable
     }
 
     private static string FormatMigrationSqliteMessage(SqliteException exception)
-        => DiagnosticRedactor.BoundDiagnosticText(
-            DiagnosticRedactor.RedactSensitiveText(exception.Message, redactPaths: true),
-            MigrationDiagnosticTextLimit);
+        => DiagnosticRedactor.FormatExceptionMessage(exception, MigrationDiagnosticTextLimit);
 
     private static void EmitMigrationFailureWarning(DbMigrationFailure failure)
     {

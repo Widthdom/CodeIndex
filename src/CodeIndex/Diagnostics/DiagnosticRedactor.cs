@@ -9,6 +9,7 @@ namespace CodeIndex.Diagnostics;
 internal static class DiagnosticRedactor
 {
     internal const int DefaultDiagnosticValueCharLimit = 120;
+    internal const int DefaultExceptionMessageCharLimit = 240;
     internal const string AngleRedacted = "<redacted>";
     internal const string SuggestionRedactedAwsAccessKey = "[REDACTED:aws_access_key]";
     internal const string SuggestionRedactedBearerToken = "[REDACTED:bearer_token]";
@@ -37,7 +38,7 @@ internal static class DiagnosticRedactor
         RegexTimeout);
 
     private static readonly Regex SensitiveAssignmentPattern = new(
-        @"(?<![\w.-])(?<name>--?[\w.-]*(?:token|password|passwd|pwd|secret|auth|apikey|api-key|api_key|access-key|access_key|credential)[\w.-]*)(?<sep>=|:)(?<value>[^\s,;]+)",
+        @"(?<![\w.-])(?<name>(?:--?)?[\w.-]*(?:token|password|passwd|pwd|secret|auth|apikey|api-key|api_key|access-key|access_key|credential)[\w.-]*)(?<sep>=|:)(?<value>[^\s,;]+)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
         RegexTimeout);
 
@@ -109,6 +110,31 @@ internal static class DiagnosticRedactor
             NotSupportedException => "not_supported",
             _ => "exception_message_redacted",
         };
+    }
+
+    internal static string FormatExceptionMessage(
+        Exception ex,
+        int maxChars = DefaultExceptionMessageCharLimit,
+        bool redactPaths = true)
+    {
+        ArgumentNullException.ThrowIfNull(ex);
+        var message = redactPaths
+            ? DiagnosticSanitizer.ForMessage(ex.Message, maxChars)
+            : DiagnosticSanitizer.ForMessage(ex.Message, static value => value, maxChars);
+        return BoundDiagnosticText(message, maxChars);
+    }
+
+    internal static string FormatExceptionDetail(
+        Exception ex,
+        int maxMessageChars = DefaultExceptionMessageCharLimit,
+        bool redactPaths = true)
+    {
+        ArgumentNullException.ThrowIfNull(ex);
+        var type = BoundDiagnosticText(ex.GetType().Name, maxChars: 128);
+        var message = FormatExceptionMessage(ex, maxMessageChars, redactPaths);
+        return string.IsNullOrWhiteSpace(message)
+            ? $"{type}: {ClassifyException(ex)}"
+            : $"{type}: {message}";
     }
 
     internal static string FormatExceptionStackLine(string line, int maxChars = 512) =>

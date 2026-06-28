@@ -36,6 +36,44 @@ public class DiagnosticRedactorTests
     }
 
     [Fact]
+    public void FormatExceptionMessage_RedactsPathsAndSecrets_Issue4124()
+    {
+        var exception = new InvalidOperationException("failed at /tmp/private/repo with --token=ghp_abcdefghijklmnopqrstuvwxyz");
+
+        var message = DiagnosticRedactor.FormatExceptionMessage(exception);
+
+        Assert.Contains("<path>", message);
+        Assert.Contains("--token=<redacted>", message);
+        Assert.DoesNotContain("/tmp/private", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("ghp_", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FormatExceptionDetail_IncludesTypeWithoutLeakingRawMessage_Issue4124()
+    {
+        var exception = new IOException("cannot open C:/Users/me/secret.db because password=hunter2");
+
+        var detail = DiagnosticRedactor.FormatExceptionDetail(exception);
+
+        Assert.StartsWith("IOException: ", detail, StringComparison.Ordinal);
+        Assert.Contains("<path>", detail);
+        Assert.Contains("password=<redacted>", detail);
+        Assert.DoesNotContain("C:/Users/me", detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("hunter2", detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RedactSensitiveText_RedactsAuthorizationBearerHeader_Issue4134()
+    {
+        const string token = "secret-token-4134";
+
+        var redacted = DiagnosticRedactor.RedactSensitiveText($"Authorization: Bearer {token}", "[redacted]");
+
+        Assert.Equal("Authorization: Bearer [redacted]", redacted);
+        Assert.DoesNotContain(token, redacted);
+    }
+
+    [Fact]
     public void RedactReportLogLine_JsonLineRedactsStrings_Issue3724()
     {
         var token = "ghp_" + new string('a', 24);

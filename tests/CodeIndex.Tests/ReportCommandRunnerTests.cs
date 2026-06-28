@@ -939,7 +939,7 @@ public class ReportCommandRunnerTests
             Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
             var message = json.GetProperty("message").GetString();
             Assert.Contains("failed to build report:", message);
-            Assert.Contains(ReportCommandRunner.RedactedPlaceholder, message);
+            Assert.Contains("<path>", message);
             Assert.DoesNotContain(workDir, message);
             Assert.DoesNotContain(fileParent, message);
         }

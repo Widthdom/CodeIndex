@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using CodeIndex.Cli;
 
 namespace CodeIndex.Indexer;
 
@@ -74,37 +75,68 @@ internal static class CaseSensitivityProbeDirectory
                 return;
 
             _disposed = true;
-            DeleteCreatedEmptyDirectory(_probeDirectory, _createdProbeDirectory);
-            DeleteCreatedEmptyDirectory(_dataDirectory, _createdDataDirectory);
+            DeleteCreatedEmptyDirectory(_probeDirectory, _createdProbeDirectory, _dataDirectory, ProbeDirectoryName);
+            DeleteCreatedEmptyDirectory(_dataDirectory, _createdDataDirectory, ProjectRoot, DataDirectoryName);
         }
 
-        private void DeleteCreatedEmptyDirectory(string path, bool createdForProbe)
+        private void DeleteCreatedEmptyDirectory(
+            string path,
+            bool createdForProbe,
+            string safeRoot,
+            string expectedNamePrefix)
         {
             if (!createdForProbe)
                 return;
 
             try
             {
+                if (!TryValidateCleanupTarget(path, safeRoot, expectedNamePrefix, out var fullPath, out var validationFailure))
+                {
+                    RecordCleanupDiagnostic(
+                        path,
+                        "CleanupTargetRejected",
+                        $"Skipped filesystem case-sensitivity probe directory cleanup: {validationFailure}.");
+                    return;
+                }
+
+                if (!Directory.Exists(LongPath.EnsureWindowsPrefix(fullPath)))
+                    return;
+
+                if (!TryValidateCleanupTarget(fullPath, safeRoot, expectedNamePrefix, out fullPath, out validationFailure))
+                {
+                    RecordCleanupDiagnostic(
+                        path,
+                        "CleanupTargetRejected",
+                        $"Skipped filesystem case-sensitivity probe directory cleanup: {validationFailure}.");
+                    return;
+                }
+
                 if (DeleteCreatedEmptyDirectoryForTesting is { } delete)
-                    delete(path);
+                    delete(fullPath);
                 else
-                    Directory.Delete(LongPath.EnsureWindowsPrefix(path));
+                    Directory.Delete(LongPath.EnsureWindowsPrefix(fullPath));
             }
             catch (DirectoryNotFoundException)
             {
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
             {
                 RecordCleanupDiagnostic(path, ex);
             }
         }
 
         private void RecordCleanupDiagnostic(string path, Exception ex)
+            => RecordCleanupDiagnostic(
+                path,
+                ex.GetType().Name,
+                "Failed to clean up filesystem case-sensitivity probe directory.");
+
+        private void RecordCleanupDiagnostic(string path, string exceptionType, string message)
         {
             var diagnostic = new CaseSensitivityProbeCleanupDiagnostic(
                 RelativePath: FormatCleanupRelativePath(path),
-                ExceptionType: ex.GetType().Name,
-                Message: "Failed to clean up filesystem case-sensitivity probe directory.");
+                ExceptionType: exceptionType,
+                Message: message);
             _cleanupDiagnostics.Add(diagnostic);
 
             if (CleanupDiagnosticSinkForTesting is { } sink)
@@ -116,6 +148,26 @@ internal static class CaseSensitivityProbeDirectory
             Console.Error.WriteLine(
                 $"Warning: {diagnostic.Message} path={diagnostic.RelativePath} exception={diagnostic.ExceptionType}. " +
                 $"Remove stale {DataDirectoryName}/{ProbeDirectoryName} entries when no cdidx process is running.");
+        }
+
+        private static bool TryValidateCleanupTarget(
+            string path,
+            string safeRoot,
+            string expectedNamePrefix,
+            out string fullPath,
+            out string failureReason)
+        {
+            var options = new DirectoryCleanupBoundaryOptions(
+                expectedNamePrefix,
+                "target is outside the expected probe cleanup root",
+                "target name does not match the expected probe cleanup prefix",
+                "target is a symbolic link, reparse point, or device");
+            return FileSystemBoundary.TryValidateDirectoryCleanupTarget(
+                path,
+                safeRoot,
+                options,
+                out fullPath,
+                out failureReason);
         }
 
         private string FormatCleanupRelativePath(string path)

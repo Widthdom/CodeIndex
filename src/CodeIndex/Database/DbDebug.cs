@@ -257,7 +257,7 @@ public static class DbDebug
 
     private static long? ReadSlowQueryThresholdFromEnvironment()
     {
-        var raw = Environment.GetEnvironmentVariable("CDIDX_SLOW_QUERY_MS");
+        var raw = global::CodeIndex.EnvironmentAccess.GetProcessEnvironmentVariable("CDIDX_SLOW_QUERY_MS");
         if (string.IsNullOrWhiteSpace(raw))
             return null;
         return long.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) && value >= 0 ? value : null;
@@ -319,7 +319,13 @@ public static class DbDebug
         }
         catch (Exception ex)
         {
-            rows.Add(new QueryPlanRow(-1, -1, -1, TruncateDiagnosticText("EXPLAIN QUERY PLAN failed: " + ex.Message, MaxQueryPlanDetailChars)));
+            rows.Add(new QueryPlanRow(
+                -1,
+                -1,
+                -1,
+                TruncateDiagnosticText(
+                    "EXPLAIN QUERY PLAN failed: " + DiagnosticRedactor.FormatExceptionMessage(ex, MaxQueryPlanDetailChars),
+                    MaxQueryPlanDetailChars)));
         }
 
         return rows;

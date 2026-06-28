@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
@@ -1904,6 +1905,39 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void WithDb_OpenFailureBranchesSanitizeExceptionMessages_Issue4124()
+    {
+        const string privatePath = "/tmp/private/repo/codeindex.db";
+        var token = "ghp_" + new string('a', 24);
+        var cases = new (Exception Exception, string ExpectedPrefix)[]
+        {
+            (new UnauthorizedAccessException($"cannot open {privatePath} with password=hunter2 --token={token}"), "database access denied:"),
+            (new IOException($"cannot read {privatePath} with api_key={token}"), "database I/O error:"),
+            (new SqliteException($"cannot open {privatePath} with secret={token}", 14), "database access/open denied:"),
+            (new SqliteException($"database malformed near {privatePath} with token={token}", 11), "SQLite reported database corruption:"),
+            (new SqliteException($"syntax near {privatePath} with password=hunter2", 1), "SQLite database error (1):"),
+        };
+
+        foreach (var (exception, expectedPrefix) in cases)
+        {
+            var (exitCode, _, stderr) = CaptureConsole(() =>
+            {
+                InvokeWriteDatabaseOpenFailure(exception);
+                return CommandExitCodes.DatabaseError;
+            });
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Contains($"Error [{CommandErrorCodes.DbError}]: {expectedPrefix}", stderr);
+            Assert.Contains("<path>", stderr);
+            Assert.Contains("<redacted>", stderr);
+            Assert.DoesNotContain(privatePath, stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain("hunter2", stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain("ghp_", stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain(token, stderr, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void WithDb_EmptySqliteFileRejectedBeforeQuery_Issue2037()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2037_empty_sqlite");
@@ -2300,6 +2334,35 @@ public partial class QueryCommandRunnerTests
             Assert.False(lang.GetProperty(propertyName).GetBoolean());
             Assert.Contains(capability, lang.GetProperty("capability_gaps").EnumerateArray().Select(gap => gap.GetString()));
         });
+    }
+
+    [Fact]
+    public void RunLanguages_JsonIncludesUnsupportedCapabilityGuidance_Issue4122()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        using var document = ParseJsonOutput(stdout);
+        var languages = document.RootElement.GetProperty("languages").EnumerateArray()
+            .ToDictionary(entry => entry.GetProperty("lang").GetString()!, entry => entry);
+        var adaGuidance = languages["ada"].GetProperty("unsupported_guidance").EnumerateArray().ToList();
+
+        var referenceGuidance = adaGuidance.Single(guidance => guidance.GetProperty("capability").GetString() == "references");
+        Assert.Contains("Reference extraction is not advertised for 'ada'", referenceGuidance.GetProperty("message").GetString());
+        var referenceCommands = referenceGuidance.GetProperty("recommended_commands").EnumerateArray().Select(command => command.GetString()).ToList();
+        Assert.Contains("search", referenceCommands);
+        Assert.Contains("definition", referenceCommands);
+
+        var graphGuidance = adaGuidance.Single(guidance => guidance.GetProperty("capability").GetString() == "graph");
+        Assert.Contains("empty callers, callees, or impact results are not authoritative", graphGuidance.GetProperty("message").GetString());
+        var graphCommands = graphGuidance.GetProperty("recommended_commands").EnumerateArray().Select(command => command.GetString()).ToList();
+        Assert.Contains("search", graphCommands);
+        Assert.Contains("files", graphCommands);
+
+        Assert.Empty(languages["csharp"].GetProperty("unsupported_guidance").EnumerateArray());
     }
 
     [Fact]
@@ -4266,6 +4329,14 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(QueryCommandRunner.DefaultDependencyCycleGraphLimit, json.GetProperty("candidate_edge_count").GetInt32());
             Assert.Equal(QueryCommandRunner.DefaultDependencyCycleGraphLimit, json.GetProperty("candidate_edge_limit").GetInt32());
             Assert.Equal("bounded_approximate_candidate_edges", json.GetProperty("cycle_detection_mode").GetString());
+            Assert.Equal("partial_candidate_edge_sample", json.GetProperty("cycle_result_scope").GetString());
+            Assert.Contains("not a complete or ranked cycle set", json.GetProperty("cycle_result_note").GetString(), StringComparison.Ordinal);
+            var nextStepFlags = json.GetProperty("next_step_flags").EnumerateArray().Select(flag => flag.GetString()).ToArray();
+            Assert.Contains("--limit 100", nextStepFlags);
+            Assert.Contains("--suppress-noise", nextStepFlags);
+            Assert.Contains("--symbol <name>", nextStepFlags);
+            Assert.Contains("--symbol-family <prefix>", nextStepFlags);
+            Assert.Contains("--path <narrower-glob>", nextStepFlags);
 
             var (textExitCode, textStdout, textStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
                 ["--db", dbPath, "--cycles", "--limit", "1", "--lang", "csharp"],
@@ -4275,6 +4346,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, textStdout);
             Assert.Contains("No dependency cycles found", textStderr, StringComparison.Ordinal);
             Assert.Contains("Warning: dependency cycle detection returned partial results", textStderr, StringComparison.Ordinal);
+            Assert.Contains("not a complete or ranked cycle set", textStderr, StringComparison.Ordinal);
+            Assert.Contains("Next steps: --limit 100, --suppress-noise", textStderr, StringComparison.Ordinal);
         }
         finally
         {
@@ -4499,6 +4572,49 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(5, symbolFilter.GetProperty("symbols_before").GetInt32());
             Assert.Equal(1, symbolFilter.GetProperty("symbols_after").GetInt32());
             Assert.Equal(4, symbolFilter.GetProperty("symbols_removed").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDeps_CyclesSuppressNoiseRemovesGenericAppendCycle_Issue4114()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_append_noise_cycle");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            InsertFileWithSymbolsAndReferences(dbPath, "src/BoundedLineReader.cs", ["Append"], ["Append"]);
+            InsertFileWithSymbolsAndReferences(dbPath, "src/BoundedTextWriter.cs", ["Append"], ["Append"]);
+            MarkDependencyGraphReady(dbPath);
+
+            var (defaultExitCode, defaultStdout, defaultStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", dbPath, "--json", "--cycles", "--limit", "10", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var defaultDocument = ParseJsonOutput(defaultStdout);
+
+            Assert.Equal(CommandExitCodes.Success, defaultExitCode);
+            Assert.Equal(string.Empty, defaultStderr);
+            Assert.True(defaultDocument.RootElement.GetProperty("count").GetInt32() >= 1);
+
+            var (filteredExitCode, filteredStdout, filteredStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", dbPath, "--json", "--cycles", "--limit", "10", "--lang", "csharp", "--suppress-noise"],
+                _jsonOptions));
+
+            using var filteredDocument = ParseJsonOutput(filteredStdout);
+            var json = filteredDocument.RootElement;
+            var symbolFilter = json.GetProperty("symbol_filter");
+
+            Assert.Equal(CommandExitCodes.Success, filteredExitCode);
+            Assert.Equal(string.Empty, filteredStderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Empty(json.GetProperty("cycles").EnumerateArray());
+            Assert.True(symbolFilter.GetProperty("suppress_noise").GetBoolean());
+            Assert.Equal(0, symbolFilter.GetProperty("edges_after").GetInt32());
+            Assert.True(symbolFilter.GetProperty("symbols_removed").GetInt32() > 0);
         }
         finally
         {
@@ -6086,6 +6202,15 @@ public partial class QueryCommandRunnerTests
         var stdErr = process.StandardError.ReadToEnd();
         process.WaitForExit();
         return (process.ExitCode, stdOut, stdErr);
+    }
+
+    private static void InvokeWriteDatabaseOpenFailure(Exception exception)
+    {
+        var method = typeof(QueryCommandRunner).GetMethod(
+            "WriteDatabaseOpenFailure",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+        method.Invoke(null, [exception, "/tmp/db-open-failure-test.db"]);
     }
 
     private static (int ExitCode, string StdOut, string StdErr) RunSanitizedPublishedCli(PublishedCli publishedCli, params string[] args)
