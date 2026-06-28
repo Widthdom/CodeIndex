@@ -69,29 +69,6 @@ public static partial class QueryCommandRunner
     {
         MaxDepth = BatchMaxJsonDepth,
     };
-    private static readonly HashSet<string> DependencyNoiseSymbols = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "Array",
-        "Console",
-        "DateTime",
-        "Dictionary",
-        "Directory",
-        "Enumerable",
-        "File",
-        "IEnumerable",
-        "List",
-        "Math",
-        "Path",
-        "Read",
-        "ReadLine",
-        "Regex",
-        "String",
-        "StringBuilder",
-        "Task",
-        "Write",
-        "WriteLine",
-    };
-
     [ThreadStatic]
     private static DbReader? s_batchReader;
     [ThreadStatic]
@@ -8245,7 +8222,7 @@ public static partial class QueryCommandRunner
 
     private static bool KeepDependencySymbol(string symbol, QueryCommandOptions options)
     {
-        if (options.DependencySuppressNoise && DependencyNoiseSymbols.Contains(symbol))
+        if (options.DependencySuppressNoise && DependencyNoiseProfile.IsNoiseSymbol(symbol))
             return false;
 
         var hasNameFilters = options.DependencySymbols.Count > 0 || options.DependencySymbolFamilies.Count > 0;
@@ -8268,6 +8245,7 @@ public static partial class QueryCommandRunner
             SourceDb = edge.SourceDb,
             TargetDb = edge.TargetDb,
             ReferenceCount = edge.ReferenceCount,
+            RankingScore = edge.RankingScore,
             Symbols = symbols,
         };
 
@@ -8381,6 +8359,7 @@ public static partial class QueryCommandRunner
                 ["source"] = edge.SourcePath,
                 ["target"] = edge.TargetPath,
                 ["reference_count"] = edge.ReferenceCount,
+                ["ranking_score"] = edge.RankingScore,
                 ["symbols"] = BuildDependencySymbolsJson(edge.Symbols),
             }).ToArray()),
         };
@@ -8428,7 +8407,8 @@ public static partial class QueryCommandRunner
             }
 
         return results
-            .OrderByDescending(result => result.ReferenceCount)
+            .OrderByDescending(result => result.RankingScore)
+            .ThenByDescending(result => result.ReferenceCount)
             .ThenBy(result => result.SourceDb, StringComparer.Ordinal)
             .ThenBy(result => result.SourcePath, StringComparer.Ordinal)
             .ThenBy(result => result.TargetDb, StringComparer.Ordinal)
@@ -8632,7 +8612,7 @@ public static partial class QueryCommandRunner
             GROUP BY edge_totals.source_path, edge_totals.target_path, edge_totals.reference_count
             ORDER BY edge_totals.reference_count DESC, edge_totals.source_path, edge_totals.target_path
             LIMIT @limit";
-        SqliteCommandPolicy.Add(cmd, "@limit", limit);
+        SqliteCommandPolicy.Add(cmd, "@limit", DependencyNoiseProfile.GetRankingCandidateLimit(limit));
         SqliteCommandPolicy.Add(cmd, "@symbolSampleLimit", DbReader.DependencySymbolSampleLimit);
 
         var results = new List<FileDependencyResult>();
@@ -8649,7 +8629,18 @@ public static partial class QueryCommandRunner
                 Symbols = reader.IsDBNull(3) ? string.Empty : reader.GetString(3),
             });
         }
-        return results;
+        foreach (var result in results)
+            result.RankingScore = DependencyNoiseProfile.ComputeRankingScore(result.ReferenceCount, result.Symbols);
+
+        return results
+            .OrderByDescending(result => result.RankingScore)
+            .ThenByDescending(result => result.ReferenceCount)
+            .ThenBy(result => result.SourceDb, StringComparer.Ordinal)
+            .ThenBy(result => result.SourcePath, StringComparer.Ordinal)
+            .ThenBy(result => result.TargetDb, StringComparer.Ordinal)
+            .ThenBy(result => result.TargetPath, StringComparer.Ordinal)
+            .Take(limit)
+            .ToList();
     }
 
     private static void AttachCrossDatabaseTarget(SqliteConnection connection, string targetDbPath)

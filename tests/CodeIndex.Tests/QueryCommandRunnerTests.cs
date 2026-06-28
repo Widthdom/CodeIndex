@@ -4443,6 +4443,7 @@ public partial class QueryCommandRunnerTests
             Assert.True(json.GetProperty("nodes").GetArrayLength() >= 2);
             Assert.True(json.GetProperty("edges").GetArrayLength() >= 1);
             Assert.True(json.GetProperty("edges")[0].TryGetProperty("reference_count", out _));
+            Assert.True(json.GetProperty("edges")[0].TryGetProperty("ranking_score", out _));
             Assert.True(json.GetProperty("edges")[0].TryGetProperty("symbols", out _));
         }
         finally
@@ -4488,6 +4489,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("src/Caller.cs", edge.GetProperty("source_path").GetString());
             Assert.Equal("src/Targets.cs", edge.GetProperty("target_path").GetString());
             Assert.Equal(4, edge.GetProperty("reference_count").GetInt32());
+            Assert.True(edge.GetProperty("ranking_score").GetDouble() > 0.0);
             Assert.Equal("Domain.Alpha", edge.GetProperty("symbols").GetString());
             Assert.True(queryContext.GetProperty("suppress_noise").GetBoolean());
             Assert.Equal("Domain.Alpha", queryContext.GetProperty("symbol")[0].GetString());

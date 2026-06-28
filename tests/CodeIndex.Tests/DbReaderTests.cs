@@ -1745,6 +1745,51 @@ public partial class DbReaderTests : IDisposable
             });
     }
 
+    [Fact]
+    public void GetFileSymbolHotspots_RanksBroadFilesAheadOfTinyHighCountFiles_Issue4113()
+    {
+        var tinySymbols = new[] { "TinyExitSuccess4113", "TinyExitFailure4113" };
+        var broadSymbols = Enumerable
+            .Range(0, 9)
+            .Select(index => $"BroadWorkflowStep4113_{index}")
+            .ToArray();
+
+        InsertIndexedFile("src/hotspot_rank_tiny.py", "python",
+            string.Join("\n\n", tinySymbols.Select(name => $"def {name}():\n    return True")) +
+            "\n\n" +
+            "def use_tiny_4113():\n" +
+            string.Join("\n", Enumerable.Range(0, 100).SelectMany(_ => tinySymbols.Select(name => $"    {name}()"))));
+        InsertIndexedFile("src/hotspot_rank_broad.py", "python",
+            string.Join("\n\n", broadSymbols.Select(name => $"def {name}():\n    return True")) +
+            "\n\n" +
+            "def use_broad_4113():\n" +
+            string.Join("\n", broadSymbols.SelectMany(name => Enumerable.Range(0, 3).Select(_ => $"    {name}()"))));
+
+        var results = _reader.GetFileSymbolHotspots(
+            limit: 10,
+            kind: "function",
+            lang: "python",
+            pathPatterns: ["src/hotspot_rank_"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var tiny = Assert.Single(results, result => result.Path == "src/hotspot_rank_tiny.py");
+        var broad = Assert.Single(results, result => result.Path == "src/hotspot_rank_broad.py");
+        Assert.True(tiny.ReferenceCount > broad.ReferenceCount);
+        Assert.True(broad.RankingScore > tiny.RankingScore);
+        Assert.Equal(0.1, tiny.StructuralRankPenalty, precision: 6);
+        Assert.Equal(1.0, broad.StructuralRankPenalty, precision: 6);
+
+        var topResult = Assert.Single(_reader.GetFileSymbolHotspots(
+            limit: 1,
+            kind: "function",
+            lang: "python",
+            pathPatterns: ["src/hotspot_rank_"],
+            excludePathPatterns: null,
+            excludeTests: false));
+        Assert.Equal("src/hotspot_rank_broad.py", topResult.Path);
+    }
+
 
 
 

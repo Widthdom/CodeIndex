@@ -296,6 +296,10 @@ public class FileHotspotResult
     public string Path { get; set; } = string.Empty;
     public string? Lang { get; set; }
     public int ReferenceCount { get; set; }
+    public double ReferenceScore { get; set; }
+    public double RankingScore { get; set; }
+    public double GenericNamePenalty { get; set; } = 1.0;
+    public double StructuralRankPenalty { get; set; } = 1.0;
     public int SymbolCount { get; set; }
 }
 
@@ -1648,5 +1652,6 @@ public class FileDependencyResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? TargetDb { get; set; }
     public int ReferenceCount { get; set; }
+    public double RankingScore { get; set; }
     public string Symbols { get; set; } = string.Empty;
 }

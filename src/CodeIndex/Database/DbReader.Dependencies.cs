@@ -1,4 +1,5 @@
 using CodeIndex.Indexer;
+using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -542,7 +543,7 @@ public partial class DbReader
             for (int i = 0; i < excludePathPatterns.Count; i++)
                 SqliteCommandPolicy.Add(cmd, $"@excludePath{i}", BuildPathLikePattern(excludePathPatterns[i]));
         }
-        SqliteCommandPolicy.Add(cmd, "@limit", limit);
+        SqliteCommandPolicy.Add(cmd, "@limit", DependencyNoiseProfile.GetRankingCandidateLimit(limit));
         SqliteCommandPolicy.Add(cmd, "@symbolSampleLimit", DependencySymbolSampleLimit);
 
         var results = new List<FileDependencyResult>();
@@ -557,7 +558,21 @@ public partial class DbReader
                 Symbols = reader.GetString(3),
             });
         }
-        return results;
+        return RankDependencyResults(results, limit);
+    }
+
+    private static List<FileDependencyResult> RankDependencyResults(List<FileDependencyResult> results, int limit)
+    {
+        foreach (var result in results)
+            result.RankingScore = DependencyNoiseProfile.ComputeRankingScore(result.ReferenceCount, result.Symbols);
+
+        return results
+            .OrderByDescending(result => result.RankingScore)
+            .ThenByDescending(result => result.ReferenceCount)
+            .ThenBy(result => result.SourcePath, StringComparer.Ordinal)
+            .ThenBy(result => result.TargetPath, StringComparer.Ordinal)
+            .Take(limit)
+            .ToList();
     }
 
     public List<FileDependencyResult> GetFileDependencyCycleCandidates(
@@ -675,6 +690,7 @@ public partial class DbReader
                 SourcePath = reader.GetString(0),
                 TargetPath = reader.GetString(1),
                 ReferenceCount = reader.GetInt32(2),
+                RankingScore = reader.GetInt32(2),
                 Symbols = reader.GetString(3),
             });
         }

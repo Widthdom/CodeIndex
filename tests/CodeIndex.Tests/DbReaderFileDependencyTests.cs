@@ -51,6 +51,83 @@ public partial class DbReaderTests
     }
 
     [Fact]
+    public void GetFileDependencies_RanksNoiseAdjustedEdgesBeforeApplyingLimit_Issue4113()
+    {
+        var sourceFileId = InsertSyntheticDependencyFile("src/RankingCaller.cs");
+        var noiseTargetFileId = InsertSyntheticDependencyFile("src/CommonNoise.cs");
+        var domainTargetFileId = InsertSyntheticDependencyFile("src/DomainWorkflow.cs");
+        var domainSymbols = Enumerable
+            .Range(0, 9)
+            .Select(index => $"DomainWorkflowStep{index}")
+            .ToArray();
+
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord { FileId = noiseTargetFileId, Kind = "class", Name = "Regex", Line = 1, StartLine = 1, EndLine = 1 },
+            new SymbolRecord { FileId = noiseTargetFileId, Kind = "class", Name = "String", Line = 2, StartLine = 2, EndLine = 2 },
+            .. domainSymbols.Select((name, index) => new SymbolRecord
+            {
+                FileId = domainTargetFileId,
+                Kind = "class",
+                Name = name,
+                Line = index + 1,
+                StartLine = index + 1,
+                EndLine = index + 1,
+            }),
+        ]);
+
+        var references = new List<ReferenceRecord>();
+        var line = 1;
+        foreach (var symbolName in new[] { "Regex", "String" })
+        {
+            for (var i = 0; i < 50; i++)
+                references.Add(new ReferenceRecord
+                {
+                    FileId = sourceFileId,
+                    SymbolName = symbolName,
+                    ReferenceKind = "type_reference",
+                    Line = line++,
+                    Column = 1,
+                    Context = symbolName,
+                });
+        }
+        foreach (var symbolName in domainSymbols)
+        {
+            for (var i = 0; i < 3; i++)
+                references.Add(new ReferenceRecord
+                {
+                    FileId = sourceFileId,
+                    SymbolName = symbolName,
+                    ReferenceKind = "type_reference",
+                    Line = line++,
+                    Column = 1,
+                    Context = symbolName,
+                });
+        }
+        _writer.InsertReferences(references);
+
+        var dependencies = _reader.GetFileDependencies(
+            limit: 10,
+            lang: "csharp",
+            pathPatterns: ["src/RankingCaller.cs"],
+            excludePathPatterns: null,
+            excludeTests: false);
+
+        var noiseEdge = Assert.Single(dependencies, dependency => dependency.TargetPath == "src/CommonNoise.cs");
+        var domainEdge = Assert.Single(dependencies, dependency => dependency.TargetPath == "src/DomainWorkflow.cs");
+        Assert.True(noiseEdge.ReferenceCount > domainEdge.ReferenceCount);
+        Assert.True(domainEdge.RankingScore > noiseEdge.RankingScore);
+
+        var topDependency = Assert.Single(_reader.GetFileDependencies(
+            limit: 1,
+            lang: "csharp",
+            pathPatterns: ["src/RankingCaller.cs"],
+            excludePathPatterns: null,
+            excludeTests: false));
+        Assert.Equal("src/DomainWorkflow.cs", topDependency.TargetPath);
+    }
+
+    [Fact]
     public void GetFileDependencies_DoesNotJoinSameNameTargetsAcrossLanguages()
     {
         InsertIndexedFile("src/Foo.cs", "csharp",
