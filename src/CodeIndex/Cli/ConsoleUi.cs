@@ -127,9 +127,9 @@ public static class ConsoleUi
         ("report", "cdidx report --output <path> [--db <path>] [--json] [--log-lines <n<=2000>] [--no-log] [--include-args]"),
         ("validate", "cdidx validate [--db <path>] [--json[=array]] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--severity <info|warning|error>] [--path <glob>]"),
         ("impact", "cdidx impact <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--max-hops <n>] [--count] [--with-paths]"),
-        ("deps", "cdidx deps [--db <path>] [--json] [--format <dot|graphml|json-graph|edgelist>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--reverse] [--cycles]"),
+        ("deps", "cdidx deps [--db <path>] [--json] [--format <dot|graphml|json-graph|edgelist>] [--summary-only] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--reverse] [--cycles]"),
         ("unused", "cdidx unused [--db <path>] [--json] [--compact] [--verbose] [--limit <n>|--top <n>] [--cursor <unused:offset>] [--audit-scope <source|all>] [--kind <kind>] [--bucket <bucket>] [--min-confidence <medium|low>|--confidence <medium|low>] [--actionable] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--by-bucket]"),
-        ("hotspots", "cdidx hotspots [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]"),
+        ("hotspots", "cdidx hotspots [--db <path>] [--json] [--summary-only] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]"),
         ("suggestions", "cdidx suggestions <list|show|export> [id] [--db <path>] [--json] [--status <all|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--limit <n>] [--offset <n>] [--format <json|markdown|issue-drafts>] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>] [--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>]"),
         ("export", "cdidx export <archive> [--db <path>] [--json]"),
         ("export", "cdidx export ctags [--output <path>] [--db <path>] [--json] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests]"),
@@ -177,6 +177,8 @@ public static class ConsoleUi
         ("db-checkpoints", "Lists existing checkpoint snapshots without changing database files."),
         ("db-restore", "Replaces the DB from a checkpoint and keeps a pre-restore backup directory next to the DB."),
         ("db-restore-backups", "--list reports pre-restore backups; --prune deletes older backup directories beyond --keep."),
+        ("deps", "Large dependency queries emit Progress lines on stderr at --limit 80+ or with --verbose; use --summary-only or --max-json-bytes for bounded JSON."),
+        ("hotspots", "Large hotspot queries emit Progress lines on stderr at --limit 80+ or with --verbose; use --summary-only or --max-json-bytes for bounded JSON."),
     ];
 
     private static readonly HashSet<string> HiddenCommandUsageNames = new(StringComparer.Ordinal)
