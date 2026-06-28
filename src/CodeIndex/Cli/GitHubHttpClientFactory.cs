@@ -123,7 +123,7 @@ internal static class GitHubHttpClientFactory
 
     internal static bool ShouldUseDefaultProxyCredentials()
     {
-        var raw = Environment.GetEnvironmentVariable(ProxyDefaultCredentialsEnvironmentVariable)?.Trim();
+        var raw = CdidxEnvironment.GetProcessEnvironmentVariable(ProxyDefaultCredentialsEnvironmentVariable)?.Trim();
         return raw != null
             && (string.Equals(raw, "1", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase)

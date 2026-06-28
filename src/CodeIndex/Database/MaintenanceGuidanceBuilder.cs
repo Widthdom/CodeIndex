@@ -129,7 +129,7 @@ internal static class MaintenanceGuidanceBuilder
 
     private static long ReadPositiveLongEnvironment(string name, long fallback)
     {
-        var value = Environment.GetEnvironmentVariable(name);
+        var value = global::CodeIndex.EnvironmentAccess.GetProcessEnvironmentVariable(name);
         return long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) && parsed > 0
             ? parsed
             : fallback;
@@ -137,7 +137,7 @@ internal static class MaintenanceGuidanceBuilder
 
     private static double ReadRatioEnvironment(string name, double fallback)
     {
-        var value = Environment.GetEnvironmentVariable(name);
+        var value = global::CodeIndex.EnvironmentAccess.GetProcessEnvironmentVariable(name);
         return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
             && parsed > 0
             && parsed <= 1
