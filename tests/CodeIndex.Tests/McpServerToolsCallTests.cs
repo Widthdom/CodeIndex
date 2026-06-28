@@ -7646,7 +7646,17 @@ public partial class McpServerTests
             Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
             var structured = response["result"]!["structuredContent"]!;
             var hotspot = structured["hotspots"]!.AsArray().Single()!;
+            var query = structured["query_context"]!;
             Assert.Equal("file", structured["grouped_by"]!.GetValue<string>());
+            Assert.Equal("file", structured["grouping_unit"]!.GetValue<string>());
+            Assert.Equal("returned_files", structured["count_kind"]!.GetValue<string>());
+            Assert.Equal("files", structured["limit_applies_to"]!.GetValue<string>());
+            Assert.Equal(new[] { "reference_count" }, structured["score_fields"]!.AsArray().Select(field => field!.GetValue<string>()).ToArray());
+            Assert.Equal(new[] { "reference_count", "path" }, structured["ranking_fields"]!.AsArray().Select(field => field!.GetValue<string>()).ToArray());
+            Assert.Equal("file", query["group_by"]!.GetValue<string>());
+            Assert.Equal("file", query["grouping_unit"]!.GetValue<string>());
+            Assert.Equal("returned_files", query["count_kind"]!.GetValue<string>());
+            Assert.Equal("files", query["limit_applies_to"]!.GetValue<string>());
             Assert.Equal(1, structured["count"]!.GetValue<int>());
             Assert.Equal("src/One.cs", hotspot["path"]!.GetValue<string>());
             Assert.Equal(3, hotspot["reference_count"]!.GetValue<int>());
@@ -7656,6 +7666,36 @@ public partial class McpServerTests
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void ToolsCall_SymbolHotspots_GroupByStatementWithoutSqlLangIsRejected_Issue4116()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{"groupBy":"statement"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var result = response["result"]!;
+        Assert.True(result["isError"]!.GetValue<bool>());
+        Assert.Contains("groupBy statement is only supported with lang=sql", result["content"]![0]!["text"]!.GetValue<string>());
+        var structured = result["structuredContent"]!;
+        Assert.Equal("groupBy", structured["parameter"]!.GetValue<string>());
+        Assert.Equal("statement", structured["value"]!.GetValue<string>());
+        Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, structured["category"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_SymbolHotspots_GroupByNameKindIsRejected()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{"groupBy":"name_kind"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var result = response["result"]!;
+        Assert.True(result["isError"]!.GetValue<bool>());
+        Assert.Contains("Unsupported symbol_hotspots groupBy 'name_kind'", result["content"]![0]!["text"]!.GetValue<string>());
+        var structured = result["structuredContent"]!;
+        Assert.Equal("groupBy", structured["parameter"]!.GetValue<string>());
+        Assert.Equal("name_kind", structured["value"]!.GetValue<string>());
+        Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, structured["category"]!.GetValue<string>());
     }
 
     [Fact]

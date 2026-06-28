@@ -368,7 +368,7 @@ internal static class CliFlagSchema
             new() { Name = "--depth", ValuePlaceholder = "<n>", Description = "Map: cap module depth; impact: deprecated alias for --max-hops", Commands = Set("impact", "map") },
             new() { Name = "--with-paths", Description = "Impact: include shortest call chains per caller", Commands = Set("impact") },
             new() { Name = "--reverse", Description = "Reverse direction (show dependents)", Commands = Set("deps") },
-            new() { Name = "--group-by", ValuePlaceholder = "<file|symbol|origin|statement>", Description = "Search: group --count rows by file, symbol, or origin; hotspots: choose grouping unit", Commands = Set("hotspots", "search") },
+            new() { Name = "--group-by", ValuePlaceholder = "<file|symbol|origin|statement>", Description = "Search: group --count rows by file, symbol, or origin; hotspots: symbol/file grouping, with statement only for --lang sql", Commands = Set("hotspots", "search") },
             new() { Name = "--group-by-name", Description = "Hotspots: collapse same-name rows; JSON keeps capped paths plus full definition details", Commands = Set("hotspots") },
             new() { Name = "--check", Description = "Verify status freshness/readiness", Commands = Set("status") },
             new() { Name = "--config", Description = "Print effective configuration with source attribution", Commands = Set("status") },

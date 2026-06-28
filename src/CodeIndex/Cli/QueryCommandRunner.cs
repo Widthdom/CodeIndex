@@ -140,10 +140,10 @@ public static partial class QueryCommandRunner
     internal const int MaxUnusedPaginationFetchLimit = MaxQueryResultLimit * MaxUnusedPaginationPages + 1;
     internal const int MaxUnusedPaginationOffset = MaxUnusedPaginationFetchLimit - MaxQueryResultLimit - 1;
     private const string SearchFilterNoMatchSentinel = "\0__cdidx_no_match__";
-    private const string HotspotsGroupedByNameKind = "name_kind";
-    private const string HotspotsGroupedBySymbol = "symbol";
-    private const string HotspotsGroupedByFile = "file";
-    private const string HotspotsGroupedByStatement = "statement";
+    internal const string HotspotsGroupedByNameKind = "name_kind";
+    internal const string HotspotsGroupedBySymbol = "symbol";
+    internal const string HotspotsGroupedByFile = "file";
+    internal const string HotspotsGroupedByStatement = "statement";
     private const string JsonOutputFormatNdjson = "ndjson";
     private const string JsonOutputFormatArray = "array";
     private sealed record StatusFieldExplanation(
@@ -12769,7 +12769,7 @@ public static partial class QueryCommandRunner
         return false;
     }
 
-    private static bool TryResolveHotspotsGroupBy(string? requestedGroupBy, string? lang, bool groupByName, out string groupBy, out string error)
+    internal static bool TryResolveHotspotsGroupBy(string? requestedGroupBy, string? lang, bool groupByName, out string groupBy, out string error)
     {
         groupBy = string.Empty;
         error = string.Empty;
@@ -12796,15 +12796,23 @@ public static partial class QueryCommandRunner
         {
             case HotspotsGroupedBySymbol:
             case HotspotsGroupedByFile:
-            case HotspotsGroupedByStatement:
                 groupBy = requestedGroupBy;
                 return true;
+            case HotspotsGroupedByStatement:
+                if (IsSqlLanguageFilter(lang))
+                {
+                    groupBy = requestedGroupBy;
+                    return true;
+                }
+
+                error = "Error: hotspots --group-by statement is only supported with --lang sql. Use --group-by symbol or --group-by file for non-SQL hotspot grouping.";
+                return false;
             case "name":
             case HotspotsGroupedByNameKind:
                 groupBy = HotspotsGroupedByNameKind;
                 return true;
             default:
-                error = $"Error: unsupported hotspots --group-by value '{ConsoleUi.FormatBoundedValue(requestedGroupBy)}'. Use symbol, file, or statement.";
+                error = $"Error: unsupported hotspots --group-by value '{ConsoleUi.FormatBoundedValue(requestedGroupBy)}'. Use symbol, file, or --lang sql --group-by statement.";
                 return false;
         }
     }
@@ -14461,6 +14469,7 @@ public static partial class QueryCommandRunner
                 zeroPayload["definition_site_total"] = 0;
                 zeroPayload["grouped_by"] = HotspotsGroupedByNameKind;
             });
+        AddHotspotsGroupingContractJsonFields(payload, HotspotsGroupedByNameKind, queryOptions, jsonOptions, countOnly);
         if (!graphAvailable)
             payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
         return payload;

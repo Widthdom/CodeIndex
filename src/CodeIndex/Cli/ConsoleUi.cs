@@ -1155,7 +1155,7 @@ public static class ConsoleUi
         WriteHelpLine("  --max-hops <n>             Max BFS hops for impact analysis, inclusive (default: 5; --max-hops 2 returns callers at hop 1 and 2; --max-hops 0 resolves the symbol without traversing callers)");
         Console.WriteLine("  --depth <n>                Deprecated alias for --max-hops");
         Console.WriteLine("  --reverse                  Reverse direction for deps (show dependents)");
-        WriteHelpLine("  --group-by <unit>          search: with --count, group rows by file or symbol; hotspots: group by symbol, file, or statement");
+        WriteHelpLine("  --group-by <unit>          search: with --count, group rows by file or symbol; hotspots: group by symbol or file, or by statement only with --lang sql");
         WriteHelpLine("  --group-by-name            hotspots: collapse rows sharing (name, kind) across files; JSON keeps capped paths plus full definition_site_details");
         WriteHelpLine("  --with-paths               impact: also emit `paths` per caller — the shortest call chains [root, ..., caller] (diamond graphs surface every converging route, capped per row)");
         WriteHelpLine("  unused reflection note     C# nameof/typeof and direct reflection member-name literals such as GetMethod(\"Foo\") are indexed; dynamically constructed reflection names may need manual review");

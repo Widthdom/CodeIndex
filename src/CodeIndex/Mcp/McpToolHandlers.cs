@@ -5183,11 +5183,35 @@ public partial class McpServer
         var limit = ReadLimit(args, QueryCommandRunner.DefaultQueryLimit, adjustments);
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
-        var groupBy = args?["groupBy"]?.GetValue<string>()?.ToLowerInvariant()
-            ?? (string.Equals(lang, "sql", StringComparison.Ordinal) ? "statement" : "symbol");
-        if (groupBy is not ("symbol" or "file" or "statement"))
+        var requestedGroupBy = args?["groupBy"]?.GetValue<string>()?.ToLowerInvariant();
+        if (!QueryCommandRunner.TryResolveHotspotsGroupBy(requestedGroupBy, lang, groupByName: false, out var groupBy, out var groupByError))
         {
-            var groupByDisplay = McpBoundedText.ForDisplay(groupBy);
+            var groupByDisplay = McpBoundedText.ForDisplay(requestedGroupBy ?? string.Empty);
+            var extra = new JsonObject
+            {
+                ["parameter"] = "groupBy",
+                ["value"] = groupByDisplay.Text,
+            };
+            groupByDisplay.AddMetadata(extra, "value");
+            var message = groupByError.StartsWith("Error: ", StringComparison.Ordinal)
+                ? groupByError["Error: ".Length..]
+                : groupByError;
+            message = message
+                .Replace("hotspots --group-by", "symbol_hotspots groupBy", StringComparison.Ordinal)
+                .Replace("--lang sql", "lang=sql", StringComparison.Ordinal)
+                .Replace("--group-by symbol", "groupBy=symbol", StringComparison.Ordinal)
+                .Replace("--group-by file", "groupBy=file", StringComparison.Ordinal);
+            return CreateToolErrorResponse(
+                id,
+                message,
+                category: McpErrorEnvelope.CategoryInvalidArgument,
+                suggestion: "Use groupBy=symbol or groupBy=file for non-SQL scopes, or set lang=sql with groupBy=statement.",
+                retrySafe: false,
+                extraData: extra);
+        }
+        if (groupBy == QueryCommandRunner.HotspotsGroupedByNameKind)
+        {
+            var groupByDisplay = McpBoundedText.ForDisplay(requestedGroupBy ?? groupBy);
             var extra = new JsonObject
             {
                 ["parameter"] = "groupBy",
@@ -5196,9 +5220,9 @@ public partial class McpServer
             groupByDisplay.AddMetadata(extra, "value");
             return CreateToolErrorResponse(
                 id,
-                $"Unsupported symbol_hotspots groupBy '{groupByDisplay.Text}'. Use symbol, file, or statement.",
+                $"Unsupported symbol_hotspots groupBy '{groupByDisplay.Text}'. Use groupBy=symbol or groupBy=file for non-SQL scopes, or set lang=sql with groupBy=statement.",
                 category: McpErrorEnvelope.CategoryInvalidArgument,
-                suggestion: "Use symbol, file, or statement for symbol_hotspots groupBy.",
+                suggestion: "Use groupBy=symbol or groupBy=file for non-SQL scopes, or set lang=sql with groupBy=statement.",
                 retrySafe: false,
                 extraData: extra);
         }
@@ -5256,6 +5280,9 @@ public partial class McpServer
                     path = r.Symbol.Path,
                     line = r.Symbol.Line,
                     reference_count = r.ReferenceCount,
+                    reference_score = r.ReferenceScore,
+                    ranking_score = r.RankingScore,
+                    generic_name_penalty = r.GenericNamePenalty,
                     visibility = r.Symbol.Visibility,
                     container = r.Symbol.ContainerName,
                 });
@@ -5267,6 +5294,18 @@ public partial class McpServer
                 ["grouped_by"] = groupBy,
                 ["hotspots"] = hotspotsNode
             };
+            QueryCommandRunner.AddHotspotsGroupingContractJsonFields(payload, groupBy, queryOptions: null, jsonOptions: _jsonOptions, countOnly: false);
+            payload["query_context"] = BuildSymbolHotspotsQueryContext(
+                limit,
+                kind,
+                lang,
+                pathPatterns,
+                excludePaths,
+                excludeTests,
+                groupBy,
+                QueryCommandRunner.GetHotspotsGroupingUnit(groupBy),
+                QueryCommandRunner.GetHotspotsCountKind(groupBy, countOnly: false),
+                QueryCommandRunner.GetHotspotsLimitAppliesTo(groupBy, countOnly: false));
             AddVisibilityFilterEcho(payload, visibilityFilters, excludeVisibilityFilters);
             if (fileResults != null)
                 payload["files"] = fileResults.Count;
@@ -5293,6 +5332,36 @@ public partial class McpServer
             adjustments.ApplyTo(payload);
             return CreateToolResult(id, summary, payload);
         });
+    }
+
+    private JsonObject BuildSymbolHotspotsQueryContext(
+        int limit,
+        string? kind,
+        string? lang,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePaths,
+        bool excludeTests,
+        string groupBy,
+        string groupingUnit,
+        string countKind,
+        string limitAppliesTo)
+    {
+        var queryContext = new JsonObject
+        {
+            ["limit"] = limit,
+        };
+        QueryCommandRunner.AddHotspotsGroupingQueryContextFields(queryContext, groupBy, groupingUnit, countKind, limitAppliesTo);
+        if (kind != null)
+            queryContext["kind"] = kind;
+        if (lang != null)
+            queryContext["lang"] = lang;
+        if (pathPatterns is { Count: > 0 })
+            queryContext["path"] = JsonSerializer.SerializeToNode(pathPatterns, _jsonOptions);
+        if (excludePaths is { Count: > 0 })
+            queryContext["exclude_path"] = JsonSerializer.SerializeToNode(excludePaths, _jsonOptions);
+        if (excludeTests)
+            queryContext["exclude_tests"] = true;
+        return queryContext;
     }
 
     private JsonNode ExecuteUnusedSymbols(JsonNode? id, JsonNode? args)

@@ -279,7 +279,7 @@ sections below show examples and option details for the most common workflows.
 | Graph | `deps` | Show file-level dependency edges | `deps` |
 | Analysis | `impact` | Traverse transitive callers from a resolved symbol | `impact_analysis` |
 | Analysis | `unused` | Find symbols defined but not referenced, with confidence buckets | `unused_symbols` |
-| Analysis | `hotspots` | Rank high-impact symbols or statements by reference volume | `symbol_hotspots` |
+| Analysis | `hotspots` | Rank high-impact symbols/files by reference volume; SQL scopes can use statement grouping | `symbol_hotspots` |
 | Analysis | `validate` | Report encoding, line-ending, and file-content diagnostics in indexed files; U+FFFD rows include origin/severity metadata | `validate` |
 | Status | `status` | Show DB statistics, freshness, and readiness metadata | `status` |
 | Status | `languages` | List language extensions and symbol/reference/graph capabilities; add `--indexed-only` and `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` for workspace audits | `languages` |
@@ -527,11 +527,16 @@ cdidx hotspots --group-by=file --json
 cdidx hotspots --group-by-name --limit 30
 ```
 
-`hotspots` ranks symbols, files, or statements by incoming reference volume so
-you can find central code before refactoring. SQL scopes default to statement
-grouping; non-SQL scopes default to symbol grouping. If `status --json` reports
-`hotspot_family_ready: false`, duplicate-name grouping uses a conservative
-fallback until you re-index with a current binary.
+`hotspots` ranks symbols or files by incoming reference volume so you can find
+central code before refactoring. SQL scopes default to statement grouping, and
+explicit `--group-by statement` is accepted only with `--lang sql`; non-SQL
+scopes default to symbol grouping and should use `--group-by symbol` or
+`--group-by file`. JSON output includes `grouping_unit`, `count_kind`,
+`limit_applies_to`, `score_fields`, `ranking_fields`, and matching
+`query_context` fields so callers can tell whether `--limit` applies to
+returned symbols, files, SQL statements, or is ignored by `--count`. If
+`status --json` reports `hotspot_family_ready: false`, duplicate-name grouping
+uses a conservative fallback until you re-index with a current binary.
 
 ### Trace impact
 
@@ -2455,7 +2460,7 @@ The MCP `tools/list` response includes an `examples` array for every registered 
 | `deps` | File-level dependency edges from the reference graph |
 | `impact_analysis` | Compute transitive callers of a symbol (inclusive `maxHops`: `maxHops: N` returns callers at hop 1..N — a chain A→B→C→D queried against D with `maxHops: 2` yields C at hop 1 and B at hop 2). The deprecated `maxDepth` alias is still accepted during the compatibility period and surfaces a warning. The symbol-level BFS walks only call-graph kinds (`call`, `instantiate`, `subscribe`) and excludes metadata-only edges (`attribute`, `annotation`, `type_reference`) so metadata cycles do not inflate caller counts. Use `maxHops: 0` to resolve the symbol only, or rely on single-type fallback to heuristic file-level dependency hints and partial-definition hints; those file hints may include metadata edges. Pass `withPaths: true` to also receive a `paths` array per caller (shortest chains `[resolvedRoot, intermediate..., callerName]`; diamond convergence surfaces every route, capped per row with a `paths_truncated` overflow flag). |
 | `unused_symbols` | Find symbols defined but never referenced, with confidence buckets for dead-code triage |
-| `symbol_hotspots` | Find high-impact hotspots. `groupBy` supports `symbol`, `file`, and `statement`; SQL scopes default to statement grouping while non-SQL scopes default to symbol grouping. |
+| `symbol_hotspots` | Find high-impact hotspots. `groupBy` supports `symbol` and `file`; `statement` is accepted only with `lang: "sql"`. Structured output includes `grouping_unit`, `count_kind`, `limit_applies_to`, `score_fields`, `ranking_fields`, and matching `query_context` fields. |
 | `batch_query` | Execute multiple queries in a single call (MCP only, max 10). The response includes a top-level `metadata` object with `submitted`, `executed`, `errors`, `total_elapsed_ms`, `success_count`, and `failure_count`; every entry in `results` carries `request_index`, optional client `slot_id`, `ok`, `elapsed_ms`, `summary`, and compact `args_summary` fields so callers can correlate partial failures and slow inner queries without relying on positional guesses. Scalar values in `args_summary` are bounded before full JSON materialization, so huge numbers and strings cannot inflate diagnostics. |
 | `validate` | Report encoding and file-content issues (U+FFFD with origin/severity, BOM, null bytes, mixed/CR-only line endings, UTF-16 BOM/heuristic detection, likely non-UTF8 encodings, Git LFS pointer placeholders, Dockerfile JSON-form diagnostics) |
 | `languages` | List all supported languages, file extensions, and capabilities |
@@ -2946,7 +2951,7 @@ cdidx index . --quiet
 | Graph | `deps` | file-level dependency edges を表示 | `deps` |
 | Analysis | `impact` | 解決した symbol から transitive callers を探索 | `impact_analysis` |
 | Analysis | `unused` | 参照されていない可能性がある symbols を confidence bucket 付きで表示 | `unused_symbols` |
-| Analysis | `hotspots` | reference volume で high-impact symbols/statements を ranking | `symbol_hotspots` |
+| Analysis | `hotspots` | reference volume で high-impact symbols/files を ranking。SQL scope は statement grouping も使用可 | `symbol_hotspots` |
 | Analysis | `validate` | indexed files の encoding / line-ending / file-content 診断を報告。U+FFFD 行には origin/severity metadata が付く | `validate` |
 | Status | `status` | DB stats、freshness、readiness metadata を表示 | `status` |
 | Status | `languages` | language extensions と symbol/graph capabilities を一覧 | `languages` |
@@ -3182,11 +3187,15 @@ cdidx hotspots --group-by=file --json
 cdidx hotspots --group-by-name --limit 30
 ```
 
-`hotspots` は incoming reference volume で symbols / files / statements を ranking し、
-refactor 前に中心的なコードを見つけます。SQL scope は既定で statement grouping、
-非 SQL scope は symbol grouping です。`status --json` が `hotspot_family_ready: false`
-を返す場合、current binary で再 index するまで duplicate-name grouping は保守的な
-fallback になります。
+`hotspots` は incoming reference volume で symbols / files を ranking し、refactor 前に
+中心的なコードを見つけます。SQL scope は既定で statement grouping になり、明示的な
+`--group-by statement` は `--lang sql` の場合だけ受け付けます。非 SQL scope は symbol
+grouping が既定で、`--group-by symbol` または `--group-by file` を使います。JSON 出力には
+`grouping_unit`、`count_kind`、`limit_applies_to`、`score_fields`、`ranking_fields` と対応する
+`query_context` fields が含まれ、`--limit` が返却 symbols / files / SQL statements のどれに
+適用されるか、または `--count` で無視されるかを判別できます。`status --json` が
+`hotspot_family_ready: false` を返す場合、current binary で再 index するまで
+duplicate-name grouping は保守的な fallback になります。
 
 ### Impact を追跡する
 
@@ -5099,7 +5108,7 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `deps` | 参照グラフからファイル間依存エッジを表示 |
 | `impact_analysis` | シンボルの推移的 caller を算出（`maxHops` は inclusive で、`maxHops: N` 指定時は hop 1〜N の caller を返す。例: A→B→C→D のチェーンで D を `maxHops: 2` 検索すると C(hop=1) と B(hop=2) が返る）。非推奨 alias の `maxDepth` は互換期間中も受け付け、使用時は warning を返す。symbol-level BFS は call graph 種別（`call`、`instantiate`、`subscribe`）のみを辿り、metadata-only edge（`attribute`、`annotation`、`type_reference`）を除外するため、metadata cycle で caller 件数が膨らまない。`maxHops: 0` で symbol 解決のみを行い、単一定義の型は heuristic な file-level dependency hint にフォールバックし、複数定義時はヒントも返す。この file hint は metadata edge を含み得る。`withPaths: true` を渡すと、各 caller に最短経路 `[resolvedRoot, 中間..., callerName]` の `paths` 配列が付き、ダイヤモンド収束時もすべての経路を返す（1 行あたりの保持上限を超えると `paths_truncated` で通知） |
 | `unused_symbols` | 定義されているが参照されていないシンボルを bucket 付きで検索（デッドコード検出向け） |
-| `symbol_hotspots` | 影響の大きい hotspot を検索。`groupBy` は `symbol` / `file` / `statement` を指定でき、SQL scope は statement grouping、非 SQL scope は symbol grouping が既定。 |
+| `symbol_hotspots` | 影響の大きい hotspot を検索。`groupBy` は `symbol` / `file` を指定でき、`statement` は `lang: "sql"` の場合だけ受け付ける。structured output には `grouping_unit`、`count_kind`、`limit_applies_to`、`score_fields`、`ranking_fields` と対応する `query_context` fields が含まれる。 |
 | `batch_query` | 複数クエリを1回で実行（MCP専用、最大10件）。レスポンスにはトップレベル `metadata`（`submitted` / `executed` / `errors` / `total_elapsed_ms` / `success_count` / `failure_count`）と各 `results` エントリの `request_index`、任意の client `slot_id`、`ok`、`elapsed_ms`、`summary`、`args_summary` が含まれ、位置だけに依存せず部分失敗や遅い内部クエリを把握できます。`args_summary` の scalar 値は full JSON materialization の前に bounded 表示へ変換されるため、巨大な数値や文字列が診断を膨らませません。 |
 | `validate` | エンコーディングと file-content の問題（origin/severity 付き U+FFFD、BOM、null バイト、改行混在 / CR-only 行末、UTF-16 BOM / heuristic 検出、UTF-8 以外と推定されるエンコーディング、Git LFS pointer placeholder、Dockerfile JSON-form 診断）を報告 |
 | `languages` | 対応言語一覧を拡張子・機能付きで表示。`--indexed-only` と `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` で現在の DB、機能別、または capability gap 別に絞り込み可能 |
