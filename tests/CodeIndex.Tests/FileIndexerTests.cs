@@ -217,6 +217,46 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void CaseSensitivityProbeDirectory_CleanupRejectsReplacedProbeSymlink_Issue4131()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-probe-boundary-{Guid.NewGuid():N}");
+        var externalDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-probe-external-{Guid.NewGuid():N}");
+        var probeDirectory = Path.Combine(
+            tempDir,
+            CaseSensitivityProbeDirectory.DataDirectoryName,
+            CaseSensitivityProbeDirectory.ProbeDirectoryName);
+        Directory.CreateDirectory(tempDir);
+        Directory.CreateDirectory(externalDir);
+        var previousSink = CaseSensitivityProbeDirectory.CleanupDiagnosticSinkForTesting;
+        var diagnostics = new List<CaseSensitivityProbeCleanupDiagnostic>();
+        try
+        {
+            var scope = CaseSensitivityProbeDirectory.CreateProbePathScope(tempDir, "case-probe-test-");
+            Directory.Delete(probeDirectory);
+            Directory.CreateSymbolicLink(probeDirectory, externalDir);
+            CaseSensitivityProbeDirectory.CleanupDiagnosticSinkForTesting = diagnostics.Add;
+
+            scope.Dispose();
+
+            Assert.True(Directory.Exists(externalDir));
+            Assert.True(Directory.Exists(probeDirectory));
+            Assert.Contains(diagnostics, diagnostic =>
+                diagnostic.RelativePath == $"{CaseSensitivityProbeDirectory.DataDirectoryName}/{CaseSensitivityProbeDirectory.ProbeDirectoryName}"
+                && diagnostic.ExceptionType == "CleanupTargetRejected");
+        }
+        finally
+        {
+            CaseSensitivityProbeDirectory.CleanupDiagnosticSinkForTesting = previousSink;
+            DeleteDirectorySymlinkIfPresent(probeDirectory);
+            TestProjectHelper.DeleteDirectory(tempDir);
+            TestProjectHelper.DeleteDirectory(externalDir);
+        }
+    }
+
+    [Fact]
     public void FileWriteProbe_TryWriteAndDeleteEmptyFile_RemovesProbeAfterSuccess_Issue3689()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-write-probe-success-{Guid.NewGuid():N}");
@@ -233,6 +273,19 @@ public partial class FileIndexerTests
         finally
         {
             TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    private static void DeleteDirectorySymlinkIfPresent(string path)
+    {
+        try
+        {
+            var attributes = File.GetAttributes(path);
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+                Directory.Delete(path);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
         }
     }
 
