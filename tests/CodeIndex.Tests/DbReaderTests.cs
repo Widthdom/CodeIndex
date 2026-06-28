@@ -5021,6 +5021,19 @@ public partial class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetRepoMap_KeepsSupportFileFallbackEntrypointVisible_Issue4115()
+    {
+        InsertIndexedFile("scripts/main.py", "python", "# support script\n");
+
+        var map = _reader.GetRepoMap(limit: 5, pathPatterns: new[] { "scripts/main.py" }, excludeTests: false);
+
+        var entrypoint = Assert.Single(map.Entrypoints, item => item.Path == "scripts/main.py");
+        Assert.Equal("file", entrypoint.Kind);
+        Assert.Equal("path", entrypoint.MatchType);
+        Assert.True(entrypoint.Score > 0);
+    }
+
+    [Fact]
     public void GetRepoMap_MinEntrypointConfidenceFiltersWeakNameOnlyMatches()
     {
         InsertIndexedFile("src/services/service.py", "python", "def app():\n    return True\n");

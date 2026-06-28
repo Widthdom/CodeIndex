@@ -676,6 +676,8 @@ internal sealed class RepoMapBuilder
         var boost = GetPathLocationBoost(path, hasPathHint: true);
         if (IsTestOrFixturePath(path))
             return Math.Max(boost, -1);
+        if (IsSupportEntrypointPath(path))
+            return Math.Max(boost, -1);
 
         return IsToolingPath(path) ? Math.Max(boost, -1) : boost;
     }
