@@ -9,6 +9,8 @@ internal static class DependencyNoiseProfile
 
     internal static readonly string[] SymbolNames =
     [
+        "Append",
+        "AppendLine",
         "Array",
         "BoundedRegex",
         "CancellationToken",
@@ -18,6 +20,7 @@ internal static class DependencyNoiseProfile
         "DateTime",
         "Dictionary",
         "Directory",
+        "Encoding",
         "Enumerable",
         "Escape",
         "File",
@@ -45,6 +48,7 @@ internal static class DependencyNoiseProfile
         "StringBuilder",
         "Task",
         "Token",
+        "ToString",
         "Unescape",
         "Value",
         "Values",
