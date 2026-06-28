@@ -674,6 +674,9 @@ internal sealed class RepoMapBuilder
     private static int GetFileFallbackPathLocationBoost(string path)
     {
         var boost = GetPathLocationBoost(path, hasPathHint: true);
+        if (IsTestOrFixturePath(path))
+            return Math.Max(boost, -1);
+
         return IsToolingPath(path) ? Math.Max(boost, -1) : boost;
     }
 

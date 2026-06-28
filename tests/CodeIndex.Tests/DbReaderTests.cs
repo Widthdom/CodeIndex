@@ -5008,6 +5008,19 @@ public partial class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetRepoMap_KeepsTestFileFallbackEntrypointWhenTestsIncluded_Issue4115()
+    {
+        InsertIndexedFile("tests/Program.cs", "csharp", "Console.WriteLine(\"test\");\n");
+
+        var map = _reader.GetRepoMap(limit: 5, pathPatterns: new[] { "tests/Program.cs" }, excludeTests: false);
+
+        var entrypoint = Assert.Single(map.Entrypoints, item => item.Path == "tests/Program.cs");
+        Assert.Equal("file", entrypoint.Kind);
+        Assert.Equal("path", entrypoint.MatchType);
+        Assert.True(entrypoint.Score > 0);
+    }
+
+    [Fact]
     public void GetRepoMap_MinEntrypointConfidenceFiltersWeakNameOnlyMatches()
     {
         InsertIndexedFile("src/services/service.py", "python", "def app():\n    return True\n");
