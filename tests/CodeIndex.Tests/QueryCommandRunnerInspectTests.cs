@@ -1189,6 +1189,34 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutline_Json_SortReferencesDoesNotBorrowDuplicateNameReferences_Issue4117()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_sort_duplicate_refs_4117");
+        try
+        {
+            var dbPath = CreateOutlineDuplicateReferenceFixtureDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/Target.cs", "--db", dbPath, "--json", "--kind", "function", "--sort", "references", "--limit", "1", "--outline-fields", "name,refs,size"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbol = Assert.Single(json.GetProperty("symbols").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("LocalAudit", symbol.GetProperty("name").GetString());
+            Assert.Equal(0, symbol.GetProperty("reference_count").GetInt32());
+            Assert.True(symbol.GetProperty("size_lines").GetInt32() > 1);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunOutline_InvalidSortReturnsUsageError_Issue4117()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
@@ -1236,6 +1264,50 @@ public partial class QueryCommandRunnerTests
         var refsFileId = GetIndexedFileId(db.Connection, "src/Giant.cs");
         var references = new List<ReferenceRecord>();
         AddSyntheticReferences(references, refsFileId, "SmallHot", 6);
+        var writer = new DbWriter(db.Connection);
+        writer.InsertReferences(references);
+        writer.MarkGraphReady();
+        return dbPath;
+    }
+
+    private static string CreateOutlineDuplicateReferenceFixtureDb(string projectRoot)
+    {
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/Target.cs",
+            "csharp",
+            """
+            public class Target
+            {
+                public void Run() { }
+
+                public void LocalAudit()
+                {
+                    var total = 0;
+                    total += 1;
+                    total += 2;
+                    total += 3;
+                }
+            }
+            """);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/Other.cs",
+            "csharp",
+            """
+            public class Other
+            {
+                public void Run() { }
+                public void Caller() { Run(); }
+            }
+            """);
+
+        using var db = new DbContext(dbPath);
+        db.InitializeSchema();
+        var refsFileId = GetIndexedFileId(db.Connection, "src/Other.cs");
+        var references = new List<ReferenceRecord>();
+        AddSyntheticReferences(references, refsFileId, "Run", 10);
         var writer = new DbWriter(db.Connection);
         writer.InsertReferences(references);
         writer.MarkGraphReady();
