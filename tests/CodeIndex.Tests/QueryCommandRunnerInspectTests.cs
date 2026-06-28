@@ -1087,6 +1087,326 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutline_CompactJson_SortSizePrioritizesLargeFunctions_Issue4117()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_sort_size_4117");
+        try
+        {
+            var dbPath = CreateOutlineSortFixtureDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/Giant.cs", "--db", dbPath, "--compact", "--kind", "function", "--sort", "size", "--limit", "1"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbol = Assert.Single(json.GetProperty("symbols").EnumerateArray()).GetProperty("name").GetString();
+            var truncation = json.GetProperty("truncation").GetProperty("sections").GetProperty("symbols");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("compact").GetBoolean());
+            Assert.Equal("size", json.GetProperty("sort").GetString());
+            Assert.Equal("BigAudit", symbol);
+            Assert.Equal(1, json.GetProperty("returned_symbol_count").GetInt32());
+            Assert.Equal(3, json.GetProperty("total_symbol_count").GetInt32());
+            Assert.Equal(1, truncation.GetProperty("returned").GetInt32());
+            Assert.Equal(3, truncation.GetProperty("source_count").GetInt32());
+            Assert.True(truncation.GetProperty("truncated").GetBoolean());
+            var first = json.GetProperty("symbols")[0];
+            Assert.Equal("size", first.GetProperty("sort_mode").GetString());
+            Assert.True(first.GetProperty("size_lines").GetInt32() > 5);
+            Assert.True(first.GetProperty("complexity_score").GetDouble() > 0);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_Json_SortReferencesProjectsTriageFields_Issue4117()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_sort_refs_4117");
+        try
+        {
+            var dbPath = CreateOutlineSortFixtureDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/Giant.cs", "--db", dbPath, "--json", "--kind", "function", "--sort", "references", "--limit", "1", "--outline-fields", "name,refs,size,complexity,sort_mode"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbol = Assert.Single(json.GetProperty("symbols").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("references", json.GetProperty("sort").GetString());
+            Assert.Equal("SmallHot", symbol.GetProperty("name").GetString());
+            Assert.Equal("references", symbol.GetProperty("sort_mode").GetString());
+            Assert.True(symbol.GetProperty("reference_count").GetInt32() >= 6);
+            Assert.Equal(1, symbol.GetProperty("size_lines").GetInt32());
+            Assert.True(symbol.GetProperty("complexity_score").GetDouble() > symbol.GetProperty("reference_count").GetInt32());
+            Assert.Equal(new[] { "name", "reference_count", "size_lines", "complexity_score", "sort_mode" }, json.GetProperty("selected_fields").EnumerateArray().Select(item => item.GetString()).ToArray());
+            Assert.Equal(new[] { "name", "reference_count", "size_lines", "complexity_score", "sort_mode" }, symbol.EnumerateObject().Select(property => property.Name).ToArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_Json_SortComplexityPrioritizesComplexFunctions_Issue4117()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_sort_complexity_4117");
+        try
+        {
+            var dbPath = CreateOutlineSortFixtureDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/Giant.cs", "--db", dbPath, "--json", "--kind", "function", "--sort", "complexity", "--limit", "1", "--outline-fields", "name,size,complexity,sort_mode"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbol = Assert.Single(json.GetProperty("symbols").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("complexity", json.GetProperty("sort").GetString());
+            Assert.Equal("BigAudit", symbol.GetProperty("name").GetString());
+            Assert.Equal("complexity", symbol.GetProperty("sort_mode").GetString());
+            Assert.True(symbol.GetProperty("complexity_score").GetDouble() > 100);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_Json_SortKindPrioritizesKindBeforeSourceOrder_Issue4117()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_sort_kind_4117");
+        try
+        {
+            var dbPath = CreateOutlineSortFixtureDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/Giant.cs", "--db", dbPath, "--json", "--sort", "kind", "--limit", "1", "--outline-fields", "name,kind,size,sort_mode"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbol = Assert.Single(json.GetProperty("symbols").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("kind", json.GetProperty("sort").GetString());
+            Assert.Equal("class", symbol.GetProperty("kind").GetString());
+            Assert.Equal("Giant", symbol.GetProperty("name").GetString());
+            Assert.Equal("kind", symbol.GetProperty("sort_mode").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_Json_SortSpanAliasUsesSizeRanking_Issue4117()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_sort_span_alias_4117");
+        try
+        {
+            var dbPath = CreateOutlineSortFixtureDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/Giant.cs", "--db", dbPath, "--json", "--kind", "function", "--sort", "span", "--limit", "1", "--outline-fields", "name,size,sort_mode"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbol = Assert.Single(json.GetProperty("symbols").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("size", json.GetProperty("sort").GetString());
+            Assert.Equal("BigAudit", symbol.GetProperty("name").GetString());
+            Assert.Equal("size", symbol.GetProperty("sort_mode").GetString());
+            Assert.True(symbol.GetProperty("size_lines").GetInt32() > 5);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_Json_OutlineFieldsProjectDerivedMetadataWithoutSort_Issue4117()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_fields_derived_4117");
+        try
+        {
+            var dbPath = CreateOutlineSortFixtureDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/Giant.cs", "--db", dbPath, "--json", "--kind", "function", "--outline-fields", "name,size,sort_mode", "--limit", "1"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbol = Assert.Single(json.GetProperty("symbols").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(json.TryGetProperty("sort", out _));
+            Assert.Equal("SmallHot", symbol.GetProperty("name").GetString());
+            Assert.Equal(1, symbol.GetProperty("size_lines").GetInt32());
+            Assert.Equal("source", symbol.GetProperty("sort_mode").GetString());
+            Assert.Equal(new[] { "name", "size_lines", "sort_mode" }, json.GetProperty("selected_fields").EnumerateArray().Select(item => item.GetString()).ToArray());
+            Assert.Equal(new[] { "name", "size_lines", "sort_mode" }, symbol.EnumerateObject().Select(property => property.Name).ToArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_Json_SortReferencesDoesNotBorrowDuplicateNameReferences_Issue4117()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_sort_duplicate_refs_4117");
+        try
+        {
+            var dbPath = CreateOutlineDuplicateReferenceFixtureDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/Target.cs", "--db", dbPath, "--json", "--kind", "function", "--sort", "references", "--limit", "1", "--outline-fields", "name,refs,size"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbol = Assert.Single(json.GetProperty("symbols").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("LocalAudit", symbol.GetProperty("name").GetString());
+            Assert.Equal(0, symbol.GetProperty("reference_count").GetInt32());
+            Assert.True(symbol.GetProperty("size_lines").GetInt32() > 1);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_InvalidSortReturnsUsageError_Issue4117()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+            ["src/Giant.cs", "--sort", "hotspot"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--sort must be one of source, kind, references, size, span, complexity, path, or name", stderr, StringComparison.Ordinal);
+        Assert.Contains("Usage: cdidx outline", stderr, StringComparison.Ordinal);
+    }
+
+    private static string CreateOutlineSortFixtureDb(string projectRoot)
+    {
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/Giant.cs",
+            "csharp",
+            """
+            using System;
+
+            namespace Sorting
+            {
+                public class Giant
+                {
+                    public void SmallHot() { }
+
+                    public void MediumRef()
+                    {
+                        SmallHot();
+                    }
+
+                    public void BigAudit()
+                    {
+                        var total = 0;
+                        total += 1;
+                        total += 2;
+                        total += 3;
+                        total += 4;
+                        total += 5;
+                        total += 6;
+                    }
+                }
+            }
+            """);
+
+        using var db = new DbContext(dbPath);
+        db.InitializeSchema();
+        var refsFileId = GetIndexedFileId(db.Connection, "src/Giant.cs");
+        var references = new List<ReferenceRecord>();
+        AddSyntheticReferences(references, refsFileId, "SmallHot", 6);
+        var writer = new DbWriter(db.Connection);
+        writer.InsertReferences(references);
+        writer.MarkGraphReady();
+        return dbPath;
+    }
+
+    private static string CreateOutlineDuplicateReferenceFixtureDb(string projectRoot)
+    {
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/Target.cs",
+            "csharp",
+            """
+            public class Target
+            {
+                public void Run() { }
+
+                public void LocalAudit()
+                {
+                    var total = 0;
+                    total += 1;
+                    total += 2;
+                    total += 3;
+                }
+            }
+            """);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/Other.cs",
+            "csharp",
+            """
+            public class Other
+            {
+                public void Run() { }
+                public void Caller() { Run(); }
+            }
+            """);
+
+        using var db = new DbContext(dbPath);
+        db.InitializeSchema();
+        var refsFileId = GetIndexedFileId(db.Connection, "src/Other.cs");
+        var references = new List<ReferenceRecord>();
+        AddSyntheticReferences(references, refsFileId, "Run", 10);
+        var writer = new DbWriter(db.Connection);
+        writer.InsertReferences(references);
+        writer.MarkGraphReady();
+        return dbPath;
+    }
+
+    [Fact]
     public void RunOutline_Json_TruncatesRunawaySignatures_Issue2989()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_signature_limit");
