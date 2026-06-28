@@ -14048,7 +14048,7 @@ public partial class SymbolExtractorTests
 
         foreach (var property in valueType.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
         {
-            if (property.GetIndexParameters().Length != 0)
+            if (!property.CanRead || property.GetIndexParameters().Length != 0)
                 continue;
 
             object? child;
