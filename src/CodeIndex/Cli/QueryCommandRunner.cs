@@ -13170,7 +13170,7 @@ public static partial class QueryCommandRunner
         var unauthorized = FindException<UnauthorizedAccessException>(ex);
         if (unauthorized != null)
         {
-            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database access denied: {unauthorized.Message}");
+            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database access denied: {CommandErrorWriter.FormatSanitizedExceptionMessage(unauthorized)}");
             CommandErrorWriter.WriteStderr(MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent()));
             return;
         }
@@ -13178,7 +13178,7 @@ public static partial class QueryCommandRunner
         var io = FindException<IOException>(ex);
         if (io != null)
         {
-            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database I/O error: {io.Message}");
+            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database I/O error: {CommandErrorWriter.FormatSanitizedExceptionMessage(io)}");
             CommandErrorWriter.WriteStderr(MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent()));
             return;
         }
@@ -13188,19 +13188,19 @@ public static partial class QueryCommandRunner
         {
             if (sqlite.SqliteErrorCode == 14)
             {
-                CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database access/open denied: {sqlite.Message}");
+                CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database access/open denied: {CommandErrorWriter.FormatSanitizedExceptionMessage(sqlite)}");
                 CommandErrorWriter.WriteStderr(MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent()));
                 return;
             }
 
             if (sqlite.SqliteErrorCode == 11)
             {
-                CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: SQLite reported database corruption: {sqlite.Message}");
+                CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: SQLite reported database corruption: {CommandErrorWriter.FormatSanitizedExceptionMessage(sqlite)}");
                 CommandErrorWriter.WriteStderr("Hint: rebuild the index with `cdidx index <projectPath> --rebuild`, or delete the broken `.cdidx/codeindex.db*` files and run `cdidx index <projectPath>` again.");
                 return;
             }
 
-            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: SQLite database error ({sqlite.SqliteErrorCode}): {sqlite.Message}");
+            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: SQLite database error ({sqlite.SqliteErrorCode}): {CommandErrorWriter.FormatSanitizedExceptionMessage(sqlite)}");
             CommandErrorWriter.WriteStderr(MacProfileDetector.IsPermissionStyleSqliteError(sqlite)
                 ? MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent())
                 : "Hint: check `--db`, verify the index was written by a compatible cdidx version, or rebuild it with `cdidx index <projectPath> --rebuild`.");

@@ -3027,16 +3027,15 @@ public partial class McpServer : IDisposable
         }
         catch (Exception ex)
         {
-            // Stderr captures the full ex.Message for local debugging, but the
-            // JSON-RPC tool result is sanitized down to the tool name +
-            // exception type. ex.Message can otherwise echo bound parameter
-            // values (e.g. SQLite errors quote the offending literal) or path
-            // / content fragments, which would leak to the client through the
-            // MCP transcript (#1530).
-            // stderr には ex.Message をそのまま残してローカルデバッグを支えるが、
-            // JSON-RPC のツール結果は tool 名 + 例外型のみに絞る。SQLite 例外などは
-            // バインド値や該当リテラルを含むため、生のメッセージをクライアントに渡すと
-            // パスや索引内容が漏れる（#1530）。
+            // Stderr keeps a sanitized local diagnostic, while the JSON-RPC tool
+            // result is reduced to the tool name + exception type. Raw exception
+            // messages can echo bound parameter values (e.g. SQLite errors quote
+            // the offending literal), paths, or content fragments, which would
+            // otherwise leak through the MCP transcript (#1530 / #4124).
+            // stderr には sanitize 済みのローカル診断だけを残し、JSON-RPC のツール結果は
+            // tool 名 + 例外型に絞る。SQLite 例外などの生メッセージはバインド値、
+            // 該当リテラル、パス、索引内容を含み得るため、MCP transcript へ流さない
+            // (#1530 / #4124)。
             DeferFrameLog(() =>
             {
                 WriteMcpLogLine(BuildToolErrorLog(toolName, ex));
