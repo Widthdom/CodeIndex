@@ -139,11 +139,15 @@ internal static class DiagnosticSanitizer
             return false;
         }
 
-        if (bodyStart >= value.Length || IsPathTerminator(value[bodyStart]))
+        var quotedTerminator = start > 0 && IsQuote(value[start - 1])
+            ? value[start - 1]
+            : '\0';
+
+        if (bodyStart >= value.Length || IsPathTerminator(value[bodyStart], quotedTerminator))
             return false;
 
         end = bodyStart + 1;
-        while (end < value.Length && !IsPathTerminator(value[end]))
+        while (end < value.Length && !IsPathTerminator(value[end], quotedTerminator))
             end++;
 
         return true;
@@ -155,8 +159,13 @@ internal static class DiagnosticSanitizer
     private static bool IsPathSeparator(char value)
         => value is '/' or '\\';
 
-    private static bool IsPathTerminator(char value)
-        => char.IsWhiteSpace(value) || value is '\'' or '"' or ';' or ':' or ',' or ')';
+    private static bool IsQuote(char value)
+        => value is '\'' or '"';
+
+    private static bool IsPathTerminator(char value, char quotedTerminator)
+        => quotedTerminator == '\0'
+            ? char.IsWhiteSpace(value) || value is '\'' or '"' or ';' or ':' or ',' or ')'
+            : value == quotedTerminator;
 
     private static string Truncate(string value)
         => Truncate(value, MaxDiagnosticFieldLength);
