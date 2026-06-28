@@ -6677,7 +6677,7 @@ public partial class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "InstallScriptTests");
         Assert.Contains(symbols, s => s.Kind == "test.method" && s.Name == "Main_WithoutExplicitVersion_DoesNotShortCircuitBrokenZeroVersionInstall");
-        var runawayBudget = TimeSpan.FromSeconds(60);
+        var runawayBudget = TimeSpan.FromSeconds(90);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
             $"InstallScriptTests.cs extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");

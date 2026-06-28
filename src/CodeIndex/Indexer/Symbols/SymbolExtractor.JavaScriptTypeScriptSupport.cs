@@ -4802,12 +4802,14 @@ public static partial class SymbolExtractor
                             AddJavaScriptTypeScriptExportedObjectLiteralPropertySymbol(
                                 fileId,
                                 rawLines,
+                                sanitizedLines,
                                 symbols,
                                 existingContainerSymbolNames,
                                 target.ContainerName,
                                 propertyName,
                                 lineIndex,
-                                scanColumn);
+                                scanColumn,
+                                identifierValueStartColumn);
 
                             scanColumn = identifierValueStartColumn;
                             skippingPropertyValue = true;
@@ -4824,12 +4826,14 @@ public static partial class SymbolExtractor
                             AddJavaScriptTypeScriptExportedObjectLiteralPropertySymbol(
                                 fileId,
                                 rawLines,
+                                sanitizedLines,
                                 symbols,
                                 existingContainerSymbolNames,
                                 target.ContainerName,
                                 literalPropertyName,
                                 lineIndex,
-                                scanColumn);
+                                scanColumn,
+                                literalValueStartColumn);
 
                             scanColumn = literalValueStartColumn;
                             skippingPropertyValue = true;
@@ -4846,12 +4850,14 @@ public static partial class SymbolExtractor
                             AddJavaScriptTypeScriptExportedObjectLiteralPropertySymbol(
                                 fileId,
                                 rawLines,
+                                sanitizedLines,
                                 symbols,
                                 existingContainerSymbolNames,
                                 target.ContainerName,
                                 computedLiteralPropertyName,
                                 lineIndex,
-                                scanColumn);
+                                scanColumn,
+                                computedLiteralValueStartColumn);
 
                             scanColumn = computedLiteralValueStartColumn;
                             skippingPropertyValue = true;
@@ -4873,12 +4879,14 @@ public static partial class SymbolExtractor
                             AddJavaScriptTypeScriptExportedObjectLiteralPropertySymbol(
                                 fileId,
                                 rawLines,
+                                sanitizedLines,
                                 symbols,
                                 existingContainerSymbolNames,
                                 target.ContainerName,
                                 shorthandPropertyName,
                                 lineIndex,
-                                scanColumn);
+                                scanColumn,
+                                shorthandEndColumn);
 
                             scanColumn = shorthandEndColumn;
                             continue;
@@ -4933,15 +4941,23 @@ public static partial class SymbolExtractor
     private static void AddJavaScriptTypeScriptExportedObjectLiteralPropertySymbol(
         long fileId,
         string[] rawLines,
+        string[] sanitizedLines,
         List<SymbolRecord> symbols,
         HashSet<string> existingContainerSymbolNames,
         string containerName,
         string propertyName,
         int lineIndex,
-        int startColumn)
+        int startColumn,
+        int valueStartColumn)
     {
         if (propertyName.Length == 0 || !existingContainerSymbolNames.Add(propertyName))
             return;
+
+        var signature = BuildJavaScriptTypeScriptObjectLiteralPropertySignature(
+            rawLines[lineIndex],
+            sanitizedLines[lineIndex],
+            startColumn,
+            valueStartColumn);
 
         AddSymbolRecord(
             symbols,
@@ -4956,12 +4972,78 @@ public static partial class SymbolExtractor
                 StartLine = lineIndex + 1,
                 StartColumn = startColumn,
                 EndLine = lineIndex + 1,
-                Signature = rawLines[lineIndex].Trim(),
+                Signature = signature,
                 ContainerKind = "object",
                 ContainerName = containerName,
                 Visibility = "export",
             },
             rawLines[lineIndex]);
+    }
+
+    private const int JavaScriptTypeScriptObjectLiteralPropertySignatureMaxLength = 240;
+
+    private static string BuildJavaScriptTypeScriptObjectLiteralPropertySignature(
+        string rawLine,
+        string sanitizedLine,
+        int startColumn,
+        int valueStartColumn)
+    {
+        var lineLength = Math.Min(rawLine.Length, sanitizedLine.Length);
+        var signatureStart = Math.Clamp(startColumn, 0, lineLength);
+        var scanColumn = Math.Clamp(valueStartColumn, signatureStart, sanitizedLine.Length);
+        var endColumn = sanitizedLine.Length;
+        var braceDepth = 0;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+
+        while (scanColumn < sanitizedLine.Length)
+        {
+            var ch = sanitizedLine[scanColumn];
+            if (braceDepth == 0 && parenDepth == 0 && bracketDepth == 0 && ch is ',' or '}' or ';')
+            {
+                endColumn = scanColumn;
+                break;
+            }
+
+            switch (ch)
+            {
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    break;
+            }
+
+            scanColumn++;
+        }
+
+        endColumn = Math.Clamp(endColumn, signatureStart, rawLine.Length);
+        while (endColumn > signatureStart && char.IsWhiteSpace(rawLine[endColumn - 1]))
+            endColumn--;
+
+        var signature = rawLine[signatureStart..endColumn].Trim();
+        if (signature.Length == 0)
+            signature = rawLine.Trim();
+
+        return signature.Length <= JavaScriptTypeScriptObjectLiteralPropertySignatureMaxLength
+            ? signature
+            : signature[..(JavaScriptTypeScriptObjectLiteralPropertySignatureMaxLength - 3)] + "...";
     }
 
     private static bool TryReadJavaScriptTypeScriptIdentifierObjectLiteralKeyName(
