@@ -246,7 +246,7 @@ internal static class GitHubIssueReporter
         var url = $"{ApiBase}/search/issues?q={query}&per_page=1";
 
         using var requestMessage = new HttpRequestMessage(HttpMethod.Get, url);
-        requestMessage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        ApplyAuthenticatedGitHubApiHeaders(requestMessage, token);
 
         using var response = await HttpClient.SendAsync(
             requestMessage,
@@ -316,7 +316,7 @@ internal static class GitHubIssueReporter
                 var url = $"{ApiBase}/repos/{RepoOwner}/{RepoName}/issues?labels={labels}&state=open&per_page=100&page={page}";
 
                 using var requestMessage = new HttpRequestMessage(HttpMethod.Get, url);
-                requestMessage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                ApplyAuthenticatedGitHubApiHeaders(requestMessage, token);
 
                 using var response = await HttpClient.SendAsync(
                     requestMessage,
@@ -565,7 +565,7 @@ internal static class GitHubIssueReporter
         {
             Content = content
         };
-        requestMessage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        ApplyAuthenticatedGitHubApiHeaders(requestMessage, token);
 
         using var response = await HttpClient.SendAsync(
             requestMessage,
@@ -594,6 +594,12 @@ internal static class GitHubIssueReporter
         return issueUrl != null
             ? SuggestionStore.SubmitAttemptResult.Success(issueUrl)
             : SuggestionStore.SubmitAttemptResult.Failure("InvalidResponse: missing html_url");
+    }
+
+    private static void ApplyAuthenticatedGitHubApiHeaders(HttpRequestMessage requestMessage, string token)
+    {
+        GitHubHttpClientFactory.ApplyDefaultHeaders(requestMessage.Headers);
+        requestMessage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
     }
 
     /// <summary>

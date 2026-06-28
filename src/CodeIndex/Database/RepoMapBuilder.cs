@@ -12,6 +12,7 @@ internal sealed class RepoMapBuilder
 {
     private readonly SqliteConnection _conn;
     private readonly HashSet<string> _fileColumns;
+    private readonly Func<StringComparer> _getIndexedPathComparer;
 
     private static readonly Dictionary<string, string[]> EntrypointNameHints = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -64,11 +65,12 @@ internal sealed class RepoMapBuilder
 
     private readonly bool _hasReferencesTable;
 
-    public RepoMapBuilder(SqliteConnection connection, HashSet<string> fileColumns, bool hasReferencesTable)
+    public RepoMapBuilder(SqliteConnection connection, HashSet<string> fileColumns, bool hasReferencesTable, Func<StringComparer> getIndexedPathComparer)
     {
         _conn = connection;
         _fileColumns = fileColumns;
         _hasReferencesTable = hasReferencesTable;
+        _getIndexedPathComparer = getIndexedPathComparer;
     }
 
     /// <summary>
@@ -96,6 +98,7 @@ internal sealed class RepoMapBuilder
         // file stats / workspace freshness / entrypoint 取得が同じ WAL snapshot から返る
         // ようにする。
         using var txn = _conn.BeginTransaction(deferred: true);
+        var indexedPathComparer = _getIndexedPathComparer();
         var javaModuleDescriptors = LoadJavaModuleDescriptors();
         var aggregate = BuildAggregate(
             EnumerateFileStats(lang, pathPatterns, excludePathPatterns, excludeTests),
@@ -118,7 +121,7 @@ internal sealed class RepoMapBuilder
             LargestFiles = BuildLargestFileResults(aggregate.LargestFiles),
             SymbolRichFiles = BuildSymbolRichFileResults(aggregate.SymbolRichFiles),
             ReferenceRichFiles = BuildReferenceRichFileResults(aggregate.ReferenceRichFiles),
-            Entrypoints = GetEntrypoints(aggregate.EntrypointFallbacks, limit, lang, pathPatterns, excludePathPatterns, excludeTests, minEntrypointConfidence),
+            Entrypoints = GetEntrypoints(aggregate.EntrypointFallbacks, limit, lang, pathPatterns, excludePathPatterns, excludeTests, minEntrypointConfidence, indexedPathComparer),
             GraphTableAvailable = _hasReferencesTable,
         };
         txn.Commit();
@@ -408,7 +411,7 @@ internal sealed class RepoMapBuilder
 
     private List<RepoEntrypointResult> GetEntrypoints(IReadOnlyList<RepoEntrypointResult> fallbackEntrypoints, int limit,
         string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests,
-        double minConfidence)
+        double minConfidence, StringComparer indexedPathComparer)
     {
         using var cmd = _conn.CreateCommand();
         var sql = @"
@@ -458,7 +461,7 @@ internal sealed class RepoMapBuilder
         // シンボル抽出がエントリポイントを捉えられない場合、既知のエントリファイルにフォールバック
         var filesWithEntrypoints = results
             .Select(result => result.Path)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            .ToHashSet(indexedPathComparer);
 
         foreach (var fallback in fallbackEntrypoints)
         {

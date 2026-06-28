@@ -252,6 +252,7 @@ public class PostExtractionHookTests
                     Assert.True(
                         diagnostic.Message.Contains("exceeded", StringComparison.Ordinal),
                         diagnostic.Message);
+                    Assert.Contains("hook disabled for this index run", diagnostic.Message, StringComparison.Ordinal);
                     // The worker wait can time out at the budget boundary before
                     // ElapsedMilliseconds rounds up to the full budget on some CI hosts.
                     Assert.True(diagnostic.DurationMs > 0);
@@ -716,6 +717,7 @@ public class PostExtractionHookTests
                 .Distinct());
         Assert.True(loadContext!.IsCollectible);
         Assert.NotSame(AssemblyLoadContext.Default, loadContext);
+        Assert.Equal("collectible_unloaded_on_runner_dispose", PostExtractionHookRunner.HookLoadContextLifecycle);
     }
 
     private static void AssertFileDoesNotAppear(string path, TimeSpan duration)

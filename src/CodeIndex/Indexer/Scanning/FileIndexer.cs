@@ -439,7 +439,7 @@ public partial class FileIndexer
             }
             catch (ArgumentException ex)
             {
-                errorMessage = $"Invalid ignore rule skipped: {ex.Message}";
+                errorMessage = $"Invalid ignore rule skipped: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}";
                 return false;
             }
         }
@@ -3989,7 +3989,7 @@ public partial class FileIndexer
                 relativePath,
                 "dockerfile_json_form_invalid",
                 lineNumber,
-                $"Dockerfile {instruction} JSON form is invalid: {LimitDockerfileJsonDiagnostic(ex.Message)}",
+                $"Dockerfile {instruction} JSON form is invalid: {LimitDockerfileJsonDiagnostic(CommandErrorWriter.FormatSanitizedExceptionMessage(ex))}",
                 ref emitted);
         }
 

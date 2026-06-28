@@ -333,7 +333,7 @@ public static partial class IndexCommandRunner
                 exitCode = WriteCommandError(
                     options.Json,
                     jsonOptions,
-                    $"failed to resolve changed files from git commits: {ex.Message}",
+                    $"failed to resolve changed files from git commits: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}",
                     CommandExitCodes.UsageError,
                     "Check the commit refs and rerun `cdidx index <projectPath> --commits <commit-ref> [commit-ref ...]`.",
                     CommandErrorCodes.UsageError);
@@ -359,7 +359,7 @@ public static partial class IndexCommandRunner
                     exitCode = WriteCommandError(
                         options.Json,
                         jsonOptions,
-                        $"failed to resolve changed files between git refs: {ex.Message}",
+                        $"failed to resolve changed files between git refs: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}",
                         CommandExitCodes.UsageError,
                         "Check the refs and rerun `cdidx index <projectPath> --changed-between <old-ref> <new-ref>`.",
                         CommandErrorCodes.UsageError);
@@ -612,7 +612,7 @@ public static partial class IndexCommandRunner
         }
         catch (Exception ex)
         {
-            return DryRunFileProbe.FromError(ex.Message);
+            return DryRunFileProbe.FromError(CommandErrorWriter.FormatSanitizedExceptionMessage(ex));
         }
     }
 

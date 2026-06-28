@@ -881,11 +881,6 @@ public static partial class ReferenceExtractor
         return $"{baseReason} {enumGapReason}";
     }
 
-    private static bool IsUnsupportedCSharpEnumMemberSymbol(string? lang, string? kind, string? containerKind)
-    {
-        return false;
-    }
-
     private static string NormalizeKotlinBacktickIdentifier(string name)
     {
         if (name.Length >= 2 && name[0] == '`' && name[^1] == '`')

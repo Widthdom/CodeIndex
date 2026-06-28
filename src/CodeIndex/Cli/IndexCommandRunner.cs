@@ -592,7 +592,7 @@ public static partial class IndexCommandRunner
 
     internal static string FormatIndexRunDiagnostic(string code, Exception ex)
     {
-        var raw = $"{code}: {ex.GetType().Name}: {CollapseLineBreaks(ex.Message)}";
+        var raw = $"{code}: {ex.GetType().Name}: {DiagnosticSanitizer.ForMessage(ex.Message, MaxIndexRunDiagnosticLength)}";
         return raw.Length <= MaxIndexRunDiagnosticLength
             ? raw
             : raw[..MaxIndexRunDiagnosticLength] + "...<truncated>";
@@ -603,7 +603,7 @@ public static partial class IndexCommandRunner
         if (string.IsNullOrWhiteSpace(target))
             return FormatIndexRunDiagnostic(code, ex);
 
-        var raw = $"{code}: {CollapseLineBreaks(target)}: {ex.GetType().Name}: {CollapseLineBreaks(ex.Message)}";
+        var raw = $"{code}: {CollapseLineBreaks(target)}: {ex.GetType().Name}: {DiagnosticSanitizer.ForMessage(ex.Message, MaxIndexRunDiagnosticLength)}";
         return raw.Length <= MaxIndexRunDiagnosticLength
             ? raw
             : raw[..MaxIndexRunDiagnosticLength] + "...<truncated>";

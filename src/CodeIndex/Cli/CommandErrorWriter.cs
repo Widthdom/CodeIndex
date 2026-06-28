@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CodeIndex.Diagnostics;
 
 namespace CodeIndex.Cli;
 
@@ -69,5 +70,11 @@ internal static class CommandErrorWriter
         return typeName.Length <= SanitizedExceptionTypeNameLimit
             ? typeName
             : typeName[..SanitizedExceptionTypeNameLimit] + "...";
+    }
+
+    internal static string FormatSanitizedExceptionMessage(Exception ex)
+    {
+        ArgumentNullException.ThrowIfNull(ex);
+        return DiagnosticSanitizer.ForMessage(ex.Message);
     }
 }

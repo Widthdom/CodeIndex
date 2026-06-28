@@ -1674,15 +1674,6 @@ internal sealed class LspServer : IDisposable
         }
     }
 
-    private bool TryGetProjectRelativePath(string resolvedPath, out string? relativePath)
-    {
-        relativePath = null;
-        if (_projectRoot == null)
-            return false;
-
-        return TryGetRelativePath(Path.GetFullPath(_projectRoot), resolvedPath, out relativePath);
-    }
-
     private bool TryGetWorkspaceRelativePath(string resolvedPath, out string? relativePath, out string? workspaceRoot)
     {
         relativePath = null;
@@ -2077,18 +2068,6 @@ internal sealed class LspServer : IDisposable
             ReadDiagnosticEndOfStream,
             "LSP input ended before a frame was available."),
     };
-
-    private void WriteResponseMessage(Stream output, JsonObject response)
-    {
-        var payload = response.ToJsonString(_jsonOptions);
-        if (TryWriteMessage(output, payload, out _))
-            return;
-
-        var id = response["id"]?.DeepClone();
-        var errorPayload = Error(id, JsonRpcInternalErrorCode, "Response too large").ToJsonString(_jsonOptions);
-        if (!TryWriteMessage(output, errorPayload, out _))
-            throw new InvalidOperationException("LSP response error exceeded the response frame byte limit.");
-    }
 
     private async Task WriteResponseMessageAsync(Stream output, JsonObject response, CancellationToken cancellationToken)
     {

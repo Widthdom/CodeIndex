@@ -1769,9 +1769,10 @@ public partial class DbReader
         lang = NormalizeQueryLanguage(lang);
         var resolvedName = ResolveSymbolName(symbolName, lang);
         var definitions = ResolveImpactDefinitions(resolvedName, lang, pathPatterns, excludePathPatterns, excludeTests);
+        var indexedPathComparer = GetIndexedPathComparer();
         var definitionPaths = definitions
             .Select(d => d.Path)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Distinct(indexedPathComparer)
             .ToList();
         var hasMultipleDefinitions = definitions.Count > 1;
         var fallbackDefinitions = definitions
@@ -1779,7 +1780,7 @@ public partial class DbReader
             .ToList();
         var fallbackDefinitionPaths = fallbackDefinitions
             .Select(d => d.Path)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Distinct(indexedPathComparer)
             .ToList();
         var hasMultipleFallbackDefinitions = fallbackDefinitions.Count > 1;
         var hasMultipleFallbackDefinitionFiles = fallbackDefinitionPaths.Count > 1;

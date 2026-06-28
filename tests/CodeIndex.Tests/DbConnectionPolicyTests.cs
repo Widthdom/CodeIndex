@@ -63,6 +63,34 @@ public class DbConnectionPolicyTests
     }
 
     [Fact]
+    public void DbPragmaPolicy_PragmaSqlHelpers_ConstrainValues_Issue4070()
+    {
+        Assert.Equal("PRAGMA temp_store=MEMORY", DbPragmaPolicy.TempStoreMemoryPragmaSql);
+        Assert.Equal("PRAGMA auto_vacuum=INCREMENTAL", DbPragmaPolicy.AutoVacuumIncrementalPragmaSql);
+        Assert.Equal("PRAGMA cache_size=-4096", DbPragmaPolicy.CacheSizePragmaSql(4096));
+        Assert.Equal("PRAGMA mmap_size=8192", DbPragmaPolicy.MmapSizePragmaSql(8192));
+        Assert.Equal("PRAGMA busy_timeout=5000", DbPragmaPolicy.BusyTimeoutPragmaSql(5000));
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => DbPragmaPolicy.CacheSizePragmaSql(0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => DbPragmaPolicy.MmapSizePragmaSql(-1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => DbPragmaPolicy.BusyTimeoutPragmaSql(-1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => DbPragmaPolicy.BusyTimeoutPragmaSql(DbPragmaPolicy.MaxBusyTimeoutMs + 1));
+    }
+
+    [Fact]
+    public void DbPragmaPolicy_ReadBusyTimeoutPragmaSql_UsesBoundedEnvironmentValue_Issue4070()
+    {
+        using var scope = CdidxEnvironment.Push(new Dictionary<string, string>
+        {
+            ["CDIDX_TEST_BUSY_TIMEOUT_MS"] = "250",
+        });
+
+        Assert.Equal(
+            "PRAGMA busy_timeout=250",
+            DbPragmaPolicy.ReadBusyTimeoutPragmaSql("CDIDX_TEST_BUSY_TIMEOUT_MS"));
+    }
+
+    [Fact]
     public void DbPragmaPolicy_ReadConnectionPragmaSettings_UsesScopedEnvironmentParser()
     {
         using var scope = CdidxEnvironment.Push(new Dictionary<string, string>

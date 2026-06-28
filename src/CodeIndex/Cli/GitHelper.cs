@@ -999,7 +999,7 @@ public static class GitHelper
         }
         catch (Exception ex)
         {
-            var diagnostic = FormatGitDiagnostic($"git helper exception: {DiagnosticRedactor.ClassifyException(ex)}: {ex.Message}");
+            var diagnostic = FormatGitDiagnostic($"git helper exception: {DiagnosticRedactor.ClassifyException(ex)}: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}");
             return new GitCommandResult(null, null, diagnostic, GitCommandFailureKind.Exception, diagnostic);
         }
     }
@@ -1082,7 +1082,7 @@ public static class GitHelper
         }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException)
         {
-            var diagnostic = FormatGitDiagnostic($"git process start failed: {DiagnosticRedactor.ClassifyException(ex)}: {ex.Message}");
+            var diagnostic = FormatGitDiagnostic($"git process start failed: {DiagnosticRedactor.ClassifyException(ex)}: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}");
             return new GitProcessCaptureResult(
                 null,
                 string.Empty,

@@ -6012,51 +6012,6 @@ public static partial class SymbolExtractor
         return !(char.IsLetterOrDigit(after) || after is '_' or '$');
     }
 
-    private static int FindJavaScriptTypeScriptKeywordIndex(string text, string keyword)
-    {
-        for (int index = 0; index <= text.Length - keyword.Length; index++)
-        {
-            if (IsJavaScriptTypeScriptKeywordAt(text, index, keyword))
-                return index;
-        }
-
-        return -1;
-    }
-
-    private static bool ContainsJavaScriptTypeScriptKeyword(string text, string keyword)
-    {
-        return FindJavaScriptTypeScriptKeywordIndex(text, keyword) >= 0;
-    }
-
-    private static bool HasPendingJavaScriptTypeScriptImportAttributes(string clause)
-    {
-        var withIndex = FindJavaScriptTypeScriptKeywordIndex(clause, "with");
-        var assertIndex = FindJavaScriptTypeScriptKeywordIndex(clause, "assert");
-        var attributeIndex = withIndex >= 0 && assertIndex >= 0
-            ? Math.Min(withIndex, assertIndex)
-            : Math.Max(withIndex, assertIndex);
-        if (attributeIndex < 0)
-            return false;
-
-        var braceDepth = 0;
-        var sawOpeningBrace = false;
-        for (int index = attributeIndex; index < clause.Length; index++)
-        {
-            var ch = clause[index];
-            if (ch == '{')
-            {
-                braceDepth++;
-                sawOpeningBrace = true;
-            }
-            else if (ch == '}' && braceDepth > 0)
-            {
-                braceDepth--;
-            }
-        }
-
-        return !sawOpeningBrace || braceDepth > 0;
-    }
-
     private static string SkipJavaScriptTypeScriptTypeOnlyExportModifier(string exportRemainder)
     {
         if (IsJavaScriptTypeScriptKeywordAt(exportRemainder, 0, "type"))
@@ -7349,51 +7304,6 @@ public static partial class SymbolExtractor
 
         if (Regex.IsMatch(remaining, @"^(?:instanceof|in|as|satisfies)\b"))
             return true;
-
-        return false;
-    }
-
-    private static bool IsAnonymousJavaScriptTypeScriptDefaultClassDeclaration(string[] lines, int startIndex, int startColumn)
-    {
-        if (!TryGetAnonymousJavaScriptTypeScriptDefaultClassToken(lines, startIndex, startColumn, "javascript", out var tokenLineIndex, out var tokenStartColumn))
-            return false;
-
-        startIndex = tokenLineIndex;
-        startColumn = tokenStartColumn + "class".Length;
-        if (!TryAdvanceJavaScriptTypeScriptClassHeaderContinuation(lines, startIndex, startColumn, "javascript", out startIndex, out startColumn))
-            return false;
-
-        var lexState = new JavaScriptLexState();
-        for (int lineIndex = startIndex; lineIndex < lines.Length; lineIndex++)
-        {
-            var lexedLine = LexJavaScriptLine(lines[lineIndex], lexState);
-            lexState = lexedLine.EndState;
-            var sanitizedLine = lexedLine.SanitizedLine;
-            var column = lineIndex == startIndex ? startColumn : 0;
-
-            while (column < sanitizedLine.Length)
-            {
-                var ch = sanitizedLine[column];
-                if (char.IsWhiteSpace(ch))
-                {
-                    column++;
-                    continue;
-                }
-
-                if (IsJavaScriptTypeScriptIdentifierStart(ch))
-                {
-                    var tokenStart = column;
-                    column++;
-                    while (column < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[column]))
-                        column++;
-
-                    var nextToken = sanitizedLine[tokenStart..column];
-                    return nextToken is "extends" or "implements";
-                }
-
-                return ch == '{';
-            }
-        }
 
         return false;
     }
@@ -11553,37 +11463,6 @@ public static partial class SymbolExtractor
         while (index < sanitizedLine.Length)
         {
             if (!IsJavaScriptTypeScriptIdentifierStart(sanitizedLine[index]))
-            {
-                index++;
-                continue;
-            }
-
-            if (index > 0 && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[index - 1]))
-            {
-                index++;
-                continue;
-            }
-
-            return index;
-        }
-
-        return -1;
-    }
-
-    private static int FindNextJavaScriptTypeScriptMethodCandidateStart(string sanitizedLine, int startIndex)
-    {
-        var index = Math.Max(0, startIndex);
-        while (index < sanitizedLine.Length)
-        {
-            var ch = sanitizedLine[index];
-            if (ch != '#'
-                && ch != '@'
-                && ch != '*'
-                && ch != '['
-                && ch != '\''
-                && ch != '"'
-                && !char.IsDigit(ch)
-                && !IsJavaScriptTypeScriptIdentifierStart(ch))
             {
                 index++;
                 continue;

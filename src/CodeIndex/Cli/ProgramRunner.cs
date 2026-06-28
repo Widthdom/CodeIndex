@@ -741,11 +741,13 @@ internal static partial class ProgramRunner
                 ? "<unknown>"
                 : $"{firstLocation.Path}:{firstLocation.Line}";
             Console.WriteLine($"  {item.Name}");
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("domain", item.Domain, indent: "    "));
             Console.WriteLine(ConsoleUi.FormatSummaryLine("category", item.Category, indent: "    "));
             Console.WriteLine(ConsoleUi.FormatSummaryLine("sensitivity", item.Sensitivity, indent: "    "));
             Console.WriteLine(ConsoleUi.FormatSummaryLine("policy", item.Policy, indent: "    "));
             Console.WriteLine(ConsoleUi.FormatSummaryLine("default", item.DefaultBehavior, indent: "    "));
             Console.WriteLine(ConsoleUi.FormatSummaryLine("config", item.ConfigFileSupported, indent: "    "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("invalid", item.InvalidValueBehavior, indent: "    "));
             Console.WriteLine(ConsoleUi.FormatSummaryLine("location", location, indent: "    "));
             Console.WriteLine(ConsoleUi.FormatSummaryLine("description", item.Description, indent: "    "));
         }

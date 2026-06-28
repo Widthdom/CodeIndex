@@ -450,6 +450,7 @@ internal sealed class IndexDryRunJsonResult
 
 internal sealed class IndexWatchEventJsonResult
 {
+    public string ApiVersion { get; init; } = JsonOutputContract.ApiVersion;
     public string Status { get; init; } = string.Empty;
     public string? Phase { get; init; }
     public string? ProjectRoot { get; init; }

@@ -137,7 +137,7 @@ public static partial class IndexCommandRunner
             return WriteCommandError(
                 options.Json,
                 jsonOptions,
-                $"failed to resolve changed files from git commits: {ex.Message}",
+                $"failed to resolve changed files from git commits: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}",
                 CommandExitCodes.UsageError,
                 "Check the commit refs and rerun `cdidx index <projectPath> --commits <commit-ref> [commit-ref ...]`.",
                 CommandErrorCodes.UsageError);

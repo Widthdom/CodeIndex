@@ -13,6 +13,9 @@ internal static class BoundedFile
     internal static FileStream OpenReadForPrefixProbe(string path)
         => OpenRead(path, FileShare.ReadWrite | FileShare.Delete, SmallReadBufferSize);
 
+    internal static FileStream OpenReadForIndexContent(string path)
+        => OpenRead(path, FileShare.ReadWrite | FileShare.Delete, DefaultReadBufferSize);
+
     internal static FileStream OpenReadForTail(string path)
         => OpenRead(path, FileShare.ReadWrite | FileShare.Delete, SmallReadBufferSize);
 

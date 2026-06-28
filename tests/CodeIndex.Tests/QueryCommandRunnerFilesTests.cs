@@ -284,6 +284,9 @@ public partial class QueryCommandRunnerTests
                 Assert.Equal("broken", hook.GetProperty("name").GetString());
                 Assert.EndsWith("broken.dll", hook.GetProperty("assembly_path").GetString(), StringComparison.Ordinal);
                 Assert.Equal(string.Empty, hook.GetProperty("type_name").GetString());
+                Assert.Equal(
+                    PostExtractionHookRunner.HookLoadContextLifecycle,
+                    hook.GetProperty("load_context_lifecycle").GetString());
             }
             finally
             {

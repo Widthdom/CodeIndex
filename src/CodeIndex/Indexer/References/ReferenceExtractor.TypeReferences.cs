@@ -643,9 +643,6 @@ public static partial class ReferenceExtractor
         return Math.Max(0, symbol.StartColumn ?? 0);
     }
 
-    private static bool ContainsCSharpWordPair(string text, string first, string second)
-        => IndexOfCSharpWordPair(text, first, second) >= 0;
-
     private static int IndexOfCSharpWordPair(string text, string first, string second)
     {
         var firstIndex = IndexOfCSharpWord(text, first, 0);
@@ -1152,12 +1149,6 @@ public static partial class ReferenceExtractor
 
         return (insideStringContent, insideBlockComment);
     }
-
-    private static bool[] BuildCSharpBlockCommentLines(string[] lines) =>
-        BuildCSharpLineStateMasks(lines).BlockComment;
-
-    private static bool[] BuildCSharpMultilineStringContentLines(string[] lines) =>
-        BuildCSharpLineStateMasks(lines).MultilineStringContent;
 
     private static bool IsCSharpTopLevelAssignmentOperator(string line, int index)
     {

@@ -323,7 +323,9 @@ public class ExtractorPluginRegistryTests
                 Assert.True(loadContext.IsCollectible);
                 Assert.NotSame(AssemblyLoadContext.Default, loadContext);
                 Assert.Same(loadContext, AssemblyLoadContext.GetLoadContext(extractor.GetType().Assembly));
-                Assert.Equal(1, ExtractorPluginRegistry.GetStatusSnapshot().RetainedLoadContextCount);
+                var status = ExtractorPluginRegistry.GetStatusSnapshot();
+                Assert.Equal(1, status.RetainedLoadContextCount);
+                Assert.Equal(ExtractorPluginRegistry.PluginLoadContextLifecycle, status.LoadContextLifecycle);
             }
             finally
             {
@@ -373,7 +375,9 @@ public class ExtractorPluginRegistryTests
 
                 ExtractorPluginRegistry.ResetForTests();
 
-                Assert.Equal(0, ExtractorPluginRegistry.GetStatusSnapshot().RetainedLoadContextCount);
+                var status = ExtractorPluginRegistry.GetStatusSnapshot();
+                Assert.Equal(0, status.RetainedLoadContextCount);
+                Assert.Equal(ExtractorPluginRegistry.PluginLoadContextLifecycle, status.LoadContextLifecycle);
                 Assert.Empty(ExtractorPluginRegistry.PluginAssemblyLoadContextsForTests());
             }
             finally
