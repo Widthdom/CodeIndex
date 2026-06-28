@@ -1158,6 +1158,93 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutline_Json_SortComplexityPrioritizesComplexFunctions_Issue4117()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_sort_complexity_4117");
+        try
+        {
+            var dbPath = CreateOutlineSortFixtureDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/Giant.cs", "--db", dbPath, "--json", "--kind", "function", "--sort", "complexity", "--limit", "1", "--outline-fields", "name,size,complexity,sort_mode"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbol = Assert.Single(json.GetProperty("symbols").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("complexity", json.GetProperty("sort").GetString());
+            Assert.Equal("BigAudit", symbol.GetProperty("name").GetString());
+            Assert.Equal("complexity", symbol.GetProperty("sort_mode").GetString());
+            Assert.True(symbol.GetProperty("complexity_score").GetDouble() > 100);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_Json_SortKindPrioritizesKindBeforeSourceOrder_Issue4117()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_sort_kind_4117");
+        try
+        {
+            var dbPath = CreateOutlineSortFixtureDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/Giant.cs", "--db", dbPath, "--json", "--sort", "kind", "--limit", "1", "--outline-fields", "name,kind,size,sort_mode"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbol = Assert.Single(json.GetProperty("symbols").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("kind", json.GetProperty("sort").GetString());
+            Assert.Equal("class", symbol.GetProperty("kind").GetString());
+            Assert.Equal("Giant", symbol.GetProperty("name").GetString());
+            Assert.Equal("kind", symbol.GetProperty("sort_mode").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_Json_SortSpanAliasUsesSizeRanking_Issue4117()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_sort_span_alias_4117");
+        try
+        {
+            var dbPath = CreateOutlineSortFixtureDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/Giant.cs", "--db", dbPath, "--json", "--kind", "function", "--sort", "span", "--limit", "1", "--outline-fields", "name,size,sort_mode"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var symbol = Assert.Single(json.GetProperty("symbols").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("size", json.GetProperty("sort").GetString());
+            Assert.Equal("BigAudit", symbol.GetProperty("name").GetString());
+            Assert.Equal("size", symbol.GetProperty("sort_mode").GetString());
+            Assert.True(symbol.GetProperty("size_lines").GetInt32() > 5);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunOutline_Json_OutlineFieldsProjectDerivedMetadataWithoutSort_Issue4117()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_fields_derived_4117");
@@ -1237,24 +1324,29 @@ public partial class QueryCommandRunnerTests
             "src/Giant.cs",
             "csharp",
             """
-            public class Giant
+            using System;
+
+            namespace Sorting
             {
-                public void SmallHot() { }
-
-                public void MediumRef()
+                public class Giant
                 {
-                    SmallHot();
-                }
+                    public void SmallHot() { }
 
-                public void BigAudit()
-                {
-                    var total = 0;
-                    total += 1;
-                    total += 2;
-                    total += 3;
-                    total += 4;
-                    total += 5;
-                    total += 6;
+                    public void MediumRef()
+                    {
+                        SmallHot();
+                    }
+
+                    public void BigAudit()
+                    {
+                        var total = 0;
+                        total += 1;
+                        total += 2;
+                        total += 3;
+                        total += 4;
+                        total += 5;
+                        total += 6;
+                    }
                 }
             }
             """);
