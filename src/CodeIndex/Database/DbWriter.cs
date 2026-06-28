@@ -2166,8 +2166,15 @@ public class DbWriter
     /// ディスク上に存在しなくなったファイルをDBから削除する（ブランチ切り替え対応）。
     /// </summary>
     /// <param name="projectRoot">Absolute path to project root / プロジェクトルートの絶対パス</param>
+    /// <param name="preservedMissingPaths">
+    /// Relative DB paths that are intentionally absent from disk /
+    /// ディスク上に意図的に存在しないDB相対パス
+    /// </param>
     /// <returns>Number of stale files removed / 削除された古いファイル数</returns>
-    public int PurgeStaleFiles(string projectRoot, Action? beforeCommit = null)
+    public int PurgeStaleFiles(
+        string projectRoot,
+        Action? beforeCommit = null,
+        IReadOnlySet<string>? preservedMissingPaths = null)
     {
         // Collect all paths currently in DB / DB内の全パスを収集
         var dbPaths = LoadCurrentFilePaths();
@@ -2181,7 +2188,8 @@ public class DbWriter
             // paths (>= 248 chars) are not silently classified as stale and DELETED from the DB.
             // Without this wrap, the FileIndexer walker can index a long path successfully and
             // the next index run will purge it. See LongPath.cs and #1547.
-            if (!File.Exists(LongPath.EnsureWindowsPrefix(absolutePath)))
+            if (!File.Exists(LongPath.EnsureWindowsPrefix(absolutePath))
+                && (preservedMissingPaths == null || !preservedMissingPaths.Contains(relativePath)))
                 staleIds.Add(id);
         }
 

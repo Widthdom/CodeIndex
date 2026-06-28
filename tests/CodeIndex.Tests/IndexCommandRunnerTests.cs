@@ -8791,6 +8791,73 @@ public sealed class Caller
     }
 
     [Fact]
+    public void Run_UpdateMode_WithChangedBetween_PurgesMissingIndexedPathOutsideDiff_4056()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "initial");
+            RunGit(projectRoot, "branch", "before-main");
+
+            RunGit(projectRoot, "checkout", "-b", "stale-index");
+            var changelogDir = Path.Combine(projectRoot, "changelog.d", "unreleased");
+            Directory.CreateDirectory(changelogDir);
+            var stalePath = Path.Combine(changelogDir, "+changelog-empty-release-guard.fixed.md");
+            File.WriteAllText(
+                stalePath,
+                """
+                ---
+                category: fixed
+                ---
+
+                ## English
+
+                - Placeholder.
+
+                ## 日本語
+
+                - プレースホルダー。
+                """);
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "add stale branch fragment");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Contains("changelog.d/unreleased/+changelog-empty-release-guard.fixed.md", ReadIndexedPaths(dbPath));
+
+            RunGit(projectRoot, "checkout", "-b", "main-update", "before-main");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+            RunGit(projectRoot, "add", "app.cs");
+            RunGit(projectRoot, "commit", "-m", "update app");
+            RunGit(projectRoot, "branch", "after-main");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--changed-between", "before-main", "after-main", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("removed").GetInt32());
+
+            var indexedPaths = ReadIndexedPaths(dbPath);
+            Assert.DoesNotContain("changelog.d/unreleased/+changelog-empty-release-guard.fixed.md", indexedPaths);
+            Assert.Contains("app.cs", indexedPaths);
+
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--check", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.True(statusJson.GetProperty("workspace_check").GetProperty("matches_workspace").GetBoolean());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_WithChangedBetween_FallsBackToFullScanWhenIgnoreFilesChange()
     {
         var projectRoot = CreateTempProject();
