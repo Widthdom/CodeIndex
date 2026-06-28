@@ -3,9 +3,10 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.Loader;
 using System.Text.Json.Serialization;
+using CodeIndex.Cli;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using CodeIndex.Indexer.Extensibility;
-using CodeIndex.Diagnostics;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer.Hooks;
@@ -325,6 +326,16 @@ public sealed class PostExtractionHookRunner : IDisposable
                 null,
                 "Hook assembly skipped: path is a directory.",
                 category: "hook_path_is_directory");
+            return false;
+        }
+
+        if (FileSystemBoundary.IsSymlinkOrReparsePoint(fileInfo))
+        {
+            runner.EnqueueDiagnostic(
+                dllPath,
+                null,
+                "Hook assembly skipped: symbolic links and reparse points are not supported.",
+                category: "hook_reparse_point");
             return false;
         }
 
