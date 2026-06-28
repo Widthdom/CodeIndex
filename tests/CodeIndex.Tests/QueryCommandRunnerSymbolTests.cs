@@ -5187,10 +5187,20 @@ public partial class QueryCommandRunnerTests
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
             var hotspot = Assert.Single(json.GetProperty("hotspots").EnumerateArray());
+            var query = json.GetProperty("query_context");
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("file", json.GetProperty("grouped_by").GetString());
+            Assert.Equal("file", json.GetProperty("grouping_unit").GetString());
+            Assert.Equal("returned_files", json.GetProperty("count_kind").GetString());
+            Assert.Equal("files", json.GetProperty("limit_applies_to").GetString());
+            Assert.Equal(new[] { "reference_count" }, json.GetProperty("score_fields").EnumerateArray().Select(field => field.GetString()!).ToArray());
+            Assert.Equal(new[] { "reference_count", "path" }, json.GetProperty("ranking_fields").EnumerateArray().Select(field => field.GetString()!).ToArray());
+            Assert.Equal("file", query.GetProperty("group_by").GetString());
+            Assert.Equal("file", query.GetProperty("grouping_unit").GetString());
+            Assert.Equal("returned_files", query.GetProperty("count_kind").GetString());
+            Assert.Equal("files", query.GetProperty("limit_applies_to").GetString());
             Assert.Equal(1, json.GetProperty("count").GetInt32());
             Assert.Equal("src/One.cs", hotspot.GetProperty("path").GetString());
             Assert.Equal(3, hotspot.GetProperty("reference_count").GetInt32());
@@ -5217,10 +5227,45 @@ public partial class QueryCommandRunnerTests
 
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
+            var query = json.GetProperty("query_context");
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("statement", json.GetProperty("grouped_by").GetString());
+            Assert.Equal("sql_statement", json.GetProperty("grouping_unit").GetString());
+            Assert.Equal("returned_sql_statements", json.GetProperty("count_kind").GetString());
+            Assert.Equal("sql_statements", json.GetProperty("limit_applies_to").GetString());
+            Assert.Equal(
+                new[] { "ranking_score", "reference_score", "reference_count", "path", "line", "name", "kind", "symbol_id" },
+                json.GetProperty("ranking_fields").EnumerateArray().Select(field => field.GetString()!).ToArray());
+            Assert.Equal("statement", query.GetProperty("group_by").GetString());
+            Assert.Equal("sql_statement", query.GetProperty("grouping_unit").GetString());
+            Assert.Equal("returned_sql_statements", query.GetProperty("count_kind").GetString());
+            Assert.Equal("sql_statements", query.GetProperty("limit_applies_to").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunHotspots_GroupByStatementWithoutSqlLang_IsRejected_Issue4116()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_statement_non_sql_4116");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--group-by", "statement"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("--group-by statement is only supported with --lang sql", stderr);
+            Assert.Contains("--group-by symbol", stderr);
+            Assert.Contains("--group-by file", stderr);
         }
         finally
         {
@@ -5337,12 +5382,28 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(3, symbolJson.GetProperty("count").GetInt32());
             Assert.Equal(3, symbolJson.GetProperty("files").GetInt32());
             Assert.Equal("symbol", symbolJson.GetProperty("grouped_by").GetString());
+            Assert.Equal("symbol", symbolJson.GetProperty("grouping_unit").GetString());
+            Assert.Equal("total_symbols", symbolJson.GetProperty("count_kind").GetString());
+            Assert.Equal("none_count_ignores_limit", symbolJson.GetProperty("limit_applies_to").GetString());
+            Assert.Equal(
+                new[] { "ranking_score", "reference_score", "reference_count", "path", "line", "name", "kind", "symbol_id" },
+                symbolJson.GetProperty("ranking_fields").EnumerateArray().Select(field => field.GetString()!).ToArray());
+            Assert.Equal("symbol", symbolJson.GetProperty("query_context").GetProperty("group_by").GetString());
+            Assert.Equal("total_symbols", symbolJson.GetProperty("query_context").GetProperty("count_kind").GetString());
+            Assert.Equal("none_count_ignores_limit", symbolJson.GetProperty("query_context").GetProperty("limit_applies_to").GetString());
 
             Assert.Equal(CommandExitCodes.Success, fileExitCode);
             Assert.Equal(string.Empty, fileStderr);
             Assert.Equal(3, fileJson.GetProperty("count").GetInt32());
             Assert.Equal(3, fileJson.GetProperty("files").GetInt32());
             Assert.Equal("file", fileJson.GetProperty("grouped_by").GetString());
+            Assert.Equal("file", fileJson.GetProperty("grouping_unit").GetString());
+            Assert.Equal("total_files", fileJson.GetProperty("count_kind").GetString());
+            Assert.Equal("none_count_ignores_limit", fileJson.GetProperty("limit_applies_to").GetString());
+            Assert.Equal(new[] { "reference_count", "path" }, fileJson.GetProperty("ranking_fields").EnumerateArray().Select(field => field.GetString()!).ToArray());
+            Assert.Equal("file", fileJson.GetProperty("query_context").GetProperty("group_by").GetString());
+            Assert.Equal("total_files", fileJson.GetProperty("query_context").GetProperty("count_kind").GetString());
+            Assert.Equal("none_count_ignores_limit", fileJson.GetProperty("query_context").GetProperty("limit_applies_to").GetString());
         }
         finally
         {
