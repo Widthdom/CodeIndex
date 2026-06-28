@@ -281,6 +281,22 @@ Every subprocess wait must have an explicit cancellation or timeout path. Captur
 
 CLI JSON output must be machine-clean: redirected stdout is written as UTF-8 without a BOM, and JSON-mode commands must not emit ANSI escape sequences even when `--color=always` or `CLICOLOR_FORCE=1` would color human output. Keep JSON-safe styling suppression close to shared formatting helpers such as `ConsoleUi.ColorizeKind` so future query output paths inherit the invariant.
 
+JSON serialization sites are split by contract domain. Public CLI JSON uses
+`ProgramRunner.CreateDefaultJsonOptions()` and `CliJsonSerializerContext`: field
+names are snake_case, nulls are omitted, audited public top-level event/result
+DTOs carry `api_version`, and DOM-built `JsonObject` payloads may add only
+sanitized, bounded fields. Add `api_version` when introducing or auditing a
+public top-level CLI JSON DTO. MCP JSON-RPC uses `McpServer`'s camelCase options for the
+protocol envelope while tool structured content keeps its documented
+machine-readable keys; sanitize/redact values before mutating `JsonObject` /
+`JsonNode` instances. LSP, quickfix, and SARIF outputs follow their external
+schemas rather than the CLI snake_case contract. GitHub/report helpers and
+worker/private storage paths use their own bounded serializers because they are
+either API clients, persisted local state, or process-internal protocols. The
+`LocalJsonlJsonWriterOptions` relaxed encoder is intentionally limited to
+private append-only JSONL diagnostics and must not be reused for public CLI,
+MCP, LSP, HTTP, or embeddable JSON.
+
 `cdidx export ctags --json` follows the same contract: stdout contains only a
 single JSON summary or structured error, while the tag file itself remains the
 artifact. The summary includes resolved output/database paths, tag/emitted/
@@ -2642,6 +2658,19 @@ CLI JSON output は機械処理向けにきれいでなければなりません�
 場合でも ANSI escape sequence を出してはいけません。JSON-safe styling suppression は
 `ConsoleUi.ColorizeKind` など共有 formatter の近くに置き、将来の query output path も同じ
 invariant を継承できるようにしてください。
+
+JSON serialization site は contract domain ごとに分けます。公開 CLI JSON は
+`ProgramRunner.CreateDefaultJsonOptions()` と `CliJsonSerializerContext` を使います。field name は
+snake_case、null は省略、audit 済みの公開 top-level event/result DTO は `api_version` を持ち、
+DOM で組み立てる `JsonObject` payload は sanitized / bounded 済み field だけを追加します。
+公開 top-level CLI JSON DTO を追加または audit するときは `api_version` を追加してください。MCP JSON-RPC は
+protocol envelope に `McpServer` の camelCase option を使い、tool structured content は文書化済みの
+machine-readable key を保ちます。`JsonObject` / `JsonNode` を mutate する前に値を sanitize /
+redact してください。LSP、quickfix、SARIF 出力は CLI snake_case contract ではなく外部 schema に
+従います。GitHub/report helper と worker/private storage path は API client、永続化ローカル状態、
+process-internal protocol のいずれかなので、それぞれの bounded serializer を使います。
+`LocalJsonlJsonWriterOptions` の relaxed encoder は private append-only JSONL diagnostic 専用であり、
+公開 CLI、MCP、LSP、HTTP、埋め込み可能な JSON に再利用してはいけません。
 
 `cdidx export ctags --json` も同じ contract に従います。stdout は単一の JSON summary または
 structured error だけを含み、tags file 自体は artifact として残します。summary には解決済みの
