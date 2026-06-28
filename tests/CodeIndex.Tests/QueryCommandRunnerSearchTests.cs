@@ -2671,7 +2671,7 @@ public partial class QueryCommandRunnerTests
                 .Single(item => item.GetProperty("name").GetString() == "unbounded-json-parse");
 
             Assert.Equal("risky-code", root.GetProperty("recipe").GetProperty("name").GetString());
-            Assert.Equal(28, root.GetProperty("query_count").GetInt32());
+            Assert.Equal(41, root.GetProperty("query_count").GetInt32());
             Assert.Equal("source", root.GetProperty("scope").GetProperty("name").GetString());
             Assert.Contains(root.GetProperty("scope").GetProperty("path_patterns").EnumerateArray(), path => path.GetString() == "src/**");
             Assert.Contains(root.GetProperty("scope").GetProperty("exclude_paths").EnumerateArray(), path => path.GetString() == "src/CodeIndex/Cli/SearchAuditRecipes.cs");
