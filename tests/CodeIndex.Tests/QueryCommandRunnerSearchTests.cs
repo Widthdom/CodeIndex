@@ -3187,6 +3187,18 @@ public partial class QueryCommandRunnerTests
             Assert.False(done.GetProperty("done").GetBoolean());
             Assert.True(done.GetProperty("interrupted").GetBoolean());
             Assert.Equal(0, done.GetProperty("count").GetInt32());
+
+            var (zeroExitCode, zeroStdout, zeroStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["MissingToken", "--db", dbPath, "--json=ndjson", "--max-json-bytes", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, zeroExitCode);
+            Assert.Equal(string.Empty, zeroStderr);
+            var zeroDone = Assert.Single(ParseJsonLines(zeroStdout)).RootElement;
+
+            Assert.False(zeroDone.GetProperty("done").GetBoolean());
+            Assert.True(zeroDone.GetProperty("interrupted").GetBoolean());
+            Assert.Equal(0, zeroDone.GetProperty("count").GetInt32());
         }
         finally
         {

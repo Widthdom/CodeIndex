@@ -646,11 +646,25 @@ public static partial class QueryCommandRunner
                     {
                         var pathHint = BuildSearchPathGlobHint(reader, options);
                         if (!options.ResultsOnly)
-                            Console.WriteLine(BuildJsonZeroResultPayload(reader, ndjsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint, extraFields: payload =>
-                            {
-                                AddSearchPathHint(payload, pathHint);
-                                AddBareTokenSearchHint(payload, options);
-                            }).ToJsonString(ndjsonOptions));
+                        {
+                            var payload = BuildJsonZeroResultPayload(
+                                reader,
+                                ndjsonOptions,
+                                resultsKey: "results",
+                                query: options.Query,
+                                ftsQueryDiagnostics: ftsQueryDiagnostics,
+                                queryOptions: options,
+                                exactSubstringHint: exactSubstringHint,
+                                extraFields: payload =>
+                                {
+                                    AddSearchPathHint(payload, pathHint);
+                                    AddBareTokenSearchHint(payload, options);
+                                }).ToJsonString(ndjsonOptions);
+                            if (WouldExceedJsonByteLimit(options, bytesWritten: 0, payload, out var interrupted))
+                                jsonDoneInterrupted = interrupted;
+                            else
+                                Console.WriteLine(payload);
+                        }
                         jsonDoneCount = 0;
                     }
                 }
