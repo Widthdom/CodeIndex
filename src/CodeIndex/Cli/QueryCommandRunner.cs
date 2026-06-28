@@ -386,22 +386,32 @@ public static partial class QueryCommandRunner
                     null,
                     null))
                 .ToList();
+            var fileGroupSelection = ApplySearchGroupOutputSelection(fileCountGroups, options);
 
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(
-                    new SearchGroupedCountJsonResult(
-                        JsonOutputContract.ApiVersion,
-                        options.Query!,
-                        options.GroupBy!,
-                        totalCount,
-                        fileGroups.Count,
-                        fileCountGroups),
-                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchGroupedCountJsonResult));
+                var json = JsonSerializer.Serialize(
+                        new SearchGroupedCountJsonResult(
+                            JsonOutputContract.ApiVersion,
+                            options.Query!,
+                            options.GroupBy!,
+                            totalCount,
+                            fileGroups.Count,
+                            fileGroupSelection.Groups.Count,
+                            fileGroupSelection.TotalGroups,
+                            fileGroupSelection.Truncated,
+                            options.Limit,
+                            fileGroupSelection.Groups),
+                        CliJsonSerializerContextFactory.Create(jsonOptions).SearchGroupedCountJsonResult);
+                return WriteJsonObjectWithOptionalByteLimit(
+                    json,
+                    options,
+                    "grouped search count",
+                    "Reduce --limit or increase --max-json-bytes.");
             }
             else
             {
-                WriteSearchGroupedCounts(options.GroupBy!, fileCountGroups, totalCount, fileGroups.Count);
+                WriteSearchGroupedCounts(options.GroupBy!, fileGroupSelection.Groups, totalCount, fileGroups.Count, fileGroupSelection.TotalGroups);
                 WriteExactSubstringHintIfNeeded(exactSubstringHint);
             }
 
@@ -411,23 +421,33 @@ public static partial class QueryCommandRunner
         var results = reader.Search(options.Query!, int.MaxValue, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, guardFilters: options.GuardFilters, guardWindow: options.GuardWindow, guardScope: options.GuardScope);
         var displayRows = BuildSearchDisplayRows(results, options, exact);
         var groups = BuildSearchGroupedCounts(options.GroupBy!, displayRows);
+        var fallbackGroupSelection = ApplySearchGroupOutputSelection(groups, options);
         var fileCount = displayRows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count();
 
         if (options.Json)
         {
-            Console.WriteLine(JsonSerializer.Serialize(
-                new SearchGroupedCountJsonResult(
-                    JsonOutputContract.ApiVersion,
-                    options.Query!,
-                    options.GroupBy!,
-                    displayRows.Count,
-                    fileCount,
-                    groups),
-                CliJsonSerializerContextFactory.Create(jsonOptions).SearchGroupedCountJsonResult));
+            var json = JsonSerializer.Serialize(
+                    new SearchGroupedCountJsonResult(
+                        JsonOutputContract.ApiVersion,
+                        options.Query!,
+                        options.GroupBy!,
+                        displayRows.Count,
+                        fileCount,
+                        fallbackGroupSelection.Groups.Count,
+                        fallbackGroupSelection.TotalGroups,
+                        fallbackGroupSelection.Truncated,
+                        options.Limit,
+                        fallbackGroupSelection.Groups),
+                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchGroupedCountJsonResult);
+            return WriteJsonObjectWithOptionalByteLimit(
+                json,
+                options,
+                "grouped search count",
+                "Reduce --limit or increase --max-json-bytes.");
         }
         else
         {
-            WriteSearchGroupedCounts(options.GroupBy!, groups, displayRows.Count, fileCount);
+            WriteSearchGroupedCounts(options.GroupBy!, fallbackGroupSelection.Groups, displayRows.Count, fileCount, fallbackGroupSelection.TotalGroups);
             WriteExactSubstringHintIfNeeded(exactSubstringHint);
         }
 
@@ -509,7 +529,7 @@ public static partial class QueryCommandRunner
         return $"{result.Path}:{start}:{kind}:{result.EnclosingSymbolName}";
     }
 
-    private static void WriteSearchGroupedCounts(string groupBy, List<SearchGroupedCountItemJsonResult> groups, int totalCount, int fileCount)
+    private static void WriteSearchGroupedCounts(string groupBy, List<SearchGroupedCountItemJsonResult> groups, int totalCount, int fileCount, int? totalGroups = null)
     {
         foreach (var group in groups)
         {
@@ -534,7 +554,10 @@ public static partial class QueryCommandRunner
             Console.WriteLine($"{group.Count,8} {location} {symbol}{container}");
         }
 
-        CommandErrorWriter.WriteStderr($"({totalCount} results in {fileCount} files; grouped by {groupBy})");
+        var truncation = totalGroups.HasValue && groups.Count < totalGroups.Value
+            ? $"; showing {groups.Count} of {totalGroups.Value} groups"
+            : string.Empty;
+        CommandErrorWriter.WriteStderr($"({totalCount} results in {fileCount} files; grouped by {groupBy}{truncation})");
     }
 
     private static int RunSearchAggregation(DbReader reader, QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool exact, SearchQueryHint? exactSubstringHint)
@@ -543,34 +566,47 @@ public static partial class QueryCommandRunner
         var rows = BuildSearchDisplayRows(results, options, exact);
         var groupBy = NormalizeSearchAggregationKey(options.CountBy ?? options.UniqueBy!);
         var groups = BuildSearchGroupedCounts(groupBy, rows);
+        var selection = ApplySearchGroupOutputSelection(groups, options);
         var uniqueOnly = options.UniqueBy != null;
         var fileCount = rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count();
 
         if (options.Json)
         {
-            Console.WriteLine(JsonSerializer.Serialize(
-                new SearchAggregationJsonResult(
-                    JsonOutputContract.ApiVersion,
-                    options.Query!,
-                    uniqueOnly ? "unique" : "count_by",
-                    groupBy,
-                    rows.Count,
-                    fileCount,
-                    uniqueOnly,
-                    groups),
-                CliJsonSerializerContextFactory.Create(jsonOptions).SearchAggregationJsonResult));
+            var json = JsonSerializer.Serialize(
+                    new SearchAggregationJsonResult(
+                        JsonOutputContract.ApiVersion,
+                        options.Query!,
+                        uniqueOnly ? "unique" : "count_by",
+                        groupBy,
+                        rows.Count,
+                        fileCount,
+                        uniqueOnly,
+                        selection.Groups.Count,
+                        selection.TotalGroups,
+                        selection.Truncated,
+                        options.Limit,
+                        selection.Groups),
+                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchAggregationJsonResult);
+            return WriteJsonObjectWithOptionalByteLimit(
+                json,
+                options,
+                "search aggregation",
+                "Reduce --limit or increase --max-json-bytes.");
         }
         else
         {
             if (uniqueOnly)
             {
-                foreach (var group in groups)
+                foreach (var group in selection.Groups)
                     Console.WriteLine(group.Key);
-                CommandErrorWriter.WriteStderr($"({groups.Count} unique {groupBy} values from {rows.Count} results in {fileCount} files)");
+                var truncation = selection.Truncated
+                    ? $"showing {selection.Groups.Count} of {selection.TotalGroups}"
+                    : selection.Groups.Count.ToString(CultureInfo.InvariantCulture);
+                CommandErrorWriter.WriteStderr($"({truncation} unique {groupBy} values from {rows.Count} results in {fileCount} files)");
             }
             else
             {
-                WriteSearchGroupedCounts(groupBy, groups, rows.Count, fileCount);
+                WriteSearchGroupedCounts(groupBy, selection.Groups, rows.Count, fileCount, selection.TotalGroups);
             }
             WriteExactSubstringHintIfNeeded(exactSubstringHint);
         }
@@ -618,21 +654,26 @@ public static partial class QueryCommandRunner
         return sampled;
     }
 
-    private static void WriteGroupedSearchResults(List<SearchDisplayRow> rows, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+    private static int WriteGroupedSearchResults(List<SearchDisplayRow> rows, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
     {
         var groups = BuildSearchFileGroups(rows, options);
         var totalMatches = rows.Count;
-        Console.WriteLine(JsonSerializer.Serialize(
-            new SearchFileGroupedJsonResult(
-                JsonOutputContract.ApiVersion,
-                options.Query!,
-                totalMatches,
-                groups.Count,
-                rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count(),
-                options.GroupedPerFileLimit,
-                groups.Any(group => group.Truncated),
-                groups),
-            CliJsonSerializerContextFactory.Create(jsonOptions).SearchFileGroupedJsonResult));
+        var json = JsonSerializer.Serialize(
+                new SearchFileGroupedJsonResult(
+                    JsonOutputContract.ApiVersion,
+                    options.Query!,
+                    totalMatches,
+                    groups.Count,
+                    rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count(),
+                    options.GroupedPerFileLimit,
+                    groups.Any(group => group.Truncated),
+                    groups),
+                CliJsonSerializerContextFactory.Create(jsonOptions).SearchFileGroupedJsonResult);
+        return WriteJsonObjectWithOptionalByteLimit(
+            json,
+            options,
+            "grouped search results",
+            "Reduce --limit, --per-file-limit, or increase --max-json-bytes.");
     }
 
     private static void WriteGroupedSearchResultsHuman(List<SearchDisplayRow> rows, QueryCommandOptions options)
@@ -670,15 +711,24 @@ public static partial class QueryCommandRunner
             .ThenBy(group => group.Path, StringComparer.Ordinal)
             .ToList();
 
-    private static void WriteProjectedSearchResults(CompactSearchResult[] results, QueryCommandOptions options, JsonSerializerOptions jsonOptions, JsonSerializerOptions ndjsonOptions, out int emittedCount, out bool interrupted)
+    private static int WriteProjectedSearchResults(CompactSearchResult[] results, QueryCommandOptions options, JsonSerializerOptions jsonOptions, JsonSerializerOptions ndjsonOptions, out int emittedCount, out bool interrupted)
     {
         var projected = results.Select(result => BuildProjectedSearchResult(result, options.SearchFields!, queryName: null, recipeName: null)).ToArray();
         if (options.JsonOutputFormat == JsonOutputFormatArray)
         {
-            Console.WriteLine(JsonSerializer.Serialize(projected, jsonOptions));
             emittedCount = projected.Length;
             interrupted = false;
-            return;
+            using var writer = new StringWriter(CultureInfo.InvariantCulture);
+            WriteJsonArray(
+                writer,
+                projected,
+                (writer, result) => writer.Write(result.ToJsonString(jsonOptions)),
+                jsonOptions);
+            return WriteJsonObjectWithOptionalByteLimit(
+                writer.ToString().TrimEnd('\r', '\n'),
+                options,
+                "projected search result array",
+                "Reduce --limit, --search-fields, or use `--json=ndjson --max-json-bytes` for streaming output.");
         }
 
         emittedCount = 0;
@@ -693,6 +743,8 @@ public static partial class QueryCommandRunner
             bytesWritten += Encoding.UTF8.GetByteCount(line) + Environment.NewLine.Length;
             emittedCount++;
         }
+
+        return CommandExitCodes.Success;
     }
 
     private static JsonObject BuildProjectedSearchResult(
@@ -827,6 +879,64 @@ public static partial class QueryCommandRunner
 
     private sealed record SearchOutputSelection(List<SearchDisplayRow> Rows, int OriginalCount, bool Truncated);
 
+    private sealed record SearchGroupOutputSelection(
+        List<SearchGroupedCountItemJsonResult> Groups,
+        int TotalGroups,
+        bool Truncated);
+
+    private static SearchGroupOutputSelection ApplySearchGroupOutputSelection(List<SearchGroupedCountItemJsonResult> groups, QueryCommandOptions options)
+    {
+        var totalGroups = groups.Count;
+        if (groups.Count > options.Limit)
+            groups = groups.Take(options.Limit).ToList();
+
+        return new SearchGroupOutputSelection(groups, totalGroups, groups.Count < totalGroups);
+    }
+
+    private static bool SupportsSearchJsonByteLimit(QueryCommandOptions options)
+    {
+        if (!options.Json)
+            return false;
+        if (options.OutputFormat is OutputFormatCount or OutputFormatCompact or OutputFormatGrouped or OutputFormatIssueDrafts)
+            return true;
+        if (options.OutputFormat == OutputFormatJson)
+            return options.JsonOutputFormat is JsonOutputFormatNdjson or JsonOutputFormatArray;
+        return false;
+    }
+
+    private static bool TryWriteEmptySearchJsonWithOptionalByteLimit(QueryCommandOptions options, JsonSerializerOptions jsonOptions, out int exitCode)
+    {
+        exitCode = CommandExitCodes.Success;
+        if (!options.MaxJsonBytes.HasValue)
+            return false;
+
+        if (options.OutputFormat == OutputFormatCompact)
+        {
+            exitCode = WriteJsonObjectWithOptionalByteLimit(
+                "[]",
+                options,
+                "compact search results",
+                "Increase --max-json-bytes or remove the byte cap.");
+            return true;
+        }
+
+        if (options.OutputFormat == OutputFormatCount)
+        {
+            exitCode = WriteJsonObjectWithOptionalByteLimit(
+                new JsonObject
+                {
+                    ["count"] = 0,
+                    ["total_estimated"] = 0,
+                }.ToJsonString(jsonOptions),
+                options,
+                "search count",
+                "Increase --max-json-bytes or remove the byte cap.");
+            return true;
+        }
+
+        return false;
+    }
+
     private static int RunSearchNamedBatch(QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool userExact)
     {
         return WithDb(options, jsonOptions, reader =>
@@ -835,14 +945,18 @@ public static partial class QueryCommandRunner
 
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(
+                var json = JsonSerializer.Serialize(
                     new SearchNamedBatchRunJsonResult(
                         JsonOutputContract.ApiVersion,
                         queryResults.Count,
                         total,
                         queryResults),
-                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchNamedBatchRunJsonResult));
-                return CommandExitCodes.Success;
+                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchNamedBatchRunJsonResult);
+                return WriteJsonObjectWithOptionalByteLimit(
+                    json,
+                    options,
+                    "named-query search",
+                    "Reduce --limit, use --snippet-lines 0, or increase --max-json-bytes.");
             }
 
             Console.WriteLine("Named search batch");
@@ -1273,34 +1387,42 @@ public static partial class QueryCommandRunner
             if (options.OutputFormat == OutputFormatCompact)
             {
                 var compactQueryResults = CollectSearchRecipeCompactQueryResults(reader, selection.Queries, scope, options, userExact, out var compactTotal);
-                Console.WriteLine(JsonSerializer.Serialize(
-                    new SearchRecipeCompactRunJsonResult(
-                        JsonOutputContract.ApiVersion,
-                        ToSearchRecipeListItem(recipe, selection.Queries),
-                        scope,
-                        selection.Queries.Count,
-                        compactTotal,
-                        BuildSearchRecipeRunSummary(compactQueryResults, options.Limit, options.TotalLimit, compactTotal),
-                        compactQueryResults),
-                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeCompactRunJsonResult));
-                return CommandExitCodes.Success;
+                var json = JsonSerializer.Serialize(
+                        new SearchRecipeCompactRunJsonResult(
+                            JsonOutputContract.ApiVersion,
+                            ToSearchRecipeListItem(recipe, selection.Queries),
+                            scope,
+                            selection.Queries.Count,
+                            compactTotal,
+                            BuildSearchRecipeRunSummary(compactQueryResults, options.Limit, options.TotalLimit, compactTotal),
+                            compactQueryResults),
+                        CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeCompactRunJsonResult);
+                return WriteJsonObjectWithOptionalByteLimit(
+                    json,
+                    options,
+                    "recipe compact",
+                    "Reduce --limit, use --snippet-lines 0, or increase --max-json-bytes.");
             }
 
             var queryResults = CollectSearchRecipeQueryResults(reader, selection.Queries, scope, options, userExact, out var total);
 
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(
-                    new SearchRecipeRunJsonResult(
-                        JsonOutputContract.ApiVersion,
-                        ToSearchRecipeListItem(recipe, selection.Queries),
-                        scope,
-                        selection.Queries.Count,
-                        total,
-                        BuildSearchRecipeRunSummary(queryResults, options.Limit, options.TotalLimit, total),
-                        queryResults),
-                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeRunJsonResult));
-                return CommandExitCodes.Success;
+                var json = JsonSerializer.Serialize(
+                        new SearchRecipeRunJsonResult(
+                            JsonOutputContract.ApiVersion,
+                            ToSearchRecipeListItem(recipe, selection.Queries),
+                            scope,
+                            selection.Queries.Count,
+                            total,
+                            BuildSearchRecipeRunSummary(queryResults, options.Limit, options.TotalLimit, total),
+                            queryResults),
+                        CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeRunJsonResult);
+                return WriteJsonObjectWithOptionalByteLimit(
+                    json,
+                    options,
+                    "recipe search",
+                    "Reduce --limit, use --snippet-lines 0, or increase --max-json-bytes.");
             }
 
             Console.WriteLine($"Recipe: {recipe.Name}");
@@ -1380,19 +1502,24 @@ public static partial class QueryCommandRunner
 
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(
-                    new SearchRecipeAggregationRunJsonResult(
-                        JsonOutputContract.ApiVersion,
-                        ToSearchRecipeListItem(recipe, selection.Queries),
-                        scope,
-                        mode,
-                        groupBy,
-                        uniqueOnly,
-                        selection.Queries.Count,
-                        total,
-                        fileCount,
-                        queryResults),
-                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeAggregationRunJsonResult));
+                var json = JsonSerializer.Serialize(
+                        new SearchRecipeAggregationRunJsonResult(
+                            JsonOutputContract.ApiVersion,
+                            ToSearchRecipeListItem(recipe, selection.Queries),
+                            scope,
+                            mode,
+                            groupBy,
+                            uniqueOnly,
+                            selection.Queries.Count,
+                            total,
+                            fileCount,
+                            queryResults),
+                        CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeAggregationRunJsonResult);
+                return WriteJsonObjectWithOptionalByteLimit(
+                    json,
+                    options,
+                    "recipe aggregation",
+                    "Reduce --limit or increase --max-json-bytes.");
             }
             else
             {
@@ -1403,10 +1530,14 @@ public static partial class QueryCommandRunner
                     {
                         foreach (var group in query.Groups)
                             Console.WriteLine(group.Key);
+                        var truncation = query.GroupsTruncated
+                            ? $"showing {query.ReturnedGroups} of {query.TotalGroups}"
+                            : query.Groups.Count.ToString(CultureInfo.InvariantCulture);
+                        CommandErrorWriter.WriteStderr($"({truncation} unique {groupBy} values from {query.Count} results in {query.FileCount} files)");
                     }
                     else
                     {
-                        WriteSearchGroupedCounts(groupBy, query.Groups, query.Count, query.FileCount);
+                        WriteSearchGroupedCounts(groupBy, query.Groups, query.Count, query.FileCount, query.TotalGroups);
                     }
                     Console.WriteLine();
                 }
@@ -1952,6 +2083,7 @@ public static partial class QueryCommandRunner
                 paths.Add(path);
 
             var groups = BuildSearchGroupedCounts(groupBy, rows);
+            var selection = ApplySearchGroupOutputSelection(groups, options);
             total += rows.Count;
             queryResults.Add(new SearchRecipeAggregationQueryJsonResult(
                 recipeQuery.Name,
@@ -1960,7 +2092,11 @@ public static partial class QueryCommandRunner
                 recipeQuery.Severity,
                 rows.Count,
                 rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count(),
-                groups));
+                selection.Groups.Count,
+                selection.TotalGroups,
+                selection.Truncated,
+                options.Limit,
+                selection.Groups));
         }
 
         fileCount = paths.Count;
@@ -3507,19 +3643,33 @@ public static partial class QueryCommandRunner
     private static JsonSerializerOptions GetCompactJsonOptions(JsonSerializerOptions jsonOptions)
         => jsonOptions.WriteIndented ? new JsonSerializerOptions(jsonOptions) { WriteIndented = false } : jsonOptions;
 
-    private static void WriteCompactSearchResults(IEnumerable<CompactSearchResult> results, JsonSerializerOptions jsonOptions)
+    private static int WriteCompactSearchResults(IEnumerable<CompactSearchResult> results, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+    {
+        using var writer = new StringWriter(CultureInfo.InvariantCulture);
+        WriteCompactSearchResults(writer, results, jsonOptions);
+        return WriteJsonObjectWithOptionalByteLimit(
+            writer.ToString().TrimEnd('\r', '\n'),
+            options,
+            "compact search results",
+            "Reduce --limit, --snippet-lines, or use `--json=ndjson --max-json-bytes` for streaming output.");
+    }
+
+    private static void WriteCompactSearchResults(TextWriter writer, IEnumerable<CompactSearchResult> results, JsonSerializerOptions jsonOptions)
     {
         var itemOptions = GetCompactJsonOptions(jsonOptions);
         var context = CliJsonSerializerContextFactory.Create(itemOptions);
         WriteJsonArray(
+            writer,
             results,
             (writer, result) => writer.Write(JsonSerializer.Serialize(result, context.CompactSearchResult)),
             jsonOptions);
     }
 
     private static void WriteJsonArray<T>(IEnumerable<T> items, Action<TextWriter, T> writeItem, JsonSerializerOptions jsonOptions)
+        => WriteJsonArray(Console.Out, items, writeItem, jsonOptions);
+
+    private static void WriteJsonArray<T>(TextWriter writer, IEnumerable<T> items, Action<TextWriter, T> writeItem, JsonSerializerOptions jsonOptions)
     {
-        var writer = Console.Out;
         if (!jsonOptions.WriteIndented)
         {
             writer.Write('[');
