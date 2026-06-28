@@ -246,11 +246,11 @@ public static class LineWidthFormatter
 
     private static bool UsesWideAmbiguousWidth()
     {
-        var lang = Environment.GetEnvironmentVariable("LC_ALL");
+        var lang = global::CodeIndex.EnvironmentAccess.GetProcessEnvironmentVariable("LC_ALL");
         if (string.IsNullOrEmpty(lang))
-            lang = Environment.GetEnvironmentVariable("LC_CTYPE");
+            lang = global::CodeIndex.EnvironmentAccess.GetProcessEnvironmentVariable("LC_CTYPE");
         if (string.IsNullOrEmpty(lang))
-            lang = Environment.GetEnvironmentVariable("LANG");
+            lang = global::CodeIndex.EnvironmentAccess.GetProcessEnvironmentVariable("LANG");
 
         return lang is not null
             && (lang.StartsWith("ja", StringComparison.OrdinalIgnoreCase)

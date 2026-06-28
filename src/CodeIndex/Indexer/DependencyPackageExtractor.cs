@@ -126,7 +126,10 @@ internal static class DependencyPackageExtractor
         XDocument document;
         try
         {
-            document = XDocument.Parse(content, LoadOptions.SetLineInfo);
+            using var reader = XmlReader.Create(
+                new StringReader(content),
+                SymbolExtractor.CreateExtractionXmlReaderSettings(DtdProcessing.Prohibit));
+            document = XDocument.Load(reader, LoadOptions.SetLineInfo);
         }
         catch (XmlException)
         {

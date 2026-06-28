@@ -113,23 +113,21 @@ internal static class SubprocessEnvironmentPolicy
 
     private static void CopyEnvironmentVariable(ProcessStartInfo startInfo, string name)
     {
-        var value = Environment.GetEnvironmentVariable(name);
+        var value = EnvironmentAccess.GetProcessEnvironmentVariable(name);
         if (!string.IsNullOrEmpty(value))
             startInfo.Environment[name] = value;
     }
 
     private static void CopyPrefixedEnvironmentVariables(ProcessStartInfo startInfo, string prefix)
     {
-        foreach (System.Collections.DictionaryEntry item in Environment.GetEnvironmentVariables())
+        foreach (var item in EnvironmentAccess.EnumerateProcessEnvironmentVariables())
         {
-            if (item.Key is not string name
-                || item.Value is not string value
-                || !name.StartsWith(prefix, StringComparison.Ordinal))
+            if (!item.Key.StartsWith(prefix, StringComparison.Ordinal))
             {
                 continue;
             }
 
-            startInfo.Environment[name] = value;
+            startInfo.Environment[item.Key] = item.Value;
         }
     }
 }

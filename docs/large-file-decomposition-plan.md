@@ -61,6 +61,23 @@ After that first split, the same dogfood queries report:
 | `QueryCommandRunner.cs` file-hotspot refs | 3,233 refs / 555 symbols | 3,194 refs / 551 symbols |
 | `QueryCommandRunner.Hotspots.cs` | not present | 25,993 bytes / 461 lines / 306 refs |
 
+## Issue #4107 Snapshot
+
+Issue #4107 starts the SymbolExtractor stage of this plan on `origin/main` at
+`e043a7f04de511c0b965f09f70228831822f6eac`. The fresh dogfood snapshot still
+shows the symbol-extraction surface dominated by `SymbolExtractor.cs`,
+`SymbolExtractor.JavaScriptTypeScriptSupport.cs`, `SymbolExtractor.CSharpScanner.cs`,
+and `SymbolExtractor.Markup.cs`, with `ExtractCore` and JS/TS styled/class helper
+paths among the largest function-level hotspots.
+
+This PR makes mechanical ownership moves for language-specific helpers: the
+JS/TS styled-factory candidate gate now lives in
+`SymbolExtractor.JavaScriptTypeScriptStyledFactory.cs`, and CSS/Sass scanner
+helpers live in `SymbolExtractor.CssScanner.cs` instead of the shared
+`SymbolExtractor.cs` core. The extraction semantics remain unchanged; the goal
+is to move language-specific paths behind focused partials before larger
+extractor splits.
+
 ## Issue #4106 Follow-up
 
 Issue #4106 continues the same staged QueryCommandRunner decomposition by
@@ -181,6 +198,21 @@ parser や output 変更と混ぜずに、最初の command-family ownership bou
 | `QueryCommandRunner` symbol size | 15,736 lines | 15,282 lines |
 | `QueryCommandRunner.cs` file-hotspot refs | 3,233 refs / 555 symbols | 3,194 refs / 551 symbols |
 | `QueryCommandRunner.Hotspots.cs` | なし | 25,993 bytes / 461 lines / 306 refs |
+
+## Issue #4107 のスナップショット
+
+Issue #4107 では、この計画の SymbolExtractor 段階を `origin/main` の
+`e043a7f04de511c0b965f09f70228831822f6eac` から開始します。fresh な dogfood
+snapshot でも、symbol extraction surface は引き続き `SymbolExtractor.cs`、
+`SymbolExtractor.JavaScriptTypeScriptSupport.cs`、`SymbolExtractor.CSharpScanner.cs`、
+`SymbolExtractor.Markup.cs` に集中しており、`ExtractCore` と JS/TS の styled/class
+helper path が関数単位の大きな hotspot に含まれています。
+
+この PR では言語固有 helper の mechanical な ownership move を行います。JS/TS の
+styled-factory candidate gate を `SymbolExtractor.JavaScriptTypeScriptStyledFactory.cs`
+へ移し、CSS/Sass scanner helper を共有 `SymbolExtractor.cs` core ではなく
+`SymbolExtractor.CssScanner.cs` に置きました。抽出 semantics は変更せず、今後の大きな
+extractor split の前に、言語固有 path を focused partial の背後へ移すことが目的です。
 
 ## Issue #4106 のフォローアップ
 

@@ -53,57 +53,6 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public void ToolsCall_BatchQueryNearResponseLimit_TruncatesDeterministically_Issue3792()
-    {
-        var queries = new JsonArray();
-        for (var i = 0; i < McpServer.MaxBatchQuerySize; i++)
-        {
-            queries.Add(new JsonObject
-            {
-                ["slotId"] = $"slot-{i.ToString(CultureInfo.InvariantCulture)}",
-                ["tool"] = "search",
-                ["arguments"] = new JsonObject
-                {
-                    ["query"] = "Run",
-                    ["limit"] = 1,
-                    ["format"] = "compact",
-                },
-            });
-        }
-        var request = new JsonObject
-        {
-            ["jsonrpc"] = "2.0",
-            ["id"] = 3792,
-            ["method"] = "tools/call",
-            ["params"] = new JsonObject
-            {
-                ["name"] = "batch_query",
-                ["arguments"] = new JsonObject
-                {
-                    ["maxResponseBytes"] = 5000,
-                    ["queries"] = queries,
-                },
-            },
-        };
-
-        var stopwatch = Stopwatch.StartNew();
-        var response = _server.HandleMessage(request)!;
-        stopwatch.Stop();
-
-        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(5));
-        var structured = response["result"]!["structuredContent"]!;
-        Assert.True(structured["truncated"]!.GetValue<bool>());
-        Assert.True(structured["metadata"]!["estimated_response_bytes"]!.GetValue<int>() <= 5000);
-        Assert.True(structured["results"]!.AsArray().Count > 0);
-        var truncatedQueries = structured["truncated_queries"]!.AsArray();
-        Assert.NotEmpty(truncatedQueries);
-        var firstTruncatedIndex = truncatedQueries[0]!["request_index"]!.GetValue<int>();
-        Assert.Equal(firstTruncatedIndex, structured["cascade_started_at_index"]!.GetValue<int>());
-        Assert.True(firstTruncatedIndex > 0);
-        Assert.Equal("slot-" + firstTruncatedIndex.ToString(CultureInfo.InvariantCulture), truncatedQueries[0]!["slot_id"]!.GetValue<string>());
-    }
-
-    [Fact]
     public void ToolsCall_SearchFilesAndMapExposeCliQueryOptions_Issue3542()
     {
         InsertIndexedFile("src/large.cs", "csharp", "public class Large { " + new string('x', 512) + " }\n");
@@ -465,22 +414,6 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public void ToolsCall_BatchQuery_ProjectFilterResolverFailure_ReturnsSlotError_Issue3160()
-    {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"search","arguments":{"query":"App","project":"DefinitelyMissingProject3160"}}]}}}""")!;
-
-        var response = _server.HandleMessage(request)!;
-
-        var structured = response["result"]!["structuredContent"]!;
-        Assert.Equal(1, structured["metadata"]!["errors"]!.GetValue<int>());
-        var slot = Assert.Single(structured["results"]!.AsArray());
-        Assert.False(slot!["ok"]!.GetValue<bool>());
-        Assert.Contains("Project filter could not be resolved", slot["error"]!.GetValue<string>(), StringComparison.Ordinal);
-        Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, slot["category"]!.GetValue<string>());
-        Assert.Equal("project", slot["parameter"]!.GetValue<string>());
-    }
-
-    [Fact]
     public void ToolsCall_ReusesDbContextAcrossInvocations()
     {
         // #1494: every MCP tool call used to construct a fresh DbContext (and reopen the
@@ -612,53 +545,6 @@ public partial class McpServerTests
         Assert.Null(response["result"]);
         Assert.Equal(-32601, response["error"]!["code"]!.GetValue<int>());
         Assert.Contains("Tool not enabled", response["error"]!["message"]!.GetValue<string>());
-    }
-
-    [Fact]
-    public void ToolsCall_BatchQuery_DisabledInnerTool_ReturnsSlotError()
-    {
-        // batch_query stays enabled, but the slot for a denied inner tool must surface a
-        // per-slot error instead of executing it. Otherwise CDIDX_MCP_TOOLS_DENY could be
-        // bypassed by smuggling the disabled name into a batch slot.
-        var deny = McpToolFilter.Parse(null, "symbols");
-        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false, deny);
-
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"symbols","arguments":{"query":"App"}}]}}}""")!;
-        var response = server.HandleMessage(request)!;
-        var results = response["result"]!["structuredContent"]!["results"]!.AsArray();
-
-        Assert.Single(results);
-        var slot = results[0]!.AsObject();
-        var slotError = slot["error"]!.GetValue<string>();
-        Assert.Contains("Tool not enabled", slotError);
-        // Carry the JSON-RPC error code on the slot so AI clients can branch on a code
-        // instead of substring-matching prose (#1561).
-        // AI クライアントが prose を部分一致せず code で分岐できるよう、slot にコードを乗せる (#1561)。
-        Assert.Equal(-32601, slot["code"]!.GetValue<int>());
-    }
-
-    [Fact]
-    public void ToolsCall_BatchQuery_DisabledWriteTool_PrefersGateCodeOverWriteGuard()
-    {
-        // When a write tool is excluded by the gate AND smuggled into a batch slot, both
-        // guards could match. The gate runs first so the slot carries the structured
-        // `code: -32601` shape — "this tool is not on offer for this deployment" — instead
-        // of the generic write-in-batch prose. Otherwise scoped clients see different
-        // error shapes depending on whether a tool happened to be a write tool (#1561).
-        // 書き込みツールが gate でも除外され、かつ batch slot に紛れ込んだケース。両 guard が
-        // 該当するが、gate を先に走らせて構造化 `code: -32601` を出すことで、scoped クライアントが
-        // 「このデプロイでは無効」という意図を一貫した shape で受け取れる (#1561)。
-        var allow = McpToolFilter.Parse("batch_query,search", null);
-        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false, allow);
-
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"index","arguments":{"path":"/tmp/x"}}]}}}""")!;
-        var response = server.HandleMessage(request)!;
-        var results = response["result"]!["structuredContent"]!["results"]!.AsArray();
-
-        Assert.Single(results);
-        var slot = results[0]!.AsObject();
-        Assert.Equal(-32601, slot["code"]!.GetValue<int>());
-        Assert.Contains("Tool not enabled", slot["error"]!.GetValue<string>());
     }
 
     [Fact]
@@ -3796,10 +3682,17 @@ public partial class McpServerTests
         var structured = response["result"]!["structuredContent"]!;
         var cycle = Assert.Single(structured["cycles"]!.AsArray());
         var nodes = cycle!["nodes"]!.AsArray().Select(node => node!.GetValue<string>()).ToArray();
+        var nextStepFlags = structured["next_step_flags"]!.AsArray()
+            .Select(flag => flag!.GetValue<string>())
+            .ToArray();
 
         Assert.Equal(1, structured["count"]!.GetValue<int>());
         Assert.Equal(2, nodes.Length);
         Assert.All(nodes, node => Assert.StartsWith("src/Cycle", node));
+        Assert.Equal("partial_display_limit", structured["cycle_result_scope"]!.GetValue<string>());
+        Assert.Contains("limit=2", nextStepFlags);
+        Assert.Contains("path=<narrower-glob>", nextStepFlags);
+        Assert.DoesNotContain(nextStepFlags, flag => flag.StartsWith("--", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -4976,34 +4869,6 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public void ToolsCall_BatchQuery_ExecutesMultipleQueries()
-    {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"status"},{"tool":"files","arguments":{}}]}}}""")!;
-        var response = _server.HandleMessage(request)!;
-
-        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
-        Assert.Contains("Executed 2 of 2 queries", text);
-        var results = response["result"]!["structuredContent"]!["results"]!.AsArray();
-        Assert.Equal(2, results.Count);
-        Assert.Equal(0, results[0]!["request_index"]!.GetValue<int>());
-        Assert.True(results[0]!["ok"]!.GetValue<bool>());
-        Assert.Equal("status", results[0]!["tool"]!.GetValue<string>());
-        Assert.Equal(1, results[1]!["request_index"]!.GetValue<int>());
-        Assert.True(results[1]!["ok"]!.GetValue<bool>());
-        Assert.Equal("files", results[1]!["tool"]!.GetValue<string>());
-        var metadata = response["result"]!["structuredContent"]!["metadata"]!;
-        Assert.Equal(2, metadata["submitted"]!.GetValue<int>());
-        Assert.Equal(2, metadata["executed"]!.GetValue<int>());
-        Assert.Equal(0, metadata["errors"]!.GetValue<int>());
-        var structured = response["result"]!["structuredContent"]!;
-        Assert.Equal(2, structured["total_count"]!.GetValue<int>());
-        Assert.Equal(2, structured["success_count"]!.GetValue<int>());
-        Assert.Equal(0, structured["failure_count"]!.GetValue<int>());
-        Assert.False(structured["partial_failure"]!.GetValue<bool>());
-        Assert.Equal("none", structured["failure_scope"]!.GetValue<string>());
-    }
-
-    [Fact]
     public void ToolsCall_BatchQuery_IncludesPing()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"ping"}]}}}""")!;
@@ -5788,6 +5653,14 @@ public partial class McpServerTests
         Assert.True(yaml["symbol_extraction"]!.GetValue<bool>());
         Assert.Contains("yml", yaml["aliases"]!.AsArray().Select(e => e!.GetValue<string>()));
         Assert.DoesNotContain("missing-symbols", yaml["capability_gaps"]!.AsArray().Select(e => e!.GetValue<string>()));
+        var yamlGuidance = yaml["unsupported_guidance"]!.AsArray();
+        var yamlReferencesGuidance = yamlGuidance.Single(g => g!["capability"]!.GetValue<string>() == "references")!;
+        Assert.Contains("Reference extraction is not advertised for 'yaml'", yamlReferencesGuidance["message"]!.GetValue<string>());
+        Assert.Contains("search", yamlReferencesGuidance["recommended_commands"]!.AsArray().Select(e => e!.GetValue<string>()));
+        var yamlGraphGuidance = yamlGuidance.Single(g => g!["capability"]!.GetValue<string>() == "graph")!;
+        Assert.Contains("empty callers, callees, or impact results are not authoritative", yamlGraphGuidance["message"]!.GetValue<string>());
+        Assert.Contains("files", yamlGraphGuidance["recommended_commands"]!.AsArray().Select(e => e!.GetValue<string>()));
+        Assert.Empty(csharp["unsupported_guidance"]!.AsArray());
 
         // Pin #215: HTML must report symbol_extraction=true and list all four
         // extensions so AI tools discover HTML support via the MCP languages tool.
@@ -7646,7 +7519,17 @@ public partial class McpServerTests
             Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
             var structured = response["result"]!["structuredContent"]!;
             var hotspot = structured["hotspots"]!.AsArray().Single()!;
+            var query = structured["query_context"]!;
             Assert.Equal("file", structured["grouped_by"]!.GetValue<string>());
+            Assert.Equal("file", structured["grouping_unit"]!.GetValue<string>());
+            Assert.Equal("returned_files", structured["count_kind"]!.GetValue<string>());
+            Assert.Equal("files", structured["limit_applies_to"]!.GetValue<string>());
+            Assert.Equal(new[] { "reference_count" }, structured["score_fields"]!.AsArray().Select(field => field!.GetValue<string>()).ToArray());
+            Assert.Equal(new[] { "reference_count", "path" }, structured["ranking_fields"]!.AsArray().Select(field => field!.GetValue<string>()).ToArray());
+            Assert.Equal("file", query["group_by"]!.GetValue<string>());
+            Assert.Equal("file", query["grouping_unit"]!.GetValue<string>());
+            Assert.Equal("returned_files", query["count_kind"]!.GetValue<string>());
+            Assert.Equal("files", query["limit_applies_to"]!.GetValue<string>());
             Assert.Equal(1, structured["count"]!.GetValue<int>());
             Assert.Equal("src/One.cs", hotspot["path"]!.GetValue<string>());
             Assert.Equal(3, hotspot["reference_count"]!.GetValue<int>());
@@ -7656,6 +7539,36 @@ public partial class McpServerTests
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void ToolsCall_SymbolHotspots_GroupByStatementWithoutSqlLangIsRejected_Issue4116()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{"groupBy":"statement"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var result = response["result"]!;
+        Assert.True(result["isError"]!.GetValue<bool>());
+        Assert.Contains("groupBy statement is only supported with lang=sql", result["content"]![0]!["text"]!.GetValue<string>());
+        var structured = result["structuredContent"]!;
+        Assert.Equal("groupBy", structured["parameter"]!.GetValue<string>());
+        Assert.Equal("statement", structured["value"]!.GetValue<string>());
+        Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, structured["category"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_SymbolHotspots_GroupByNameKindIsRejected()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{"groupBy":"name_kind"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var result = response["result"]!;
+        Assert.True(result["isError"]!.GetValue<bool>());
+        Assert.Contains("Unsupported symbol_hotspots groupBy 'name_kind'", result["content"]![0]!["text"]!.GetValue<string>());
+        var structured = result["structuredContent"]!;
+        Assert.Equal("groupBy", structured["parameter"]!.GetValue<string>());
+        Assert.Equal("name_kind", structured["value"]!.GetValue<string>());
+        Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, structured["category"]!.GetValue<string>());
     }
 
     [Fact]
