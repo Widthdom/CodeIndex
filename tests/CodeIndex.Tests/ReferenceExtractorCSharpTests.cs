@@ -57,6 +57,34 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharpQualifiedDataReaderCall_DoesNotEmitCommonMemberReference_Issue4121()
+    {
+        const string content = """
+            class ReaderAdapter
+            {
+                void GetInt32() {}
+
+                void Run(Microsoft.Data.Sqlite.SqliteDataReader reader)
+                {
+                    var value = reader.GetInt32(0);
+                    this.GetInt32();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var getInt32Calls = references
+            .Where(reference => reference.SymbolName == "GetInt32" && reference.ReferenceKind == "call")
+            .ToList();
+
+        var call = Assert.Single(getInt32Calls);
+        Assert.Contains("this.GetInt32()", call.Context, StringComparison.Ordinal);
+        Assert.DoesNotContain(getInt32Calls, reference => reference.Context.Contains("reader.GetInt32", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Extract_CsharpRawStringLongerQuoteRun_DoesNotLeakCallReferences()
     {
         // Regression for #1453: a raw string opened with four quotes must only
