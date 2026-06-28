@@ -709,7 +709,7 @@ public class DbContext : IDisposable
         cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'";
         var objectCount = SqliteCommandPolicy.ReadInt64Scalar(cmd, "sqlite_master object count");
         if (objectCount == 0)
-            Execute("PRAGMA auto_vacuum=INCREMENTAL");
+            Execute(DbPragmaPolicy.AutoVacuumIncrementalPragmaSql);
     }
 
     public VacuumResult RunIncrementalVacuum(bool dryRun = false)
@@ -802,7 +802,7 @@ public class DbContext : IDisposable
     private void ApplyBusyTimeoutPragma()
     {
         var busyTimeoutMs = DbPragmaPolicy.ReadBusyTimeoutMs(BusyTimeoutEnvironmentVariable);
-        Execute($"PRAGMA busy_timeout={busyTimeoutMs}");
+        Execute(DbPragmaPolicy.BusyTimeoutPragmaSql(busyTimeoutMs));
     }
 
     private long? TryGetDatabaseFileSize()

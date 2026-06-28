@@ -147,7 +147,7 @@ internal static class IndexWatchRunner
 
             watcher.EnableRaisingEvents = true;
 
-            EmitWatchStarted(baseOptions, projectRoot, resolvedDbPath, debounce, maxPendingPaths);
+            EmitWatchStarted(baseOptions, jsonOptions, projectRoot, resolvedDbPath, debounce, maxPendingPaths);
 
             while (!cancellationToken.IsCancellationRequested)
             {
@@ -165,7 +165,7 @@ internal static class IndexWatchRunner
 
                 if (fullRescan)
                 {
-                    EmitWatchOverflow(baseOptions, overflowReason, resolvedDbPath);
+                    EmitWatchOverflow(baseOptions, jsonOptions, overflowReason, resolvedDbPath);
                     RecordSubRunExitCode(ref watchExitCode, RunFullRescan(baseOptions, jsonOptions, resolvedDbPath));
                     continue;
                 }
@@ -185,7 +185,7 @@ internal static class IndexWatchRunner
             }
         }
 
-        EmitWatchStopped(baseOptions);
+        EmitWatchStopped(baseOptions, jsonOptions);
         return watchExitCode;
     }
 
@@ -612,7 +612,7 @@ internal static class IndexWatchRunner
         }
         catch (JsonException ex)
         {
-            return new WatchSubRunSummary(null, null, null, "invalid_json", ex.Message);
+            return new WatchSubRunSummary(null, null, null, "invalid_json", CommandErrorWriter.FormatSanitizedExceptionMessage(ex));
         }
     }
 
@@ -694,6 +694,7 @@ internal static class IndexWatchRunner
 
     private static void EmitWatchStarted(
         IndexCommandOptions baseOptions,
+        JsonSerializerOptions jsonOptions,
         string projectRoot,
         string resolvedDbPath,
         TimeSpan debounce,
@@ -701,10 +702,6 @@ internal static class IndexWatchRunner
     {
         if (baseOptions.Json)
         {
-            var jsonOpts = new JsonSerializerOptions
-            {
-                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-            };
             Console.Out.WriteLine(JsonSerializer.Serialize(new IndexWatchEventJsonResult
             {
                 Status = "watching",
@@ -713,7 +710,7 @@ internal static class IndexWatchRunner
                 Db = "[redacted]",
                 DebounceMs = (int)debounce.TotalMilliseconds,
                 WatchPendingPathLimit = maxPendingPaths,
-            }, CliJsonSerializerContextFactory.Create(jsonOpts).IndexWatchEventJsonResult));
+            }, CliJsonSerializerContextFactory.Create(jsonOptions).IndexWatchEventJsonResult));
         }
         else
         {
@@ -722,15 +719,15 @@ internal static class IndexWatchRunner
         }
     }
 
-    private static void EmitWatchOverflow(IndexCommandOptions baseOptions, string? reason, string resolvedDbPath)
+    private static void EmitWatchOverflow(
+        IndexCommandOptions baseOptions,
+        JsonSerializerOptions jsonOptions,
+        string? reason,
+        string resolvedDbPath)
     {
         var safeReason = FormatWatchDiagnosticText(reason);
         if (baseOptions.Json)
         {
-            var jsonOpts = new JsonSerializerOptions
-            {
-                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-            };
             Console.Out.WriteLine(JsonSerializer.Serialize(new IndexWatchEventJsonResult
             {
                 Status = "overflow",
@@ -739,7 +736,7 @@ internal static class IndexWatchRunner
                 OverflowReason = safeReason,
                 WatchPendingPathLimit = baseOptions.WatchPendingPathLimit,
                 RecoveryCommand = BuildOverflowRecoveryCommand(baseOptions, resolvedDbPath, redactPaths: true),
-            }, CliJsonSerializerContextFactory.Create(jsonOpts).IndexWatchEventJsonResult));
+            }, CliJsonSerializerContextFactory.Create(jsonOptions).IndexWatchEventJsonResult));
         }
         else
         {
@@ -748,18 +745,14 @@ internal static class IndexWatchRunner
         }
     }
 
-    private static void EmitWatchStopped(IndexCommandOptions baseOptions)
+    private static void EmitWatchStopped(IndexCommandOptions baseOptions, JsonSerializerOptions jsonOptions)
     {
         if (baseOptions.Json)
         {
-            var jsonOpts = new JsonSerializerOptions
-            {
-                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-            };
             Console.Out.WriteLine(JsonSerializer.Serialize(new IndexWatchEventJsonResult
             {
                 Status = "stopped",
-            }, CliJsonSerializerContextFactory.Create(jsonOpts).IndexWatchEventJsonResult));
+            }, CliJsonSerializerContextFactory.Create(jsonOptions).IndexWatchEventJsonResult));
         }
         else
         {

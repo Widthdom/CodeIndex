@@ -7625,6 +7625,77 @@ public partial class DbReaderTests : IDisposable
         Assert.DoesNotContain("CORRELATED", planText);
     }
 
+    [Fact]
+    public void AnalyzeFileLine_WithKindAndLanguageFilters_ReturnsSymbolAtLine_Issue4057()
+    {
+        InsertIndexedFile(
+            "src/issue4057/LineLookup.cs",
+            "csharp",
+            """
+            public class LineLookup
+            {
+                public void Outside() { }
+                public void Target()
+                {
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeFileLine(
+            "src/issue4057/LineLookup.cs",
+            line: 5,
+            limit: 5,
+            lang: "csharp",
+            kind: "function");
+
+        var definition = Assert.Single(analysis.Definitions);
+        Assert.Equal("Target", definition.Name);
+        Assert.Equal("function", definition.Kind);
+        Assert.Equal("csharp", definition.Lang);
+        Assert.Equal("src/issue4057/LineLookup.cs", definition.Path);
+    }
+
+    [Fact]
+    public void GetRepoMap_CaseSensitiveWorkspaceKeepsCaseVariantEntrypointFallbackPath()
+    {
+        StampWorkspacePathCaseSensitive(true);
+        InsertIndexedFile("src/Program.cs", "csharp",
+            """
+            public class Program
+            {
+                public static void Main() { }
+            }
+            """);
+        InsertIndexedFile("src/program.cs", "csharp", "Console.WriteLine(\"fallback\");\n");
+
+        var map = _reader.GetRepoMap(limit: 10, lang: "csharp", pathPatterns: new[] { "src/" });
+
+        Assert.Contains(map.Entrypoints, item => item.Name == "Main" && item.Path == "src/Program.cs");
+        Assert.Contains(map.Entrypoints, item => item.Kind == "file" && item.Name == "program.cs" && item.Path == "src/program.cs");
+    }
+
+    [Fact]
+    public void GetRepoMap_CaseInsensitiveWorkspaceCollapsesCaseVariantEntrypointFallbackPath()
+    {
+        StampWorkspacePathCaseSensitive(false);
+        InsertIndexedFile("src/Program.cs", "csharp",
+            """
+            public class Program
+            {
+                public static void Main() { }
+            }
+            """);
+        InsertIndexedFile("src/program.cs", "csharp", "Console.WriteLine(\"fallback\");\n");
+
+        var map = _reader.GetRepoMap(limit: 10, lang: "csharp", pathPatterns: new[] { "src/" });
+
+        Assert.Contains(map.Entrypoints, item => item.Name == "Main" && item.Path == "src/Program.cs");
+        Assert.DoesNotContain(map.Entrypoints, item => item.Kind == "file" && item.Path == "src/program.cs");
+    }
+
+    private void StampWorkspacePathCaseSensitive(bool pathCaseSensitive)
+        => _writer.SetMeta(DbContext.WorkspacePathCaseSensitiveMetaKey, pathCaseSensitive.ToString());
+
     private static SqliteConnection CreateLegacyReferenceConnection(string legacyPath)
     {
         var db = new DbContext(legacyPath);

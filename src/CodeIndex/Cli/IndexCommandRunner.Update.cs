@@ -921,11 +921,12 @@ public static partial class IndexCommandRunner
                             writer.ClearBatchInProgress();
 
                         warnings++;
-                        warningList.Add(new CliJsonMessage(relPath, ex.Message));
+                        var sanitizedMessage = CommandErrorWriter.FormatSanitizedExceptionMessage(ex);
+                        warningList.Add(new CliJsonMessage(relPath, sanitizedMessage));
                         if (!options.Json && !options.Quiet)
                         {
                             PauseUpdateSpinnerForConsoleWrite();
-                            ConsoleUi.PrintWarning(ex.Message);
+                            ConsoleUi.PrintWarning(sanitizedMessage);
                             ResumeUpdateSpinnerAfterConsoleWrite();
                         }
 
@@ -1046,6 +1047,31 @@ public static partial class IndexCommandRunner
         finally
         {
             StopIndexJsonPhaseHeartbeat(updateHeartbeat);
+        }
+
+        if (options.ChangedBetweenSpecified)
+        {
+            ThrowIfUpdateCancelled();
+
+            var skipWorktreePaths = GitHelper.TryGetSkipWorktreePaths(projectRoot, cancellationToken);
+            if (skipWorktreePaths != null)
+            {
+                var purgedMissing = writer.PurgeStaleFiles(
+                    projectRoot,
+                    beforeCommit: () =>
+                    {
+                        DemoteReadinessOnce();
+                        WriteProjectRootOnce();
+                        RequireTypeScriptAugmentationRefresh();
+                    },
+                    preservedMissingPaths: skipWorktreePaths);
+                if (purgedMissing > 0)
+                {
+                    removed += purgedMissing;
+                    ftsMutated = true;
+                    WriteUpdateVerboseStatus($"  [DEL ] purged {purgedMissing:N0} missing indexed path(s) after --changed-between");
+                }
+            }
         }
 
         ThrowIfUpdateCancelled();

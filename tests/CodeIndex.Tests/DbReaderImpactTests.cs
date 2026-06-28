@@ -935,4 +935,56 @@ public partial class DbReaderTests
         Assert.Equal(4, edge.ReferenceCount);
         Assert.Equal("ExecuteFolderDiffAsync,FolderDiffService", edge.Symbols);
     }
+
+    [Fact]
+    public void AnalyzeImpact_CaseSensitiveWorkspaceTreatsCaseVariantDefinitionFilesAsDistinct()
+    {
+        StampWorkspacePathCaseSensitive(true);
+        InsertIndexedFile("src/CaseVariantTarget.cs", "csharp",
+            """
+            public class CaseVariantTarget
+            {
+                public void Start() { }
+            }
+            """);
+        InsertIndexedFile("src/casevarianttarget.cs", "csharp",
+            """
+            public class CaseVariantTarget
+            {
+                public void Stop() { }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("CaseVariantTarget", maxDepth: 3, limit: 10);
+
+        Assert.Equal("none", analysis.ImpactMode);
+        Assert.True(analysis.HasMultipleDefinitions);
+        Assert.True(analysis.HasMultipleDefinitionFiles);
+        Assert.Equal("multiple_definition_files", analysis.ZeroResultReason);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_CaseInsensitiveWorkspaceCollapsesCaseVariantDefinitionFiles()
+    {
+        StampWorkspacePathCaseSensitive(false);
+        InsertIndexedFile("src/CaseVariantTarget.cs", "csharp",
+            """
+            public class CaseVariantTarget
+            {
+                public void Start() { }
+            }
+            """);
+        InsertIndexedFile("src/casevarianttarget.cs", "csharp",
+            """
+            public class CaseVariantTarget
+            {
+                public void Stop() { }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("CaseVariantTarget", maxDepth: 3, limit: 10);
+
+        Assert.True(analysis.HasMultipleDefinitions);
+        Assert.False(analysis.HasMultipleDefinitionFiles);
+    }
 }

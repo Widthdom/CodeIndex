@@ -137,6 +137,51 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunMap_FormatIssueDrafts_EmitsOversizedCandidates_Issue4067()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_issue_drafts");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var largerFile = string.Join('\n', Enumerable.Range(1, QueryCommandRunner.MapIssueDraftLineThreshold + 20).Select(line => $"// large {line}")) + "\n";
+            var smallerFile = string.Join('\n', Enumerable.Range(1, QueryCommandRunner.MapIssueDraftLineThreshold + 10).Select(line => $"// smaller {line}")) + "\n";
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/LargeOne.cs", "csharp", largerFile);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/LargeTwo.cs", "csharp", smallerFile);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--format", "issue-drafts", "--limit", "1"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var draft = Assert.Single(json.GetProperty("issue_drafts").EnumerateArray());
+            var candidate = draft.GetProperty("candidate");
+            var oversizedGroup = json.GetProperty("groups").GetProperty("oversized_file");
+            var largestFiles = json.GetProperty("truncation").GetProperty("largest_files");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("issue-drafts", json.GetProperty("format").GetString());
+            Assert.Equal(1, oversizedGroup.GetProperty("count").GetInt32());
+            Assert.Equal("src/LargeOne.cs", oversizedGroup.GetProperty("representative_paths").EnumerateArray().Single().GetString());
+            Assert.Equal("oversized_file", draft.GetProperty("kind").GetString());
+            Assert.Contains("src/LargeOne.cs", draft.GetProperty("title").GetString(), StringComparison.Ordinal);
+            Assert.Contains("## Checklist", draft.GetProperty("body").GetString(), StringComparison.Ordinal);
+            Assert.Equal("src/LargeOne.cs", candidate.GetProperty("path").GetString());
+            Assert.True(candidate.GetProperty("line_threshold_exceeded").GetBoolean());
+            Assert.Equal(QueryCommandRunner.MapIssueDraftLineThreshold, candidate.GetProperty("line_threshold").GetInt32());
+            Assert.Equal(QueryCommandRunner.MapIssueDraftByteThreshold, candidate.GetProperty("byte_threshold").GetInt64());
+            Assert.Equal(1, largestFiles.GetProperty("source_limit").GetInt32());
+            Assert.Equal(2, largestFiles.GetProperty("total_files").GetInt32());
+            Assert.True(largestFiles.GetProperty("truncated").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunMap_ParseInvalidMinEntrypointConfidence_TruncatesOversizedValue()
     {
         var value = new string('x', ConsoleUi.DefaultDiagnosticValueCharLimit + 1);

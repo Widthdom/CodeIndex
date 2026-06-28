@@ -7116,7 +7116,7 @@ public sealed class Caller
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("success", json.GetProperty("status").GetString());
             Assert.True(File.Exists(lockPath), "lock file should remain after a clean exit");
-            Assert.False(File.Exists(infoPath), "lock metadata sidecar should be removed after a clean exit");
+        Assert.False(File.Exists(infoPath), "lock metadata sidecar should be removed after a clean exit");
         }
         finally
         {
@@ -7126,6 +7126,26 @@ public sealed class Caller
             DeleteFile(infoPath);
             DeleteFile(lockPath);
         }
+    }
+
+    [Fact]
+    public void WorkerProtocol_RejectsPayloadOverUtf8FrameLimitBeforeDomParse_Issue4058()
+    {
+        var json = "{\"x\":\"あ\"}";
+
+        var valid = WorkerProtocolJsonValidator.TryValidate(json, json.Length, out var error);
+
+        Assert.False(valid);
+        Assert.Equal("worker_protocol_error: json_payload_length_exceeded", error);
+    }
+
+    [Fact]
+    public void WorkerProtocolLineLimits_ClampHugeFileCapToExtendedProtocolLimit_Issue4058()
+    {
+        var protocolLimit = WorkerProtocolLineLimits.ResolveForSourceFileBytes(long.MaxValue);
+
+        Assert.Equal(WorkerProtocolLineLimits.MaxExtendedLineUtf8Bytes, protocolLimit);
+        Assert.True(protocolLimit < int.MaxValue);
     }
 
 

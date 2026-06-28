@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 
 namespace CodeIndex;
@@ -19,6 +20,12 @@ internal static class WorkerProtocolJsonValidator
         var maxProperties = MaxJsonPropertiesForTesting ?? DefaultMaxJsonProperties;
         var effectiveMaxStringCharacters = MaxStringCharactersForTesting ?? maxStringCharacters;
         var propertyCount = 0;
+        if (IsPayloadOverLimit(json, maxStringCharacters))
+        {
+            error = SafeDiagnosticFormatter.FormatCategoryType("worker_protocol_error", "json_payload_length_exceeded");
+            return false;
+        }
+
         try
         {
             using var document = JsonDocument.Parse(json, new JsonDocumentOptions { MaxDepth = maxDepth });
@@ -36,6 +43,16 @@ internal static class WorkerProtocolJsonValidator
     {
         var maxDepth = MaxJsonDepthForTesting ?? DefaultMaxJsonDepth;
         return maxDepth > 0 ? maxDepth : DefaultMaxJsonDepth;
+    }
+
+    private static bool IsPayloadOverLimit(string json, int maxCharactersAndUtf8Bytes)
+    {
+        if (maxCharactersAndUtf8Bytes <= 0)
+            return true;
+        if (json.Length > maxCharactersAndUtf8Bytes)
+            return true;
+
+        return Encoding.UTF8.GetByteCount(json) > maxCharactersAndUtf8Bytes;
     }
 
     private static void ValidateElement(

@@ -340,7 +340,7 @@ public class SuggestionStore
         {
             // Best-effort — GitHub submission failure does not fail the local operation.
             // ベストエフォート — GitHub 送信失敗はローカル操作を失敗させない。
-            submitResult = SubmitAttemptResult.Failure($"{ex.GetType().Name}: {ex.Message}");
+            submitResult = SubmitAttemptResult.Failure($"{ex.GetType().Name}: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}");
         }
 
         return WithFileLock(() =>

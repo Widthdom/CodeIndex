@@ -24,6 +24,16 @@ public class DiagnosticSanitizerTests
     }
 
     [Fact]
+    public void ForMessage_RedactsSensitiveAssignments_Issue4069()
+    {
+        var sanitized = DiagnosticSanitizer.ForMessage("failed command --token=abc123 at /tmp/codeindex/plugins/bad.dll");
+
+        Assert.Equal("failed command --token=<redacted> at <path>", sanitized);
+        Assert.DoesNotContain("abc123", sanitized, StringComparison.Ordinal);
+        Assert.DoesNotContain("/tmp/codeindex", sanitized, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ForMessage_RedactionTimeout_ReturnsFallbackMessage()
     {
         var timeout = new RegexMatchTimeoutException(

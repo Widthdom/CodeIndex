@@ -1648,6 +1648,113 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void GetUnchangedFileId_ReturnsNullWhenBomMetadataStaleOrSuppressed_Issue4068()
+    {
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var sourceFile = new FileRecord
+        {
+            Path = "src/bom.cs",
+            Lang = "csharp",
+            Size = 50,
+            Lines = 1,
+            Modified = modified,
+        };
+        var sourceFileId = _writer.UpsertFile(sourceFile);
+        _writer.InsertIssues(sourceFileId,
+        [
+            new FileIssue
+            {
+                Path = sourceFile.Path,
+                Kind = "bom",
+                Line = 1,
+                Message = "legacy BOM row without metadata",
+            },
+        ]);
+
+        Assert.Null(_writer.GetUnchangedFileId(sourceFile.Path, modified));
+
+        _writer.InsertIssues(sourceFileId,
+        [
+            new FileIssue
+            {
+                Path = sourceFile.Path,
+                Kind = "bom",
+                Line = 1,
+                Message = "UTF-8 BOM marker detected",
+                Origin = FileIssue.OriginByteOrderMark,
+                Severity = FileIssue.SeverityWarning,
+            },
+        ]);
+
+        Assert.NotNull(_writer.GetUnchangedFileId(sourceFile.Path, modified));
+
+        var utf16File = new FileRecord
+        {
+            Path = "src/utf16.cs",
+            Lang = "csharp",
+            Size = 50,
+            Lines = 1,
+            Modified = modified,
+        };
+        var utf16FileId = _writer.UpsertFile(utf16File);
+        _writer.InsertIssues(utf16FileId,
+        [
+            new FileIssue
+            {
+                Path = utf16File.Path,
+                Kind = "utf16_bom",
+                Line = 1,
+                Message = "legacy UTF-16 BOM row without metadata",
+            },
+        ]);
+
+        Assert.Null(_writer.GetUnchangedFileId(utf16File.Path, modified));
+
+        _writer.InsertIssues(utf16FileId,
+        [
+            new FileIssue
+            {
+                Path = utf16File.Path,
+                Kind = "utf16_bom",
+                Line = 1,
+                Message = "UTF-16 LE BOM detected (decoded as UTF-16)",
+                Origin = FileIssue.OriginByteOrderMark,
+                Severity = FileIssue.SeverityWarning,
+            },
+        ]);
+
+        Assert.NotNull(_writer.GetUnchangedFileId(utf16File.Path, modified));
+
+        var solutionFile = new FileRecord
+        {
+            Path = "CodeIndex.sln",
+            Lang = "solution",
+            Size = 50,
+            Lines = 1,
+            Modified = modified,
+        };
+        var solutionFileId = _writer.UpsertFile(solutionFile);
+        _writer.InsertIssues(solutionFileId,
+        [
+            new FileIssue
+            {
+                Path = solutionFile.Path,
+                Kind = "bom",
+                Line = 1,
+                Message = "UTF-8 BOM marker detected",
+                Origin = FileIssue.OriginByteOrderMark,
+                Severity = FileIssue.SeverityWarning,
+            },
+        ]);
+
+        Assert.Null(_writer.GetUnchangedFileId(solutionFile.Path, modified));
+
+        _writer.InsertIssues(solutionFileId, []);
+
+        Assert.NotNull(_writer.GetUnchangedFileId(solutionFile.Path, modified));
+    }
+
+    [Fact]
     public void GetUnchangedFileId_WithNullChecksumUsesModifiedAndSize()
     {
         var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);

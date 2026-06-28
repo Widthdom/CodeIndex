@@ -372,7 +372,6 @@ internal static class PostExtractionHookCallbackWorker
 {
     internal const string CommandName = "__cdidx-post-extraction-hook-callback";
     internal const int WorkerKillWaitMilliseconds = 5000;
-    private const string ProtocolMaxLineBytesOption = "--protocol-max-line-bytes";
     private const int CapturedConsoleMaxChars = 32 * 1024;
     internal static readonly JsonSerializerOptions JsonOptions =
         WorkerProtocolJsonValidator.CreateSerializerOptions(PostExtractionHookCallbackWorkerJsonContext.Default.Options);
@@ -454,10 +453,12 @@ internal static class PostExtractionHookCallbackWorker
                 typeof(PostExtractionHookCallbackWorker).Assembly))
         {
             startInfo.FileName = currentProcessPath!;
-            startInfo.ArgumentList.Add(CommandName);
-            startInfo.ArgumentList.Add(hook.AssemblyPath);
-            startInfo.ArgumentList.Add(hook.TypeName);
-            CodeIndex.ProcessLaunchPolicy.AddInvariantIntArgument(startInfo, ProtocolMaxLineBytesOption, maxProtocolLineBytes);
+            CodeIndex.ProcessLaunchPolicy.AddWorkerCommandArguments(
+                startInfo,
+                CommandName,
+                maxProtocolLineBytes,
+                hook.AssemblyPath,
+                hook.TypeName);
             error = string.Empty;
             return true;
         }
@@ -475,10 +476,12 @@ internal static class PostExtractionHookCallbackWorker
             return false;
         }
 
-        startInfo.ArgumentList.Add(CommandName);
-        startInfo.ArgumentList.Add(hook.AssemblyPath);
-        startInfo.ArgumentList.Add(hook.TypeName);
-        CodeIndex.ProcessLaunchPolicy.AddInvariantIntArgument(startInfo, ProtocolMaxLineBytesOption, maxProtocolLineBytes);
+        CodeIndex.ProcessLaunchPolicy.AddWorkerCommandArguments(
+            startInfo,
+            CommandName,
+            maxProtocolLineBytes,
+            hook.AssemblyPath,
+            hook.TypeName);
 
         error = string.Empty;
         return true;
@@ -665,7 +668,7 @@ internal static class PostExtractionHookCallbackWorker
             return true;
 
         if (args.Length == 5
-            && StringComparer.Ordinal.Equals(args[3], ProtocolMaxLineBytesOption)
+            && StringComparer.Ordinal.Equals(args[3], CodeIndex.ProcessLaunchPolicy.WorkerProtocolMaxLineBytesOption)
             && int.TryParse(args[4], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
             && parsed > 0)
         {
@@ -674,7 +677,7 @@ internal static class PostExtractionHookCallbackWorker
             return true;
         }
 
-        error = $"post-extraction hook callback worker requires assembly path, type name, and optional `{ProtocolMaxLineBytesOption} <bytes>`.";
+        error = $"post-extraction hook callback worker requires assembly path, type name, and optional `{CodeIndex.ProcessLaunchPolicy.WorkerProtocolMaxLineBytesOption} <bytes>`.";
         return false;
     }
 

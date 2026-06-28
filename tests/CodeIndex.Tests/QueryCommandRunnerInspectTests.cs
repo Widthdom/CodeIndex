@@ -269,6 +269,70 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_ParseOutlineOnly_ImplyJsonAndOutlineFields_Issue4067()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["--outline-only"],
+            jsonDefault: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
+
+        Assert.True(options.Json);
+        Assert.False(options.IncludeBody);
+        Assert.Equal(["file", "definitions", "nearby_symbols"], options.InspectFields);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void RunInspect_OutlineOnlyJsonEmitsSummaryGroups_Issue4067()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_outline_only_4067");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/InspectTarget.cs",
+                "csharp",
+                """
+                public class InspectTarget
+                {
+                    public void Run()
+                    {
+                        Helper();
+                    }
+
+                    private void Helper() { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["InspectTarget", "--db", dbPath, "--outline-only", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var definition = root.GetProperty("definitions").EnumerateArray().First();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(["file", "definitions", "nearby_symbols"], root.GetProperty("selected_fields").EnumerateArray().Select(field => field.GetString()));
+            Assert.True(root.TryGetProperty("file", out _));
+            Assert.NotEmpty(root.GetProperty("definitions").EnumerateArray());
+            Assert.NotEmpty(root.GetProperty("nearby_symbols").EnumerateArray());
+            Assert.False(root.TryGetProperty("references", out _));
+            Assert.False(root.TryGetProperty("callers", out _));
+            Assert.False(root.TryGetProperty("callees", out _));
+            Assert.False(root.GetProperty("body_mode").GetProperty("include_body").GetBoolean());
+            Assert.False(definition.TryGetProperty("body_content", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_ParseBodyRange_ImplyBodyAndValidateValues_Issue3394()
     {
         var options = QueryCommandRunner.ParseArgs(

@@ -889,7 +889,7 @@ public partial class McpServer : IDisposable
             }
             catch (Exception ex) when (ex is IOException or ObjectDisposedException or OperationCanceledException)
             {
-                WriteMcpLogLine(BuildResponseWriteErrorLog(ex.Message));
+                WriteMcpLogLine(BuildResponseWriteErrorLog(DiagnosticSanitizer.ForMessage(ex.Message)));
                 FlushDeferredFrameLogs();
             }
         }
@@ -914,7 +914,7 @@ public partial class McpServer : IDisposable
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or TimeoutException)
         {
-            WriteMcpLogLine(BuildResponseWriteErrorLog(ex.Message));
+            WriteMcpLogLine(BuildResponseWriteErrorLog(DiagnosticSanitizer.ForMessage(ex.Message)));
         }
     }
 
@@ -1059,7 +1059,7 @@ public partial class McpServer : IDisposable
             // stderr には診断用に詳細を残すが、ネットワークに出るレスポンスには
             // 例外型のみを返し、SQLite の "near 'foo': syntax error" などを通じた
             // 内容漏れを防ぐ（#1530）。
-            DeferFrameLog(BuildUnhandledLoopErrorLog(ex.Message));
+            DeferFrameLog(BuildUnhandledLoopErrorLog(DiagnosticSanitizer.ForMessage(ex.Message)));
             var classification = McpErrorEnvelope.ClassifyException(ex);
             var errorResponse = CreateErrorResponse(responseHasId, responseId, classification.JsonRpcCode,
                 BuildSanitizedLoopErrorMessage(ex),
@@ -1251,7 +1251,7 @@ public partial class McpServer : IDisposable
         }
         catch (Exception ex)
         {
-            DeferFrameLog(BuildResponseSerializationErrorLog(ex.Message));
+            DeferFrameLog(BuildResponseSerializationErrorLog(DiagnosticSanitizer.ForMessage(ex.Message)));
             return BuildMinimalInternalErrorResponse(hasId, id, ex);
         }
     }

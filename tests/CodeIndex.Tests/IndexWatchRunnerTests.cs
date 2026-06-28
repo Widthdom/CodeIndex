@@ -493,7 +493,7 @@ public class IndexWatchRunnerTests
             Console.SetOut(stdout);
             try
             {
-                method.Invoke(null, [options, "buffer full", resolvedDbPath]);
+                method.Invoke(null, [options, _jsonOptions, "buffer full", resolvedDbPath]);
             }
             finally
             {
@@ -503,6 +503,7 @@ public class IndexWatchRunnerTests
         }
 
         using var doc = JsonDocument.Parse(capturedOut);
+        Assert.Equal(JsonOutputContract.ApiVersion, doc.RootElement.GetProperty("api_version").GetString());
         Assert.Equal("overflow", doc.RootElement.GetProperty("status").GetString());
         Assert.Equal("incremental", doc.RootElement.GetProperty("phase").GetString());
         Assert.Equal("buffer full", doc.RootElement.GetProperty("overflow_reason").GetString());
@@ -660,9 +661,80 @@ public class IndexWatchRunnerTests
             Assert.DoesNotContain(projectRoot, watchingLine);
             Assert.DoesNotContain(dbPath, watchingLine);
             using var watchStarted = JsonDocument.Parse(watchingLine);
+            Assert.Equal(JsonOutputContract.ApiVersion, watchStarted.RootElement.GetProperty("api_version").GetString());
             Assert.Equal("[redacted]", watchStarted.RootElement.GetProperty("project_root").GetString());
             Assert.Equal("[redacted]", watchStarted.RootElement.GetProperty("db").GetString());
             Assert.Equal(123, watchStarted.RootElement.GetProperty("watch_pending_path_limit").GetInt32());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void RunCore_JsonLifecycleEventsHonorIndentedJsonOptions()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "hello.py"), "print('hi')\n");
+            var prebuildJson = RunIndexAndCapture([projectRoot, "--db", dbPath, "--json"], out var prebuildExit);
+            Assert.Equal(CommandExitCodes.Success, prebuildExit);
+
+            var options = new IndexCommandOptions
+            {
+                ProjectPath = projectRoot,
+                DbPath = dbPath,
+                Json = true,
+                Watch = true,
+                WatchDebounceMs = 50,
+            };
+            var indentedOptions = new JsonSerializerOptions(_jsonOptions)
+            {
+                WriteIndented = true,
+            };
+
+            using var cts = new CancellationTokenSource();
+            string capturedOut;
+            int exitCode;
+
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var stdout = new SignalingStringWriter(
+                    line => line.Contains("\"status\": \"watching\"", StringComparison.Ordinal));
+                Task<int>? loopTask = null;
+                Console.SetOut(stdout);
+                try
+                {
+                    loopTask = StartWatchLoop(options, projectRoot, dbPath, cts.Token, indentedOptions);
+                    var started = stdout.WaitForSignal(TimeSpan.FromSeconds(10));
+                    cts.Cancel();
+                    Assert.True(started,
+                        "Watch loop did not emit the indented watching event before cancellation / 取り消し前に indented watching イベントが出力されなかった");
+#pragma warning disable xUnit1031
+                    Assert.True(loopTask.Wait(TimeSpan.FromSeconds(10)));
+                    exitCode = loopTask.Result;
+#pragma warning restore xUnit1031
+                }
+                finally
+                {
+                    CancelAndDrainWatchLoop(cts, loopTask);
+                    Console.SetOut(originalOut);
+                }
+                capturedOut = stdout.ToString();
+            }
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            var normalized = capturedOut.Replace("\r\n", "\n", StringComparison.Ordinal);
+            Assert.Contains("{\n  \"api_version\": \"" + JsonOutputContract.ApiVersion + "\"", normalized, StringComparison.Ordinal);
+            Assert.Contains("\n  \"status\": \"watching\"", normalized, StringComparison.Ordinal);
+            Assert.Contains("\n  \"status\": \"stopped\"", normalized, StringComparison.Ordinal);
         }
         finally
         {
@@ -780,12 +852,13 @@ public class IndexWatchRunnerTests
         IndexCommandOptions options,
         string projectRoot,
         string dbPath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        JsonSerializerOptions? jsonOptions = null)
     {
         // Run the watcher on a dedicated thread so this cancellation test does not depend on
         // ThreadPool availability during the full test suite.
         return Task.Factory.StartNew(
-            () => IndexWatchRunner.RunCore(options, _jsonOptions, projectRoot, dbPath, cancellationToken),
+            () => IndexWatchRunner.RunCore(options, jsonOptions ?? _jsonOptions, projectRoot, dbPath, cancellationToken),
             CancellationToken.None,
             TaskCreationOptions.LongRunning,
             TaskScheduler.Default);

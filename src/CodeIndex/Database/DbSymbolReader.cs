@@ -17,14 +17,46 @@ public partial class DbReader
     internal const int DefinitionBodyMaxRequestedLines = 1_000;
     internal const int DefinitionBodyMaxBytes = 16 * 1024;
 
-    private const double GenericHotspotNamePenalty = 0.35;
     private const string GenericHotspotNamePenaltySqlLiteral = "0.35";
     private const string GenericHotspotNamesSql = "('add','append','build','call','combine','convert','create','execute','get','getstring','getvalue','getvalues','handle','invoke','load','parse','process','read','resolve','run','set','start','stop','tolist','tostring','tryparse','update','write')";
+    private const string GenericSymbolRankNamePenaltySqlLiteral = "0.01";
+    private const string GenericSymbolRankNamesSql = "('add','append','build','call','combine','contains','convert','count','create','equal','equals','execute','file','files','get','getstring','getvalue','getvalues','handle','id','invoke','key','kind','length','line','load','name','parse','path','process','read','resolve','run','set','start','stop','text','tolist','tostring','tryparse','type','update','value','values','write')";
 
     private const string UnusedBucketLikelyPrivate = "likely_unused_private";
     private const string UnusedBucketMaybeNonPublic = "maybe_unused_nonpublic";
     private const string UnusedBucketPublicOrExported = "public_or_exported_no_refs";
     private const string UnusedBucketReflectionOrConfig = "reflection_or_config_suspect";
+    private const string UnusedContractDomainPrivate = "private_or_file_local";
+    private const string UnusedContractDomainNonPublic = "nonpublic_internal";
+    private const string UnusedContractDomainPublicApi = "public_api_surface";
+    private const string UnusedContractDomainCli = "cli_contract";
+    private const string UnusedContractDomainJson = "json_contract";
+    private const string UnusedContractDomainMcp = "mcp_contract";
+    private const string UnusedContractDomainLsp = "lsp_contract";
+    private const string UnusedContractDomainConfig = "configuration_contract";
+    private const string UnusedContractDomainSerialization = "serialization_or_reflection_contract";
+    private const string UnusedContractDomainGenerated = "generated_code";
+    private const string UnusedContractDomainDocumentation = "documentation_surface";
+    private const string UnusedContractDomainTest = "test_contract";
+    private const string UnusedContractDomainFrameworkOverride = "framework_override";
+    private const string UnusedContractDomainExceptionDiagnostic = "exception_diagnostic";
+    internal static readonly string[] OrderedUnusedContractDomains =
+    [
+        UnusedContractDomainPrivate,
+        UnusedContractDomainNonPublic,
+        UnusedContractDomainPublicApi,
+        UnusedContractDomainCli,
+        UnusedContractDomainJson,
+        UnusedContractDomainMcp,
+        UnusedContractDomainLsp,
+        UnusedContractDomainConfig,
+        UnusedContractDomainSerialization,
+        UnusedContractDomainGenerated,
+        UnusedContractDomainDocumentation,
+        UnusedContractDomainTest,
+        UnusedContractDomainFrameworkOverride,
+        UnusedContractDomainExceptionDiagnostic,
+    ];
     private static readonly HashSet<string> ReflectionPropertyAttributeNames = new(StringComparer.Ordinal)
     {
         "jsonpropertyname",
@@ -142,6 +174,43 @@ public partial class DbReader
         "/obj/",
         "/bin/",
     ];
+    private static readonly string[] UnusedCliPathMarkers = ["/cli/", "/commands/", "/commandline/"];
+    private static readonly string[] UnusedMcpPathMarkers = ["/mcp/"];
+    private static readonly string[] UnusedLspPathMarkers = ["/lsp/", "/languageserver/"];
+    private static readonly string[] UnusedJsonContractTerms =
+    [
+        "Json",
+        "Dto",
+        "DTO",
+        "Request",
+        "Response",
+        "Result",
+        "Results",
+        "Payload",
+        "Envelope",
+        "Contract",
+        "Schema",
+    ];
+    private static readonly HashSet<string> UnusedFrameworkOverrideMemberNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CanRead",
+        "CanSeek",
+        "CanWrite",
+        "Length",
+        "Position",
+        "Flush",
+        "FlushAsync",
+        "Read",
+        "ReadAsync",
+        "ReadByte",
+        "Seek",
+        "SetLength",
+        "Write",
+        "WriteAsync",
+        "WriteByte",
+        "Dispose",
+        "DisposeAsync",
+    };
     private static readonly HashSet<string> UnusedExceptionMetadataNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "CharactersRead",
@@ -229,6 +298,7 @@ public partial class DbReader
     }
 
     private readonly record struct UnusedCandidateChunk(int StartLine, int EndLine, string Content);
+    private readonly record struct UnusedContractDomainClassification(string Domain, List<string> Tags);
 
     private sealed class NormalizedSymbolSearchQueryList : List<string>
     {
@@ -823,14 +893,31 @@ public partial class DbReader
                 GROUP BY rf.lang, sr.symbol_name
             ) symbol_rank
               ON symbol_rank.lang = f.lang
-             AND symbol_rank.symbol_name = s.name COLLATE NOCASE"
+             AND symbol_rank.symbol_name = s.name COLLATE NOCASE
+            LEFT JOIN (
+                SELECT df.lang AS lang,
+                       ds.name AS symbol_name,
+                       COUNT(*) AS definition_sites
+                FROM symbols ds
+                JOIN files df ON df.id = ds.file_id
+                WHERE ds.name IS NOT NULL
+                  AND ds.name <> ''
+                GROUP BY df.lang, ds.name
+            ) symbol_defs
+              ON symbol_defs.lang = f.lang
+             AND symbol_defs.symbol_name = s.name COLLATE NOCASE"
             : string.Empty;
         var referenceCountSql = includeRankSignals ? "COALESCE(symbol_rank.reference_count, 0)" : "CAST(0 AS INTEGER)";
         var hotspotScoreSql = includeRankSignals ? "COALESCE(symbol_rank.hotspot_score, 0.0)" : "CAST(0.0 AS REAL)";
-        var genericNamePenaltySql = includeRankSignals ? GetGenericHotspotNamePenaltySql("s.name") : "1.0";
-        var rankingReferenceCountSql = includeRankSignals ? $"(({referenceCountSql}) * ({genericNamePenaltySql}))" : referenceCountSql;
-        var rankingHotspotScoreSql = includeRankSignals ? $"(({hotspotScoreSql}) * ({genericNamePenaltySql}))" : hotspotScoreSql;
-        var complexityScoreSql = $@"(({sizeLinesSql}) + ({rankingReferenceCountSql} * 4.0) + ({rankingHotspotScoreSql} * 2.0) + CASE
+        var genericNamePenaltySql = includeRankSignals ? GetGenericSymbolRankNamePenaltySql("s.name") : "1.0";
+        var definitionSitesSql = includeRankSignals ? "COALESCE(symbol_defs.definition_sites, 1)" : "CAST(1 AS INTEGER)";
+        var definitionDilutionSql = $"CASE WHEN ({definitionSitesSql}) > 1 THEN CAST(({definitionSitesSql}) * ({definitionSitesSql}) AS REAL) ELSE 1.0 END";
+        var structuralRankPenaltySql = includeRankSignals ? $"CASE WHEN s.kind IN ('property', 'enum') AND ({sizeLinesSql}) <= 1 THEN 0.1 ELSE 1.0 END" : "1.0";
+        var rankingReferenceScoreSql = includeRankSignals ? $"(({referenceCountSql}) * ({genericNamePenaltySql}) * ({structuralRankPenaltySql}) / ({definitionDilutionSql}))" : referenceCountSql;
+        var rankingHotspotScoreSql = includeRankSignals ? $"(({hotspotScoreSql}) * ({genericNamePenaltySql}) * ({structuralRankPenaltySql}) / ({definitionDilutionSql}))" : hotspotScoreSql;
+        var cappedRankingReferenceScoreSql = $"CASE WHEN ({rankingReferenceScoreSql}) > 100.0 THEN 100.0 ELSE ({rankingReferenceScoreSql}) END";
+        var cappedRankingHotspotScoreSql = $"CASE WHEN ({rankingHotspotScoreSql}) > 150.0 THEN 150.0 ELSE ({rankingHotspotScoreSql}) END";
+        var complexityScoreSql = $@"(({sizeLinesSql} * 16.0) + ({cappedRankingReferenceScoreSql} * 0.75) + ({cappedRankingHotspotScoreSql} * 0.35) + CASE
                        WHEN {visibilitySql} IN ('public', 'pub', 'open', 'export') THEN 8.0
                        WHEN {visibilitySql} IN ('protected', 'internal', 'protected internal') THEN 4.0
                        ELSE 0.0
@@ -849,6 +936,11 @@ public partial class DbReader
                    {returnTypeSql} AS return_type,
                    {referenceCountSql} AS reference_count,
                    {hotspotScoreSql} AS hotspot_score,
+                   {rankingReferenceScoreSql} AS ranking_reference_score,
+                   {rankingHotspotScoreSql} AS ranking_hotspot_score,
+                   {genericNamePenaltySql} AS generic_name_penalty,
+                   {structuralRankPenaltySql} AS structural_rank_penalty,
+                   {definitionSitesSql} AS definition_sites,
                    {sizeLinesSql} AS size_lines,
                    {complexityScoreSql} AS complexity_score
             FROM symbols s
@@ -916,7 +1008,7 @@ public partial class DbReader
             "WHEN @preferCaseInsensitiveNormalizedSqlMatch = 1 AND f.lang = 'sql' AND sql_segment_count(s.name) = @rawQuerySegmentCount AND sql_normalize_name_folded(s.name) = @rawQueryNormalizedFolded THEN 3 " +
             "WHEN @preferCaseInsensitiveSqlLeafMatch = 1 AND f.lang = 'sql' AND sql_leaf_name_folded(s.name) = @rawQueryLeafFolded THEN 4 " +
             "ELSE 5 END";
-        sql += BuildSymbolSortOrderBy(sortMode, exactNameOrderSql, referenceCountSql, rankingHotspotScoreSql, sizeLinesSql, complexityScoreSql, startColumnSql);
+        sql += BuildSymbolSortOrderBy(sortMode, exactNameOrderSql, referenceCountSql, hotspotScoreSql, rankingReferenceScoreSql, rankingHotspotScoreSql, sizeLinesSql, complexityScoreSql, startColumnSql);
         sql += " LIMIT @limit";
 
         cmd.CommandText = sql;
@@ -1007,8 +1099,13 @@ public partial class DbReader
                 SortMode = includeRankingMetadata ? sortModeName : null,
                 ReferenceCount = includeRankingMetadata ? Convert.ToInt32(reader.GetInt64(15)) : null,
                 HotspotScore = includeRankingMetadata ? Math.Round(reader.GetDouble(16), 3) : null,
-                SizeLines = includeRankingMetadata ? Convert.ToInt32(reader.GetInt64(17)) : null,
-                ComplexityScore = includeRankingMetadata ? Math.Round(reader.GetDouble(18), 3) : null,
+                RankingReferenceScore = includeRankingMetadata ? Math.Round(reader.GetDouble(17), 3) : null,
+                RankingHotspotScore = includeRankingMetadata ? Math.Round(reader.GetDouble(18), 3) : null,
+                GenericNamePenalty = includeRankingMetadata ? Math.Round(reader.GetDouble(19), 3) : null,
+                StructuralRankPenalty = includeRankingMetadata ? Math.Round(reader.GetDouble(20), 3) : null,
+                DefinitionSites = includeRankingMetadata ? Convert.ToInt32(reader.GetInt64(21)) : null,
+                SizeLines = includeRankingMetadata ? Convert.ToInt32(reader.GetInt64(22)) : null,
+                ComplexityScore = includeRankingMetadata ? Math.Round(reader.GetDouble(23), 3) : null,
             });
         }
         return results;
@@ -1017,11 +1114,16 @@ public partial class DbReader
     private static string GetGenericHotspotNamePenaltySql(string nameSql)
         => $"CASE WHEN lower({nameSql}) IN {GenericHotspotNamesSql} THEN {GenericHotspotNamePenaltySqlLiteral} ELSE 1.0 END";
 
+    private static string GetGenericSymbolRankNamePenaltySql(string nameSql)
+        => $"CASE WHEN lower({nameSql}) IN {GenericSymbolRankNamesSql} THEN {GenericSymbolRankNamePenaltySqlLiteral} ELSE 1.0 END";
+
     private string BuildSymbolSortOrderBy(
         SymbolSortMode sortMode,
         string exactNameOrderSql,
         string referenceCountSql,
-        string hotspotScoreSql,
+        string rawHotspotScoreSql,
+        string rankingReferenceScoreSql,
+        string rankingHotspotScoreSql,
         string sizeLinesSql,
         string complexityScoreSql,
         string startColumnSql)
@@ -1029,10 +1131,10 @@ public partial class DbReader
         var stableTieBreakers = $"{PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line, {startColumnSql} ASC, s.id ASC";
         return sortMode switch
         {
-            SymbolSortMode.Hotspot => $" ORDER BY {hotspotScoreSql} DESC, {referenceCountSql} DESC, {sizeLinesSql} DESC, {stableTieBreakers}",
-            SymbolSortMode.References => $" ORDER BY {referenceCountSql} DESC, {hotspotScoreSql} DESC, {sizeLinesSql} DESC, {stableTieBreakers}",
-            SymbolSortMode.Size => $" ORDER BY {sizeLinesSql} DESC, {referenceCountSql} DESC, {hotspotScoreSql} DESC, {stableTieBreakers}",
-            SymbolSortMode.Complexity => $" ORDER BY {complexityScoreSql} DESC, {hotspotScoreSql} DESC, {referenceCountSql} DESC, {sizeLinesSql} DESC, {stableTieBreakers}",
+            SymbolSortMode.Hotspot => $" ORDER BY {rankingHotspotScoreSql} DESC, {rankingReferenceScoreSql} DESC, {rawHotspotScoreSql} DESC, {referenceCountSql} DESC, {sizeLinesSql} DESC, {stableTieBreakers}",
+            SymbolSortMode.References => $" ORDER BY {rankingReferenceScoreSql} DESC, {rankingHotspotScoreSql} DESC, {referenceCountSql} DESC, {rawHotspotScoreSql} DESC, {sizeLinesSql} DESC, {stableTieBreakers}",
+            SymbolSortMode.Size => $" ORDER BY {sizeLinesSql} DESC, {rankingReferenceScoreSql} DESC, {rankingHotspotScoreSql} DESC, {referenceCountSql} DESC, {stableTieBreakers}",
+            SymbolSortMode.Complexity => $" ORDER BY {complexityScoreSql} DESC, {rankingHotspotScoreSql} DESC, {rankingReferenceScoreSql} DESC, {referenceCountSql} DESC, {sizeLinesSql} DESC, {stableTieBreakers}",
             SymbolSortMode.Path => $" ORDER BY f.path, s.line, {startColumnSql} ASC, s.name, s.id ASC",
             _ => $" ORDER BY {exactNameOrderSql}, {stableTieBreakers}",
         };
@@ -1821,13 +1923,13 @@ public partial class DbReader
             LIMIT @limit";
 
         cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("@path", path);
-        cmd.Parameters.AddWithValue("@line", line);
-        cmd.Parameters.AddWithValue("@limit", limit);
+        SqliteCommandPolicy.Add(cmd, "@path", path);
+        SqliteCommandPolicy.Add(cmd, "@line", line);
+        SqliteCommandPolicy.Add(cmd, "@limit", limit);
         if (kind != null)
-            cmd.Parameters.AddWithValue("@kind", kind);
+            SqliteCommandPolicy.Add(cmd, "@kind", kind);
         if (lang != null)
-            cmd.Parameters.AddWithValue("@lang", lang);
+            SqliteCommandPolicy.Add(cmd, "@lang", lang);
 
         var results = new List<SymbolResult>();
         using var reader = cmd.ExecuteTrackedReader();
@@ -4059,6 +4161,8 @@ public partial class DbReader
 
         var isIntentionalSurfaceSuspect = surfaceTags.Count > 0;
         var classification = ClassifyUnusedSymbol(candidate.IsPublicOrExported, isIntentionalSurfaceSuspect, candidate.Visibility);
+        var reasonTags = BuildUnusedReasonTags(candidate.IsPublicOrExported, isIntentionalSurfaceSuspect, candidate.Visibility, surfaceTags);
+        var contractDomain = ClassifyUnusedContractDomain(candidate, kind, classification.Bucket, surfaceTags);
         return new UnusedSymbolResult
         {
             Path = candidate.Path,
@@ -4076,7 +4180,9 @@ public partial class DbReader
             UnusedBucket = classification.Bucket,
             UnusedConfidence = classification.Confidence,
             UnusedReason = classification.Reason,
-            UnusedReasonTags = BuildUnusedReasonTags(candidate.IsPublicOrExported, isIntentionalSurfaceSuspect, candidate.Visibility, surfaceTags),
+            UnusedReasonTags = reasonTags,
+            UnusedContractDomain = contractDomain.Domain,
+            UnusedContractDomainTags = contractDomain.Tags,
         };
     }
 
@@ -4601,6 +4707,7 @@ public partial class DbReader
         var includesSql = false;
         var bucketCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         var confidenceCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var contractDomainCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         const int batchSize = UnusedPublicOverfetchMaximum;
         for (var bucket = 0; bucket <= 3; bucket++)
         {
@@ -4618,7 +4725,7 @@ public partial class DbReader
                     if (!MatchesUnusedFilters(result, bucketFilter, minConfidence))
                         continue;
 
-                    AddUnusedCountResult(result, paths, bucketCounts, confidenceCounts, ref count, ref includesSql);
+                    AddUnusedCountResult(result, paths, bucketCounts, confidenceCounts, contractDomainCounts, ref count, ref includesSql);
                 }
 
                 if (batch.Count < batchSize)
@@ -4626,7 +4733,7 @@ public partial class DbReader
             }
         }
 
-        return CreateUnusedCountResult(count, paths.Count, includesSql, bucketCounts, confidenceCounts);
+        return CreateUnusedCountResult(count, paths.Count, includesSql, bucketCounts, confidenceCounts, contractDomainCounts);
     }
 
     private UnusedCountResult CountUnusedSymbolsDetailedWithoutSqlResolver(string? kind, string? lang,
@@ -4639,6 +4746,7 @@ public partial class DbReader
         var includesSql = false;
         var bucketCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         var confidenceCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var contractDomainCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         var fileContentByFileId = new Dictionary<long, string>();
         const int batchSize = UnusedPublicOverfetchMaximum;
         for (var bucket = 0; bucket <= 3; bucket++)
@@ -4661,7 +4769,7 @@ public partial class DbReader
                     if (!MatchesUnusedFilters(result, bucketFilter, minConfidence))
                         continue;
 
-                    AddUnusedCountResult(result, paths, bucketCounts, confidenceCounts, ref count, ref includesSql);
+                    AddUnusedCountResult(result, paths, bucketCounts, confidenceCounts, contractDomainCounts, ref count, ref includesSql);
                 }
 
                 if (batch.Count < batchSize)
@@ -4669,7 +4777,7 @@ public partial class DbReader
             }
         }
 
-        return CreateUnusedCountResult(count, paths.Count, includesSql, bucketCounts, confidenceCounts);
+        return CreateUnusedCountResult(count, paths.Count, includesSql, bucketCounts, confidenceCounts, contractDomainCounts);
     }
 
     private static void AddUnusedCountResult(
@@ -4677,6 +4785,7 @@ public partial class DbReader
         HashSet<string> paths,
         Dictionary<string, int> bucketCounts,
         Dictionary<string, int> confidenceCounts,
+        Dictionary<string, int> contractDomainCounts,
         ref int count,
         ref bool includesSql)
     {
@@ -4686,6 +4795,8 @@ public partial class DbReader
             includesSql = true;
         IncrementUnusedCount(bucketCounts, result.UnusedBucket);
         IncrementUnusedCount(confidenceCounts, result.UnusedConfidence);
+        if (!string.IsNullOrWhiteSpace(result.UnusedContractDomain))
+            IncrementUnusedCount(contractDomainCounts, result.UnusedContractDomain);
     }
 
     private static void IncrementUnusedCount(Dictionary<string, int> counts, string key)
@@ -4701,16 +4812,24 @@ public partial class DbReader
         int fileCount,
         bool includesSql,
         Dictionary<string, int> bucketCounts,
-        Dictionary<string, int> confidenceCounts)
+        Dictionary<string, int> confidenceCounts,
+        Dictionary<string, int> contractDomainCounts)
         => new(
             count,
             fileCount,
             includesSql,
             OrderUnusedBucketCounts(bucketCounts),
-            OrderUnusedConfidenceCounts(confidenceCounts));
+            OrderUnusedConfidenceCounts(confidenceCounts),
+            OrderUnusedContractDomainCounts(contractDomainCounts));
 
     private static UnusedCountResult EmptyUnusedCountResult()
-        => CreateUnusedCountResult(0, 0, includesSql: false, new Dictionary<string, int>(StringComparer.Ordinal), new Dictionary<string, int>(StringComparer.Ordinal));
+        => CreateUnusedCountResult(
+            0,
+            0,
+            includesSql: false,
+            new Dictionary<string, int>(StringComparer.Ordinal),
+            new Dictionary<string, int>(StringComparer.Ordinal),
+            new Dictionary<string, int>(StringComparer.Ordinal));
 
     private static QueryCountResult ToQueryCountResult(UnusedCountResult result)
         => new(result.Count, result.FileCount, result.IncludesSql);
@@ -4734,6 +4853,24 @@ public partial class DbReader
         {
             if (counts.TryGetValue(confidence, out var count))
                 ordered[confidence] = count;
+        }
+
+        foreach (var pair in counts.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+        {
+            if (!ordered.ContainsKey(pair.Key))
+                ordered[pair.Key] = pair.Value;
+        }
+
+        return ordered;
+    }
+
+    private static Dictionary<string, int> OrderUnusedContractDomainCounts(Dictionary<string, int> counts)
+    {
+        var ordered = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var domain in OrderedUnusedContractDomains)
+        {
+            if (counts.TryGetValue(domain, out var count))
+                ordered[domain] = count;
         }
 
         foreach (var pair in counts.OrderBy(pair => pair.Key, StringComparer.Ordinal))
@@ -5997,6 +6134,167 @@ public partial class DbReader
         else
             tags.Add("non_public");
         return tags;
+    }
+
+    private static UnusedContractDomainClassification ClassifyUnusedContractDomain(
+        UnusedCandidateSymbol candidate,
+        string kind,
+        string bucket,
+        IReadOnlyList<string> surfaceTags)
+    {
+        var tags = new List<string>();
+        if (string.Equals(bucket, UnusedBucketReflectionOrConfig, StringComparison.Ordinal))
+            AddUnusedSurfaceTag(tags, "intentional_surface_suspect");
+        foreach (var surfaceTag in surfaceTags)
+            AddUnusedSurfaceTag(tags, surfaceTag);
+
+        if (IsPrivateLikeVisibility(candidate.Visibility))
+            return CreateUnusedContractDomain(UnusedContractDomainPrivate, tags, "private_or_file_local");
+
+        if (!candidate.IsPublicOrExported && surfaceTags.Count == 0)
+            return CreateUnusedContractDomain(UnusedContractDomainNonPublic, tags, "nonpublic_or_protected");
+
+        AddUnusedSurfaceTag(tags, candidate.IsPublicOrExported ? "public_or_exported" : "nonpublic_or_protected");
+
+        if (HasUnusedSurfaceTag(surfaceTags, "documentation_heading") || IsMarkdownHeadingSymbol(candidate, kind))
+            return CreateUnusedContractDomain(UnusedContractDomainDocumentation, tags, "documentation_heading");
+
+        if (IsUnusedTestContractSurface(candidate))
+            return CreateUnusedContractDomain(UnusedContractDomainTest, tags, "test_surface");
+
+        if (HasUnusedSurfaceTag(surfaceTags, "generated_surface") || IsGeneratedSurface(candidate))
+            return CreateUnusedContractDomain(UnusedContractDomainGenerated, tags, "generated_surface");
+
+        if (HasUnusedSurfaceTag(surfaceTags, "exception_metadata") || IsExceptionDiagnosticSurface(candidate, kind))
+            return CreateUnusedContractDomain(UnusedContractDomainExceptionDiagnostic, tags, "exception_metadata");
+
+        if (IsFrameworkOverrideSurface(candidate))
+            return CreateUnusedContractDomain(UnusedContractDomainFrameworkOverride, tags, "framework_override");
+
+        if (IsMcpContractSurface(candidate))
+            return CreateUnusedContractDomain(UnusedContractDomainMcp, tags, "mcp_tool_contract");
+
+        if (IsLspContractSurface(candidate))
+            return CreateUnusedContractDomain(UnusedContractDomainLsp, tags, "lsp_protocol_contract");
+
+        if (IsCliContractSurface(candidate))
+            return CreateUnusedContractDomain(UnusedContractDomainCli, tags, "cli_option_or_result");
+
+        if (IsConfigurationContractSurface(candidate, kind, surfaceTags))
+            return CreateUnusedContractDomain(UnusedContractDomainConfig, tags, "configuration_or_metadata_contract");
+
+        if (IsJsonContractSurface(candidate, surfaceTags))
+            return CreateUnusedContractDomain(UnusedContractDomainJson, tags, "json_output_or_input_contract");
+
+        if (HasUnusedSurfaceTag(surfaceTags, "reflection_or_config_suspect"))
+            return CreateUnusedContractDomain(UnusedContractDomainSerialization, tags, "reflection_or_serialization_contract");
+
+        return candidate.IsPublicOrExported
+            ? CreateUnusedContractDomain(UnusedContractDomainPublicApi, tags, "public_api_surface")
+            : CreateUnusedContractDomain(UnusedContractDomainNonPublic, tags, "nonpublic_or_protected");
+    }
+
+    private static UnusedContractDomainClassification CreateUnusedContractDomain(string domain, List<string> tags, params string[] domainTags)
+    {
+        AddUnusedSurfaceTag(tags, domain);
+        foreach (var tag in domainTags)
+            AddUnusedSurfaceTag(tags, tag);
+        return new UnusedContractDomainClassification(domain, tags);
+    }
+
+    private static bool HasUnusedSurfaceTag(IReadOnlyList<string> tags, string tag)
+        => tags.Contains(tag, StringComparer.Ordinal);
+
+    private static bool IsUnusedTestContractSurface(UnusedCandidateSymbol candidate)
+    {
+        return IsUnusedTestPath(candidate.Path)
+            || EndsWithAny(candidate.ContainerName, ["Test", "Tests", "Fixture"])
+            || EndsWithAny(candidate.ContainerQualifiedName, ["Test", "Tests", "Fixture"])
+            || IsTestHookName(candidate.Name);
+    }
+
+    private static bool IsUnusedTestPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return false;
+
+        var normalized = path.Replace('\\', '/');
+        return normalized.StartsWith("test/", StringComparison.OrdinalIgnoreCase)
+            || normalized.StartsWith("tests/", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("/test/", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("/tests/", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains(".tests/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsExceptionDiagnosticSurface(UnusedCandidateSymbol candidate, string kind)
+    {
+        return IsExceptionMetadataProperty(candidate, kind)
+            || (IsDataMemberUnusedKind(kind)
+                && (EndsWithAny(candidate.ContainerName, ["Exception"])
+                    || EndsWithAny(candidate.ContainerQualifiedName, ["Exception"])))
+            || (IsTypeLikeUnusedKind(kind) && EndsWithAny(candidate.Name, ["Exception"]));
+    }
+
+    private static bool IsFrameworkOverrideSurface(UnusedCandidateSymbol candidate)
+    {
+        if (ContainsAny(candidate.Signature, [" override ", " override\t", " override\r", " override\n"]))
+            return true;
+
+        if (!UnusedFrameworkOverrideMemberNames.Contains(candidate.Name))
+            return false;
+
+        return EndsWithAny(candidate.ContainerName, ["Stream", "TextReader", "TextWriter"])
+            || EndsWithAny(candidate.ContainerQualifiedName, ["Stream", "TextReader", "TextWriter"])
+            || ContainsAny(candidate.Signature, ["Stream", "TextReader", "TextWriter"]);
+    }
+
+    private static bool IsMcpContractSurface(UnusedCandidateSymbol candidate)
+    {
+        return ContainsAny(candidate.Path, UnusedMcpPathMarkers)
+            || ContainsAny(candidate.ContainerName, ["Mcp", "JsonRpc"])
+            || ContainsAny(candidate.ContainerQualifiedName, ["Mcp", "JsonRpc"])
+            || ContainsAny(candidate.Signature, ["Mcp", "JsonRpc"]);
+    }
+
+    private static bool IsLspContractSurface(UnusedCandidateSymbol candidate)
+    {
+        return ContainsAny(candidate.Path, UnusedLspPathMarkers)
+            || ContainsAny(candidate.ContainerName, ["Lsp", "LanguageServer"])
+            || ContainsAny(candidate.ContainerQualifiedName, ["Lsp", "LanguageServer"])
+            || ContainsAny(candidate.Signature, ["Lsp", "LanguageServer"]);
+    }
+
+    private static bool IsCliContractSurface(UnusedCandidateSymbol candidate)
+    {
+        var hasCliContext = ContainsAny(candidate.Path, UnusedCliPathMarkers)
+            || ContainsAny(candidate.ContainerQualifiedName, ["Cli", "CommandLine"])
+            || ContainsAny(candidate.Signature, ["CommandLine", "System.CommandLine", "Option<", "Argument<"]);
+        if (hasCliContext)
+            return true;
+
+        return EndsWithAny(candidate.Name, ["Command", "Flag", "Flags", "Usage", "ExitCode", "ErrorCode"])
+            || EndsWithAny(candidate.ContainerName, ["Command", "Flag", "Flags", "Usage", "ExitCode", "ErrorCode"]);
+    }
+
+    private static bool IsConfigurationContractSurface(UnusedCandidateSymbol candidate, string kind, IReadOnlyList<string> surfaceTags)
+    {
+        return HasUnusedSurfaceTag(surfaceTags, "config_or_metadata_surface")
+            || HasUnusedSurfaceTag(surfaceTags, "config_or_metadata_member")
+            || IsConfigOrManifestSurface(candidate, kind)
+            || IsConfigOrMetadataMember(candidate, kind);
+    }
+
+    private static bool IsJsonContractSurface(UnusedCandidateSymbol candidate, IReadOnlyList<string> surfaceTags)
+    {
+        return HasUnusedSurfaceTag(surfaceTags, "serialization_contract")
+            || HasUnusedSurfaceTag(surfaceTags, "contract_member")
+            || HasUnusedSurfaceTag(surfaceTags, "source_generated_json_context")
+            || ContainsAny(candidate.Path, UnusedContractPathSegments)
+            || EndsWithAny(candidate.Name, UnusedRecordContractSuffixes)
+            || EndsWithAny(candidate.ContainerName, UnusedRecordContractSuffixes)
+            || ContainsAny(candidate.Name, UnusedJsonContractTerms)
+            || ContainsAny(candidate.ContainerName, UnusedJsonContractTerms)
+            || ContainsAny(candidate.Signature, ["JsonProperty", "JsonInclude", "JsonSerializerContext", "DataContract", "DataMember", "XmlElement", "XmlAttribute", "YamlMember", "MessagePackObject", "ProtoContract"]);
     }
 
     private static bool IsPrivateLikeVisibility(string? visibility)

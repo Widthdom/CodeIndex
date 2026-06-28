@@ -1,3 +1,5 @@
+using CodeIndex.Diagnostics;
+
 namespace CodeIndex;
 
 /// <summary>
@@ -81,7 +83,7 @@ internal static class PathUriNormalizer
         }
         catch (Exception ex) when (ex is ArgumentException or FormatException or UriFormatException)
         {
-            error = ex.Message;
+            error = DiagnosticSanitizer.ForMessage(ex.Message);
             return false;
         }
     }

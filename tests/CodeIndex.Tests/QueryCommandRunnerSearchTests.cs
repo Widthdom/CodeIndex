@@ -7893,6 +7893,46 @@ jobs:
     }
 
     [Fact]
+    public void RunFind_RegexPathologicalInputReturnsTimeoutJson_Issue4058()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_regex_timeout_4058");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Auth.cs",
+                "csharp",
+                new string('a', 4096) + "!\n");
+
+            try
+            {
+                DbReader.FindRegexMatchTimeoutForTesting = TimeSpan.FromMilliseconds(1);
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                    ["^(a+)+$", "--regex", "--db", dbPath, "--path", "src/Auth.cs", "--json"],
+                    _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.RuntimeError, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                using var document = ParseJsonOutput(stdout);
+                var json = document.RootElement;
+                Assert.Equal("error", json.GetProperty("status").GetString());
+                Assert.Equal("E014_REGEX_MATCH_TIMEOUT", json.GetProperty("error_code").GetString());
+                Assert.Equal("regex_timeout", json.GetProperty("category").GetString());
+            }
+            finally
+            {
+                DbReader.FindRegexMatchTimeoutForTesting = null;
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunFind_RegexTimeoutWritesRuntimeErrorJsonMetadata_Issue3559()
     {
         var timeout = new RegexMatchTimeoutException("aaaaaaaaaaaaaaaa!", "^(a+)+$", TimeSpan.FromMilliseconds(25));
