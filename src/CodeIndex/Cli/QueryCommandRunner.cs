@@ -10280,7 +10280,8 @@ public static partial class QueryCommandRunner
                     hasSymbols,
                     hasReferences,
                     hasReferences,
-                    BuildLanguageCapabilityGaps(hasSymbols, hasReferences, hasReferences));
+                    LanguageCapabilitySupport.BuildGaps(hasSymbols, hasReferences, hasReferences),
+                    LanguageCapabilitySupport.BuildUnsupportedGuidance(lang, hasSymbols, hasReferences, hasReferences));
                 allLangs[lang] = info;
             }
             info.Extensions.Add(ext);
@@ -10331,6 +10332,7 @@ public static partial class QueryCommandRunner
                     kv.Value.References,
                     kv.Value.Graph,
                     kv.Value.CapabilityGaps,
+                    kv.Value.UnsupportedGuidance,
                     GetIndexedLanguageCount(indexedLanguageCounts, kv.Key))).ToList();
                 Console.WriteLine(JsonSerializer.Serialize(new LanguagesJsonResult(entries), CliJsonSerializerContextFactory.Create(jsonOptions).LanguagesJsonResult));
             }
@@ -10390,7 +10392,14 @@ public static partial class QueryCommandRunner
         }
     }
 
-    private sealed record LanguageSupportInfo(List<string> Extensions, List<string> Aliases, bool Symbols, bool References, bool Graph, List<string> CapabilityGaps);
+    private sealed record LanguageSupportInfo(
+        List<string> Extensions,
+        List<string> Aliases,
+        bool Symbols,
+        bool References,
+        bool Graph,
+        List<string> CapabilityGaps,
+        List<LanguageUnsupportedGuidance> UnsupportedGuidance);
 
     private static bool HasLanguageLookup(QueryCommandOptions options)
         => options.LanguageLookups.Count > 0 || options.LanguageExtensionLookups.Count > 0 || options.LanguageAliasLookups.Count > 0;
@@ -10466,18 +10475,6 @@ public static partial class QueryCommandRunner
             LanguageCapabilityMissingReferences or
             LanguageCapabilityMissingSymbols or
             LanguageCapabilitySearchOnly;
-    }
-
-    private static List<string> BuildLanguageCapabilityGaps(bool symbols, bool references, bool graph)
-    {
-        var gaps = new List<string>();
-        if (!symbols)
-            gaps.Add("missing-symbols");
-        if (!references)
-            gaps.Add("missing-references");
-        if (!graph)
-            gaps.Add("missing-graph");
-        return gaps;
     }
 
     private static bool TryNormalizeSearchAuditScope(string value, out string scope)

@@ -2303,6 +2303,35 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunLanguages_JsonIncludesUnsupportedCapabilityGuidance_Issue4122()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        using var document = ParseJsonOutput(stdout);
+        var languages = document.RootElement.GetProperty("languages").EnumerateArray()
+            .ToDictionary(entry => entry.GetProperty("lang").GetString()!, entry => entry);
+        var adaGuidance = languages["ada"].GetProperty("unsupported_guidance").EnumerateArray().ToList();
+
+        var referenceGuidance = adaGuidance.Single(guidance => guidance.GetProperty("capability").GetString() == "references");
+        Assert.Contains("Reference extraction is not advertised for 'ada'", referenceGuidance.GetProperty("message").GetString());
+        var referenceCommands = referenceGuidance.GetProperty("recommended_commands").EnumerateArray().Select(command => command.GetString()).ToList();
+        Assert.Contains("search", referenceCommands);
+        Assert.Contains("definition", referenceCommands);
+
+        var graphGuidance = adaGuidance.Single(guidance => guidance.GetProperty("capability").GetString() == "graph");
+        Assert.Contains("empty callers, callees, or impact results are not authoritative", graphGuidance.GetProperty("message").GetString());
+        var graphCommands = graphGuidance.GetProperty("recommended_commands").EnumerateArray().Select(command => command.GetString()).ToList();
+        Assert.Contains("search", graphCommands);
+        Assert.Contains("files", graphCommands);
+
+        Assert.Empty(languages["csharp"].GetProperty("unsupported_guidance").EnumerateArray());
+    }
+
+    [Fact]
     public void RunLanguages_JsonCapabilitySearchOnlyFiltersAllExtractionGaps()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() =>
