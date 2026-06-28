@@ -1285,6 +1285,10 @@ public partial class QueryCommandRunnerTests
             .GetProperty("recipes")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "dogfood-risk-patterns");
+        var sqlitePolicyRecipe = root
+            .GetProperty("recipes")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "sqlite-query-policy-surfaces");
         var xmlRecipe = root
             .GetProperty("recipes")
             .EnumerateArray()
@@ -1325,6 +1329,14 @@ public partial class QueryCommandRunnerTests
             .GetProperty("queries")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "raw-sql-command-text");
+        var sqlitePolicyCommandTextQuery = sqlitePolicyRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "sqlite-policy-command-text");
+        var sqlitePolicyPragmaQuery = sqlitePolicyRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "sqlite-policy-pragma");
         var emptyCatchQuery = recipe
             .GetProperty("queries")
             .EnumerateArray()
@@ -1431,6 +1443,10 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(dogfoodRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "static-regex-api-negated");
         Assert.Contains(dogfoodRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "static-regex-api-parenthesized");
         Assert.Contains(dogfoodSqlQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("identifier", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(sqlitePolicyCommandTextQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("SqliteCommandPolicy", StringComparison.Ordinal));
+        Assert.Contains(sqlitePolicyPragmaQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("cannot bind every pragma value", StringComparison.Ordinal));
+        Assert.Contains(sqlitePolicyRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "sqlite-policy-immutable-uri");
+        Assert.Contains(sqlitePolicyRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "sqlite-policy-maintenance-progress");
         Assert.Contains(recipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "file-read-all-text");
         Assert.Contains(recipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "file-read-all-bytes");
         Assert.Contains(recipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "thread-sleep");
@@ -1600,6 +1616,7 @@ public partial class QueryCommandRunnerTests
         var recipes = root.GetProperty("recipes").EnumerateArray().ToList();
         var dotnetRecipe = Assert.Single(recipes, recipe => recipe.GetProperty("name").GetString() == "dotnet-risk-patterns");
         var dogfoodRecipe = Assert.Single(recipes, recipe => recipe.GetProperty("name").GetString() == "dogfood-risk-patterns");
+        var sqlitePolicyRecipe = Assert.Single(recipes, recipe => recipe.GetProperty("name").GetString() == "sqlite-query-policy-surfaces");
         var dotnetQueryNames = dotnetRecipe.GetProperty("queries")
             .EnumerateArray()
             .Select(query => query.GetProperty("name").GetString() ?? string.Empty)
@@ -1608,14 +1625,21 @@ public partial class QueryCommandRunnerTests
             .EnumerateArray()
             .Select(query => query.GetProperty("name").GetString() ?? string.Empty)
             .ToList();
+        var sqlitePolicyQueryNames = sqlitePolicyRecipe.GetProperty("queries")
+            .EnumerateArray()
+            .Select(query => query.GetProperty("name").GetString() ?? string.Empty)
+            .ToList();
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
         Assert.Equal(string.Empty, stderr);
-        Assert.Equal(2, root.GetProperty("count").GetInt32());
+        Assert.Equal(3, root.GetProperty("count").GetInt32());
         Assert.Equal(root.GetProperty("count").GetInt32(), recipes.Count);
         Assert.Contains("sqlite-addwithvalue", dotnetQueryNames);
         Assert.All(dotnetQueryNames, name => Assert.Contains("sqlite", name, StringComparison.OrdinalIgnoreCase));
         Assert.Equal(["pragma-command"], dogfoodQueryNames);
+        Assert.Contains("sqlite-policy-command-text", sqlitePolicyQueryNames);
+        Assert.Contains("sqlite-policy-pragma", sqlitePolicyQueryNames);
+        Assert.All(sqlitePolicyQueryNames, name => Assert.Contains("sqlite", name, StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -1667,7 +1691,7 @@ public partial class QueryCommandRunnerTests
         };
 
         Assert.Equal(
-            ["risky-code", "auth-token-audit", "dogfood-risk-patterns", "json-parse-apis", "dotnet-risk-patterns", "xml-parser-security", "filesystem-traversal", "bounded-read-evidence", "broad-token-audit"],
+            ["risky-code", "auth-token-audit", "dogfood-risk-patterns", "sqlite-query-policy-surfaces", "json-parse-apis", "dotnet-risk-patterns", "xml-parser-security", "filesystem-traversal", "bounded-read-evidence", "broad-token-audit"],
             recipes.Select(recipe => recipe.Name).ToArray());
 
         AssertRecipe(
@@ -1747,6 +1771,33 @@ public partial class QueryCommandRunnerTests
                 "environment-variable-parser",
                 "plugin-activator",
                 "assembly-load-context"
+            ]);
+        AssertRecipe(
+            "sqlite-query-policy-surfaces",
+            SearchAuditRecipes.DefaultAuditScope,
+            ["src/**"],
+            expectedSourceExcludes,
+            [
+                "sqlite-policy-command-text",
+                "sqlite-policy-create-command",
+                "sqlite-policy-execute-reader",
+                "sqlite-policy-execute-non-query",
+                "sqlite-policy-execute-scalar",
+                "sqlite-policy-add-with-value",
+                "sqlite-policy-pragma",
+                "sqlite-policy-create-table",
+                "sqlite-policy-alter-table",
+                "sqlite-policy-create-index",
+                "sqlite-policy-drop-table",
+                "sqlite-policy-delete-from",
+                "sqlite-policy-begin-transaction",
+                "sqlite-policy-codeindex-meta",
+                "sqlite-policy-user-version",
+                "sqlite-policy-check-constraint",
+                "sqlite-policy-immutable-uri",
+                "sqlite-policy-read-only",
+                "sqlite-policy-migration",
+                "sqlite-policy-maintenance-progress"
             ]);
         AssertRecipe(
             "json-parse-apis",

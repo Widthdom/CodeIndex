@@ -778,6 +778,153 @@ internal static class SearchAuditRecipes
                 }
             ]),
         SourceScopedRecipe(
+            "sqlite-query-policy-surfaces",
+            "Audit SQLite raw SQL, PRAGMA, schema, transaction, metadata, and read-only compatibility surfaces under the shared command/query policy.",
+            [
+                new(
+                    "sqlite-policy-command-text",
+                    "CommandText",
+                    "Find SQLite command text construction that may need parameterization, identifier quoting, timeout, and cancellation review.",
+                    ["audit", "security"],
+                    "False positives include constant SQL text with all values bound through SqliteCommandPolicy helpers.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: raw CommandText can mix trusted SQL, dynamic identifiers, and user values without a single policy checkpoint.",
+                        "positive: typed SqliteCommandPolicy parameters and SqliteIdentifier quoting are safer evidence."
+                    ],
+                },
+                new(
+                    "sqlite-policy-create-command",
+                    "CreateCommand",
+                    "Find SQLite command creation sites that may need the shared command policy before executing SQL.",
+                    ["audit", "security"],
+                    "False positives include isolated tests or commands immediately populated by a shared policy helper.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: ad hoc commands can skip typed parameters, timeout setup, cancellation boundaries, or read-only checks.",
+                        "positive: command wrappers that centralize timeout, typed parameter, and SQL text policy reduce the risk."
+                    ],
+                },
+                new(
+                    "sqlite-policy-execute-reader",
+                    "ExecuteReader",
+                    "Find SQLite reader execution surfaces that may need timeout, cancellation, and result-bounding review.",
+                    ["audit", "bug"],
+                    "False positives include bounded internal queries and reader loops with explicit cancellation or row limits."),
+                new(
+                    "sqlite-policy-execute-non-query",
+                    "ExecuteNonQuery",
+                    "Find SQLite mutation execution surfaces that may need transaction, timeout, cancellation, and read-only compatibility review.",
+                    ["audit", "security"],
+                    "False positives include schema setup or maintenance operations already guarded by mode checks and shared SQL helpers."),
+                new(
+                    "sqlite-policy-execute-scalar",
+                    "ExecuteScalar",
+                    "Find SQLite scalar execution surfaces that may need type conversion, timeout, and PRAGMA compatibility review.",
+                    ["audit", "bug"],
+                    "False positives include constant bounded probes whose result conversion is centralized."),
+                new(
+                    "sqlite-policy-add-with-value",
+                    "AddWithValue",
+                    "Find SQLite parameter binding that may need explicit type or size review instead of provider inference.",
+                    ["audit", "bug"],
+                    "False positives include tests and intentionally unconstrained values that cannot affect SQL shape."),
+                new(
+                    "sqlite-policy-pragma",
+                    "PRAGMA",
+                    "Find SQLite PRAGMA surfaces that may need allowlisted names, bounded values, and read-only fallback review.",
+                    ["audit", "security"],
+                    "False positives include constant read-only PRAGMA probes and calls routed through DbPragmaPolicy or SqliteCommandPolicy helpers.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: PRAGMA syntax is commonly string-built because SQLite cannot bind every pragma value like a normal parameter.",
+                        "positive: allowlisted pragma names, bounded numeric builders, and fixed values are safer evidence."
+                    ],
+                },
+                new(
+                    "sqlite-policy-create-table",
+                    "CREATE TABLE",
+                    "Find SQLite table DDL that may need schema compatibility, identifier, and migration review.",
+                    ["audit", "security"],
+                    "False positives include static schema statements covered by migration tests."),
+                new(
+                    "sqlite-policy-alter-table",
+                    "ALTER TABLE",
+                    "Find SQLite schema evolution statements that may need legacy database compatibility review.",
+                    ["audit", "bug"],
+                    "False positives include static migrations guarded by schema-version checks."),
+                new(
+                    "sqlite-policy-create-index",
+                    "CREATE INDEX",
+                    "Find SQLite index DDL that may need identifier quoting, uniqueness, and migration compatibility review.",
+                    ["audit", "bug"],
+                    "False positives include static index definitions covered by migration tests."),
+                new(
+                    "sqlite-policy-drop-table",
+                    "DROP TABLE",
+                    "Find SQLite destructive DDL that may need transaction and legacy compatibility review.",
+                    ["audit", "security"],
+                    "False positives include temporary-table cleanup in isolated maintenance paths."),
+                new(
+                    "sqlite-policy-delete-from",
+                    "DELETE FROM",
+                    "Find SQLite delete statements that may need parameterization, transaction, and read-only mode review.",
+                    ["audit", "security"],
+                    "False positives include bounded maintenance cleanup with typed parameters and explicit mode checks."),
+                new(
+                    "sqlite-policy-begin-transaction",
+                    "BeginTransaction",
+                    "Find SQLite transaction boundaries that may need isolation, busy timeout, WAL, and cancellation review.",
+                    ["audit", "bug"],
+                    "False positives include short-lived schema transactions covered by rollback tests."),
+                new(
+                    "sqlite-policy-codeindex-meta",
+                    "codeindex_meta",
+                    "Find SQLite metadata stamping and reads that may need migration, downgrade, and read-only compatibility review.",
+                    ["audit", "bug"],
+                    "False positives include constant metadata keys covered by schema compatibility tests."),
+                new(
+                    "sqlite-policy-user-version",
+                    "user_version",
+                    "Find SQLite user_version reads and writes that may need migration and read-only fallback review.",
+                    ["audit", "bug"],
+                    "False positives include constant version probes with explicit writable-mode checks."),
+                new(
+                    "sqlite-policy-check-constraint",
+                    "CHECK (",
+                    "Find SQLite CHECK constraints that may encode enum or state allowlists needing compatibility review.",
+                    ["audit", "bug"],
+                    "False positives include static constraints whose allowed values are covered by round-trip tests."),
+                new(
+                    "sqlite-policy-immutable-uri",
+                    "immutable=1",
+                    "Find SQLite immutable read-only URI handling that may need WAL, side-file, and migration compatibility review.",
+                    ["audit", "bug"],
+                    "False positives include diagnostic text and tests that only assert the documented fallback path."),
+                new(
+                    "sqlite-policy-read-only",
+                    "read-only",
+                    "Find SQLite read-only fallback text and control flow that may need write avoidance and compatibility review.",
+                    ["audit", "bug"],
+                    "False positives include user-facing help text and tests that intentionally exercise read-only failures."),
+                new(
+                    "sqlite-policy-migration",
+                    "Migration",
+                    "Find SQLite migration code paths that may need legacy schema, metadata, and downgrade compatibility review.",
+                    ["audit", "bug"],
+                    "False positives include stable diagnostic constants and tests that only assert migration messages."),
+                new(
+                    "sqlite-policy-maintenance-progress",
+                    "ReportMaintenanceProgress",
+                    "Find SQLite maintenance status surfaces that may need PRAGMA, transaction, and read-only compatibility review.",
+                    ["audit", "bug"],
+                    "False positives include progress-only emission that does not affect database state.")
+            ],
+            DefaultExecutableExcludeOriginsValue),
+        SourceScopedRecipe(
             "json-parse-apis",
             "Audit JSON parse and deserialize API families that may need payload bounds, streaming, or serializer-option review.",
             [
