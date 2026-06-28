@@ -2291,7 +2291,7 @@ public partial class DbReader
     /// Return a structured outline of symbols in a single file, ordered deterministically.
     /// 1ファイルのシンボルを決定的な順序の構造化アウトラインとして返す。
     /// </summary>
-    public OutlineResult? GetOutline(string filePath)
+    public OutlineResult? GetOutline(string filePath, bool includeReferenceCounts = false)
     {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = "SELECT id, path, lang, lines FROM files WHERE path = @path";
@@ -2310,6 +2310,24 @@ public partial class DbReader
         }
 
         var startColumnOrderSql = GetSymbolColumnSql("start_column", "CAST(2147483647 AS INTEGER)");
+        var includeReferenceCountSql = includeReferenceCounts && _hasReferencesTable;
+        var referenceCountSql = includeReferenceCountSql ? "COALESCE(symbol_rank.reference_count, 0)" : "CAST(NULL AS INTEGER)";
+        var symbolRankJoin = includeReferenceCountSql
+            ? $@"
+            LEFT JOIN (
+                SELECT rf.lang AS lang,
+                       sr.symbol_name AS symbol_name,
+                       COUNT(*) AS reference_count
+                FROM symbol_references sr
+                JOIN files rf ON rf.id = sr.file_id
+                WHERE sr.reference_kind IN {CallGraphReferenceKindsSql}
+                  AND sr.symbol_name IS NOT NULL
+                  AND sr.symbol_name <> ''
+                GROUP BY rf.lang, sr.symbol_name
+            ) symbol_rank
+              ON symbol_rank.lang IS @lang
+             AND symbol_rank.symbol_name = s.name COLLATE NOCASE"
+            : string.Empty;
         using var symCmd = _conn.CreateCommand();
         symCmd.CommandText = $@"
             SELECT s.kind, s.name, s.line,
@@ -2322,8 +2340,10 @@ public partial class DbReader
                    {GetSymbolColumnSql("container_name")} AS container_name,
                    {GetSymbolColumnSql("container_qualified_name")} AS container_qualified_name,
                    {GetSymbolColumnSql("visibility")} AS visibility,
-                   {GetSymbolColumnSql("return_type")} AS return_type
+                   {GetSymbolColumnSql("return_type")} AS return_type,
+                   {referenceCountSql} AS reference_count
             FROM symbols s
+            {symbolRankJoin}
             WHERE s.file_id = @fileId
             ORDER BY s.line ASC,
                      {startColumnOrderSql} ASC,
@@ -2331,6 +2351,8 @@ public partial class DbReader
                      s.name COLLATE BINARY ASC,
                      s.id ASC";
         SqliteCommandPolicy.Add(symCmd, "@fileId", fileId);
+        if (includeReferenceCountSql)
+            SqliteCommandPolicy.AddNullableText(symCmd, "@lang", lang);
 
         var symbols = new List<OutlineSymbol>();
         using (var reader = symCmd.ExecuteTrackedReader())
@@ -2355,6 +2377,7 @@ public partial class DbReader
                     Path = BuildOutlineSymbolPath(containerQualifiedName ?? containerName, name),
                     Visibility = GetNullableString(reader, 11),
                     ReturnType = GetNullableString(reader, 12),
+                    ReferenceCount = GetNullableInt32(reader, 13),
                 });
             }
         }

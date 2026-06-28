@@ -71,6 +71,7 @@ cdidx search "handleRequest"
 cdidx search "TODO" --first-per-file --sample 25 --json=ndjson --max-json-bytes 65536
 cdidx definition UserService
 cdidx inspect QueryCommandRunner --outline-only
+cdidx outline src/CodeIndex/Cli/QueryCommandRunner.cs --compact --kind function --sort size --limit 10
 cdidx unused --compact --by-bucket
 cdidx map --format issue-drafts --limit 10
 cdidx validate
@@ -270,6 +271,7 @@ cdidx search "handleRequest"
 cdidx search "TODO" --first-per-file --sample 25 --json=ndjson --max-json-bytes 65536
 cdidx definition UserService
 cdidx inspect QueryCommandRunner --outline-only
+cdidx outline src/CodeIndex/Cli/QueryCommandRunner.cs --compact --kind function --sort size --limit 10
 cdidx unused --compact --by-bucket
 cdidx map --format issue-drafts --limit 10
 cdidx validate

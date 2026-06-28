@@ -6708,7 +6708,58 @@ public static partial class QueryCommandRunner
         => options.OutlineFieldsExplicit
            || kindFilters.Count > 0
            || options.LimitExplicit
-           || options.OutlineCursorOffset.HasValue;
+           || options.OutlineCursorOffset.HasValue
+           || options.SortExplicit;
+
+    private static bool TryParseOutlineSortMode(string value, out OutlineSortMode sortMode)
+    {
+        switch (value.Trim().ToLowerInvariant().Replace("_", "-"))
+        {
+            case "source":
+            case "line":
+            case "lines":
+                sortMode = OutlineSortMode.Source;
+                return true;
+            case "name":
+                sortMode = OutlineSortMode.Name;
+                return true;
+            case "kind":
+                sortMode = OutlineSortMode.Kind;
+                return true;
+            case "references":
+            case "reference":
+            case "refs":
+            case "ref":
+                sortMode = OutlineSortMode.References;
+                return true;
+            case "size":
+            case "span":
+            case "spans":
+                sortMode = OutlineSortMode.Size;
+                return true;
+            case "complexity":
+                sortMode = OutlineSortMode.Complexity;
+                return true;
+            case "path":
+                sortMode = OutlineSortMode.Path;
+                return true;
+            default:
+                sortMode = OutlineSortMode.Source;
+                return false;
+        }
+    }
+
+    private static string FormatOutlineSortMode(OutlineSortMode sortMode)
+        => sortMode switch
+        {
+            OutlineSortMode.Name => "name",
+            OutlineSortMode.Kind => "kind",
+            OutlineSortMode.References => "references",
+            OutlineSortMode.Size => "size",
+            OutlineSortMode.Complexity => "complexity",
+            OutlineSortMode.Path => "path",
+            _ => "source",
+        };
 
     private static List<string> BuildOutlineKindFilters(string? rawKind)
     {
@@ -6731,6 +6782,100 @@ public static partial class QueryCommandRunner
         return symbols.Where(symbol => filterSet.Contains(symbol.Kind.ToLowerInvariant())).ToList();
     }
 
+    private static bool OutlineNeedsReferenceCounts(QueryCommandOptions options, OutlineSortMode sortMode)
+        => sortMode is OutlineSortMode.References or OutlineSortMode.Complexity
+           || (options.OutlineFieldsExplicit
+               && (options.OutlineFields is null
+                   || options.OutlineFields.Contains("reference_count", StringComparer.Ordinal)
+                   || options.OutlineFields.Contains("complexity_score", StringComparer.Ordinal)));
+
+    private static bool OutlineNeedsDerivedMetadata(QueryCommandOptions options, OutlineSortMode sortMode)
+        => sortMode != OutlineSortMode.Source
+           || options.SortExplicit
+           || options.OutlineFieldsExplicit;
+
+    private static List<OutlineSymbol> ApplyOutlineSort(IReadOnlyList<OutlineSymbol> symbols, OutlineSortMode sortMode, bool includeDerivedMetadata)
+    {
+        if (includeDerivedMetadata)
+        {
+            foreach (var symbol in symbols)
+                ApplyOutlineSortMetadata(symbol, sortMode);
+        }
+
+        if (sortMode == OutlineSortMode.Source)
+            return symbols.ToList();
+
+        if (!includeDerivedMetadata)
+        {
+            foreach (var symbol in symbols)
+                ApplyOutlineSortMetadata(symbol, sortMode);
+        }
+
+        return sortMode switch
+        {
+            OutlineSortMode.Name => symbols
+                .OrderBy(symbol => symbol.Name, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(symbol => symbol.Line)
+                .ThenBy(symbol => symbol.Kind, StringComparer.Ordinal)
+                .ToList(),
+            OutlineSortMode.Kind => symbols
+                .OrderBy(symbol => symbol.Kind, StringComparer.Ordinal)
+                .ThenByDescending(GetOutlineSizeLines)
+                .ThenBy(symbol => symbol.Line)
+                .ThenBy(symbol => symbol.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+            OutlineSortMode.References => symbols
+                .OrderByDescending(symbol => symbol.ReferenceCount ?? 0)
+                .ThenByDescending(GetOutlineSizeLines)
+                .ThenBy(symbol => symbol.Line)
+                .ThenBy(symbol => symbol.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+            OutlineSortMode.Size => symbols
+                .OrderByDescending(GetOutlineSizeLines)
+                .ThenBy(symbol => symbol.Line)
+                .ThenBy(symbol => symbol.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+            OutlineSortMode.Complexity => symbols
+                .OrderByDescending(GetOutlineComplexityScore)
+                .ThenByDescending(GetOutlineSizeLines)
+                .ThenBy(symbol => symbol.Line)
+                .ThenBy(symbol => symbol.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+            OutlineSortMode.Path => symbols
+                .OrderBy(symbol => symbol.Path, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(symbol => symbol.Line)
+                .ThenBy(symbol => symbol.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+            _ => symbols.ToList(),
+        };
+    }
+
+    private static void ApplyOutlineSortMetadata(OutlineSymbol symbol, OutlineSortMode sortMode)
+    {
+        symbol.SortMode = FormatOutlineSortMode(sortMode);
+        symbol.SizeLines = GetOutlineSizeLines(symbol);
+        symbol.ComplexityScore = GetOutlineComplexityScore(symbol);
+    }
+
+    private static int GetOutlineSizeLines(OutlineSymbol symbol)
+        => symbol.EndLine >= symbol.StartLine
+            ? Math.Max(1, symbol.EndLine - symbol.StartLine + 1)
+            : 1;
+
+    private static double GetOutlineComplexityScore(OutlineSymbol symbol)
+    {
+        var visibilityBonus = symbol.Visibility switch
+        {
+            "public" or "pub" or "open" or "export" => 8.0,
+            "protected" or "internal" or "protected internal" => 4.0,
+            _ => 0.0,
+        };
+        var kindBonus = symbol.Kind is "class" or "struct" or "interface" or "enum" or "namespace" or "record"
+            ? 6.0
+            : 0.0;
+        return (GetOutlineSizeLines(symbol) * 16.0) + ((symbol.ReferenceCount ?? 0) * 0.75) + visibilityBonus + kindBonus;
+    }
+
     private static List<OutlineSymbol> ApplyOutlineHumanPaging(IReadOnlyList<OutlineSymbol> symbols, QueryCommandOptions options)
     {
         if (!options.LimitExplicit && !options.OutlineCursorOffset.HasValue)
@@ -6744,6 +6889,7 @@ public static partial class QueryCommandRunner
         OutlineResult outline,
         IReadOnlyList<OutlineSymbol> filteredSymbols,
         IReadOnlyList<string> kindFilters,
+        OutlineSortMode sortMode,
         QueryCommandOptions options,
         JsonSerializerOptions jsonOptions,
         bool compact)
@@ -6760,7 +6906,7 @@ public static partial class QueryCommandRunner
             var compactOutline = BuildOutlineView(outline, remainingSymbols, totalMatchingSymbols);
             var compactTruncation = ApplyOutlineCompactCaps(compactOutline, compactLimit);
             var payload = JsonSerializer.SerializeToNode(compactOutline, CliJsonSerializerContextFactory.Create(jsonOptions).OutlineResult)!.AsObject();
-            AddOutlinePagingJsonFields(payload, kindFilters, totalMatchingSymbols, offset, compactOutline.Symbols.Count, jsonOptions);
+            AddOutlinePagingJsonFields(payload, kindFilters, sortMode, options.SortExplicit, totalMatchingSymbols, offset, compactOutline.Symbols.Count, jsonOptions);
             ApplyOutlineFieldSelection(payload, compactOutline.Symbols, options, jsonOptions);
             AddCompactJsonFields(payload, compactLimit, compactTruncation);
             return payload;
@@ -6772,7 +6918,7 @@ public static partial class QueryCommandRunner
             : remainingSymbols;
         var pagedOutline = BuildOutlineView(outline, pageSymbols, totalMatchingSymbols);
         var pagedPayload = JsonSerializer.SerializeToNode(pagedOutline, CliJsonSerializerContextFactory.Create(jsonOptions).OutlineResult)!.AsObject();
-        AddOutlinePagingJsonFields(pagedPayload, kindFilters, totalMatchingSymbols, offset, pageSymbols.Count, jsonOptions);
+        AddOutlinePagingJsonFields(pagedPayload, kindFilters, sortMode, options.SortExplicit, totalMatchingSymbols, offset, pageSymbols.Count, jsonOptions);
         ApplyOutlineFieldSelection(pagedPayload, pageSymbols, options, jsonOptions);
         return pagedPayload;
     }
@@ -6790,6 +6936,8 @@ public static partial class QueryCommandRunner
     private static void AddOutlinePagingJsonFields(
         JsonObject payload,
         IReadOnlyList<string> kindFilters,
+        OutlineSortMode sortMode,
+        bool sortExplicit,
         int totalSymbolCount,
         int offset,
         int returnedSymbolCount,
@@ -6804,6 +6952,8 @@ public static partial class QueryCommandRunner
         payload["has_more"] = hasMore;
         if (kindFilters.Count > 0)
             payload["kind_filter"] = JsonSerializer.SerializeToNode(kindFilters.ToList(), CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+        if (sortExplicit || sortMode != OutlineSortMode.Source)
+            payload["sort"] = FormatOutlineSortMode(sortMode);
     }
 
     private static void ApplyOutlineFieldSelection(
@@ -6885,6 +7035,18 @@ public static partial class QueryCommandRunner
                     break;
                 case "return_type":
                     payload["return_type"] = symbol.ReturnType;
+                    break;
+                case "sort_mode":
+                    payload["sort_mode"] = symbol.SortMode;
+                    break;
+                case "reference_count":
+                    payload["reference_count"] = symbol.ReferenceCount;
+                    break;
+                case "size_lines":
+                    payload["size_lines"] = symbol.SizeLines;
+                    break;
+                case "complexity_score":
+                    payload["complexity_score"] = symbol.ComplexityScore;
                     break;
             }
         }
@@ -7339,7 +7501,8 @@ public static partial class QueryCommandRunner
             jsonDefault: false,
             validateDefaultLimit: false,
             validateDefaultSnippetLines: false,
-            validateDefaultMaxLineWidth: false);
+            validateDefaultMaxLineWidth: false,
+            allowOutlineSort: true);
         if (TryWriteUnsupportedOptionError("outline", cmdArgs[1..], CliFlagSchema.GetAcceptedFlagNamesForCommand("outline")))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "outline"))
@@ -7358,9 +7521,14 @@ public static partial class QueryCommandRunner
         }
 
         var filePath = DbPathResolver.ResolveQueryFilePath(options.DbPath, cmdArgs[0], options.DbPathExplicit);
+        var outlineSortMode = options.SortExplicit && options.SortValue != null && TryParseOutlineSortMode(options.SortValue, out var parsedSortMode)
+            ? parsedSortMode
+            : OutlineSortMode.Source;
+        var includeReferenceCounts = OutlineNeedsReferenceCounts(options, outlineSortMode);
+        var includeDerivedMetadata = OutlineNeedsDerivedMetadata(options, outlineSortMode);
         return WithDb(options, jsonOptions, reader =>
         {
-            var outline = reader.GetOutline(filePath);
+            var outline = reader.GetOutline(filePath, includeReferenceCounts: includeReferenceCounts);
             if (outline == null)
             {
                 if (options.Json)
@@ -7372,16 +7540,17 @@ public static partial class QueryCommandRunner
 
             var kindFilters = BuildOutlineKindFilters(options.Kind);
             var filteredSymbols = ApplyOutlineKindFilters(outline.Symbols, kindFilters);
+            var displaySourceSymbols = ApplyOutlineSort(filteredSymbols, outlineSortMode, includeDerivedMetadata);
             if (options.Json)
             {
                 if (options.Compact)
                 {
-                    var payload = BuildOutlineJsonPayload(outline, filteredSymbols, kindFilters, options, jsonOptions, compact: true);
+                    var payload = BuildOutlineJsonPayload(outline, displaySourceSymbols, kindFilters, outlineSortMode, options, jsonOptions, compact: true);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else if (HasOutlineJsonControls(options, kindFilters))
                 {
-                    var payload = BuildOutlineJsonPayload(outline, filteredSymbols, kindFilters, options, jsonOptions, compact: false);
+                    var payload = BuildOutlineJsonPayload(outline, displaySourceSymbols, kindFilters, outlineSortMode, options, jsonOptions, compact: false);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
@@ -7401,7 +7570,7 @@ public static partial class QueryCommandRunner
                     .Where(group => group.Count() > 1)
                     .Select(group => group.Key)
                     .ToHashSet(StringComparer.Ordinal);
-                var displaySymbols = ApplyOutlineHumanPaging(filteredSymbols, options);
+                var displaySymbols = ApplyOutlineHumanPaging(displaySourceSymbols, options);
                 foreach (var sym in displaySymbols)
                 {
                     // Indent nested symbols by computed tree depth / コンテナ連鎖の深さでインデント
@@ -10524,7 +10693,8 @@ public static partial class QueryCommandRunner
         bool validateDefaultLimit = true,
         bool validateDefaultSnippetLines = true,
         bool validateDefaultMaxLineWidth = true,
-        bool applySearchSourceDefaults = false)
+        bool applySearchSourceDefaults = false,
+        bool allowOutlineSort = false)
     {
         string? dbPath = null;
         string? dataDir = null;
@@ -10623,6 +10793,8 @@ public static partial class QueryCommandRunner
         bool strict = false;
         var rankMode = ReferenceRankMode.Weighted;
         var symbolSortMode = SymbolSortMode.Name;
+        string? sortValue = null;
+        bool sortExplicit = false;
         var extraNames = new List<string>();
         bool impactDeprecatedDepthUsed = false;
         List<string>? mapSections = null;
@@ -11319,13 +11491,27 @@ public static partial class QueryCommandRunner
                         AddParseError(rankByError!);
                     break;
                 case "--sort":
-                    if (TryReadStringOptionValue(args, ref i, "--sort", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var sortValue, out var sortError))
+                    if (TryReadStringOptionValue(args, ref i, "--sort", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var sortRawValue, out var sortError))
                     {
-                        WarnIfDuplicateSingleValueOption("--sort", sortValue!);
-                        if (TryParseSymbolSortMode(sortValue!, out var parsedSortMode))
+                        WarnIfDuplicateSingleValueOption("--sort", sortRawValue!);
+                        var normalizedSortValue = sortRawValue!;
+                        if (allowOutlineSort && TryParseOutlineSortMode(normalizedSortValue, out _))
+                        {
+                            sortExplicit = true;
+                        }
+                        else if (!allowOutlineSort && TryParseSymbolSortMode(normalizedSortValue, out var parsedSortMode))
+                        {
                             symbolSortMode = parsedSortMode;
+                            sortExplicit = true;
+                        }
                         else
-                            AddParseError($"Error: --sort must be one of hotspot, references, size, complexity, path; got '{sortValue}'.");
+                        {
+                            var allowedSortValues = allowOutlineSort
+                                ? "source, kind, references, size, span, complexity, path, or name"
+                                : "hotspot, references, size, complexity, path";
+                            AddParseError($"Error: --sort must be one of {allowedSortValues}; got '{normalizedSortValue}'.");
+                        }
+                        sortValue = normalizedSortValue;
                     }
                     else
                         AddParseError(sortError!);
@@ -12100,6 +12286,8 @@ public static partial class QueryCommandRunner
             StatusConfig = statusConfig,
             RankMode = rankMode,
             SymbolSortMode = symbolSortMode,
+            SortValue = sortValue,
+            SortExplicit = sortExplicit,
             ExtraNames = extraNames,
             MapSections = mapSections,
             SummaryOnly = summaryOnly,
@@ -12420,7 +12608,22 @@ public static partial class QueryCommandRunner
                 case "container_name":
                 case "visibility":
                 case "return_type":
+                case "sort_mode":
+                case "reference_count":
+                case "size_lines":
+                case "complexity_score":
                     AddField(field);
+                    break;
+                case "refs":
+                case "references":
+                    AddField("reference_count");
+                    break;
+                case "size":
+                case "span":
+                    AddField("size_lines");
+                    break;
+                case "complexity":
+                    AddField("complexity_score");
                     break;
                 case "range":
                 case "lines":
@@ -12437,7 +12640,7 @@ public static partial class QueryCommandRunner
                     AddField("container_name");
                     break;
                 default:
-                    addParseError($"Error: unsupported --outline-fields value '{ConsoleUi.FormatBoundedValue(rawField)}'. Use one or more of all, kind, name, display_name, path, line, start_line, end_line, depth, body_start_line, body_end_line, signature, signature_truncated, signature_original_length, container_kind, container_name, visibility, return_type, or aliases range, lines, body, body_range, container.");
+                    addParseError($"Error: unsupported --outline-fields value '{ConsoleUi.FormatBoundedValue(rawField)}'. Use one or more of all, kind, name, display_name, path, line, start_line, end_line, depth, body_start_line, body_end_line, signature, signature_truncated, signature_original_length, container_kind, container_name, visibility, return_type, sort_mode, reference_count, size_lines, complexity_score, or aliases range, lines, body, body_range, container, refs, size, span, complexity.");
                     continue;
             }
         }
@@ -16067,6 +16270,8 @@ public sealed class QueryCommandOptions
     public bool StatusConfig { get; init; }
     public ReferenceRankMode RankMode { get; init; } = ReferenceRankMode.Weighted;
     public SymbolSortMode SymbolSortMode { get; init; } = SymbolSortMode.Name;
+    public string? SortValue { get; init; }
+    public bool SortExplicit { get; init; }
     public List<string> ExtraNames { get; init; } = [];
     public List<string>? MapSections { get; init; }
     public bool SummaryOnly { get; init; }
