@@ -109,6 +109,9 @@ public sealed class PostExtractionHookRunner : IDisposable
         if (string.IsNullOrWhiteSpace(hooksDirectory) || !Directory.Exists(hooksDirectory))
             return new PostExtractionHookDiscoverySnapshot([], runner.Diagnostics, runner.CallbackBudget, initialTrustOverrides);
 
+        if (!HookDirectoryIsSupported(hooksDirectory, runner))
+            return new PostExtractionHookDiscoverySnapshot([], runner.Diagnostics, runner.CallbackBudget, initialTrustOverrides);
+
         var hooks = EnumerateHookAssemblyPaths(hooksDirectory, runner, discoveryLimit.Value)
             .Select(dllPath =>
             {
@@ -151,6 +154,9 @@ public sealed class PostExtractionHookRunner : IDisposable
         runner.EnqueueDiagnostic(discoveryLimit.Diagnostic);
 
         if (string.IsNullOrWhiteSpace(hooksDirectory) || !Directory.Exists(hooksDirectory))
+            return runner;
+
+        if (!HookDirectoryIsSupported(hooksDirectory, runner))
             return runner;
 
         var maxAssemblyBytes = ResolveDiscoveryMaxBytes();
@@ -236,6 +242,40 @@ public sealed class PostExtractionHookRunner : IDisposable
         }
 
         return runner;
+    }
+
+    private static bool HookDirectoryIsSupported(string hooksDirectory, PostExtractionHookRunner runner)
+    {
+        DirectoryInfo directoryInfo;
+        try
+        {
+            directoryInfo = new DirectoryInfo(hooksDirectory);
+            directoryInfo.Refresh();
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            runner.EnqueueDiagnostic(
+                hooksDirectory,
+                null,
+                "Hook directory skipped: could not inspect directory.",
+                category: "hook_directory_inspection_failed");
+            return false;
+        }
+
+        if (!directoryInfo.Exists)
+            return false;
+
+        if (FileSystemBoundary.IsSymlinkOrReparsePoint(directoryInfo))
+        {
+            runner.EnqueueDiagnostic(
+                hooksDirectory,
+                null,
+                "Hook directory skipped: symbolic links and reparse points are not supported.",
+                category: "hook_directory_reparse_point");
+            return false;
+        }
+
+        return true;
     }
 
     private static IReadOnlyList<string> EnumerateHookAssemblyPaths(

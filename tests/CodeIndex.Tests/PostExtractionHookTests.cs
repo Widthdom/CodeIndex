@@ -627,6 +627,41 @@ public class PostExtractionHookTests
     }
 
     [Fact]
+    public void Discover_RejectsSymlinkHooksDirectory_Issue4133()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-symlink-dir-4133");
+        lock (TestConsoleLock.Gate)
+        {
+            var targetDir = Path.Combine(projectRoot, "target-hooks");
+            var linkDir = Path.Combine(projectRoot, "hooks-link");
+            try
+            {
+                Directory.CreateDirectory(targetDir);
+                File.WriteAllText(Path.Combine(targetDir, "target.dll"), "not a real dll");
+                Directory.CreateSymbolicLink(linkDir, targetDir);
+
+                using var runner = PostExtractionHookRunner.Discover(linkDir);
+
+                Assert.Empty(runner.Hooks);
+                var diagnostic = Assert.Single(runner.Diagnostics);
+                Assert.EndsWith("hooks-link", diagnostic.AssemblyPath, StringComparison.Ordinal);
+                Assert.Equal("hook_directory_reparse_point", diagnostic.Category);
+                Assert.DoesNotContain(projectRoot, diagnostic.AssemblyPath, StringComparison.Ordinal);
+                Assert.Contains("symbolic links and reparse points", diagnostic.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                if (Directory.Exists(linkDir))
+                    Directory.Delete(linkDir);
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
     public void Callbacks_TruncateHookMaterializationAndReportDiagnostics_Issue3744()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-materialization-cap");
