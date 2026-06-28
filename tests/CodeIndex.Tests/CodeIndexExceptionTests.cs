@@ -155,6 +155,30 @@ public class CodeIndexExceptionTests
     }
 
     [Fact]
+    public void Formatter_JsonFlag_RedactsMessageButKeepsStructuredPath_Issue4124()
+    {
+        var ex = new CodeIndexException(
+            code: CommandErrorCodes.DbError,
+            category: CodeIndexExceptionCategory.Database,
+            message: "Failed with --token=ghp_abcdefghijklmnopqrstuvwxyz.",
+            path: "/var/private/state.db",
+            hint: "Retry after fixing permissions.");
+
+        var (stdout, stderr) = CaptureConsole(() =>
+            CodeIndexExceptionFormatter.Write(ex, ["status", "--json"], _jsonOptions));
+
+        Assert.Empty(stderr);
+        using var doc = JsonDocument.Parse(stdout);
+        var root = doc.RootElement;
+        var message = root.GetProperty("message").GetString();
+        Assert.Equal("/var/private/state.db", root.GetProperty("path").GetString());
+        Assert.Contains("--token=<redacted>", message);
+        Assert.Contains("<path>", message);
+        Assert.DoesNotContain("ghp_", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("/var/private", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void HasJsonFlag_RespectsDoubleDashBoundary()
     {
         Assert.False(CodeIndexExceptionFormatter.HasJsonFlag(["status"]));

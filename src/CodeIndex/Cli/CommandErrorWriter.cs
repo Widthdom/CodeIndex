@@ -75,6 +75,9 @@ internal static class CommandErrorWriter
     internal static string FormatSanitizedExceptionMessage(Exception ex)
     {
         ArgumentNullException.ThrowIfNull(ex);
-        return DiagnosticSanitizer.ForMessage(ex.Message);
+        return DiagnosticRedactor.FormatExceptionMessage(ex);
     }
+
+    internal static string FormatSanitizedExceptionDetail(Exception ex, int maxMessageChars = 240)
+        => DiagnosticRedactor.FormatExceptionDetail(ex, maxMessageChars);
 }

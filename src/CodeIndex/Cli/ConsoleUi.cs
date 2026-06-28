@@ -2474,7 +2474,7 @@ public static class ConsoleUi
         _widthDetectionFailed = true;
         if (_traceWidthDetectionFailures && !_widthDetectionTraceWritten)
         {
-            var suffix = exception == null ? string.Empty : $" ({exception.GetType().Name}: {exception.Message})";
+            var suffix = exception == null ? string.Empty : $" ({CommandErrorWriter.FormatSanitizedExceptionDetail(exception)})";
             CommandErrorWriter.WriteStderr($"cdidx: console width detection failed; using COLUMNS or 80 columns{suffix}");
             _widthDetectionTraceWritten = true;
         }

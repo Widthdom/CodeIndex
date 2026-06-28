@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace CodeIndex.PackageNormalize;
 
@@ -256,17 +257,32 @@ internal static class PackageNormalizeDiagnostics
 {
     private const int MaxDiagnosticValueChars = 160;
     private const int MaxDiagnosticMessageChars = 512;
+    private const string RedactedValue = "<redacted>";
+    private const string RedactedPath = "<path>";
+    private static readonly TimeSpan RedactionRegexTimeout = TimeSpan.FromMilliseconds(100);
+    private static readonly Regex SensitiveAssignmentPattern = new(
+        @"(?<![\w.-])(?<name>(?:--?)?[\w.-]*(?:token|password|passwd|pwd|secret|auth|apikey|api-key|api_key|access-key|access_key|credential)[\w.-]*)(?<sep>=|:)(?<value>[^\s,;]+)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
+        RedactionRegexTimeout);
+    private static readonly Regex WindowsAbsolutePathPattern = new(
+        @"\b[A-Za-z]:[\\/][^\s""'<>|]+",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled,
+        RedactionRegexTimeout);
+    private static readonly Regex UnixAbsolutePathPattern = new(
+        @"(?<![A-Za-z0-9+\-.]:)(?<!/)/[^\s""'<>]+(?:/[^\s""'<>]+)*",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled,
+        RedactionRegexTimeout);
 
     internal static string FormatException(string packagePath, Exception exception)
     {
         return exception switch
         {
             InvalidDataException => $"Package {FormatPath(packagePath)} is not a readable ZIP archive.",
-            PackageNormalizeReplaceDurabilityException => FormatMessage(exception.Message),
+            PackageNormalizeReplaceDurabilityException => FormatExceptionMessage(exception),
             IOException => $"Could not read or rewrite package {FormatPath(packagePath)}.",
             UnauthorizedAccessException => $"Could not access package {FormatPath(packagePath)}.",
-            ArgumentException => FormatMessage(exception.Message),
-            InvalidOperationException => FormatMessage(exception.Message),
+            ArgumentException => FormatExceptionMessage(exception),
+            InvalidOperationException => FormatExceptionMessage(exception),
             _ => $"Unexpected package normalization failure for {FormatPath(packagePath)}: {exception.GetType().Name}.",
         };
     }
@@ -296,7 +312,12 @@ internal static class PackageNormalizeDiagnostics
 
     internal static string FormatMessage(string message)
     {
-        return FormatValue(message, MaxDiagnosticMessageChars);
+        return FormatValue(RedactMessage(message), MaxDiagnosticMessageChars);
+    }
+
+    private static string FormatExceptionMessage(Exception exception)
+    {
+        return FormatMessage(exception.Message);
     }
 
     internal static string FormatCleanupWarning(string tempPath, Exception exception)
@@ -332,6 +353,22 @@ internal static class PackageNormalizeDiagnostics
     private static bool IsSafeDiagnosticChar(char ch)
     {
         return ch >= ' ' && ch != '\u007F';
+    }
+
+    private static string RedactMessage(string message)
+    {
+        try
+        {
+            var redacted = SensitiveAssignmentPattern.Replace(
+                message,
+                match => match.Groups["name"].Value + match.Groups["sep"].Value + RedactedValue);
+            redacted = WindowsAbsolutePathPattern.Replace(redacted, RedactedPath);
+            return UnixAbsolutePathPattern.Replace(redacted, RedactedPath);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return RedactedValue;
+        }
     }
 }
 
