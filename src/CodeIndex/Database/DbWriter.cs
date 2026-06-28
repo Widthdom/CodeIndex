@@ -784,19 +784,28 @@ public class DbWriter
             return false;
         }
 
+        var isSolutionFile = string.Equals(Path.GetExtension(relativePath), ".sln", StringComparison.OrdinalIgnoreCase);
         var cmd = RentCommand(
             @"
             SELECT 1
             FROM file_issues i
             JOIN files f ON i.file_id = f.id
             WHERE f.path = @path
-              AND i.kind IN ('replacement_char', 'non_utf8_likely')
-              AND (i.origin IS NULL OR i.severity IS NULL)
+              AND (
+                  (i.kind IN ('replacement_char', 'non_utf8_likely', 'bom', 'utf16_bom')
+                      AND (i.origin IS NULL OR i.severity IS NULL))
+                  OR (i.kind = 'bom' AND @is_solution_file = 1)
+              )
             LIMIT 1",
-            static c => c.Parameters.Add("@path", SqliteType.Text));
+            static c =>
+            {
+                c.Parameters.Add("@path", SqliteType.Text);
+                c.Parameters.Add("@is_solution_file", SqliteType.Integer);
+            });
         try
         {
             cmd.Parameters["@path"].Value = relativePath;
+            cmd.Parameters["@is_solution_file"].Value = isSolutionFile ? 1 : 0;
             return cmd.ExecuteScalar() != null;
         }
         finally
