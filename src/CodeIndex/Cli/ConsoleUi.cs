@@ -177,8 +177,6 @@ public static class ConsoleUi
         ("db-checkpoints", "Lists existing checkpoint snapshots without changing database files."),
         ("db-restore", "Replaces the DB from a checkpoint and keeps a pre-restore backup directory next to the DB."),
         ("db-restore-backups", "--list reports pre-restore backups; --prune deletes older backup directories beyond --keep."),
-        ("deps", "Large dependency queries emit Progress lines on stderr at --limit 80+ or with --verbose; use --summary-only or --max-json-bytes for bounded JSON."),
-        ("hotspots", "Large hotspot queries emit Progress lines on stderr at --limit 80+ or with --verbose; use --summary-only or --max-json-bytes for bounded JSON."),
     ];
 
     private static readonly HashSet<string> HiddenCommandUsageNames = new(StringComparer.Ordinal)
