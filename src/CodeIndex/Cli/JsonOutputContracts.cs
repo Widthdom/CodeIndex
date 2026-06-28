@@ -417,6 +417,7 @@ internal sealed record LanguageEntryJsonResult(
     [property: JsonPropertyName("reference_extraction")] bool ReferenceExtraction,
     [property: JsonPropertyName("graph_queries")] bool GraphQueries,
     [property: JsonPropertyName("capability_gaps")] List<string> CapabilityGaps,
+    [property: JsonPropertyName("unsupported_guidance")] List<LanguageUnsupportedGuidance> UnsupportedGuidance,
     [property: JsonPropertyName("indexed_file_count")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? IndexedFileCount = null);
 
@@ -731,6 +732,7 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(List<HookCommandWarningJsonResult>))]
 [JsonSerializable(typeof(JsonStreamDoneResult))]
 [JsonSerializable(typeof(LanguageEntryJsonResult))]
+[JsonSerializable(typeof(LanguageUnsupportedGuidance))]
 [JsonSerializable(typeof(LanguagesJsonResult))]
 [JsonSerializable(typeof(LspLocation))]
 [JsonSerializable(typeof(LspPosition))]

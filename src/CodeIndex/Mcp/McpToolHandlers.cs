@@ -5424,7 +5424,7 @@ public partial class McpServer
         }
 
         // Build consolidated language info / 統合言語情報を構築
-        var allLangs = new Dictionary<string, (List<string> Extensions, List<string> Aliases, bool Symbols, bool References, bool Graph, List<string> CapabilityGaps)>(StringComparer.Ordinal);
+        var allLangs = new Dictionary<string, (List<string> Extensions, List<string> Aliases, bool Symbols, bool References, bool Graph, List<string> CapabilityGaps, List<LanguageUnsupportedGuidance> UnsupportedGuidance)>(StringComparer.Ordinal);
         foreach (var (ext, lang) in langExtensions)
         {
             if (!allLangs.TryGetValue(lang, out var info))
@@ -5437,7 +5437,8 @@ public partial class McpServer
                     hasSymbols,
                     hasReferences,
                     hasReferences,
-                    BuildLanguageCapabilityGaps(hasSymbols, hasReferences, hasReferences));
+                    LanguageCapabilitySupport.BuildGaps(hasSymbols, hasReferences, hasReferences),
+                    LanguageCapabilitySupport.BuildUnsupportedGuidance(lang, hasSymbols, hasReferences, hasReferences));
                 allLangs[lang] = info;
             }
             info.Extensions.Add(ext);
@@ -5462,6 +5463,17 @@ public partial class McpServer
                 foreach (var ext in info.Extensions.OrderBy(e => e, StringComparer.Ordinal))
                     extArray.Add(ext);
 
+                var guidanceArray = new JsonArray();
+                foreach (var guidance in info.UnsupportedGuidance)
+                {
+                    guidanceArray.Add(new JsonObject
+                    {
+                        ["capability"] = guidance.Capability,
+                        ["message"] = guidance.Message,
+                        ["recommended_commands"] = new JsonArray(guidance.RecommendedCommands.Select(command => JsonValue.Create(command)).ToArray()),
+                    });
+                }
+
                 languagesArray.Add(new JsonObject
                 {
                     ["lang"] = lang,
@@ -5471,6 +5483,7 @@ public partial class McpServer
                     ["reference_extraction"] = info.References,
                     ["graph_queries"] = info.Graph,
                     ["capability_gaps"] = new JsonArray(info.CapabilityGaps.Select(gap => JsonValue.Create(gap)).ToArray()),
+                    ["unsupported_guidance"] = guidanceArray,
                 });
             }
 
@@ -5525,18 +5538,6 @@ public partial class McpServer
             "graph" => graph,
             _ => false,
         };
-
-    private static List<string> BuildLanguageCapabilityGaps(bool symbols, bool references, bool graph)
-    {
-        var gaps = new List<string>();
-        if (!symbols)
-            gaps.Add("missing-symbols");
-        if (!references)
-            gaps.Add("missing-references");
-        if (!graph)
-            gaps.Add("missing-graph");
-        return gaps;
-    }
 
     private sealed record McpIndexUnsupportedMode(string Name, string Reason, bool BlocksIndexing);
 

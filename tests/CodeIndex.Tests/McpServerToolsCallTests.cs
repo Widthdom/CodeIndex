@@ -5788,6 +5788,14 @@ public partial class McpServerTests
         Assert.True(yaml["symbol_extraction"]!.GetValue<bool>());
         Assert.Contains("yml", yaml["aliases"]!.AsArray().Select(e => e!.GetValue<string>()));
         Assert.DoesNotContain("missing-symbols", yaml["capability_gaps"]!.AsArray().Select(e => e!.GetValue<string>()));
+        var yamlGuidance = yaml["unsupported_guidance"]!.AsArray();
+        var yamlReferencesGuidance = yamlGuidance.Single(g => g!["capability"]!.GetValue<string>() == "references")!;
+        Assert.Contains("Reference extraction is not advertised for 'yaml'", yamlReferencesGuidance["message"]!.GetValue<string>());
+        Assert.Contains("search", yamlReferencesGuidance["recommended_commands"]!.AsArray().Select(e => e!.GetValue<string>()));
+        var yamlGraphGuidance = yamlGuidance.Single(g => g!["capability"]!.GetValue<string>() == "graph")!;
+        Assert.Contains("empty callers, callees, or impact results are not authoritative", yamlGraphGuidance["message"]!.GetValue<string>());
+        Assert.Contains("files", yamlGraphGuidance["recommended_commands"]!.AsArray().Select(e => e!.GetValue<string>()));
+        Assert.Empty(csharp["unsupported_guidance"]!.AsArray());
 
         // Pin #215: HTML must report symbol_extraction=true and list all four
         // extensions so AI tools discover HTML support via the MCP languages tool.
