@@ -412,9 +412,6 @@ public static class DiffCommandRunner
             options.Detailed);
     }
 
-    private static OrderedRowsDiff DiffOrderedRows(SqliteConnection leftConnection, SqliteConnection rightConnection, string sql, int limit)
-        => DiffOrderedRows(leftConnection, rightConnection, sql, sql, limit, CancellationToken.None);
-
     private static OrderedRowsDiff DiffOrderedRows(
         SqliteConnection leftConnection,
         SqliteConnection rightConnection,
@@ -552,9 +549,6 @@ public static class DiffCommandRunner
 
         return new OrderedRowsDiff(equal, onlyInLeft, onlyInRight, truncated);
     }
-
-    private static bool RowsEqual(SqliteConnection leftConnection, SqliteConnection rightConnection, string sql)
-        => RowsEqual(leftConnection, rightConnection, sql, sql, CancellationToken.None);
 
     private static bool RowsEqual(SqliteConnection leftConnection, SqliteConnection rightConnection, string sql, CancellationToken cancellationToken)
         => RowsEqual(leftConnection, rightConnection, sql, sql, cancellationToken);
