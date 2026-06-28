@@ -33,7 +33,7 @@ public static class DbPathResolver
         if (!string.IsNullOrWhiteSpace(explicitDbPath))
             return new DbPathResolution(explicitDbPath, null, null);
 
-        return ResolveDataDir(projectPath, explicitDataDir, Environment.GetEnvironmentVariable(DataDirEnvironmentVariable), Environment.GetEnvironmentVariable("XDG_DATA_HOME"));
+        return ResolveDataDir(projectPath, explicitDataDir, CdidxEnvironment.GetProcessEnvironmentVariable(DataDirEnvironmentVariable), CdidxEnvironment.GetProcessEnvironmentVariable("XDG_DATA_HOME"));
     }
 
     public static DbPathResolution ResolveForQuery(string workspacePath, string? explicitDbPath, string? explicitDataDir)
@@ -41,7 +41,7 @@ public static class DbPathResolver
         if (!string.IsNullOrWhiteSpace(explicitDbPath))
             return new DbPathResolution(explicitDbPath, null, null);
 
-        return ResolveDataDirForQuery(workspacePath, explicitDataDir, Environment.GetEnvironmentVariable(DataDirEnvironmentVariable), Environment.GetEnvironmentVariable("XDG_DATA_HOME"));
+        return ResolveDataDirForQuery(workspacePath, explicitDataDir, CdidxEnvironment.GetProcessEnvironmentVariable(DataDirEnvironmentVariable), CdidxEnvironment.GetProcessEnvironmentVariable("XDG_DATA_HOME"));
     }
 
     internal static DbPathResolution ResolveDataDir(string workspacePath, string? explicitDataDir, string? environmentDataDir, string? xdgDataHome)

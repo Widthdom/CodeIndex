@@ -339,6 +339,10 @@ internal sealed record SearchGroupedCountJsonResult(
     [property: JsonPropertyName("group_by")] string GroupBy,
     [property: JsonPropertyName("count")] int Count,
     [property: JsonPropertyName("files")] int Files,
+    [property: JsonPropertyName("returned_groups")] int ReturnedGroups,
+    [property: JsonPropertyName("total_groups")] int TotalGroups,
+    [property: JsonPropertyName("groups_truncated")] bool GroupsTruncated,
+    [property: JsonPropertyName("group_limit")] int GroupLimit,
     [property: JsonPropertyName("groups")] List<SearchGroupedCountItemJsonResult> Groups);
 
 internal sealed record SearchGroupedCountItemJsonResult(
@@ -359,6 +363,10 @@ internal sealed record SearchAggregationJsonResult(
     [property: JsonPropertyName("count")] int Count,
     [property: JsonPropertyName("files")] int Files,
     [property: JsonPropertyName("unique")] bool Unique,
+    [property: JsonPropertyName("returned_groups")] int ReturnedGroups,
+    [property: JsonPropertyName("total_groups")] int TotalGroups,
+    [property: JsonPropertyName("groups_truncated")] bool GroupsTruncated,
+    [property: JsonPropertyName("group_limit")] int GroupLimit,
     [property: JsonPropertyName("groups")] List<SearchGroupedCountItemJsonResult> Groups);
 
 internal sealed record SearchFileGroupedJsonResult(
@@ -417,6 +425,7 @@ internal sealed record LanguageEntryJsonResult(
     [property: JsonPropertyName("reference_extraction")] bool ReferenceExtraction,
     [property: JsonPropertyName("graph_queries")] bool GraphQueries,
     [property: JsonPropertyName("capability_gaps")] List<string> CapabilityGaps,
+    [property: JsonPropertyName("unsupported_guidance")] List<LanguageUnsupportedGuidance> UnsupportedGuidance,
     [property: JsonPropertyName("indexed_file_count")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? IndexedFileCount = null);
 
@@ -731,6 +740,7 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(List<HookCommandWarningJsonResult>))]
 [JsonSerializable(typeof(JsonStreamDoneResult))]
 [JsonSerializable(typeof(LanguageEntryJsonResult))]
+[JsonSerializable(typeof(LanguageUnsupportedGuidance))]
 [JsonSerializable(typeof(LanguagesJsonResult))]
 [JsonSerializable(typeof(LspLocation))]
 [JsonSerializable(typeof(LspPosition))]
@@ -796,6 +806,7 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(SearchRecipeBroadCatchDiagnosticBehaviorJsonResult))]
 [JsonSerializable(typeof(SearchRecipeFilterSupportJsonResult))]
 [JsonSerializable(typeof(SearchRecipeLimitSemanticsJsonResult))]
+[JsonSerializable(typeof(SearchRecipeQueryFreshnessJsonResult))]
 [JsonSerializable(typeof(SearchRecipeCompactRunJsonResult))]
 [JsonSerializable(typeof(SearchRecipeCompactQueryResultJsonResult))]
 [JsonSerializable(typeof(SearchRecipeCompactResultJsonResult))]

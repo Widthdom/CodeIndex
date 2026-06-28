@@ -470,7 +470,7 @@ public static partial class IndexCommandRunner
 
     private static void WarnIfMemoryThresholdExceeded(IndexMemoryTimelineJsonResult? timeline)
     {
-        var rawThreshold = Environment.GetEnvironmentVariable("CDIDX_MEM_WARN_MB");
+        var rawThreshold = CdidxEnvironment.GetProcessEnvironmentVariable("CDIDX_MEM_WARN_MB");
         if (timeline == null || !long.TryParse(rawThreshold, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var thresholdMb) || thresholdMb <= 0)
             return;
 
