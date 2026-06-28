@@ -21,6 +21,15 @@ public sealed class GitHubHttpCancellationTests : IDisposable
     [Fact]
     public void GitHubHttpClientFactory_NormalizesInfiniteTimeoutToBoundedMaximum_Issue3954()
     {
+        var infiniteBudget = GitHubHttpClientFactory.NormalizeRequestTimeoutBudget(Timeout.InfiniteTimeSpan);
+        Assert.True(infiniteBudget.HasTimeout);
+        Assert.Equal(GitHubHttpClientFactory.MaxRequestTimeout, infiniteBudget.Duration);
+
+        var overBudget = GitHubHttpClientFactory.NormalizeRequestTimeoutBudget(
+            GitHubHttpClientFactory.MaxRequestTimeout + TimeSpan.FromSeconds(1));
+        Assert.True(overBudget.HasTimeout);
+        Assert.Equal(GitHubHttpClientFactory.MaxRequestTimeout, overBudget.Duration);
+
         Assert.Equal(
             GitHubHttpClientFactory.MaxRequestTimeout,
             GitHubHttpClientFactory.NormalizeRequestTimeout(Timeout.InfiniteTimeSpan));
