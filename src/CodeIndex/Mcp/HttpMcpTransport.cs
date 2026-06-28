@@ -467,7 +467,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             return configured;
         }
 
-        var raw = Environment.GetEnvironmentVariable(envVar);
+        var raw = global::CodeIndex.EnvironmentAccess.GetProcessEnvironmentVariable(envVar);
         if (BigInteger.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
         {
             if (parsed > maximumValue)

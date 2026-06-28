@@ -382,6 +382,32 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
+    public void BuildApiFailureMessage_RedactsBearerTokenInPlainTextErrorBody_Issue4134()
+    {
+        const string token = "secret-token-4134";
+
+        var message = GitHubIssueReporter.BuildApiFailureMessage(
+            403,
+            $"Authorization: Bearer {token} denied");
+
+        Assert.Contains("Authorization: Bearer [redacted]", message);
+        Assert.DoesNotContain(token, message);
+    }
+
+    [Fact]
+    public void BuildApiFailureMessage_RedactsBearerTokenInsideMessageField_Issue4134()
+    {
+        const string token = "secret-token-4134";
+
+        var message = GitHubIssueReporter.BuildApiFailureMessage(
+            403,
+            $$"""{ "message": "Authorization: Bearer {{token}} denied" }""");
+
+        Assert.Contains("Bearer [redacted]", message);
+        Assert.DoesNotContain(token, message);
+    }
+
+    [Fact]
     public void BuildRateLimitFailureMessage_RedactsSensitiveErrorBody()
     {
         var retryAt = new DateTime(2026, 5, 23, 10, 0, 0, DateTimeKind.Utc);

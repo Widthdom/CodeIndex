@@ -1,5 +1,6 @@
 using CodeIndex.Cli;
 using Microsoft.Data.Sqlite;
+using System.Globalization;
 
 namespace CodeIndex.Database;
 
@@ -46,9 +47,10 @@ internal static class DbPragmaPolicy
         Action<string> execute,
         string synchronousMode)
     {
+        var sql = SynchronousPragmaSql(synchronousMode);
         try
         {
-            execute($"PRAGMA synchronous={synchronousMode}");
+            execute(sql);
         }
         catch (SqliteException ex) when (IsSafetyLevelTransactionError(ex))
         {
@@ -74,21 +76,51 @@ internal static class DbPragmaPolicy
     {
         if (busyTimeoutMs is < 0 or > MaxBusyTimeoutMs)
             throw new ArgumentOutOfRangeException(nameof(busyTimeoutMs), busyTimeoutMs, $"SQLite busy_timeout must be between 0 and {MaxBusyTimeoutMs} milliseconds.");
-        return $"PRAGMA busy_timeout={busyTimeoutMs}";
+        return $"PRAGMA busy_timeout={busyTimeoutMs.ToString(CultureInfo.InvariantCulture)}";
     }
 
     internal static string CacheSizePragmaSql(int cacheSizeKb)
     {
         if (cacheSizeKb <= 0)
             throw new ArgumentOutOfRangeException(nameof(cacheSizeKb), cacheSizeKb, "SQLite cache_size kilobytes must be positive.");
-        return $"PRAGMA cache_size=-{cacheSizeKb}";
+        return $"PRAGMA cache_size=-{cacheSizeKb.ToString(CultureInfo.InvariantCulture)}";
     }
 
     internal static string MmapSizePragmaSql(long mmapSizeBytes)
     {
         if (mmapSizeBytes < 0)
             throw new ArgumentOutOfRangeException(nameof(mmapSizeBytes), mmapSizeBytes, "SQLite mmap_size bytes must be non-negative.");
-        return $"PRAGMA mmap_size={mmapSizeBytes}";
+        return $"PRAGMA mmap_size={mmapSizeBytes.ToString(CultureInfo.InvariantCulture)}";
+    }
+
+    internal static string SynchronousPragmaSql(string synchronousMode)
+        => $"PRAGMA synchronous={NormalizeSynchronousMode(synchronousMode)}";
+
+    internal static string WalAutocheckpointPragmaSql(int pageCount)
+    {
+        if (pageCount < 0)
+            throw new ArgumentOutOfRangeException(nameof(pageCount), pageCount, "SQLite wal_autocheckpoint page count must be non-negative.");
+        return $"PRAGMA wal_autocheckpoint={pageCount.ToString(CultureInfo.InvariantCulture)}";
+    }
+
+    internal static string IncrementalVacuumPragmaSql(long pageCount)
+    {
+        if (pageCount < 0)
+            throw new ArgumentOutOfRangeException(nameof(pageCount), pageCount, "SQLite incremental_vacuum page count must be non-negative.");
+        return $"PRAGMA incremental_vacuum({pageCount.ToString(CultureInfo.InvariantCulture)})";
+    }
+
+    private static string NormalizeSynchronousMode(string synchronousMode)
+    {
+        if (string.IsNullOrWhiteSpace(synchronousMode))
+            throw new ArgumentException("SQLite synchronous mode must be one of OFF, NORMAL, FULL, or EXTRA.", nameof(synchronousMode));
+
+        var normalized = synchronousMode.Trim().ToUpperInvariant();
+        return normalized switch
+        {
+            "OFF" or "NORMAL" or "FULL" or "EXTRA" => normalized,
+            _ => throw new ArgumentOutOfRangeException(nameof(synchronousMode), synchronousMode, "SQLite synchronous mode must be one of OFF, NORMAL, FULL, or EXTRA.")
+        };
     }
 
     private static int ReadPositiveIntEnvironment(string name, int fallback, int maximum)

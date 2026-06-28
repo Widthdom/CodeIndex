@@ -166,11 +166,16 @@ internal static class AtomicFileWriter
         bool overwrite,
         Action<string>? applyDestinationMode)
     {
+        if (overwrite)
+            applyDestinationMode?.Invoke(sourcePath);
+
         File.Move(
             LongPath.EnsureWindowsPrefix(sourcePath),
             LongPath.EnsureWindowsPrefix(destinationPath),
             overwrite);
-        applyDestinationMode?.Invoke(destinationPath);
+
+        if (!overwrite)
+            applyDestinationMode?.Invoke(destinationPath);
     }
 
     internal static void FlushParentDirectoryAfterReplace(string path)

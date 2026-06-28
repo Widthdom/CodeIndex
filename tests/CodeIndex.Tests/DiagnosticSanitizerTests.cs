@@ -23,6 +23,19 @@ public class DiagnosticSanitizerTests
         Assert.Equal(expected, sanitized);
     }
 
+    [Theory]
+    [InlineData("Access to the path '/Users/Jane Doe/cdidx audit.log' is denied.", "Access to the path '<path>' is denied.")]
+    [InlineData("Access to the path \"C:\\Users\\Jane Doe\\cdidx audit.log\" is denied.", "Access to the path \"<path>\" is denied.")]
+    public void ForMessage_RedactsQuotedPathsWithSpaces_Issue4123(string message, string expected)
+    {
+        var sanitized = DiagnosticSanitizer.ForMessage(message);
+
+        Assert.Equal(expected, sanitized);
+        Assert.DoesNotContain("Jane", sanitized, StringComparison.Ordinal);
+        Assert.DoesNotContain("Doe", sanitized, StringComparison.Ordinal);
+        Assert.DoesNotContain("audit.log", sanitized, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void ForMessage_RedactsSensitiveAssignments_Issue4069()
     {

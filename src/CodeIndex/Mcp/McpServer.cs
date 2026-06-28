@@ -1542,7 +1542,7 @@ public partial class McpServer : IDisposable
 
     private static TimeSpan? ReadKeepAliveIntervalFromEnvironment()
     {
-        var raw = Environment.GetEnvironmentVariable(KeepAliveIntervalEnvironmentVariable);
+        var raw = global::CodeIndex.EnvironmentAccess.GetProcessEnvironmentVariable(KeepAliveIntervalEnvironmentVariable);
         if (string.IsNullOrWhiteSpace(raw))
             return null;
         if (!double.TryParse(raw, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var seconds)
@@ -4158,7 +4158,7 @@ public partial class McpServer : IDisposable
 
     private static int ReadPositiveIntEnvironmentLimit(string envVar, int defaultValue, int maximumValue, string description)
     {
-        var raw = Environment.GetEnvironmentVariable(envVar);
+        var raw = global::CodeIndex.EnvironmentAccess.GetProcessEnvironmentVariable(envVar);
         if (string.IsNullOrWhiteSpace(raw))
             return defaultValue;
 

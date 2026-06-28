@@ -480,7 +480,7 @@ internal sealed class IssueDuplicatePreflight
         using var requestCancellation = GitHubHttpClientFactory.CreateRequestCancellationScope(timeout, cancellationToken);
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         GitHubHttpClientFactory.ApplyDefaultHeaders(request.Headers);
-        var token = Environment.GetEnvironmentVariable(GitHubTokenEnvironmentVariable);
+        var token = CdidxEnvironment.GetProcessEnvironmentVariable(GitHubTokenEnvironmentVariable);
         if (!string.IsNullOrWhiteSpace(token))
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
@@ -527,7 +527,7 @@ internal sealed class IssueDuplicatePreflight
         using var requestCancellation = GitHubHttpClientFactory.CreateRequestCancellationScope(timeout, cancellationToken);
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         GitHubHttpClientFactory.ApplyDefaultHeaders(request.Headers);
-        var token = Environment.GetEnvironmentVariable(GitHubTokenEnvironmentVariable);
+        var token = CdidxEnvironment.GetProcessEnvironmentVariable(GitHubTokenEnvironmentVariable);
         if (!string.IsNullOrWhiteSpace(token))
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 

@@ -107,7 +107,7 @@ public static partial class ExtractorPluginRegistry
 
     internal static IReadOnlyList<ExtensionTrustOverride> GetAcceptedTrustOverrides(string? projectRoot)
     {
-        var value = Environment.GetEnvironmentVariable(TrustWorkspacePluginsEnvironmentVariable);
+        var value = global::CodeIndex.EnvironmentAccess.GetProcessEnvironmentVariable(TrustWorkspacePluginsEnvironmentVariable);
         if (!WorkspacePluginsTrusted(value) || string.IsNullOrWhiteSpace(projectRoot))
             return [];
 
@@ -265,7 +265,7 @@ public static partial class ExtractorPluginRegistry
     }
 
     private static bool WorkspacePluginsTrusted()
-        => WorkspacePluginsTrusted(Environment.GetEnvironmentVariable(TrustWorkspacePluginsEnvironmentVariable));
+        => WorkspacePluginsTrusted(global::CodeIndex.EnvironmentAccess.GetProcessEnvironmentVariable(TrustWorkspacePluginsEnvironmentVariable));
 
     private static bool WorkspacePluginsTrusted(string? value)
     {

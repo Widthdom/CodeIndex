@@ -365,12 +365,12 @@ internal static partial class ProgramRunner
         }
         catch (IOException ex)
         {
-            exitCode = CommandErrorWriter.Write($"{displayRole} could not be read: {CommandErrorWriter.FormatSanitizedExceptionDetail(ex)}", CommandExitCodes.InvalidArgument);
+            exitCode = CommandErrorWriter.Write($"{displayRole} could not be read: {FormatSanitizedExceptionSummary(ex)}", CommandExitCodes.InvalidArgument);
             return false;
         }
         catch (UnauthorizedAccessException ex)
         {
-            exitCode = CommandErrorWriter.Write($"{displayRole} could not be read: {CommandErrorWriter.FormatSanitizedExceptionDetail(ex)}", CommandExitCodes.InvalidArgument);
+            exitCode = CommandErrorWriter.Write($"{displayRole} could not be read: {FormatSanitizedExceptionSummary(ex)}", CommandExitCodes.InvalidArgument);
             return false;
         }
     }
@@ -511,9 +511,9 @@ internal static partial class ProgramRunner
         Console.WriteLine("terminal:");
         Console.WriteLine(ConsoleUi.FormatSummaryLine("stdout_tty", !Console.IsOutputRedirected, indent: "  "));
         Console.WriteLine(ConsoleUi.FormatSummaryLine("stderr_tty", !Console.IsErrorRedirected, indent: "  "));
-        Console.WriteLine(ConsoleUi.FormatSummaryLine("columns", FormatDoctorEnvironmentValue(Environment.GetEnvironmentVariable("COLUMNS")), indent: "  "));
-        Console.WriteLine(ConsoleUi.FormatSummaryLine("no_color", FormatDoctorEnvironmentValue(Environment.GetEnvironmentVariable("NO_COLOR")), indent: "  "));
-        Console.WriteLine(ConsoleUi.FormatSummaryLine("term", FormatDoctorEnvironmentValue(Environment.GetEnvironmentVariable("TERM")), indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("columns", FormatDoctorEnvironmentValue(CdidxEnvironment.GetProcessEnvironmentVariable("COLUMNS")), indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("no_color", FormatDoctorEnvironmentValue(CdidxEnvironment.GetProcessEnvironmentVariable("NO_COLOR")), indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("term", FormatDoctorEnvironmentValue(CdidxEnvironment.GetProcessEnvironmentVariable("TERM")), indent: "  "));
         Console.WriteLine(ConsoleUi.FormatSummaryLine("locale", CultureInfo.CurrentCulture.Name, indent: "  "));
         Console.WriteLine(ConsoleUi.FormatSummaryLine("ui_locale", CultureInfo.CurrentUICulture.Name, indent: "  "));
         Console.WriteLine();
@@ -537,7 +537,7 @@ internal static partial class ProgramRunner
         Console.WriteLine();
         Console.WriteLine("config:");
         Console.WriteLine(ConsoleUi.FormatSummaryLine(CdidxConfigFile.FileName, File.Exists(Path.Combine(Environment.CurrentDirectory, CdidxConfigFile.FileName)) ? "present" : "not found", indent: "  "));
-        Console.WriteLine(ConsoleUi.FormatSummaryLine(CdidxConfigFile.DisableEnvVar, FormatDoctorEnvironmentValue(Environment.GetEnvironmentVariable(CdidxConfigFile.DisableEnvVar)), indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine(CdidxConfigFile.DisableEnvVar, FormatDoctorEnvironmentValue(CdidxEnvironment.GetProcessEnvironmentVariable(CdidxConfigFile.DisableEnvVar)), indent: "  "));
         Console.WriteLine();
         Console.WriteLine("github:");
         Console.WriteLine(ConsoleUi.FormatSummaryLine("proxy_default_credentials", GitHubHttpClientFactory.FormatProxyDefaultCredentialsStatus(), indent: "  "));
@@ -755,9 +755,7 @@ internal static partial class ProgramRunner
 
     private static IEnumerable<DoctorEnvironmentVariableJsonResult> EnumerateCdidxEnvironmentJson(bool redactPaths)
     {
-        var rows = Environment.GetEnvironmentVariables()
-            .Cast<System.Collections.DictionaryEntry>()
-            .Select(e => (Key: e.Key?.ToString() ?? string.Empty, Value: e.Value?.ToString() ?? string.Empty))
+        var rows = CdidxEnvironment.EnumerateProcessEnvironmentVariables()
             .Where(e => e.Key.StartsWith("CDIDX_", StringComparison.Ordinal))
             .OrderBy(e => e.Key, StringComparer.Ordinal);
         foreach (var row in rows)
@@ -775,7 +773,7 @@ internal static partial class ProgramRunner
 
     private static string FormatDoctorJsonEnvironmentValue(string name, bool redactPaths)
     {
-        var value = Environment.GetEnvironmentVariable(name);
+        var value = CdidxEnvironment.GetProcessEnvironmentVariable(name);
         return value == null ? "<unset>" : ConsoleUi.FormatBoundedValue(RedactDoctorPath(value, redactPaths));
     }
 
@@ -784,9 +782,7 @@ internal static partial class ProgramRunner
 
     private static IEnumerable<(string Key, string Value)> EnumerateCdidxEnvironment()
     {
-        var rows = Environment.GetEnvironmentVariables()
-            .Cast<System.Collections.DictionaryEntry>()
-            .Select(e => (Key: e.Key?.ToString() ?? string.Empty, Value: e.Value?.ToString() ?? string.Empty))
+        var rows = CdidxEnvironment.EnumerateProcessEnvironmentVariables()
             .Where(e => e.Key.StartsWith("CDIDX_", StringComparison.Ordinal))
             .OrderBy(e => e.Key, StringComparer.Ordinal);
         var any = false;
@@ -2485,7 +2481,7 @@ internal static partial class ProgramRunner
         catch (Exception ex)
         {
             GlobalToolLog.Error("lsp_server_failed " + GlobalToolLog.FormatExceptionChain(ex));
-            CommandErrorWriter.WriteStderr($"Error: LSP server failed ({CommandErrorWriter.FormatSanitizedExceptionDetail(ex)}).");
+            CommandErrorWriter.WriteStderr($"Error: LSP server failed ({FormatSanitizedExceptionSummary(ex)}).");
             Console.Out.Flush();
             Console.Error.Flush();
             return CommandExitCodes.DatabaseError;
@@ -2676,14 +2672,25 @@ internal static partial class ProgramRunner
             exitCode = CommandExitCodes.Success;
             return true;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (IsExpectedAuditLogOpenException(ex))
         {
-            CommandErrorWriter.WriteStderr($"Error: failed to open audit log '{auditOptions.Path}' ({CommandErrorWriter.FormatSanitizedExceptionDetail(ex)}).");
+            var displayPath = DiagnosticSanitizer.ForPath(auditOptions.Path);
+            CommandErrorWriter.WriteStderr($"Error: failed to open audit log '{displayPath}' ({FormatSanitizedExceptionSummary(ex)}).");
             CommandErrorWriter.WriteStderr("Hint: pick a writable path or omit --audit-log to disable per-call auditing.");
             exitCode = CommandExitCodes.UsageError;
             return false;
         }
     }
+
+    private static string FormatSanitizedExceptionSummary(Exception ex)
+    {
+        var exceptionType = CommandErrorWriter.FormatSanitizedException(ex);
+        var message = CommandErrorWriter.FormatSanitizedExceptionMessage(ex);
+        return string.IsNullOrEmpty(message) ? exceptionType : $"{exceptionType}: {message}";
+    }
+
+    private static bool IsExpectedAuditLogOpenException(Exception ex)
+        => ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException;
 
     private static int RunMcpServer(McpServer server, string transport, string? listenSpec)
     {
@@ -2704,7 +2711,7 @@ internal static partial class ProgramRunner
         catch (Exception ex)
         {
             GlobalToolLog.Error("mcp_server_failed " + GlobalToolLog.FormatExceptionChain(ex));
-            CommandErrorWriter.WriteStderr($"Error: MCP server failed ({CommandErrorWriter.FormatSanitizedExceptionDetail(ex)}).");
+            CommandErrorWriter.WriteStderr($"Error: MCP server failed ({FormatSanitizedExceptionSummary(ex)}).");
             Console.Out.Flush();
             Console.Error.Flush();
             return CommandExitCodes.DatabaseError;
@@ -2833,7 +2840,7 @@ internal static partial class ProgramRunner
                 catch (Exception ex)
                 {
                     GlobalToolLog.Error("mcp_http_server_failed " + GlobalToolLog.FormatExceptionChain(ex));
-                    CommandErrorWriter.WriteStderr($"Error: MCP HTTP server failed ({CommandErrorWriter.FormatSanitizedExceptionDetail(ex)}).");
+                    CommandErrorWriter.WriteStderr($"Error: MCP HTTP server failed ({FormatSanitizedExceptionSummary(ex)}).");
                     Console.Out.Flush();
                     Console.Error.Flush();
                     return CommandExitCodes.DatabaseError;
@@ -2864,12 +2871,12 @@ internal static partial class ProgramRunner
         {
             var inner = ex.Flatten().InnerExceptions.FirstOrDefault() ?? ex;
             GlobalToolLog.Error("mcp_http_transport_dispose_failed " + GlobalToolLog.FormatExceptionChain(inner));
-            CommandErrorWriter.WriteStderr($"Warning: MCP HTTP transport disposal failed ({CommandErrorWriter.FormatSanitizedExceptionDetail(inner)}).");
+            CommandErrorWriter.WriteStderr($"Warning: MCP HTTP transport disposal failed ({FormatSanitizedExceptionSummary(inner)}).");
         }
         catch (Exception ex)
         {
             GlobalToolLog.Error("mcp_http_transport_dispose_failed " + GlobalToolLog.FormatExceptionChain(ex));
-            CommandErrorWriter.WriteStderr($"Warning: MCP HTTP transport disposal failed ({CommandErrorWriter.FormatSanitizedExceptionDetail(ex)}).");
+            CommandErrorWriter.WriteStderr($"Warning: MCP HTTP transport disposal failed ({FormatSanitizedExceptionSummary(ex)}).");
         }
     }
 
@@ -3508,7 +3515,7 @@ internal static partial class ProgramRunner
             }
             else
             {
-                CommandErrorWriter.WriteStderr($"Error: upgrade failed before install.sh completed ({CommandErrorWriter.FormatSanitizedExceptionDetail(ex)}).");
+                CommandErrorWriter.WriteStderr($"Error: upgrade failed before install.sh completed ({FormatSanitizedExceptionSummary(ex)}).");
                 WriteUpgradeInstallerTrustDiagnostic();
                 CommandErrorWriter.WriteStderr("Hint: rerun `install.sh` manually for the desired release.");
             }
@@ -3910,9 +3917,9 @@ internal static partial class ProgramRunner
             else
                 File.Delete(scriptPath);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (IsExpectedCleanupException(ex))
         {
-            CommandErrorWriter.WriteStderr($"Warning: failed to delete upgrade installer script {ConsoleUi.FormatBoundedValue(scriptPath)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
+            CommandErrorWriter.WriteStderr($"Warning: failed to delete upgrade installer script {ConsoleUi.FormatBoundedValue(scriptPath)} ({FormatSanitizedExceptionSummary(ex)}).");
         }
     }
 
@@ -3940,11 +3947,14 @@ internal static partial class ProgramRunner
             else
                 Directory.Delete(LongPath.EnsureWindowsPrefix(fullPath), recursive: true);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
+        catch (Exception ex) when (IsExpectedCleanupException(ex))
         {
-            CommandErrorWriter.WriteStderr($"Warning: failed to delete upgrade installer temporary directory {ConsoleUi.FormatBoundedValue(scriptDirectory)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
+            CommandErrorWriter.WriteStderr($"Warning: failed to delete upgrade installer temporary directory {ConsoleUi.FormatBoundedValue(scriptDirectory)} ({FormatSanitizedExceptionSummary(ex)}).");
         }
     }
+
+    private static bool IsExpectedCleanupException(Exception ex)
+        => ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException;
 
     internal static bool TryValidateUpgradeInstallerDirectoryCleanupTarget(
         string path,

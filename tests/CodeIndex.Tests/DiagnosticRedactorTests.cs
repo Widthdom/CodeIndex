@@ -63,6 +63,17 @@ public class DiagnosticRedactorTests
     }
 
     [Fact]
+    public void RedactSensitiveText_RedactsAuthorizationBearerHeader_Issue4134()
+    {
+        const string token = "secret-token-4134";
+
+        var redacted = DiagnosticRedactor.RedactSensitiveText($"Authorization: Bearer {token}", "[redacted]");
+
+        Assert.Equal("Authorization: Bearer [redacted]", redacted);
+        Assert.DoesNotContain(token, redacted);
+    }
+
+    [Fact]
     public void RedactReportLogLine_JsonLineRedactsStrings_Issue3724()
     {
         var token = "ghp_" + new string('a', 24);
