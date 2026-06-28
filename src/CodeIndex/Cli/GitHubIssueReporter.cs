@@ -870,6 +870,7 @@ internal static class GitHubIssueReporter
         var sanitized = TryRedactSensitiveJsonFields(bounded, out var redactedJson)
             ? redactedJson
             : RedactSensitiveJsonLikeFields(bounded);
+        sanitized = DiagnosticRedactor.RedactSensitiveText(sanitized, "[redacted]");
         var normalized = sanitized.Replace("\r", " ").Replace("\n", " ").Trim();
         return normalized.Length == 0 ? "<empty response body>" : normalized;
     }
