@@ -268,6 +268,14 @@ Usage: <command shape>
 
 When an error code is available, the first line is `Error [<code>]: <message>`. Use `CommandErrorWriter` for new CLI parse, validation, and filesystem preflight errors so `ProgramRunner`, `IndexCommandRunner`, and query runners keep the same format. JSON error payloads continue to use `CommandErrorJsonResult`.
 
+### Process launch policy
+
+All production subprocess launch sites must use `ProcessStartInfo.ArgumentList` and must leave `UseShellExecute` disabled. Start-info construction belongs in `ProcessLaunchPolicy` or a nearby purpose-specific helper that calls it, so git, isolated workers, hook callbacks, installer dispatch, and other subprocesses share the same argument, encoding, and no-shell defaults.
+
+Environment inheritance is opt-in. Use `SubprocessEnvironmentPolicy` for allowlisted subprocess environments: git keeps only base/proxy/certificate/git knobs and disables terminal prompts, isolated workers keep only base/.NET runtime values plus `CDIDX_TEST_` variables for tests, and installer handoff keeps only the documented installer/proxy/certificate variables. Do not add broad `CDIDX_*`, token, credential, or shell environment forwarding without documenting the trust boundary and adding tests.
+
+Every subprocess wait must have an explicit cancellation or timeout path. Captured stdout/stderr must be bounded before user-visible diagnostics, and diagnostics should be sanitized through the existing safe-formatting helpers.
+
 ### CLI output encoding and terminal controls
 
 CLI JSON output must be machine-clean: redirected stdout is written as UTF-8 without a BOM, and JSON-mode commands must not emit ANSI escape sequences even when `--color=always` or `CLICOLOR_FORCE=1` would color human output. Keep JSON-safe styling suppression close to shared formatting helpers such as `ConsoleUi.ColorizeKind` so future query output paths inherit the invariant.
@@ -2605,6 +2613,14 @@ error code がある場合、先頭行は `Error [<code>]: <message>` です。�
 validation、filesystem preflight error は `CommandErrorWriter` を使い、`ProgramRunner`、
 `IndexCommandRunner`、query runner の形式を揃えてください。JSON error payload は
 `CommandErrorJsonResult` を使い続けます。
+
+### プロセス起動ポリシー
+
+本番の subprocess 起動箇所はすべて `ProcessStartInfo.ArgumentList` を使い、`UseShellExecute` を無効のままにしてください。start-info の構築は `ProcessLaunchPolicy` またはそれを呼ぶ用途別 helper に置き、git、isolated worker、hook callback、installer dispatch、その他の subprocess が同じ argument、encoding、no-shell default を共有できるようにします。
+
+environment 継承は opt-in です。subprocess environment には `SubprocessEnvironmentPolicy` の allowlist を使ってください。git は base / proxy / certificate / git knob だけを残し terminal prompt を無効化します。isolated worker は base / .NET runtime 値と test 用の `CDIDX_TEST_` 変数だけを残します。installer handoff は文書化済みの installer / proxy / certificate 変数だけを残します。trust boundary の文書化とテストなしに、広い `CDIDX_*`、token、credential、shell environment forwarding を追加してはいけません。
+
+すべての subprocess wait には明示的な cancellation または timeout 経路が必要です。capture した stdout / stderr は user-visible diagnostic に出す前に bounded にし、diagnostic は既存の safe-formatting helper で sanitize してください。
 
 ### CLI 出力エンコーディングと端末制御
 

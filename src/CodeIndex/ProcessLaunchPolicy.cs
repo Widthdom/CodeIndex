@@ -6,6 +6,8 @@ namespace CodeIndex;
 
 internal static class ProcessLaunchPolicy
 {
+    internal const string WorkerProtocolMaxLineBytesOption = "--protocol-max-line-bytes";
+
     internal static ProcessStartInfo CreateNoShellStartInfo(
         string? fileName = null,
         string? workingDirectory = null,
@@ -53,5 +55,16 @@ internal static class ProcessLaunchPolicy
     {
         startInfo.ArgumentList.Add(optionName);
         startInfo.ArgumentList.Add(value.ToString(CultureInfo.InvariantCulture));
+    }
+
+    internal static void AddWorkerCommandArguments(
+        ProcessStartInfo startInfo,
+        string commandName,
+        int maxProtocolLineBytes,
+        params string[] commandArguments)
+    {
+        startInfo.ArgumentList.Add(commandName);
+        AddArguments(startInfo, commandArguments);
+        AddInvariantIntArgument(startInfo, WorkerProtocolMaxLineBytesOption, maxProtocolLineBytes);
     }
 }
