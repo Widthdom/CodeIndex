@@ -20,7 +20,7 @@ public partial class DbReader
     private const string GenericHotspotNamePenaltySqlLiteral = "0.35";
     private const string GenericHotspotNamesSql = "('add','append','build','call','combine','convert','create','execute','get','getstring','getvalue','getvalues','handle','invoke','load','parse','process','read','resolve','run','set','start','stop','tolist','tostring','tryparse','update','write')";
     private const string GenericSymbolRankNamePenaltySqlLiteral = "0.01";
-    private const string GenericSymbolRankNamesSql = "('add','append','build','call','combine','contains','convert','count','create','equal','equals','execute','file','files','get','getstring','getvalue','getvalues','handle','id','invoke','key','kind','length','line','load','name','parse','path','process','read','resolve','run','set','start','stop','text','tolist','tostring','tryparse','type','update','value','values','write')";
+    private const string GenericSymbolRankNamesSql = "('add','all','any','append','appendline','average','build','call','combine','contains','convert','count','create','distinct','equal','equals','execute','exists','file','files','first','firstordefault','get','getboolean','getbyte','getbytes','getchar','getchars','getdatetime','getdecimal','getdouble','getfieldvalue','getfloat','getguid','getint16','getint32','getint64','getordinal','getstring','gettemppath','getvalue','getvalues','groupby','handle','id','invoke','isdbnull','key','kind','last','lastordefault','length','line','list','load','name','orderby','orderbydescending','parse','path','process','read','resolve','run','set','single','singleordefault','skip','start','stop','sum','take','text','thenby','thenbydescending','tolist','tostring','tryparse','type','update','value','values','write')";
 
     private const string UnusedBucketLikelyPrivate = "likely_unused_private";
     private const string UnusedBucketMaybeNonPublic = "maybe_unused_nonpublic";
@@ -895,6 +895,19 @@ public partial class DbReader
               ON symbol_rank.lang = f.lang
              AND symbol_rank.symbol_name = s.name COLLATE NOCASE
             LEFT JOIN (
+                SELECT sr.file_id AS file_id,
+                       sr.symbol_name AS symbol_name,
+                       COUNT(*) AS reference_count,
+                       SUM({GetHotspotReferenceWeightSql("sr.reference_kind")}) AS hotspot_score
+                FROM symbol_references sr
+                WHERE sr.reference_kind IN {CallGraphReferenceKindsSql}
+                  AND sr.symbol_name IS NOT NULL
+                  AND sr.symbol_name <> ''
+                GROUP BY sr.file_id, sr.symbol_name
+            ) symbol_file_rank
+              ON symbol_file_rank.file_id = s.file_id
+             AND symbol_file_rank.symbol_name = s.name COLLATE NOCASE
+            LEFT JOIN (
                 SELECT df.lang AS lang,
                        ds.name AS symbol_name,
                        COUNT(*) AS definition_sites
@@ -907,10 +920,17 @@ public partial class DbReader
               ON symbol_defs.lang = f.lang
              AND symbol_defs.symbol_name = s.name COLLATE NOCASE"
             : string.Empty;
-        var referenceCountSql = includeRankSignals ? "COALESCE(symbol_rank.reference_count, 0)" : "CAST(0 AS INTEGER)";
-        var hotspotScoreSql = includeRankSignals ? "COALESCE(symbol_rank.hotspot_score, 0.0)" : "CAST(0.0 AS REAL)";
         var genericNamePenaltySql = includeRankSignals ? GetGenericSymbolRankNamePenaltySql("s.name") : "1.0";
         var definitionSitesSql = includeRankSignals ? "COALESCE(symbol_defs.definition_sites, 1)" : "CAST(1 AS INTEGER)";
+        var csharpConservativeRankSignalSql = includeRankSignals
+            ? $"(f.lang = 'csharp' AND (s.kind = 'property' OR ({definitionSitesSql}) > 1 OR lower(s.name) IN {GenericSymbolRankNamesSql}))"
+            : "0";
+        var referenceCountSql = includeRankSignals
+            ? $"CASE WHEN {csharpConservativeRankSignalSql} THEN COALESCE(symbol_file_rank.reference_count, 0) ELSE COALESCE(symbol_rank.reference_count, 0) END"
+            : "CAST(0 AS INTEGER)";
+        var hotspotScoreSql = includeRankSignals
+            ? $"CASE WHEN {csharpConservativeRankSignalSql} THEN COALESCE(symbol_file_rank.hotspot_score, 0.0) ELSE COALESCE(symbol_rank.hotspot_score, 0.0) END"
+            : "CAST(0.0 AS REAL)";
         var definitionDilutionSql = $"CASE WHEN ({definitionSitesSql}) > 1 THEN CAST(({definitionSitesSql}) * ({definitionSitesSql}) AS REAL) ELSE 1.0 END";
         var structuralRankPenaltySql = includeRankSignals ? $"CASE WHEN s.kind IN ('property', 'enum') AND ({sizeLinesSql}) <= 1 THEN 0.1 ELSE 1.0 END" : "1.0";
         var rankingReferenceScoreSql = includeRankSignals ? $"(({referenceCountSql}) * ({genericNamePenaltySql}) * ({structuralRankPenaltySql}) / ({definitionDilutionSql}))" : referenceCountSql;
@@ -2291,7 +2311,7 @@ public partial class DbReader
     /// Return a structured outline of symbols in a single file, ordered deterministically.
     /// 1ファイルのシンボルを決定的な順序の構造化アウトラインとして返す。
     /// </summary>
-    public OutlineResult? GetOutline(string filePath)
+    public OutlineResult? GetOutline(string filePath, bool includeReferenceCounts = false)
     {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = "SELECT id, path, lang, lines FROM files WHERE path = @path";
@@ -2310,8 +2330,55 @@ public partial class DbReader
         }
 
         var startColumnOrderSql = GetSymbolColumnSql("start_column", "CAST(2147483647 AS INTEGER)");
+        var includeReferenceCountSql = includeReferenceCounts && _hasReferencesTable;
+        var referenceCountSql = includeReferenceCountSql
+            ? "CASE WHEN COALESCE(symbol_defs.definition_sites, 0) = 1 THEN COALESCE(symbol_rank.reference_count, 0) ELSE 0 END"
+            : "CAST(NULL AS INTEGER)";
+        var symbolRankCteSql = includeReferenceCountSql
+            ? $@"
+            WITH candidate_outline_names AS (
+                SELECT DISTINCT name COLLATE NOCASE AS symbol_name
+                FROM symbols
+                WHERE file_id = @fileId
+                  AND name IS NOT NULL
+                  AND name <> ''
+            ),
+            symbol_rank AS (
+                SELECT rf.lang AS lang,
+                       sr.symbol_name COLLATE NOCASE AS symbol_name,
+                       COUNT(*) AS reference_count
+                FROM symbol_references sr
+                JOIN files rf ON rf.id = sr.file_id
+                JOIN candidate_outline_names cn ON cn.symbol_name = sr.symbol_name COLLATE NOCASE
+                WHERE sr.reference_kind IN {CallGraphReferenceKindsSql}
+                  AND sr.symbol_name IS NOT NULL
+                  AND sr.symbol_name <> ''
+                GROUP BY rf.lang, sr.symbol_name COLLATE NOCASE
+            ),
+            symbol_defs AS (
+                SELECT df.lang AS lang,
+                       ds.name COLLATE NOCASE AS symbol_name,
+                       COUNT(*) AS definition_sites
+                FROM symbols ds
+                JOIN files df ON df.id = ds.file_id
+                JOIN candidate_outline_names cn ON cn.symbol_name = ds.name COLLATE NOCASE
+                WHERE ds.name IS NOT NULL
+                  AND ds.name <> ''
+                GROUP BY df.lang, ds.name COLLATE NOCASE
+            )"
+            : string.Empty;
+        var symbolRankJoin = includeReferenceCountSql
+            ? @"
+            LEFT JOIN symbol_rank
+              ON symbol_rank.lang IS @lang
+             AND symbol_rank.symbol_name = s.name COLLATE NOCASE
+            LEFT JOIN symbol_defs
+              ON symbol_defs.lang IS @lang
+             AND symbol_defs.symbol_name = s.name COLLATE NOCASE"
+            : string.Empty;
         using var symCmd = _conn.CreateCommand();
         symCmd.CommandText = $@"
+            {symbolRankCteSql}
             SELECT s.kind, s.name, s.line,
                    {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
                    {GetSymbolColumnSql("end_line", "s.line")} AS end_line,
@@ -2322,8 +2389,10 @@ public partial class DbReader
                    {GetSymbolColumnSql("container_name")} AS container_name,
                    {GetSymbolColumnSql("container_qualified_name")} AS container_qualified_name,
                    {GetSymbolColumnSql("visibility")} AS visibility,
-                   {GetSymbolColumnSql("return_type")} AS return_type
+                   {GetSymbolColumnSql("return_type")} AS return_type,
+                   {referenceCountSql} AS reference_count
             FROM symbols s
+            {symbolRankJoin}
             WHERE s.file_id = @fileId
             ORDER BY s.line ASC,
                      {startColumnOrderSql} ASC,
@@ -2331,6 +2400,8 @@ public partial class DbReader
                      s.name COLLATE BINARY ASC,
                      s.id ASC";
         SqliteCommandPolicy.Add(symCmd, "@fileId", fileId);
+        if (includeReferenceCountSql)
+            SqliteCommandPolicy.AddNullableText(symCmd, "@lang", lang);
 
         var symbols = new List<OutlineSymbol>();
         using (var reader = symCmd.ExecuteTrackedReader())
@@ -2355,6 +2426,7 @@ public partial class DbReader
                     Path = BuildOutlineSymbolPath(containerQualifiedName ?? containerName, name),
                     Visibility = GetNullableString(reader, 11),
                     ReturnType = GetNullableString(reader, 12),
+                    ReferenceCount = GetNullableInt32(reader, 13),
                 });
             }
         }

@@ -3,9 +3,10 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.Loader;
 using System.Text.Json.Serialization;
+using CodeIndex.Cli;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using CodeIndex.Indexer.Extensibility;
-using CodeIndex.Diagnostics;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer.Hooks;
@@ -108,6 +109,9 @@ public sealed class PostExtractionHookRunner : IDisposable
         if (string.IsNullOrWhiteSpace(hooksDirectory) || !Directory.Exists(hooksDirectory))
             return new PostExtractionHookDiscoverySnapshot([], runner.Diagnostics, runner.CallbackBudget, initialTrustOverrides);
 
+        if (!HookDirectoryIsSupported(hooksDirectory, runner))
+            return new PostExtractionHookDiscoverySnapshot([], runner.Diagnostics, runner.CallbackBudget, initialTrustOverrides);
+
         var hooks = EnumerateHookAssemblyPaths(hooksDirectory, runner, discoveryLimit.Value)
             .Select(dllPath =>
             {
@@ -150,6 +154,9 @@ public sealed class PostExtractionHookRunner : IDisposable
         runner.EnqueueDiagnostic(discoveryLimit.Diagnostic);
 
         if (string.IsNullOrWhiteSpace(hooksDirectory) || !Directory.Exists(hooksDirectory))
+            return runner;
+
+        if (!HookDirectoryIsSupported(hooksDirectory, runner))
             return runner;
 
         var maxAssemblyBytes = ResolveDiscoveryMaxBytes();
@@ -235,6 +242,40 @@ public sealed class PostExtractionHookRunner : IDisposable
         }
 
         return runner;
+    }
+
+    private static bool HookDirectoryIsSupported(string hooksDirectory, PostExtractionHookRunner runner)
+    {
+        DirectoryInfo directoryInfo;
+        try
+        {
+            directoryInfo = new DirectoryInfo(hooksDirectory);
+            directoryInfo.Refresh();
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            runner.EnqueueDiagnostic(
+                hooksDirectory,
+                null,
+                "Hook directory skipped: could not inspect directory.",
+                category: "hook_directory_inspection_failed");
+            return false;
+        }
+
+        if (!directoryInfo.Exists)
+            return false;
+
+        if (FileSystemBoundary.IsSymlinkOrReparsePoint(directoryInfo))
+        {
+            runner.EnqueueDiagnostic(
+                hooksDirectory,
+                null,
+                "Hook directory skipped: symbolic links and reparse points are not supported.",
+                category: "hook_directory_reparse_point");
+            return false;
+        }
+
+        return true;
     }
 
     private static IReadOnlyList<string> EnumerateHookAssemblyPaths(
@@ -325,6 +366,16 @@ public sealed class PostExtractionHookRunner : IDisposable
                 null,
                 "Hook assembly skipped: path is a directory.",
                 category: "hook_path_is_directory");
+            return false;
+        }
+
+        if (FileSystemBoundary.IsSymlinkOrReparsePoint(fileInfo))
+        {
+            runner.EnqueueDiagnostic(
+                dllPath,
+                null,
+                "Hook assembly skipped: symbolic links and reparse points are not supported.",
+                category: "hook_reparse_point");
             return false;
         }
 
@@ -616,7 +667,7 @@ public sealed class PostExtractionHookRunner : IDisposable
         if (CallbackBudgetForTesting != null)
             return NormalizeCallbackBudget(CallbackBudgetForTesting());
 
-        var raw = Environment.GetEnvironmentVariable(CallbackBudgetEnvironmentVariable);
+        var raw = global::CodeIndex.EnvironmentAccess.GetProcessEnvironmentVariable(CallbackBudgetEnvironmentVariable);
         return long.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var milliseconds)
             ? NormalizeCallbackBudgetMilliseconds(milliseconds)
             : new HookBudgetResolution<TimeSpan>(DefaultCallbackBudget, null);
@@ -627,7 +678,7 @@ public sealed class PostExtractionHookRunner : IDisposable
         if (DiscoveryLimitForTesting != null)
             return NormalizeDiscoveryLimit(DiscoveryLimitForTesting());
 
-        var raw = Environment.GetEnvironmentVariable(DiscoveryLimitEnvironmentVariable);
+        var raw = global::CodeIndex.EnvironmentAccess.GetProcessEnvironmentVariable(DiscoveryLimitEnvironmentVariable);
         return int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var value)
             ? NormalizeDiscoveryLimit(value)
             : new HookBudgetResolution<int>(DefaultDiscoveryLimit, null);
@@ -657,7 +708,7 @@ public sealed class PostExtractionHookRunner : IDisposable
         if (DiscoveryMaxBytesForTesting != null)
             return NormalizeDiscoveryMaxBytes(DiscoveryMaxBytesForTesting());
 
-        var raw = Environment.GetEnvironmentVariable(DiscoveryMaxBytesEnvironmentVariable);
+        var raw = global::CodeIndex.EnvironmentAccess.GetProcessEnvironmentVariable(DiscoveryMaxBytesEnvironmentVariable);
         return long.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var value)
             ? NormalizeDiscoveryMaxBytes(value)
             : new HookBudgetResolution<long>(DefaultDiscoveryMaxBytes, null);
@@ -835,7 +886,7 @@ public sealed class PostExtractionHookRunner : IDisposable
 
     private static HookDirectoryResolution ResolveDefaultHooksDirectory(bool includeAcceptedOverrideDiagnostic)
     {
-        var overridePath = Environment.GetEnvironmentVariable(HooksDirectoryEnvironmentVariable);
+        var overridePath = global::CodeIndex.EnvironmentAccess.GetProcessEnvironmentVariable(HooksDirectoryEnvironmentVariable);
         if (!string.IsNullOrWhiteSpace(overridePath))
             return ResolveOverrideHooksDirectory(overridePath, includeAcceptedOverrideDiagnostic);
 

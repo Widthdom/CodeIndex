@@ -201,6 +201,17 @@ public enum SymbolSortMode
     Path,
 }
 
+public enum OutlineSortMode
+{
+    Source,
+    Name,
+    Kind,
+    References,
+    Size,
+    Complexity,
+    Path,
+}
+
 public class SymbolResult
 {
     [JsonPropertyName("api_version")]
@@ -1625,6 +1636,14 @@ public class OutlineSymbol
     public string? ContainerName { get; set; }
     public string? Visibility { get; set; }
     public string? ReturnType { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SortMode { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? ReferenceCount { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? SizeLines { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? ComplexityScore { get; set; }
 }
 
 internal sealed class RepoFileStat

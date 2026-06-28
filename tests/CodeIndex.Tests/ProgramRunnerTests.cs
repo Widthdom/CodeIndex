@@ -4414,6 +4414,32 @@ exit 7
         Assert.Equal(new[] { "--db", "--audit-log" }, args);
     }
 
+    [Fact]
+    public void RunMcp_AuditLogOpenFailure_RedactsExceptionMessagePath_Issue4123()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var auditPath = TestProjectHelper.CreateTempProject("cdidx_mcp_audit_open_failure");
+            var displayPath = Path.GetFileName(auditPath);
+            try
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["mcp", "--audit-log", auditPath],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                Assert.Empty(stdout);
+                Assert.Contains($"Error: failed to open audit log '{displayPath}' (UnauthorizedAccessException:", stderr);
+                Assert.Contains("<path>", stderr);
+                Assert.DoesNotContain(auditPath, stderr, StringComparison.Ordinal);
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(auditPath);
+            }
+        }
+    }
+
     private sealed class StaticResponseHandler : HttpMessageHandler
     {
         private readonly HttpContent _content;

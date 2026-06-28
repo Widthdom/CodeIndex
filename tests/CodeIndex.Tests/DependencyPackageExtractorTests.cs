@@ -92,6 +92,49 @@ public class DependencyPackageExtractorTests
     }
 
     [Fact]
+    public void Extract_DependencyManifest_RejectsDtdWithSharedReaderPolicy_Issue4130()
+    {
+        var symbols = SymbolExtractor.Extract(
+            5,
+            "dependency_manifest",
+            """
+            <!DOCTYPE Project [
+              <!ENTITY packageName "Unsafe.Package">
+            ]>
+            <Project>
+              <ItemGroup>
+                <PackageVersion Include="&packageName;" Version="1.0.0" />
+              </ItemGroup>
+            </Project>
+            """,
+            filePath: "Directory.Packages.props");
+
+        Assert.Empty(symbols);
+    }
+
+    [Fact]
+    public void Extract_DependencyManifest_StopsAtSharedDocumentLimit_Issue4130()
+    {
+        var padding = new string('a', (int)SymbolExtractor.XmlExtractionMaxCharactersInDocument + 1);
+        var symbols = SymbolExtractor.Extract(
+            6,
+            "dependency_manifest",
+            $"""
+            <Project>
+              <ItemGroup>
+                <PackageVersion Include="TooLarge.Package" Version="1.0.0" />
+              </ItemGroup>
+              <PropertyGroup>
+                <Padding>{padding}</Padding>
+              </PropertyGroup>
+            </Project>
+            """,
+            filePath: "Directory.Packages.props");
+
+        Assert.Empty(symbols);
+    }
+
+    [Fact]
     public void Extract_DependencyLock_EmitsResolvedPackageSymbolsAndReferences_Issue3899()
     {
         var content =

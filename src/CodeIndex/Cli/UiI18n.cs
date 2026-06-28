@@ -26,7 +26,7 @@ public static class UiLanguageResolver
 
     public static UiLanguage Resolve(string? envOverride = null, CultureInfo? cultureOverride = null)
     {
-        var raw = envOverride ?? Environment.GetEnvironmentVariable(EnvVarName);
+        var raw = envOverride ?? CdidxEnvironment.GetProcessEnvironmentVariable(EnvVarName);
         if (TryParse(raw, out var parsed))
             return parsed;
         var culture = cultureOverride ?? CultureInfo.CurrentUICulture;

@@ -152,12 +152,15 @@ public static partial class QueryCommandRunner
                 "Use one recipe-list shape at a time.");
             return CommandExitCodes.UsageError;
         }
-        if (options.SummaryOnly && !options.ListRecipes && !(options.RecipeName != null && options.CountOnly))
+        if (options.SummaryOnly
+            && !options.ListRecipes
+            && !(options.RecipeName != null
+                && (options.CountOnly || options.OutputFormat == OutputFormatIssueDrafts)))
         {
             WriteUsageError(
-                "--summary-only is only supported with `cdidx recipes` / `cdidx search --list-recipes`, or recipe count output.",
+                "--summary-only is only supported with `cdidx recipes` / `cdidx search --list-recipes`, recipe count output, or recipe issue-drafts output.",
                 GetUsageLineOrThrow("search"),
-                "Use `cdidx recipes --summary-only --json` or `cdidx search --recipe <name> --format count --summary-only`.");
+                "Use `cdidx recipes --summary-only --json`, `cdidx search --recipe <name> --format count --summary-only`, or `cdidx search --recipe <name> --format issue-drafts --summary-only`.");
             return CommandExitCodes.UsageError;
         }
         if (options.OutputFormat == OutputFormatIssueDrafts && options.JsonOutputFormat == JsonOutputFormatArray)
@@ -278,6 +281,14 @@ public static partial class QueryCommandRunner
                     "Use plain `--json` for the grouped named-query object.");
                 return CommandExitCodes.UsageError;
             }
+            if (options.MaxJsonBytes.HasValue && !options.Json)
+            {
+                WriteUsageError(
+                    "--max-json-bytes is only supported with JSON search output.",
+                    GetUsageLineOrThrow("search"),
+                    "Use `--json` or `--format compact` with --named-query when bounding named batch output.");
+                return CommandExitCodes.UsageError;
+            }
 
             return RunSearchNamedBatch(options, jsonOptions, exact);
         }
@@ -315,20 +326,12 @@ public static partial class QueryCommandRunner
                     "Use plain `--json` for the grouped recipe object.");
                 return CommandExitCodes.UsageError;
             }
-            if (options.MaxJsonBytes.HasValue
-                && !(options.Json && options.JsonOutputFormat != JsonOutputFormatArray && options.OutputFormat == OutputFormatIssueDrafts)
-                && !(options.Json && options.JsonOutputFormat == JsonOutputFormatNdjson && options.OutputFormat == OutputFormatJson)
-                && !(options.Json
-                    && options.CountOnly
-                    && options.SummaryOnly
-                    && options.GroupBy == null
-                    && options.CountBy == null
-                    && options.UniqueBy == null))
+            if (options.MaxJsonBytes.HasValue && !SupportsSearchJsonByteLimit(options))
             {
                 WriteUsageError(
-                    "--max-json-bytes is only supported with NDJSON recipe rows, issue-draft JSON, or summary-only recipe count JSON.",
+                    "--max-json-bytes is only supported with JSON search output.",
                     GetUsageLineOrThrow("search"),
-                    "Use `--recipe <name> --json=ndjson --max-json-bytes <n>`, `--format issue-drafts --max-json-bytes <n>`, or `--format count --summary-only --max-json-bytes <n>`.");
+                    "Use `--json=ndjson`, `--format count`, `--format compact`, grouped/count-by JSON, or `--format issue-drafts` with --max-json-bytes.");
                 return CommandExitCodes.UsageError;
             }
             if (options.ResultsOnly && options.JsonOutputFormat != JsonOutputFormatNdjson)
@@ -510,14 +513,12 @@ public static partial class QueryCommandRunner
                 "Use `--results-only --json=ndjson`, or remove --results-only when using --json=array.");
             return CommandExitCodes.UsageError;
         }
-        if (options.MaxJsonBytes.HasValue
-            && !(options.Json && options.JsonOutputFormat != JsonOutputFormatArray && options.OutputFormat == OutputFormatIssueDrafts)
-            && (!options.Json || options.JsonOutputFormat != JsonOutputFormatNdjson || options.OutputFormat != OutputFormatJson))
+        if (options.MaxJsonBytes.HasValue && !SupportsSearchJsonByteLimit(options))
         {
             WriteUsageError(
-                "--max-json-bytes is only supported with NDJSON search output.",
+                "--max-json-bytes is only supported with JSON search output.",
                 GetUsageLineOrThrow("search"),
-                "Use `--json=ndjson --max-json-bytes <n>` for bounded streaming output, or `--format issue-drafts --max-json-bytes <n>` for bounded draft export.");
+                "Use `--json=ndjson`, `--json=array`, `--format count`, `--format compact`, grouped/count-by JSON, or `--format issue-drafts` with --max-json-bytes.");
             return CommandExitCodes.UsageError;
         }
         if (options.CountBy != null && options.CountBy is not "path" and not "file" and not "symbol" and not "origin")
@@ -566,15 +567,19 @@ public static partial class QueryCommandRunner
                 {
                     if (options.Json)
                     {
-                        Console.WriteLine(BuildCountJsonPayload(
-                            reader,
-                            jsonOptions,
-                            count: 0,
-                            files: 0,
-                            query: options.Query,
-                            queryOptions: options,
-                            ftsQueryDiagnostics: queryDiagnostics,
-                            exactSubstringHint: exactSubstringHint).ToJsonString(jsonOptions));
+                        return WriteJsonObjectWithOptionalByteLimit(
+                            BuildCountJsonPayload(
+                                reader,
+                                jsonOptions,
+                                count: 0,
+                                files: 0,
+                                query: options.Query,
+                                queryOptions: options,
+                                ftsQueryDiagnostics: queryDiagnostics,
+                                exactSubstringHint: exactSubstringHint).ToJsonString(jsonOptions),
+                            options,
+                            "search count",
+                            "Narrow the query or increase --max-json-bytes.");
                     }
                     else
                     {
@@ -586,15 +591,19 @@ public static partial class QueryCommandRunner
 
                 if (options.Json)
                 {
-                    Console.WriteLine(BuildCountJsonPayload(
-                        reader,
-                        jsonOptions,
-                        counts.Count,
-                        counts.FileCount,
-                        query: options.Query,
-                        queryOptions: options,
-                        ftsQueryDiagnostics: queryDiagnostics,
-                        exactSubstringHint: exactSubstringHint).ToJsonString(jsonOptions));
+                    return WriteJsonObjectWithOptionalByteLimit(
+                        BuildCountJsonPayload(
+                            reader,
+                            jsonOptions,
+                            counts.Count,
+                            counts.FileCount,
+                            query: options.Query,
+                            queryOptions: options,
+                            ftsQueryDiagnostics: queryDiagnostics,
+                            exactSubstringHint: exactSubstringHint).ToJsonString(jsonOptions),
+                        options,
+                        "search count",
+                        "Narrow the query or increase --max-json-bytes.");
                 }
                 else
                 {
@@ -615,27 +624,50 @@ public static partial class QueryCommandRunner
                     WriteDelimitedSearchResults([], options);
                     return ZeroResultExitCode(options);
                 }
+                if (options.Json && options.OutputFormat == OutputFormatGrouped)
+                {
+                    var groupedExitCode = WriteGroupedSearchResults([], options, jsonOptions);
+                    return groupedExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : groupedExitCode;
+                }
+                if (options.Json && TryWriteEmptySearchJsonWithOptionalByteLimit(options, jsonOptions, out var emptyJsonExitCode))
+                    return emptyJsonExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : emptyJsonExitCode;
                 if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
                     return ZeroResultExitCode(options);
                 if (options.Json)
                 {
-                    if (TryWriteEmptyFormattedResult(options, jsonOptions))
-                        return ZeroResultExitCode(options);
                     if (options.JsonOutputFormat == JsonOutputFormatArray)
                     {
-                        Console.WriteLine(JsonSerializer.Serialize(
-                            Array.Empty<CompactSearchResult>(),
-                            CliJsonSerializerContextFactory.Create(jsonOptions).CompactSearchResultArray));
+                        return WriteJsonObjectWithOptionalByteLimit(
+                            JsonSerializer.Serialize(
+                                Array.Empty<CompactSearchResult>(),
+                                CliJsonSerializerContextFactory.Create(jsonOptions).CompactSearchResultArray),
+                            options,
+                            "search result array",
+                            "Increase --max-json-bytes or remove the byte cap.");
                     }
                     else
                     {
                         var pathHint = BuildSearchPathGlobHint(reader, options);
                         if (!options.ResultsOnly)
-                            Console.WriteLine(BuildJsonZeroResultPayload(reader, ndjsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options, exactSubstringHint: exactSubstringHint, extraFields: payload =>
-                            {
-                                AddSearchPathHint(payload, pathHint);
-                                AddBareTokenSearchHint(payload, options);
-                            }).ToJsonString(ndjsonOptions));
+                        {
+                            var payload = BuildJsonZeroResultPayload(
+                                reader,
+                                ndjsonOptions,
+                                resultsKey: "results",
+                                query: options.Query,
+                                ftsQueryDiagnostics: ftsQueryDiagnostics,
+                                queryOptions: options,
+                                exactSubstringHint: exactSubstringHint,
+                                extraFields: payload =>
+                                {
+                                    AddSearchPathHint(payload, pathHint);
+                                    AddBareTokenSearchHint(payload, options);
+                                }).ToJsonString(ndjsonOptions);
+                            if (WouldExceedJsonByteLimit(options, bytesWritten: 0, payload, out var interrupted))
+                                jsonDoneInterrupted = interrupted;
+                            else
+                                Console.WriteLine(payload);
+                        }
                         jsonDoneCount = 0;
                     }
                 }
@@ -657,20 +689,18 @@ public static partial class QueryCommandRunner
                 AttachSearchNextSteps(compactResults, options);
                 if (options.SearchFields != null)
                 {
-                    WriteProjectedSearchResults(compactResults, options, jsonOptions, ndjsonOptions, out var projectedDoneCount, out var projectedInterrupted);
+                    var projectedExitCode = WriteProjectedSearchResults(compactResults, options, jsonOptions, ndjsonOptions, out var projectedDoneCount, out var projectedInterrupted);
                     jsonDoneCount = projectedDoneCount;
                     jsonDoneInterrupted = projectedInterrupted;
-                    return CommandExitCodes.Success;
+                    return projectedExitCode;
                 }
                 if (options.OutputFormat == OutputFormatCompact)
                 {
-                    WriteCompactSearchResults(compactResults, jsonOptions);
-                    return CommandExitCodes.Success;
+                    return WriteCompactSearchResults(compactResults, options, jsonOptions);
                 }
                 if (options.OutputFormat == OutputFormatGrouped)
                 {
-                    WriteGroupedSearchResults(displayRows, options, jsonOptions);
-                    return CommandExitCodes.Success;
+                    return WriteGroupedSearchResults(displayRows, options, jsonOptions);
                 }
                 if (options.OutputFormat == OutputFormatCsv || options.OutputFormat == OutputFormatTsv)
                 {
@@ -699,9 +729,13 @@ public static partial class QueryCommandRunner
                 }
                 if (options.JsonOutputFormat == JsonOutputFormatArray)
                 {
-                    Console.WriteLine(JsonSerializer.Serialize(
+                    return WriteJsonObjectWithOptionalByteLimit(
+                        JsonSerializer.Serialize(
                         compactResults,
-                        CliJsonSerializerContextFactory.Create(jsonOptions).CompactSearchResultArray));
+                            CliJsonSerializerContextFactory.Create(jsonOptions).CompactSearchResultArray),
+                        options,
+                        "search result array",
+                        "Reduce --limit, --snippet-lines, or use `--json=ndjson --max-json-bytes` for streaming output.");
                 }
                 else
                 {
