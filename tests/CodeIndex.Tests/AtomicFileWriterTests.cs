@@ -142,6 +142,40 @@ public class AtomicFileWriterTests
     }
 
     [Fact]
+    public void MoveFile_OverwriteModeFailureBeforeMove_LeavesSourceAndDestination_Issue4132()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("atomic_overwrite_mode_failure");
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "source.db");
+            var destinationPath = Path.Combine(projectRoot, "destination.db");
+            string? modePath = null;
+            File.WriteAllText(sourcePath, "new", Utf8NoBom);
+            File.WriteAllText(destinationPath, "old", Utf8NoBom);
+
+            var ex = Assert.Throws<UnauthorizedAccessException>(() =>
+                AtomicFileWriter.MoveFile(
+                    sourcePath,
+                    destinationPath,
+                    overwrite: true,
+                    applyDestinationMode: path =>
+                    {
+                        modePath = path;
+                        throw new UnauthorizedAccessException("mode denied");
+                    }));
+
+            Assert.Contains("mode denied", ex.Message, StringComparison.Ordinal);
+            Assert.Equal(sourcePath, modePath);
+            Assert.Equal("new", File.ReadAllText(sourcePath, Utf8NoBom));
+            Assert.Equal("old", File.ReadAllText(destinationPath, Utf8NoBom));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void PublishDirectory_ParentDirectoryFlushFailure_ReportsPublishedDirectory_Issue4001()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("atomic_directory_publish_flush");
