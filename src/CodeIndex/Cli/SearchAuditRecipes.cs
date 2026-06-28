@@ -12,6 +12,8 @@ internal static class SearchAuditRecipes
     internal const string AllAuditScope = "all";
     internal const string DefaultQuerySeverity = "medium";
     internal const string RecipePathsEnvironmentVariable = "CDIDX_SEARCH_RECIPE_PATHS";
+    private const string BoundedRegexAliasUsing = "using Regex = CodeIndex.Indexer.BoundedRegex";
+    private const string BoundedRegexPath = "src/CodeIndex/Indexer/BoundedRegex.cs";
     private const int MaxRecipeSourceFiles = 8;
     internal const int MaxRecipeSourceBytes = 128 * 1024;
     private const int MaxExternalRecipesPerFile = 32;
@@ -93,6 +95,48 @@ internal static class SearchAuditRecipes
 
     internal static IReadOnlyList<string> DefaultSourcePathPatterns => DefaultSourcePathPatternsValue;
     internal static IReadOnlyList<string> DefaultSourceExcludePaths => DefaultSourceExcludePathsValue;
+
+    private static SearchAuditRecipeQuery StaticRegexApiQuery(string name, string query, string apiName) =>
+        new(
+            name,
+            query,
+            $"Find static Regex.{apiName} calls that may need BoundedRegex or an explicit timeout overload.",
+            ["audit", "performance"],
+            "False positives include bounded wrapper aliases, prevalidated small inputs, and tests that intentionally exercise raw Regex behavior.")
+        {
+            RejectFileQueries =
+            [
+                BoundedRegexAliasUsing
+            ],
+            ExcludePaths = [BoundedRegexPath],
+            RiskEvidence =
+            [
+                $"risk: static System.Text.RegularExpressions.Regex.{apiName} can run without the shared timeout policy.",
+                "positive: BoundedRegex aliases, explicit timeout overloads, or tightly bounded trusted inputs can make a hit intentional."
+            ],
+            MatchOrigins = ["code"],
+        };
+
+    private static SearchAuditRecipeQuery DogfoodStaticRegexApiQuery(string name, string query, string shape) =>
+        new(
+            name,
+            query,
+            $"Find raw static Regex API usage candidates with {shape} so bounded instance names are not counted.",
+            ["audit", "performance", "security"],
+            "False positives include Regex.Escape/Unescape, explicit timeout overloads, generated/precompiled patterns, trusted small inputs, and tests that intentionally exercise raw Regex behavior.")
+        {
+            RejectFileQueries =
+            [
+                BoundedRegexAliasUsing
+            ],
+            ExcludePaths = [BoundedRegexPath],
+            RiskEvidence =
+            [
+                "risk: raw System.Text.RegularExpressions.Regex static APIs can run without explicit timeout or shared bounded-regex policy.",
+                "positive: BoundedRegex aliases and instance names ending in Regex are filtered out; remaining hits should be classified as timeout-backed, generated/precompiled, trusted small input, or non-matching helpers such as Escape."
+            ],
+            MatchOrigins = ["code"],
+        };
 
     private static readonly List<SearchAuditRecipe> BuiltInRecipes =
     [
@@ -261,6 +305,7 @@ internal static class SearchAuditRecipes
                     [
                         "using Regex = CodeIndex.Indexer.BoundedRegex"
                     ],
+                    ExcludePaths = [BoundedRegexPath],
                     RiskEvidence =
                     [
                         "risk: raw System.Text.RegularExpressions.Regex construction should show an explicit timeout, non-backtracking mode, or bounded input.",
@@ -296,42 +341,66 @@ internal static class SearchAuditRecipes
                         "positive: explicit timeout arguments or RegexOptions.NonBacktracking can make the construction bounded."
                     ],
                 },
-                new(
+                StaticRegexApiQuery(
+                    "static-regex-is-match",
+                    " Regex.IsMatch(",
+                    "IsMatch"),
+                StaticRegexApiQuery(
+                    "static-regex-is-match-negated",
+                    "!Regex.IsMatch(",
+                    "IsMatch"),
+                StaticRegexApiQuery(
+                    "static-regex-is-match-parenthesized",
+                    "(Regex.IsMatch(",
+                    "IsMatch"),
+                StaticRegexApiQuery(
                     "static-regex-match",
                     " Regex.Match(",
-                    "Find static Regex.Match calls that may need BoundedRegex or an explicit timeout overload.",
-                    ["audit", "performance"],
-                    "False positives include bounded wrapper aliases, prevalidated small inputs, and tests that intentionally exercise raw Regex behavior.")
-                {
-                    RejectFileQueries =
-                    [
-                        "using Regex = CodeIndex.Indexer.BoundedRegex"
-                    ],
-                    RiskEvidence =
-                    [
-                        "risk: static System.Text.RegularExpressions.Regex.Match can run without the shared timeout policy.",
-                        "positive: BoundedRegex aliases, explicit timeout overloads, or tightly bounded trusted inputs can make a hit intentional."
-                    ],
-                    MatchOrigins = ["code"],
-                },
-                new(
+                    "Match"),
+                StaticRegexApiQuery(
+                    "static-regex-match-negated",
+                    "!Regex.Match(",
+                    "Match"),
+                StaticRegexApiQuery(
+                    "static-regex-match-parenthesized",
+                    "(Regex.Match(",
+                    "Match"),
+                StaticRegexApiQuery(
+                    "static-regex-matches",
+                    " Regex.Matches(",
+                    "Matches"),
+                StaticRegexApiQuery(
+                    "static-regex-matches-negated",
+                    "!Regex.Matches(",
+                    "Matches"),
+                StaticRegexApiQuery(
+                    "static-regex-matches-parenthesized",
+                    "(Regex.Matches(",
+                    "Matches"),
+                StaticRegexApiQuery(
                     "static-regex-replace",
                     " Regex.Replace(",
-                    "Find static Regex.Replace calls that may need BoundedRegex or an explicit timeout overload.",
-                    ["audit", "performance"],
-                    "False positives include bounded wrapper aliases, prevalidated small inputs, and tests that intentionally exercise raw Regex behavior.")
-                {
-                    RejectFileQueries =
-                    [
-                        "using Regex = CodeIndex.Indexer.BoundedRegex"
-                    ],
-                    RiskEvidence =
-                    [
-                        "risk: static System.Text.RegularExpressions.Regex.Replace can run without the shared timeout policy.",
-                        "positive: BoundedRegex aliases, explicit timeout overloads, or tightly bounded trusted inputs can make a hit intentional."
-                    ],
-                    MatchOrigins = ["code"],
-                },
+                    "Replace"),
+                StaticRegexApiQuery(
+                    "static-regex-replace-negated",
+                    "!Regex.Replace(",
+                    "Replace"),
+                StaticRegexApiQuery(
+                    "static-regex-replace-parenthesized",
+                    "(Regex.Replace(",
+                    "Replace"),
+                StaticRegexApiQuery(
+                    "static-regex-split",
+                    " Regex.Split(",
+                    "Split"),
+                StaticRegexApiQuery(
+                    "static-regex-split-negated",
+                    "!Regex.Split(",
+                    "Split"),
+                StaticRegexApiQuery(
+                    "static-regex-split-parenthesized",
+                    "(Regex.Split(",
+                    "Split"),
                 new(
                     "regex-timeout-handling",
                     "RegexMatchTimeoutException",
@@ -513,20 +582,18 @@ internal static class SearchAuditRecipes
                     ],
                     MatchOrigins = ["code"],
                 },
-                new(
+                DogfoodStaticRegexApiQuery(
                     "static-regex-api",
-                    "Regex.",
-                    "Find direct/static Regex API usage that may bypass BoundedRegex timeout policy.",
-                    ["audit", "performance", "security"],
-                    "False positives include BoundedRegex internals and tests that intentionally exercise raw Regex behavior.")
-                {
-                    RiskEvidence =
-                    [
-                        "risk: static Regex APIs can run without explicit timeout or shared bounded-regex policy.",
-                        "positive: BoundedRegex wrappers, precompiled generated regex, or explicit timeout overloads are safer evidence."
-                    ],
-                    MatchOrigins = ["code"],
-                },
+                    " Regex.",
+                    "a whitespace prefix"),
+                DogfoodStaticRegexApiQuery(
+                    "static-regex-api-negated",
+                    "!Regex.",
+                    "a negation prefix"),
+                DogfoodStaticRegexApiQuery(
+                    "static-regex-api-parenthesized",
+                    "(Regex.",
+                    "an opening-parenthesis prefix"),
                 new(
                     "relaxed-json-encoder",
                     "UnsafeRelaxedJsonEscaping",
@@ -772,6 +839,7 @@ internal static class SearchAuditRecipes
                     [
                         "using Regex = CodeIndex.Indexer.BoundedRegex"
                     ],
+                    ExcludePaths = [BoundedRegexPath],
                     RiskEvidence =
                     [
                         "risk: raw System.Text.RegularExpressions.Regex construction should show an explicit timeout, non-backtracking mode, or bounded input.",
@@ -807,42 +875,66 @@ internal static class SearchAuditRecipes
                         "positive: explicit timeout arguments or RegexOptions.NonBacktracking can make the construction bounded."
                     ],
                 },
-                new(
+                StaticRegexApiQuery(
+                    "static-regex-is-match",
+                    " Regex.IsMatch(",
+                    "IsMatch"),
+                StaticRegexApiQuery(
+                    "static-regex-is-match-negated",
+                    "!Regex.IsMatch(",
+                    "IsMatch"),
+                StaticRegexApiQuery(
+                    "static-regex-is-match-parenthesized",
+                    "(Regex.IsMatch(",
+                    "IsMatch"),
+                StaticRegexApiQuery(
                     "static-regex-match",
                     " Regex.Match(",
-                    "Find static Regex.Match calls that may need BoundedRegex or an explicit timeout overload.",
-                    ["audit", "performance"],
-                    "False positives include bounded wrapper aliases, prevalidated small inputs, and tests that intentionally exercise raw Regex behavior.")
-                {
-                    RejectFileQueries =
-                    [
-                        "using Regex = CodeIndex.Indexer.BoundedRegex"
-                    ],
-                    RiskEvidence =
-                    [
-                        "risk: static System.Text.RegularExpressions.Regex.Match can run without the shared timeout policy.",
-                        "positive: BoundedRegex aliases, explicit timeout overloads, or tightly bounded trusted inputs can make a hit intentional."
-                    ],
-                    MatchOrigins = ["code"],
-                },
-                new(
+                    "Match"),
+                StaticRegexApiQuery(
+                    "static-regex-match-negated",
+                    "!Regex.Match(",
+                    "Match"),
+                StaticRegexApiQuery(
+                    "static-regex-match-parenthesized",
+                    "(Regex.Match(",
+                    "Match"),
+                StaticRegexApiQuery(
+                    "static-regex-matches",
+                    " Regex.Matches(",
+                    "Matches"),
+                StaticRegexApiQuery(
+                    "static-regex-matches-negated",
+                    "!Regex.Matches(",
+                    "Matches"),
+                StaticRegexApiQuery(
+                    "static-regex-matches-parenthesized",
+                    "(Regex.Matches(",
+                    "Matches"),
+                StaticRegexApiQuery(
                     "static-regex-replace",
                     " Regex.Replace(",
-                    "Find static Regex.Replace calls that may need BoundedRegex or an explicit timeout overload.",
-                    ["audit", "performance"],
-                    "False positives include bounded wrapper aliases, prevalidated small inputs, and tests that intentionally exercise raw Regex behavior.")
-                {
-                    RejectFileQueries =
-                    [
-                        "using Regex = CodeIndex.Indexer.BoundedRegex"
-                    ],
-                    RiskEvidence =
-                    [
-                        "risk: static System.Text.RegularExpressions.Regex.Replace can run without the shared timeout policy.",
-                        "positive: BoundedRegex aliases, explicit timeout overloads, or tightly bounded trusted inputs can make a hit intentional."
-                    ],
-                    MatchOrigins = ["code"],
-                },
+                    "Replace"),
+                StaticRegexApiQuery(
+                    "static-regex-replace-negated",
+                    "!Regex.Replace(",
+                    "Replace"),
+                StaticRegexApiQuery(
+                    "static-regex-replace-parenthesized",
+                    "(Regex.Replace(",
+                    "Replace"),
+                StaticRegexApiQuery(
+                    "static-regex-split",
+                    " Regex.Split(",
+                    "Split"),
+                StaticRegexApiQuery(
+                    "static-regex-split-negated",
+                    "!Regex.Split(",
+                    "Split"),
+                StaticRegexApiQuery(
+                    "static-regex-split-parenthesized",
+                    "(Regex.Split(",
+                    "Split"),
                 new(
                     "cancellation-token-none",
                     "CancellationToken.None",
