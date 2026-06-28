@@ -1107,10 +1107,10 @@ public partial class ReferenceExtractorTests
     [Fact]
     public void Extract_CsharpIndentedRawStringBeforeBlockComment_DoesNotLeakXmlDocReferences()
     {
-        // Regression: BuildCSharpBlockCommentLines must recognize the closing delimiter of an
-        // indented raw string. Otherwise the scanner stays in raw-string mode, misses the
-        // following ordinary block comment, and treats its `/**` opener as XML doc.
-        // 回帰: BuildCSharpBlockCommentLines はインデント付き raw string の閉じ記号を認識する必要がある。
+        // Regression: C# line-state masking must recognize the closing delimiter of an indented
+        // raw string. Otherwise the scanner stays in raw-string mode, misses the following
+        // ordinary block comment, and treats its `/**` opener as XML doc.
+        // 回帰: C# の行状態マスクはインデント付き raw string の閉じ記号を認識する必要がある。
         // さもないと raw-string mode に居座って後続の通常 block comment を見失い、その `/**` を XML doc と
         // 誤認してしまう。
         var content =
@@ -1165,11 +1165,12 @@ public partial class ReferenceExtractorTests
         };
 
         var buildMethod = typeof(ReferenceExtractor).GetMethod(
-            "BuildCSharpMultilineStringContentLines",
+            "BuildCSharpLineStateMasks",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
         Assert.NotNull(buildMethod);
 
-        var insideStringContent = (bool[])buildMethod!.Invoke(null, new object[] { lines })!;
+        var masks = ((bool[] MultilineStringContent, bool[] BlockComment))buildMethod!.Invoke(null, new object[] { lines })!;
+        var insideStringContent = masks.MultilineStringContent;
 
         Assert.True(insideStringContent[3]);
         Assert.True(insideStringContent[4]);

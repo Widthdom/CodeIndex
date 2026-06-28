@@ -1710,9 +1710,6 @@ internal static class ExportImportCommandRunner
         return false;
     }
 
-    private static int WriteError(string message, string hint, string usage)
-        => CommandErrorWriter.Write(message, CommandExitCodes.UsageError, hint, usage);
-
     private static int WriteImportError(
         bool json,
         JsonSerializerOptions jsonOptions,

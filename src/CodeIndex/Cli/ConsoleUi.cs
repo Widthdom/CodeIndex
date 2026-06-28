@@ -244,7 +244,6 @@ public static class ConsoleUi
     }
 
     private const int SpinnerFrameDelayMs = 100;
-    private const int SpinnerStopDelayMs = 20;
     private const int ConsoleLineMargin = 1;
     private static readonly object TerminalLock = new();
     private static TextWriter? _synchronizedOut;
