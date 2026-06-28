@@ -11,6 +11,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.35.0] - 2026-06-28
+
+#### Added
+
+- **Issue-oriented maintenance discovery output is now available (#4067)** — `cdidx map --format issue-drafts` emits grouped oversized-file issue draft candidates with threshold and source-limit metadata, `unused --compact --by-bucket` returns count/representative bucket summaries without full symbol payloads, and `inspect --outline-only` provides an outline-first JSON mode for large targets.
+
+#### Changed
+
+- **Plugin and hook lifecycle diagnostics now make load-context retention explicit (#4060)** — `status --json` reports plugin and hook load-context lifecycle codes, and the docs now spell out constructor execution, trust boundaries, timeout handling, and when collectible contexts are retained or unloaded.
+- **Audit and recipe workflows now expose compact automation paths (#4064)** — recipe discovery supports deterministic name-only and summary-only JSON, recipe count output can omit heavy recipe metadata, and issue-draft export supports byte budgets plus snippetless path/line evidence.
+- **Static regex audit recipes now separate bounded aliases from raw BCL calls (#4072)** — `dogfood-risk-patterns/static-regex-api` filters out `BoundedRegex` alias files, and .NET regex recipes now cover raw static `IsMatch`, `Matches`, and `Split` calls alongside `Match` and `Replace`.
+- **Environment-variable inventory now reports domains and invalid-value behavior (#4073)** — `cdidx doctor --env-inventory` and doctor JSON classify environment-variable controls by display, config, auth secret, trust-boundary, subprocess, update/logging, and indexing/query domains and document how invalid values are handled.
+- **Unused public-surface audit output now includes contract-domain classification (#4074)** -- `unused` JSON, compact representatives, count summaries, and MCP `unused_symbols` responses report contract-domain counts and per-symbol domains such as public API, CLI, JSON, configuration, MCP/LSP, generated code, test hooks, and framework overrides.
+
+#### Fixed
+
+- **`index --changed-between` now purges stale missing rows after branch refreshes (#4056)** — changed-between updates now remove indexed files that are absent from the current worktree even when the stale row came from the previously indexed branch rather than the provided diff range.
+- **Symbol line lookups now use explicit SQLite parameter binding (#4057)** — `AnalyzeFileLine` no longer relies on `AddWithValue` inside symbol lookup queries, so the dotnet risk audit stays aligned with the repository SQLite command policy.
+- **.NET sync/cancellation audit hits are classified and narrowed (#4059)** — unnecessary no-token helper wrappers were removed from diff and export/import internals, while the remaining intentional compatibility, process-boundary, and detached-cleanup cases are documented.
+- **`deps --cycles` now uses a bounded approximate candidate scan (#4065)** - cycle detection avoids the full dependency-edge aggregation path, can be interrupted through the CLI cancellation token, and reports partial results with truncation metadata when the candidate edge budget is reached.
+- **Symbol audit ranking now downranks ambiguous generic names (#4066)** — `symbols --sort references`, `--sort hotspot`, and `--sort complexity` now use generic-name penalties, duplicate-definition dilution, structural member penalties, and structural size caps so one-line `Path`, `File`, `Equal`, or partial-class rows no longer dominate top-N audit output.
+- **`validate` now labels intentional fixture encoding findings more clearly (#4068)** — human output includes severity, origin, and test-fixture markers, and stale BOM / UTF-16 BOM metadata rows are rechecked so expected `.sln` BOM noise does not survive incremental reuse.
+- **Path-sensitive `map` and `impact` results now honor indexed filesystem case policy (#4071)** — case-sensitive workspaces keep case-variant indexed paths distinct for entrypoint fallback and impact definition-file ambiguity, while legacy and case-insensitive indexes keep the previous collapsed behavior. The audit classification for path comparison and normalization domains is documented in `docs/path-comparison-audit.md`.
+- **Watch JSON events now follow the shared CLI JSON contract (#4077)** — `index --watch --json` lifecycle events include `api_version`, honor the caller's JSON serializer options such as `--pretty`, and the developer guide now classifies CLI, MCP, LSP, GitHub/report, worker, and local JSONL contract domains.
+- **Indexer source reads now use the shared bounded file-open policy (#4078)** - source content and checksum reads now allow concurrent build-tool writers while preserving max-file byte caps and modified-time retry checks.
+- **SymbolExtractor practical budget guards are less flaky on slow Release hosts (#4087)** - large exported JavaScript object literal property symbols now keep compact per-property signatures, and the affected runaway guard budgets leave room for observed local Release variance.
+
+#### Security
+
+- **Worker JSON and regex resource limits are now explicit (#4058)** — worker protocol JSON is rejected before DOM parsing when it exceeds the negotiated frame cap, oversized `--max-file-bytes` protocol frames clamp to a named 384 MiB ceiling instead of `int.MaxValue`, and `find --regex` timeout behavior is covered by a pathological-input regression test.
+- **Exception diagnostics now sanitize raw messages before user-facing egress (#4069)** — CLI, MCP, indexing, and file-read diagnostic paths now route exception messages through shared bounding, path redaction, and sensitive-value redaction before exposing them in human, JSON, or local diagnostic output.
+- **Tightened SQLite PRAGMA construction policy (#4070)** — busy timeout, cache size, mmap size, and report schema PRAGMA construction now route through shared constrained helpers, with an audit table documenting raw SQL categories.
+- **Process launch construction now has a documented shared policy (#4075)** — isolated symbol and hook workers now share the same worker command/protocol argument helper, and the developer guide records the no-shell, allowlisted-environment, timeout/cancellation, and bounded-capture expectations for production subprocess launches.
+- **GitHub egress contracts are now explicit for suggestion submission (#4079)** — GitHub suggestion submission now applies the shared GitHub API headers on every search, list, and create request, and the docs classify outbound GitHub/update/preflight paths with their timeout, response-size, redaction, and fail-closed duplicate-lookup behavior.
+
+#### Documentation
+
+- **Documented the destructive filesystem operation audit (#4076)** - `DEVELOPER_GUIDE.md` now classifies production delete and move call sites by ownership, containment, rollback, and best-effort cleanup diagnostics.
+
+#### Internal
+
+- **Started the oversized-hotspot split plan (#4061)** — `hotspots` command execution now lives in a focused `QueryCommandRunner.Hotspots.cs` partial, and the large-file decomposition plan records the current dogfood baseline and tracking commands for future behavior-preserving splits.
+- **Oversized test suites were split into focused partial files (#4062)** — large extractor, DbReader, MCP server, index command, and query graph test suites now move feature-specific coverage into smaller files while preserving shared helpers on the root partial classes.
+- **Removed unused private helpers reported by actionable unused analysis (#4063)** — production-only private helpers and constants that no longer had indexed references were pruned after reviewing the reported candidates.
+
 ### [1.34.5] - 2026-06-28
 
 #### Fixed
@@ -4706,6 +4751,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.35.0] - 2026-06-28
+
+#### 追加
+
+- **Issue 作成向けの保守候補出力を追加しました (#4067)** — `cdidx map --format issue-drafts` は巨大ファイルの Issue 下書き候補を group 化し、閾値と取得元上限 metadata 付きで出力します。`unused --compact --by-bucket` は完全なシンボル一覧なしで bucket ごとの件数と代表例の概要を返し、`inspect --outline-only` は大きな対象を本文なしで確認しやすいアウトライン優先の JSON モードを提供します。
+
+#### 変更
+
+- **plugin / hook lifecycle diagnostics が load-context retention を明示するようになりました (#4060)** — `status --json` は plugin / hook の load-context lifecycle code を返し、docs は constructor 実行、trust boundary、timeout 処理、collectible context がいつ保持または unload されるかを明記しました。
+- **audit / recipe workflow で compact な automation path を使いやすくしました (#4064)** — recipe discovery は決定的な名前のみ JSON と summary-only JSON に対応し、recipe count output は重い recipe metadata を省略でき、issue-draft export は byte budget と snippet なしの path / line evidence に対応しました。
+- **static regex の監査 recipe が bounded alias と raw BCL 呼び出しを分離するようになりました (#4072)** — `dogfood-risk-patterns/static-regex-api` は `BoundedRegex` alias ファイルを除外し、.NET regex recipe は `Match` / `Replace` に加えて raw static `IsMatch` / `Matches` / `Split` も対象にします。
+- **環境変数 inventory が domain と不正値の扱いを報告するようになりました (#4073)** — `cdidx doctor --env-inventory` と doctor JSON は、環境変数制御を display、config、auth secret、trust-boundary、subprocess、update/logging、indexing/query の domain で分類し、不正値がどう扱われるかを示します。
+- **unused の public surface 監査出力に契約ドメイン分類を追加しました (#4074)** -- `unused` の JSON、compact representative、count summary、MCP `unused_symbols` 応答で、public API、CLI、JSON、configuration、MCP/LSP、generated code、test hook、framework override などの契約ドメイン集計とシンボル単位の分類を返します。
+
+#### 修正
+
+- **`index --changed-between` がブランチ更新後の stale な missing 行を削除するようになりました (#4056)** — changed-between 更新は、stale 行が指定された diff 範囲ではなく以前に index したブランチ由来の場合でも、現在の worktree に存在しない indexed file を削除します。
+- **シンボル行 lookup が明示的な SQLite parameter binding を使うようになりました (#4057)** — `AnalyzeFileLine` のシンボル lookup query 内で `AddWithValue` に依存しなくなり、dotnet risk audit がリポジトリの SQLite command policy と揃うようになりました。
+- **.NET の sync/cancellation 監査ヒットを分類し、対象を絞りました (#4059)** — diff と export/import 内部の不要な no-token helper wrapper を削除し、残す互換 API、process 境界、detached cleanup のケースを文書化しました。
+- **`deps --cycles` が上限付きの近似候補 scan を使うようになりました (#4065)** - cycle 検出は依存 edge の全量集計経路を避け、CLI の cancellation token で中断でき、候補 edge budget に達した場合は truncation metadata 付きで部分結果を報告します。
+- **シンボル監査ランキングで曖昧な汎用名を下げるようになりました (#4066)** — `symbols --sort references`、`--sort hotspot`、`--sort complexity` は汎用名ペナルティ、重複定義の希釈、構造的なメンバーへのペナルティ、構造的サイズの上限を使うようになり、1 行の `Path`、`File`、`Equal` や部分クラス行が上位 N 件の監査出力を占有しにくくなりました。
+- **`validate` が意図的な fixture の encoding finding をより明確に表示するようになりました (#4068)** — human output に severity、origin、test-fixture marker を表示し、古い BOM / UTF-16 BOM metadata 行を再確認することで、期待される `.sln` BOM ノイズが incremental reuse で残り続けないようにしました。
+- **path-sensitive な `map` と `impact` の結果が indexed filesystem の大小区別ポリシーを尊重するようになりました (#4071)** — case-sensitive な workspace では entrypoint fallback と impact の definition file 曖昧性判定で case variant の indexed path を別物として扱い、legacy / case-insensitive な index では従来どおり畳み込む挙動を維持します。パス比較と正規化 domain の監査分類は `docs/path-comparison-audit.md` に記録しました。
+- **watch JSON event が共有 CLI JSON contract に従うようになりました (#4077)** — `index --watch --json` の lifecycle event に `api_version` を追加し、`--pretty` など呼び出し元の JSON serializer option を尊重するようにしました。また developer guide で CLI、MCP、LSP、GitHub/report、worker、local JSONL の contract domain を分類しました。
+- **インデックス対象ソースの読み取りが共有の境界付きファイルオープン方針を使うようになりました (#4078)** - ソース本文とチェックサムの読み取りは、最大ファイルバイト数の上限と更新時刻の再確認を保ったまま、ビルドツールによる同時書き込みを許容するようになりました。
+- **SymbolExtractor の practical budget guard が低速な Release 環境で失敗しにくくなりました (#4087)** - 大きな exported JavaScript object literal の property symbol は property ごとの短い signature を保持するようになり、対象の runaway guard 予算は観測されたローカル Release の揺れを許容します。
+
+#### セキュリティ
+
+- **worker JSON と regex のリソース上限を明確化しました (#4058)** — worker protocol JSON は合意済み frame 上限を超える場合に DOM parse 前で拒否され、過大な `--max-file-bytes` による protocol frame は `int.MaxValue` ではなく名前付きの 384 MiB 上限へ clamp され、`find --regex` の timeout 挙動を pathological input の regression test で確認するようになりました。
+- **例外診断がユーザー向け出力前に raw message をサニタイズするようになりました (#4069)** — CLI / MCP / indexing / file 読み取りの診断経路は、human / JSON / ローカル診断出力に例外メッセージを出す前に、共通の長さ制限、パス伏せ字、機微値伏せ字を通すようになりました。
+- **SQLite PRAGMA 構築ポリシーを強化しました (#4070)** — busy timeout、cache size、mmap size、report schema の PRAGMA 構築を制約付き shared helper 経由にし、raw SQL の分類表を追加しました。
+- **プロセス起動構築を共有ポリシーとして文書化しました (#4075)** — isolated symbol worker と hook worker が同じ worker command / protocol argument helper を共有し、開発者ガイドに本番 subprocess 起動の no-shell、allowlisted environment、timeout / cancellation、bounded capture の期待値を記録しました。
+- **suggestion 送信時の GitHub egress 契約を明確化しました (#4079)** — GitHub suggestion 送信では search / list / create の各 request に共有 GitHub API header を明示適用し、docs では GitHub / update / preflight の outbound 経路について timeout、response-size 上限、redaction、fail-closed duplicate lookup の挙動を分類しました。
+
+#### ドキュメント
+
+- **破壊的ファイルシステム操作の監査内容を文書化しました (#4076)** - `DEVELOPER_GUIDE.md` で、本番コードの削除・移動呼び出しを ownership、containment、rollback、best-effort cleanup diagnostics ごとに分類しました。
+
+#### 内部変更
+
+- **巨大 hotspot 分割計画を開始しました (#4061)** — `hotspots` command 実行を focused partial の `QueryCommandRunner.Hotspots.cs` に移し、巨大ファイル分割計画に現在の dogfood baseline と今後の behavior-preserving split 向け tracking command を記録しました。
+- **肥大化したテストスイートを focused partial file に分割しました (#4062)** — 大きくなっていた extractor、DbReader、MCP server、index command、query graph のテスト群は、共有 helper を root 側の partial class に残しつつ、機能別の小さなファイルへ分割しました。
+- **actionable unused analysis が報告した未使用 private helper を削除しました (#4063)** — 報告された候補を確認したうえで、indexed reference が残っていない本番コード内の private helper と定数を削除しました。
+
 ### [1.34.5] - 2026-06-28
 
 #### 修正
@@ -9383,7 +9473,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.34.5...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.35.0...HEAD
+[1.35.0]: https://github.com/Widthdom/CodeIndex/compare/v1.34.5...v1.35.0
 [1.34.5]: https://github.com/Widthdom/CodeIndex/compare/v1.34.4...v1.34.5
 [1.34.4]: https://github.com/Widthdom/CodeIndex/compare/v1.34.3...v1.34.4
 [1.34.3]: https://github.com/Widthdom/CodeIndex/compare/v1.34.2...v1.34.3
