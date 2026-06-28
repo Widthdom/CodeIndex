@@ -1067,7 +1067,8 @@ cleanup, probe, diagnostic-sanitization, and worker boundaries from catches that
 should be narrowed or rethrown.
 Built-in recipes include `risky-code`, `json-parse-apis`,
 `auth-token-audit`, `dogfood-risk-patterns`, `dotnet-risk-patterns`,
-`xml-parser-security`, `filesystem-traversal`, `bounded-read-evidence`, and the
+`sqlite-query-policy-surfaces`, `xml-parser-security`, `filesystem-traversal`,
+`bounded-read-evidence`, and the
 opt-in broad `broad-token-audit` recipe.
 `--recipe <name>` applies normal search filters such as `--lang`, `--path`,
 `--exclude-path`, `--exclude-tests`, `--limit`, and snippet controls to every
@@ -3746,8 +3747,9 @@ result level、正規化済みの repository-relative artifact URI を出力し�
 
 search audit recipe は、名前付き recipe を複数の curated search query に展開します。
 組み込み recipe には `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、`xml-parser-security`、
-`auth-token-audit`、`dogfood-risk-patterns`、`filesystem-traversal`、`bounded-read-evidence`、
-`broad-token-audit` があります。`--list-recipes` は利用可能な名前、
+`auth-token-audit`、`dogfood-risk-patterns`、`sqlite-query-policy-surfaces`、
+`filesystem-traversal`、`bounded-read-evidence`、`broad-token-audit` があります。
+`--list-recipes` は利用可能な名前、
 説明、推奨 label、query text、exact-match mode、false-positive guidance、guard filter、
 risk evidence、query 固有の audit taxonomy metadata を表示します。
 `--query <filter>` を追加すると、recipe/query 名、query text、label、severity、path metadata、
