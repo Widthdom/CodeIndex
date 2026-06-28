@@ -1843,6 +1843,10 @@ internal sealed record SearchRecipeAggregationQueryJsonResult(
     [property: JsonPropertyName("severity")] string Severity,
     [property: JsonPropertyName("count")] int Count,
     [property: JsonPropertyName("file_count")] int FileCount,
+    [property: JsonPropertyName("returned_groups")] int ReturnedGroups,
+    [property: JsonPropertyName("total_groups")] int TotalGroups,
+    [property: JsonPropertyName("groups_truncated")] bool GroupsTruncated,
+    [property: JsonPropertyName("group_limit")] int GroupLimit,
     [property: JsonPropertyName("groups")] List<SearchGroupedCountItemJsonResult> Groups);
 
 internal sealed record SearchRecipeCompactRunJsonResult(

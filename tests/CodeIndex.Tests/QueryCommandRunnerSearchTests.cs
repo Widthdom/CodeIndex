@@ -769,6 +769,14 @@ public partial class QueryCommandRunnerTests
             Assert.StartsWith("release/pack", packPath, StringComparison.Ordinal);
             Assert.Contains("dotnet pack", packResult.GetProperty("snippet").GetString(), StringComparison.Ordinal);
             Assert.NotEmpty(packResult.GetProperty("match_lines").EnumerateArray());
+
+            var (capExitCode, capStdout, capStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--named-query=pack=dotnet pack", "--db", dbPath, "--format", "compact", "--max-json-bytes", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, capExitCode);
+            Assert.Equal(string.Empty, capStdout);
+            Assert.Contains("named-query search JSON output", capStderr, StringComparison.Ordinal);
         }
         finally
         {
@@ -835,6 +843,41 @@ public partial class QueryCommandRunnerTests
             var groups = root.GetProperty("groups").EnumerateArray().ToList();
             Assert.Equal(["src/alpha.cs", "src/beta.cs"], groups.Select(group => group.GetProperty("file").GetString()).ToArray());
             Assert.All(groups, group => Assert.Equal(1, group.GetProperty("count").GetInt32()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_GroupByFileCountLimitCapsReturnedGroups_Issue4119()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_group_by_file_limit_4119");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/alpha.cs", "csharp", "public class Alpha { void Run() { LimitMarker(); } }");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/beta.cs", "csharp", "public class Beta { void Run() { LimitMarker(); } }");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/gamma.cs", "csharp", "public class Gamma { void Run() { LimitMarker(); } }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["LimitMarker", "--db", dbPath, "--exact-substring", "--group-by", "file", "--count", "--json", "--limit", "2"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var groups = root.GetProperty("groups").EnumerateArray().ToArray();
+
+            Assert.Equal(3, root.GetProperty("count").GetInt32());
+            Assert.Equal(3, root.GetProperty("files").GetInt32());
+            Assert.Equal(2, root.GetProperty("returned_groups").GetInt32());
+            Assert.Equal(3, root.GetProperty("total_groups").GetInt32());
+            Assert.True(root.GetProperty("groups_truncated").GetBoolean());
+            Assert.Equal(2, root.GetProperty("group_limit").GetInt32());
+            Assert.Equal(2, groups.Length);
         }
         finally
         {
@@ -2901,7 +2944,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.UsageError, aggregationCapExitCode);
             Assert.Equal(string.Empty, aggregationCapStdout);
-            Assert.Contains("--max-json-bytes is only supported with NDJSON recipe rows, issue-draft JSON, or summary-only recipe count JSON.", aggregationCapStderr, StringComparison.Ordinal);
+            Assert.Contains("recipe aggregation JSON output", aggregationCapStderr, StringComparison.Ordinal);
         }
         finally
         {
@@ -2981,16 +3024,27 @@ public partial class QueryCommandRunnerTests
             var (groupByExitCode, groupByStdout, groupByStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--group-by", "file", "--count", "--json"],
                 _jsonOptions));
+            var (limitedExitCode, limitedStdout, limitedStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--count-by", "file", "--json", "--limit", "1"],
+                _jsonOptions));
+            var (textExitCode, textStdout, textStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--count-by", "file", "--limit", "1"],
+                _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, countByExitCode);
             Assert.Equal(CommandExitCodes.Success, groupByExitCode);
+            Assert.Equal(CommandExitCodes.Success, limitedExitCode);
+            Assert.Equal(CommandExitCodes.Success, textExitCode);
             Assert.Equal(string.Empty, countByStderr);
             Assert.Equal(string.Empty, groupByStderr);
+            Assert.Equal(string.Empty, limitedStderr);
             using var countByDocument = ParseJsonOutput(countByStdout);
             using var groupByDocument = ParseJsonOutput(groupByStdout);
+            using var limitedDocument = ParseJsonOutput(limitedStdout);
             var countByRoot = countByDocument.RootElement;
             var groupByRoot = groupByDocument.RootElement;
             var query = Assert.Single(countByRoot.GetProperty("queries").EnumerateArray());
+            var limitedQuery = Assert.Single(limitedDocument.RootElement.GetProperty("queries").EnumerateArray());
 
             Assert.Equal("count_by", countByRoot.GetProperty("mode").GetString());
             Assert.Equal("group_by", groupByRoot.GetProperty("mode").GetString());
@@ -2999,6 +3053,12 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(2, query.GetProperty("count").GetInt32());
             Assert.Equal(2, query.GetProperty("groups").GetArrayLength());
             Assert.Contains(query.GetProperty("groups").EnumerateArray(), group => group.GetProperty("file").GetString() == "src/a.cs");
+            Assert.Equal(1, limitedQuery.GetProperty("returned_groups").GetInt32());
+            Assert.Equal(2, limitedQuery.GetProperty("total_groups").GetInt32());
+            Assert.True(limitedQuery.GetProperty("groups_truncated").GetBoolean());
+            Assert.Equal(1, limitedQuery.GetProperty("groups").GetArrayLength());
+            Assert.Contains("[raw-diagnostic-echo]", textStdout, StringComparison.Ordinal);
+            Assert.Contains("showing 1 of 2 groups", textStderr, StringComparison.Ordinal);
         }
         finally
         {
@@ -3061,15 +3121,38 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunSearch_MaxJsonBytesRejectsCompactOutput_Issue3904()
+    public void RunSearch_MaxJsonBytesBoundsCompactOutput_Issue4119()
     {
-        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-            ["token", "--format", "compact", "--max-json-bytes", "1024"],
-            _jsonOptions));
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_compact_byte_cap_4119");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/token.cs",
+                "csharp",
+                "public sealed class TokenStore { private string token = \"secret\"; }");
 
-        Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Equal(string.Empty, stdout);
-        Assert.Contains("--max-json-bytes is only supported with NDJSON search output", stderr, StringComparison.Ordinal);
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["token", "--db", dbPath, "--format", "compact", "--max-json-bytes", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("compact search results JSON output", stderr, StringComparison.Ordinal);
+
+            var (zeroExitCode, zeroStdout, zeroStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["MissingToken", "--db", dbPath, "--format", "compact", "--max-json-bytes", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, zeroExitCode);
+            Assert.Equal(string.Empty, zeroStdout);
+            Assert.Contains("compact search results JSON output", zeroStderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Fact]
@@ -8854,6 +8937,42 @@ jobs:
     }
 
     [Fact]
+    public void RunSearch_CountByFileLimitCapsReturnedGroups_Issue4119()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_count_by_file_limit_4119");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/alpha.cs", "csharp", "public class Alpha { void Run() { CountByLimitNeedle(); } }");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/beta.cs", "csharp", "public class Beta { void Run() { CountByLimitNeedle(); } }");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/gamma.cs", "csharp", "public class Gamma { void Run() { CountByLimitNeedle(); } }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["CountByLimitNeedle", "--db", dbPath, "--exact-substring", "--count-by", "file", "--json", "--limit", "2"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var groups = root.GetProperty("groups").EnumerateArray().ToArray();
+
+            Assert.Equal("count_by", root.GetProperty("mode").GetString());
+            Assert.Equal(3, root.GetProperty("count").GetInt32());
+            Assert.Equal(3, root.GetProperty("files").GetInt32());
+            Assert.Equal(2, root.GetProperty("returned_groups").GetInt32());
+            Assert.Equal(3, root.GetProperty("total_groups").GetInt32());
+            Assert.True(root.GetProperty("groups_truncated").GetBoolean());
+            Assert.Equal(2, root.GetProperty("group_limit").GetInt32());
+            Assert.Equal(2, groups.Length);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_GroupedFormatBoundsRepresentativeMatches_Issue3788()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_grouped_output");
@@ -8944,6 +9063,29 @@ jobs:
             Assert.Equal("src/projected.cs", document.RootElement.GetProperty("path").GetString());
             Assert.True(document.RootElement.TryGetProperty("line", out _));
             Assert.False(document.RootElement.TryGetProperty("done", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_SearchFieldsJsonArrayHonorsMaxJsonBytes_Issue4119()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_projection_array_byte_cap_4119");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/projected.cs", "csharp", "public class Demo { void Run() { ProjectedNeedle(); } }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["ProjectedNeedle", "--db", dbPath, "--exact-substring", "--json=array", "--search-fields", "path,line", "--max-json-bytes", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("projected search result array JSON output", stderr, StringComparison.Ordinal);
         }
         finally
         {

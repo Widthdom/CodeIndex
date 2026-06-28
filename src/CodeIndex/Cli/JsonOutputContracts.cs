@@ -339,6 +339,10 @@ internal sealed record SearchGroupedCountJsonResult(
     [property: JsonPropertyName("group_by")] string GroupBy,
     [property: JsonPropertyName("count")] int Count,
     [property: JsonPropertyName("files")] int Files,
+    [property: JsonPropertyName("returned_groups")] int ReturnedGroups,
+    [property: JsonPropertyName("total_groups")] int TotalGroups,
+    [property: JsonPropertyName("groups_truncated")] bool GroupsTruncated,
+    [property: JsonPropertyName("group_limit")] int GroupLimit,
     [property: JsonPropertyName("groups")] List<SearchGroupedCountItemJsonResult> Groups);
 
 internal sealed record SearchGroupedCountItemJsonResult(
@@ -359,6 +363,10 @@ internal sealed record SearchAggregationJsonResult(
     [property: JsonPropertyName("count")] int Count,
     [property: JsonPropertyName("files")] int Files,
     [property: JsonPropertyName("unique")] bool Unique,
+    [property: JsonPropertyName("returned_groups")] int ReturnedGroups,
+    [property: JsonPropertyName("total_groups")] int TotalGroups,
+    [property: JsonPropertyName("groups_truncated")] bool GroupsTruncated,
+    [property: JsonPropertyName("group_limit")] int GroupLimit,
     [property: JsonPropertyName("groups")] List<SearchGroupedCountItemJsonResult> Groups);
 
 internal sealed record SearchFileGroupedJsonResult(
