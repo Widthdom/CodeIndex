@@ -172,7 +172,7 @@ internal static class BoundedLineReader
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
         {
-            var reason = $"it could not be read ({ex.GetType().Name}: {DiagnosticSanitizer.ForMessage(ex.Message)})";
+            var reason = $"it could not be read ({DiagnosticRedactor.FormatExceptionDetail(ex)})";
             failure = new(
                 BoundedTextFileReadFailureKind.ReadFailed,
                 reason,

@@ -6661,7 +6661,7 @@ public partial class McpServer
         var path = SanitizeMcpIndexDiagnosticPath(projectRoot, filePath);
         var exceptionType = SanitizeMcpIndexFailureToken(ex.GetType().Name, "Exception");
         var message = SanitizeAndCapMcpIndexFailureMessage(
-            DiagnosticRedactor.FormatExceptionStackLine(ex.Message),
+            DiagnosticRedactor.FormatExceptionMessage(ex, MaxMcpIndexFailureMessageLength),
             out var messageTruncated);
         return new McpIndexDiagnostic(code, category, path, stage, exceptionType, message, messageTruncated);
     }

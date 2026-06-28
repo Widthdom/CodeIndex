@@ -44,5 +44,5 @@ internal static class JsonFrameParser
         => new("json_parse_error", FormatExceptionDetail(ex), maxDepth);
 
     internal static string FormatExceptionDetail(JsonException ex)
-        => DiagnosticRedactor.BoundDiagnosticText(DiagnosticSanitizer.ForMessage(ex.Message), MaxParseDiagnosticChars);
+        => DiagnosticRedactor.FormatExceptionMessage(ex, MaxParseDiagnosticChars);
 }

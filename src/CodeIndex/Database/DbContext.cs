@@ -2858,9 +2858,7 @@ public class DbContext : IDisposable
     }
 
     private static string FormatMigrationSqliteMessage(SqliteException exception)
-        => DiagnosticRedactor.BoundDiagnosticText(
-            DiagnosticRedactor.RedactSensitiveText(exception.Message, redactPaths: true),
-            MigrationDiagnosticTextLimit);
+        => DiagnosticRedactor.FormatExceptionMessage(exception, MigrationDiagnosticTextLimit);
 
     private static void EmitMigrationFailureWarning(DbMigrationFailure failure)
     {

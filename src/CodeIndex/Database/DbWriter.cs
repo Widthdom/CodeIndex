@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using CodeIndex.Cli;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
 using System.Diagnostics;
@@ -1469,7 +1470,10 @@ public class DbWriter
         => BuildBatchRowSkipWarning(rowIdentifier, batchException, rowException);
 
     private static string BuildBatchRowSkipWarning(string rowIdentifier, Exception batchException, Exception rowException)
-        => $"Warning: skipped failed batch row ({FormatBatchRowSkipDiagnosticValue(rowIdentifier)}); batch_error={FormatBatchRowSkipDiagnosticValue(batchException.Message)}; row_error={FormatBatchRowSkipDiagnosticValue(rowException.Message)}";
+        => $"Warning: skipped failed batch row ({FormatBatchRowSkipDiagnosticValue(rowIdentifier)}); batch_error={FormatBatchRowSkipException(batchException)}; row_error={FormatBatchRowSkipException(rowException)}";
+
+    private static string FormatBatchRowSkipException(Exception ex)
+        => FormatBatchRowSkipDiagnosticValue(DiagnosticRedactor.FormatExceptionMessage(ex));
 
     private static string FormatBatchRowSkipDiagnosticValue(string? value)
     {

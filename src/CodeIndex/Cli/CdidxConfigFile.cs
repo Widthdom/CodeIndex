@@ -902,7 +902,7 @@ internal static class CdidxConfigFile
         => $"[cdidx] {FormatConfigDiagnosticPath(path)}:";
 
     internal static string FormatConfigExceptionMessage(Exception ex)
-        => FormatConfigDiagnosticText(ex.Message, MaxConfigDiagnosticChars, redactPaths: true).Text;
+        => DiagnosticRedactor.FormatExceptionMessage(ex, MaxConfigDiagnosticChars);
 
     private static string FormatConfigKeyForDiagnostic(string key)
         => FormatConfigDiagnosticText(key, MaxUnknownConfigKeyChars, redactPaths: false).Text;

@@ -15,11 +15,12 @@ internal static class CodeIndexExceptionFormatter
 {
     public static void Write(CodeIndexException ex, string[] args, JsonSerializerOptions jsonOptions)
     {
+        var message = CommandErrorWriter.FormatSanitizedExceptionMessage(ex);
         if (HasJsonFlag(args))
         {
             var payload = new CommandErrorJsonResult(
                 Status: "error",
-                Message: ex.Message,
+                Message: message,
                 Hint: ex.Hint,
                 ErrorCode: ex.Code,
                 Path: ex.Path,
@@ -34,7 +35,7 @@ internal static class CodeIndexExceptionFormatter
         // QueryCommandRunner / IndexCommandRunner already emit so downstream
         // parsers do not need a second format.
         // 既存の `Error [Exxx]: ...` 形に揃え、parser の差分を最小化する。
-        CommandErrorWriter.WriteStderr($"Error [{ex.Code}]: {ex.Message}");
+        CommandErrorWriter.WriteStderr($"Error [{ex.Code}]: {message}");
         if (!string.IsNullOrEmpty(ex.Path))
             CommandErrorWriter.WriteStderr($"Path: {ex.Path}");
         if (!string.IsNullOrEmpty(ex.Hint))

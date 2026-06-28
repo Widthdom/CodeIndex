@@ -120,9 +120,7 @@ public static class ReportCommandRunner
     }
 
     private static string FormatReportExceptionMessage(Exception ex) =>
-        DiagnosticRedactor.BoundDiagnosticText(
-            DiagnosticRedactor.RedactSensitiveText(ex.Message, RedactedPlaceholder, redactPaths: true),
-            maxChars: 512);
+        DiagnosticRedactor.FormatExceptionMessage(ex, maxChars: 512);
 
     private static string? RedactLocalJsonPath(string? path) =>
         string.IsNullOrWhiteSpace(path) ? path : RedactedPlaceholder;

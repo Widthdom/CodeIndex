@@ -889,7 +889,7 @@ public partial class McpServer : IDisposable
             }
             catch (Exception ex) when (ex is IOException or ObjectDisposedException or OperationCanceledException)
             {
-                WriteMcpLogLine(BuildResponseWriteErrorLog(DiagnosticSanitizer.ForMessage(ex.Message)));
+                WriteMcpLogLine(BuildResponseWriteErrorLog(DiagnosticRedactor.FormatExceptionMessage(ex)));
                 FlushDeferredFrameLogs();
             }
         }
@@ -914,7 +914,7 @@ public partial class McpServer : IDisposable
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or TimeoutException)
         {
-            WriteMcpLogLine(BuildResponseWriteErrorLog(DiagnosticSanitizer.ForMessage(ex.Message)));
+            WriteMcpLogLine(BuildResponseWriteErrorLog(DiagnosticRedactor.FormatExceptionMessage(ex)));
         }
     }
 
@@ -969,7 +969,7 @@ public partial class McpServer : IDisposable
 
     private string BuildInvalidUtf8ParseErrorResponse(DecoderFallbackException ex)
     {
-        DeferFrameLog(BuildInvalidUtf8ErrorLog(ex.Message));
+        DeferFrameLog(BuildInvalidUtf8ErrorLog(DiagnosticRedactor.FormatExceptionMessage(ex)));
         var errorResponse = CreateErrorResponse(hasId: true, id: null, code: -32700, message: "Parse error: invalid UTF-8 input",
             category: McpErrorEnvelope.CategoryParseError,
             suggestion: "Send one JSON-RPC 2.0 object per line encoded as valid UTF-8. Reject or re-encode malformed bytes before retrying.",
@@ -1059,7 +1059,7 @@ public partial class McpServer : IDisposable
             // stderr には診断用に詳細を残すが、ネットワークに出るレスポンスには
             // 例外型のみを返し、SQLite の "near 'foo': syntax error" などを通じた
             // 内容漏れを防ぐ（#1530）。
-            DeferFrameLog(BuildUnhandledLoopErrorLog(DiagnosticSanitizer.ForMessage(ex.Message)));
+            DeferFrameLog(BuildUnhandledLoopErrorLog(DiagnosticRedactor.FormatExceptionMessage(ex)));
             var classification = McpErrorEnvelope.ClassifyException(ex);
             var errorResponse = CreateErrorResponse(responseHasId, responseId, classification.JsonRpcCode,
                 BuildSanitizedLoopErrorMessage(ex),
@@ -1251,7 +1251,7 @@ public partial class McpServer : IDisposable
         }
         catch (Exception ex)
         {
-            DeferFrameLog(BuildResponseSerializationErrorLog(DiagnosticSanitizer.ForMessage(ex.Message)));
+            DeferFrameLog(BuildResponseSerializationErrorLog(DiagnosticRedactor.FormatExceptionMessage(ex)));
             return BuildMinimalInternalErrorResponse(hasId, id, ex);
         }
     }
