@@ -152,12 +152,15 @@ public static partial class QueryCommandRunner
                 "Use one recipe-list shape at a time.");
             return CommandExitCodes.UsageError;
         }
-        if (options.SummaryOnly && !options.ListRecipes && !(options.RecipeName != null && options.CountOnly))
+        if (options.SummaryOnly
+            && !options.ListRecipes
+            && !(options.RecipeName != null
+                && (options.CountOnly || options.OutputFormat == OutputFormatIssueDrafts)))
         {
             WriteUsageError(
-                "--summary-only is only supported with `cdidx recipes` / `cdidx search --list-recipes`, or recipe count output.",
+                "--summary-only is only supported with `cdidx recipes` / `cdidx search --list-recipes`, recipe count output, or recipe issue-drafts output.",
                 GetUsageLineOrThrow("search"),
-                "Use `cdidx recipes --summary-only --json` or `cdidx search --recipe <name> --format count --summary-only`.");
+                "Use `cdidx recipes --summary-only --json`, `cdidx search --recipe <name> --format count --summary-only`, or `cdidx search --recipe <name> --format issue-drafts --summary-only`.");
             return CommandExitCodes.UsageError;
         }
         if (options.OutputFormat == OutputFormatIssueDrafts && options.JsonOutputFormat == JsonOutputFormatArray)

@@ -903,14 +903,7 @@ public static partial class QueryCommandRunner
         if (options.OutputFormat == OutputFormatCompact || (options.SummaryOnly && options.Json))
         {
             var compactRecipes = recipes
-                .Select(recipe => new SearchRecipeCompactListItemJsonResult(
-                    recipe.Name,
-                    recipe.Description,
-                    recipe.DefaultScope,
-                    recipe.Queries.Count,
-                    recipe.RecommendedLabels,
-                    recipe.DefaultPathPatterns,
-                    recipe.DefaultExcludePaths))
+                .Select(recipe => ToSearchRecipeCompactListItem(recipe, recipe.Queries))
                 .ToList();
             var json = JsonSerializer.Serialize(
                 new SearchRecipeCompactListJsonResult(JsonOutputContract.ApiVersion, compactRecipes.Count, compactRecipes),
@@ -1498,13 +1491,18 @@ public static partial class QueryCommandRunner
                 .Where(queryResult => queryResult.Count > 0)
                 .Select(queryResult => ToSearchIssueDraft(recipe, queryResult, preflight, options))
                 .ToList();
+            var fullRecipeMetadata = options.SummaryOnly ? null : ToSearchRecipeListItem(recipe, selection.Queries);
+            var recipeSummaryMetadata = options.SummaryOnly ? ToSearchRecipeCompactListItem(recipe, selection.Queries) : null;
             var json = JsonSerializer.Serialize(
                 new SearchIssueDraftExportJsonResult(
                     JsonOutputContract.ApiVersion,
-                    ToSearchRecipeListItem(recipe, selection.Queries),
+                    fullRecipeMetadata,
+                    recipeSummaryMetadata,
+                    options.SummaryOnly ? "summary" : "full",
                     scope,
                     selection.Queries.Count,
                     total,
+                    BuildSearchRecipeQueryFreshness(queryResults),
                     drafts.Count,
                     new SuggestionIssueDraftPreflightSummaryJsonResult(
                         preflight.Checked,
@@ -1564,6 +1562,7 @@ public static partial class QueryCommandRunner
                             selection.Queries.Count,
                             total,
                             fileCount,
+                            BuildSearchRecipeQueryFreshness(queryCounts),
                             summaryQueries),
                         CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeCountSummaryRunJsonResult);
                     return WriteJsonObjectWithOptionalByteLimit(
@@ -1675,8 +1674,11 @@ public static partial class QueryCommandRunner
                     JsonOutputContract.ApiVersion,
                     null,
                     null,
+                    "none",
+                    null,
                     1,
                     rows.Count,
+                    null,
                     drafts.Count,
                     new SuggestionIssueDraftPreflightSummaryJsonResult(
                         preflight.Checked,
@@ -1984,6 +1986,7 @@ public static partial class QueryCommandRunner
             emittedResultCount,
             queryResults.Count(query => query.Truncated),
             queryResults.Sum(query => query.MinimumOmittedResultCount),
+            BuildSearchRecipeQueryFreshness(queryResults),
             queryResults.Any(query => query.Truncated && !string.IsNullOrWhiteSpace(query.NextCursor)),
             "When a query is truncated, rerun a single child query with --recipe <recipe>/<query> --cursor <next_cursor> to page the next result set.");
 
@@ -1998,8 +2001,31 @@ public static partial class QueryCommandRunner
             emittedResultCount,
             queryResults.Count(query => query.Truncated),
             queryResults.Sum(query => query.MinimumOmittedResultCount),
+            BuildSearchRecipeQueryFreshness(queryResults),
             queryResults.Any(query => query.Truncated && !string.IsNullOrWhiteSpace(query.NextCursor)),
             "When a query is truncated, rerun a single child query with --recipe <recipe>/<query> --cursor <next_cursor> to page the next result set.");
+
+    private static SearchRecipeQueryFreshnessJsonResult BuildSearchRecipeQueryFreshness(IReadOnlyList<SearchRecipeQueryResultJsonResult> queryResults)
+        => BuildSearchRecipeQueryFreshness(queryResults.Select(query => (query.Name, query.MinimumMatchedCount)));
+
+    private static SearchRecipeQueryFreshnessJsonResult BuildSearchRecipeQueryFreshness(IReadOnlyList<SearchRecipeCompactQueryResultJsonResult> queryResults)
+        => BuildSearchRecipeQueryFreshness(queryResults.Select(query => (query.Name, query.MinimumMatchedCount)));
+
+    private static SearchRecipeQueryFreshnessJsonResult BuildSearchRecipeQueryFreshness(IReadOnlyList<SearchRecipeCountQueryJsonResult> queryResults)
+        => BuildSearchRecipeQueryFreshness(queryResults.Select(query => (query.Name, query.Count)));
+
+    private static SearchRecipeQueryFreshnessJsonResult BuildSearchRecipeQueryFreshness(IEnumerable<(string Name, int Count)> queryResults)
+    {
+        var results = queryResults.ToList();
+        var staleQueryNames = results
+            .Where(query => query.Count == 0)
+            .Select(query => query.Name)
+            .ToList();
+        return new(
+            results.Count(query => query.Count > 0),
+            staleQueryNames.Count,
+            staleQueryNames);
+    }
 
     private static SearchRecipeScopeJsonResult BuildSearchRecipeScope(SearchAuditRecipe recipe, QueryCommandOptions options)
     {
@@ -2917,6 +2943,24 @@ public static partial class QueryCommandRunner
             [.. query.ResultKinds],
             query.BroadCatchTaxonomy,
             query.ExactSubstring)).ToList());
+
+    private static SearchRecipeCompactListItemJsonResult ToSearchRecipeCompactListItem(SearchAuditRecipe recipe, IReadOnlyList<SearchAuditRecipeQuery> queries) => new(
+        recipe.Name,
+        recipe.Description,
+        recipe.DefaultScope,
+        queries.Count,
+        recipe.RecommendedLabels,
+        [.. recipe.DefaultPathPatterns],
+        [.. recipe.DefaultExcludePaths]);
+
+    private static SearchRecipeCompactListItemJsonResult ToSearchRecipeCompactListItem(SearchRecipeListItemJsonResult recipe, IReadOnlyList<SearchRecipeQueryListItemJsonResult> queries) => new(
+        recipe.Name,
+        recipe.Description,
+        recipe.DefaultScope,
+        queries.Count,
+        recipe.RecommendedLabels,
+        recipe.DefaultPathPatterns,
+        recipe.DefaultExcludePaths);
 
     private static List<SearchRecipeGuardFilterJsonResult> ToSearchRecipeGuardFilterJsonResults(IReadOnlyList<SearchGuardFilter> guardFilters)
         => guardFilters
