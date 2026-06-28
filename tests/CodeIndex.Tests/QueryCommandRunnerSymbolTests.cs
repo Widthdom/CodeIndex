@@ -1400,6 +1400,29 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunUnused_DefaultTextCountReportsSuppressionHint_Issue4120()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--lang", "csharp", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("2", stdout.Trim());
+            Assert.Contains("7 low-confidence contract-domain candidates suppressed by default", stderr);
+            Assert.Contains("use --all to include them", stderr);
+            Assert.Contains("public_api_surface: 3", stderr);
+            Assert.Contains("configuration_contract: 4", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunUnused_DefaultJsonCursorPaginatesVisibleResultsAfterSuppression_Issue4120()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();

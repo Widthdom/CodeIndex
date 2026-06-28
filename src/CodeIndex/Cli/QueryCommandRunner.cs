@@ -9395,6 +9395,8 @@ public static partial class QueryCommandRunner
                             baseSqlGraphSignal,
                             countSummary.IncludesSql || DbReader.IsSqlLanguage(options.Lang));
                     Console.WriteLine($"{countSummary.Count}");
+                    if (countSuppression is { Applied: true })
+                        WriteUnusedDefaultCountSuppressionSummary(countSuppression);
                     WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
                     WriteDegradedGraphZeroResult(reader, "unused", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
@@ -9802,8 +9804,22 @@ public static partial class QueryCommandRunner
         if (!suppression.Applied || suppressedCount == 0)
             return;
 
-        var domainCounts = BuildUnusedSuppressedContractDomainCounts(suppression)
-            .Select(pair => $"{pair.Key}: {pair.Value}");
+        WriteUnusedDefaultSuppressionSummary(suppressedCount, BuildUnusedSuppressedContractDomainCounts(suppression));
+    }
+
+    private static void WriteUnusedDefaultCountSuppressionSummary(UnusedDefaultCountSuppressionResult suppression)
+    {
+        if (!suppression.Applied || suppression.SuppressedResult.Count == 0)
+            return;
+
+        WriteUnusedDefaultSuppressionSummary(
+            suppression.SuppressedResult.Count,
+            ToUnusedCountDictionary(suppression.SuppressedResult.ContractDomainCounts));
+    }
+
+    private static void WriteUnusedDefaultSuppressionSummary(int suppressedCount, IReadOnlyDictionary<string, int> contractDomainCounts)
+    {
+        var domainCounts = contractDomainCounts.Select(pair => $"{pair.Key}: {pair.Value}");
         CommandErrorWriter.WriteStderr(
             $"({suppressedCount} low-confidence contract-domain candidates suppressed by default; use --all to include them; suppressed domains: {string.Join(", ", domainCounts)})");
     }
