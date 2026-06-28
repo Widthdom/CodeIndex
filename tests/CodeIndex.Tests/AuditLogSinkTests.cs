@@ -185,6 +185,22 @@ public class AuditLogSinkTests
     }
 
     [Fact]
+    public void SanitizeArgValue_RedactsBearerTokenInNonSecretValue_Issue4134()
+    {
+        const string token = "AbCdEfGhIjKlMnOpQrStUvWxYz123456";
+        var state = new AuditLogSink.ArgValueSanitizationState();
+
+        var sanitized = AuditLogSink.SanitizeArgValue(
+            "query",
+            JsonValue.Create($"curl -H 'Authorization: Bearer {token}' https://example.test"),
+            state);
+
+        Assert.NotNull(sanitized);
+        Assert.True(state.Redacted);
+        Assert.Equal(AuditLogSink.RedactedValue, sanitized!.GetValue<string>());
+    }
+
+    [Fact]
     public void SanitizeArgValue_LongNonSecretString_TruncatesWithoutRedaction_Issue3909()
     {
         var text = new string('x', 100_000);
