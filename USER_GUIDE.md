@@ -1478,6 +1478,7 @@ same source location.
 | `--json` | All commands except `mcp` | JSON output (for AI/machine use). `search --json` writes newline-delimited result objects followed by a final `{"done":true,"count":N,"interrupted":false}` sentinel, including zero-result output, so stream consumers can detect clean completion. |
 | `--pretty` | JSON-capable commands except `mcp` | Pretty-print JSON output with indentation. Default `search --json` remains newline-delimited; use `search --json=array --pretty` for an indented search result array. |
 | `--compact` | `map`, `inspect`, `outline` | Emit AI-oriented compact JSON with capped list sections and `truncation.sections.*` metadata. The default cap is 5 unless `--limit` / `--top` is supplied. |
+| `--summary-only` | `map`, `recipes`, `audit`, `deps`, `hotspots`, and supported `search` JSON contexts | Emit aggregate/context JSON while omitting heavy result arrays where supported. For `deps`, use `--json` or `--format json-graph`; for `hotspots`, use `--json`. Large `deps` and `hotspots` queries emit `Progress:` diagnostics to stderr at `--limit 80+` or with `--verbose`. |
 | `--sort <mode>` | `symbols`, `outline` | For `outline`, sort one file's symbols by `source`, `kind`, `references`, `size` / `span`, `complexity`, `path`, or `name` before `--limit` / cursor paging. |
 | `--outline-fields <csv>` | `outline` | Project outline JSON symbol fields such as `name`, `line`, `kind`, `signature`, `container`, `range`, `body`, `reference_count`, `size_lines`, `complexity_score`, or `sort_mode`; pass `all` for the full symbol payload with paging metadata. |
 | `--fields <csv>` | `inspect` | Select top-level inspect JSON groups: `file`, `workspace`, `graph`, `definitions`, `body`, `source_excerpt`, `nearby_symbols`, `references`, `callers`, `callees`, or `all`. `body` includes definition bodies and maps to `definitions`. |
@@ -1523,7 +1524,8 @@ same source location.
 | `--unique <path\|file\|symbol\|origin>` / `--count-by <path\|file\|symbol\|origin>` | `search` | Emit unique aggregation rows or count aggregation rows for broad audits, including recipe runs |
 | `--format grouped` / `--per-file-limit <n>` | `search` | Return file-grouped JSON with bounded representative matches per file |
 | `--search-fields <fields>` / `--results-only` | `search` | Project compact JSON fields, including recipe `query_name` and `recipe`, and emit result-only NDJSON for shell pipelines |
-| `--first-per-file` / `--sample <n>` / `--total-limit <n>` / `--max-json-bytes <n>` | `search` | Bound broad audit output by file, deterministic sample size, recipe total rows, or NDJSON byte budget |
+| `--first-per-file` / `--sample <n>` / `--total-limit <n>` | `search` | Bound broad audit output by file, deterministic sample size, or recipe total rows |
+| `--max-json-bytes <n>` | `search`, `recipes`, `audit`, `deps`, `hotspots` | Fail before emitting JSON that exceeds this UTF-8 byte budget. For large graph outputs, pair it with `deps --summary-only`, `deps --format json-graph --summary-only`, or `hotspots --summary-only`. |
 | `--next-steps` | `search` | Emit inspect/excerpt follow-up commands for top search hits |
 | `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate`, `deps`, `impact`, `unused`, `hotspots` | Include files detected as generated code; generated files are excluded from query results by default |
 | `--workspace-db <path>` | `deps` | Add another CodeIndex database to the file-dependency query. Repeat it for up to 7 distinct additional DBs (8 total including `--db`); JSON edges include `source_db` and `target_db` so same relative paths can be disambiguated. |
@@ -4161,6 +4163,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--json` | `mcp` を除く全コマンド | JSON出力（AI/機械向け） |
 | `--pretty` | `mcp` を除く JSON 対応コマンド | JSON 出力をインデント付きで整形。既定の `search --json` は newline-delimited のまま維持されるため、検索結果配列を整形したい場合は `search --json=array --pretty` を使う。 |
 | `--compact` | `map`、`inspect`、`outline` | list section を cap した AI 向け compact JSON を出力し、`truncation.sections.*` metadata を含める。既定 cap は 5 件で、`--limit` / `--top` 指定時はその値を使う。 |
+| `--summary-only` | `map`、`recipes`、`audit`、`deps`、`hotspots`、および対応する `search` JSON 文脈 | 対応コマンドで重い結果配列を省き、集計と文脈中心の JSON を返す。`deps` では `--json` または `--format json-graph`、`hotspots` では `--json` と組み合わせる。大きい `deps` / `hotspots` query は `--limit 80` 以上または `--verbose` 指定時に stderr へ `Progress:` 診断を出す。 |
 | `--sort <mode>` | `symbols`、`outline` | `outline` では 1ファイル内のシンボルを `source`、`kind`、`references`、`size` / `span`、`complexity`、`path`、`name` で並べ替えてから `--limit` / カーソルページングを適用する。 |
 | `--outline-fields <csv>` | `outline` | outline JSON のシンボルフィールドを投影する。`name`、`line`、`kind`、`signature`、`container`、`range`、`body`、`reference_count`、`size_lines`、`complexity_score`、`sort_mode` などを指定でき、`all` を渡すとシンボルペイロード全体とページングメタデータを返す。 |
 | `--fields <csv>` | `inspect` | inspect JSON の top-level group を選択。`file`、`workspace`、`graph`、`definitions`、`body`、`source_excerpt`、`nearby_symbols`、`references`、`callers`、`callees`、`all` を指定できる。`body` は definition body を含め、`definitions` に対応する。 |
@@ -4205,7 +4208,8 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--unique <path\|file\|symbol\|origin>` / `--count-by <path\|file\|symbol\|origin>` | `search` | 広い audit や recipe run 向けに unique aggregation row または count aggregation row を出力する |
 | `--format grouped` / `--per-file-limit <n>` | `search` | file ごとに grouped JSON を返し、各 file の代表 match 数を制限する |
 | `--search-fields <fields>` / `--results-only` | `search` | recipe の `query_name` / `recipe` を含む compact JSON field を projection し、shell pipeline 向けの result-only NDJSON を出力する |
-| `--first-per-file` / `--sample <n>` / `--total-limit <n>` / `--max-json-bytes <n>` | `search` | file 単位、決定的 sample 数、recipe 全体の row 数、NDJSON byte budget で広い audit 出力を制限する |
+| `--first-per-file` / `--sample <n>` / `--total-limit <n>` | `search` | file 単位、決定的 sample 数、recipe 全体の row 数で広い audit 出力を制限する |
+| `--max-json-bytes <n>` | `search`、`recipes`、`audit`、`deps`、`hotspots` | 指定した UTF-8 byte 上限を超える JSON を出力する前に失敗する。大きい graph 出力では `deps --summary-only`、`deps --format json-graph --summary-only`、または `hotspots --summary-only` と組み合わせる。 |
 | `--next-steps` | `search` | 上位 search hit に対する inspect / excerpt follow-up command を出力する |
 | `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate`, `deps`, `impact`, `unused`, `hotspots` | 生成コードとして検出されたファイルを含める。生成ファイルは既定でクエリ結果から除外される |
 | `--snippet-lines <n>` | `search`, `references`, `callers`, `callees`, `impact` | search スニペット、または graph `--body` 抜粋の行数（デフォルト: 8、最大: 20） |
