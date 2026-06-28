@@ -61,7 +61,7 @@ internal static class GitHubHttpClientFactory
         {
             scope = OperationTimeoutScope.Create(
                 OperationTimeoutCategories.GitHubApiRequest,
-                NormalizeRequestTimeout(timeout),
+                NormalizeRequestTimeoutBudget(timeout),
                 cancellationToken);
         }
 
@@ -134,9 +134,8 @@ internal static class GitHubHttpClientFactory
         => ShouldUseDefaultProxyCredentials() ? "enabled" : "disabled";
 
     internal static TimeSpan NormalizeRequestTimeout(TimeSpan timeout)
-    {
-        if (timeout == Timeout.InfiniteTimeSpan || timeout <= TimeSpan.Zero)
-            return MaxRequestTimeout;
-        return timeout <= MaxRequestTimeout ? timeout : MaxRequestTimeout;
-    }
+        => NormalizeRequestTimeoutBudget(timeout).Duration ?? MaxRequestTimeout;
+
+    internal static OperationTimeoutBudget NormalizeRequestTimeoutBudget(TimeSpan timeout)
+        => OperationTimeoutBudget.FromTimeoutOrDefault(timeout, MaxRequestTimeout).Clamp(MaxRequestTimeout);
 }
