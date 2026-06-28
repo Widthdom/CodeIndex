@@ -7116,7 +7116,7 @@ public sealed class Caller
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("success", json.GetProperty("status").GetString());
             Assert.True(File.Exists(lockPath), "lock file should remain after a clean exit");
-        Assert.False(File.Exists(infoPath), "lock metadata sidecar should be removed after a clean exit");
+            Assert.False(File.Exists(infoPath), "lock metadata sidecar should be removed after a clean exit");
         }
         finally
         {
