@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using CodeIndex.Diagnostics;
 
 namespace CodeIndex.Cli;
 
@@ -121,7 +122,7 @@ internal sealed class IssueDuplicatePreflight
         catch (InvalidOpenIssuesFileException ex)
         {
             preflight = new IssueDuplicatePreflight(false, null, []);
-            error = $"invalid --open-issues file '{pathForError}' ({InvalidPreflightFileErrorCode}): {SanitizePreflightErrorDetail(ex.Message)}";
+            error = $"invalid --open-issues file '{pathForError}' ({InvalidPreflightFileErrorCode}): {SanitizePreflightErrorDetail(DiagnosticRedactor.FormatExceptionMessage(ex, MaxPreflightErrorDetailLength))}";
             return false;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException or NotSupportedException)

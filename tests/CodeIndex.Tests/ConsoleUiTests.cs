@@ -290,7 +290,7 @@ public class ConsoleUiTests
         Assert.DoesNotContain("cdidx validate [--db <path>] [--json] [--limit <n>] [--lang <lang>]", output);
         Assert.Contains("cdidx unused [--db <path>] [--json] [--compact]", output);
         Assert.Contains("[--cursor <unused:offset>] [--audit-scope <source|all>]", output);
-        Assert.Contains("cdidx hotspots [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]", output);
+        Assert.Contains("cdidx hotspots [--db <path>] [--json] [--summary-only] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]", output);
         Assert.Contains("--json                     Output as JSON (search/files stream ndjson by", output);
         Assert.Contains("search/files/validate accept --json=array for one array)", output);
         Assert.Contains("--lang <lang>              Filter by language (aliases: bat, cmd, cshtml, razor, ts, tsx, cts, mts)", output);
@@ -405,7 +405,7 @@ public class ConsoleUiTests
         AssertSearchUsageFragments(output);
         Assert.Contains("cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json[=array]] [--format <text|json|count|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--sort <hotspot|references|size|complexity|path>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]", output);
         Assert.Contains("cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json[=ndjson|array]] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]", output);
-        Assert.Contains("cdidx hotspots [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]", output);
+        Assert.Contains("cdidx hotspots [--db <path>] [--json] [--summary-only] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]", output);
         Assert.Contains("cdidx unused", output);
         Assert.Contains("[--cursor <unused:offset>] [--audit-scope <source|all>]", output);
         Assert.Contains("cdidx license", output);

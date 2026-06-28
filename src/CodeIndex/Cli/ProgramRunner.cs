@@ -365,12 +365,12 @@ internal static partial class ProgramRunner
         }
         catch (IOException ex)
         {
-            exitCode = CommandErrorWriter.Write($"{displayRole} could not be read: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}", CommandExitCodes.InvalidArgument);
+            exitCode = CommandErrorWriter.Write($"{displayRole} could not be read: {FormatSanitizedExceptionSummary(ex)}", CommandExitCodes.InvalidArgument);
             return false;
         }
         catch (UnauthorizedAccessException ex)
         {
-            exitCode = CommandErrorWriter.Write($"{displayRole} could not be read: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}", CommandExitCodes.InvalidArgument);
+            exitCode = CommandErrorWriter.Write($"{displayRole} could not be read: {FormatSanitizedExceptionSummary(ex)}", CommandExitCodes.InvalidArgument);
             return false;
         }
     }

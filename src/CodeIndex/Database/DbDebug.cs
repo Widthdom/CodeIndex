@@ -319,7 +319,13 @@ public static class DbDebug
         }
         catch (Exception ex)
         {
-            rows.Add(new QueryPlanRow(-1, -1, -1, TruncateDiagnosticText("EXPLAIN QUERY PLAN failed: " + ex.Message, MaxQueryPlanDetailChars)));
+            rows.Add(new QueryPlanRow(
+                -1,
+                -1,
+                -1,
+                TruncateDiagnosticText(
+                    "EXPLAIN QUERY PLAN failed: " + DiagnosticRedactor.FormatExceptionMessage(ex, MaxQueryPlanDetailChars),
+                    MaxQueryPlanDetailChars)));
         }
 
         return rows;

@@ -419,7 +419,9 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     internal static string FormatBindFailureDiagnostic(HttpListenSpec listenSpec, Exception exception)
     {
         var prefix = LimitRequestLogField(listenSpec.Prefix) ?? "<unknown>";
-        var message = LimitRequestLogField(exception.Message) ?? exception.GetType().Name;
+        var message = DiagnosticRedactor.FormatExceptionMessage(
+            exception,
+            MaxRequestLogFieldCharacters);
         var diagnostic = $"failed to bind HTTP listener on {prefix}: {message}";
         if (listenSpec.PortWasEphemeral)
         {

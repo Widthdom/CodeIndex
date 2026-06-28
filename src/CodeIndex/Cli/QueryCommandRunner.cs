@@ -29,6 +29,7 @@ public static partial class QueryCommandRunner
     private const int MaxNamedSearchQueryNameLength = 128;
     internal const int DefaultImpactLimit = 50;
     internal const int DefaultDependencyCycleGraphLimit = 50;
+    internal const int GraphLivenessLimitThreshold = 80;
     internal const string DependencyCycleDetectionMode = "bounded_approximate_candidate_edges";
     internal const int MaxWorkspaceDependencyDatabaseCount = 8;
     internal const int MaxWorkspaceDependencyDatabasePairCount = MaxWorkspaceDependencyDatabaseCount * (MaxWorkspaceDependencyDatabaseCount - 1);
@@ -1082,7 +1083,8 @@ public static partial class QueryCommandRunner
         string json,
         QueryCommandOptions options,
         string outputDescription,
-        string hint)
+        string hint,
+        string commandName = "search")
     {
         if (options.MaxJsonBytes.HasValue)
         {
@@ -1091,7 +1093,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     $"{outputDescription} JSON output is {byteCount.ToString(CultureInfo.InvariantCulture)} bytes and exceeds --max-json-bytes {options.MaxJsonBytes.Value.ToString(CultureInfo.InvariantCulture)}.",
-                    GetUsageLineOrThrow("search"),
+                    GetUsageLineOrThrow(commandName),
                     hint);
                 return CommandExitCodes.UsageError;
             }
@@ -1099,6 +1101,65 @@ public static partial class QueryCommandRunner
 
         Console.WriteLine(json);
         return CommandExitCodes.Success;
+    }
+
+    private static int WriteJsonPayloadWithOptionalByteLimit(
+        JsonObject payload,
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        string commandName,
+        string outputDescription,
+        string hint)
+        => WriteJsonObjectWithOptionalByteLimit(
+            payload.ToJsonString(jsonOptions),
+            options,
+            outputDescription,
+            hint,
+            commandName);
+
+    private static bool ShouldEmitGraphLiveness(QueryCommandOptions options)
+        => options.Verbose || options.Limit >= GraphLivenessLimitThreshold;
+
+    private static void WriteGraphLiveness(
+        string commandName,
+        string phase,
+        QueryCommandOptions options,
+        string? format = null,
+        string? groupBy = null,
+        int? rows = null,
+        int? cycleCount = null)
+    {
+        if (!ShouldEmitGraphLiveness(options))
+            return;
+
+        var parts = new List<string>
+        {
+            $"Progress: {commandName}",
+            $"phase={phase}",
+            $"limit={options.Limit.ToString(CultureInfo.InvariantCulture)}",
+        };
+        if (format != null)
+            parts.Add($"format={format}");
+        if (groupBy != null)
+            parts.Add($"group_by={groupBy}");
+        if (rows.HasValue)
+            parts.Add($"rows={rows.Value.ToString(CultureInfo.InvariantCulture)}");
+        if (cycleCount.HasValue)
+            parts.Add($"cycles={cycleCount.Value.ToString(CultureInfo.InvariantCulture)}");
+        if (options.PathPatterns.Count > 0)
+            parts.Add($"path_filters={options.PathPatterns.Count.ToString(CultureInfo.InvariantCulture)}");
+        if (options.ExcludePaths.Count > 0)
+            parts.Add($"exclude_filters={options.ExcludePaths.Count.ToString(CultureInfo.InvariantCulture)}");
+        if (options.ExcludeTests)
+            parts.Add("exclude_tests=true");
+        if (options.DependencyCycles)
+            parts.Add("cycles=true");
+        if (options.SummaryOnly)
+            parts.Add("summary_only=true");
+        if (options.MaxJsonBytes.HasValue)
+            parts.Add($"max_json_bytes={options.MaxJsonBytes.Value.ToString(CultureInfo.InvariantCulture)}");
+
+        CommandErrorWriter.WriteStderr(string.Join(" ", parts));
     }
 
     private static SearchRecipeListItemJsonResult? ToFilteredSearchRecipeListItem(SearchAuditRecipe recipe, string? filter)
@@ -8144,6 +8205,23 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteWorkspaceDependencyFanOutError(options))
             return CommandExitCodes.UsageError;
+        var emitsJson = DepsEmitsJson(options, depsFormat);
+        if (options.MaxJsonBytes.HasValue && !emitsJson)
+        {
+            WriteUsageError(
+                "--max-json-bytes is only supported with deps JSON output.",
+                GetUsageLineOrThrow("deps"),
+                "Use `cdidx deps --json --max-json-bytes <n>` or `cdidx deps --format json-graph --max-json-bytes <n>`.");
+            return CommandExitCodes.UsageError;
+        }
+        if (options.SummaryOnly && !emitsJson)
+        {
+            WriteUsageError(
+                "--summary-only is only supported with deps JSON output.",
+                GetUsageLineOrThrow("deps"),
+                "Use `cdidx deps --json --summary-only` or `cdidx deps --format json-graph --summary-only`.");
+            return CommandExitCodes.UsageError;
+        }
 
         return WithDb(options, jsonOptions, reader =>
         {
@@ -8158,6 +8236,7 @@ public static partial class QueryCommandRunner
             var cycleCandidateLimit = GetDependencyCycleGraphLimit(options.Limit);
             if (options.DependencyCycles)
             {
+                WriteGraphLiveness("deps", "read_cycle_candidates", options, depsFormat);
                 cycleCandidates = GetWorkspaceFileDependencyCycleCandidates(
                     reader,
                     options,
@@ -8170,9 +8249,11 @@ public static partial class QueryCommandRunner
             }
             else
             {
-                results = GetWorkspaceFileDependencies(reader, options, reverse, options.Limit);
+                WriteGraphLiveness("deps", "read_edges", options, depsFormat);
+                results = GetWorkspaceFileDependencies(reader, options, reverse, options.Limit, cancellationToken);
                 cycleCandidates = results;
             }
+            WriteGraphLiveness("deps", "shape_output", options, depsFormat, rows: results.Count);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             if (results.Count == 0)
             {
@@ -8180,13 +8261,33 @@ public static partial class QueryCommandRunner
                 var zeroSymbolFilter = ApplyDependencySymbolFilters([], options).Summary;
                 if (depsFormat is OutputFormatJsonGraph)
                 {
-                    WriteDependencyGraph([], depsFormat, jsonOptions, reader, options, zeroSqlGraphSignal, zeroSymbolFilter);
-                    return ZeroResultExitCode(options);
+                    var writeExitCode = WriteDependencyGraph([], depsFormat, jsonOptions, reader, options, zeroSqlGraphSignal, zeroSymbolFilter);
+                    return writeExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : writeExitCode;
                 }
                 if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult(reader, "edges", json: true, graphAvailable: false, jsonOptions, queryOptions: options, extraFields: payload => AddDependencySchemaJsonFields(payload, options, jsonOptions, zeroSqlGraphSignal, zeroSymbolFilter));
+                {
+                    var payload = BuildJsonZeroResultPayload(
+                        reader,
+                        jsonOptions,
+                        resultsKey: options.SummaryOnly ? null : "edges",
+                        graphTableAvailable: false,
+                        degraded: true,
+                        queryOptions: options,
+                        extraFields: payload => AddDependencySchemaJsonFields(payload, options, jsonOptions, zeroSqlGraphSignal, zeroSymbolFilter));
+                    if (options.SummaryOnly)
+                        payload["summary_only"] = true;
+                    payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
+                    var writeExitCode = WriteDepsJsonPayload(payload, options, jsonOptions);
+                    return writeExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : writeExitCode;
+                }
                 else if (options.Json)
-                    Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "edges", graphTableAvailable: true, degraded: !zeroSqlGraphSignal.Ready, queryOptions: options, extraFields: payload => AddDependencySchemaJsonFields(payload, options, jsonOptions, zeroSqlGraphSignal, zeroSymbolFilter)).ToJsonString(jsonOptions));
+                {
+                    var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: options.SummaryOnly ? null : "edges", graphTableAvailable: true, degraded: !zeroSqlGraphSignal.Ready, queryOptions: options, extraFields: payload => AddDependencySchemaJsonFields(payload, options, jsonOptions, zeroSqlGraphSignal, zeroSymbolFilter));
+                    if (options.SummaryOnly)
+                        payload["summary_only"] = true;
+                    var writeExitCode = WriteDepsJsonPayload(payload, options, jsonOptions);
+                    return writeExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : writeExitCode;
+                }
                 else
                 {
                     CommandErrorWriter.WriteStderr(BuildZeroResultLine("No file dependencies found", options));
@@ -8203,6 +8304,7 @@ public static partial class QueryCommandRunner
             if (options.DependencyCycles)
             {
                 symbolFilter = ApplyDependencySymbolFilters(cycleCandidates, options);
+                WriteGraphLiveness("deps", "analyze_cycles", options, depsFormat, rows: symbolFilter.Edges.Count);
                 var analysis = AnalyzeDependencyCycles(
                     symbolFilter.Edges,
                     cycleCandidateLimit,
@@ -8232,18 +8334,23 @@ public static partial class QueryCommandRunner
             {
                 if (depsFormat is OutputFormatDot or OutputFormatGraphMl or OutputFormatJsonGraph)
                 {
-                    WriteDependencyGraph(outputEdges, depsFormat, jsonOptions, reader, options, sqlGraphSignal, symbolFilter.Summary);
+                    var writeExitCode = WriteDependencyGraph(outputEdges, depsFormat, jsonOptions, reader, options, sqlGraphSignal, symbolFilter.Summary);
+                    return writeExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : writeExitCode;
                 }
                 else if (options.Json)
                 {
-                    Console.WriteLine(BuildJsonZeroResultPayload(
+                    var payload = BuildJsonZeroResultPayload(
                         reader,
                         jsonOptions,
-                        resultsKey: "edges",
+                        resultsKey: options.SummaryOnly ? null : "edges",
                         graphTableAvailable: true,
                         degraded: !sqlGraphSignal.Ready,
                         queryOptions: options,
-                        extraFields: payload => AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary)).ToJsonString(jsonOptions));
+                        extraFields: payload => AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary));
+                    if (options.SummaryOnly)
+                        payload["summary_only"] = true;
+                    var writeExitCode = WriteDepsJsonPayload(payload, options, jsonOptions);
+                    return writeExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : writeExitCode;
                 }
                 else
                 {
@@ -8256,12 +8363,18 @@ public static partial class QueryCommandRunner
             {
                 if (options.Json)
                 {
-                    var payload = new JsonObject { ["count"] = 0, ["cycles"] = new JsonArray() };
+                    var payload = new JsonObject { ["count"] = 0 };
+                    if (options.SummaryOnly)
+                        payload["summary_only"] = true;
+                    else
+                        payload["cycles"] = new JsonArray();
                     if (dependencyCycleAnalysis != null)
                         AddDependencyCycleAnalysisJsonFields(payload, dependencyCycleAnalysis);
                     AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary);
                     AddFreshnessHint(payload, reader);
-                    Console.WriteLine(payload.ToJsonString(jsonOptions));
+                    WriteGraphLiveness("deps", "write_output", options, depsFormat, rows: outputEdges.Count, cycleCount: 0);
+                    var writeExitCode = WriteDepsJsonPayload(payload, options, jsonOptions);
+                    return writeExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : writeExitCode;
                 }
                 else
                 {
@@ -8275,7 +8388,8 @@ public static partial class QueryCommandRunner
 
             if (depsFormat is OutputFormatDot or OutputFormatGraphMl or OutputFormatJsonGraph)
             {
-                WriteDependencyGraph(
+                WriteGraphLiveness("deps", "write_output", options, depsFormat, rows: outputEdges.Count, cycleCount: cycles.Count);
+                var writeExitCode = WriteDependencyGraph(
                     outputEdges,
                     depsFormat,
                     jsonOptions,
@@ -8286,7 +8400,7 @@ public static partial class QueryCommandRunner
                     dependencyCycleAnalysis == null ? null : payload => AddDependencyCycleAnalysisJsonFields(payload, dependencyCycleAnalysis));
                 if ((depsFormat is OutputFormatDot or OutputFormatGraphMl) && dependencyCycleAnalysis is { Truncated: true })
                     CommandErrorWriter.WriteStderr(BuildDependencyCycleTruncationWarning(dependencyCycleAnalysis));
-                return CommandExitCodes.Success;
+                return writeExitCode;
             }
 
             if (options.Json)
@@ -8295,17 +8409,21 @@ public static partial class QueryCommandRunner
                 {
                     ["count"] = options.DependencyCycles ? cycles.Count : outputEdges.Count,
                 };
+                if (options.SummaryOnly)
+                    payload["summary_only"] = true;
                 if (options.DependencyCycles)
                 {
-                    payload["cycles"] = BuildDependencyCyclesJson(cycles);
+                    if (!options.SummaryOnly)
+                        payload["cycles"] = BuildDependencyCyclesJson(cycles);
                     if (dependencyCycleAnalysis != null)
                         AddDependencyCycleAnalysisJsonFields(payload, dependencyCycleAnalysis);
                 }
-                else
+                else if (!options.SummaryOnly)
                     payload["edges"] = JsonSerializer.SerializeToNode(outputEdges, CliJsonSerializerContextFactory.Create(jsonOptions).ListFileDependencyResult);
                 AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary);
                 AddFreshnessHint(payload, reader);
-                Console.WriteLine(payload.ToJsonString(jsonOptions));
+                WriteGraphLiveness("deps", "write_output", options, depsFormat, rows: outputEdges.Count, cycleCount: cycles.Count);
+                return WriteDepsJsonPayload(payload, options, jsonOptions);
             }
             else
             {
@@ -8822,6 +8940,18 @@ public static partial class QueryCommandRunner
     private static JsonArray BuildDependencySymbolsJson(string symbols)
         => new(SplitDependencySymbols(symbols).Select(symbol => JsonValue.Create(symbol)).ToArray<JsonNode?>());
 
+    private static bool DepsEmitsJson(QueryCommandOptions options, string depsFormat)
+        => depsFormat == OutputFormatJsonGraph || (options.Json && depsFormat == OutputFormatEdgeList);
+
+    private static int WriteDepsJsonPayload(JsonObject payload, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+        => WriteJsonPayloadWithOptionalByteLimit(
+            payload,
+            options,
+            jsonOptions,
+            "deps",
+            "deps",
+            "Use --summary-only, reduce --limit, or increase --max-json-bytes.");
+
     private sealed record DependencySymbolFilterResult(List<FileDependencyResult> Edges, DependencySymbolFilterSummary Summary);
 
     private sealed record DependencySymbolFilterSummary(
@@ -8834,7 +8964,7 @@ public static partial class QueryCommandRunner
         int SymbolsBefore,
         int SymbolsAfter);
 
-    private static void WriteDependencyGraph(
+    private static int WriteDependencyGraph(
         IReadOnlyList<FileDependencyResult> edges,
         string format,
         JsonSerializerOptions jsonOptions,
@@ -8851,7 +8981,7 @@ public static partial class QueryCommandRunner
                 foreach (var edge in edges)
                     Console.WriteLine($"  \"{EscapeDot(edge.SourcePath)}\" -> \"{EscapeDot(edge.TargetPath)}\" [label=\"{edge.ReferenceCount}\"];");
                 Console.WriteLine("}");
-                break;
+                return CommandExitCodes.Success;
             case OutputFormatGraphMl:
                 Console.WriteLine("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
                 Console.WriteLine("<graphml xmlns=\"http://graphml.graphdrawing.org/xmlns\"><graph edgedefault=\"directed\">");
@@ -8860,14 +8990,15 @@ public static partial class QueryCommandRunner
                 foreach (var edge in edges)
                     Console.WriteLine($"<edge source=\"{System.Security.SecurityElement.Escape(edge.SourcePath)}\" target=\"{System.Security.SecurityElement.Escape(edge.TargetPath)}\"><data key=\"references\">{edge.ReferenceCount}</data></edge>");
                 Console.WriteLine("</graph></graphml>");
-                break;
+                return CommandExitCodes.Success;
             case OutputFormatJsonGraph:
-                WriteDependencyJsonGraph(edges, jsonOptions, reader, options, sqlGraphSignal, symbolFilter, addExtraJsonFields);
-                break;
+                return WriteDependencyJsonGraph(edges, jsonOptions, reader, options, sqlGraphSignal, symbolFilter, addExtraJsonFields);
+            default:
+                return CommandExitCodes.Success;
         }
     }
 
-    private static void WriteDependencyJsonGraph(
+    private static int WriteDependencyJsonGraph(
         IReadOnlyList<FileDependencyResult> edges,
         JsonSerializerOptions jsonOptions,
         DbReader reader,
@@ -8886,21 +9017,24 @@ public static partial class QueryCommandRunner
                 nodes.Add(edge.TargetPath);
         }
 
-        var payload = new JsonObject
+        var payload = new JsonObject { ["count"] = edges.Count };
+        if (options.SummaryOnly)
+            payload["summary_only"] = true;
+        else
         {
-            ["nodes"] = new JsonArray(nodes.Select(node => (JsonNode?)new JsonObject { ["id"] = node }).ToArray()),
-            ["edges"] = new JsonArray(edges.Select(edge => (JsonNode?)new JsonObject
+            payload["nodes"] = new JsonArray(nodes.Select(node => (JsonNode?)new JsonObject { ["id"] = node }).ToArray());
+            payload["edges"] = new JsonArray(edges.Select(edge => (JsonNode?)new JsonObject
             {
                 ["source"] = edge.SourcePath,
                 ["target"] = edge.TargetPath,
                 ["reference_count"] = edge.ReferenceCount,
                 ["symbols"] = BuildDependencySymbolsJson(edge.Symbols),
-            }).ToArray()),
-        };
+            }).ToArray());
+        }
         addExtraJsonFields?.Invoke(payload);
         AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter);
         AddFreshnessHint(payload, reader);
-        Console.WriteLine(payload.ToJsonString(jsonOptions));
+        return WriteDepsJsonPayload(payload, options, jsonOptions);
     }
 
     private static string EscapeDot(string value) => value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal);
@@ -8913,9 +9047,11 @@ public static partial class QueryCommandRunner
             : requestedLimit;
     }
 
-    private static List<FileDependencyResult> GetWorkspaceFileDependencies(DbReader primaryReader, QueryCommandOptions options, bool reverse, int limit)
+    private static List<FileDependencyResult> GetWorkspaceFileDependencies(DbReader primaryReader, QueryCommandOptions options, bool reverse, int limit, CancellationToken cancellationToken)
     {
-        var results = primaryReader.GetFileDependencies(limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, reverse);
+        cancellationToken.ThrowIfCancellationRequested();
+        var results = primaryReader.GetFileDependencies(limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, reverse, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         if (options.WorkspaceDbPaths.Count == 0)
             return results;
 
@@ -8924,10 +9060,11 @@ public static partial class QueryCommandRunner
         TagFileDependencyResults(results, primaryDb);
         foreach (var normalizedDbPath in memberDbs.Skip(1))
         {
-            using var db = new DbContext(normalizedDbPath);
+            cancellationToken.ThrowIfCancellationRequested();
+            using var db = new DbContext(normalizedDbPath, cancellationToken);
             db.TryMigrateForRead();
             var reader = new DbReader(db) { IncludeGenerated = primaryReader.IncludeGenerated };
-            var memberResults = reader.GetFileDependencies(limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, reverse);
+            var memberResults = reader.GetFileDependencies(limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, reverse, cancellationToken);
             TagFileDependencyResults(memberResults, normalizedDbPath);
             results.AddRange(memberResults);
         }
@@ -8935,6 +9072,7 @@ public static partial class QueryCommandRunner
         foreach (var sourceDb in memberDbs)
             foreach (var targetDb in memberDbs)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (string.Equals(sourceDb, targetDb, StringComparison.Ordinal))
                     continue;
                 results.AddRange(GetCrossDatabaseFileDependencies(sourceDb, targetDb, options, reverse, limit));
@@ -13216,7 +13354,7 @@ public static partial class QueryCommandRunner
         var unauthorized = FindException<UnauthorizedAccessException>(ex);
         if (unauthorized != null)
         {
-            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database access denied: {unauthorized.Message}");
+            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database access denied: {CommandErrorWriter.FormatSanitizedExceptionMessage(unauthorized)}");
             CommandErrorWriter.WriteStderr(MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent()));
             return;
         }
@@ -13224,7 +13362,7 @@ public static partial class QueryCommandRunner
         var io = FindException<IOException>(ex);
         if (io != null)
         {
-            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database I/O error: {io.Message}");
+            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database I/O error: {CommandErrorWriter.FormatSanitizedExceptionMessage(io)}");
             CommandErrorWriter.WriteStderr(MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent()));
             return;
         }
@@ -13234,19 +13372,19 @@ public static partial class QueryCommandRunner
         {
             if (sqlite.SqliteErrorCode == 14)
             {
-                CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database access/open denied: {sqlite.Message}");
+                CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database access/open denied: {CommandErrorWriter.FormatSanitizedExceptionMessage(sqlite)}");
                 CommandErrorWriter.WriteStderr(MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent()));
                 return;
             }
 
             if (sqlite.SqliteErrorCode == 11)
             {
-                CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: SQLite reported database corruption: {sqlite.Message}");
+                CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: SQLite reported database corruption: {CommandErrorWriter.FormatSanitizedExceptionMessage(sqlite)}");
                 CommandErrorWriter.WriteStderr("Hint: rebuild the index with `cdidx index <projectPath> --rebuild`, or delete the broken `.cdidx/codeindex.db*` files and run `cdidx index <projectPath>` again.");
                 return;
             }
 
-            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: SQLite database error ({sqlite.SqliteErrorCode}): {sqlite.Message}");
+            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: SQLite database error ({sqlite.SqliteErrorCode}): {CommandErrorWriter.FormatSanitizedExceptionMessage(sqlite)}");
             CommandErrorWriter.WriteStderr(MacProfileDetector.IsPermissionStyleSqliteError(sqlite)
                 ? MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent())
                 : "Hint: check `--db`, verify the index was written by a compatible cdidx version, or rebuild it with `cdidx index <projectPath> --rebuild`.");
@@ -14497,7 +14635,7 @@ public static partial class QueryCommandRunner
         var payload = BuildJsonZeroResultPayload(
             reader,
             jsonOptions,
-            resultsKey: countOnly ? null : "hotspots",
+            resultsKey: countOnly || queryOptions?.SummaryOnly == true ? null : "hotspots",
             includeFiles: countOnly,
             graphTableAvailable: graphAvailable,
             degraded: !graphAvailable,
