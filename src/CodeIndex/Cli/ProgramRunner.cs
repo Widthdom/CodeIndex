@@ -365,12 +365,12 @@ internal static partial class ProgramRunner
         }
         catch (IOException ex)
         {
-            exitCode = CommandErrorWriter.Write($"{displayRole} could not be read: {ex.Message}", CommandExitCodes.InvalidArgument);
+            exitCode = CommandErrorWriter.Write($"{displayRole} could not be read: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}", CommandExitCodes.InvalidArgument);
             return false;
         }
         catch (UnauthorizedAccessException ex)
         {
-            exitCode = CommandErrorWriter.Write($"{displayRole} could not be read: {ex.Message}", CommandExitCodes.InvalidArgument);
+            exitCode = CommandErrorWriter.Write($"{displayRole} could not be read: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}", CommandExitCodes.InvalidArgument);
             return false;
         }
     }
@@ -2485,7 +2485,7 @@ internal static partial class ProgramRunner
         catch (Exception ex)
         {
             GlobalToolLog.Error("lsp_server_failed " + GlobalToolLog.FormatExceptionChain(ex));
-            CommandErrorWriter.WriteStderr($"Error: LSP server failed ({ex.GetType().Name}: {ex.Message}).");
+            CommandErrorWriter.WriteStderr($"Error: LSP server failed ({FormatSanitizedExceptionSummary(ex)}).");
             Console.Out.Flush();
             Console.Error.Flush();
             return CommandExitCodes.DatabaseError;
@@ -2537,7 +2537,7 @@ internal static partial class ProgramRunner
             }
             catch (FormatException ex)
             {
-                CommandErrorWriter.WriteStderr($"Error: {ex.Message}");
+                CommandErrorWriter.WriteStderr($"Error: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}");
                 PrintMcpUsage();
                 return CommandExitCodes.UsageError;
             }
@@ -2676,14 +2676,25 @@ internal static partial class ProgramRunner
             exitCode = CommandExitCodes.Success;
             return true;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (IsExpectedAuditLogOpenException(ex))
         {
-            CommandErrorWriter.WriteStderr($"Error: failed to open audit log '{auditOptions.Path}' ({ex.GetType().Name}: {ex.Message}).");
+            var displayPath = DiagnosticSanitizer.ForPath(auditOptions.Path);
+            CommandErrorWriter.WriteStderr($"Error: failed to open audit log '{displayPath}' ({FormatSanitizedExceptionSummary(ex)}).");
             CommandErrorWriter.WriteStderr("Hint: pick a writable path or omit --audit-log to disable per-call auditing.");
             exitCode = CommandExitCodes.UsageError;
             return false;
         }
     }
+
+    private static string FormatSanitizedExceptionSummary(Exception ex)
+    {
+        var exceptionType = CommandErrorWriter.FormatSanitizedException(ex);
+        var message = CommandErrorWriter.FormatSanitizedExceptionMessage(ex);
+        return string.IsNullOrEmpty(message) ? exceptionType : $"{exceptionType}: {message}";
+    }
+
+    private static bool IsExpectedAuditLogOpenException(Exception ex)
+        => ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException;
 
     private static int RunMcpServer(McpServer server, string transport, string? listenSpec)
     {
@@ -2704,7 +2715,7 @@ internal static partial class ProgramRunner
         catch (Exception ex)
         {
             GlobalToolLog.Error("mcp_server_failed " + GlobalToolLog.FormatExceptionChain(ex));
-            CommandErrorWriter.WriteStderr($"Error: MCP server failed ({ex.GetType().Name}: {ex.Message}).");
+            CommandErrorWriter.WriteStderr($"Error: MCP server failed ({FormatSanitizedExceptionSummary(ex)}).");
             Console.Out.Flush();
             Console.Error.Flush();
             return CommandExitCodes.DatabaseError;
@@ -2734,7 +2745,7 @@ internal static partial class ProgramRunner
         }
         catch (FormatException ex)
         {
-            CommandErrorWriter.WriteStderr($"Error: {ex.Message}");
+            CommandErrorWriter.WriteStderr($"Error: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}");
             PrintMcpUsage();
             return CommandExitCodes.UsageError;
         }
@@ -2759,7 +2770,7 @@ internal static partial class ProgramRunner
         }
         catch (FormatException ex)
         {
-            CommandErrorWriter.WriteStderr($"Error: {ex.Message}");
+            CommandErrorWriter.WriteStderr($"Error: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}");
             PrintMcpUsage();
             return CommandExitCodes.UsageError;
         }
@@ -2783,13 +2794,13 @@ internal static partial class ProgramRunner
         }
         catch (FormatException ex)
         {
-            CommandErrorWriter.WriteStderr($"Error: {ex.Message}");
+            CommandErrorWriter.WriteStderr($"Error: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}");
             PrintMcpUsage();
             return CommandExitCodes.UsageError;
         }
         catch (ArgumentOutOfRangeException ex)
         {
-            CommandErrorWriter.WriteStderr($"Error: {ex.Message}");
+            CommandErrorWriter.WriteStderr($"Error: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}");
             PrintMcpUsage();
             return CommandExitCodes.UsageError;
         }
@@ -2833,7 +2844,7 @@ internal static partial class ProgramRunner
                 catch (Exception ex)
                 {
                     GlobalToolLog.Error("mcp_http_server_failed " + GlobalToolLog.FormatExceptionChain(ex));
-                    CommandErrorWriter.WriteStderr($"Error: MCP HTTP server failed ({ex.GetType().Name}: {ex.Message}).");
+                    CommandErrorWriter.WriteStderr($"Error: MCP HTTP server failed ({FormatSanitizedExceptionSummary(ex)}).");
                     Console.Out.Flush();
                     Console.Error.Flush();
                     return CommandExitCodes.DatabaseError;
@@ -2864,12 +2875,12 @@ internal static partial class ProgramRunner
         {
             var inner = ex.Flatten().InnerExceptions.FirstOrDefault() ?? ex;
             GlobalToolLog.Error("mcp_http_transport_dispose_failed " + GlobalToolLog.FormatExceptionChain(inner));
-            CommandErrorWriter.WriteStderr($"Warning: MCP HTTP transport disposal failed ({inner.GetType().Name}: {inner.Message}).");
+            CommandErrorWriter.WriteStderr($"Warning: MCP HTTP transport disposal failed ({FormatSanitizedExceptionSummary(inner)}).");
         }
         catch (Exception ex)
         {
             GlobalToolLog.Error("mcp_http_transport_dispose_failed " + GlobalToolLog.FormatExceptionChain(ex));
-            CommandErrorWriter.WriteStderr($"Warning: MCP HTTP transport disposal failed ({ex.GetType().Name}: {ex.Message}).");
+            CommandErrorWriter.WriteStderr($"Warning: MCP HTTP transport disposal failed ({FormatSanitizedExceptionSummary(ex)}).");
         }
     }
 
@@ -3508,7 +3519,7 @@ internal static partial class ProgramRunner
             }
             else
             {
-                CommandErrorWriter.WriteStderr($"Error: upgrade failed before install.sh completed ({ex.GetType().Name}: {ex.Message}).");
+                CommandErrorWriter.WriteStderr($"Error: upgrade failed before install.sh completed ({FormatSanitizedExceptionSummary(ex)}).");
                 WriteUpgradeInstallerTrustDiagnostic();
                 CommandErrorWriter.WriteStderr("Hint: rerun `install.sh` manually for the desired release.");
             }
@@ -3910,9 +3921,9 @@ internal static partial class ProgramRunner
             else
                 File.Delete(scriptPath);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (IsExpectedCleanupException(ex))
         {
-            CommandErrorWriter.WriteStderr($"Warning: failed to delete upgrade installer script {ConsoleUi.FormatBoundedValue(scriptPath)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
+            CommandErrorWriter.WriteStderr($"Warning: failed to delete upgrade installer script {ConsoleUi.FormatBoundedValue(scriptPath)} ({FormatSanitizedExceptionSummary(ex)}).");
         }
     }
 
@@ -3940,11 +3951,14 @@ internal static partial class ProgramRunner
             else
                 Directory.Delete(LongPath.EnsureWindowsPrefix(fullPath), recursive: true);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
+        catch (Exception ex) when (IsExpectedCleanupException(ex))
         {
-            CommandErrorWriter.WriteStderr($"Warning: failed to delete upgrade installer temporary directory {ConsoleUi.FormatBoundedValue(scriptDirectory)} ({CommandErrorWriter.FormatSanitizedException(ex)}).");
+            CommandErrorWriter.WriteStderr($"Warning: failed to delete upgrade installer temporary directory {ConsoleUi.FormatBoundedValue(scriptDirectory)} ({FormatSanitizedExceptionSummary(ex)}).");
         }
     }
+
+    private static bool IsExpectedCleanupException(Exception ex)
+        => ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException;
 
     internal static bool TryValidateUpgradeInstallerDirectoryCleanupTarget(
         string path,
