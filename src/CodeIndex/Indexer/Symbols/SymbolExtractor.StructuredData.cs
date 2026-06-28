@@ -506,7 +506,7 @@ public static partial class SymbolExtractor
                 StructuredDataMaxJsonParseUtf8Bytes,
                 StructuredJsonStringOptions) ?? value;
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or System.IO.InvalidDataException)
         {
             return value;
         }

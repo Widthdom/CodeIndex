@@ -777,6 +777,18 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Json_UnescapePropertyNameReturnsOriginalOverBoundedParseLimit_Issue4127()
+    {
+        var longName = new string('\u3042', (SymbolExtractor.StructuredDataMaxJsonParseUtf8Bytes / 3) + 1);
+        var method = typeof(SymbolExtractor).GetMethod("UnescapeJsonPropertyName", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var unescaped = Assert.IsType<string>(method.Invoke(null, [longName]));
+
+        Assert.Equal(longName, unescaped);
+    }
+
+    [Fact]
     public void Extract_Yaml_IndexesIndentedConfigurationKeyPaths()
     {
         const string content = """
