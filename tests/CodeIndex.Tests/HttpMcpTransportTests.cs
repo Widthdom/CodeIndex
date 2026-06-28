@@ -45,6 +45,23 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public void FormatBindFailureDiagnostic_RedactsExceptionMessage_Issue4124()
+    {
+        var listen = HttpMcpTransport.ResolveListenSpec("127.0.0.1:0");
+        var exception = new HttpListenerException(
+            5,
+            "access denied at /tmp/private/repo with --token=ghp_abcdefghijklmnopqrstuvwxyz");
+
+        var diagnostic = HttpMcpTransport.FormatBindFailureDiagnostic(listen, exception);
+
+        Assert.Contains("failed to bind HTTP listener", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("<path>", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("--token=<redacted>", diagnostic, StringComparison.Ordinal);
+        Assert.DoesNotContain("/tmp/private", diagnostic, StringComparison.Ordinal);
+        Assert.DoesNotContain("ghp_", diagnostic, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task HttpTransport_DisposeAsync_DisposesOwnedSemaphoreGates_Issue3985()
     {
         var harness = await McpHttpHarness.StartAsync(_dbPath);

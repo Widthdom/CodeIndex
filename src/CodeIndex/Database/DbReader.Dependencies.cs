@@ -176,10 +176,11 @@ public partial class DbReader
     // traversal, so there is no maxDepth contract to align here.
     // issue #2121 監査: deps は上限付きの集計クエリであり depth-bounded traversal ではないため、
     // maxDepth の inclusive/exclusive 契約は持たない。
-    public List<FileDependencyResult> GetFileDependencies(int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool reverse = false)
+    public List<FileDependencyResult> GetFileDependencies(int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool reverse = false, CancellationToken cancellationToken = default)
     {
         lang = NormalizeQueryLanguage(lang);
         if (!_hasReferencesTable) return new List<FileDependencyResult>();
+        cancellationToken.ThrowIfCancellationRequested();
         using var cmd = _conn.CreateCommand();
         var referenceLineJoin = ReferenceLineJoinSql("r");
         var contextSql = ReferenceContextSql("r");
@@ -547,9 +548,11 @@ public partial class DbReader
         SqliteCommandPolicy.Add(cmd, "@symbolSampleLimit", DependencySymbolSampleLimit);
 
         var results = new List<FileDependencyResult>();
+        cancellationToken.ThrowIfCancellationRequested();
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
+            cancellationToken.ThrowIfCancellationRequested();
             results.Add(new FileDependencyResult
             {
                 SourcePath = reader.GetString(0),

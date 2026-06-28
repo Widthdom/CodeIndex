@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
@@ -1900,6 +1901,39 @@ public partial class QueryCommandRunnerTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void WithDb_OpenFailureBranchesSanitizeExceptionMessages_Issue4124()
+    {
+        const string privatePath = "/tmp/private/repo/codeindex.db";
+        var token = "ghp_" + new string('a', 24);
+        var cases = new (Exception Exception, string ExpectedPrefix)[]
+        {
+            (new UnauthorizedAccessException($"cannot open {privatePath} with password=hunter2 --token={token}"), "database access denied:"),
+            (new IOException($"cannot read {privatePath} with api_key={token}"), "database I/O error:"),
+            (new SqliteException($"cannot open {privatePath} with secret={token}", 14), "database access/open denied:"),
+            (new SqliteException($"database malformed near {privatePath} with token={token}", 11), "SQLite reported database corruption:"),
+            (new SqliteException($"syntax near {privatePath} with password=hunter2", 1), "SQLite database error (1):"),
+        };
+
+        foreach (var (exception, expectedPrefix) in cases)
+        {
+            var (exitCode, _, stderr) = CaptureConsole(() =>
+            {
+                InvokeWriteDatabaseOpenFailure(exception);
+                return CommandExitCodes.DatabaseError;
+            });
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Contains($"Error [{CommandErrorCodes.DbError}]: {expectedPrefix}", stderr);
+            Assert.Contains("<path>", stderr);
+            Assert.Contains("<redacted>", stderr);
+            Assert.DoesNotContain(privatePath, stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain("hunter2", stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain("ghp_", stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain(token, stderr, StringComparison.Ordinal);
         }
     }
 
@@ -6170,6 +6204,15 @@ public partial class QueryCommandRunnerTests
         var stdErr = process.StandardError.ReadToEnd();
         process.WaitForExit();
         return (process.ExitCode, stdOut, stdErr);
+    }
+
+    private static void InvokeWriteDatabaseOpenFailure(Exception exception)
+    {
+        var method = typeof(QueryCommandRunner).GetMethod(
+            "WriteDatabaseOpenFailure",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+        method.Invoke(null, [exception, "/tmp/db-open-failure-test.db"]);
     }
 
     private static (int ExitCode, string StdOut, string StdErr) RunSanitizedPublishedCli(PublishedCli publishedCli, params string[] args)

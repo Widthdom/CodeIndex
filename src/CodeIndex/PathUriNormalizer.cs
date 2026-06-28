@@ -83,7 +83,7 @@ internal static class PathUriNormalizer
         }
         catch (Exception ex) when (ex is ArgumentException or FormatException or UriFormatException)
         {
-            error = DiagnosticSanitizer.ForMessage(ex.Message);
+            error = DiagnosticRedactor.FormatExceptionMessage(ex);
             return false;
         }
     }

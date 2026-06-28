@@ -2231,6 +2231,25 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void BatchRowSkipWarning_RedactsExceptionMessages_Issue4124()
+    {
+        var warning = DbWriter.BuildBatchRowSkipWarningForTesting(
+            "symbol file_id=1 name=ok line=42",
+            new InvalidOperationException("batch failed at /tmp/private/repo --token=ghp_abcdefghijklmnopqrstuvwxyz"),
+            new InvalidOperationException("row failed at C:/Users/me/private.db password=hunter2"));
+
+        Assert.Contains("batch_error=", warning, StringComparison.Ordinal);
+        Assert.Contains("row_error=", warning, StringComparison.Ordinal);
+        Assert.Contains("<path>", warning, StringComparison.Ordinal);
+        Assert.Contains("--token=<redacted>", warning, StringComparison.Ordinal);
+        Assert.Contains("password=<redacted>", warning, StringComparison.Ordinal);
+        Assert.DoesNotContain("/tmp/private", warning, StringComparison.Ordinal);
+        Assert.DoesNotContain("C:/Users/me", warning, StringComparison.Ordinal);
+        Assert.DoesNotContain("ghp_", warning, StringComparison.Ordinal);
+        Assert.DoesNotContain("hunter2", warning, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void DeleteFileData_RemovesChunksAndSymbols()
     {
         var fileId = _writer.UpsertFile(new FileRecord
