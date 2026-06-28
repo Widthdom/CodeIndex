@@ -316,8 +316,9 @@ For AI-oriented bounded payloads, `map`, `inspect`, and `outline` accept
 `compact_limit`, and `truncation.sections.*` metadata.
 For narrower `inspect` evidence, `--fields <csv>` implies JSON and selects
 top-level groups such as `definitions`, `file`, `graph`, `references`,
-`callers`, and `callees`; `--body-only` is shorthand for `--body --fields
-definitions`. When a definition body is longer than the returned slice,
+`callers`, and `callees`; `--outline-only` is shorthand for
+`--fields file,definitions,nearby_symbols`, and `--body-only` is shorthand for
+`--body --fields definitions`. When a definition body is longer than the returned slice,
 `body_content_next_start_line` points to the next source line to pass with
 `--body-start`; use `--body-lines` (or alias `--body-line-count`) to choose the page size. `inspect`
 can also return a bounded `source_excerpt` when you pass `--line`, `--start-line` / `--end-line`,
@@ -340,6 +341,7 @@ cdidx search authenticate --json          # ndjson stream, one result per line
 cdidx search authenticate --json=array    # single JSON array
 cdidx inspect QueryCommandRunner --json --pretty
 cdidx map --compact                       # capped JSON with truncation metadata
+cdidx inspect Compute --outline-only      # file/definition/nearby symbol summary
 cdidx inspect Compute --body-only         # definitions with body_content only
 cdidx inspect Compute --body --body-start 40 --body-lines 40
 cdidx inspect Compute --line 42 --context 2 --json
@@ -490,14 +492,18 @@ cdidx unused --actionable --confidence medium
 cdidx unused --json --count
 cdidx unused --compact --bucket likely_unused_private --min-confidence medium
 cdidx unused --json --by-bucket
+cdidx unused --compact --by-bucket
 ```
 
 `unused` compares definitions with indexed references and groups results by
 confidence. JSON output includes `summary.by_bucket`, `summary.by_confidence`,
 and `bucket_taxonomy` for the `likely_unused_private`,
 `maybe_unused_nonpublic`, `public_or_exported_no_refs`, and
-`reflection_or_config_suspect` buckets; `--by-bucket` also groups returned
-symbols under those bucket keys. Use `--bucket <name>` to return only one
+`reflection_or_config_suspect` buckets. In regular JSON, `--by-bucket` also
+groups returned symbols under those bucket keys; with `--compact`, the same
+flag emits count/representative summaries and records `by_bucket.symbols` under
+`omitted_sections` instead of duplicating full symbol arrays. Use
+`--bucket <name>` to return only one
 bucket, and `--min-confidence <medium|low>` or its `--confidence` alias to omit
 lower-confidence classes. Use `--actionable` to preset the query to private,
 medium-confidence cleanup candidates while excluding tests. JSON output includes
@@ -505,8 +511,7 @@ medium-confidence cleanup candidates while excluding tests. JSON output includes
 downstream audit tooling. Count-only JSON includes `returned_bucket_counts` and
 `summary.by_bucket` / `summary.by_confidence`, matching the full JSON summary.
 Use `--compact` for audit summaries that keep counts, confidence buckets,
-taxonomy, and filter context without returning the full `symbols` array; add
-`--by-bucket` only when grouped symbol arrays are explicitly needed.
+taxonomy, and filter context without returning the full `symbols` array.
 Public APIs, framework entrypoints, DTOs, serialization contracts, generated
 hooks, test-only hooks, Markdown headings, reflection, and configuration-based
 usage can be false positives and are routed into lower-confidence buckets. C#
@@ -1374,9 +1379,14 @@ cdidx map --path src/ --exclude-tests
 cdidx map --path src/ --exclude-tests --json
 cdidx map --summary-only --json
 cdidx map --sections hotspots,metrics --json
+cdidx map --format issue-drafts --limit 10
 ```
 
 `map` is the fastest way to orient both a human and an AI agent before deeper queries. Use it to get languages, modules, hot files, and likely entrypoints, then narrow with `inspect`, `search`, or `definition`. Use `--summary-only` when only aggregate counts and freshness metadata are needed, or `--sections <tree,languages,hotspots,metrics>` to request only selected detail sections. For the full freshness and metadata contract of `status --json`, `map --json`, `inspect --json`, and MCP `analyze_symbol`, see [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md).
+Use `--format issue-drafts` when maintenance triage needs oversized-file issue
+draft candidates instead of the full map. The payload is built from the bounded
+`largest_files` section, groups candidates by kind, and includes thresholds,
+source-limit metadata, and the active `query_context`.
 
 ### Build a bug-report bundle
 
@@ -1442,6 +1452,7 @@ same source location.
 | `--compact` | `map`, `inspect`, `outline` | Emit AI-oriented compact JSON with capped list sections and `truncation.sections.*` metadata. The default cap is 5 unless `--limit` / `--top` is supplied. |
 | `--outline-fields <csv>` | `outline` | Project outline JSON symbol fields such as `name`, `line`, `kind`, `signature`, `container`, `range`, or `body`; pass `all` for the full symbol payload with paging metadata. |
 | `--fields <csv>` | `inspect` | Select top-level inspect JSON groups: `file`, `workspace`, `graph`, `definitions`, `body`, `source_excerpt`, `nearby_symbols`, `references`, `callers`, `callees`, or `all`. `body` includes definition bodies and maps to `definitions`. |
+| `--outline-only` | `inspect` | Shorthand for `--fields file,definitions,nearby_symbols`, useful for outline-first review of large classes/types before requesting body or graph evidence. |
 | `--body-only` | `inspect` | Shorthand for `--body --fields definitions`, useful when large audits need implementation text without graph context. |
 | `--body-start <line>` | `inspect` | Start the returned definition body slice at a 1-based source line inside the symbol body. Pair with `body_content_next_start_line` from JSON to page a long body. |
 | `--body-lines <n>` / `--body-line-count <n>` | `inspect` | Return at most this many definition body lines for `--body`, `--body-only`, or `--fields body`; maximum 1000. |
@@ -2050,6 +2061,7 @@ CLI JSON and MCP compatibility:
 | MCP metadata | MCP tools return JSON-RPC tool results with camelCase field names and may include MCP-specific metadata. |
 | Grouped graph rows | Graph tools that group reference rows (`callers`, `callees`, and bundled `analyze_symbol` caller/callee rows) expose a backward-compatible scalar summary kind plus a sorted kind array and mixed-kind flag. CLI JSON uses `reference_kind` / `reference_kinds` / `has_mixed_reference_kinds`, while MCP uses `referenceKind` / `referenceKinds` / `hasMixedReferenceKinds`. |
 | Project filters | When `--project` / MCP `project` expansion cannot resolve the indexed project root and uses the process current directory, structured payloads expose `project_filter_root` and `project_filter_root_fallback_reason`. |
+| Issue-draft map output | `cdidx map --format issue-drafts` returns `api_version`, `format`, `count`, `groups`, `issue_drafts`, `thresholds`, `truncation.largest_files`, and `query_context`; consumers should treat drafts as candidates from the bounded `largest_files` section. |
 | Consumer guidance | Consumers that need every underlying kind should read the array for the surface they call and ignore unknown future fields. See [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md#cli-json-and-mcp-response-compatibility) for the CLI/MCP compatibility table. |
 | Slow search profiling | Add `--profile` to read commands to append one JSON object after the normal results. It contains `profile.phases` (`name`, `elapsed_ms`, `rows_scanned`), `profile.query_plan` (`EXPLAIN QUERY PLAN` rows), and `profile.queries` (SQL text). With `--slow-query-ms <n>`, profiled SQL at or above the threshold is written to the persistent tool log. |
 
@@ -2958,8 +2970,9 @@ AI 向けに上限付き payload が必要な場合、`map`、`inspect`、`outli
 `compact`、`compact_limit`、`truncation.sections.*` metadata を追加します。
 `inspect` の証跡をさらに絞りたい場合、`--fields <csv>` は JSON 出力を暗黙に有効化し、
 `definitions`、`file`、`graph`、`references`、`callers`、`callees` などの
-top-level group を選択します。`--body-only` は `--body --fields definitions` の
-shorthand です。definition body が返却 slice より長い場合は
+top-level group を選択します。`--outline-only` は
+`--fields file,definitions,nearby_symbols` の shorthand で、`--body-only` は
+`--body --fields definitions` の shorthand です。definition body が返却 slice より長い場合は
 `body_content_next_start_line` が次に `--body-start` へ渡す source line を示します。
 `--body-lines`（alias: `--body-line-count`）で page size を指定できます。`--line`、`--start-line` / `--end-line`、
 任意の `--context`、`--before`、`--after` を渡すと、`inspect` は範囲を絞った `source_excerpt`
@@ -2980,6 +2993,7 @@ cdidx search authenticate --json          # ndjson stream、1 行 1 result
 cdidx search authenticate --json=array    # 単一 JSON array
 cdidx inspect QueryCommandRunner --json --pretty
 cdidx map --compact                       # truncation metadata 付きの cap 済み JSON
+cdidx inspect Compute --outline-only      # ファイル・定義・近傍シンボルの概要
 cdidx inspect Compute --body-only         # body_content 付き definitions のみ
 cdidx inspect Compute --body --body-start 40 --body-lines 40
 cdidx inspect Compute --line 42 --context 2 --json
@@ -3123,13 +3137,16 @@ cdidx unused --actionable --confidence medium
 cdidx unused --json --count
 cdidx unused --compact --bucket likely_unused_private --min-confidence medium
 cdidx unused --json --by-bucket
+cdidx unused --compact --by-bucket
 ```
 
 `unused` は definitions と indexed references を比較し、confidence ごとに結果を
 分類します。JSON 出力には `likely_unused_private`、`maybe_unused_nonpublic`、
 `public_or_exported_no_refs`、`reflection_or_config_suspect` bucket 用の
 `summary.by_bucket`、`summary.by_confidence`、`bucket_taxonomy` が含まれます。
-`--by-bucket` は返却された symbols も bucket key ごとに grouped します。
+通常の JSON では `--by-bucket` が返却されたシンボルを bucket key ごとに grouped します。
+`--compact` と組み合わせると、同じ flag は件数と代表例の概要を返し、
+完全なシンボル配列を重複させずに `omitted_sections` へ `by_bucket.symbols` を記録します。
 `--bucket <name>` で単一 bucket だけを返し、`--min-confidence <medium|low>` で
 より低い confidence class を除外できます。`--confidence` はその alias です。
 `--actionable` は private かつ medium confidence の削除候補に絞り、tests を除外する
@@ -3137,8 +3154,7 @@ preset です。JSON 出力には `query_context` も含まれるため、audit 
 bucket と confidence filter を直接確認できます。count-only JSON には
 `returned_bucket_counts` と `summary.by_bucket` / `summary.by_confidence` も含まれ、
 full JSON summary と同じ bucket totals を返します。count、confidence bucket、taxonomy、
-filter context だけが必要な場合は `--compact` を使い、grouped symbol arrays が明示的に
-必要な場合だけ `--by-bucket` を追加してください。Public API、framework entrypoint、DTO、
+filter context だけが必要な場合は `--compact` を使ってください。Public API、framework entrypoint、DTO、
 serialization contract、generated hook、test-only hook、Markdown heading、reflection、
 config 経由の使用は false positive になりうるため、低 confidence bucket に寄せられます。
 C# の `nameof(...)`、`typeof(...)`、`GetMethod("Foo")` のような
@@ -4022,9 +4038,13 @@ cdidx map --path src/ --exclude-tests
 cdidx map --path src/ --exclude-tests --json
 cdidx map --summary-only --json
 cdidx map --sections hotspots,metrics --json
+cdidx map --format issue-drafts --limit 10
 ```
 
 `map` は、人と AI のどちらにも最短で全体像を渡すための入口です。言語、モジュール、ホットなファイル、推定エントリポイントを把握したら、`inspect`、`search`、`definition` に進んでください。集計値と freshness メタデータだけが必要な場合は `--summary-only`、必要な詳細セクションだけを取りたい場合は `--sections <tree,languages,hotspots,metrics>` を使えます。`status --json`、`map --json`、`inspect --json`、MCP `analyze_symbol` の詳細なメタデータ契約は [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md#開発者ガイド) にまとめています。
+保守作業の triage で full map ではなく巨大ファイルの Issue 下書き候補が必要な場合は
+`--format issue-drafts` を使います。payload は上限付きの `largest_files` section から作られ、
+候補を kind ごとに group 化し、閾値、取得元上限 metadata、現在の `query_context` を含みます。
 
 ### バグ報告用バンドルを作る
 
@@ -4089,6 +4109,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--compact` | `map`、`inspect`、`outline` | list section を cap した AI 向け compact JSON を出力し、`truncation.sections.*` metadata を含める。既定 cap は 5 件で、`--limit` / `--top` 指定時はその値を使う。 |
 | `--outline-fields <csv>` | `outline` | outline JSON の symbol field を投影する。`name`、`line`、`kind`、`signature`、`container`、`range`、`body` などを指定でき、`all` を渡すと full symbol payload と paging metadata を返す。 |
 | `--fields <csv>` | `inspect` | inspect JSON の top-level group を選択。`file`、`workspace`、`graph`、`definitions`、`body`、`source_excerpt`、`nearby_symbols`、`references`、`callers`、`callees`、`all` を指定できる。`body` は definition body を含め、`definitions` に対応する。 |
+| `--outline-only` | `inspect` | `--fields file,definitions,nearby_symbols` の shorthand。大きな class / type を body や graph evidence なしでアウトライン優先で確認したい場合に使う。 |
 | `--body-only` | `inspect` | `--body --fields definitions` の shorthand。大規模 audit で graph context なしに実装本文だけが必要な場合に使う。 |
 | `--body-start <line>` | `inspect` | symbol body 内の 1-based source line から definition body slice を返す。長い body の page 送りでは JSON の `body_content_next_start_line` を次の値として渡す。 |
 | `--body-lines <n>` / `--body-line-count <n>` | `inspect` | `--body`、`--body-only`、`--fields body` で返す definition body 行数の上限。最大 1000。 |
@@ -4684,6 +4705,7 @@ CLI JSON と MCP compatibility:
 | CLI metadata | CLI command は `api_version` や command result field など CLI 向け metadata を保持します。 |
 | MCP metadata | MCP tool は JSON-RPC tool result と camelCase field name、および MCP 固有 metadata を返す場合があります。 |
 | grouped graph row | 参照行を group 化する graph tool（`callers`、`callees`、bundled `analyze_symbol` の caller/callee 行）は、後方互換の scalar summary kind、sort 済み kind array、mixed-kind flag を返します。CLI JSON は `reference_kind` / `reference_kinds` / `has_mixed_reference_kinds`、MCP は `referenceKind` / `referenceKinds` / `hasMixedReferenceKinds` を使います。 |
+| Issue 下書き map 出力 | `cdidx map --format issue-drafts` は `api_version`、`format`、`count`、`groups`、`issue_drafts`、`thresholds`、`truncation.largest_files`、`query_context` を返します。consumer は draft を上限付きの `largest_files` section 由来の candidate として扱ってください。 |
 | consumer guidance | すべての underlying kind が必要な consumer は、呼び出した surface の array field を読み、将来追加される未知の field は無視してください。CLI/MCP compatibility table は [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md#cli-json-and-mcp-response-compatibility) を参照してください。 |
 | slow search profiling | 遅い検索を調べる場合は、read 系 command に `--profile` を追加してください。通常結果の後に `profile.phases`（`name`、`elapsed_ms`、`rows_scanned`）、`profile.query_plan`（`EXPLAIN QUERY PLAN` 行）、`profile.queries`（SQL text）を含む JSON object を 1 行追加します。`--slow-query-ms <n>` を併用すると、閾値以上の profiled SQL を persistent tool log に記録します。 |
 
