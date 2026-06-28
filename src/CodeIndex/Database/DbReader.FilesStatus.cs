@@ -943,7 +943,7 @@ public partial class DbReader
     /// </summary>
     public RepoMapResult GetRepoMap(int limit = 10, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, double minEntrypointConfidence = 0)
     {
-        var builder = new RepoMapBuilder(_conn, _fileColumns, _hasReferencesTable);
+        var builder = new RepoMapBuilder(_conn, _fileColumns, _hasReferencesTable, GetIndexedPathComparer);
         return builder.Build(limit, lang, pathPatterns, excludePathPatterns, excludeTests, minEntrypointConfidence, GetWorkspaceFreshness);
     }
 
@@ -1134,6 +1134,14 @@ public partial class DbReader
             ExecuteNullableDateTime(_fileColumns.Contains("indexed_at") ? "SELECT MAX(indexed_at) FROM files" : null),
             ExecuteNullableDateTime(_fileColumns.Contains("modified") ? "SELECT MAX(modified) FROM files" : null)
         );
+    }
+
+    private StringComparer GetIndexedPathComparer()
+    {
+        var pathCaseSensitive = ParseMetaBool(TryGetMetaStringInternal(DbContext.WorkspacePathCaseSensitiveMetaKey));
+        return pathCaseSensitive == true
+            ? StringComparer.Ordinal
+            : StringComparer.OrdinalIgnoreCase;
     }
 
     private DateTime? ExecuteNullableDateTime(string? sql)
