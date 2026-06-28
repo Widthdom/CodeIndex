@@ -70,7 +70,8 @@ public readonly record struct UnusedCountResult(
     int FileCount,
     bool IncludesSql,
     IReadOnlyDictionary<string, int> BucketCounts,
-    IReadOnlyDictionary<string, int> ConfidenceCounts);
+    IReadOnlyDictionary<string, int> ConfidenceCounts,
+    IReadOnlyDictionary<string, int> ContractDomainCounts);
 
 public readonly record struct SearchFileCountResult(string Path, int Count);
 
@@ -231,6 +232,16 @@ public class SymbolResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public double? HotspotScore { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? RankingReferenceScore { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? RankingHotspotScore { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? GenericNamePenalty { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? StructuralRankPenalty { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? DefinitionSites { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? SizeLines { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public double? ComplexityScore { get; set; }
@@ -242,6 +253,10 @@ public class UnusedSymbolResult : SymbolResult
     public string UnusedConfidence { get; set; } = string.Empty;
     public string UnusedReason { get; set; } = string.Empty;
     public List<string> UnusedReasonTags { get; set; } = [];
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? UnusedContractDomain { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? UnusedContractDomainTags { get; set; }
 }
 
 public class GroupedHotspotResult
@@ -1424,6 +1439,8 @@ public class PostExtractionHookStatus
     public string TypeName { get; set; } = string.Empty;
     [JsonPropertyName("callback_budget_ms")]
     public long CallbackBudgetMs { get; set; }
+    [JsonPropertyName("load_context_lifecycle")]
+    public string LoadContextLifecycle { get; set; } = PostExtractionHookRunner.HookLoadContextLifecycle;
 }
 
 public class RepoMapResult

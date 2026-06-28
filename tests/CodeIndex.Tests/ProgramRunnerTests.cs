@@ -530,15 +530,61 @@ public class ProgramRunnerTests
         var byName = EnvironmentVariableInventory.Items.ToDictionary(item => item.Name, StringComparer.Ordinal);
 
         var githubToken = Assert.Contains("CDIDX_GITHUB_TOKEN", byName);
+        Assert.Equal(EnvironmentVariableInventory.DomainAuthSecret, githubToken.Domain);
         Assert.Equal(EnvironmentVariableInventory.SensitivitySecret, githubToken.Sensitivity);
         Assert.Equal("security", githubToken.Policy);
         Assert.Equal("no", githubToken.ConfigFileSupported);
+        Assert.Contains("GitHub submission", githubToken.InvalidValueBehavior, StringComparison.Ordinal);
         Assert.Contains(githubToken.Locations, location => location.Path.EndsWith("GitHubIssueReporter.cs", StringComparison.Ordinal));
 
+        var mcpAuthToken = Assert.Contains(McpAuthenticatorFactory.AuthTokenEnvVar, byName);
+        Assert.Equal(EnvironmentVariableInventory.DomainAuthSecret, mcpAuthToken.Domain);
+        Assert.Contains("whitespace/control-token", mcpAuthToken.InvalidValueBehavior, StringComparison.Ordinal);
+
         var maxLineWidth = Assert.Contains(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, byName);
+        Assert.Equal(EnvironmentVariableInventory.DomainDisplay, maxLineWidth.Domain);
         Assert.Equal(EnvironmentVariableInventory.SensitivityPublic, maxLineWidth.Sensitivity);
         Assert.Equal("display", maxLineWidth.Policy);
         Assert.Equal("yes", maxLineWidth.ConfigFileSupported);
+        Assert.NotEmpty(maxLineWidth.InvalidValueBehavior);
+
+        var defaultLimit = Assert.Contains(QueryCommandRunner.DefaultLimitEnvironmentVariable, byName);
+        Assert.Equal(EnvironmentVariableInventory.DomainIndexingQuery, defaultLimit.Domain);
+
+        var toolAllowlist = Assert.Contains(McpToolFilter.AllowEnvVarName, byName);
+        Assert.Equal(EnvironmentVariableInventory.DomainTrustBoundary, toolAllowlist.Domain);
+        Assert.Contains("fail closed", toolAllowlist.InvalidValueBehavior, StringComparison.OrdinalIgnoreCase);
+
+        var updateDisable = Assert.Contains(UpdateChecker.DisableEnvVar, byName);
+        Assert.Equal(EnvironmentVariableInventory.DomainUpdateLogging, updateDisable.Domain);
+        Assert.Contains("1 or true", updateDisable.InvalidValueBehavior, StringComparison.Ordinal);
+
+        var isolatedWorkerPrefix = Assert.Contains(global::CodeIndex.SubprocessEnvironmentPolicy.TestEnvironmentPrefix + "*", byName);
+        Assert.Equal(EnvironmentVariableInventory.DomainSubprocess, isolatedWorkerPrefix.Domain);
+        Assert.Contains("isolated worker subprocesses", isolatedWorkerPrefix.InvalidValueBehavior, StringComparison.Ordinal);
+
+        Assert.All(EnvironmentVariableInventory.Items, item =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(item.Domain));
+            Assert.False(string.IsNullOrWhiteSpace(item.InvalidValueBehavior));
+        });
+    }
+
+    [Theory]
+    [InlineData("1", true)]
+    [InlineData("true", true)]
+    [InlineData("TRUE", true)]
+    [InlineData("0", false)]
+    [InlineData("false", false)]
+    [InlineData("yes", false)]
+    [InlineData("garbage", false)]
+    [InlineData("", false)]
+    public void UpdateChecker_IsDisabled_OnlyRecognizesExplicitTrueValues(string value, bool expected)
+    {
+        using var env = EnvironmentVariableScope.Capture(UpdateChecker.DisableEnvVar);
+        env.Set(UpdateChecker.DisableEnvVar, value);
+
+        Assert.Equal(expected, UpdateChecker.IsDisabled());
     }
 
     [Fact]
@@ -552,7 +598,9 @@ public class ProgramRunnerTests
         Assert.Empty(stderr);
         Assert.Contains("environment_inventory:", stdout);
         Assert.Contains("CDIDX_GITHUB_TOKEN", stdout);
+        Assert.Contains("domain   : auth_secret", stdout);
         Assert.Contains("sensitivity: secret", stdout);
+        Assert.Contains("invalid", stdout);
         Assert.Contains("CDIDX_MCP_RATE_LIMIT_RPS", stdout);
         Assert.Contains("policy   : performance", stdout);
     }
@@ -593,12 +641,22 @@ public class ProgramRunnerTests
         Assert.Equal(visiblePath, envByName["CDIDX_VISIBLE_PATH"].GetProperty("value").GetString());
         Assert.False(envByName["CDIDX_VISIBLE_PATH"].GetProperty("sensitive").GetBoolean());
 
-        var inventoryNames = root.GetProperty("environment_inventory")
+        var inventoryByName = root.GetProperty("environment_inventory")
             .EnumerateArray()
-            .Select(element => element.GetProperty("name").GetString())
-            .ToHashSet(StringComparer.Ordinal);
-        Assert.Contains("CDIDX_GITHUB_TOKEN", inventoryNames);
-        Assert.Contains(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, inventoryNames);
+            .ToDictionary(
+                element => element.GetProperty("name").GetString()!,
+                element => element,
+                StringComparer.Ordinal);
+        Assert.Equal(
+            EnvironmentVariableInventory.DomainAuthSecret,
+            inventoryByName["CDIDX_GITHUB_TOKEN"].GetProperty("domain").GetString());
+        Assert.Contains(
+            "GitHub submission",
+            inventoryByName["CDIDX_GITHUB_TOKEN"].GetProperty("invalid_value_behavior").GetString(),
+            StringComparison.Ordinal);
+        Assert.Equal(
+            EnvironmentVariableInventory.DomainDisplay,
+            inventoryByName[QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable].GetProperty("domain").GetString());
     }
 
     [Fact]

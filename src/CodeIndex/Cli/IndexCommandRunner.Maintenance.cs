@@ -116,7 +116,7 @@ public static partial class IndexCommandRunner
             return WriteCommandError(
                 json,
                 jsonOptions,
-                $"failed to optimize FTS5 index: {ex.Message}",
+                $"failed to optimize FTS5 index: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}",
                 CommandExitCodes.DatabaseError,
                 "Ensure no other writer is holding the database lock, then retry `cdidx optimize`.",
                 CommandErrorCodes.DbError);
@@ -282,7 +282,7 @@ public static partial class IndexCommandRunner
             return WriteCommandError(
                 options.Json,
                 jsonOptions,
-                $"failed to backfill folded-name columns: {ex.Message}",
+                $"failed to backfill folded-name columns: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}",
                 CommandExitCodes.DatabaseError,
                 "Retry `cdidx backfill-fold`. If this persists, rebuild the index with `cdidx index <projectPath> --rebuild`.",
                 CommandErrorCodes.DbError);

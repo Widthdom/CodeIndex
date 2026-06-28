@@ -312,7 +312,7 @@ internal static partial class ProgramRunner
             "validate" => a => QueryCommandRunner.RunValidate(a, context.JsonOptions),
             "languages" => a => QueryCommandRunner.RunLanguages(a, context.JsonOptions),
             "impact" => a => QueryCommandRunner.RunImpact(a, context.JsonOptions),
-            "deps" => a => QueryCommandRunner.RunDeps(a, context.JsonOptions),
+            "deps" => a => QueryCommandRunner.RunDeps(a, context.JsonOptions, context.CancellationToken),
             "unused" => a => QueryCommandRunner.RunUnused(a, context.JsonOptions),
             "hotspots" => a => QueryCommandRunner.RunHotspots(a, context.JsonOptions),
             "batch" => a => QueryCommandRunner.RunBatch(a, context.JsonOptions),

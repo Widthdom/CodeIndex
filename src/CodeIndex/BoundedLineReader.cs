@@ -1,5 +1,6 @@
 using System.Text;
 using System.Runtime.CompilerServices;
+using CodeIndex.Diagnostics;
 
 namespace CodeIndex;
 
@@ -46,6 +47,8 @@ internal static class WorkerProtocolLineLimits
     // file cap after JSON escaping while still bounding line-protocol memory growth.
     internal const int MaxLineCharacters = 32 * 1024 * 1024;
     internal const int MaxLineUtf8Bytes = 32 * 1024 * 1024;
+    internal const int MaxExtendedLineCharacters = 384 * 1024 * 1024;
+    internal const int MaxExtendedLineUtf8Bytes = 384 * 1024 * 1024;
     private const long JsonEscapedCharacterBytes = 6;
     private const long ProtocolEnvelopeBytes = 1024 * 1024;
 
@@ -54,11 +57,13 @@ internal static class WorkerProtocolLineLimits
         if (maxFileSizeBytes is not > 0)
             return MaxLineUtf8Bytes;
 
+        var largestUncappedFileBytes = (MaxExtendedLineUtf8Bytes - ProtocolEnvelopeBytes) / JsonEscapedCharacterBytes;
+        if (maxFileSizeBytes.Value >= largestUncappedFileBytes)
+            return MaxExtendedLineUtf8Bytes;
+
         var required = checked(maxFileSizeBytes.Value * JsonEscapedCharacterBytes + ProtocolEnvelopeBytes);
         if (required <= MaxLineUtf8Bytes)
             return MaxLineUtf8Bytes;
-        if (required >= int.MaxValue)
-            return int.MaxValue;
 
         return (int)required;
     }
@@ -167,7 +172,7 @@ internal static class BoundedLineReader
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
         {
-            var reason = $"it could not be read ({ex.GetType().Name}: {CollapseLineBreaks(ex.Message)})";
+            var reason = $"it could not be read ({ex.GetType().Name}: {DiagnosticSanitizer.ForMessage(ex.Message)})";
             failure = new(
                 BoundedTextFileReadFailureKind.ReadFailed,
                 reason,
@@ -354,7 +359,4 @@ internal static class BoundedLineReader
                 throw new BoundedLineLengthException(_charactersRead, _utf8BytesRead, _maxCharacters, _maxUtf8Bytes);
         }
     }
-
-    private static string CollapseLineBreaks(string value)
-        => value.Replace('\r', ' ').Replace('\n', ' ');
 }

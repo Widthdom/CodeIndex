@@ -36,6 +36,30 @@ public class ProcessLaunchPolicyTests
     }
 
     [Fact]
+    public void AddWorkerCommandArguments_AppendsCommandPayloadAndProtocolLimit_Issue4075()
+    {
+        var startInfo = ProcessLaunchPolicy.CreateNoShellStartInfo();
+
+        ProcessLaunchPolicy.AddWorkerCommandArguments(
+            startInfo,
+            "__cdidx-worker",
+            16384,
+            "/tmp/hook.dll",
+            "Demo.Hook");
+
+        Assert.Equal(
+            [
+                "__cdidx-worker",
+                "/tmp/hook.dll",
+                "Demo.Hook",
+                ProcessLaunchPolicy.WorkerProtocolMaxLineBytesOption,
+                "16384",
+            ],
+            startInfo.ArgumentList.ToArray());
+        Assert.Equal(string.Empty, startInfo.Arguments);
+    }
+
+    [Fact]
     public void CreateUtf8RedirectedWorkerStartInfo_DisablesShellAndUsesUtf8NoBom_Issue3991()
     {
         var startInfo = ProcessLaunchPolicy.CreateUtf8RedirectedWorkerStartInfo();

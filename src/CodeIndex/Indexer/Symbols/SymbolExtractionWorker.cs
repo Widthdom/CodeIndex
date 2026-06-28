@@ -382,7 +382,6 @@ internal static class SymbolExtractionWorker
     internal const string CommandName = "__cdidx-symbol-extraction";
     internal const int WorkerKillWaitMilliseconds = 5000;
     internal const int MaxDelayMillisecondsForTesting = 5000;
-    private const string ProtocolMaxLineBytesOption = "--protocol-max-line-bytes";
     private const string TestDelayMillisecondsOption = "--test-delay-ms";
     private const string TestConsoleStdoutOption = "--test-console-stdout";
     private const int CapturedConsoleMaxChars = 32 * 1024;
@@ -457,8 +456,7 @@ internal static class SymbolExtractionWorker
                 typeof(SymbolExtractionWorker).Assembly))
         {
             startInfo.FileName = currentProcessPath!;
-            startInfo.ArgumentList.Add(CommandName);
-            CodeIndex.ProcessLaunchPolicy.AddInvariantIntArgument(startInfo, ProtocolMaxLineBytesOption, maxProtocolLineBytes);
+            CodeIndex.ProcessLaunchPolicy.AddWorkerCommandArguments(startInfo, CommandName, maxProtocolLineBytes);
             AddTestingArguments(startInfo);
             error = string.Empty;
             return true;
@@ -477,8 +475,7 @@ internal static class SymbolExtractionWorker
             return false;
         }
 
-        startInfo.ArgumentList.Add(CommandName);
-        CodeIndex.ProcessLaunchPolicy.AddInvariantIntArgument(startInfo, ProtocolMaxLineBytesOption, maxProtocolLineBytes);
+        CodeIndex.ProcessLaunchPolicy.AddWorkerCommandArguments(startInfo, CommandName, maxProtocolLineBytes);
         AddTestingArguments(startInfo);
 
         error = string.Empty;
@@ -697,7 +694,7 @@ internal static class SymbolExtractionWorker
             }
 
             var value = args[++index];
-            if (StringComparer.Ordinal.Equals(option, ProtocolMaxLineBytesOption)
+            if (StringComparer.Ordinal.Equals(option, CodeIndex.ProcessLaunchPolicy.WorkerProtocolMaxLineBytesOption)
                 && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var protocolBytes)
                 && protocolBytes > 0)
             {
@@ -734,7 +731,7 @@ internal static class SymbolExtractionWorker
 
     private static string BuildWorkerOptionError()
         => "symbol extraction worker accepts only "
-            + $"`{ProtocolMaxLineBytesOption} <bytes>`, "
+            + $"`{CodeIndex.ProcessLaunchPolicy.WorkerProtocolMaxLineBytesOption} <bytes>`, "
             + $"`{TestDelayMillisecondsOption} <milliseconds>`, or "
             + $"`{TestConsoleStdoutOption} <text>`.";
 

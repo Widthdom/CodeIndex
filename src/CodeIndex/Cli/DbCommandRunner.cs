@@ -211,7 +211,7 @@ public static class DbCommandRunner
             return WriteCommandError(
                 options.Json,
                 jsonOptions,
-                $"failed to run integrity check: {ex.Message}",
+                $"failed to run integrity check: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}",
                 CommandExitCodes.DatabaseError,
                 "Retry `cdidx db --integrity-check`. If this persists, the DB may be unreadable; rebuild with `cdidx index <projectPath> --rebuild`.",
                 CommandErrorCodes.DbError);
@@ -293,7 +293,7 @@ public static class DbCommandRunner
             return WriteCommandError(
                 options.Json,
                 jsonOptions,
-                $"failed to read schema: {ex.Message}",
+                $"failed to read schema: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}",
                 CommandExitCodes.DatabaseError,
                 "Retry `cdidx db schema`. If this persists, rebuild with `cdidx index <projectPath> --rebuild`.",
                 CommandErrorCodes.DbError);
@@ -376,7 +376,7 @@ public static class DbCommandRunner
             return WriteCommandError(
                 options.Json,
                 jsonOptions,
-                $"failed to prune database: {ex.Message}",
+                $"failed to prune database: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}",
                 CommandExitCodes.DatabaseError,
                 "Ensure no other writer is holding the database lock, then retry `cdidx db prune --dry-run`.",
                 CommandErrorCodes.DbError);
@@ -460,7 +460,7 @@ public static class DbCommandRunner
         catch (Exception ex)
         {
             var safeMessage = ex is ArgumentException
-                ? ex.Message
+                ? CommandErrorWriter.FormatSanitizedExceptionMessage(ex)
                 : $"failed to create database checkpoint: {CommandErrorWriter.FormatSanitizedException(ex)}";
             return WriteCommandError(
                 options.Json,
@@ -966,7 +966,7 @@ public static class DbCommandRunner
     {
         cancellationToken.ThrowIfCancellationRequested();
         using var cmd = SqliteConnectionPolicy.CreateCommand(connection);
-        cmd.CommandText = $"PRAGMA busy_timeout={DbPragmaPolicy.ReadBusyTimeoutMs(DbContext.BusyTimeoutEnvironmentVariable)}";
+        cmd.CommandText = DbPragmaPolicy.ReadBusyTimeoutPragmaSql(DbContext.BusyTimeoutEnvironmentVariable);
         cmd.ExecuteNonQuery();
     }
 

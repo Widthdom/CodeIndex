@@ -6353,4 +6353,32 @@ public partial class FileIndexerTests
             FileContentLoader.TryComputeChecksum(stream, long.MaxValue, out _, cancellation.Token));
     }
 
+    [Fact]
+    public void TryComputeChecksum_FilePathAllowsConcurrentWriterShare_Issue4078()
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_checksum_share");
+        try
+        {
+            var path = Path.Combine(tempDir, "sample.cs");
+            var bytes = Encoding.UTF8.GetBytes("class Sample {}\n");
+            File.WriteAllBytes(path, bytes);
+
+            using var writer = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Write,
+                FileShare.ReadWrite | FileShare.Delete);
+
+            Assert.True(FileContentLoader.TryComputeChecksum(
+                path,
+                FileIndexer.DefaultMaxFileSizeBytes,
+                out var checksum));
+            Assert.Equal(FileIndexer.ComputeChecksum(bytes), checksum);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
 }

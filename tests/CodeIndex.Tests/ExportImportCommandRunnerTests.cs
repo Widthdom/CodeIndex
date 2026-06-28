@@ -861,7 +861,7 @@ public class ExportImportCommandRunnerTests
             var sourceDbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             var snapshotPath = Path.Combine(projectRoot, "snapshot.db");
 
-            ExportImportCommandRunner.CreateDatabaseSnapshot(sourceDbPath, snapshotPath);
+            ExportImportCommandRunner.CreateDatabaseSnapshot(sourceDbPath, snapshotPath, CancellationToken.None);
 
             var mode = File.GetUnixFileMode(snapshotPath) & DataDirectorySecurity.PermissionBits;
             Assert.Equal(DataDirectorySecurity.PrivateFileMode, mode);
@@ -920,7 +920,8 @@ public class ExportImportCommandRunnerTests
                     outputPath,
                     missingSnapshotPath,
                     manifest,
-                    new JsonSerializerOptions()));
+                    new JsonSerializerOptions(),
+                    CancellationToken.None));
 
             Assert.Equal("existing archive", File.ReadAllText(outputPath));
             Assert.Single(Directory.GetFiles(workDir));
@@ -1002,7 +1003,7 @@ public class ExportImportCommandRunnerTests
             var missingTempPath = Path.Combine(workDir, "missing.db");
 
             Assert.ThrowsAny<IOException>(() =>
-                ExportImportCommandRunner.ReplaceImportedDatabase(missingTempPath, dbPath));
+                ExportImportCommandRunner.ReplaceImportedDatabase(missingTempPath, dbPath, CancellationToken.None));
 
             Assert.Equal("existing db", File.ReadAllText(dbPath));
             Assert.Equal("existing wal", File.ReadAllText(dbPath + "-wal"));
@@ -1028,7 +1029,7 @@ public class ExportImportCommandRunnerTests
             File.WriteAllText(dbPath + "-shm", "existing shm");
             File.WriteAllText(tempPath, "imported db");
 
-            ExportImportCommandRunner.ReplaceImportedDatabase(tempPath, dbPath);
+            ExportImportCommandRunner.ReplaceImportedDatabase(tempPath, dbPath, CancellationToken.None);
 
             Assert.Equal("imported db", File.ReadAllText(dbPath));
             Assert.False(File.Exists(dbPath + "-wal"));
@@ -1058,7 +1059,7 @@ public class ExportImportCommandRunnerTests
 
             var (_, _, stderr) = ConsoleCapture.Capture(() =>
             {
-                ExportImportCommandRunner.ReplaceImportedDatabase(tempPath, dbPath);
+                ExportImportCommandRunner.ReplaceImportedDatabase(tempPath, dbPath, CancellationToken.None);
                 return 0;
             });
 
@@ -1092,7 +1093,7 @@ public class ExportImportCommandRunnerTests
                 throw new IOException("simulated post-move failure");
 
             var ex = Assert.ThrowsAny<IOException>(() =>
-                ExportImportCommandRunner.ReplaceImportedDatabase(tempPath, dbPath));
+                ExportImportCommandRunner.ReplaceImportedDatabase(tempPath, dbPath, CancellationToken.None));
 
             Assert.Contains("rolled back", ex.Message, StringComparison.Ordinal);
             Assert.Equal("existing db", File.ReadAllText(dbPath));
@@ -1123,7 +1124,7 @@ public class ExportImportCommandRunnerTests
             File.WriteAllText(tempPath, "imported db");
             File.SetUnixFileMode(tempPath, DataDirectorySecurity.PermissionBits);
 
-            ExportImportCommandRunner.ReplaceImportedDatabase(tempPath, dbPath);
+            ExportImportCommandRunner.ReplaceImportedDatabase(tempPath, dbPath, CancellationToken.None);
 
             var mode = File.GetUnixFileMode(dbPath) & DataDirectorySecurity.PermissionBits;
             Assert.Equal(DataDirectorySecurity.PrivateFileMode, mode);

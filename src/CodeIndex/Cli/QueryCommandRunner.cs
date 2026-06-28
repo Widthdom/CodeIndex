@@ -24,6 +24,8 @@ public static partial class QueryCommandRunner
     internal const int DefaultQueryLimit = 20;
     internal const int DefaultMapLimit = 10;
     internal const int DefaultCompactSectionLimit = 5;
+    internal const int MapIssueDraftLineThreshold = 800;
+    internal const long MapIssueDraftByteThreshold = 64 * 1024;
     private const int MaxNamedSearchQueryNameLength = 128;
     internal const int DefaultImpactLimit = 50;
     internal const int DefaultDependencyCycleGraphLimit = 50;
@@ -315,6 +317,7 @@ public static partial class QueryCommandRunner
         "--pretty",
         "--compact",
         "--body-only",
+        "--outline-only",
         "--first-per-file",
         "--results-only",
         "--next-steps",
@@ -341,6 +344,7 @@ public static partial class QueryCommandRunner
         OutputFormatText,
         OutputFormatJson,
         OutputFormatCompact,
+        OutputFormatIssueDrafts,
     };
     private static readonly HashSet<string> SymbolOutputFormats = new(StringComparer.Ordinal)
     {
@@ -5475,6 +5479,16 @@ public static partial class QueryCommandRunner
             parts.Add($"refs={result.ReferenceCount.Value}");
         if (result.HotspotScore.HasValue)
             parts.Add($"hotspot={result.HotspotScore.Value.ToString("0.###", CultureInfo.InvariantCulture)}");
+        if (result.RankingReferenceScore.HasValue)
+            parts.Add($"rank_refs={result.RankingReferenceScore.Value.ToString("0.###", CultureInfo.InvariantCulture)}");
+        if (result.RankingHotspotScore.HasValue)
+            parts.Add($"rank_hotspot={result.RankingHotspotScore.Value.ToString("0.###", CultureInfo.InvariantCulture)}");
+        if (result.GenericNamePenalty is < 1.0)
+            parts.Add($"name_penalty={result.GenericNamePenalty.Value.ToString("0.###", CultureInfo.InvariantCulture)}");
+        if (result.StructuralRankPenalty is < 1.0)
+            parts.Add($"struct_penalty={result.StructuralRankPenalty.Value.ToString("0.###", CultureInfo.InvariantCulture)}");
+        if (result.DefinitionSites is > 1)
+            parts.Add($"defs={result.DefinitionSites.Value}");
         if (result.SizeLines.HasValue)
             parts.Add($"size={result.SizeLines.Value}");
         if (result.ComplexityScore.HasValue)
@@ -6116,7 +6130,7 @@ public static partial class QueryCommandRunner
         => CommandErrorWriter.WriteJsonOrHuman(
             json,
             jsonOptions,
-            $"invalid regular expression: {ex.Message}",
+            $"invalid regular expression: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}",
             CommandExitCodes.UsageError,
             "fix the pattern passed with --regex, or omit --regex to run a literal text search.",
             errorCode: CommandErrorCodes.UsageError,
@@ -6301,13 +6315,14 @@ public static partial class QueryCommandRunner
         var options = ParseArgs(
             cmdArgs,
             jsonDefault: false,
+            allowIssueDraftsFormat: true,
             validateDefaultSnippetLines: false,
             validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("map", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("map")))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "map"))
             return CommandExitCodes.UsageError;
-        if (TryWriteUnsupportedOutputFormat("map", options, RepoMapOutputFormats, "Use `--format json` or `--format compact` for map output; use `cdidx files --count` when you need only a file count."))
+        if (TryWriteUnsupportedOutputFormat("map", options, RepoMapOutputFormats, "Use `--format json`, `--format compact`, or `--format issue-drafts` for map output; use `cdidx files --count` when you need only a file count."))
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("map", options))
             return CommandExitCodes.UsageError;
@@ -6333,6 +6348,11 @@ public static partial class QueryCommandRunner
             // フィルタ指定時に該当0件なら未検出を返す。フィルタなしの空DBは正常（ヘルスチェック用途）。
             var hasFilter = options.PathPatterns.Count > 0 || options.ExcludePaths.Count > 0
                 || options.ExcludeTests || options.Lang != null;
+            if (options.OutputFormat == OutputFormatIssueDrafts)
+            {
+                Console.WriteLine(BuildRepoMapIssueDraftsPayload(map, options, jsonOptions));
+                return map.FileCount == 0 && hasFilter ? ZeroResultExitCode(options) : CommandExitCodes.Success;
+            }
             if (map.FileCount == 0 && hasFilter)
             {
                 if (options.Json)
@@ -6440,6 +6460,134 @@ public static partial class QueryCommandRunner
         if (options.Compact && compactTruncation != null)
             AddCompactJsonFields(payload, GetCompactSectionLimit(options), compactTruncation);
         return payload;
+    }
+
+    private static string BuildRepoMapIssueDraftsPayload(RepoMapResult map, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+    {
+        var candidates = map.LargestFiles
+            .Where(IsRepoMapOversizedFileCandidate)
+            .Select(BuildRepoMapIssueDraftJson)
+            .ToArray();
+        var sourceLimit = options.Compact ? GetCompactSourceLimit(GetCompactSectionLimit(options)) : options.Limit;
+        var largestFilesTruncated = map.FileCount > map.LargestFiles.Count && map.LargestFiles.Count >= sourceLimit;
+        var payload = new JsonObject
+        {
+            ["api_version"] = JsonOutputContract.ApiVersion,
+            ["format"] = OutputFormatIssueDrafts,
+            ["count"] = candidates.Length,
+            ["issue_drafts"] = new JsonArray(candidates),
+            ["groups"] = BuildRepoMapIssueDraftGroupsJson(candidates),
+            ["thresholds"] = new JsonObject
+            {
+                ["line_threshold"] = MapIssueDraftLineThreshold,
+                ["byte_threshold"] = MapIssueDraftByteThreshold,
+            },
+            ["truncation"] = new JsonObject
+            {
+                ["largest_files"] = new JsonObject
+                {
+                    ["source_section"] = "largest_files",
+                    ["returned"] = map.LargestFiles.Count,
+                    ["source_limit"] = sourceLimit,
+                    ["total_files"] = map.FileCount,
+                    ["truncated"] = largestFilesTruncated,
+                },
+            },
+            ["query_context"] = BuildQueryContextJson(options, jsonOptions),
+        };
+        if (map.ProjectRoot != null)
+            payload["project_root"] = map.ProjectRoot;
+        if (map.GitHead != null)
+            payload["git_head"] = map.GitHead;
+        if (map.GitIsDirty != null)
+            payload["git_is_dirty"] = map.GitIsDirty;
+        if (map.IndexedHeadCommit != null)
+            payload["indexed_head_commit"] = map.IndexedHeadCommit;
+        if (map.WorktreeHeadChanged != null)
+            payload["worktree_head_changed"] = map.WorktreeHeadChanged;
+        return payload.ToJsonString(GetJsonNodeSerializationOptions(jsonOptions));
+    }
+
+    private static JsonObject BuildRepoMapIssueDraftGroupsJson(IReadOnlyList<JsonObject> candidates)
+    {
+        var representativePaths = new JsonArray();
+        foreach (var candidate in candidates.Take(DefaultCompactSectionLimit))
+        {
+            var path = candidate["candidate"]?["path"]?.GetValue<string>();
+            if (path != null)
+                representativePaths.Add(path);
+        }
+
+        return new JsonObject
+        {
+            ["oversized_file"] = new JsonObject
+            {
+                ["kind"] = "oversized_file",
+                ["count"] = candidates.Count,
+                ["source_section"] = "largest_files",
+                ["representative_paths"] = representativePaths,
+                ["representative_paths_truncated"] = candidates.Count > representativePaths.Count,
+            },
+        };
+    }
+
+    private static bool IsRepoMapOversizedFileCandidate(RepoFileSummaryResult file)
+        => file.Lines >= MapIssueDraftLineThreshold || file.Size >= MapIssueDraftByteThreshold;
+
+    private static JsonObject BuildRepoMapIssueDraftJson(RepoFileSummaryResult file)
+    {
+        var reasonTags = new JsonArray();
+        if (file.Lines >= MapIssueDraftLineThreshold)
+            reasonTags.Add("line_threshold_exceeded");
+        if (file.Size >= MapIssueDraftByteThreshold)
+            reasonTags.Add("byte_threshold_exceeded");
+
+        return new JsonObject
+        {
+            ["kind"] = "oversized_file",
+            ["title"] = $"Split oversized file: {file.Path}",
+            ["body"] = BuildRepoMapIssueDraftBody(file, reasonTags),
+            ["labels"] = new JsonArray("maintenance", "refactor"),
+            ["candidate"] = new JsonObject
+            {
+                ["path"] = file.Path,
+                ["lang"] = file.Lang,
+                ["lines"] = file.Lines,
+                ["size_bytes"] = file.Size,
+                ["symbol_count"] = file.SymbolCount,
+                ["reference_count"] = file.ReferenceCount,
+                ["line_threshold"] = MapIssueDraftLineThreshold,
+                ["byte_threshold"] = MapIssueDraftByteThreshold,
+                ["line_threshold_exceeded"] = file.Lines >= MapIssueDraftLineThreshold,
+                ["byte_threshold_exceeded"] = file.Size >= MapIssueDraftByteThreshold,
+                ["reason_tags"] = reasonTags.DeepClone(),
+                ["source_section"] = "largest_files",
+            },
+        };
+    }
+
+    private static string BuildRepoMapIssueDraftBody(RepoFileSummaryResult file, JsonArray reasonTags)
+    {
+        var reasons = string.Join(", ", reasonTags.Select(tag => tag?.GetValue<string>()).Where(tag => tag != null));
+        var builder = new StringBuilder();
+        builder.AppendLine("## Summary");
+        builder.AppendLine();
+        builder.AppendLine($"`{file.Path}` is an oversized maintenance candidate from `cdidx map --format issue-drafts`.");
+        builder.AppendLine();
+        builder.AppendLine("## Evidence");
+        builder.AppendLine();
+        builder.AppendLine($"- Lines: {file.Lines.ToString(CultureInfo.InvariantCulture)} (threshold: >= {MapIssueDraftLineThreshold.ToString(CultureInfo.InvariantCulture)})");
+        builder.AppendLine($"- Size: {file.Size.ToString(CultureInfo.InvariantCulture)} bytes (threshold: >= {MapIssueDraftByteThreshold.ToString(CultureInfo.InvariantCulture)})");
+        builder.AppendLine($"- Symbols: {file.SymbolCount.ToString(CultureInfo.InvariantCulture)}");
+        builder.AppendLine($"- References: {file.ReferenceCount.ToString(CultureInfo.InvariantCulture)}");
+        builder.AppendLine($"- Reason tags: {reasons}");
+        builder.AppendLine();
+        builder.AppendLine("## Checklist");
+        builder.AppendLine();
+        builder.AppendLine("- [ ] Identify cohesive regions, types, or command paths that can move together.");
+        builder.AppendLine("- [ ] Preserve public behavior and CLI/MCP output contracts.");
+        builder.AppendLine("- [ ] Add or keep focused tests for moved behavior.");
+        return builder.ToString().TrimEnd();
     }
 
     private static readonly HashSet<string> RepoMapSummaryJsonProperties = new(StringComparer.Ordinal)
@@ -7494,6 +7642,7 @@ public static partial class QueryCommandRunner
                         AssemblyPath = hook.AssemblyPath,
                         TypeName = hook.TypeName,
                         CallbackBudgetMs = (long)Math.Round(postExtractionHookSnapshot.CallbackBudget.TotalMilliseconds, MidpointRounding.AwayFromZero),
+                        LoadContextLifecycle = PostExtractionHookRunner.HookLoadContextLifecycle,
                     })
                     .ToList();
             }
@@ -8324,6 +8473,9 @@ public static partial class QueryCommandRunner
     }
 
     public static int RunDeps(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+        => RunDeps(cmdArgs, jsonOptions, CancellationToken.None);
+
+    public static int RunDeps(string[] cmdArgs, JsonSerializerOptions jsonOptions, CancellationToken cancellationToken)
     {
         var previewOptionError = ValidatePreviewOptions("deps", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
         if (previewOptionError != null)
@@ -8353,14 +8505,32 @@ public static partial class QueryCommandRunner
 
         return WithDb(options, jsonOptions, reader =>
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (TryWriteInvalidWorkspaceDependencyDatabaseError(options, out var workspaceDbExitCode))
                 return workspaceDbExitCode;
 
             var reverse = cmdArgs.Any(a => a == "--reverse");
-            var results = GetWorkspaceFileDependencies(reader, options, reverse, options.Limit);
-            var cycleCandidates = options.DependencyCycles
-                ? GetWorkspaceFileDependencies(reader, options, reverse, GetDependencyCycleGraphLimit(options.Limit))
-                : results;
+            List<FileDependencyResult> results;
+            List<FileDependencyResult> cycleCandidates;
+            var cycleCandidateRowCount = 0;
+            var cycleCandidateLimit = GetDependencyCycleGraphLimit(options.Limit);
+            if (options.DependencyCycles)
+            {
+                cycleCandidates = GetWorkspaceFileDependencyCycleCandidates(
+                    reader,
+                    options,
+                    reverse,
+                    checked(cycleCandidateLimit + 1),
+                    out cycleCandidateRowCount,
+                    cancellationToken);
+                results = cycleCandidates.Take(cycleCandidateLimit).ToList();
+                cycleCandidates = results;
+            }
+            else
+            {
+                results = GetWorkspaceFileDependencies(reader, options, reverse, options.Limit);
+                cycleCandidates = results;
+            }
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             if (results.Count == 0)
             {
@@ -8387,11 +8557,19 @@ public static partial class QueryCommandRunner
             List<List<string>> cycles = [];
             List<FileDependencyResult> outputEdges;
             DependencySymbolFilterResult symbolFilter;
+            DependencyCycleAnalysis? dependencyCycleAnalysis = null;
             if (options.DependencyCycles)
             {
                 symbolFilter = ApplyDependencySymbolFilters(cycleCandidates, options);
-                outputEdges = FilterCycleEdges(symbolFilter.Edges, out cycles).Take(options.Limit).ToList();
-                cycles = cycles.Take(options.Limit).ToList();
+                var analysis = AnalyzeDependencyCycles(
+                    symbolFilter.Edges,
+                    cycleCandidateLimit,
+                    cycleCandidateRowCount,
+                    options.Limit,
+                    cancellationToken);
+                outputEdges = analysis.Edges;
+                cycles = analysis.Cycles;
+                dependencyCycleAnalysis = analysis;
             }
             else
             {
@@ -8437,6 +8615,8 @@ public static partial class QueryCommandRunner
                 if (options.Json)
                 {
                     var payload = new JsonObject { ["count"] = 0, ["cycles"] = new JsonArray() };
+                    if (dependencyCycleAnalysis != null)
+                        AddDependencyCycleAnalysisJsonFields(payload, dependencyCycleAnalysis);
                     AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary);
                     AddFreshnessHint(payload, reader);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
@@ -8444,6 +8624,8 @@ public static partial class QueryCommandRunner
                 else
                 {
                     CommandErrorWriter.WriteStderr(BuildZeroResultLine("No dependency cycles found", options));
+                    if (dependencyCycleAnalysis is { Truncated: true })
+                        CommandErrorWriter.WriteStderr(BuildDependencyCycleTruncationWarning(dependencyCycleAnalysis));
                     WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
                 }
                 return ZeroResultExitCode(options);
@@ -8451,7 +8633,17 @@ public static partial class QueryCommandRunner
 
             if (depsFormat is OutputFormatDot or OutputFormatGraphMl or OutputFormatJsonGraph)
             {
-                WriteDependencyGraph(outputEdges, depsFormat, jsonOptions, reader, options, sqlGraphSignal, symbolFilter.Summary);
+                WriteDependencyGraph(
+                    outputEdges,
+                    depsFormat,
+                    jsonOptions,
+                    reader,
+                    options,
+                    sqlGraphSignal,
+                    symbolFilter.Summary,
+                    dependencyCycleAnalysis == null ? null : payload => AddDependencyCycleAnalysisJsonFields(payload, dependencyCycleAnalysis));
+                if ((depsFormat is OutputFormatDot or OutputFormatGraphMl) && dependencyCycleAnalysis is { Truncated: true })
+                    CommandErrorWriter.WriteStderr(BuildDependencyCycleTruncationWarning(dependencyCycleAnalysis));
                 return CommandExitCodes.Success;
             }
 
@@ -8462,7 +8654,11 @@ public static partial class QueryCommandRunner
                     ["count"] = options.DependencyCycles ? cycles.Count : outputEdges.Count,
                 };
                 if (options.DependencyCycles)
+                {
                     payload["cycles"] = BuildDependencyCyclesJson(cycles);
+                    if (dependencyCycleAnalysis != null)
+                        AddDependencyCycleAnalysisJsonFields(payload, dependencyCycleAnalysis);
+                }
                 else
                     payload["edges"] = JsonSerializer.SerializeToNode(outputEdges, CliJsonSerializerContextFactory.Create(jsonOptions).ListFileDependencyResult);
                 AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter.Summary);
@@ -8475,7 +8671,10 @@ public static partial class QueryCommandRunner
                 {
                     foreach (var cycle in cycles)
                         Console.WriteLine(string.Join(" -> ", cycle.Concat([cycle[0]])));
-                    CommandErrorWriter.WriteStderr($"({cycles.Count} dependency cycles)");
+                    var truncationNote = dependencyCycleAnalysis is { Truncated: true }
+                        ? $"; {BuildDependencyCycleTruncationSummary(dependencyCycleAnalysis)}"
+                        : string.Empty;
+                    CommandErrorWriter.WriteStderr($"({cycles.Count} dependency cycles{truncationNote})");
                     WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
                     return CommandExitCodes.Success;
                 }
@@ -8489,7 +8688,7 @@ public static partial class QueryCommandRunner
                 WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
             }
             return CommandExitCodes.Success;
-        });
+        }, cancellationToken: cancellationToken);
     }
 
     private static bool TryExtractDepsFormat(string[] args, out string format, out string[] parseArgs, out string? error)
@@ -8554,8 +8753,11 @@ public static partial class QueryCommandRunner
     }
 
     internal static List<FileDependencyResult> FilterCycleEdges(List<FileDependencyResult> results, out List<List<string>> cycles)
+        => FilterCycleEdges(results, out cycles, CancellationToken.None);
+
+    private static List<FileDependencyResult> FilterCycleEdges(IReadOnlyList<FileDependencyResult> results, out List<List<string>> cycles, CancellationToken cancellationToken)
     {
-        cycles = FindDependencyCycles(results);
+        cycles = FindDependencyCycles(results, cancellationToken);
         if (cycles.Count == 0)
             return [];
         var cycleNodes = cycles.SelectMany(cycle => cycle).ToHashSet(StringComparer.Ordinal);
@@ -8565,10 +8767,15 @@ public static partial class QueryCommandRunner
     }
 
     internal static List<List<string>> FindDependencyCycles(IReadOnlyList<FileDependencyResult> edges)
+        => FindDependencyCycles(edges, CancellationToken.None);
+
+    private static List<List<string>> FindDependencyCycles(IReadOnlyList<FileDependencyResult> edges, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var adjacency = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var edge in edges)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!adjacency.TryGetValue(edge.SourcePath, out var targets))
                 adjacency[edge.SourcePath] = targets = [];
             targets.Add(edge.TargetPath);
@@ -8584,6 +8791,7 @@ public static partial class QueryCommandRunner
 
         void Visit(string node)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             indexes[node] = index;
             lowLinks[node] = index;
             index++;
@@ -8592,6 +8800,7 @@ public static partial class QueryCommandRunner
 
             foreach (var target in adjacency[node])
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (!indexes.ContainsKey(target))
                 {
                     Visit(target);
@@ -8621,8 +8830,11 @@ public static partial class QueryCommandRunner
         }
 
         foreach (var node in adjacency.Keys.OrderBy(path => path, StringComparer.Ordinal).ToList())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!indexes.ContainsKey(node))
                 Visit(node);
+        }
 
         return cycles;
     }
@@ -8640,6 +8852,75 @@ public static partial class QueryCommandRunner
         }
         return array;
     }
+
+    private sealed record DependencyCycleAnalysis(
+        List<FileDependencyResult> Edges,
+        List<List<string>> Cycles,
+        bool Truncated,
+        string TerminationReason,
+        string? TruncatedReason,
+        int CandidateEdgeCount,
+        int CandidateEdgeLimit,
+        string DetectionMode);
+
+    private static DependencyCycleAnalysis AnalyzeDependencyCycles(
+        IReadOnlyList<FileDependencyResult> candidateEdges,
+        int candidateEdgeLimit,
+        int candidateRowCount,
+        int displayLimit,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var edges = FilterCycleEdges(candidateEdges, out var allCycles, cancellationToken);
+        var cyclesTruncated = allCycles.Count > displayLimit;
+        var candidateTruncated = candidateRowCount > candidateEdgeLimit;
+        var cycles = allCycles.Take(displayLimit).ToList();
+        var cycleNodes = cycles.SelectMany(static cycle => cycle).ToHashSet(StringComparer.Ordinal);
+        var outputEdges = edges
+            .Where(edge => cycleNodes.Count == 0 || (cycleNodes.Contains(edge.SourcePath) && cycleNodes.Contains(edge.TargetPath)))
+            .Take(displayLimit)
+            .ToList();
+        var truncatedReason = candidateTruncated
+            ? "candidate_edge_limit"
+            : cyclesTruncated
+                ? "display_limit"
+                : null;
+        var terminationReason = truncatedReason switch
+        {
+            "candidate_edge_limit" => "candidate_limit_reached",
+            "display_limit" => "display_limit_reached",
+            _ => "completed",
+        };
+
+        return new DependencyCycleAnalysis(
+            outputEdges,
+            cycles,
+            candidateTruncated || cyclesTruncated,
+            terminationReason,
+            truncatedReason,
+            Math.Min(candidateRowCount, candidateEdgeLimit),
+            candidateEdgeLimit,
+            "bounded_approximate_candidate_edges");
+    }
+
+    private static void AddDependencyCycleAnalysisJsonFields(JsonObject payload, DependencyCycleAnalysis analysis)
+    {
+        payload["truncated"] = analysis.Truncated;
+        payload["termination_reason"] = analysis.TerminationReason;
+        if (analysis.TruncatedReason != null)
+            payload["truncated_reason"] = analysis.TruncatedReason;
+        payload["candidate_edge_count"] = analysis.CandidateEdgeCount;
+        payload["candidate_edge_limit"] = analysis.CandidateEdgeLimit;
+        payload["cycle_detection_mode"] = analysis.DetectionMode;
+    }
+
+    private static string BuildDependencyCycleTruncationSummary(DependencyCycleAnalysis analysis)
+        => analysis.TruncatedReason == "display_limit"
+            ? $"partial: showing first {analysis.Cycles.Count} cycles"
+            : $"partial: candidate edge limit reached after {analysis.CandidateEdgeCount} candidate edges";
+
+    private static string BuildDependencyCycleTruncationWarning(DependencyCycleAnalysis analysis)
+        => $"Warning: dependency cycle detection returned partial results ({BuildDependencyCycleTruncationSummary(analysis)}).";
 
     private static DependencySymbolFilterResult ApplyDependencySymbolFilters(IReadOnlyList<FileDependencyResult> edges, QueryCommandOptions options)
     {
@@ -8774,7 +9055,8 @@ public static partial class QueryCommandRunner
         DbReader reader,
         QueryCommandOptions options,
         SqlGraphContractSignal sqlGraphSignal,
-        DependencySymbolFilterSummary symbolFilter)
+        DependencySymbolFilterSummary symbolFilter,
+        Action<JsonObject>? addExtraJsonFields = null)
     {
         switch (format)
         {
@@ -8794,7 +9076,7 @@ public static partial class QueryCommandRunner
                 Console.WriteLine("</graph></graphml>");
                 break;
             case OutputFormatJsonGraph:
-                WriteDependencyJsonGraph(edges, jsonOptions, reader, options, sqlGraphSignal, symbolFilter);
+                WriteDependencyJsonGraph(edges, jsonOptions, reader, options, sqlGraphSignal, symbolFilter, addExtraJsonFields);
                 break;
         }
     }
@@ -8805,7 +9087,8 @@ public static partial class QueryCommandRunner
         DbReader reader,
         QueryCommandOptions options,
         SqlGraphContractSignal sqlGraphSignal,
-        DependencySymbolFilterSummary symbolFilter)
+        DependencySymbolFilterSummary symbolFilter,
+        Action<JsonObject>? addExtraJsonFields = null)
     {
         var seenNodes = new HashSet<string>(StringComparer.Ordinal);
         var nodes = new List<string>();
@@ -8828,6 +9111,7 @@ public static partial class QueryCommandRunner
                 ["symbols"] = BuildDependencySymbolsJson(edge.Symbols),
             }).ToArray()),
         };
+        addExtraJsonFields?.Invoke(payload);
         AddDependencySchemaJsonFields(payload, options, jsonOptions, sqlGraphSignal, symbolFilter);
         AddFreshnessHint(payload, reader);
         Console.WriteLine(payload.ToJsonString(jsonOptions));
@@ -8878,6 +9162,71 @@ public static partial class QueryCommandRunner
             .ThenBy(result => result.TargetPath, StringComparer.Ordinal)
             .Take(limit)
             .ToList();
+    }
+
+    private static List<FileDependencyResult> GetWorkspaceFileDependencyCycleCandidates(
+        DbReader primaryReader,
+        QueryCommandOptions options,
+        bool reverse,
+        int limit,
+        out int candidateRowCount,
+        CancellationToken cancellationToken)
+    {
+        candidateRowCount = 0;
+        var results = primaryReader.GetFileDependencyCycleCandidates(
+            limit,
+            out var primaryCandidateRows,
+            options.Lang,
+            options.PathPatterns,
+            options.ExcludePaths,
+            options.ExcludeTests,
+            reverse,
+            cancellationToken);
+        candidateRowCount += primaryCandidateRows;
+        if (options.WorkspaceDbPaths.Count == 0)
+            return results.Take(limit).ToList();
+
+        var memberDbs = BuildWorkspaceDependencyDatabaseList(options);
+        var primaryDb = memberDbs[0];
+        TagFileDependencyResults(results, primaryDb);
+        if (results.Count >= limit)
+            return results.Take(limit).ToList();
+        foreach (var normalizedDbPath in memberDbs.Skip(1))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            using var db = new DbContext(normalizedDbPath, cancellationToken);
+            db.TryMigrateForRead();
+            var reader = new DbReader(db) { IncludeGenerated = primaryReader.IncludeGenerated };
+            var memberResults = reader.GetFileDependencyCycleCandidates(
+                limit,
+                out var memberCandidateRows,
+                options.Lang,
+                options.PathPatterns,
+                options.ExcludePaths,
+                options.ExcludeTests,
+                reverse,
+                cancellationToken);
+            candidateRowCount += memberCandidateRows;
+            TagFileDependencyResults(memberResults, normalizedDbPath);
+            results.AddRange(memberResults);
+            if (results.Count >= limit)
+                return results.Take(limit).ToList();
+        }
+
+        foreach (var sourceDb in memberDbs)
+            foreach (var targetDb in memberDbs)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (string.Equals(sourceDb, targetDb, StringComparison.Ordinal))
+                    continue;
+                var crossDbResults = GetCrossDatabaseFileDependencies(sourceDb, targetDb, options, reverse, limit);
+                candidateRowCount += crossDbResults.Count;
+                results.AddRange(crossDbResults);
+                if (results.Count >= limit)
+                    return results.Take(limit).ToList();
+            }
+
+        return results.Take(limit).ToList();
     }
 
     internal static List<string> BuildWorkspaceDependencyDatabaseList(QueryCommandOptions options)
@@ -9111,460 +9460,6 @@ public static partial class QueryCommandRunner
         }
     }
 
-    public static int RunHotspots(string[] cmdArgs, JsonSerializerOptions jsonOptions)
-    {
-        bool groupByName = cmdArgs.Any(a => a == "--group-by-name");
-        var previewOptionError = ValidatePreviewOptions("hotspots", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
-        if (previewOptionError != null)
-        {
-            CommandErrorWriter.WriteStderr(previewOptionError);
-            return CommandExitCodes.UsageError;
-        }
-        var options = ParseArgs(
-            cmdArgs,
-            jsonDefault: false,
-            validateDefaultSnippetLines: false,
-            validateDefaultMaxLineWidth: false);
-        if (TryWriteUnsupportedOptionError("hotspots", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("hotspots")))
-            return CommandExitCodes.UsageError;
-        if (TryWriteParseError(options, "hotspots"))
-            return CommandExitCodes.UsageError;
-        if (TryWriteInvalidKindFilterError(options, "hotspots", KnownSymbolKindFilters))
-            return CommandExitCodes.InvalidArgument;
-        if (TryWriteUnexpectedPositionals("hotspots", options))
-            return CommandExitCodes.UsageError;
-        if (!TryResolveHotspotsGroupBy(options.GroupBy, options.Lang, groupByName, out var groupBy, out var groupByError))
-        {
-            CommandErrorWriter.WriteStderr(groupByError);
-            CommandErrorWriter.WriteStderr("Usage: cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]");
-            return CommandExitCodes.UsageError;
-        }
-
-        return WithDb(options, jsonOptions, reader =>
-        {
-            var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
-            var zeroResultSqlGraphSignal = NarrowSqlGraphContractSignal(
-                baseSqlGraphSignal,
-                reader.ScopeMayIncludeSqlSymbols(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests));
-            if (groupBy == HotspotsGroupedByNameKind)
-            {
-                if (options.CountOnly)
-                {
-                    var countSummary = reader.CountGroupedSymbolHotspots(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
-                    var countSqlGraphSignal = countSummary.Count == 0
-                        ? zeroResultSqlGraphSignal
-                        : NarrowSqlGraphContractSignal(
-                            baseSqlGraphSignal,
-                            reader.ScopeMayIncludeSqlSymbols(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests));
-                    if (options.Json)
-                    {
-                        var payload = countSummary.Count == 0
-                            ? BuildGroupedHotspotsZeroJsonPayload(reader, jsonOptions, countOnly: true, graphAvailable: reader._hasReferencesTable, queryOptions: options)
-                            : new JsonObject
-                            {
-                                ["count"] = countSummary.Count,
-                                ["files"] = countSummary.FileCount,
-                                ["definition_site_total"] = countSummary.DefinitionSiteTotal,
-                                ["grouped_by"] = HotspotsGroupedByNameKind,
-                            };
-                        AddSqlGraphContractJsonFields(payload, countSqlGraphSignal);
-                        Console.WriteLine(payload.ToJsonString(jsonOptions));
-                    }
-                    else
-                    {
-                        Console.WriteLine($"{countSummary.Count}");
-                        WriteSqlGraphContractWarningIfNeeded(json: false, countSqlGraphSignal, reader, options);
-                    }
-                    return countSummary.Count == 0 ? ZeroResultExitCode(options) : CommandExitCodes.Success;
-                }
-
-                var groupedResults = reader.GetGroupedSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
-                var effectiveSqlGraphSignal = groupedResults.Count == 0
-                    ? zeroResultSqlGraphSignal
-                    : NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, groupedResults.Select(result => result.Symbol.Lang), options.Lang);
-                if (groupedResults.Count == 0)
-                {
-                    if (options.CountOnly)
-                    {
-                        if (options.Json)
-                        {
-                            var payload = BuildGroupedHotspotsZeroJsonPayload(reader, jsonOptions, countOnly: true, graphAvailable: reader._hasReferencesTable, queryOptions: options);
-                            AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
-                            Console.WriteLine(payload.ToJsonString(jsonOptions));
-                        }
-                        else
-                            WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, new ExactQuerySignal(true, HasMissingIndex: false, HasMissingTable: false, null));
-                    }
-                    else if (options.Json)
-                    {
-                        var payload = BuildGroupedHotspotsZeroJsonPayload(reader, jsonOptions, countOnly: false, graphAvailable: reader._hasReferencesTable, queryOptions: options);
-                        AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
-                        Console.WriteLine(payload.ToJsonString(jsonOptions));
-                    }
-                    else
-                    {
-                        CommandErrorWriter.WriteStderr(BuildZeroResultLine("No symbol hotspots found", options));
-                        WriteZeroResultHints(options, reader);
-                        WriteKindHint(options.Kind, reader);
-                        WriteLangHint(options.Lang, reader);
-                        WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
-                        WriteDegradedGraphZeroResult(reader, "hotspots", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
-                    }
-                    return ZeroResultExitCode(options);
-                }
-
-                var definitionSiteTotal = groupedResults.Sum(g => g.DefinitionSites);
-
-                if (options.Json)
-                {
-                    var items = groupedResults
-                        .Select(g => new GroupedSymbolHotspotJsonResult(
-                            g.Symbol.Name,
-                            g.Symbol.Kind,
-                            g.Symbol.Path,
-                            g.Symbol.Line,
-                            g.ReferenceCount,
-                            g.ReferenceScore,
-                            g.RankingScore,
-                            g.GenericNamePenalty,
-                            g.Symbol.Visibility,
-                            g.Symbol.ContainerName,
-                            g.DefinitionSites,
-                            g.Paths,
-                            g.PathsTruncated,
-                            BuildGroupedHotspotRepresentative(g),
-                            g.DefinitionSiteDetails.Select(ToGroupedHotspotSiteJson).ToList()))
-                        .ToList();
-                    var payload = new JsonObject
-                    {
-                        ["count"] = groupedResults.Count,
-                        ["definition_site_total"] = definitionSiteTotal,
-                        ["grouped_by"] = HotspotsGroupedByNameKind,
-                        ["hotspots"] = JsonSerializer.SerializeToNode(items, CliJsonSerializerContextFactory.Create(jsonOptions).ListGroupedSymbolHotspotJsonResult)
-                    };
-                    AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
-                    Console.WriteLine(payload.ToJsonString(jsonOptions));
-                }
-                else
-                {
-                    foreach (var g in groupedResults)
-                    {
-                        var s = g.Symbol;
-                        var vis = s.Visibility != null ? $" [{s.Visibility}]" : "";
-                        var multi = g.DefinitionSites > 1 ? $" (×{g.DefinitionSites} sites)" : "";
-                        Console.WriteLine($"{FormatHotspotScore(g.ReferenceScore),5} score {g.ReferenceCount,5} refs  {ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}{multi}");
-                    }
-                    CommandErrorWriter.WriteStderr($"({groupedResults.Count} unique name/kind groups, {definitionSiteTotal} definition sites)");
-                    WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
-                }
-                return CommandExitCodes.Success;
-            }
-
-            if (groupBy == HotspotsGroupedByFile)
-            {
-                var fileHotspotSignal = reader.GetHotspotFamilySignal(options.Lang);
-                if (options.CountOnly)
-                {
-                    var countSummary = reader.CountFileSymbolHotspots(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
-                    var countSqlGraphSignal = countSummary.Count == 0
-                        ? zeroResultSqlGraphSignal
-                        : NarrowSqlGraphContractSignal(
-                            baseSqlGraphSignal,
-                            reader.ScopeMayIncludeSqlSymbols(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests));
-                    if (options.Json)
-                    {
-                        var payload = new JsonObject
-                        {
-                            ["count"] = countSummary.Count,
-                            ["files"] = countSummary.FileCount,
-                            ["graph_table_available"] = reader._hasReferencesTable,
-                            ["grouped_by"] = groupBy,
-                        };
-                        AddHotspotFamilyJsonFields(payload, fileHotspotSignal);
-                        AddSqlGraphContractJsonFields(payload, countSqlGraphSignal);
-                        if (countSummary.Count == 0)
-                            AddFreshnessHint(payload, reader);
-                        Console.WriteLine(payload.ToJsonString(jsonOptions));
-                    }
-                    else
-                    {
-                        Console.WriteLine($"{countSummary.Count}");
-                        WriteHotspotFamilyWarningIfNeeded(json: false, fileHotspotSignal);
-                        WriteSqlGraphContractWarningIfNeeded(json: false, countSqlGraphSignal, reader, options);
-                    }
-                    return countSummary.Count == 0 ? ZeroResultExitCode(options) : CommandExitCodes.Success;
-                }
-
-                var fileResults = reader.GetFileSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
-                var effectiveSqlGraphSignal = fileResults.Count == 0
-                    ? zeroResultSqlGraphSignal
-                    : NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, fileResults.Select(result => result.Lang), options.Lang);
-
-                if (fileResults.Count == 0)
-                {
-                    if (options.CountOnly)
-                    {
-                        if (options.Json)
-                        {
-                            var payload = new JsonObject
-                            {
-                                ["count"] = 0,
-                                ["files"] = 0,
-                                ["graph_table_available"] = reader._hasReferencesTable,
-                                ["grouped_by"] = groupBy,
-                            };
-                            AddHotspotFamilyJsonFields(payload, fileHotspotSignal);
-                            AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
-                            AddFreshnessHint(payload, reader);
-                            Console.WriteLine(payload.ToJsonString(jsonOptions));
-                        }
-                        else
-                        {
-                            Console.WriteLine("0");
-                            WriteHotspotFamilyWarningIfNeeded(json: false, fileHotspotSignal);
-                            WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
-                        }
-                    }
-                    else if (options.Json)
-                    {
-                        Console.WriteLine(BuildJsonZeroResultPayload(
-                            reader,
-                            jsonOptions,
-                            resultsKey: "hotspots",
-                            graphTableAvailable: reader._hasReferencesTable,
-                            degraded: !reader._hasReferencesTable || !fileHotspotSignal.Ready,
-                            extraFields: payload =>
-                            {
-                                payload["grouped_by"] = groupBy;
-                                AddHotspotFamilyJsonFields(payload, fileHotspotSignal);
-                                AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
-                            }).ToJsonString(jsonOptions));
-                    }
-                    else
-                    {
-                        CommandErrorWriter.WriteStderr("No symbol hotspots found.");
-                        WriteZeroResultHints(options, reader);
-                        WriteKindHint(options.Kind, reader);
-                        WriteLangHint(options.Lang, reader);
-                        WriteHotspotFamilyWarningIfNeeded(json: false, fileHotspotSignal);
-                        WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
-                        WriteDegradedGraphZeroResult(reader, "hotspots", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
-                    }
-                    return ZeroResultExitCode(options);
-                }
-
-                if (options.Json)
-                {
-                    var hotspots = new JsonArray();
-                    foreach (var result in fileResults)
-                    {
-                        hotspots.Add(new JsonObject
-                        {
-                            ["path"] = result.Path,
-                            ["lang"] = result.Lang,
-                            ["reference_count"] = result.ReferenceCount,
-                            ["symbol_count"] = result.SymbolCount,
-                        });
-                    }
-                    var payload = new JsonObject
-                    {
-                        ["count"] = fileResults.Count,
-                        ["files"] = fileResults.Count,
-                        ["grouped_by"] = groupBy,
-                        ["hotspots"] = hotspots,
-                    };
-                    AddHotspotFamilyJsonFields(payload, fileHotspotSignal);
-                    AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
-                    payload["query_context"] = BuildQueryContextJson(options, jsonOptions);
-                    if (options.Compact)
-                    {
-                        payload["compact"] = true;
-                        payload["omitted_sections"] = new JsonArray();
-                    }
-                    Console.WriteLine(payload.ToJsonString(jsonOptions));
-                }
-                else
-                {
-                    foreach (var result in fileResults)
-                    {
-                        Console.WriteLine($"{result.ReferenceCount,5} refs  {result.SymbolCount,5} symbols  {result.Path}");
-                    }
-                    CommandErrorWriter.WriteStderr($"({fileResults.Count} file hotspots; grouped_by={groupBy})");
-                    WriteHotspotFamilyWarningIfNeeded(json: false, fileHotspotSignal);
-                    WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
-                }
-                return CommandExitCodes.Success;
-            }
-
-            var hotspotSignal = reader.GetHotspotFamilySignal(options.Lang);
-            if (options.CountOnly)
-            {
-                var countSummary = reader.CountSymbolHotspots(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
-                var countSqlGraphSignal = countSummary.Count == 0
-                    ? zeroResultSqlGraphSignal
-                    : NarrowSqlGraphContractSignal(
-                        baseSqlGraphSignal,
-                        reader.ScopeMayIncludeSqlSymbols(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests));
-                if (options.Json)
-                {
-                    var payload = new JsonObject
-                    {
-                        ["count"] = countSummary.Count,
-                        ["files"] = countSummary.FileCount,
-                        ["graph_table_available"] = reader._hasReferencesTable,
-                        ["grouped_by"] = groupBy,
-                    };
-                    if (!reader._hasReferencesTable)
-                        payload["degraded"] = true;
-                    AddHotspotFamilyJsonFields(payload, hotspotSignal);
-                    AddSqlGraphContractJsonFields(payload, countSqlGraphSignal);
-                    if (countSummary.Count == 0)
-                        AddFreshnessHint(payload, reader);
-                    Console.WriteLine(payload.ToJsonString(jsonOptions));
-                }
-                else
-                {
-                    Console.WriteLine($"{countSummary.Count}");
-                    if (!reader._hasReferencesTable)
-                        CommandErrorWriter.WriteStderr("WARN: symbol_references table missing — this count result is degraded, not authoritative.");
-                    WriteHotspotFamilyWarningIfNeeded(json: false, hotspotSignal);
-                    WriteSqlGraphContractWarningIfNeeded(json: false, countSqlGraphSignal, reader, options);
-                }
-                return countSummary.Count == 0 ? ZeroResultExitCode(options) : CommandExitCodes.Success;
-            }
-
-            var results = reader.GetSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
-            var sqlGraphSignal = results.Count == 0
-                ? zeroResultSqlGraphSignal
-                : NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Symbol.Lang), options.Lang);
-            if (results.Count == 0)
-            {
-                if (options.CountOnly)
-                {
-                    if (!options.Json)
-                    {
-                        Console.WriteLine("0");
-                        if (!reader._hasReferencesTable)
-                            CommandErrorWriter.WriteStderr("WARN: symbol_references table missing — this count result is degraded, not authoritative.");
-                        WriteHotspotFamilyWarningIfNeeded(json: false, hotspotSignal);
-                    }
-                    else
-                    {
-                        var payload = new JsonObject
-                        {
-                            ["count"] = 0,
-                            ["files"] = 0,
-                            ["graph_table_available"] = reader._hasReferencesTable,
-                            ["grouped_by"] = groupBy,
-                        };
-                        if (!reader._hasReferencesTable)
-                            payload["degraded"] = true;
-                        AddHotspotFamilyJsonFields(payload, hotspotSignal);
-                        AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
-                        AddFreshnessHint(payload, reader);
-                        Console.WriteLine(payload.ToJsonString(jsonOptions));
-                    }
-                }
-                else if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult(reader, "hotspots", json: true, graphAvailable: false, jsonOptions, queryOptions: options, extraFields: payload =>
-                    {
-                        payload["grouped_by"] = groupBy;
-                        AddHotspotFamilyJsonFields(payload, hotspotSignal);
-                        AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
-                    });
-                else if (options.Json)
-                    Console.WriteLine(BuildJsonZeroResultPayload(
-                        reader,
-                        jsonOptions,
-                        resultsKey: "hotspots",
-                        graphTableAvailable: true,
-                        degraded: !hotspotSignal.Ready,
-                        extraFields: payload =>
-                        {
-                            payload["grouped_by"] = groupBy;
-                            AddHotspotFamilyJsonFields(payload, hotspotSignal);
-                            AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
-                        }).ToJsonString(jsonOptions));
-                else if (!options.Json)
-                {
-                    CommandErrorWriter.WriteStderr(BuildZeroResultLine("No symbol hotspots found", options));
-                    WriteZeroResultHints(options, reader);
-                    WriteKindHint(options.Kind, reader);
-                    WriteLangHint(options.Lang, reader);
-                    WriteHotspotFamilyWarningIfNeeded(json: false, hotspotSignal);
-                    WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
-                    WriteDegradedGraphZeroResult(reader, "hotspots", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
-                }
-                return ZeroResultExitCode(options);
-            }
-
-            if (options.Json)
-            {
-                var items = results
-                    .Select(r => new SymbolHotspotJsonResult(
-                        r.Symbol.Name,
-                        r.Symbol.Kind,
-                        r.Symbol.Path,
-                        r.Symbol.Line,
-                        r.ReferenceCount,
-                        r.ReferenceScore,
-                        r.RankingScore,
-                        r.GenericNamePenalty,
-                        r.Symbol.Visibility,
-                        r.Symbol.ContainerName))
-                    .ToList();
-                var payload = new JsonObject
-                {
-                    ["count"] = results.Count,
-                    ["grouped_by"] = groupBy,
-                    ["hotspots"] = JsonSerializer.SerializeToNode(items, CliJsonSerializerContextFactory.Create(jsonOptions).ListSymbolHotspotJsonResult)
-                };
-                AddHotspotFamilyJsonFields(payload, hotspotSignal);
-                AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
-                Console.WriteLine(payload.ToJsonString(jsonOptions));
-            }
-            else
-            {
-                foreach (var r in results)
-                {
-                    var s = r.Symbol;
-                    var vis = s.Visibility != null ? $" [{s.Visibility}]" : "";
-                    Console.WriteLine($"{FormatHotspotScore(r.ReferenceScore),5} score {r.ReferenceCount,5} refs  {ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}");
-                }
-                CommandErrorWriter.WriteStderr($"({results.Count} symbol hotspots; grouped_by={groupBy})");
-                WriteHotspotFamilyWarningIfNeeded(json: false, hotspotSignal);
-                WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
-            }
-            return CommandExitCodes.Success;
-        });
-    }
-
-    private static GroupedSymbolHotspotSiteJsonResult BuildGroupedHotspotRepresentative(GroupedHotspotResult result)
-    {
-        var representative = result.DefinitionSiteDetails.FirstOrDefault(site =>
-            string.Equals(site.Path, result.Symbol.Path, StringComparison.Ordinal)
-            && site.Line == result.Symbol.Line);
-        if (representative != null)
-            return ToGroupedHotspotSiteJson(representative);
-
-        return new GroupedSymbolHotspotSiteJsonResult(
-            result.Symbol.Path,
-            result.Symbol.Lang,
-            result.Symbol.Line,
-            result.Symbol.Visibility,
-            result.Symbol.ContainerName,
-            LogicalTargetKey: null);
-    }
-
-    private static GroupedSymbolHotspotSiteJsonResult ToGroupedHotspotSiteJson(GroupedHotspotDefinitionSite site)
-        => new(
-            site.Path,
-            site.Lang,
-            site.Line,
-            site.Visibility,
-            site.Container,
-            site.LogicalTargetKey);
-
     public static int RunUnused(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var byBucket = cmdArgs.Any(arg => arg == "--by-bucket");
@@ -9651,6 +9546,7 @@ public static partial class QueryCommandRunner
                         ["count"] = countSummary.Count,
                         ["files"] = countSummary.FileCount,
                         ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(ToUnusedCountDictionary(countSummary.BucketCounts), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
+                        ["returned_contract_domain_counts"] = JsonSerializer.SerializeToNode(ToUnusedCountDictionary(countSummary.ContractDomainCounts), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
                         ["summary"] = BuildUnusedCountSummaryJson(countSummary, jsonOptions),
                         ["bucket_taxonomy"] = BuildUnusedBucketTaxonomyJson(),
                         ["graph_supported"] = graphSupported,
@@ -9773,7 +9669,8 @@ public static partial class QueryCommandRunner
                         var vis = s.Visibility != null ? $" [{s.Visibility}]" : "";
                         var container = s.ContainerName != null ? $" in {s.ContainerName}" : "";
                         Console.WriteLine($"{ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}{container}");
-                        Console.WriteLine($"             confidence={s.UnusedConfidence} reason={s.UnusedReason}");
+                        var domain = s.UnusedContractDomain != null ? $" domain={s.UnusedContractDomain}" : "";
+                        Console.WriteLine($"             confidence={s.UnusedConfidence}{domain} reason={s.UnusedReason}");
                     }
                     Console.WriteLine();
                 }
@@ -9882,13 +9779,37 @@ public static partial class QueryCommandRunner
             .OrderBy(group => GetUnusedConfidenceOrder(group.Key))
             .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
 
+    internal static Dictionary<string, int> BuildUnusedContractDomainCounts(IEnumerable<UnusedSymbolResult> results)
+    {
+        var grouped = results
+            .Where(result => !string.IsNullOrWhiteSpace(result.UnusedContractDomain))
+            .GroupBy(result => result.UnusedContractDomain!, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        var ordered = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var domain in DbReader.OrderedUnusedContractDomains)
+        {
+            if (grouped.TryGetValue(domain, out var count))
+                ordered[domain] = count;
+        }
+
+        foreach (var pair in grouped.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+        {
+            if (!ordered.ContainsKey(pair.Key))
+                ordered[pair.Key] = pair.Value;
+        }
+
+        return ordered;
+    }
+
     internal static JsonObject BuildUnusedSummaryJson(IEnumerable<UnusedSymbolResult> results, JsonSerializerOptions jsonOptions)
     {
         var resultList = results as List<UnusedSymbolResult> ?? results.ToList();
+        var context = CliJsonSerializerContextFactory.Create(jsonOptions);
         return new JsonObject
         {
-            ["by_bucket"] = JsonSerializer.SerializeToNode(BuildUnusedBucketCounts(resultList), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
-            ["by_confidence"] = JsonSerializer.SerializeToNode(BuildUnusedConfidenceCounts(resultList), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
+            ["by_bucket"] = JsonSerializer.SerializeToNode(BuildUnusedBucketCounts(resultList), context.DictionaryStringInt32),
+            ["by_confidence"] = JsonSerializer.SerializeToNode(BuildUnusedConfidenceCounts(resultList), context.DictionaryStringInt32),
+            ["by_contract_domain"] = JsonSerializer.SerializeToNode(BuildUnusedContractDomainCounts(resultList), context.DictionaryStringInt32),
         };
     }
 
@@ -9899,6 +9820,7 @@ public static partial class QueryCommandRunner
         {
             ["by_bucket"] = JsonSerializer.SerializeToNode(ToUnusedCountDictionary(result.BucketCounts), context.DictionaryStringInt32),
             ["by_confidence"] = JsonSerializer.SerializeToNode(ToUnusedCountDictionary(result.ConfidenceCounts), context.DictionaryStringInt32),
+            ["by_contract_domain"] = JsonSerializer.SerializeToNode(ToUnusedCountDictionary(result.ContractDomainCounts), context.DictionaryStringInt32),
         };
     }
 
@@ -9946,6 +9868,7 @@ public static partial class QueryCommandRunner
                     ["path"] = result.Path,
                     ["line"] = result.Line,
                     ["confidence"] = result.UnusedConfidence,
+                    ["contract_domain"] = result.UnusedContractDomain,
                 });
             }
 
@@ -10001,6 +9924,7 @@ public static partial class QueryCommandRunner
             ["graph_supported"] = graphSupported,
             ["graph_support_reason"] = graphSupportReason,
             ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(BuildUnusedBucketCounts(resultList), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
+            ["returned_contract_domain_counts"] = JsonSerializer.SerializeToNode(BuildUnusedContractDomainCounts(resultList), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
             ["summary"] = BuildUnusedSummaryJson(resultList, jsonOptions),
             ["bucket_taxonomy"] = BuildUnusedBucketTaxonomyJson(),
         };
@@ -10010,14 +9934,20 @@ public static partial class QueryCommandRunner
         {
             payload["compact"] = true;
             payload["representative_symbols"] = BuildUnusedRepresentativeSymbolsJson(resultList);
-            payload["omitted_sections"] = new JsonArray(JsonValue.Create("symbols"));
+            var omittedSections = new JsonArray(JsonValue.Create("symbols"));
+            if (byBucket)
+            {
+                payload["by_bucket"] = BuildUnusedBucketSummariesJson(resultList);
+                omittedSections.Add("by_bucket.symbols");
+            }
+            payload["omitted_sections"] = omittedSections;
         }
         else
         {
             payload["symbols"] = JsonSerializer.SerializeToNode(resultList, CliJsonSerializerContextFactory.Create(jsonOptions).ListUnusedSymbolResult);
+            if (byBucket)
+                payload["by_bucket"] = BuildUnusedResultsByBucketJson(resultList, jsonOptions);
         }
-        if (byBucket)
-            payload["by_bucket"] = BuildUnusedResultsByBucketJson(resultList, jsonOptions);
 
         if (!hasReferencesTable)
         {
@@ -10031,7 +9961,52 @@ public static partial class QueryCommandRunner
             payload["query_context"] = unusedScope != null
                 ? BuildUnusedQueryContextJson(queryOptions, unusedScope, jsonOptions)
                 : BuildQueryContextJson(queryOptions, jsonOptions);
-        return payload.ToJsonString(jsonOptions);
+        return payload.ToJsonString(GetJsonNodeSerializationOptions(jsonOptions));
+    }
+
+    internal static JsonObject BuildUnusedBucketSummariesJson(IEnumerable<UnusedSymbolResult> results)
+    {
+        var grouped = results
+            .GroupBy(result => result.UnusedBucket, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
+        var summaries = new JsonObject();
+        foreach (var bucket in OrderedUnusedBuckets)
+        {
+            grouped.TryGetValue(bucket, out var bucketResults);
+            bucketResults ??= [];
+            var summary = new JsonObject
+            {
+                ["count"] = bucketResults.Count,
+                ["confidence"] = GetUnusedBucketConfidence(bucket),
+                ["description"] = GetUnusedBucketDescription(bucket),
+            };
+            var representative = bucketResults.FirstOrDefault();
+            if (representative != null)
+            {
+                summary["representative"] = new JsonObject
+                {
+                    ["name"] = representative.Name,
+                    ["kind"] = representative.Kind,
+                    ["path"] = representative.Path,
+                    ["line"] = representative.Line,
+                    ["confidence"] = representative.UnusedConfidence,
+                };
+            }
+            summaries[bucket] = summary;
+        }
+
+        return summaries;
+    }
+
+    private static JsonSerializerOptions GetJsonNodeSerializationOptions(JsonSerializerOptions jsonOptions)
+    {
+        if (jsonOptions.TypeInfoResolver != null)
+            return jsonOptions;
+
+        return new JsonSerializerOptions(jsonOptions)
+        {
+            TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
+        };
     }
 
     private static JsonObject BuildUnusedQueryContextJson(QueryCommandOptions options, UnusedAuditScopeFilters unusedScope, JsonSerializerOptions jsonOptions)
@@ -10209,13 +10184,57 @@ public static partial class QueryCommandRunner
                 foreach (var issue in issues)
                 {
                     var location = issue.Line > 0 ? $":{issue.Line}" : "";
-                    Console.WriteLine($"  {issue.Kind,-20} {issue.Path}{location}  {issue.Message}");
+                    var metadata = FormatValidateIssueMetadata(issue);
+                    Console.WriteLine($"  {issue.Kind,-20} {issue.Path}{location}  {metadata}{issue.Message}");
                 }
                 var kindCounts = issues.GroupBy(i => i.Kind).Select(g => $"{g.Key}: {g.Count()}");
                 CommandErrorWriter.WriteStderr($"\n({issues.Count} issues: {string.Join(", ", kindCounts)})");
             }
             return CommandExitCodes.Success;
         });
+    }
+
+    private static string FormatValidateIssueMetadata(FileIssue issue)
+    {
+        var tags = new List<string>(3);
+        if (!string.IsNullOrWhiteSpace(issue.Severity))
+            tags.Add(issue.Severity);
+        if (!string.IsNullOrWhiteSpace(issue.Origin))
+            tags.Add(issue.Origin);
+        if (IsValidateTestOrFixturePath(issue.Path))
+            tags.Add("test_fixture");
+
+        return tags.Count == 0
+            ? string.Empty
+            : $"[{string.Join(", ", tags)}] ";
+    }
+
+    private static bool IsValidateTestOrFixturePath(string path)
+    {
+        var normalized = path.Replace('\\', '/');
+        var lower = normalized.ToLowerInvariant();
+        return lower.StartsWith("test/", StringComparison.Ordinal)
+            || lower.StartsWith("tests/", StringComparison.Ordinal)
+            || lower.StartsWith("fixture/", StringComparison.Ordinal)
+            || lower.StartsWith("fixtures/", StringComparison.Ordinal)
+            || lower.Contains("/test/", StringComparison.Ordinal)
+            || lower.Contains("/tests/", StringComparison.Ordinal)
+            || lower.Contains("/fixture/", StringComparison.Ordinal)
+            || lower.Contains("/fixtures/", StringComparison.Ordinal)
+            || lower.StartsWith("test.", StringComparison.Ordinal)
+            || lower.StartsWith("tests.", StringComparison.Ordinal)
+            || lower.StartsWith("test_", StringComparison.Ordinal)
+            || lower.StartsWith("tests_", StringComparison.Ordinal)
+            || lower.Contains("/test.", StringComparison.Ordinal)
+            || lower.Contains("/tests.", StringComparison.Ordinal)
+            || lower.Contains("/test_", StringComparison.Ordinal)
+            || lower.Contains("/tests_", StringComparison.Ordinal)
+            || lower.Contains("_test.", StringComparison.Ordinal)
+            || lower.Contains("_tests.", StringComparison.Ordinal)
+            || lower == "conftest.py"
+            || lower.EndsWith("/conftest.py", StringComparison.Ordinal)
+            || lower.Contains(".spec.", StringComparison.Ordinal)
+            || lower.Contains(".test.", StringComparison.Ordinal);
     }
 
     public static int RunLanguages(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -10835,6 +10854,12 @@ public static partial class QueryCommandRunner
                     inspectFields = ["definitions"];
                     json = true;
                     outputFormat = OutputFormatJson;
+                    break;
+                case "--outline-only":
+                    inspectFields = ["file", "definitions", "nearby_symbols"];
+                    json = true;
+                    if (outputFormat == OutputFormatText)
+                        outputFormat = OutputFormatJson;
                     break;
                 case "--workspace-db":
                     if (TryReadStringOptionValue(args, ref i, "--workspace-db", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var workspaceDbPath, out var workspaceDbError))
@@ -11927,7 +11952,7 @@ public static partial class QueryCommandRunner
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
             {
-                AddParseError($"Error: {ex.Message}");
+                AddParseError($"Error: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}");
             }
         }
 
@@ -13043,7 +13068,7 @@ public static partial class QueryCommandRunner
         }
         catch (FtsQuerySyntaxException ex)
         {
-            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.FtsQuerySyntax}]: FTS5 query syntax: {ex.Message}");
+            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.FtsQuerySyntax}]: FTS5 query syntax: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}");
             if (ex.Kind == FtsQuerySyntaxErrorKind.ColumnQualifier)
             {
                 CommandErrorWriter.WriteStderr("Hint: `--fts` passes raw FTS5 syntax, so `:` is treated as a column qualifier. Drop `--fts` if you want literal-safe search.");
@@ -13056,7 +13081,7 @@ public static partial class QueryCommandRunner
         }
         catch (SearchGuardCandidateLimitException ex)
         {
-            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.UsageError}]: guarded search is too broad: {ex.Message}");
+            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.UsageError}]: guarded search is too broad: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}");
             if (ex.CandidatePreviewPaths.Count > 0)
                 CommandErrorWriter.WriteStderr($"Candidate files sampled before refusal: {string.Join(", ", ex.CandidatePreviewPaths)}.");
             if (ex.CandidatePreviewLanguages.Count > 0)
@@ -13067,7 +13092,7 @@ public static partial class QueryCommandRunner
         }
         catch (SearchQueryLimitException ex)
         {
-            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.UsageError}]: {ex.Message}");
+            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.UsageError}]: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}");
             CommandErrorWriter.WriteStderr("Hint: shorten the search text or split generated input into smaller literal queries.");
             return CommandExitCodes.UsageError;
         }
@@ -13093,7 +13118,7 @@ public static partial class QueryCommandRunner
                 // E002_DB_LOCKED で機械可読に区別する。
                 if (sqliteEx.SqliteErrorCode == 5 || sqliteEx.SqliteErrorCode == 6)
                 {
-                    CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbLocked}]: SQLite reported the database is locked or busy: {ex.Message}");
+                    CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbLocked}]: SQLite reported the database is locked or busy: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}");
                     CommandErrorWriter.WriteStderr("Hint: another process may be holding the database. Wait for it to finish, or retry with backoff.");
                     Database.DbDebug.DumpToStderr(ex);
                     return CommandExitCodes.DatabaseError;
@@ -13175,7 +13200,7 @@ public static partial class QueryCommandRunner
             return;
         }
 
-        CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database error: {ex.Message}");
+        CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database error: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}");
         CommandErrorWriter.WriteStderr("Hint: check `--db`, or rebuild the index with `cdidx index <projectPath>` if the DB may be stale or corrupted.");
     }
 
@@ -15590,6 +15615,7 @@ public static partial class QueryCommandRunner
         ["--cursor"] = "pass the `next_cursor` returned by a prior paged response, such as a recipe search cursor, `outline:<offset>`, or `unused:<offset>`.",
         ["--kind"] = "pass a kind identifier, e.g. `--kind function`. definition/symbols/outline/hotspots/unused take a symbol kind; references/callers/callees take a reference kind such as `call`, `instantiate`, or `subscribe`. Run the command's `--help` for the kind list.",
         ["--outline-fields"] = "pass outline symbol field names such as `name,line,signature`, or `all` for the full symbol payload.",
+        ["--outline-only"] = "for inspect, return file, definitions, and nearby_symbols JSON only; add `--body` when definition body snippets are needed.",
         ["--bucket"] = "pass one unused-symbol bucket: likely_unused_private, maybe_unused_nonpublic, public_or_exported_no_refs, or reflection_or_config_suspect.",
         ["--confidence"] = "pass one unused-symbol confidence threshold: medium or low.",
         ["--min-confidence"] = "pass one unused-symbol confidence threshold: medium or low.",

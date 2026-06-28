@@ -719,6 +719,7 @@ public class GitHubIssueReporterTests : IDisposable
             Assert.Equal(HttpMethod.Get, handler.Requests[0].Method);
             Assert.Equal(HttpMethod.Get, handler.Requests[1].Method);
             Assert.Equal(HttpMethod.Post, handler.Requests[2].Method);
+            Assert.All(handler.Requests, request => AssertUsesGitHubApiHeaders(request, "ghp_idempotency_test"));
             var postedJson = Assert.Single(handler.RequestBodies);
             Assert.Contains("codex/5.0", postedJson);
             Assert.Contains("session-123", postedJson);
@@ -1673,6 +1674,16 @@ public class GitHubIssueReporterTests : IDisposable
 
     private static StringContent MakeJsonContent(string json) =>
         new(json, Encoding.UTF8, "application/json");
+
+    private static void AssertUsesGitHubApiHeaders(HttpRequestMessage request, string token)
+    {
+        Assert.Contains(request.Headers.UserAgent, value => value.Product?.Name == "cdidx");
+        Assert.Contains(request.Headers.Accept, value => value.MediaType == "application/vnd.github+json");
+        Assert.True(request.Headers.TryGetValues("X-GitHub-Api-Version", out var values));
+        Assert.Contains("2022-11-28", values);
+        Assert.Equal("Bearer", request.Headers.Authorization?.Scheme);
+        Assert.Equal(token, request.Headers.Authorization?.Parameter);
+    }
 
     private static string MakeDeepObjectJson(int depth)
     {

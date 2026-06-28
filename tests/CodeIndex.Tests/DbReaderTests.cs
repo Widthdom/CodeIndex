@@ -619,6 +619,9 @@ public class DbReaderTests : IDisposable
         _writer.InsertReferences(ReferenceExtractor.Extract(fileId, lang, normalized, symbols));
     }
 
+    private void StampWorkspacePathCaseSensitive(bool pathCaseSensitive)
+        => _writer.SetMeta(DbContext.WorkspacePathCaseSensitiveMetaKey, pathCaseSensitive.ToString());
+
     private string ExplainQueryPlan(string sql)
     {
         using var cmd = _db.Connection.CreateCommand();
@@ -2568,6 +2571,36 @@ public class DbReaderTests : IDisposable
         var results = _reader.SearchSymbols("SameLine", kind: "function", lang: "csharp", exact: true, pathPatterns: ["src/same_line_symbols.cs"]);
 
         Assert.Equal(["early SameLine()", "late SameLine()"], results.Select(result => result.Signature).ToArray());
+    }
+
+    [Fact]
+    public void AnalyzeFileLine_WithKindAndLanguageFilters_ReturnsSymbolAtLine_Issue4057()
+    {
+        InsertIndexedFile(
+            "src/issue4057/LineLookup.cs",
+            "csharp",
+            """
+            public class LineLookup
+            {
+                public void Outside() { }
+                public void Target()
+                {
+                }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeFileLine(
+            "src/issue4057/LineLookup.cs",
+            line: 5,
+            limit: 5,
+            lang: "csharp",
+            kind: "function");
+
+        var definition = Assert.Single(analysis.Definitions);
+        Assert.Equal("Target", definition.Name);
+        Assert.Equal("function", definition.Kind);
+        Assert.Equal("csharp", definition.Lang);
+        Assert.Equal("src/issue4057/LineLookup.cs", definition.Path);
     }
 
     [Fact]
@@ -12667,6 +12700,58 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void AnalyzeImpact_CaseSensitiveWorkspaceTreatsCaseVariantDefinitionFilesAsDistinct()
+    {
+        StampWorkspacePathCaseSensitive(true);
+        InsertIndexedFile("src/CaseVariantTarget.cs", "csharp",
+            """
+            public class CaseVariantTarget
+            {
+                public void Start() { }
+            }
+            """);
+        InsertIndexedFile("src/casevarianttarget.cs", "csharp",
+            """
+            public class CaseVariantTarget
+            {
+                public void Stop() { }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("CaseVariantTarget", maxDepth: 3, limit: 10);
+
+        Assert.Equal("none", analysis.ImpactMode);
+        Assert.True(analysis.HasMultipleDefinitions);
+        Assert.True(analysis.HasMultipleDefinitionFiles);
+        Assert.Equal("multiple_definition_files", analysis.ZeroResultReason);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_CaseInsensitiveWorkspaceCollapsesCaseVariantDefinitionFiles()
+    {
+        StampWorkspacePathCaseSensitive(false);
+        InsertIndexedFile("src/CaseVariantTarget.cs", "csharp",
+            """
+            public class CaseVariantTarget
+            {
+                public void Start() { }
+            }
+            """);
+        InsertIndexedFile("src/casevarianttarget.cs", "csharp",
+            """
+            public class CaseVariantTarget
+            {
+                public void Stop() { }
+            }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("CaseVariantTarget", maxDepth: 3, limit: 10);
+
+        Assert.True(analysis.HasMultipleDefinitions);
+        Assert.False(analysis.HasMultipleDefinitionFiles);
+    }
+
+    [Fact]
     public void AnalyzeImpact_FoldEquivalentClassDefinitions_ReportAmbiguity()
     {
         InsertIndexedFile("src/FooService.cs", "csharp",
@@ -13673,6 +13758,44 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetRepoMap_CaseSensitiveWorkspaceKeepsCaseVariantEntrypointFallbackPath()
+    {
+        StampWorkspacePathCaseSensitive(true);
+        InsertIndexedFile("src/Program.cs", "csharp",
+            """
+            public class Program
+            {
+                public static void Main() { }
+            }
+            """);
+        InsertIndexedFile("src/program.cs", "csharp", "Console.WriteLine(\"fallback\");\n");
+
+        var map = _reader.GetRepoMap(limit: 10, lang: "csharp", pathPatterns: new[] { "src/" });
+
+        Assert.Contains(map.Entrypoints, item => item.Name == "Main" && item.Path == "src/Program.cs");
+        Assert.Contains(map.Entrypoints, item => item.Kind == "file" && item.Name == "program.cs" && item.Path == "src/program.cs");
+    }
+
+    [Fact]
+    public void GetRepoMap_CaseInsensitiveWorkspaceCollapsesCaseVariantEntrypointFallbackPath()
+    {
+        StampWorkspacePathCaseSensitive(false);
+        InsertIndexedFile("src/Program.cs", "csharp",
+            """
+            public class Program
+            {
+                public static void Main() { }
+            }
+            """);
+        InsertIndexedFile("src/program.cs", "csharp", "Console.WriteLine(\"fallback\");\n");
+
+        var map = _reader.GetRepoMap(limit: 10, lang: "csharp", pathPatterns: new[] { "src/" });
+
+        Assert.Contains(map.Entrypoints, item => item.Name == "Main" && item.Path == "src/Program.cs");
+        Assert.DoesNotContain(map.Entrypoints, item => item.Kind == "file" && item.Path == "src/program.cs");
+    }
+
+    [Fact]
     public void GetRepoMap_MinEntrypointConfidenceFiltersWeakNameOnlyMatches()
     {
         InsertIndexedFile("src/services/service.py", "python", "def app():\n    return True\n");
@@ -14633,10 +14756,14 @@ public class DbReaderTests : IDisposable
         Assert.Equal(["Hidden", "InternalOnly", "PathResolver", "ConnectionString", "AdoptionService", "AppSettings", "TokenService", "ApplyConfiguration", "UseIOptions"], unused.Select(symbol => symbol.Name).ToArray());
         Assert.Equal("likely_unused_private", unused[0].UnusedBucket);
         Assert.Equal("medium", unused[0].UnusedConfidence);
+        Assert.Equal("private_or_file_local", unused[0].UnusedContractDomain);
         Assert.Equal("maybe_unused_nonpublic", unused[1].UnusedBucket);
         Assert.Equal("low", unused[1].UnusedConfidence);
+        Assert.Equal("nonpublic_internal", unused[1].UnusedContractDomain);
         Assert.Equal("public_or_exported_no_refs", unused[2].UnusedBucket);
+        Assert.Equal("public_api_surface", unused[2].UnusedContractDomain);
         Assert.Equal("reflection_or_config_suspect", unused[3].UnusedBucket);
+        Assert.Equal("configuration_contract", unused[3].UnusedContractDomain);
         Assert.Contains("serialization, config", unused[3].UnusedReason);
         Assert.Equal("public_or_exported_no_refs", unused[4].UnusedBucket);
         Assert.Equal("reflection_or_config_suspect", unused[5].UnusedBucket);
@@ -14699,10 +14826,13 @@ public class DbReaderTests : IDisposable
 
         var dto = Assert.Single(unused, symbol => symbol.Name == "SearchResponseDto");
         Assert.Equal("reflection_or_config_suspect", dto.UnusedBucket);
+        Assert.Equal("json_contract", dto.UnusedContractDomain);
         Assert.Contains("serialization_contract", dto.UnusedReasonTags);
+        Assert.Contains("json_output_or_input_contract", dto.UnusedContractDomainTags!);
 
         var jsonContext = Assert.Single(unused, symbol => symbol.Name == "SearchJsonContext");
         Assert.Equal("reflection_or_config_suspect", jsonContext.UnusedBucket);
+        Assert.Equal("json_contract", jsonContext.UnusedContractDomain);
         Assert.Contains("source_generated_json_context", jsonContext.UnusedReasonTags);
     }
 

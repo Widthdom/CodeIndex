@@ -56,13 +56,7 @@ internal sealed partial class FileContentLoader
             throw new ArgumentOutOfRangeException(nameof(maxBytes), maxBytes, "Maximum byte count must be non-negative.");
 
         checksum = string.Empty;
-        using var stream = new FileStream(
-            filePath,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.Read,
-            bufferSize: StreamBufferSize,
-            options: FileOptions.SequentialScan);
+        using var stream = BoundedFile.OpenReadForIndexContent(filePath);
         return TryComputeChecksum(stream, maxBytes, out checksum, cancellationToken);
     }
 

@@ -393,24 +393,6 @@ public static partial class SymbolExtractor
         return -1;
     }
 
-    private static int FindMatchingRustBrace(string text, int openIndex)
-    {
-        var braceDepth = 0;
-        for (var i = openIndex; i < text.Length; i++)
-        {
-            if (text[i] == '{')
-                braceDepth++;
-            else if (text[i] == '}')
-            {
-                braceDepth--;
-                if (braceDepth == 0)
-                    return i;
-            }
-        }
-
-        return -1;
-    }
-
     private readonly record struct RustAsKeywordSpan(int Start, int Length);
 
     private static RustAsKeywordSpan FindTopLevelAsKeyword(string text)

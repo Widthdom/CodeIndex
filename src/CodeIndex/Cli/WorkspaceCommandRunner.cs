@@ -125,7 +125,7 @@ internal static class WorkspaceCommandRunner
         }
         catch (InvalidOperationException ex)
         {
-            return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, ex.Message, CommandExitCodes.UsageError, "set XDG_CONFIG_HOME to an absolute writable directory or choose a workspace whose database is inside its root.");
+            return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, CommandErrorWriter.FormatSanitizedExceptionMessage(ex), CommandExitCodes.UsageError, "set XDG_CONFIG_HOME to an absolute writable directory or choose a workspace whose database is inside its root.");
         }
 
         if (json)

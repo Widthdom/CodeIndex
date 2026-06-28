@@ -19,6 +19,7 @@ public static partial class ExtractorPluginRegistry
     internal const int MaxPluginAssemblyCandidatesTotal = 256;
     internal const long MaxPluginAssemblyBytes = 64 * 1024 * 1024;
     internal const int MaxExtensionAssemblyTypes = 4096;
+    internal const string PluginLoadContextLifecycle = "collectible_retained_while_extractors_registered";
     internal static readonly TimeSpan PatternRegexTimeout = TimeSpan.FromMilliseconds(100);
 
     private static readonly object Gate = new();
@@ -99,6 +100,7 @@ public static partial class ExtractorPluginRegistry
                 SymbolExtractorCount = SymbolExtractors.Count,
                 ReferenceExtractorCount = ReferenceExtractors.Count,
                 RetainedLoadContextCount = LoadedPluginAssemblyContexts.Count,
+                LoadContextLifecycle = PluginLoadContextLifecycle,
                 SkippedFileCount = skippedFileCount,
                 DiagnosticCount = diagnosticTotalCount,
                 DiagnosticLimit = DiagnosticLimit,

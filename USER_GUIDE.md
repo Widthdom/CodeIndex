@@ -316,8 +316,9 @@ For AI-oriented bounded payloads, `map`, `inspect`, and `outline` accept
 `compact_limit`, and `truncation.sections.*` metadata.
 For narrower `inspect` evidence, `--fields <csv>` implies JSON and selects
 top-level groups such as `definitions`, `file`, `graph`, `references`,
-`callers`, and `callees`; `--body-only` is shorthand for `--body --fields
-definitions`. When a definition body is longer than the returned slice,
+`callers`, and `callees`; `--outline-only` is shorthand for
+`--fields file,definitions,nearby_symbols`, and `--body-only` is shorthand for
+`--body --fields definitions`. When a definition body is longer than the returned slice,
 `body_content_next_start_line` points to the next source line to pass with
 `--body-start`; use `--body-lines` (or alias `--body-line-count`) to choose the page size. `inspect`
 can also return a bounded `source_excerpt` when you pass `--line`, `--start-line` / `--end-line`,
@@ -340,6 +341,7 @@ cdidx search authenticate --json          # ndjson stream, one result per line
 cdidx search authenticate --json=array    # single JSON array
 cdidx inspect QueryCommandRunner --json --pretty
 cdidx map --compact                       # capped JSON with truncation metadata
+cdidx inspect Compute --outline-only      # file/definition/nearby symbol summary
 cdidx inspect Compute --body-only         # definitions with body_content only
 cdidx inspect Compute --body --body-start 40 --body-lines 40
 cdidx inspect Compute --line 42 --context 2 --json
@@ -465,6 +467,8 @@ JSON-form instruction payloads.
 For `replacement_char`, JSON and MCP responses include `origin` (`source_literal`
 or `decode_replacement`) and `severity` so agents can distinguish intentional
 U+FFFD literals from likely encoding damage.
+Human-readable output prints the same markers in brackets and adds
+`test_fixture` when a finding comes from a test or fixture path.
 Use `--severity warning` to hide informational source literals and focus on
 findings that indicate likely encoding damage.
 Use `--exclude-tests` and repeatable `--exclude-path` to keep validation output
@@ -488,14 +492,18 @@ cdidx unused --actionable --confidence medium
 cdidx unused --json --count
 cdidx unused --compact --bucket likely_unused_private --min-confidence medium
 cdidx unused --json --by-bucket
+cdidx unused --compact --by-bucket
 ```
 
 `unused` compares definitions with indexed references and groups results by
 confidence. JSON output includes `summary.by_bucket`, `summary.by_confidence`,
 and `bucket_taxonomy` for the `likely_unused_private`,
 `maybe_unused_nonpublic`, `public_or_exported_no_refs`, and
-`reflection_or_config_suspect` buckets; `--by-bucket` also groups returned
-symbols under those bucket keys. Use `--bucket <name>` to return only one
+`reflection_or_config_suspect` buckets. In regular JSON, `--by-bucket` also
+groups returned symbols under those bucket keys; with `--compact`, the same
+flag emits count/representative summaries and records `by_bucket.symbols` under
+`omitted_sections` instead of duplicating full symbol arrays. Use
+`--bucket <name>` to return only one
 bucket, and `--min-confidence <medium|low>` or its `--confidence` alias to omit
 lower-confidence classes. Use `--actionable` to preset the query to private,
 medium-confidence cleanup candidates while excluding tests. JSON output includes
@@ -503,8 +511,7 @@ medium-confidence cleanup candidates while excluding tests. JSON output includes
 downstream audit tooling. Count-only JSON includes `returned_bucket_counts` and
 `summary.by_bucket` / `summary.by_confidence`, matching the full JSON summary.
 Use `--compact` for audit summaries that keep counts, confidence buckets,
-taxonomy, and filter context without returning the full `symbols` array; add
-`--by-bucket` only when grouped symbol arrays are explicitly needed.
+taxonomy, and filter context without returning the full `symbols` array.
 Public APIs, framework entrypoints, DTOs, serialization contracts, generated
 hooks, test-only hooks, Markdown headings, reflection, and configuration-based
 usage can be false positives and are routed into lower-confidence buckets. C#
@@ -1385,9 +1392,14 @@ cdidx map --path src/ --exclude-tests
 cdidx map --path src/ --exclude-tests --json
 cdidx map --summary-only --json
 cdidx map --sections hotspots,metrics --json
+cdidx map --format issue-drafts --limit 10
 ```
 
 `map` is the fastest way to orient both a human and an AI agent before deeper queries. Use it to get languages, modules, hot files, and likely entrypoints, then narrow with `inspect`, `search`, or `definition`. Use `--summary-only` when only aggregate counts and freshness metadata are needed, or `--sections <tree,languages,hotspots,metrics>` to request only selected detail sections. For the full freshness and metadata contract of `status --json`, `map --json`, `inspect --json`, and MCP `analyze_symbol`, see [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md).
+Use `--format issue-drafts` when maintenance triage needs oversized-file issue
+draft candidates instead of the full map. The payload is built from the bounded
+`largest_files` section, groups candidates by kind, and includes thresholds,
+source-limit metadata, and the active `query_context`.
 
 ### Build a bug-report bundle
 
@@ -1453,6 +1465,7 @@ same source location.
 | `--compact` | `map`, `inspect`, `outline` | Emit AI-oriented compact JSON with capped list sections and `truncation.sections.*` metadata. The default cap is 5 unless `--limit` / `--top` is supplied. |
 | `--outline-fields <csv>` | `outline` | Project outline JSON symbol fields such as `name`, `line`, `kind`, `signature`, `container`, `range`, or `body`; pass `all` for the full symbol payload with paging metadata. |
 | `--fields <csv>` | `inspect` | Select top-level inspect JSON groups: `file`, `workspace`, `graph`, `definitions`, `body`, `source_excerpt`, `nearby_symbols`, `references`, `callers`, `callees`, or `all`. `body` includes definition bodies and maps to `definitions`. |
+| `--outline-only` | `inspect` | Shorthand for `--fields file,definitions,nearby_symbols`, useful for outline-first review of large classes/types before requesting body or graph evidence. |
 | `--body-only` | `inspect` | Shorthand for `--body --fields definitions`, useful when large audits need implementation text without graph context. |
 | `--body-start <line>` | `inspect` | Start the returned definition body slice at a 1-based source line inside the symbol body. Pair with `body_content_next_start_line` from JSON to page a long body. |
 | `--body-lines <n>` / `--body-line-count <n>` | `inspect` | Return at most this many definition body lines for `--body`, `--body-only`, or `--fields body`; maximum 1000. |
@@ -1540,6 +1553,7 @@ same source location.
 | `--since <datetime>` | `search`, `definition`, `symbols`, `files` | Filter to files modified since this ISO 8601 timestamp. Offsetless values (e.g. `2024-01-01T00:00:00`) are treated as UTC so the same flag resolves to the same instant in every timezone; append `Z` or an explicit offset (`+09:00`) to be explicit. |
 | `--no-dedup` | `search` | Disable overlapping-chunk deduplication and return every raw chunk hit; useful for debugging chunk boundaries or measuring raw match density |
 | `--reverse` | `deps` | Reverse lookup: show files that depend ON the matched path |
+| `--cycles` | `deps` | Return dependency cycles from a bounded approximate candidate-edge scan. `--limit` controls displayed cycles; cycle detection examines up to `max(--limit, 50)` lightweight candidate edges and JSON reports `truncated`, `termination_reason`, `truncated_reason`, `candidate_edge_count`, `candidate_edge_limit`, and `cycle_detection_mode` when results are partial. |
 | `--strict-not-found` | Query commands | Return exit code `2` when a valid query produces zero rows. Without this flag, zero-result queries exit `0` and keep their normal empty/zero-result output. |
 | `--top <n>` | Query commands | Alias for `--limit` |
 | `--max-results <n>` | `search` | Alias for `--limit` |
@@ -1804,6 +1818,8 @@ Precedence is **CLI flag > environment variable > config file > built-in default
 
 Secrets are intentionally **not** loadable from the file: `CDIDX_GITHUB_TOKEN`, `CDIDX_MCP_AUTH_TOKEN`, and `CDIDX_MCP_HTTP_TOKEN` are env-only so tokens never get checked into version control.
 
+Run `cdidx doctor --env-inventory` (or `cdidx doctor --json`) to audit the full environment-variable contract. Each inventory row reports a stable `domain` (`display`, `config`, `auth_secret`, `trust_boundary`, `subprocess`, `update_logging`, or `indexing_query`), sensitivity, config-file support, and `invalid_value_behavior`. Secret-bearing variables such as `CDIDX_GITHUB_TOKEN`, `CDIDX_MCP_AUTH_TOKEN`, and `CDIDX_MCP_HTTP_TOKEN` are marked `auth_secret` and are redacted from doctor/config diagnostics; trust-boundary variables such as MCP tool filters, workspace plugin trust, hook directories, and GitHub proxy credential opt-ins document whether invalid values fail closed, warn, or leave the feature disabled.
+
 Supported schema (top-level keys are snake_case; nested indexing kind keys keep the CLI issue spelling; every key is optional):
 
 ```jsonc
@@ -2058,6 +2074,7 @@ CLI JSON and MCP compatibility:
 | MCP metadata | MCP tools return JSON-RPC tool results with camelCase field names and may include MCP-specific metadata. |
 | Grouped graph rows | Graph tools that group reference rows (`callers`, `callees`, and bundled `analyze_symbol` caller/callee rows) expose a backward-compatible scalar summary kind plus a sorted kind array and mixed-kind flag. CLI JSON uses `reference_kind` / `reference_kinds` / `has_mixed_reference_kinds`, while MCP uses `referenceKind` / `referenceKinds` / `hasMixedReferenceKinds`. |
 | Project filters | When `--project` / MCP `project` expansion cannot resolve the indexed project root and uses the process current directory, structured payloads expose `project_filter_root` and `project_filter_root_fallback_reason`. |
+| Issue-draft map output | `cdidx map --format issue-drafts` returns `api_version`, `format`, `count`, `groups`, `issue_drafts`, `thresholds`, `truncation.largest_files`, and `query_context`; consumers should treat drafts as candidates from the bounded `largest_files` section. |
 | Consumer guidance | Consumers that need every underlying kind should read the array for the surface they call and ignore unknown future fields. See [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md#cli-json-and-mcp-response-compatibility) for the CLI/MCP compatibility table. |
 | Slow search profiling | Add `--profile` to read commands to append one JSON object after the normal results. It contains `profile.phases` (`name`, `elapsed_ms`, `rows_scanned`), `profile.query_plan` (`EXPLAIN QUERY PLAN` rows), and `profile.queries` (SQL text). With `--slow-query-ms <n>`, profiled SQL at or above the threshold is written to the persistent tool log. |
 
@@ -2557,7 +2574,7 @@ MCP security-sensitive environment variables share validation diagnostics. Token
 
 ### AI Feedback
 
-cdidx includes a `suggest_improvement` MCP tool for AI agents that hit gaps or bugs. Suggestions are saved locally beside the selected DB (`.cdidx/suggestions-codeindex.json` by default), and are sent to GitHub only when the user explicitly provides `CDIDX_GITHUB_TOKEN`. GitHub submission runs outside the suggestion-store file lock and uses a 10-second timeout by default; set `CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS=<seconds>` to tune that deadline up to 300 seconds. Non-positive, non-numeric, and larger values fall back to the 10-second default. GitHub HTTP calls use .NET's default proxy discovery, but they do not forward OS/default proxy credentials by default; set `CDIDX_GITHUB_PROXY_USE_DEFAULT_CREDENTIALS=1` only when an enterprise proxy explicitly requires those credentials. Local records include lifecycle metadata: `draft`, `submitted_pending_triage`, `open_in_upstream`, `resolved_in_upstream`, `wont_fix`, `duplicate`, or `superseded`, plus upstream issue URL/number fields when known. They also persist GitHub submission diagnostics (`last_submit_attempt`, `submit_attempt_count`, `last_submit_error`, and rate-limit `next_retry_at`) so operators can tell whether a suggestion was never attempted, failed transiently, is waiting for a rate-limit window, or was rejected by the API. New records also store attribution metadata: the MCP `initialize.clientInfo` name/version when available, an opaque cdidx session id, the cdidx version that recorded the suggestion, optional natural-language `toolInvocationContext`, and optional repository-relative `evidencePaths` supplied by the caller. Payload details and source-code leak guardrails are documented in the [Developer Guide](DEVELOPER_GUIDE.md#ai-feedback-implementation).
+cdidx includes a `suggest_improvement` MCP tool for AI agents that hit gaps or bugs. Suggestions are saved locally beside the selected DB (`.cdidx/suggestions-codeindex.json` by default), and are sent to GitHub only when the user explicitly provides `CDIDX_GITHUB_TOKEN`. GitHub submission runs outside the suggestion-store file lock and uses a 10-second timeout by default; set `CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS=<seconds>` to tune that deadline up to 300 seconds. Non-positive, non-numeric, and larger values fall back to the 10-second default. GitHub HTTP calls use .NET's default proxy discovery, but they do not forward OS/default proxy credentials by default; set `CDIDX_GITHUB_PROXY_USE_DEFAULT_CREDENTIALS=1` only when an enterprise proxy explicitly requires those credentials. Before posting, cdidx checks GitHub Search and a bounded labeled-Issue listing for the suggestion hash; if that duplicate lookup or response parsing is indeterminate, submission fails closed and records `last_submit_error` instead of creating a possible duplicate Issue. Local records include lifecycle metadata: `draft`, `submitted_pending_triage`, `open_in_upstream`, `resolved_in_upstream`, `wont_fix`, `duplicate`, or `superseded`, plus upstream issue URL/number fields when known. They also persist GitHub submission diagnostics (`last_submit_attempt`, `submit_attempt_count`, `last_submit_error`, and rate-limit `next_retry_at`) so operators can tell whether a suggestion was never attempted, failed transiently, is waiting for a rate-limit window, or was rejected by the API. New records also store attribution metadata: the MCP `initialize.clientInfo` name/version when available, an opaque cdidx session id, the cdidx version that recorded the suggestion, optional natural-language `toolInvocationContext`, and optional repository-relative `evidencePaths` supplied by the caller. Payload details, response-size bounds, redaction behavior, and source-code leak guardrails are documented in the [Developer Guide](DEVELOPER_GUIDE.md#ai-feedback-implementation).
 
 Use `cdidx suggestions list` to review recorded suggestions, `cdidx suggestions show <id>` to inspect one entry, and `cdidx suggestions export --format markdown` to share a filtered triage bundle with a team. Use `cdidx suggestions export --format issue-drafts --open-issues open-issues.json` to emit issue-ready drafts with title, labels, evidence paths, severity/confidence/evidence-count triage metadata, body text, and duplicate matches from an open-issues JSON preflight. Add `--duplicate-confidence low|medium|high` or `--duplicate-threshold <0..1>` when issue-draft exports need looser or stricter duplicate matching. The command reads the suggestion store beside the selected DB (`.cdidx/suggestions-codeindex.json` by default), supports filters such as `--status`, `--language`, `--category`, `--since`, and `--agent`, and prints JSON with `--json` for scripts. By default, `suggestions list` and `suggestions export` emit every matching record in newest-first order; pass `--limit <n>` and `--offset <n>` to page or cap large stores. Exported JSON, markdown bundles, and issue-draft bodies cap long description/context/tool-invocation text with a `[truncated]` marker; use `cdidx suggestions show <id>` when you need the full local record body. Treat exported issue drafts as triage aids and review duplicate guidance plus current open issues before filing.
 
@@ -2966,8 +2983,9 @@ AI 向けに上限付き payload が必要な場合、`map`、`inspect`、`outli
 `compact`、`compact_limit`、`truncation.sections.*` metadata を追加します。
 `inspect` の証跡をさらに絞りたい場合、`--fields <csv>` は JSON 出力を暗黙に有効化し、
 `definitions`、`file`、`graph`、`references`、`callers`、`callees` などの
-top-level group を選択します。`--body-only` は `--body --fields definitions` の
-shorthand です。definition body が返却 slice より長い場合は
+top-level group を選択します。`--outline-only` は
+`--fields file,definitions,nearby_symbols` の shorthand で、`--body-only` は
+`--body --fields definitions` の shorthand です。definition body が返却 slice より長い場合は
 `body_content_next_start_line` が次に `--body-start` へ渡す source line を示します。
 `--body-lines`（alias: `--body-line-count`）で page size を指定できます。`--line`、`--start-line` / `--end-line`、
 任意の `--context`、`--before`、`--after` を渡すと、`inspect` は範囲を絞った `source_excerpt`
@@ -2988,6 +3006,7 @@ cdidx search authenticate --json          # ndjson stream、1 行 1 result
 cdidx search authenticate --json=array    # 単一 JSON array
 cdidx inspect QueryCommandRunner --json --pretty
 cdidx map --compact                       # truncation metadata 付きの cap 済み JSON
+cdidx inspect Compute --outline-only      # ファイル・定義・近傍シンボルの概要
 cdidx inspect Compute --body-only         # body_content 付き definitions のみ
 cdidx inspect Compute --body --body-start 40 --body-lines 40
 cdidx inspect Compute --line 42 --context 2 --json
@@ -3107,7 +3126,9 @@ placeholder、Dockerfile の JSON-form instruction payload の parse / truncatio
 診断などです。
 `replacement_char` の JSON / MCP response には `origin` (`source_literal` /
 `decode_replacement`) と `severity` が入り、意図的な U+FFFD literal と
-エンコーディング破損の可能性を agent が区別できます。`--severity warning`
+エンコーディング破損の可能性を agent が区別できます。human-readable output
+にも同じ marker が角括弧で表示され、test / fixture path の finding には
+`test_fixture` が付きます。`--severity warning`
 を使うと、informational な source literal を隠して、エンコーディング破損の
 可能性がある finding に集中できます。fixture や generated sample が issue list を
 支配する場合は、`--exclude-tests` と繰り返し指定できる `--exclude-path` で
@@ -3129,13 +3150,16 @@ cdidx unused --actionable --confidence medium
 cdidx unused --json --count
 cdidx unused --compact --bucket likely_unused_private --min-confidence medium
 cdidx unused --json --by-bucket
+cdidx unused --compact --by-bucket
 ```
 
 `unused` は definitions と indexed references を比較し、confidence ごとに結果を
 分類します。JSON 出力には `likely_unused_private`、`maybe_unused_nonpublic`、
 `public_or_exported_no_refs`、`reflection_or_config_suspect` bucket 用の
 `summary.by_bucket`、`summary.by_confidence`、`bucket_taxonomy` が含まれます。
-`--by-bucket` は返却された symbols も bucket key ごとに grouped します。
+通常の JSON では `--by-bucket` が返却されたシンボルを bucket key ごとに grouped します。
+`--compact` と組み合わせると、同じ flag は件数と代表例の概要を返し、
+完全なシンボル配列を重複させずに `omitted_sections` へ `by_bucket.symbols` を記録します。
 `--bucket <name>` で単一 bucket だけを返し、`--min-confidence <medium|low>` で
 より低い confidence class を除外できます。`--confidence` はその alias です。
 `--actionable` は private かつ medium confidence の削除候補に絞り、tests を除外する
@@ -3143,8 +3167,7 @@ preset です。JSON 出力には `query_context` も含まれるため、audit 
 bucket と confidence filter を直接確認できます。count-only JSON には
 `returned_bucket_counts` と `summary.by_bucket` / `summary.by_confidence` も含まれ、
 full JSON summary と同じ bucket totals を返します。count、confidence bucket、taxonomy、
-filter context だけが必要な場合は `--compact` を使い、grouped symbol arrays が明示的に
-必要な場合だけ `--by-bucket` を追加してください。Public API、framework entrypoint、DTO、
+filter context だけが必要な場合は `--compact` を使ってください。Public API、framework entrypoint、DTO、
 serialization contract、generated hook、test-only hook、Markdown heading、reflection、
 config 経由の使用は false positive になりうるため、低 confidence bucket に寄せられます。
 C# の `nameof(...)`、`typeof(...)`、`GetMethod("Foo")` のような
@@ -4038,9 +4061,13 @@ cdidx map --path src/ --exclude-tests
 cdidx map --path src/ --exclude-tests --json
 cdidx map --summary-only --json
 cdidx map --sections hotspots,metrics --json
+cdidx map --format issue-drafts --limit 10
 ```
 
 `map` は、人と AI のどちらにも最短で全体像を渡すための入口です。言語、モジュール、ホットなファイル、推定エントリポイントを把握したら、`inspect`、`search`、`definition` に進んでください。集計値と freshness メタデータだけが必要な場合は `--summary-only`、必要な詳細セクションだけを取りたい場合は `--sections <tree,languages,hotspots,metrics>` を使えます。`status --json`、`map --json`、`inspect --json`、MCP `analyze_symbol` の詳細なメタデータ契約は [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md#開発者ガイド) にまとめています。
+保守作業の triage で full map ではなく巨大ファイルの Issue 下書き候補が必要な場合は
+`--format issue-drafts` を使います。payload は上限付きの `largest_files` section から作られ、
+候補を kind ごとに group 化し、閾値、取得元上限 metadata、現在の `query_context` を含みます。
 
 ### バグ報告用バンドルを作る
 
@@ -4105,6 +4132,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--compact` | `map`、`inspect`、`outline` | list section を cap した AI 向け compact JSON を出力し、`truncation.sections.*` metadata を含める。既定 cap は 5 件で、`--limit` / `--top` 指定時はその値を使う。 |
 | `--outline-fields <csv>` | `outline` | outline JSON の symbol field を投影する。`name`、`line`、`kind`、`signature`、`container`、`range`、`body` などを指定でき、`all` を渡すと full symbol payload と paging metadata を返す。 |
 | `--fields <csv>` | `inspect` | inspect JSON の top-level group を選択。`file`、`workspace`、`graph`、`definitions`、`body`、`source_excerpt`、`nearby_symbols`、`references`、`callers`、`callees`、`all` を指定できる。`body` は definition body を含め、`definitions` に対応する。 |
+| `--outline-only` | `inspect` | `--fields file,definitions,nearby_symbols` の shorthand。大きな class / type を body や graph evidence なしでアウトライン優先で確認したい場合に使う。 |
 | `--body-only` | `inspect` | `--body --fields definitions` の shorthand。大規模 audit で graph context なしに実装本文だけが必要な場合に使う。 |
 | `--body-start <line>` | `inspect` | symbol body 内の 1-based source line から definition body slice を返す。長い body の page 送りでは JSON の `body_content_next_start_line` を次の値として渡す。 |
 | `--body-lines <n>` / `--body-line-count <n>` | `inspect` | `--body`、`--body-only`、`--fields body` で返す definition body 行数の上限。最大 1000。 |
@@ -4189,6 +4217,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--since <datetime>` | `search`, `definition`, `symbols`, `files` | 指定タイムスタンプ以降に変更されたファイルのみ（ISO 8601）。オフセットなしの値（例: `2024-01-01T00:00:00`）は UTC として解釈されるため、どのタイムゾーンから呼び出しても同じ UTC 時点になります。明示したい場合は末尾に `Z` または `+09:00` 等のオフセットを付与してください。 |
 | `--no-dedup` | `search` | overlap chunk の重複排除を無効化し、全 raw chunk hit を返す。chunk 境界の debug や raw match density 計測向け |
 | `--reverse` | `deps` | 逆引き: 指定パスに依存しているファイルを表示 |
+| `--cycles` | `deps` | 上限付きの近似候補 edge scan から依存 cycle を返す。`--limit` は表示する cycle 数を制御し、cycle 検出は最大 `max(--limit, 50)` 件の軽量候補 edge を調べる。結果が部分的な場合、JSON は `truncated`、`termination_reason`、`truncated_reason`、`candidate_edge_count`、`candidate_edge_limit`、`cycle_detection_mode` を返す。 |
 | `--workspace-db <path>` | `deps` | file dependency query に別の CodeIndex DB を追加する。最大 7 個の distinct な追加 DB（`--db` を含め合計 8 個）まで繰り返し指定でき、JSON edge には同じ相対パスを区別できるよう `source_db` / `target_db` が含まれる。 |
 | `--top <n>` | クエリ系 | `--limit` のエイリアス |
 | `--max-results <n>` | `search` | `--limit` のエイリアス |
@@ -4453,6 +4482,8 @@ MCP のレスポンスサイズ上限は、環境変数 override で guard が�
 
 シークレットは意図的に**ファイルから読み込めません**。`CDIDX_GITHUB_TOKEN` / `CDIDX_MCP_AUTH_TOKEN` / `CDIDX_MCP_HTTP_TOKEN` は環境変数専用としており、トークンがバージョン管理に混入するのを防ぎます。
 
+`cdidx doctor --env-inventory`（または `cdidx doctor --json`）で環境変数契約全体を監査できます。各 inventory 行は安定した `domain`（`display`、`config`、`auth_secret`、`trust_boundary`、`subprocess`、`update_logging`、`indexing_query`）、sensitivity、設定ファイル対応、`invalid_value_behavior` を出力します。`CDIDX_GITHUB_TOKEN` / `CDIDX_MCP_AUTH_TOKEN` / `CDIDX_MCP_HTTP_TOKEN` のような secret 変数は `auth_secret` として扱われ、doctor / config 診断では redact されます。MCP tool filter、workspace plugin trust、hook directory、GitHub proxy credential opt-in のような trust-boundary 変数は、不正値が fail closed になるのか、警告されるのか、機能を無効のままにするのかを inventory に明示します。
+
 対応スキーマ（top-level key は snake_case、ネストした indexing の kind key は CLI issue の表記を維持、すべて任意）:
 
 ```jsonc
@@ -4697,6 +4728,7 @@ CLI JSON と MCP compatibility:
 | CLI metadata | CLI command は `api_version` や command result field など CLI 向け metadata を保持します。 |
 | MCP metadata | MCP tool は JSON-RPC tool result と camelCase field name、および MCP 固有 metadata を返す場合があります。 |
 | grouped graph row | 参照行を group 化する graph tool（`callers`、`callees`、bundled `analyze_symbol` の caller/callee 行）は、後方互換の scalar summary kind、sort 済み kind array、mixed-kind flag を返します。CLI JSON は `reference_kind` / `reference_kinds` / `has_mixed_reference_kinds`、MCP は `referenceKind` / `referenceKinds` / `hasMixedReferenceKinds` を使います。 |
+| Issue 下書き map 出力 | `cdidx map --format issue-drafts` は `api_version`、`format`、`count`、`groups`、`issue_drafts`、`thresholds`、`truncation.largest_files`、`query_context` を返します。consumer は draft を上限付きの `largest_files` section 由来の candidate として扱ってください。 |
 | consumer guidance | すべての underlying kind が必要な consumer は、呼び出した surface の array field を読み、将来追加される未知の field は無視してください。CLI/MCP compatibility table は [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md#cli-json-and-mcp-response-compatibility) を参照してください。 |
 | slow search profiling | 遅い検索を調べる場合は、read 系 command に `--profile` を追加してください。通常結果の後に `profile.phases`（`name`、`elapsed_ms`、`rows_scanned`）、`profile.query_plan`（`EXPLAIN QUERY PLAN` 行）、`profile.queries`（SQL text）を含む JSON object を 1 行追加します。`--slow-query-ms <n>` を併用すると、閾値以上の profiled SQL を persistent tool log に記録します。 |
 
@@ -5186,7 +5218,7 @@ MCP の security-sensitive な環境変数は共通の validation 診断を使�
 
 ### AIフィードバック
 
-cdidx には、AI エージェントがギャップや不具合に気づいたときに使える `suggest_improvement` MCP ツールがあります。提案は選択した DB の隣（既定は `.cdidx/suggestions-codeindex.json`）にローカル保存され、`CDIDX_GITHUB_TOKEN` を明示設定した場合に限って GitHub へ送信されます。GitHub 送信は suggestion-store のファイルロック外で実行され、既定では 10 秒で timeout します。この deadline は `CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS=<秒>` で最大 300 秒まで調整できます。0 以下、数値以外、または上限を超える値は 10 秒の既定値へ戻ります。GitHub HTTP 呼び出しは .NET の既定 proxy 検出を使いますが、既定では OS/default proxy 資格情報を転送しません。企業 proxy が明示的にその資格情報を必要とする場合だけ `CDIDX_GITHUB_PROXY_USE_DEFAULT_CREDENTIALS=1` を設定してください。ローカルレコードには lifecycle metadata として `draft`、`submitted_pending_triage`、`open_in_upstream`、`resolved_in_upstream`、`wont_fix`、`duplicate`、`superseded` と、判明している upstream issue URL/番号が保存されます。さらに GitHub 送信診断として `last_submit_attempt`、`submit_attempt_count`、`last_submit_error`、rate-limit 時の `next_retry_at` も永続化されるため、提案が未試行なのか、一時的に失敗したのか、rate-limit window 待ちなのか、API に拒否されたのかを運用者が判断できます。新規レコードには attribution metadata も保存されます。取得可能な場合は MCP `initialize.clientInfo` の name/version、不透明な cdidx セッション ID、提案を記録した cdidx バージョン、呼び出し元が任意で渡す自然言語の `toolInvocationContext`、任意のリポジトリ相対 `evidencePaths` が含まれます。ペイロード詳細とソースコード漏えいガードは [DEVELOPER_GUIDE.md#aiフィードバックの実装](DEVELOPER_GUIDE.md#aiフィードバックの実装) にまとめています。
+cdidx には、AI エージェントがギャップや不具合に気づいたときに使える `suggest_improvement` MCP ツールがあります。提案は選択した DB の隣（既定は `.cdidx/suggestions-codeindex.json`）にローカル保存され、`CDIDX_GITHUB_TOKEN` を明示設定した場合に限って GitHub へ送信されます。GitHub 送信は suggestion-store のファイルロック外で実行され、既定では 10 秒で timeout します。この deadline は `CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS=<秒>` で最大 300 秒まで調整できます。0 以下、数値以外、または上限を超える値は 10 秒の既定値へ戻ります。GitHub HTTP 呼び出しは .NET の既定 proxy 検出を使いますが、既定では OS/default proxy 資格情報を転送しません。企業 proxy が明示的にその資格情報を必要とする場合だけ `CDIDX_GITHUB_PROXY_USE_DEFAULT_CREDENTIALS=1` を設定してください。POST 前に cdidx は GitHub Search と bounded な label 付き Issue 一覧で suggestion hash を確認します。この duplicate lookup または response parsing が不確定な場合、送信は fail closed となり、重複の可能性がある Issue を作成せず `last_submit_error` を記録します。ローカルレコードには lifecycle metadata として `draft`、`submitted_pending_triage`、`open_in_upstream`、`resolved_in_upstream`、`wont_fix`、`duplicate`、`superseded` と、判明している upstream issue URL/番号が保存されます。さらに GitHub 送信診断として `last_submit_attempt`、`submit_attempt_count`、`last_submit_error`、rate-limit 時の `next_retry_at` も永続化されるため、提案が未試行なのか、一時的に失敗したのか、rate-limit window 待ちなのか、API に拒否されたのかを運用者が判断できます。新規レコードには attribution metadata も保存されます。取得可能な場合は MCP `initialize.clientInfo` の name/version、不透明な cdidx セッション ID、提案を記録した cdidx バージョン、呼び出し元が任意で渡す自然言語の `toolInvocationContext`、任意のリポジトリ相対 `evidencePaths` が含まれます。ペイロード詳細、response-size 上限、redaction 動作、ソースコード漏えいガードは [DEVELOPER_GUIDE.md#aiフィードバックの実装](DEVELOPER_GUIDE.md#aiフィードバックの実装) にまとめています。
 
 記録済みの提案は `cdidx suggestions list` で確認し、`cdidx suggestions show <id>` で1件を詳細表示し、`cdidx suggestions export --format markdown` でチーム triage 用に共有できます。`cdidx suggestions export --format issue-drafts --open-issues open-issues.json` は、title、labels、evidence paths、severity / confidence / evidence-count の triage metadata、body text、open issue JSON との重複候補を含む Issue 作成用 draft を出力します。issue-draft export で重複一致を緩く、または厳しくしたい場合は `--duplicate-confidence low|medium|high` または `--duplicate-threshold <0..1>` を追加します。このコマンドは選択した DB の隣にある提案ストア（既定は `.cdidx/suggestions-codeindex.json`）を読み、`--status`、`--language`、`--category`、`--since`、`--agent` で絞り込めます。スクリプト向けには `--json` を使います。既定では `suggestions list` と `suggestions export` は一致した全レコードを新しい順に出力します。大きなストアでは `--limit <n>` と `--offset <n>` でページングまたは出力上限を指定できます。export JSON、markdown bundle、issue draft body は長い description / context / tool-invocation text を `[truncated]` marker 付きで制限します。ローカルレコード本文をすべて確認する場合は `cdidx suggestions show <id>` を使ってください。出力された issue draft は triage aid として扱い、起票前に duplicate guidance と現在の open issue を確認してください。
 

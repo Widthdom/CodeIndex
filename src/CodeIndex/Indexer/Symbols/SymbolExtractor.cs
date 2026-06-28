@@ -212,7 +212,6 @@ public static partial class SymbolExtractor
     private const string CppFunctionStartBlacklistPattern = @"^(?!\s*typedef\b)(?!\s*(?:if|else|for|while|switch|return|sizeof|using|namespace)\s*[\(\{;<])";
     private const string CppTemplatePrefixPattern = @"(?:template\s*<[^>]*>\s*)*";
     private const string CppAttributePrefixPattern = @"(?:\[\[[^\r\n]*?\]\]\s*)*";
-    private const string CppTypeAtomPattern = @"(?:decltype\s*\(\s*auto\s*\)|[\w:<>~]+)";
     private static readonly Regex CppFriendTypeDeclarationRegex = new(
         @"\bfriend\s+(?<kind>class|struct|union|enum(?:\s+class)?)\s+(?<name>(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)\s*;",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -269,9 +268,6 @@ public static partial class SymbolExtractor
     private static readonly Regex RustUseStartRegex = new(
         @"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?use\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex RustUseStatementRegex = new(
-        @"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?use\s+(?<body>.+);\s*$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Singleline);
     private readonly record struct RustUseSymbolOccurrence(string Name, int Line, int Column);
     private const string RustIdentifierPattern = @"(?:r#)?\w+";
     private static readonly Regex RustMultilineImplForRegex = new(

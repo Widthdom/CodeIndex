@@ -35,6 +35,7 @@ Development contracts:
 | CLI help | `cdidx --help` stays brief, `cdidx --help-all` prints the full command/flag/example reference, `cdidx --help-flags` prints only shared flag tables, and `cdidx <command> --help` prints one command's usage line. Keep new commands visible in the brief summary only when they are a primary user workflow; every command must remain present in the full help and command-specific usage table. |
 | `cdidx validate` | This is the user-facing integrity scan for indexed content issues such as replacement characters, BOMs, NUL bytes, mixed line endings, UTF-16 BOMs, and likely non-UTF8 content. Keep its CLI usage, README entry, and help summary in sync when adding validation issue kinds or filters. |
 | `cdidx doctor` | This is the copy-pasteable environment summary for support requests. Keep it redacted by default: secret-like `CDIDX_*` values must not be printed, and new diagnostic fields should be stable enough for issue triage. The `github` block reports `proxy_default_credentials` as `enabled` / `disabled` and the bounded `max_request_timeout_s`; never print proxy credential material or raw secret values. |
+| Exception diagnostics | User-facing CLI, JSON, MCP, file-issue, and local diagnostic output must not echo raw `ex.Message` directly. Route exception prose through `CommandErrorWriter.FormatSanitizedExceptionMessage`, `DiagnosticSanitizer.ForMessage`, or an existing bounded `DiagnosticRedactor` helper, and use stable error codes/categories when the message is not needed for recovery. Intentional broad catches should match the `risky-code/broad-exception-catch` taxonomy and normalize to bounded diagnostics, private best-effort suppression, or a documented fallback. |
 | Shell completions | Generated shell completion scripts include a comment with the `cdidx` version that produced them. When command or flag schema changes, update completion tests and keep the README guidance that installed completions should be regenerated after upgrades. |
 | Target frameworks | The production CLI and NuGet tool packaging target `net8.0`. The test project multi-targets `net8.0;net9.0`, and CI runs the test suite on both frameworks across Linux, Windows, and macOS. Use a .NET SDK that can restore and run both target frameworks when validating the full CI-equivalent test matrix. |
 | SDK selection | `global.json` pins the repository SDK to `9.0.301` with `rollForward` disabled. CI installs both `8.0.413` and `9.0.301` explicitly: `8.0.413` provides the `net8.0` runtime lane, while `9.0.301` is the selected SDK for restore, build, test, publish, and changelog validation. When rolling SDKs, update `global.json`, every `actions/setup-dotnet` version list, the Docker build image, and this guide together. |
@@ -59,10 +60,35 @@ Development contracts:
 | `.cdidx/` | Created with mode `0700`. |
 | `codeindex.db` plus WAL/SHM sidecars | Mode `0600` is applied when the files exist. |
 | `suggestions-*.json` suggestion stores | Written atomically with owner-only mode `0600` on POSIX. |
+| Indexed workspace source reads | Source-file content and checksum reads use `FileShare.ReadWrite | FileShare.Delete`, long-path normalization, the configured max-file byte cap, and modified-time retry checks so indexing can inspect files that build tools keep open without allowing unbounded growth. |
 | Atomic file writes | `AtomicFileWriter` writes to a sibling temp file, applies the requested POSIX mode before replacement, flushes file contents, renames over the target, and fsyncs the parent directory on Unix. Callers must use the `Sensitive` write profile for local state, caches, suggestions, checkpoints, and other private payloads; user-requested exports and reports use the default `Public` profile unless their content is explicitly private. If the parent directory flush fails after replacement, the command fails explicitly so callers know the file was replaced but directory durability was not confirmed. Windows skips directory fsync because the helper only promises it on supported Unix platforms. |
 | Index locks, watch sub-run spools, staged hook scripts, lock metadata sidecars, and active workspace `active.json` | Created or written as owner-only files (`0600`) before contents are exposed, and read through small bounded buffers where applicable so stale or corrupted diagnostics cannot expose local paths more broadly or force unbounded allocation. |
 | Checkpoint roots, snapshot directories, manifest files, copied DB/WAL/SHM snapshots, and restore staging/backup directories | Forced owner-only on POSIX. |
 | `status --json` | Reports `data_dir_mode` and `db_file_mode` when the platform exposes Unix file modes. |
+
+### Destructive Filesystem Operation Audit
+
+Production `File.Delete`, `Directory.Delete`, and `File.Move` call sites are allowed only for owned CodeIndex state or caller-approved outputs. Re-run the audit with the local binary when changing these areas:
+
+```bash
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search File.Delete --path src/ --exclude-tests --exact-substring --count-by file --limit 80
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search Directory.Delete --path src/ --exclude-tests --exact-substring --count-by file --limit 80
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search File.Move --path src/ --exclude-tests --exact-substring --count-by file --limit 80
+```
+
+| Surface | Ownership and boundary policy | Cleanup or rollback policy |
+|---|---|---|
+| `AtomicFileWriter` file delete/move helpers | Used for caller-selected output paths after the caller has accepted or validated the destination. Temp files are generated as collision-resistant siblings of the target, so replacements stay on the same filesystem boundary and do not follow a separate temp-root policy. | Writes flush the temp file, rename over the target, and flush the parent directory on Unix. Pre-move temp cleanup is best-effort; post-replace parent-directory flush failures are explicit command failures because the target has already changed. |
+| `cdidx import` / `cdidx export` temp databases and sidecars | Import temp DBs are either hidden siblings in the destination DB directory or owner-only `codeindex-import-*` temp directories for dry-run. Export snapshots live in owner-only `codeindex-export-*` temp directories. Destination DB replacement rejects overlapping export outputs and rolls back through backup sidecars. | Temp DB, WAL, SHM, and empty temp-directory cleanup failures are warnings that do not hide the import/export error. Replacement failure reports residual diagnostics so operators can inspect the destination state. |
+| `cdidx db` checkpoint restore staging and restore-backup pruning | Checkpoints, restore staging, and restore backups are derived from the resolved DB path. Recursive cleanup uses `FileSystemBoundary.TryValidateDirectoryCleanupTarget` with the DB parent as safe root and an expected `codeindex.db.restore-*` style prefix. Checkpoint payload files must be regular files, not symlinks, reparse points, or devices. | Restore creates backups before replacement and attempts rollback on failure. Temporary-directory cleanup and restore-backup prune failures become bounded diagnostics or warnings without deleting outside the validated root. |
+| Upgrade installer script and temp directory | Upgrade downloads use owner-only `cdidx-install-*` directories under `Path.GetTempPath()`. Recursive directory cleanup validates the temp root, required prefix, and symlink/reparse/device status before deletion. Install-directory write probes run only after install-directory validation rejects roots, symlinks/reparse points, and unsafe POSIX modes. | Installer script and temp-directory cleanup failures are warnings. The install operation reports its own result separately from secondary cleanup failures. |
+| `.cdidx` write probes and case-sensitivity probes | Write probes are freshly generated files under the already resolved install directory, `.cdidx` directory, or `.cdidx/probes` directory. Probe directories are created owner-only and are under the workspace data directory. | Probe files are deleted after the check. Case-sensitivity probe-directory cleanup records bounded diagnostics and suggests removing stale `.cdidx/probes` entries when no `cdidx` process is running. |
+| Scan checkpoints | Full-scan resume checkpoints are local state at `.cdidx/scan-checkpoint.json` and are written through the sensitive atomic writer profile. | Save/delete failures are warnings in human output and `CliJsonMessage` entries in JSON output; indexing continues without relying on a stale checkpoint. |
+| Git hook staging | Hook installation writes a private staged hook script inside the repository hook directory, then replaces the hook file through `File.Replace` with a backup path when needed. | If the staged script was not moved into place, cleanup is best-effort and recorded as hook warnings. Failure to delete a managed hook is a command error because that is the requested mutation. |
+| Index and MCP lock metadata sidecars | Lock files and `.info` sidecars live next to the resolved DB or MCP index lock path and are created with owner-only permissions. | Disposing a lock deletes only the metadata sidecar. Cleanup failures are logged through `GlobalToolLog` and optional test sinks; stale lock files rely on OS lock release rather than recursive cleanup. |
+| Search audit recipes | `SearchAuditRecipes` contains literal recipe strings such as `Directory.Delete` and `File.Move`; these are search metadata, not filesystem mutations. | No cleanup policy applies. |
+
+Best-effort cleanup catches must stay narrow to secondary cleanup for owned temp, probe, lock, or metadata artifacts. They should emit a bounded warning or diagnostic when an operator can act on the residue, and they must not suppress the primary operation result. The exception is durability confirmation after an atomic replacement: if the target has already been replaced and the parent directory cannot be flushed on Unix, the command fails explicitly so callers know the filesystem state changed but durability was not confirmed.
 
 ## Release Distribution Checklist
 
@@ -175,6 +201,14 @@ CodeIndex exposes an opt-in `ActivitySource` named `CodeIndex`. MCP JSON-RPC fra
 
 Set `CDIDX_SLOW_QUERY_MS=<milliseconds>` to write slow SQLite command diagnostics to stderr. Query commands also accept `--profile` for a JSON profile block and `--slow-query-ms <milliseconds>` for command-scoped profiling. Slow-query SQL diagnostics are single-line, length-bounded, and redact SQL string/blob/numeric literals before they reach stderr or the global tool log; the logged SQL is intended for operation/shape debugging, not value recovery.
 
+### Resource-Boundary Contracts
+
+| Path | Contract |
+|---|---|
+| Worker protocol JSON | Isolated worker stdin frames are read through `BoundedLineReader`. The default frame cap is 32 MiB for both characters and UTF-8 bytes. When a larger `--max-file-bytes` setting needs JSON-escaping headroom, the protocol frame cap may expand up to `WorkerProtocolLineLimits.MaxExtendedLineUtf8Bytes` (384 MiB), never to `int.MaxValue`. `WorkerProtocolJsonValidator` rejects payloads over the negotiated character/UTF-8 byte cap before `JsonDocument.Parse`, parses with `DefaultMaxJsonDepth` (32), rejects more than 1,000,000 object properties, and rejects strings longer than the frame cap. |
+| User regex find | `find --regex` keeps the classic .NET regex engine for lookaround/backreference compatibility, adds `RegexOptions.CultureInvariant`, adds `IgnoreCase` unless `--exact` is set, and uses `BoundedRegex.DefaultMatchTimeout` per match. Timeouts surface as `E014_REGEX_MATCH_TIMEOUT` / `regex_timeout` in CLI JSON, and human output includes the same recovery hint. `find --all` additionally applies candidate-file and line-scan caps before walking the whole index. |
+| `MaxValue` sentinels | `int.MaxValue` may be used only as an internal sentinel when the next operation clamps before SQL limits, allocation, traversal, payload sizing, or timeout conversion. User-influenced values must be reduced to named practical constants before multiplication, buffer sizing, protocol framing, or query expansion. |
+
 ### Indexing pipeline
 
 ```
@@ -208,11 +242,11 @@ trust metadata before the dependent rows are written.
 
 ### Extending the indexer
 
-Out-of-tree post-extraction hooks can implement `CodeIndex.Indexer.Hooks.IPostExtractionHook` in a `.dll` placed under `~/.config/cdidx/hooks/` (or the directory named by `CDIDX_HOOKS_DIR`). Hook discovery examines at most `CDIDX_HOOK_DISCOVERY_MAX_DLLS` DLL candidates (default: 128), requires each candidate to be no larger than `CDIDX_HOOK_DISCOVERY_MAX_BYTES` bytes (default: 67108864), then loads the bounded candidate set in path order. Each concrete hook type is instantiated with a public parameterless constructor, then called after built-in symbol extraction and again after built-in reference extraction, before rows are persisted. Hooks receive a `FileContext` plus mutable `IList<SymbolRecord>` / `IList<ReferenceRecord>` values, so they can annotate extracted records, add synthetic symbols, or add domain-specific references.
+Out-of-tree post-extraction hooks can implement `CodeIndex.Indexer.Hooks.IPostExtractionHook` in a `.dll` placed under `~/.config/cdidx/hooks/` (or the directory named by `CDIDX_HOOKS_DIR`). Hook discovery examines at most `CDIDX_HOOK_DISCOVERY_MAX_DLLS` DLL candidates (default: 128), requires each candidate to be no larger than `CDIDX_HOOK_DISCOVERY_MAX_BYTES` bytes (default: 67108864), then loads the bounded candidate set in path order. Discovery validates that each concrete hook type has a public parameterless constructor, but hook constructors execute inside the isolated callback worker when callbacks run. Hooks are called after built-in symbol extraction and again after built-in reference extraction, before rows are persisted. Hooks receive a `FileContext` plus mutable `IList<SymbolRecord>` / `IList<ReferenceRecord>` values, so they can annotate extracted records, add synthetic symbols, or add domain-specific references.
 
-Extractor plugin assemblies and hook assemblies load through custom collectible assembly load contexts instead of `AssemblyLoadContext.Default`. Dependency resolution first reuses already-loaded default assemblies such as CodeIndex's shared interfaces, then resolves private dependencies relative to the extension assembly path.
+Extractor plugin assemblies and hook assemblies load through custom collectible assembly load contexts instead of `AssemblyLoadContext.Default`. Dependency resolution first reuses already-loaded default assemblies such as CodeIndex's shared interfaces, then resolves private dependencies relative to the extension assembly path. Plugin constructors run in the main process during registry loading and may perform arbitrary extension-code side effects; trusted plugin directories must be treated as code execution. Plugin load contexts are collectible but retained while registered extractor instances remain active, because the registry keeps those instances for later extraction. Rejected plugin assemblies and unretained hook assemblies are unloaded immediately; loaded hook contexts are retained only for the hook runner lifetime and unloaded on runner disposal. `status --json` reports this as `extractors.load_context_lifecycle` and per-hook `hooks[].load_context_lifecycle`.
 
-`CDIDX_HOOKS_DIR` is a trust boundary override. Point it only at a local directory controlled by trusted users because hook assemblies execute extension code. `status --json` and MCP `status` report sanitized `hook_diagnostics[]` when the override is accepted or rejected, reject missing or symlink/reparse-point override directories, and warn when Unix permissions make the directory group- or world-writable. Hook diagnostics include a bounded `category` machine code so callers can distinguish override, discovery, assembly load, constructor, callback, and timeout failures without parsing human-readable messages.
+`CDIDX_HOOKS_DIR` is a trust boundary override. Point it only at a local directory controlled by trusted users because hook assemblies execute extension code in isolated workers. `status --json` and MCP `status` report sanitized `hook_diagnostics[]` when the override is accepted or rejected, reject missing or symlink/reparse-point override directories, and warn when Unix permissions make the directory group- or world-writable. Hook diagnostics include a bounded `category` machine code so callers can distinguish override, discovery, assembly load, constructor, callback, and timeout failures without parsing human-readable messages.
 
 Hook failures are isolated to that hook invocation: assembly load, construction, and callback exceptions are captured as diagnostics with sanitized categories and indexing continues. Each loaded hook runs in an isolated worker process, and callbacks run against scratch copies with a bounded wall-clock budget controlled by `CDIDX_HOOK_CALLBACK_BUDGET_MS` (default: 5000 ms). The first callback budget covers worker startup and callback execution. A timed-out callback kills the worker process tree, contributes no mutations, emits an index warning, and disables that hook for the remainder of the current index run. `status --json` and MCP `status` expose loaded hooks under `hooks` with `name`, `assembly_path`, `type_name`, and `callback_budget_ms` so users can confirm which extensions are active and what timeout is being enforced.
 
@@ -236,9 +270,33 @@ Usage: <command shape>
 
 When an error code is available, the first line is `Error [<code>]: <message>`. Use `CommandErrorWriter` for new CLI parse, validation, and filesystem preflight errors so `ProgramRunner`, `IndexCommandRunner`, and query runners keep the same format. JSON error payloads continue to use `CommandErrorJsonResult`.
 
+### Process launch policy
+
+All production subprocess launch sites must use `ProcessStartInfo.ArgumentList` and must leave `UseShellExecute` disabled. Start-info construction belongs in `ProcessLaunchPolicy` or a nearby purpose-specific helper that calls it, so git, isolated workers, hook callbacks, installer dispatch, and other subprocesses share the same argument, encoding, and no-shell defaults.
+
+Environment inheritance is opt-in. Use `SubprocessEnvironmentPolicy` for allowlisted subprocess environments: git keeps only base/proxy/certificate/git knobs and disables terminal prompts, isolated workers keep only base/.NET runtime values plus `CDIDX_TEST_` variables for tests, and installer handoff keeps only the documented installer/proxy/certificate variables. Do not add broad `CDIDX_*`, token, credential, or shell environment forwarding without documenting the trust boundary and adding tests.
+
+Every subprocess wait must have an explicit cancellation or timeout path. Captured stdout/stderr must be bounded before user-visible diagnostics, and diagnostics should be sanitized through the existing safe-formatting helpers.
+
 ### CLI output encoding and terminal controls
 
 CLI JSON output must be machine-clean: redirected stdout is written as UTF-8 without a BOM, and JSON-mode commands must not emit ANSI escape sequences even when `--color=always` or `CLICOLOR_FORCE=1` would color human output. Keep JSON-safe styling suppression close to shared formatting helpers such as `ConsoleUi.ColorizeKind` so future query output paths inherit the invariant.
+
+JSON serialization sites are split by contract domain. Public CLI JSON uses
+`ProgramRunner.CreateDefaultJsonOptions()` and `CliJsonSerializerContext`: field
+names are snake_case, nulls are omitted, audited public top-level event/result
+DTOs carry `api_version`, and DOM-built `JsonObject` payloads may add only
+sanitized, bounded fields. Add `api_version` when introducing or auditing a
+public top-level CLI JSON DTO. MCP JSON-RPC uses `McpServer`'s camelCase options for the
+protocol envelope while tool structured content keeps its documented
+machine-readable keys; sanitize/redact values before mutating `JsonObject` /
+`JsonNode` instances. LSP, quickfix, and SARIF outputs follow their external
+schemas rather than the CLI snake_case contract. GitHub/report helpers and
+worker/private storage paths use their own bounded serializers because they are
+either API clients, persisted local state, or process-internal protocols. The
+`LocalJsonlJsonWriterOptions` relaxed encoder is intentionally limited to
+private append-only JSONL diagnostics and must not be reused for public CLI,
+MCP, LSP, HTTP, or embeddable JSON.
 
 `cdidx export ctags --json` follows the same contract: stdout contains only a
 single JSON summary or structured error, while the tag file itself remains the
@@ -1049,7 +1107,7 @@ For the AI agent search-rule template, see [AI Integration](USER_GUIDE.md#ai-int
 |---|---|
 | Human-readable default | Query commands (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `excerpt`, `map`, `inspect`, `outline`, `suggestions`) default to **human-readable output**. |
 | `--json` | Emits JSON lines output, one JSON object per line, designed for easy parsing by AI agents. |
-| `--count --json` envelope | Count-only JSON for `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `impact`, and `unused` is a single automation-oriented object. It always includes `count`, applied `query_context`, freshness metadata (`indexed_file_count`, `indexed_at`, `freshness_available`), and trust flags `degraded` / `authoritative_count`; commands with matched-file totals also include `files` and compatibility alias `file_count`. `unused --count --json` also includes `returned_bucket_counts` and `summary.by_bucket` / `summary.by_confidence`. `authoritative_count=false` means a readiness or graph/exact trust signal made the count non-authoritative, while the freshness fields describe the indexed snapshot used for the count. |
+| `--count --json` envelope | Count-only JSON for `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `impact`, and `unused` is a single automation-oriented object. It always includes `count`, applied `query_context`, freshness metadata (`indexed_file_count`, `indexed_at`, `freshness_available`), and trust flags `degraded` / `authoritative_count`; commands with matched-file totals also include `files` and compatibility alias `file_count`. `unused --count --json` also includes `returned_bucket_counts`, `returned_contract_domain_counts`, and `summary.by_bucket` / `summary.by_confidence` / `summary.by_contract_domain`. `authoritative_count=false` means a readiness or graph/exact trust signal made the count non-authoritative, while the freshness fields describe the indexed snapshot used for the count. |
 | `search --json` sentinel | Appends a final `{"done":true,"count":N,"interrupted":false}` sentinel after result rows, including zero-result responses, so stream consumers can distinguish a clean end from a truncated/interrupted stream. |
 | `outline --json` controls | `outline --json` accepts `--kind <kind[,kind]>`, `--limit` / `--top`, `--cursor <outline:offset>`, and `--outline-fields <csv>` for bounded machine output. Controlled responses keep the normal outline envelope and add `total_symbol_count`, `returned_symbol_count`, `cursor_offset`, `next_cursor`, `has_more`, plus `kind_filter` and `selected_fields` when those controls are active. These additive fields do not require an API version bump. |
 | `--json-envelope` commands | Applies to `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `excerpt`, `map`, `inspect`, `outline`, `status`, `validate`, `languages`, `impact`, `deps`, `unused`, and `hotspots`. |
@@ -1208,9 +1266,20 @@ Local suggestion records use the `status` lifecycle field instead of a binary su
 
 `SuggestionStore.TryAddAndSubmit` keeps local read/write and submission reservation under the suggestion-store file lock, but invokes the GitHub callback after releasing the lock. The reservation stamps `last_submit_attempt`, increments `submit_attempt_count`, and sets a short `next_retry_at` guard so another writer will not submit the same duplicate while the first remote call is still in flight. The callback result is persisted by re-taking the lock briefly after the remote call completes.
 
-Before creating an upstream Issue, `GitHubIssueReporter` checks whether an Issue with the same SHA256 suggestion hash already exists. It first queries GitHub Search for the hash in issue bodies, then falls back to listing Issues with the existing repository labels cdidx applies (`enhancement` for ordinary suggestions, `bug` for crash/error reports) and matching the hash in each body. The fallback avoids GitHub Search indexing latency, so a retry immediately after a lost create response can still find the just-created Issue and avoid a duplicate POST. Lookup failures remain best-effort: if both checks fail because GitHub is unavailable, the reporter proceeds to the normal create path instead of blocking a legitimate first submission.
+Before creating an upstream Issue, `GitHubIssueReporter` checks whether an Issue with the same SHA256 suggestion hash already exists. It first queries GitHub Search for the hash in issue bodies, then falls back to listing Issues with the existing repository labels cdidx applies (`enhancement` for ordinary suggestions, `bug` for crash/error reports) and matching the hash in each body. The fallback avoids GitHub Search indexing latency, so a retry immediately after a lost create response can still find the just-created Issue and avoid a duplicate POST. Lookup failures fail closed: if GitHub search, labeled issue listing, or response parsing is indeterminate, the reporter records a sanitized `last_submit_error` and does not create a possible duplicate Issue.
 
-The shared GitHub HTTP client uses an explicit 10-second submission timeout by default, configurable up to 300 seconds with `CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS`, and the platform default proxy (`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, and `NO_PROXY` through .NET default proxy handling). Non-positive, non-numeric, and larger timeout values fall back to the 10-second default. Create failures mention proxy environment variables in their diagnostic hint. `429` responses and `403` responses with `x-ratelimit-remaining: 0` are treated as rate limits; `Retry-After` wins, then `x-ratelimit-reset`, then a one-minute fallback retry window.
+The shared GitHub HTTP client uses an explicit 10-second submission timeout by default, configurable up to 300 seconds with `CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS`, and the platform default proxy (`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, and `NO_PROXY` through .NET default proxy handling). Non-positive, non-numeric, and larger timeout values fall back to the 10-second default. GitHub API requests apply `User-Agent: cdidx`, `Accept: application/vnd.github+json`, and `X-GitHub-Api-Version: 2022-11-28`; bearer tokens are set per request and only from `CDIDX_GITHUB_TOKEN`. Create failures mention proxy environment variables in their diagnostic hint. `429` responses and `403` responses with `x-ratelimit-remaining: 0` are treated as rate limits; `Retry-After` wins, then `x-ratelimit-reset`, then a one-minute fallback retry window.
+
+Outbound HTTP/GitHub egress is intentionally narrow:
+
+| Purpose | Path and bounds |
+|---|---|
+| Update check | `UpdateChecker` reads GitHub release metadata with a 2-second request scope, `ResponseHeadersRead`, a 64 KiB response cap, JSON depth 16, private cache writes, and sanitized failure categories. |
+| Release installer/download verification | `ProgramRunner` release download helpers use release-download headers without GitHub API media types, a 256 KiB checksum cap, a 1 MiB installer script cap, private script-file writes, and bounded release-asset diagnostics. |
+| GitHub issue creation | `GitHubIssueReporter` posts only scrubbed structured suggestion fields after duplicate lookup succeeds; success JSON is capped at 256 KiB/depth 16 and API error bodies are capped at 4 KiB with sensitive JSON fields redacted. |
+| Duplicate preflight | `IssueDuplicatePreflight` loads at most 1000 open issues and 1000 repository labels, caps GitHub page bodies at 8 MiB/depth 32, skips pull requests, truncates issue/title/body/label scalars, and sanitizes recoverable diagnostics. |
+| Suggestions/reporting exports | `SuggestionStore`, `SuggestionsCommandRunner`, search issue-draft output, and report/query output are local-only unless the caller explicitly requests live GitHub duplicate preflight or `suggest_improvement` has `CDIDX_GITHUB_TOKEN`; exported descriptions/context/tool invocation text are bounded with `[truncated]` markers. |
+| MCP exposure and diagnostics | MCP `suggest_improvement` stores accepted suggestions locally first; doctor diagnostics expose GitHub proxy/default-credential state and maximum request timeout without token values, while submission failures store sanitized categories/details instead of raw response bodies. |
 
 ### What is NOT included in the payload by design
 
@@ -2310,6 +2379,7 @@ net9 CI lane に合わせる場合は `FRAMEWORK=net9.0 make test` を使いま�
 | CLI help | `cdidx --help` は短い概要、`cdidx --help-all` は全コマンド・flag・例の一覧、`cdidx --help-flags` は共有 flag table のみ、`cdidx <command> --help` は 1 コマンドの usage line を出します。新しいコマンドは主要な user workflow である場合だけ簡易概要に載せ、full help とコマンド固有の usage table には必ず載せてください。 |
 | `cdidx validate` | replacement character、BOM、NUL byte、混在改行、UTF-16 BOM、非 UTF-8 らしい内容など、indexed content の問題を user-facing に検査する integrity scan です。validation issue の種別や filter を追加する場合は、CLI usage、README entry、help summary を同期してください。 |
 | `cdidx doctor` | support request 向けにコピーしやすい environment summary です。既定では redacted に保ち、secret 風の `CDIDX_*` 値は出力しないでください。新しい diagnostic field は issue triage に使える程度に安定したものだけにします。`github` block は `proxy_default_credentials` を `enabled` / `disabled` として出力し、bounded な `max_request_timeout_s` も出します。proxy credential material や raw secret value は出力しないでください。 |
+| 例外診断 | user-facing な CLI / JSON / MCP / file issue / local diagnostic output では raw `ex.Message` を直接 echo しないでください。例外の prose は `CommandErrorWriter.FormatSanitizedExceptionMessage`、`DiagnosticSanitizer.ForMessage`、または既存の bounded な `DiagnosticRedactor` helper を通し、回復に message が不要な場合は安定した error code/category を使ってください。意図的に残す broad catch は `risky-code/broad-exception-catch` taxonomy に沿い、bounded diagnostic、private な best-effort suppression、または documented fallback に正規化してください。 |
 | shell completion | 生成された shell completion script には、生成元の `cdidx` version comment が含まれます。command や flag の schema を変えた場合は completion test を更新し、upgrade 後に installed completion を再生成する README guidance も保ってください。 |
 | target framework | 製品版 CLI と NuGet tool packaging は `net8.0` を対象にしています。test project は `net8.0;net9.0` の multi-target で、CI は Linux、Windows、macOS の各 lane で両方の framework に対して test suite を実行します。CI 相当の full matrix を検証する場合は、両方の target framework を restore / 実行できる .NET SDK を使ってください。 |
 | SDK selection | `global.json` は repository SDK を `9.0.301` に固定し、`rollForward` を無効化します。CI は `8.0.413` と `9.0.301` を明示的に install します。`8.0.413` は `net8.0` runtime lane を提供し、`9.0.301` は restore、build、test、publish、changelog 検証で選択される SDK です。SDK を更新する場合は、`global.json`、すべての `actions/setup-dotnet` version list、Docker build image、この guide を同じ変更で更新してください。 |
@@ -2334,10 +2404,35 @@ net9 CI lane に合わせる場合は `FRAMEWORK=net9.0 make test` を使いま�
 | `.cdidx/` | mode `0700` で作成。 |
 | `codeindex.db` と WAL/SHM sidecar | ファイルが存在する場合は mode `0600` を適用。 |
 | `suggestions-*.json` suggestion store | POSIX では owner-only の mode `0600` で atomic write します。 |
+| インデックス対象ワークスペースソースの読み取り | ソースファイル本文とチェックサムの読み取りは `FileShare.ReadWrite | FileShare.Delete`、長いパスの正規化、設定された最大ファイルバイト数、更新時刻の再確認を使い、ビルドツールが開いたままのファイルも無制限な肥大化を許さず検査できるようにします。 |
 | atomic file write | `AtomicFileWriter` は sibling temp file に書き込み、要求された POSIX mode を置換前に適用し、file content を flush してから target へ rename し、Unix では parent directory を fsync します。local state、cache、suggestion、checkpoint など private payload には `Sensitive` write profile を使い、user-requested export や report は内容が明示的に private でない限り既定の `Public` profile を使います。置換後に parent directory flush が失敗した場合、file は置換済みだが directory durability を確認できていないことが caller に分かるよう command は明示的に失敗します。Windows では、この helper の directory fsync 保証は supported Unix platform に限定されるため skip します。 |
 | index lock、watch sub-run spool、staged hook script、lock metadata sidecar、active workspace の `active.json` | 内容が露出する前に owner-only file (`0600`) として作成または書き込み、該当するものは stale / corrupt diagnostic が local path を広く漏らしたり unbounded allocation を強制したりしないよう小さな bounded buffer で読みます。 |
 | database checkpoint root、snapshot directory、manifest file、copy された DB/WAL/SHM snapshot、restore staging/backup directory | POSIX では owner-only に固定。 |
 | `status --json` | platform が Unix file mode を公開する場合、`data_dir_mode` と `db_file_mode` を報告。 |
+
+### 破壊的ファイルシステム操作の監査
+
+本番コードの `File.Delete`、`Directory.Delete`、`File.Move` 呼び出しは、CodeIndex が所有する状態、または caller が承認した出力に限って許可します。これらの領域を変更する場合は、ローカル binary で次の監査を再実行してください:
+
+```bash
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search File.Delete --path src/ --exclude-tests --exact-substring --count-by file --limit 80
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search Directory.Delete --path src/ --exclude-tests --exact-substring --count-by file --limit 80
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search File.Move --path src/ --exclude-tests --exact-substring --count-by file --limit 80
+```
+
+| surface | ownership / boundary policy | cleanup / rollback policy |
+|---|---|---|
+| `AtomicFileWriter` の file delete / move helper | caller が destination を承認または検証した後の出力 path に使います。temp file は target の sibling として衝突しにくい名前で生成するため、置換は同じ filesystem boundary に残り、別 temp root の policy には依存しません。 | 書き込みは temp file を flush し、target に rename し、Unix では parent directory を flush します。move 前の temp cleanup は best-effort です。置換後の parent-directory flush failure は、target がすでに変わっているため command failure として明示します。 |
+| `cdidx import` / `cdidx export` の temp database と sidecar | import temp DB は destination DB directory 内の hidden sibling、または dry-run 用の owner-only `codeindex-import-*` temp directory に置きます。export snapshot は owner-only `codeindex-export-*` temp directory に置きます。destination DB replacement は export output が source DB / sidecar と重なる path を拒否し、backup sidecar 経由で rollback します。 | temp DB、WAL、SHM、空の temp directory の cleanup failure は warning として出し、import/export の primary error を隠しません。replacement failure では destination state を確認できる residual diagnostics を報告します。 |
+| `cdidx db` checkpoint restore staging と restore-backup prune | checkpoint、restore staging、restore backup は解決済み DB path から派生します。recursive cleanup は DB parent を safe root とし、`codeindex.db.restore-*` 形式の expected prefix を渡して `FileSystemBoundary.TryValidateDirectoryCleanupTarget` で検証します。checkpoint payload file は regular file である必要があり、symlink、reparse point、device は拒否します。 | restore は置換前に backup を作り、失敗時は rollback を試みます。temp directory cleanup と restore-backup prune の失敗は bounded diagnostic または warning になり、検証済み root の外側は削除しません。 |
+| upgrade installer script と temp directory | upgrade download は `Path.GetTempPath()` 配下の owner-only `cdidx-install-*` directory を使います。recursive directory cleanup は削除前に temp root、required prefix、symlink / reparse / device 状態を検証します。install-directory write probe は、root、symlink / reparse point、unsafe POSIX mode を拒否する install-directory validation の後だけ実行します。 | installer script と temp-directory cleanup の失敗は warning です。install operation の結果は、二次的な cleanup failure とは分けて報告します。 |
+| `.cdidx` write probe と case-sensitivity probe | write probe は、解決済み install directory、`.cdidx` directory、または `.cdidx/probes` directory 配下に fresh file として生成します。probe directory は owner-only で作成され、workspace data directory 配下にあります。 | probe file は確認後に削除します。case-sensitivity probe directory の cleanup は bounded diagnostic を記録し、`cdidx` process が動いていないときに stale `.cdidx/probes` entry を削除するよう案内します。 |
+| scan checkpoint | full-scan resume checkpoint は `.cdidx/scan-checkpoint.json` の local state で、sensitive atomic writer profile 経由で書き込みます。 | save / delete failure は human output では warning、JSON output では `CliJsonMessage` entry です。indexing は stale checkpoint に依存せず継続します。 |
+| Git hook staging | hook installation は repository hook directory 内に private staged hook script を書き込み、必要に応じて backup path 付きの `File.Replace` で hook file を置き換えます。 | staged script が配置されなかった場合の cleanup は best-effort で、hook warning として記録します。managed hook の削除失敗は requested mutation の失敗なので command error です。 |
+| index / MCP lock metadata sidecar | lock file と `.info` sidecar は、解決済み DB または MCP index lock path の隣に置き、owner-only permission で作成します。 | lock dispose は metadata sidecar だけを削除します。cleanup failure は `GlobalToolLog` と任意の test sink に記録します。stale lock file は recursive cleanup ではなく OS の lock release に依存して復旧します。 |
+| search audit recipe | `SearchAuditRecipes` には `Directory.Delete` や `File.Move` のような literal recipe string が含まれます。これは search metadata であり filesystem mutation ではありません。 | cleanup policy は適用されません。 |
+
+best-effort cleanup の catch は、所有済み temp / probe / lock / metadata artifact の二次 cleanup に限定してください。operator が残骸に対処できる場合は bounded warning または diagnostic を出し、primary operation result を隠してはいけません。例外は atomic replacement 後の durability confirmation です。target がすでに置換済みで Unix parent directory を flush できない場合は、filesystem state は変わったが durability を確認できていないことを caller に伝えるため、command は明示的に失敗します。
 
 ## リリース配布チェックリスト
 
@@ -2466,6 +2561,14 @@ slow SQLite command diagnostic は `CDIDX_SLOW_QUERY_MS=<milliseconds>` で stde
 query コマンドも JSON profile block 用の `--profile` と command-scoped profiling 用の
 `--slow-query-ms <milliseconds>` を受け付けます。
 
+### リソース境界契約
+
+| 経路 | 契約 |
+|---|---|
+| worker protocol JSON | isolated worker の stdin frame は `BoundedLineReader` で読みます。既定の frame 上限は文字数・UTF-8 byte 数ともに 32 MiB です。大きな `--max-file-bytes` によって JSON escape 分の余裕が必要な場合、protocol frame 上限は `WorkerProtocolLineLimits.MaxExtendedLineUtf8Bytes`（384 MiB）まで拡張できますが、`int.MaxValue` までは拡張しません。`WorkerProtocolJsonValidator` は `JsonDocument.Parse` の前に合意済みの文字数 / UTF-8 byte 上限を超える payload を拒否し、`DefaultMaxJsonDepth`（32）で parse し、object property 1,000,000 件超と frame 上限を超える string を拒否します。 |
+| user regex find | `find --regex` は lookaround / backreference 互換性のため classic .NET regex engine を維持し、`RegexOptions.CultureInvariant` を付け、`--exact` でない場合は `IgnoreCase` も付け、各 match に `BoundedRegex.DefaultMatchTimeout` を使います。timeout は CLI JSON で `E014_REGEX_MATCH_TIMEOUT` / `regex_timeout` として返り、人間向け出力にも同じ recovery hint が出ます。`find --all` は index 全体を走査する前に candidate file と line scan の上限も適用します。 |
+| `MaxValue` sentinel | `int.MaxValue` は、次の操作が SQL limit、allocation、traversal、payload sizing、timeout conversion の前に clamp する場合だけ内部 sentinel として使えます。ユーザー影響値は multiplication、buffer sizing、protocol framing、query expansion の前に、名前付きの実用上限へ落としてください。 |
+
 ### インデックスパイプライン
 
 ```
@@ -2502,14 +2605,15 @@ out-of-tree の post-extraction hook は、`~/.config/cdidx/hooks/` または
 `CodeIndex.Indexer.Hooks.IPostExtractionHook` を実装できます。hook discovery は
 `CDIDX_HOOK_DISCOVERY_MAX_DLLS` 件（既定 128）までの DLL 候補を調べ、各候補は
 `CDIDX_HOOK_DISCOVERY_MAX_BYTES` bytes（既定 67108864）以下である必要があります。その bounded
-candidate set を path order で load します。public parameterless constructor を持つ concrete hook type が instantiate されます。
-built-in symbol extraction 後と built-in reference extraction 後、row 永続化前に呼び出されます。
+candidate set を path order で load します。discovery は concrete hook type が public parameterless
+constructor を持つことを検証しますが、hook constructor は callback 実行時に isolated callback worker 内で実行されます。
+built-in symbol extraction 後と built-in reference extraction 後、row 永続化前に hook が呼び出されます。
 hook は `FileContext` と mutable な `IList<SymbolRecord>` / `IList<ReferenceRecord>` を受け取り、
 extracted record の annotation、synthetic symbol 追加、domain-specific reference 追加ができます。
 
-Extractor plugin assembly と hook assembly は `AssemblyLoadContext.Default` ではなく、custom collectible assembly load context で読み込まれます。dependency resolution はまず CodeIndex の共有 interface など既に Default ALC に読み込まれている assembly を再利用し、その後 extension assembly path から private dependency を解決します。
+Extractor plugin assembly と hook assembly は `AssemblyLoadContext.Default` ではなく、custom collectible assembly load context で読み込まれます。dependency resolution はまず CodeIndex の共有 interface など既に Default ALC に読み込まれている assembly を再利用し、その後 extension assembly path から private dependency を解決します。plugin constructor は registry loading 中に main process で実行され、任意の extension code side effect を起こせるため、plugin directory は code execution として信頼境界を扱ってください。plugin load context は collectible ですが、registry が後続の extraction 用に extractor instance を保持するため、登録済み extractor が active な間は保持されます。reject された plugin assembly と保持されない hook assembly は直ちに unload されます。loaded hook context は hook runner の lifetime だけ保持され、runner dispose 時に unload されます。`status --json` はこれを `extractors.load_context_lifecycle` と各 hook の `hooks[].load_context_lifecycle` で報告します。
 
-`CDIDX_HOOKS_DIR` は trust boundary の override です。hook assembly は extension code を実行するため、信頼できる user が管理する local directory だけを指定してください。`status --json` と MCP `status` は override が accepted / rejected になった場合に sanitization 済みの `hook_diagnostics[]` を返し、存在しない directory や symlink / reparse point の override directory を拒否します。Unix permissions が group- または world-writable な directory も warning として報告します。hook diagnostics には bounded な `category` machine code が含まれるため、caller は human-readable message を parse せずに override、discovery、assembly load、constructor、callback、timeout failure を区別できます。
+`CDIDX_HOOKS_DIR` は trust boundary の override です。hook assembly は isolated worker 内で extension code を実行するため、信頼できる user が管理する local directory だけを指定してください。`status --json` と MCP `status` は override が accepted / rejected になった場合に sanitization 済みの `hook_diagnostics[]` を返し、存在しない directory や symlink / reparse point の override directory を拒否します。Unix permissions が group- または world-writable な directory も warning として報告します。hook diagnostics には bounded な `category` machine code が含まれるため、caller は human-readable message を parse せずに override、discovery、assembly load、constructor、callback、timeout failure を区別できます。
 
 assembly load、construction、callback exception は sanitization 済み category 付きの diagnostic として捕捉され、indexing は継続します。
 各 loaded hook は isolated worker process 内で動き、callback は scratch copy 上で実行され、
@@ -2541,6 +2645,14 @@ validation、filesystem preflight error は `CommandErrorWriter` を使い、`Pr
 `IndexCommandRunner`、query runner の形式を揃えてください。JSON error payload は
 `CommandErrorJsonResult` を使い続けます。
 
+### プロセス起動ポリシー
+
+本番の subprocess 起動箇所はすべて `ProcessStartInfo.ArgumentList` を使い、`UseShellExecute` を無効のままにしてください。start-info の構築は `ProcessLaunchPolicy` またはそれを呼ぶ用途別 helper に置き、git、isolated worker、hook callback、installer dispatch、その他の subprocess が同じ argument、encoding、no-shell default を共有できるようにします。
+
+environment 継承は opt-in です。subprocess environment には `SubprocessEnvironmentPolicy` の allowlist を使ってください。git は base / proxy / certificate / git knob だけを残し terminal prompt を無効化します。isolated worker は base / .NET runtime 値と test 用の `CDIDX_TEST_` 変数だけを残します。installer handoff は文書化済みの installer / proxy / certificate 変数だけを残します。trust boundary の文書化とテストなしに、広い `CDIDX_*`、token、credential、shell environment forwarding を追加してはいけません。
+
+すべての subprocess wait には明示的な cancellation または timeout 経路が必要です。capture した stdout / stderr は user-visible diagnostic に出す前に bounded にし、diagnostic は既存の safe-formatting helper で sanitize してください。
+
 ### CLI 出力エンコーディングと端末制御
 
 CLI JSON output は機械処理向けにきれいでなければなりません。redirected stdout は BOM なし UTF-8 で
@@ -2548,6 +2660,19 @@ CLI JSON output は機械処理向けにきれいでなければなりません�
 場合でも ANSI escape sequence を出してはいけません。JSON-safe styling suppression は
 `ConsoleUi.ColorizeKind` など共有 formatter の近くに置き、将来の query output path も同じ
 invariant を継承できるようにしてください。
+
+JSON serialization site は contract domain ごとに分けます。公開 CLI JSON は
+`ProgramRunner.CreateDefaultJsonOptions()` と `CliJsonSerializerContext` を使います。field name は
+snake_case、null は省略、audit 済みの公開 top-level event/result DTO は `api_version` を持ち、
+DOM で組み立てる `JsonObject` payload は sanitized / bounded 済み field だけを追加します。
+公開 top-level CLI JSON DTO を追加または audit するときは `api_version` を追加してください。MCP JSON-RPC は
+protocol envelope に `McpServer` の camelCase option を使い、tool structured content は文書化済みの
+machine-readable key を保ちます。`JsonObject` / `JsonNode` を mutate する前に値を sanitize /
+redact してください。LSP、quickfix、SARIF 出力は CLI snake_case contract ではなく外部 schema に
+従います。GitHub/report helper と worker/private storage path は API client、永続化ローカル状態、
+process-internal protocol のいずれかなので、それぞれの bounded serializer を使います。
+`LocalJsonlJsonWriterOptions` の relaxed encoder は private append-only JSONL diagnostic 専用であり、
+公開 CLI、MCP、LSP、HTTP、埋め込み可能な JSON に再利用してはいけません。
 
 `cdidx export ctags --json` も同じ contract に従います。stdout は単一の JSON summary または
 structured error だけを含み、tags file 自体は artifact として残します。summary には解決済みの
@@ -3378,7 +3503,7 @@ AI エージェント向け検索ルールのテンプレートについては�
 |---|---|
 | human-readable default | query command（`search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files`、`excerpt`、`map`、`inspect`、`outline`、`suggestions`）は既定で**人間向け出力**です。 |
 | `--json` | JSON lines output（1 行 1 JSON object）に切り替えます。AI agent が容易に parse できるよう設計されています。 |
-| `--count --json` envelope | `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files`、`find`、`impact`、`unused` の count-only JSON は単一の自動化向け object です。常に `count`、適用済み `query_context`、freshness metadata（`indexed_file_count`、`indexed_at`、`freshness_available`）、trust flag の `degraded` / `authoritative_count` を含みます。matched-file total を持つ command は `files` と互換 alias の `file_count` も含みます。`unused --count --json` は `returned_bucket_counts` と `summary.by_bucket` / `summary.by_confidence` も含みます。`authoritative_count=false` は readiness または graph/exact trust signal により count が authoritative ではないことを示し、freshness field は count に使った index snapshot を説明します。 |
+| `--count --json` envelope | `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files`、`find`、`impact`、`unused` の count-only JSON は単一の自動化向け object です。常に `count`、適用済み `query_context`、freshness metadata（`indexed_file_count`、`indexed_at`、`freshness_available`）、trust flag の `degraded` / `authoritative_count` を含みます。matched-file total を持つ command は `files` と互換 alias の `file_count` も含みます。`unused --count --json` は `returned_bucket_counts`、`returned_contract_domain_counts`、`summary.by_bucket` / `summary.by_confidence` / `summary.by_contract_domain` も含みます。`authoritative_count=false` は readiness または graph/exact trust signal により count が authoritative ではないことを示し、freshness field は count に使った index snapshot を説明します。 |
 | `search --json` sentinel | result row の後に、0 件応答も含めて最後の `{"done":true,"count":N,"interrupted":false}` sentinel を追加します。stream consumer は clean end と truncated / interrupted stream を区別できます。 |
 | `outline --json` controls | `outline --json` は bounded な機械向け出力として `--kind <kind[,kind]>`、`--limit` / `--top`、`--cursor <outline:offset>`、`--outline-fields <csv>` を受け付けます。制御付き応答は通常の outline envelope を維持し、`total_symbol_count`、`returned_symbol_count`、`cursor_offset`、`next_cursor`、`has_more` を追加します。該当する場合は `kind_filter` と `selected_fields` も返します。これらは additive field なので API version bump は不要です。 |
 | `--json-envelope` 対象 command | `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files`、`find`、`excerpt`、`map`、`inspect`、`outline`、`status`、`validate`、`languages`、`impact`、`deps`、`unused`、`hotspots`。 |
@@ -3537,9 +3662,20 @@ Unlist しても exact version restore は不可能になりません。これ�
 
 `SuggestionStore.TryAddAndSubmit` は、ローカル read/write と送信予約を suggestion-store file lock の下で行いますが、GitHub callback は lock を解放してから呼び出します。予約時に `last_submit_attempt`、`submit_attempt_count`、短い `next_retry_at` guard を stamp するため、最初の remote call が進行中に別 writer が同じ duplicate を送信することはありません。callback の結果は、remote call 完了後に短時間だけ lock を取り直して永続化されます。
 
-upstream Issue を作成する前に、`GitHubIssueReporter` は同じ SHA256 提案ハッシュを持つ Issue が既に存在するか確認する。まず GitHub Search で Issue 本文内のハッシュを検索し、その後 fallback として、cdidx が付与する既存 repository label（通常提案は `enhancement`、crash/error report は `bug`）付きの Issue を一覧し、各本文内のハッシュを照合する。この fallback により GitHub Search の indexing 遅延を回避できるため、作成レスポンスが失われた直後の再試行でも、作成済み Issue を検出して重複 POST を防げる。lookup 失敗時の扱いは引き続きベストエフォートであり、GitHub 側の障害などで両方の確認に失敗した場合は、正規の初回送信をブロックせず通常の作成経路へ進む。
+upstream Issue を作成する前に、`GitHubIssueReporter` は同じ SHA256 提案ハッシュを持つ Issue が既に存在するか確認する。まず GitHub Search で Issue 本文内のハッシュを検索し、その後 fallback として、cdidx が付与する既存 repository label（通常提案は `enhancement`、crash/error report は `bug`）付きの Issue を一覧し、各本文内のハッシュを照合する。この fallback により GitHub Search の indexing 遅延を回避できるため、作成レスポンスが失われた直後の再試行でも、作成済み Issue を検出して重複 POST を防げる。lookup 失敗時は fail closed として扱う。GitHub Search、label 付き Issue 一覧、またはレスポンス解析が不確定な場合、reporter は sanitization 済みの `last_submit_error` を記録し、重複の可能性がある Issue は作成しない。
 
-共有 GitHub HTTP クライアントは既定で 10 秒 timeout と platform default proxy（.NET の既定 proxy 処理を通じた `HTTPS_PROXY`、`HTTP_PROXY`、`ALL_PROXY`、`NO_PROXY`）を使う。`CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS` で最大 300 秒まで設定でき、0 以下、数値以外、または上限を超える値は 10 秒の既定値へ戻る。作成失敗の診断には proxy 環境変数の確認ヒントを含める。`429` 応答と `x-ratelimit-remaining: 0` 付きの `403` 応答は rate limit として扱い、`Retry-After`、`x-ratelimit-reset`、1 分の fallback retry window の順で再試行時刻を決める。
+共有 GitHub HTTP クライアントは既定で 10 秒 timeout と platform default proxy（.NET の既定 proxy 処理を通じた `HTTPS_PROXY`、`HTTP_PROXY`、`ALL_PROXY`、`NO_PROXY`）を使う。`CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS` で最大 300 秒まで設定でき、0 以下、数値以外、または上限を超える値は 10 秒の既定値へ戻る。GitHub API request には `User-Agent: cdidx`、`Accept: application/vnd.github+json`、`X-GitHub-Api-Version: 2022-11-28` を設定する。bearer token は request ごとに設定し、`CDIDX_GITHUB_TOKEN` のみを使う。作成失敗の診断には proxy 環境変数の確認ヒントを含める。`429` 応答と `x-ratelimit-remaining: 0` 付きの `403` 応答は rate limit として扱い、`Retry-After`、`x-ratelimit-reset`、1 分の fallback retry window の順で再試行時刻を決める。
+
+Outbound HTTP/GitHub egress は意図的に狭くしている:
+
+| 目的 | 経路と上限 |
+|---|---|
+| update check | `UpdateChecker` は GitHub release metadata を 2 秒の request scope、`ResponseHeadersRead`、64 KiB の response 上限、JSON 深度 16、private cache write、sanitization 済み failure category で読む。 |
+| release installer/download verification | `ProgramRunner` の release download helper は GitHub API media type を付けない release-download header、256 KiB の checksum 上限、1 MiB の installer script 上限、private script-file write、bounded な release asset 診断を使う。 |
+| GitHub issue creation | `GitHubIssueReporter` は duplicate lookup 成功後に scrub 済みの構造化 suggestion field だけを POST する。success JSON は 256 KiB / 深度 16 で制限し、API error body は 4 KiB で制限して sensitive JSON field を redact する。 |
+| duplicate preflight | `IssueDuplicatePreflight` は最大 1000 件の open issue と 1000 件の repository label だけを読み、GitHub page body は 8 MiB / 深度 32 に制限し、pull request を除外し、issue/title/body/label scalar を切り詰め、recoverable diagnostic を sanitize する。 |
+| suggestions/reporting exports | `SuggestionStore`、`SuggestionsCommandRunner`、search issue-draft output、report/query output は、呼び出し元が live GitHub duplicate preflight を明示するか `suggest_improvement` に `CDIDX_GITHUB_TOKEN` がある場合を除き local-only である。export される description/context/tool invocation text は `[truncated]` marker 付きで制限される。 |
+| MCP exposure and diagnostics | MCP `suggest_improvement` は受理した suggestion をまず local に保存する。doctor 診断は GitHub proxy/default-credential 状態と maximum request timeout を token 値なしで出し、submission failure は raw response body ではなく sanitize 済み category/detail として保存する。 |
 
 ### ペイロードに設計上含まれないもの
 

@@ -534,11 +534,11 @@ public partial class McpServer
                 "unused_symbols",
                 "Use this when auditing potential dead code before removal. Prefer `references`, `callers`, or `excerpt` to verify surprising hits before editing. Find symbols that are defined but never referenced in the indexed codebase. "
                 + "Results include confidence buckets so private hits rank ahead of public/exported suspects; the lowest-confidence bucket also covers reflection, serialization contracts, config, metadata, generated surfaces, documentation headings, and test-only hooks. Only meaningful for languages with reference extraction support. "
-                + "Structured output includes `summary.by_bucket`, `summary.by_confidence`, and `bucket_taxonomy`; bucket values are `likely_unused_private`, `maybe_unused_nonpublic`, `public_or_exported_no_refs`, and `reflection_or_config_suspect`. Use `bucket` or `minConfidence` to audit a single bucket or confidence class. "
+                + "Structured output includes `summary.by_bucket`, `summary.by_confidence`, `summary.by_contract_domain`, `bucket_taxonomy`, and per-symbol `unusedContractDomain`; bucket values are `likely_unused_private`, `maybe_unused_nonpublic`, `public_or_exported_no_refs`, and `reflection_or_config_suspect`. Use `bucket` or `minConfidence` to audit a single bucket or confidence class. "
                 + "C# nameof/typeof and direct reflection member-name literals such as GetMethod(\"Foo\") are indexed as references; dynamically constructed reflection names can still require manual review. "
                 + "/ 削除前に dead code 候補を監査するときに使う。意外なヒットは編集前に `references` / `callers` / `excerpt` で確認する。インデックス済みコードベースで定義されているが一度も参照されていないシンボルを検索する。"
                 + "private 候補を public/exported suspect より前に返し、最低信頼 bucket は reflection、serialization contract、config、metadata、generated surface、documentation heading、test-only hook も扱う。参照抽出対応言語でのみ意味がある。"
-                + "構造化出力には `summary.by_bucket`、`summary.by_confidence`、`bucket_taxonomy` が含まれ、bucket 値は `likely_unused_private`、`maybe_unused_nonpublic`、`public_or_exported_no_refs`、`reflection_or_config_suspect`。`bucket` または `minConfidence` で単一 bucket や confidence class を監査できる。"
+                + "構造化出力には `summary.by_bucket`、`summary.by_confidence`、`summary.by_contract_domain`、`bucket_taxonomy`、シンボル単位の `unusedContractDomain` が含まれ、bucket 値は `likely_unused_private`、`maybe_unused_nonpublic`、`public_or_exported_no_refs`、`reflection_or_config_suspect`。`bucket` または `minConfidence` で単一 bucket や confidence class を監査できる。"
                 + "C# の nameof/typeof と GetMethod(\"Foo\") のような直接の reflection member-name literal は参照として index されるが、動的に組み立てた reflection 名は手動確認が必要な場合がある。",
                 new JsonObject
                 {

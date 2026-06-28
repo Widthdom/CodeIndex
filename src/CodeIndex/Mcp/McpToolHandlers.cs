@@ -467,24 +467,6 @@ public partial class McpServer
         payload["format"] = "compact";
     }
 
-    private static bool AddLimitMetadata<T>(JsonObject payload, List<T> results, int limit, int offset = 0, bool includePagination = false)
-    {
-        var truncated = results.Count > limit;
-        if (truncated)
-            results.RemoveRange(limit, results.Count - limit);
-
-        payload["count"] = results.Count;
-        payload["truncated"] = truncated;
-        payload["more_available"] = truncated;
-        if (includePagination)
-        {
-            payload["offset"] = offset;
-            if (truncated)
-                payload["next_offset"] = offset + results.Count;
-        }
-        return truncated;
-    }
-
     /// <summary>
     /// Return true when the requested reference kind is NOT a call-graph kind (i.e. metadata
     /// `attribute` / `annotation`, compile-time `type_reference`, or structural `import`) —
@@ -3005,19 +2987,6 @@ public partial class McpServer
         }
     }
 
-    private static void AddExactSignalAliases(JsonObject payload)
-    {
-        if (payload["exact_index_available"] is JsonNode snakeExact && payload["exactIndexAvailable"] is null)
-            payload["exactIndexAvailable"] = snakeExact.DeepClone();
-        else if (payload["exactIndexAvailable"] is JsonNode camelExact && payload["exact_index_available"] is null)
-            payload["exact_index_available"] = camelExact.DeepClone();
-
-        if (payload["degraded_reason"] is JsonNode snakeReason && payload["degradedReason"] is null)
-            payload["degradedReason"] = snakeReason.DeepClone();
-        else if (payload["degradedReason"] is JsonNode camelReason && payload["degraded_reason"] is null)
-            payload["degraded_reason"] = camelReason.DeepClone();
-    }
-
     private static bool IsBareVerbatimQueryToken(string value)
     {
         var trimmed = value.Trim();
@@ -3206,6 +3175,7 @@ public partial class McpServer
                         AssemblyPath = hook.AssemblyPath,
                         TypeName = hook.TypeName,
                         CallbackBudgetMs = (long)Math.Round(postExtractionHookSnapshot.CallbackBudget.TotalMilliseconds, MidpointRounding.AwayFromZero),
+                        LoadContextLifecycle = PostExtractionHookRunner.HookLoadContextLifecycle,
                     })
                     .ToList();
             }
@@ -4839,15 +4809,34 @@ public partial class McpServer
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.GetFileDependencies(limit, lang, pathPatterns, excludePaths, excludeTests, reverse);
-            var cycleCandidates = cyclesOnly
-                ? reader.GetFileDependencies(QueryCommandRunner.GetDependencyCycleGraphLimit(limit), lang, pathPatterns, excludePaths, excludeTests, reverse)
-                : results;
+            var cycleCandidateLimit = QueryCommandRunner.GetDependencyCycleGraphLimit(limit);
+            var cycleCandidateRowCount = 0;
+            var results = cyclesOnly
+                ? reader.GetFileDependencyCycleCandidates(
+                    checked(cycleCandidateLimit + 1),
+                    out cycleCandidateRowCount,
+                    lang,
+                    pathPatterns,
+                    excludePaths,
+                    excludeTests,
+                    reverse)
+                : reader.GetFileDependencies(limit, lang, pathPatterns, excludePaths, excludeTests, reverse);
+            var cycleCandidateRowsRead = cyclesOnly ? cycleCandidateRowCount : 0;
+            var cycleCandidates = cyclesOnly ? results.Take(cycleCandidateLimit).ToList() : results;
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
             List<List<string>> cycles = [];
-            var outputEdges = cyclesOnly ? QueryCommandRunner.FilterCycleEdges(cycleCandidates, out cycles).Take(limit).ToList() : results;
+            var outputEdges = cyclesOnly ? QueryCommandRunner.FilterCycleEdges(cycleCandidates, out cycles) : results;
+            var cycleCandidateTruncated = cyclesOnly && cycleCandidateRowsRead > cycleCandidateLimit;
+            var cycleDisplayTruncated = cyclesOnly && cycles.Count > limit;
             if (cyclesOnly)
+            {
                 cycles = cycles.Take(limit).ToList();
+                var cycleNodes = cycles.SelectMany(static cycle => cycle).ToHashSet(StringComparer.Ordinal);
+                outputEdges = outputEdges
+                    .Where(edge => cycleNodes.Count == 0 || (cycleNodes.Contains(edge.SourcePath) && cycleNodes.Contains(edge.TargetPath)))
+                    .Take(limit)
+                    .ToList();
+            }
             var sqlGraphSignalPaths = cyclesOnly
                 ? cycles.Count > 0
                     ? cycles.SelectMany(static cycle => cycle)
@@ -4867,6 +4856,26 @@ public partial class McpServer
                 payload["graph"] = BuildJsonGraphPayload(outputEdges);
             else
                 payload["edges"] = JsonSerializer.SerializeToNode(outputEdges, _jsonOptions);
+            if (cyclesOnly)
+            {
+                payload["truncated"] = cycleCandidateTruncated || cycleDisplayTruncated;
+                var truncatedReason = cycleCandidateTruncated
+                    ? "candidate_edge_limit"
+                    : cycleDisplayTruncated
+                        ? "display_limit"
+                        : null;
+                payload["termination_reason"] = truncatedReason switch
+                {
+                    "candidate_edge_limit" => "candidate_limit_reached",
+                    "display_limit" => "display_limit_reached",
+                    _ => "completed",
+                };
+                if (truncatedReason != null)
+                    payload["truncated_reason"] = truncatedReason;
+                payload["candidate_edge_count"] = Math.Min(cycleCandidateRowsRead, cycleCandidateLimit);
+                payload["candidate_edge_limit"] = cycleCandidateLimit;
+                payload["cycle_detection_mode"] = "bounded_approximate_candidate_edges";
+            }
             payload["format"] = format;
             payload["includeGenerated"] = includeGenerated;
             payload["generated_code_filter_supported"] = true;
@@ -4874,7 +4883,7 @@ public partial class McpServer
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
             var summary = payload["count"]!.GetValue<int>() > 0
                 ? cyclesOnly ? $"Found {ConsoleUi.Counted(cycles.Count, "dependency cycle")}." : $"Found {ConsoleUi.Counted(results.Count, "dependency edge")}."
-                : "No file dependencies found.";
+                : cyclesOnly ? "No dependency cycles found." : "No file dependencies found.";
             if (results.Count == 0)
                 AddFreshnessHint(payload, reader);
             adjustments.ApplyTo(payload);
@@ -5334,12 +5343,14 @@ public partial class McpServer
                     results.Select(result => result.Lang),
                     lang);
             var bucketCounts = QueryCommandRunner.BuildUnusedBucketCounts(results);
+            var contractDomainCounts = QueryCommandRunner.BuildUnusedContractDomainCounts(results);
             var payload = new JsonObject
             {
                 ["count"] = results.Count,
                 ["graph_supported"] = graphSupported,
                 ["graph_support_reason"] = graphSupportReason,
                 ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(bucketCounts, _jsonOptions),
+                ["returned_contract_domain_counts"] = JsonSerializer.SerializeToNode(contractDomainCounts, _jsonOptions),
                 ["summary"] = QueryCommandRunner.BuildUnusedSummaryJson(results, _jsonOptions),
                 ["bucket_taxonomy"] = QueryCommandRunner.BuildUnusedBucketTaxonomyJson(),
                 ["symbols"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
@@ -5350,7 +5361,7 @@ public partial class McpServer
                 payload["symbols_by_bucket"] = BuildUnusedSymbolsByBucket(results);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
             var summary = results.Count > 0
-                ? $"Found {ConsoleUi.Counted(results.Count, "potentially unused symbol")} across {ConsoleUi.Counted(bucketCounts.Count, "returned bucket")}. Private hits are ranked ahead of exported/config suspects, but not labeled high-confidence from indexed refs alone. Note: name-based matching — same-named symbols in different contexts may mask true unused symbols."
+                ? $"Found {ConsoleUi.Counted(results.Count, "potentially unused symbol")} across {ConsoleUi.Counted(bucketCounts.Count, "returned bucket")} and {ConsoleUi.Counted(contractDomainCounts.Count, "contract domain")}. Private hits are ranked ahead of exported/config suspects, but not labeled high-confidence from indexed refs alone. Note: name-based matching — same-named symbols in different contexts may mask true unused symbols."
                 : "No unused symbols found.";
             if (graphSupported == false)
                 summary += $" Warning: '{lang}' does not support reference extraction. Unused results are unavailable for this language.";
