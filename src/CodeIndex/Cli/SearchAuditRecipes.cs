@@ -942,11 +942,33 @@ internal static class SearchAuditRecipes
                     ["audit", "bug"],
                     "False positives include intentionally detached background work and APIs without a meaningful caller token."),
                 new(
+                    "sync-wait-call",
+                    ".Wait(",
+                    "Find synchronous Wait calls that may block cancellation, async continuations, or shutdown paths.",
+                    ["audit", "bug"],
+                    "False positives include Monitor.Wait, SemaphoreSlim.Wait(0) admission checks, and bounded disposal or cleanup waits that intentionally bridge synchronous APIs.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: Task.Wait, unbounded waits, and waits without a caller cancellation token can hide cancellation and deadlock async flows.",
+                        "positive: Monitor.Wait, SemaphoreSlim admission checks, and bounded best-effort shutdown waits should be classified separately from Task blocking."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
                     "sync-over-async",
                     "GetAwaiter().GetResult",
-                    "Find sync-over-async waits that may deadlock or hide cancellation and timeout behavior.",
+                    "Find Task or ValueTask GetAwaiter().GetResult bridges that may deadlock or hide cancellation and timeout behavior.",
                     ["audit", "bug"],
-                    "False positives include process-exit boundaries and test helpers that intentionally bridge sync APIs.")
+                    "False positives include process-exit boundaries, compatibility sync wrappers, and completed-task observation; `.Result` property accesses are intentionally kept out of this query because many project DTOs expose Result-named properties.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: Task/ValueTask GetAwaiter().GetResult can block async continuations and bypass caller cancellation if used on live asynchronous work.",
+                        "positive: compatibility wrappers, process-exit boundaries, and already-completed task observation should be reviewed as sync API bridges rather than automatic defects."
+                    ],
+                    MatchOrigins = ["code"],
+                }
             ]),
         SourceScopedRecipe(
             "xml-parser-security",

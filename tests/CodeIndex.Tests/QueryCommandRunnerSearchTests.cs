@@ -1759,7 +1759,7 @@ public partial class QueryCommandRunnerTests
             SearchAuditRecipes.DefaultAuditScope,
             ["src/**"],
             expectedSourceExcludes,
-            ["sqlite-addwithvalue", "sqlite-quoted-identifier", "sqlite-typed-parameter", "regex-construction", "bounded-regex-alias", "fully-qualified-regex-construction", "static-regex-is-match", "static-regex-is-match-negated", "static-regex-is-match-parenthesized", "static-regex-match", "static-regex-match-negated", "static-regex-match-parenthesized", "static-regex-matches", "static-regex-matches-negated", "static-regex-matches-parenthesized", "static-regex-replace", "static-regex-replace-negated", "static-regex-replace-parenthesized", "static-regex-split", "static-regex-split-negated", "static-regex-split-parenthesized", "cancellation-token-none", "sync-over-async"]);
+            ["sqlite-addwithvalue", "sqlite-quoted-identifier", "sqlite-typed-parameter", "regex-construction", "bounded-regex-alias", "fully-qualified-regex-construction", "static-regex-is-match", "static-regex-is-match-negated", "static-regex-is-match-parenthesized", "static-regex-match", "static-regex-match-negated", "static-regex-match-parenthesized", "static-regex-matches", "static-regex-matches-negated", "static-regex-matches-parenthesized", "static-regex-replace", "static-regex-replace-negated", "static-regex-replace-parenthesized", "static-regex-split", "static-regex-split-negated", "static-regex-split-parenthesized", "cancellation-token-none", "sync-wait-call", "sync-over-async"]);
         AssertRecipe(
             "xml-parser-security",
             SearchAuditRecipes.DefaultAuditScope,
@@ -1804,6 +1804,26 @@ public partial class QueryCommandRunnerTests
                 Assert.False(string.IsNullOrWhiteSpace(query.FalsePositiveGuidance));
             });
         }
+    }
+
+    [Fact]
+    public void RunSearch_DotnetRiskSyncQueriesSeparateBlockingShapes_Issue4125()
+    {
+        using var env = EnvironmentVariableScope.Capture(SearchAuditRecipes.RecipePathsEnvironmentVariable);
+        env.Set(SearchAuditRecipes.RecipePathsEnvironmentVariable, null);
+
+        var recipe = Assert.Single(SearchAuditRecipes.All, item => item.Name == "dotnet-risk-patterns");
+        var syncWait = Assert.Single(recipe.Queries, query => query.Name == "sync-wait-call");
+        var syncOverAsync = Assert.Single(recipe.Queries, query => query.Name == "sync-over-async");
+
+        Assert.Equal(".Wait(", syncWait.Query);
+        Assert.Contains("Monitor.Wait", syncWait.FalsePositiveGuidance, StringComparison.Ordinal);
+        Assert.Contains("SemaphoreSlim", syncWait.RiskEvidence[1], StringComparison.Ordinal);
+
+        Assert.Equal("GetAwaiter().GetResult", syncOverAsync.Query);
+        Assert.Contains("Task/ValueTask", syncOverAsync.RiskEvidence[0], StringComparison.Ordinal);
+        Assert.Contains("Result-named properties", syncOverAsync.FalsePositiveGuidance, StringComparison.Ordinal);
+        Assert.DoesNotContain(".Result", syncOverAsync.Query, StringComparison.Ordinal);
     }
 
     [Fact]
