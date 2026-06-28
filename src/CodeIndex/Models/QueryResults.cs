@@ -70,7 +70,8 @@ public readonly record struct UnusedCountResult(
     int FileCount,
     bool IncludesSql,
     IReadOnlyDictionary<string, int> BucketCounts,
-    IReadOnlyDictionary<string, int> ConfidenceCounts);
+    IReadOnlyDictionary<string, int> ConfidenceCounts,
+    IReadOnlyDictionary<string, int> ContractDomainCounts);
 
 public readonly record struct SearchFileCountResult(string Path, int Count);
 
@@ -252,6 +253,10 @@ public class UnusedSymbolResult : SymbolResult
     public string UnusedConfidence { get; set; } = string.Empty;
     public string UnusedReason { get; set; } = string.Empty;
     public List<string> UnusedReasonTags { get; set; } = [];
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? UnusedContractDomain { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? UnusedContractDomainTags { get; set; }
 }
 
 public class GroupedHotspotResult

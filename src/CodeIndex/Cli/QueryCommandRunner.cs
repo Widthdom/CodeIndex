@@ -9249,6 +9249,7 @@ public static partial class QueryCommandRunner
                         ["count"] = countSummary.Count,
                         ["files"] = countSummary.FileCount,
                         ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(ToUnusedCountDictionary(countSummary.BucketCounts), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
+                        ["returned_contract_domain_counts"] = JsonSerializer.SerializeToNode(ToUnusedCountDictionary(countSummary.ContractDomainCounts), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
                         ["summary"] = BuildUnusedCountSummaryJson(countSummary, jsonOptions),
                         ["bucket_taxonomy"] = BuildUnusedBucketTaxonomyJson(),
                         ["graph_supported"] = graphSupported,
@@ -9371,7 +9372,8 @@ public static partial class QueryCommandRunner
                         var vis = s.Visibility != null ? $" [{s.Visibility}]" : "";
                         var container = s.ContainerName != null ? $" in {s.ContainerName}" : "";
                         Console.WriteLine($"{ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}{container}");
-                        Console.WriteLine($"             confidence={s.UnusedConfidence} reason={s.UnusedReason}");
+                        var domain = s.UnusedContractDomain != null ? $" domain={s.UnusedContractDomain}" : "";
+                        Console.WriteLine($"             confidence={s.UnusedConfidence}{domain} reason={s.UnusedReason}");
                     }
                     Console.WriteLine();
                 }
@@ -9480,13 +9482,37 @@ public static partial class QueryCommandRunner
             .OrderBy(group => GetUnusedConfidenceOrder(group.Key))
             .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
 
+    internal static Dictionary<string, int> BuildUnusedContractDomainCounts(IEnumerable<UnusedSymbolResult> results)
+    {
+        var grouped = results
+            .Where(result => !string.IsNullOrWhiteSpace(result.UnusedContractDomain))
+            .GroupBy(result => result.UnusedContractDomain!, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        var ordered = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var domain in DbReader.OrderedUnusedContractDomains)
+        {
+            if (grouped.TryGetValue(domain, out var count))
+                ordered[domain] = count;
+        }
+
+        foreach (var pair in grouped.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+        {
+            if (!ordered.ContainsKey(pair.Key))
+                ordered[pair.Key] = pair.Value;
+        }
+
+        return ordered;
+    }
+
     internal static JsonObject BuildUnusedSummaryJson(IEnumerable<UnusedSymbolResult> results, JsonSerializerOptions jsonOptions)
     {
         var resultList = results as List<UnusedSymbolResult> ?? results.ToList();
+        var context = CliJsonSerializerContextFactory.Create(jsonOptions);
         return new JsonObject
         {
-            ["by_bucket"] = JsonSerializer.SerializeToNode(BuildUnusedBucketCounts(resultList), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
-            ["by_confidence"] = JsonSerializer.SerializeToNode(BuildUnusedConfidenceCounts(resultList), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
+            ["by_bucket"] = JsonSerializer.SerializeToNode(BuildUnusedBucketCounts(resultList), context.DictionaryStringInt32),
+            ["by_confidence"] = JsonSerializer.SerializeToNode(BuildUnusedConfidenceCounts(resultList), context.DictionaryStringInt32),
+            ["by_contract_domain"] = JsonSerializer.SerializeToNode(BuildUnusedContractDomainCounts(resultList), context.DictionaryStringInt32),
         };
     }
 
@@ -9497,6 +9523,7 @@ public static partial class QueryCommandRunner
         {
             ["by_bucket"] = JsonSerializer.SerializeToNode(ToUnusedCountDictionary(result.BucketCounts), context.DictionaryStringInt32),
             ["by_confidence"] = JsonSerializer.SerializeToNode(ToUnusedCountDictionary(result.ConfidenceCounts), context.DictionaryStringInt32),
+            ["by_contract_domain"] = JsonSerializer.SerializeToNode(ToUnusedCountDictionary(result.ContractDomainCounts), context.DictionaryStringInt32),
         };
     }
 
@@ -9544,6 +9571,7 @@ public static partial class QueryCommandRunner
                     ["path"] = result.Path,
                     ["line"] = result.Line,
                     ["confidence"] = result.UnusedConfidence,
+                    ["contract_domain"] = result.UnusedContractDomain,
                 });
             }
 
@@ -9599,6 +9627,7 @@ public static partial class QueryCommandRunner
             ["graph_supported"] = graphSupported,
             ["graph_support_reason"] = graphSupportReason,
             ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(BuildUnusedBucketCounts(resultList), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
+            ["returned_contract_domain_counts"] = JsonSerializer.SerializeToNode(BuildUnusedContractDomainCounts(resultList), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
             ["summary"] = BuildUnusedSummaryJson(resultList, jsonOptions),
             ["bucket_taxonomy"] = BuildUnusedBucketTaxonomyJson(),
         };

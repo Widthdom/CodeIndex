@@ -5374,12 +5374,14 @@ public partial class McpServer
                     results.Select(result => result.Lang),
                     lang);
             var bucketCounts = QueryCommandRunner.BuildUnusedBucketCounts(results);
+            var contractDomainCounts = QueryCommandRunner.BuildUnusedContractDomainCounts(results);
             var payload = new JsonObject
             {
                 ["count"] = results.Count,
                 ["graph_supported"] = graphSupported,
                 ["graph_support_reason"] = graphSupportReason,
                 ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(bucketCounts, _jsonOptions),
+                ["returned_contract_domain_counts"] = JsonSerializer.SerializeToNode(contractDomainCounts, _jsonOptions),
                 ["summary"] = QueryCommandRunner.BuildUnusedSummaryJson(results, _jsonOptions),
                 ["bucket_taxonomy"] = QueryCommandRunner.BuildUnusedBucketTaxonomyJson(),
                 ["symbols"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
@@ -5390,7 +5392,7 @@ public partial class McpServer
                 payload["symbols_by_bucket"] = BuildUnusedSymbolsByBucket(results);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
             var summary = results.Count > 0
-                ? $"Found {ConsoleUi.Counted(results.Count, "potentially unused symbol")} across {ConsoleUi.Counted(bucketCounts.Count, "returned bucket")}. Private hits are ranked ahead of exported/config suspects, but not labeled high-confidence from indexed refs alone. Note: name-based matching — same-named symbols in different contexts may mask true unused symbols."
+                ? $"Found {ConsoleUi.Counted(results.Count, "potentially unused symbol")} across {ConsoleUi.Counted(bucketCounts.Count, "returned bucket")} and {ConsoleUi.Counted(contractDomainCounts.Count, "contract domain")}. Private hits are ranked ahead of exported/config suspects, but not labeled high-confidence from indexed refs alone. Note: name-based matching — same-named symbols in different contexts may mask true unused symbols."
                 : "No unused symbols found.";
             if (graphSupported == false)
                 summary += $" Warning: '{lang}' does not support reference extraction. Unused results are unavailable for this language.";
