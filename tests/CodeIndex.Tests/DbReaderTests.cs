@@ -4919,6 +4919,95 @@ public partial class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetRepoMap_RanksProductionCliEntrypointAheadOfToolingPrograms_Issue4115()
+    {
+        InsertIndexedFile("src/CodeIndex/Program.cs", "csharp",
+            """
+            return await CodeIndex.Cli.ProgramRunner.RunAsync(args);
+
+            internal static class BuildHost
+            {
+                public static object Create() => new();
+            }
+            """);
+        InsertIndexedFile("tools/CodeIndex.Changelog/Program.cs", "csharp",
+            """
+            namespace CodeIndex.Changelog;
+
+            public static class Program
+            {
+                public static int Main(string[] args) => 0;
+            }
+            """);
+        InsertIndexedFile("src/Tools/BuildHelper/Program.cs", "csharp",
+            """
+            namespace BuildHelper;
+
+            public static class Program
+            {
+                public static int Main(string[] args) => 0;
+            }
+            """);
+        InsertIndexedFile("src/CodeIndex.Tools/Program.cs", "csharp",
+            """
+            namespace CodeIndex.Tools;
+
+            public static class Program
+            {
+                public static int Main(string[] args) => 0;
+            }
+            """);
+        InsertIndexedFile("tools/TopLevel/Program.cs", "csharp", "Console.WriteLine(\"tool\");\n");
+        InsertIndexedFile("src/CodeIndex.Tests/Program.cs", "csharp",
+            """
+            namespace CodeIndex.Tests;
+
+            public static class Program
+            {
+                public static int Main(string[] args) => 0;
+            }
+            """);
+        InsertIndexedFile(".codex/hooks/bash_guard.py", "python", "def main():\n    return 0\n");
+
+        var map = _reader.GetRepoMap(limit: 20, excludeTests: true);
+        var production = Assert.Single(map.Entrypoints, item => item.Path == "src/CodeIndex/Program.cs" && item.Kind == "file");
+        var productionHelpers = map.Entrypoints
+            .Where(item => item.Path == "src/CodeIndex/Program.cs" && item.Kind != "file")
+            .ToList();
+        var toolScores = map.Entrypoints
+            .Where(item => item.Path.StartsWith("tools/", StringComparison.OrdinalIgnoreCase) ||
+                           item.Path.Contains("/tools/", StringComparison.OrdinalIgnoreCase) ||
+                           item.Path.Contains(".Tool/", StringComparison.OrdinalIgnoreCase) ||
+                           item.Path.Contains(".Tools/", StringComparison.OrdinalIgnoreCase))
+            .Select(item => item.Score)
+            .ToList();
+        var toolConfidences = map.Entrypoints
+            .Where(item => item.Path.StartsWith("tools/", StringComparison.OrdinalIgnoreCase) ||
+                           item.Path.Contains("/tools/", StringComparison.OrdinalIgnoreCase) ||
+                           item.Path.Contains(".Tool/", StringComparison.OrdinalIgnoreCase) ||
+                           item.Path.Contains(".Tools/", StringComparison.OrdinalIgnoreCase))
+            .Select(item => item.Confidence)
+            .ToList();
+        var unfilteredMap = _reader.GetRepoMap(limit: 20, excludeTests: false);
+        var unfilteredProduction = Assert.Single(unfilteredMap.Entrypoints, item => item.Path == "src/CodeIndex/Program.cs" && item.Kind == "file");
+        var dottedTestScores = unfilteredMap.Entrypoints
+            .Where(item => item.Path == "src/CodeIndex.Tests/Program.cs")
+            .Select(item => item.Score)
+            .ToList();
+
+        Assert.NotEmpty(toolScores);
+        Assert.NotEmpty(productionHelpers);
+        Assert.NotEmpty(dottedTestScores);
+        Assert.Contains(map.Entrypoints, item => item.Path == "tools/TopLevel/Program.cs" && item.Kind == "file");
+        Assert.Equal("src/CodeIndex/Program.cs", map.Entrypoints[0].Path);
+        Assert.Equal("file", production.Kind);
+        Assert.All(productionHelpers, helper => Assert.True(production.Score > helper.Score));
+        Assert.All(toolScores, score => Assert.True(production.Score > score));
+        Assert.All(toolConfidences, confidence => Assert.True(production.Confidence >= confidence));
+        Assert.All(dottedTestScores, score => Assert.True(unfilteredProduction.Score > score));
+    }
+
+    [Fact]
     public void GetRepoMap_MinEntrypointConfidenceFiltersWeakNameOnlyMatches()
     {
         InsertIndexedFile("src/services/service.py", "python", "def app():\n    return True\n");

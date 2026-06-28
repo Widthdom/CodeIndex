@@ -457,15 +457,18 @@ internal sealed class RepoMapBuilder
             });
         }
 
-        // Fall back to known entry files when symbol extraction misses entrypoints
-        // シンボル抽出がエントリポイントを捉えられない場合、既知のエントリファイルにフォールバック
-        var filesWithEntrypoints = results
+        // Fall back to known entry files when symbol extraction has not found a named entrypoint.
+        // Path-only helper symbols in Program.cs should not suppress the file fallback.
+        // 名前一致の entrypoint が見つからない場合、既知の entry file にフォールバックする。
+        // Program.cs 内の path-only な補助シンボルでは file fallback を抑止しない。
+        var filesWithNamedEntrypoints = results
+            .Where(result => result.MatchType.Contains("name", StringComparison.OrdinalIgnoreCase))
             .Select(result => result.Path)
             .ToHashSet(indexedPathComparer);
 
         foreach (var fallback in fallbackEntrypoints)
         {
-            if (filesWithEntrypoints.Contains(fallback.Path))
+            if (filesWithNamedEntrypoints.Contains(fallback.Path))
                 continue;
             results.Add(fallback);
         }
@@ -595,7 +598,8 @@ internal sealed class RepoMapBuilder
         if (kind == "class" && string.Equals(Path.GetFileNameWithoutExtension(fileName), name, StringComparison.OrdinalIgnoreCase))
             score += 1;
 
-        score += GetPathLocationBoost(path);
+        var hasStrongPathHint = pathRank > 0 && nameRank > 0;
+        score += GetPathLocationBoost(path, hasStrongPathHint);
         var matchType = pathRank > 0 && nameRank > 0
             ? "path+name"
             : pathRank > 0
@@ -610,7 +614,7 @@ internal sealed class RepoMapBuilder
                 ? 0.65
                 : 0.5;
 
-        return new EntrypointScore(score, matchType, NormalizeConfidence(confidence + GetPathLocationConfidenceBoost(path)), hintRank);
+        return new EntrypointScore(score, matchType, NormalizeConfidence(confidence + GetPathLocationConfidenceBoost(path, hasStrongPathHint)), hintRank);
     }
 
     private static EntrypointScore ScoreEntrypointFileFallback(string path, string? lang, int symbolCount, int referenceCount)
@@ -631,8 +635,8 @@ internal sealed class RepoMapBuilder
         if (referenceCount > 0)
             score += 1;
 
-        score += GetPathLocationBoost(path);
-        return new EntrypointScore(score, "path", NormalizeConfidence(0.4 + GetPathLocationConfidenceBoost(path)), pathRank);
+        score += GetFileFallbackPathLocationBoost(path);
+        return new EntrypointScore(score, "path", NormalizeConfidence(0.4 + GetPathLocationConfidenceBoost(path, hasPathHint: true)), pathRank);
     }
 
     private static int GetHintRank(IReadOnlyDictionary<string, string[]> hintsByLang, string lang, string candidate)
@@ -649,32 +653,165 @@ internal sealed class RepoMapBuilder
         return 0;
     }
 
-    private static int GetPathLocationBoost(string path)
+    private static int GetPathLocationBoost(string path, bool hasPathHint)
     {
+        if (IsTestOrFixturePath(path))
+            return -4;
+        if (IsToolingPath(path))
+            return hasPathHint ? -3 : -2;
+        if (IsSupportEntrypointPath(path))
+            return hasPathHint ? -2 : -1;
+
         var slashCount = path.Count(ch => ch == '/');
         if (slashCount == 0)
-            return 2;
-        if (path.StartsWith("src/", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("app/", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("cmd/", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("bin/", StringComparison.OrdinalIgnoreCase))
-            return 1;
+            return hasPathHint ? 3 : 1;
+        if (IsProductionEntrypointPath(path))
+            return hasPathHint ? 5 : 1;
 
         return 0;
     }
 
-    private static double GetPathLocationConfidenceBoost(string path)
+    private static int GetFileFallbackPathLocationBoost(string path)
     {
+        var boost = GetPathLocationBoost(path, hasPathHint: true);
+        return IsToolingPath(path) ? Math.Max(boost, -1) : boost;
+    }
+
+    private static double GetPathLocationConfidenceBoost(string path, bool hasPathHint)
+    {
+        if (IsTestOrFixturePath(path))
+            return -0.2;
+        if (IsToolingPath(path))
+            return -0.15;
+        if (IsSupportEntrypointPath(path))
+            return -0.1;
+
         var slashCount = path.Count(ch => ch == '/');
         if (slashCount == 0)
-            return 0.1;
-        if (path.StartsWith("src/", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("app/", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("cmd/", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("bin/", StringComparison.OrdinalIgnoreCase))
-            return 0.05;
+            return hasPathHint ? 0.2 : 0.05;
+        if (IsProductionEntrypointPath(path))
+            return hasPathHint ? 0.35 : 0.05;
 
         return 0;
+    }
+
+    private static bool IsProductionEntrypointPath(string path)
+    {
+        return path.StartsWith("src/", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith("app/", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith("cmd/", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith("bin/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsToolingPath(string path)
+    {
+        foreach (var segment in path.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (IsToolingPathSegment(segment))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsToolingPathSegment(string segment)
+    {
+        return segment.Equals("tool", StringComparison.OrdinalIgnoreCase) ||
+               segment.Equals("tools", StringComparison.OrdinalIgnoreCase) ||
+               segment.StartsWith("tool.", StringComparison.OrdinalIgnoreCase) ||
+               segment.StartsWith("tools.", StringComparison.OrdinalIgnoreCase) ||
+               segment.EndsWith(".tool", StringComparison.OrdinalIgnoreCase) ||
+               segment.EndsWith(".tools", StringComparison.OrdinalIgnoreCase) ||
+               segment.EndsWith("_tool", StringComparison.OrdinalIgnoreCase) ||
+               segment.EndsWith("_tools", StringComparison.OrdinalIgnoreCase) ||
+               segment.EndsWith("-tool", StringComparison.OrdinalIgnoreCase) ||
+               segment.EndsWith("-tools", StringComparison.OrdinalIgnoreCase) ||
+               segment.Contains(".tool.", StringComparison.OrdinalIgnoreCase) ||
+               segment.Contains(".tools.", StringComparison.OrdinalIgnoreCase) ||
+               segment.Contains("_tool.", StringComparison.OrdinalIgnoreCase) ||
+               segment.Contains("_tools.", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsSupportEntrypointPath(string path)
+    {
+        return path.StartsWith(".", StringComparison.OrdinalIgnoreCase) ||
+               path.Contains("/.", StringComparison.OrdinalIgnoreCase) ||
+               path.Equals("install.sh", StringComparison.OrdinalIgnoreCase) ||
+               HasPathSegment(path, "docs") ||
+               HasPathSegment(path, "scripts") ||
+               HasPathSegment(path, "install_modules") ||
+               HasPathSegment(path, "workflow") ||
+               HasPathSegment(path, "workflows");
+    }
+
+    private static bool IsTestOrFixturePath(string path)
+    {
+        var normalized = path.Replace('\\', '/');
+        foreach (var segment in normalized.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (IsTestOrFixturePathSegment(segment))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsTestOrFixturePathSegment(string segment)
+    {
+        return IsTestPathSegment(segment) ||
+               IsFixturePathSegment(segment) ||
+               segment.Equals("conftest.py", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsTestPathSegment(string segment)
+    {
+        return segment.Equals("test", StringComparison.OrdinalIgnoreCase) ||
+               segment.Equals("tests", StringComparison.OrdinalIgnoreCase) ||
+               segment.Equals("spec", StringComparison.OrdinalIgnoreCase) ||
+               segment.Equals("specs", StringComparison.OrdinalIgnoreCase) ||
+               segment.StartsWith("test.", StringComparison.OrdinalIgnoreCase) ||
+               segment.StartsWith("tests.", StringComparison.OrdinalIgnoreCase) ||
+               segment.StartsWith("spec.", StringComparison.OrdinalIgnoreCase) ||
+               segment.StartsWith("specs.", StringComparison.OrdinalIgnoreCase) ||
+               segment.EndsWith(".test", StringComparison.OrdinalIgnoreCase) ||
+               segment.EndsWith(".tests", StringComparison.OrdinalIgnoreCase) ||
+               segment.EndsWith(".spec", StringComparison.OrdinalIgnoreCase) ||
+               segment.EndsWith(".specs", StringComparison.OrdinalIgnoreCase) ||
+               segment.EndsWith("_test", StringComparison.OrdinalIgnoreCase) ||
+               segment.EndsWith("_tests", StringComparison.OrdinalIgnoreCase) ||
+               segment.Contains(".test.", StringComparison.OrdinalIgnoreCase) ||
+               segment.Contains(".tests.", StringComparison.OrdinalIgnoreCase) ||
+               segment.Contains(".spec.", StringComparison.OrdinalIgnoreCase) ||
+               segment.Contains(".specs.", StringComparison.OrdinalIgnoreCase) ||
+               segment.Contains("_test.", StringComparison.OrdinalIgnoreCase) ||
+               segment.Contains("_tests.", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsFixturePathSegment(string segment)
+    {
+        return segment.Equals("fixture", StringComparison.OrdinalIgnoreCase) ||
+               segment.Equals("fixtures", StringComparison.OrdinalIgnoreCase) ||
+               segment.StartsWith("fixture.", StringComparison.OrdinalIgnoreCase) ||
+               segment.StartsWith("fixtures.", StringComparison.OrdinalIgnoreCase) ||
+               segment.EndsWith(".fixture", StringComparison.OrdinalIgnoreCase) ||
+               segment.EndsWith(".fixtures", StringComparison.OrdinalIgnoreCase) ||
+               segment.EndsWith("_fixture", StringComparison.OrdinalIgnoreCase) ||
+               segment.EndsWith("_fixtures", StringComparison.OrdinalIgnoreCase) ||
+               segment.Contains(".fixture.", StringComparison.OrdinalIgnoreCase) ||
+               segment.Contains(".fixtures.", StringComparison.OrdinalIgnoreCase) ||
+               segment.Contains("_fixture.", StringComparison.OrdinalIgnoreCase) ||
+               segment.Contains("_fixtures.", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasPathSegment(string path, string segment)
+    {
+        foreach (var candidate in path.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (string.Equals(candidate, segment, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
     }
 
     private static void ApplyEntrypointAmbiguityPenalty(List<RepoEntrypointResult> results)
@@ -691,7 +828,7 @@ internal sealed class RepoMapBuilder
         }
     }
 
-    private static double NormalizeConfidence(double confidence) => Math.Round(Math.Min(confidence, 1.0), 3);
+    private static double NormalizeConfidence(double confidence) => Math.Round(Math.Clamp(confidence, 0.0, 1.0), 3);
 
     private readonly record struct EntrypointScore(int Score, string MatchType, double Confidence, int HintRank)
     {
