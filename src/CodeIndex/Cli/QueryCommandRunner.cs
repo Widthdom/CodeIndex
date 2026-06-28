@@ -978,6 +978,11 @@ public static partial class QueryCommandRunner
                     WriteDelimitedSearchResults([], options);
                     return ZeroResultExitCode(options);
                 }
+                if (options.Json && options.OutputFormat == OutputFormatGrouped)
+                {
+                    var groupedExitCode = WriteGroupedSearchResults([], options, jsonOptions);
+                    return groupedExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : groupedExitCode;
+                }
                 if (options.Json && TryWriteEmptySearchJsonWithOptionalByteLimit(options, jsonOptions, out var emptyJsonExitCode))
                     return emptyJsonExitCode == CommandExitCodes.Success ? ZeroResultExitCode(options) : emptyJsonExitCode;
                 if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))

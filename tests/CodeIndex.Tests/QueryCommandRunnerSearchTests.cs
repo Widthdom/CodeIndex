@@ -3148,6 +3148,14 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.UsageError, zeroExitCode);
             Assert.Equal(string.Empty, zeroStdout);
             Assert.Contains("compact search results JSON output", zeroStderr, StringComparison.Ordinal);
+
+            var (groupedZeroExitCode, groupedZeroStdout, groupedZeroStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["MissingToken", "--db", dbPath, "--format", "grouped", "--max-json-bytes", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, groupedZeroExitCode);
+            Assert.Equal(string.Empty, groupedZeroStdout);
+            Assert.Contains("grouped search results JSON output", groupedZeroStderr, StringComparison.Ordinal);
         }
         finally
         {
