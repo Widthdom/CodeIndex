@@ -5973,7 +5973,7 @@ public static partial class QueryCommandRunner
         => CommandErrorWriter.WriteJsonOrHuman(
             json,
             jsonOptions,
-            $"invalid regular expression: {ex.Message}",
+            $"invalid regular expression: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}",
             CommandExitCodes.UsageError,
             "fix the pattern passed with --regex, or omit --regex to run a literal text search.",
             errorCode: CommandErrorCodes.UsageError,
@@ -11787,7 +11787,7 @@ public static partial class QueryCommandRunner
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
             {
-                AddParseError($"Error: {ex.Message}");
+                AddParseError($"Error: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}");
             }
         }
 
@@ -12901,7 +12901,7 @@ public static partial class QueryCommandRunner
         }
         catch (FtsQuerySyntaxException ex)
         {
-            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.FtsQuerySyntax}]: FTS5 query syntax: {ex.Message}");
+            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.FtsQuerySyntax}]: FTS5 query syntax: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}");
             if (ex.Kind == FtsQuerySyntaxErrorKind.ColumnQualifier)
             {
                 CommandErrorWriter.WriteStderr("Hint: `--fts` passes raw FTS5 syntax, so `:` is treated as a column qualifier. Drop `--fts` if you want literal-safe search.");
@@ -12914,7 +12914,7 @@ public static partial class QueryCommandRunner
         }
         catch (SearchGuardCandidateLimitException ex)
         {
-            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.UsageError}]: guarded search is too broad: {ex.Message}");
+            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.UsageError}]: guarded search is too broad: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}");
             if (ex.CandidatePreviewPaths.Count > 0)
                 CommandErrorWriter.WriteStderr($"Candidate files sampled before refusal: {string.Join(", ", ex.CandidatePreviewPaths)}.");
             if (ex.CandidatePreviewLanguages.Count > 0)
@@ -12925,7 +12925,7 @@ public static partial class QueryCommandRunner
         }
         catch (SearchQueryLimitException ex)
         {
-            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.UsageError}]: {ex.Message}");
+            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.UsageError}]: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}");
             CommandErrorWriter.WriteStderr("Hint: shorten the search text or split generated input into smaller literal queries.");
             return CommandExitCodes.UsageError;
         }
@@ -12951,7 +12951,7 @@ public static partial class QueryCommandRunner
                 // E002_DB_LOCKED で機械可読に区別する。
                 if (sqliteEx.SqliteErrorCode == 5 || sqliteEx.SqliteErrorCode == 6)
                 {
-                    CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbLocked}]: SQLite reported the database is locked or busy: {ex.Message}");
+                    CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbLocked}]: SQLite reported the database is locked or busy: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}");
                     CommandErrorWriter.WriteStderr("Hint: another process may be holding the database. Wait for it to finish, or retry with backoff.");
                     Database.DbDebug.DumpToStderr(ex);
                     return CommandExitCodes.DatabaseError;
@@ -13033,7 +13033,7 @@ public static partial class QueryCommandRunner
             return;
         }
 
-        CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database error: {ex.Message}");
+        CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database error: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}");
         CommandErrorWriter.WriteStderr("Hint: check `--db`, or rebuild the index with `cdidx index <projectPath>` if the DB may be stale or corrupted.");
     }
 
