@@ -183,7 +183,7 @@ internal static class GitHubIssueReporter
 
     internal static TimeSpan ResolveSubmitTimeout()
     {
-        var raw = Environment.GetEnvironmentVariable(TimeoutEnvironmentVariable);
+        var raw = CdidxEnvironment.GetProcessEnvironmentVariable(TimeoutEnvironmentVariable);
         if (string.IsNullOrWhiteSpace(raw))
             return DefaultTimeout;
 
@@ -473,7 +473,7 @@ internal static class GitHubIssueReporter
     /// </summary>
     internal static string? ResolveToken()
     {
-        var cdidxToken = Environment.GetEnvironmentVariable("CDIDX_GITHUB_TOKEN");
+        var cdidxToken = CdidxEnvironment.GetProcessEnvironmentVariable("CDIDX_GITHUB_TOKEN");
         if (!string.IsNullOrWhiteSpace(cdidxToken))
             return cdidxToken;
 

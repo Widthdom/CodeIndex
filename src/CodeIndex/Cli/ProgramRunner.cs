@@ -511,9 +511,9 @@ internal static partial class ProgramRunner
         Console.WriteLine("terminal:");
         Console.WriteLine(ConsoleUi.FormatSummaryLine("stdout_tty", !Console.IsOutputRedirected, indent: "  "));
         Console.WriteLine(ConsoleUi.FormatSummaryLine("stderr_tty", !Console.IsErrorRedirected, indent: "  "));
-        Console.WriteLine(ConsoleUi.FormatSummaryLine("columns", FormatDoctorEnvironmentValue(Environment.GetEnvironmentVariable("COLUMNS")), indent: "  "));
-        Console.WriteLine(ConsoleUi.FormatSummaryLine("no_color", FormatDoctorEnvironmentValue(Environment.GetEnvironmentVariable("NO_COLOR")), indent: "  "));
-        Console.WriteLine(ConsoleUi.FormatSummaryLine("term", FormatDoctorEnvironmentValue(Environment.GetEnvironmentVariable("TERM")), indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("columns", FormatDoctorEnvironmentValue(CdidxEnvironment.GetProcessEnvironmentVariable("COLUMNS")), indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("no_color", FormatDoctorEnvironmentValue(CdidxEnvironment.GetProcessEnvironmentVariable("NO_COLOR")), indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("term", FormatDoctorEnvironmentValue(CdidxEnvironment.GetProcessEnvironmentVariable("TERM")), indent: "  "));
         Console.WriteLine(ConsoleUi.FormatSummaryLine("locale", CultureInfo.CurrentCulture.Name, indent: "  "));
         Console.WriteLine(ConsoleUi.FormatSummaryLine("ui_locale", CultureInfo.CurrentUICulture.Name, indent: "  "));
         Console.WriteLine();
@@ -537,7 +537,7 @@ internal static partial class ProgramRunner
         Console.WriteLine();
         Console.WriteLine("config:");
         Console.WriteLine(ConsoleUi.FormatSummaryLine(CdidxConfigFile.FileName, File.Exists(Path.Combine(Environment.CurrentDirectory, CdidxConfigFile.FileName)) ? "present" : "not found", indent: "  "));
-        Console.WriteLine(ConsoleUi.FormatSummaryLine(CdidxConfigFile.DisableEnvVar, FormatDoctorEnvironmentValue(Environment.GetEnvironmentVariable(CdidxConfigFile.DisableEnvVar)), indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine(CdidxConfigFile.DisableEnvVar, FormatDoctorEnvironmentValue(CdidxEnvironment.GetProcessEnvironmentVariable(CdidxConfigFile.DisableEnvVar)), indent: "  "));
         Console.WriteLine();
         Console.WriteLine("github:");
         Console.WriteLine(ConsoleUi.FormatSummaryLine("proxy_default_credentials", GitHubHttpClientFactory.FormatProxyDefaultCredentialsStatus(), indent: "  "));
@@ -755,9 +755,7 @@ internal static partial class ProgramRunner
 
     private static IEnumerable<DoctorEnvironmentVariableJsonResult> EnumerateCdidxEnvironmentJson(bool redactPaths)
     {
-        var rows = Environment.GetEnvironmentVariables()
-            .Cast<System.Collections.DictionaryEntry>()
-            .Select(e => (Key: e.Key?.ToString() ?? string.Empty, Value: e.Value?.ToString() ?? string.Empty))
+        var rows = CdidxEnvironment.EnumerateProcessEnvironmentVariables()
             .Where(e => e.Key.StartsWith("CDIDX_", StringComparison.Ordinal))
             .OrderBy(e => e.Key, StringComparer.Ordinal);
         foreach (var row in rows)
@@ -775,7 +773,7 @@ internal static partial class ProgramRunner
 
     private static string FormatDoctorJsonEnvironmentValue(string name, bool redactPaths)
     {
-        var value = Environment.GetEnvironmentVariable(name);
+        var value = CdidxEnvironment.GetProcessEnvironmentVariable(name);
         return value == null ? "<unset>" : ConsoleUi.FormatBoundedValue(RedactDoctorPath(value, redactPaths));
     }
 
@@ -784,9 +782,7 @@ internal static partial class ProgramRunner
 
     private static IEnumerable<(string Key, string Value)> EnumerateCdidxEnvironment()
     {
-        var rows = Environment.GetEnvironmentVariables()
-            .Cast<System.Collections.DictionaryEntry>()
-            .Select(e => (Key: e.Key?.ToString() ?? string.Empty, Value: e.Value?.ToString() ?? string.Empty))
+        var rows = CdidxEnvironment.EnumerateProcessEnvironmentVariables()
             .Where(e => e.Key.StartsWith("CDIDX_", StringComparison.Ordinal))
             .OrderBy(e => e.Key, StringComparer.Ordinal);
         var any = false;

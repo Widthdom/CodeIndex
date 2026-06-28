@@ -50,7 +50,7 @@ internal sealed class PreparedCommandCache : IDisposable
 
     internal static int ReadCapacityFromEnvironment()
     {
-        var raw = Environment.GetEnvironmentVariable(CapacityEnvironmentVariable);
+        var raw = global::CodeIndex.EnvironmentAccess.GetProcessEnvironmentVariable(CapacityEnvironmentVariable);
         return int.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
             && parsed > 0
             && parsed <= MaxCapacity
