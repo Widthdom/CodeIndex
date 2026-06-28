@@ -82,7 +82,7 @@ internal static class CliFlagSchema
     private static readonly string[] LimitCapableCommands =
     [
         "search", "definition", "goto", "references", "callers", "callees", "symbols",
-        "files", "find", "map", "inspect", "outline", "deps", "impact", "unused", "hotspots", "validate",
+        "files", "find", "map", "inspect", "outline", "deps", "impact", "unused", "hotspots", "validate", "audit",
     ];
 
     private static readonly string[] LangCapableCommands =
@@ -135,7 +135,7 @@ internal static class CliFlagSchema
     private static readonly string[] ByteFormatCommands = ["files", "map"];
     private static readonly string[] EntrypointConfidenceCommands = ["map"];
     private static readonly string[] MapSectionCommands = ["map"];
-    private static readonly string[] SummaryOnlyCommands = ["map"];
+    private static readonly string[] SummaryOnlyCommands = ["map", "search", "recipes", "audit"];
     private static readonly string[] DependencyCycleCommands = ["deps"];
     private static readonly string[] LanguagesFilterCommands = ["languages"];
 
@@ -203,7 +203,7 @@ internal static class CliFlagSchema
 
     private static readonly string[] FormatCommands =
     [
-        "search", "audit", "definition", "references", "callers", "callees", "symbols", "find", "map", "inspect", "validate", "deps", "suggestions",
+        "search", "recipes", "audit", "definition", "references", "callers", "callees", "symbols", "find", "map", "inspect", "validate", "deps", "suggestions",
     ];
 
     private static readonly string[] ProfileCommands =
@@ -281,7 +281,7 @@ internal static class CliFlagSchema
             new() { Name = "--bytes", Description = "Files: sort by size and show raw byte counts in human output; map: show raw byte counts", Commands = Set(ByteFormatCommands) },
             new() { Name = "--min-entrypoint-confidence", ValuePlaceholder = "<0.0..1.0>", Description = "Map: omit entrypoint candidates below this confidence", Commands = Set(EntrypointConfidenceCommands) },
             new() { Name = "--sections", ValuePlaceholder = "<tree,languages,hotspots,metrics>", Description = "Map: comma-separated response sections to include", Commands = Set(MapSectionCommands) },
-            new() { Name = "--summary-only", Description = "Map/Diff: return only aggregate summary fields", Commands = Set(SummaryOnlyCommands) },
+            new() { Name = "--summary-only", Description = "Map/Diff/Recipes/Audit: return only aggregate summary fields where supported", Commands = Set(SummaryOnlyCommands) },
             new() { Name = "--cycles", Description = "Deps: return dependency cycles from a bounded approximate candidate-edge scan", Commands = Set(DependencyCycleCommands) },
             new() { Name = "--suppress-noise", Description = "Deps: suppress generic framework/noise symbols in edge symbol samples", Commands = Set("deps") },
             new() { Name = "--symbol", ValuePlaceholder = "<name>", Description = "Deps: keep only edges with an exact sampled symbol name", Commands = Set("deps") },
@@ -293,6 +293,7 @@ internal static class CliFlagSchema
             new() { Name = "--include-query", ValuePlaceholder = "<name>", Description = "Search recipe: include one child query; repeat or comma-separate values", Commands = Set("search") },
             new() { Name = "--exclude-query", ValuePlaceholder = "<name>", Description = "Search recipe: exclude one child query; repeat or comma-separate values", Commands = Set("search") },
             new() { Name = "--list-recipes", Description = "Search: list built-in audit recipes", Commands = Set("search") },
+            new() { Name = "--names", Description = "Recipes: emit only deterministic recipe names", Commands = Set("search", "recipes") },
             new() { Name = "--audit-scope", ValuePlaceholder = "<source|all>", Description = "Search/Unused: use production source defaults or include all indexed paths", Commands = Set("search", "unused") },
             new() { Name = "--source-only", Description = "Search: alias for --audit-scope source on ad hoc and named searches", Commands = Set("search") },
             new() { Name = "--show-excluded", Description = "Search recipes: include effective scope and exclusion diagnostics in recipe output", Commands = Set("search") },
@@ -331,14 +332,14 @@ internal static class CliFlagSchema
             new() { Name = "--match-origin", ValuePlaceholder = "<code|comment|string_literal|regex_literal|help_text>", Description = "Search: keep only matches from selected origins; repeat or comma-separate values", Commands = Set("search") },
             new() { Name = "--exclude-origin", ValuePlaceholder = "<code|comment|string_literal|regex_literal|help_text>", Description = "Search: drop matches from selected origins; repeat or comma-separate values", Commands = Set("search") },
             new() { Name = "--result-kind", ValuePlaceholder = "<call_site|declaration|identifier|comment|string_literal>", Description = "Search: keep only projected result kinds; repeat or comma-separate values", Commands = Set("search") },
-            new() { Name = "--search-fields", ValuePlaceholder = "<path,line,column,symbol,origin,kind,score,snippet,query_name,recipe>", Description = "Search: project JSON/NDJSON result fields for audit pipelines", Commands = Set("search") },
+            new() { Name = "--search-fields", ValuePlaceholder = "<path,line,column,symbol,origin,kind,score,snippet,query_name,recipe>", Description = "Search/Audit: project JSON/NDJSON result fields for audit pipelines", Commands = Set("search", "audit") },
             new() { Name = "--outline-fields", ValuePlaceholder = "<kind,name,path,line,signature,...>", Description = "Outline JSON: project symbol fields for audit pipelines", Commands = Set("outline") },
-            new() { Name = "--results-only", Description = "Search: emit result-only NDJSON without stream done records", Commands = Set("search") },
+            new() { Name = "--results-only", Description = "Search/Audit: emit result-only NDJSON without stream done records", Commands = Set("search", "audit") },
             new() { Name = "--first-per-file", Description = "Search: keep the first returned match for each file", Commands = Set("search") },
             new() { Name = "--sample", ValuePlaceholder = "<n>", Description = "Search: deterministically sample returned rows down to n results", Commands = Set("search") },
-            new() { Name = "--per-file-limit", ValuePlaceholder = "<n>", Description = "Search grouped output: representative matches per file", Commands = Set("search") },
-            new() { Name = "--total-limit", ValuePlaceholder = "<n>", Description = "Search recipes: cap emitted rows across all child queries", Commands = Set("search") },
-            new() { Name = "--max-json-bytes", ValuePlaceholder = "<n>", Description = "Search NDJSON: stop before emitting more than this many JSON bytes", Commands = Set("search") },
+            new() { Name = "--per-file-limit", ValuePlaceholder = "<n>", Description = "Search/Audit grouped output: representative matches per file", Commands = Set("search", "audit") },
+            new() { Name = "--total-limit", ValuePlaceholder = "<n>", Description = "Search/Audit recipes: cap emitted rows across all child queries", Commands = Set("search", "audit") },
+            new() { Name = "--max-json-bytes", ValuePlaceholder = "<n>", Description = "Search/Recipes/Audit JSON: fail before emitting more than this many JSON bytes", Commands = Set("search", "recipes", "audit") },
             new() { Name = "--next-steps", Description = "Search: print inspect/excerpt follow-up commands for top hits", Commands = Set("search") },
             new() { Name = "--exclude-comments", Description = "Search: suppress comment-only matches after origin classification", Commands = Set("search") },
             new() { Name = "--exclude-strings", Description = "Search: suppress string, regex, and help-text matches after origin classification", Commands = Set("search") },
@@ -346,7 +347,7 @@ internal static class CliFlagSchema
             new() { Name = "--no-progress", Description = "Disable animated progress and spinner output", Commands = Set(AllCommands.ToArray()), TopLevel = true },
             new() { Name = "--name", ValuePlaceholder = "<name>", Description = "Exact symbol name", Commands = Set("symbols") },
             new() { Name = "--max-line-width", ValuePlaceholder = "<n>", Description = "Clamp long single-line payloads (0 disables clamping)", Commands = Set(MaxLineWidthCommands) },
-            new() { Name = "--snippet-lines", ValuePlaceholder = "<n>", Description = "Snippet length", Commands = Set("search", "find", "references", "callers", "callees", "impact") },
+            new() { Name = "--snippet-lines", ValuePlaceholder = "<n>", Description = "Snippet length; issue-drafts accept 0 for path/line-only evidence", Commands = Set("search", "audit", "find", "references", "callers", "callees", "impact") },
             new() { Name = "--snippet-focus", ValuePlaceholder = "<leftmost|quality|proximity>", Description = "Search snippet long-line focus mode", Commands = Set("search") },
             new() { Name = "--fts", Description = "Raw FTS5 syntax", Commands = Set("search") },
             new() { Name = "--no-dedup", Description = "Show duplicate chunks", Commands = Set("search") },
