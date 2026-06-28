@@ -64,6 +64,30 @@ Development contracts:
 | Checkpoint roots, snapshot directories, manifest files, copied DB/WAL/SHM snapshots, and restore staging/backup directories | Forced owner-only on POSIX. |
 | `status --json` | Reports `data_dir_mode` and `db_file_mode` when the platform exposes Unix file modes. |
 
+### Destructive Filesystem Operation Audit
+
+Production `File.Delete`, `Directory.Delete`, and `File.Move` call sites are allowed only for owned CodeIndex state or caller-approved outputs. Re-run the audit with the local binary when changing these areas:
+
+```bash
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search File.Delete --path src/ --exclude-tests --exact-substring --count-by file --limit 80
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search Directory.Delete --path src/ --exclude-tests --exact-substring --count-by file --limit 80
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search File.Move --path src/ --exclude-tests --exact-substring --count-by file --limit 80
+```
+
+| Surface | Ownership and boundary policy | Cleanup or rollback policy |
+|---|---|---|
+| `AtomicFileWriter` file delete/move helpers | Used for caller-selected output paths after the caller has accepted or validated the destination. Temp files are generated as collision-resistant siblings of the target, so replacements stay on the same filesystem boundary and do not follow a separate temp-root policy. | Writes flush the temp file, rename over the target, and flush the parent directory on Unix. Pre-move temp cleanup is best-effort; post-replace parent-directory flush failures are explicit command failures because the target has already changed. |
+| `cdidx import` / `cdidx export` temp databases and sidecars | Import temp DBs are either hidden siblings in the destination DB directory or owner-only `codeindex-import-*` temp directories for dry-run. Export snapshots live in owner-only `codeindex-export-*` temp directories. Destination DB replacement rejects overlapping export outputs and rolls back through backup sidecars. | Temp DB, WAL, SHM, and empty temp-directory cleanup failures are warnings that do not hide the import/export error. Replacement failure reports residual diagnostics so operators can inspect the destination state. |
+| `cdidx db` checkpoint restore staging and restore-backup pruning | Checkpoints, restore staging, and restore backups are derived from the resolved DB path. Recursive cleanup uses `FileSystemBoundary.TryValidateDirectoryCleanupTarget` with the DB parent as safe root and an expected `codeindex.db.restore-*` style prefix. Checkpoint payload files must be regular files, not symlinks, reparse points, or devices. | Restore creates backups before replacement and attempts rollback on failure. Temporary-directory cleanup and restore-backup prune failures become bounded diagnostics or warnings without deleting outside the validated root. |
+| Upgrade installer script and temp directory | Upgrade downloads use owner-only `cdidx-install-*` directories under `Path.GetTempPath()`. Recursive directory cleanup validates the temp root, required prefix, and symlink/reparse/device status before deletion. Install-directory write probes run only after install-directory validation rejects roots, symlinks/reparse points, and unsafe POSIX modes. | Installer script and temp-directory cleanup failures are warnings. The install operation reports its own result separately from secondary cleanup failures. |
+| `.cdidx` write probes and case-sensitivity probes | Write probes are freshly generated files under the already resolved install directory, `.cdidx` directory, or `.cdidx/probes` directory. Probe directories are created owner-only and are under the workspace data directory. | Probe files are deleted after the check. Case-sensitivity probe-directory cleanup records bounded diagnostics and suggests removing stale `.cdidx/probes` entries when no `cdidx` process is running. |
+| Scan checkpoints | Full-scan resume checkpoints are local state at `.cdidx/scan-checkpoint.json` and are written through the sensitive atomic writer profile. | Save/delete failures are warnings in human output and `CliJsonMessage` entries in JSON output; indexing continues without relying on a stale checkpoint. |
+| Git hook staging | Hook installation writes a private staged hook script inside the repository hook directory, then replaces the hook file through `File.Replace` with a backup path when needed. | If the staged script was not moved into place, cleanup is best-effort and recorded as hook warnings. Failure to delete a managed hook is a command error because that is the requested mutation. |
+| Index and MCP lock metadata sidecars | Lock files and `.info` sidecars live next to the resolved DB or MCP index lock path and are created with owner-only permissions. | Disposing a lock deletes only the metadata sidecar. Cleanup failures are logged through `GlobalToolLog` and optional test sinks; stale lock files rely on OS lock release rather than recursive cleanup. |
+| Search audit recipes | `SearchAuditRecipes` contains literal recipe strings such as `Directory.Delete` and `File.Move`; these are search metadata, not filesystem mutations. | No cleanup policy applies. |
+
+Best-effort cleanup catches must stay narrow to secondary cleanup for owned temp, probe, lock, or metadata artifacts. They should emit a bounded warning or diagnostic when an operator can act on the residue, and they must not suppress the primary operation result. The exception is durability confirmation after an atomic replacement: if the target has already been replaced and the parent directory cannot be flushed on Unix, the command fails explicitly so callers know the filesystem state changed but durability was not confirmed.
+
 ## Release Distribution Checklist
 
 When preparing a release, verify every supported distribution channel documented
@@ -2346,6 +2370,30 @@ net9 CI lane に合わせる場合は `FRAMEWORK=net9.0 make test` を使いま�
 | index lock、watch sub-run spool、staged hook script、lock metadata sidecar、active workspace の `active.json` | 内容が露出する前に owner-only file (`0600`) として作成または書き込み、該当するものは stale / corrupt diagnostic が local path を広く漏らしたり unbounded allocation を強制したりしないよう小さな bounded buffer で読みます。 |
 | database checkpoint root、snapshot directory、manifest file、copy された DB/WAL/SHM snapshot、restore staging/backup directory | POSIX では owner-only に固定。 |
 | `status --json` | platform が Unix file mode を公開する場合、`data_dir_mode` と `db_file_mode` を報告。 |
+
+### 破壊的ファイルシステム操作の監査
+
+本番コードの `File.Delete`、`Directory.Delete`、`File.Move` 呼び出しは、CodeIndex が所有する状態、または caller が承認した出力に限って許可します。これらの領域を変更する場合は、ローカル binary で次の監査を再実行してください:
+
+```bash
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search File.Delete --path src/ --exclude-tests --exact-substring --count-by file --limit 80
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search Directory.Delete --path src/ --exclude-tests --exact-substring --count-by file --limit 80
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search File.Move --path src/ --exclude-tests --exact-substring --count-by file --limit 80
+```
+
+| surface | ownership / boundary policy | cleanup / rollback policy |
+|---|---|---|
+| `AtomicFileWriter` の file delete / move helper | caller が destination を承認または検証した後の出力 path に使います。temp file は target の sibling として衝突しにくい名前で生成するため、置換は同じ filesystem boundary に残り、別 temp root の policy には依存しません。 | 書き込みは temp file を flush し、target に rename し、Unix では parent directory を flush します。move 前の temp cleanup は best-effort です。置換後の parent-directory flush failure は、target がすでに変わっているため command failure として明示します。 |
+| `cdidx import` / `cdidx export` の temp database と sidecar | import temp DB は destination DB directory 内の hidden sibling、または dry-run 用の owner-only `codeindex-import-*` temp directory に置きます。export snapshot は owner-only `codeindex-export-*` temp directory に置きます。destination DB replacement は export output が source DB / sidecar と重なる path を拒否し、backup sidecar 経由で rollback します。 | temp DB、WAL、SHM、空の temp directory の cleanup failure は warning として出し、import/export の primary error を隠しません。replacement failure では destination state を確認できる residual diagnostics を報告します。 |
+| `cdidx db` checkpoint restore staging と restore-backup prune | checkpoint、restore staging、restore backup は解決済み DB path から派生します。recursive cleanup は DB parent を safe root とし、`codeindex.db.restore-*` 形式の expected prefix を渡して `FileSystemBoundary.TryValidateDirectoryCleanupTarget` で検証します。checkpoint payload file は regular file である必要があり、symlink、reparse point、device は拒否します。 | restore は置換前に backup を作り、失敗時は rollback を試みます。temp directory cleanup と restore-backup prune の失敗は bounded diagnostic または warning になり、検証済み root の外側は削除しません。 |
+| upgrade installer script と temp directory | upgrade download は `Path.GetTempPath()` 配下の owner-only `cdidx-install-*` directory を使います。recursive directory cleanup は削除前に temp root、required prefix、symlink / reparse / device 状態を検証します。install-directory write probe は、root、symlink / reparse point、unsafe POSIX mode を拒否する install-directory validation の後だけ実行します。 | installer script と temp-directory cleanup の失敗は warning です。install operation の結果は、二次的な cleanup failure とは分けて報告します。 |
+| `.cdidx` write probe と case-sensitivity probe | write probe は、解決済み install directory、`.cdidx` directory、または `.cdidx/probes` directory 配下に fresh file として生成します。probe directory は owner-only で作成され、workspace data directory 配下にあります。 | probe file は確認後に削除します。case-sensitivity probe directory の cleanup は bounded diagnostic を記録し、`cdidx` process が動いていないときに stale `.cdidx/probes` entry を削除するよう案内します。 |
+| scan checkpoint | full-scan resume checkpoint は `.cdidx/scan-checkpoint.json` の local state で、sensitive atomic writer profile 経由で書き込みます。 | save / delete failure は human output では warning、JSON output では `CliJsonMessage` entry です。indexing は stale checkpoint に依存せず継続します。 |
+| Git hook staging | hook installation は repository hook directory 内に private staged hook script を書き込み、必要に応じて backup path 付きの `File.Replace` で hook file を置き換えます。 | staged script が配置されなかった場合の cleanup は best-effort で、hook warning として記録します。managed hook の削除失敗は requested mutation の失敗なので command error です。 |
+| index / MCP lock metadata sidecar | lock file と `.info` sidecar は、解決済み DB または MCP index lock path の隣に置き、owner-only permission で作成します。 | lock dispose は metadata sidecar だけを削除します。cleanup failure は `GlobalToolLog` と任意の test sink に記録します。stale lock file は recursive cleanup ではなく OS の lock release に依存して復旧します。 |
+| search audit recipe | `SearchAuditRecipes` には `Directory.Delete` や `File.Move` のような literal recipe string が含まれます。これは search metadata であり filesystem mutation ではありません。 | cleanup policy は適用されません。 |
+
+best-effort cleanup の catch は、所有済み temp / probe / lock / metadata artifact の二次 cleanup に限定してください。operator が残骸に対処できる場合は bounded warning または diagnostic を出し、primary operation result を隠してはいけません。例外は atomic replacement 後の durability confirmation です。target がすでに置換済みで Unix parent directory を flush できない場合は、filesystem state は変わったが durability を確認できていないことを caller に伝えるため、command は明示的に失敗します。
 
 ## リリース配布チェックリスト
 
