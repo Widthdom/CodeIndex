@@ -365,14 +365,14 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal("DeepAuditTarget", refsRows[0].GetProperty("name").GetString());
             Assert.Equal("DeepAuditTarget", complexityRow.GetProperty("name").GetString());
-            Assert.DoesNotContain(refsRows, row => row.GetProperty("name").GetString() is "Path" or "Equal");
+            Assert.DoesNotContain(refsRows, row => row.GetProperty("name").GetString() is "Path" or "Equal" or "List");
 
             Assert.Equal("Path", pathRow.GetProperty("name").GetString());
-            Assert.True(pathRow.GetProperty("reference_count").GetInt32() >= 500);
+            Assert.Equal(0, pathRow.GetProperty("reference_count").GetInt32());
+            Assert.Equal(0.0, pathRow.GetProperty("ranking_reference_score").GetDouble(), precision: 6);
             Assert.True(pathRow.GetProperty("generic_name_penalty").GetDouble() < 1.0);
             Assert.True(pathRow.GetProperty("structural_rank_penalty").GetDouble() < 1.0);
             Assert.True(pathRow.GetProperty("definition_sites").GetInt32() > 1);
-            Assert.True(pathRow.GetProperty("ranking_reference_score").GetDouble() < pathRow.GetProperty("reference_count").GetInt32());
             Assert.Contains("rank_refs=", humanStdout);
             Assert.Contains("rank_hotspot=", humanStdout);
             Assert.Contains("name_penalty=", humanStdout);
@@ -533,6 +533,10 @@ public partial class QueryCommandRunnerTests
                 {
                     DeepAuditTarget();
                 }
+
+                public void List()
+                {
+                }
             }
             """);
         TestProjectHelper.InsertIndexedFile(
@@ -555,6 +559,7 @@ public partial class QueryCommandRunnerTests
         AddSyntheticReferences(references, refsFileId, "Path", 500);
         AddSyntheticReferences(references, refsFileId, "Equal", 450);
         AddSyntheticReferences(references, refsFileId, "File", 400);
+        AddSyntheticReferences(references, refsFileId, "List", 600);
         AddSyntheticReferences(references, refsFileId, "DeepAuditTarget", 30);
 
         var writer = new DbWriter(db.Connection);
