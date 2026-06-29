@@ -3322,6 +3322,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("raw-diagnostic-echo", query.GetProperty("name").GetString());
             Assert.Equal(1, query.GetProperty("returned").GetInt32());
             var nextCommand = Assert.Single(root.GetProperty("next_commands").EnumerateArray()).GetString()!;
+            Assert.Contains("--recipe risky-code/raw-diagnostic-echo", nextCommand, StringComparison.Ordinal);
             Assert.Contains("--db ", nextCommand, StringComparison.Ordinal);
             Assert.Contains("--path 'src/**'", nextCommand, StringComparison.Ordinal);
             Assert.Contains("--origin code", nextCommand, StringComparison.Ordinal);

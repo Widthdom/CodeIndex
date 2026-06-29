@@ -1636,12 +1636,15 @@ public static partial class QueryCommandRunner
                 resultsOnly: false,
                 includeRecipeQuerySelectors: false));
         }
+        var resultsOnlySelector = queryResults.Count == 1
+            ? $"{recipeName}/{queryResults[0].Name}"
+            : recipeName;
         commands.Add(BuildSearchRecipeCompactReplayCommand(
-            recipeName,
+            resultsOnlySelector,
             options,
             cursor: null,
             resultsOnly: true,
-            includeRecipeQuerySelectors: true));
+            includeRecipeQuerySelectors: queryResults.Count != 1));
         return commands;
     }
 
