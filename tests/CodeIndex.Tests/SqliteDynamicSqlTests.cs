@@ -40,7 +40,7 @@ public class SqliteDynamicSqlTests
 
         Assert.Contains("@pathPattern998", sql);
         Assert.Equal(SqliteDynamicSql.MaxSqlVariables, cmd.Parameters.Count);
-        Assert.Equal("%src/998.cs%", cmd.Parameters["@pathPattern998"].Value);
+        Assert.Equal("src/998.cs", cmd.Parameters["@pathPattern998"].Value);
         Assert.Equal(SqliteType.Text, cmd.Parameters["@pathPattern998"].SqliteType);
     }
 

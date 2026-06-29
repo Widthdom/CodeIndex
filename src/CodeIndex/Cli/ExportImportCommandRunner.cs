@@ -594,12 +594,12 @@ internal static class ExportImportCommandRunner
         {
             var ors = new List<string>(filters.PathPatterns.Count);
             for (var i = 0; i < filters.PathPatterns.Count; i++)
-                ors.Add($"f.path LIKE @pathPattern{i} ESCAPE '\\'");
+                ors.Add(DbReader.BuildPathFilterPredicate("f", "pathPattern", i, filters.PathPatterns[i]));
             sql += " AND (" + string.Join(" OR ", ors) + ")";
         }
 
         for (var i = 0; i < filters.ExcludePathPatterns.Count; i++)
-            sql += $" AND f.path NOT LIKE @excludePathPattern{i} ESCAPE '\\'";
+            sql += $" AND NOT {DbReader.BuildPathFilterPredicate("f", "excludePathPattern", i, filters.ExcludePathPatterns[i])}";
 
         if (filters.ExcludeTests)
             sql += $" AND NOT {DbReader.TestPathCondition}";
@@ -610,11 +610,8 @@ internal static class ExportImportCommandRunner
         if (!string.IsNullOrWhiteSpace(filters.Lang))
             SqliteCommandPolicy.Add(cmd, "@lang", filters.Lang);
 
-        for (var i = 0; i < filters.PathPatterns.Count; i++)
-            SqliteCommandPolicy.Add(cmd, $"@pathPattern{i}", DbReader.BuildPathLikePattern(filters.PathPatterns[i]));
-
-        for (var i = 0; i < filters.ExcludePathPatterns.Count; i++)
-            SqliteCommandPolicy.Add(cmd, $"@excludePathPattern{i}", DbReader.BuildPathLikePattern(filters.ExcludePathPatterns[i]));
+        DbReader.AddPathFilterParameterSet(cmd, "pathPattern", filters.PathPatterns);
+        DbReader.AddPathFilterParameterSet(cmd, "excludePathPattern", filters.ExcludePathPatterns);
     }
 
     private static string? GetNullableString(SqliteDataReader reader, int ordinal)

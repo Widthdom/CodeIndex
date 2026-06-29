@@ -1533,17 +1533,17 @@ public partial class DbReaderTests
             }
             """);
 
-        Assert.Single(_reader.SearchSymbols("operator +", kind: "operator", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
-        Assert.Single(_reader.SearchSymbols("operator -", kind: "operator", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
-        Assert.Single(_reader.SearchSymbols("operator checked +", kind: "operator", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
-        Assert.Single(_reader.SearchSymbols("implicit operator decimal", kind: "operator", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
-        Assert.Single(_reader.SearchSymbols("explicit operator Money", kind: "operator", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
-        Assert.Single(_reader.SearchSymbols("explicit operator checked byte", kind: "operator", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
-        Assert.Single(_reader.SearchSymbols("explicit operator Dictionary<string,int>", kind: "operator", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
-        Assert.Single(_reader.SearchSymbols("explicit operator (int whole,int cents)", kind: "operator", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
-        Assert.Single(_reader.SearchSymbols("explicit operator (int[] items, int count)", kind: "operator", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
-        Assert.Single(_reader.SearchSymbols("Money", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
-        Assert.Single(_reader.SearchSymbols("Item", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("operator +", kind: "operator", lang: "csharp", exact: true, pathPatterns: ["src/*csharp_special_names*"]));
+        Assert.Single(_reader.SearchSymbols("operator -", kind: "operator", lang: "csharp", exact: true, pathPatterns: ["src/*csharp_special_names*"]));
+        Assert.Single(_reader.SearchSymbols("operator checked +", kind: "operator", lang: "csharp", exact: true, pathPatterns: ["src/*csharp_special_names*"]));
+        Assert.Single(_reader.SearchSymbols("implicit operator decimal", kind: "operator", lang: "csharp", exact: true, pathPatterns: ["src/*csharp_special_names*"]));
+        Assert.Single(_reader.SearchSymbols("explicit operator Money", kind: "operator", lang: "csharp", exact: true, pathPatterns: ["src/*csharp_special_names*"]));
+        Assert.Single(_reader.SearchSymbols("explicit operator checked byte", kind: "operator", lang: "csharp", exact: true, pathPatterns: ["src/*csharp_special_names*"]));
+        Assert.Single(_reader.SearchSymbols("explicit operator Dictionary<string,int>", kind: "operator", lang: "csharp", exact: true, pathPatterns: ["src/*csharp_special_names*"]));
+        Assert.Single(_reader.SearchSymbols("explicit operator (int whole,int cents)", kind: "operator", lang: "csharp", exact: true, pathPatterns: ["src/*csharp_special_names*"]));
+        Assert.Single(_reader.SearchSymbols("explicit operator (int[] items, int count)", kind: "operator", lang: "csharp", exact: true, pathPatterns: ["src/*csharp_special_names*"]));
+        Assert.Single(_reader.SearchSymbols("Money", kind: "function", lang: "csharp", exact: true, pathPatterns: ["src/*csharp_special_names*"]));
+        Assert.Single(_reader.SearchSymbols("Item", kind: "function", lang: "csharp", exact: true, pathPatterns: ["src/*csharp_special_names*"]));
     }
 
     [Fact]
@@ -2069,7 +2069,7 @@ public partial class DbReaderTests
             """);
 
         var reference = Assert.Single(
-            _reader.SearchReferences("dbo.Target", lang: "sql", exact: true, pathPatterns: ["current_sql"]));
+            _reader.SearchReferences("dbo.Target", lang: "sql", exact: true, pathPatterns: ["src/*current_sql*"]));
         Assert.Equal("src/current_sql.sql", reference.Path);
         Assert.Contains("EXEC dbo.Target;", reference.RawContext);
 
@@ -2575,7 +2575,7 @@ public partial class DbReaderTests
             """);
 
         var reference = Assert.Single(_reader.SearchReferences(
-            "SearchSelfTarget", lang: "csharp", referenceKind: "call", exact: true, pathPatterns: ["self_reference_search"]));
+            "SearchSelfTarget", lang: "csharp", referenceKind: "call", exact: true, pathPatterns: ["src/*self_reference_search*"]));
         Assert.True(reference.IsSelfReference);
         Assert.False(reference.IsMutualRecursion);
 
@@ -2584,7 +2584,7 @@ public partial class DbReaderTests
             lang: "csharp",
             referenceKind: "call",
             exact: true,
-            pathPatterns: ["self_reference_search"],
+            pathPatterns: ["src/*self_reference_search*"],
             excludeSelfReferences: true));
     }
 
@@ -2607,9 +2607,9 @@ public partial class DbReaderTests
             """);
 
         var aToB = Assert.Single(_reader.SearchReferences(
-            "CrossCycleB", lang: "csharp", referenceKind: "call", exact: true, pathPatterns: ["mutual_recursion_a"]));
+            "CrossCycleB", lang: "csharp", referenceKind: "call", exact: true, pathPatterns: ["src/*mutual_recursion_a*"]));
         var bToA = Assert.Single(_reader.SearchReferences(
-            "CrossCycleA", lang: "csharp", referenceKind: "call", exact: true, pathPatterns: ["mutual_recursion_b"]));
+            "CrossCycleA", lang: "csharp", referenceKind: "call", exact: true, pathPatterns: ["src/*mutual_recursion_b*"]));
 
         Assert.True(aToB.IsMutualRecursion);
         Assert.True(bToA.IsMutualRecursion);

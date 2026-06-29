@@ -2981,13 +2981,13 @@ public partial class DbReader
         {
             var ors = new List<string>(pathPatterns.Count);
             for (int i = 0; i < pathPatterns.Count; i++)
-                ors.Add($"path LIKE @pathPattern{i} ESCAPE '\\'");
+                ors.Add(BuildPathColumnFilterPredicate("path", "pathPattern", i, pathPatterns[i]));
             sql += " AND (" + string.Join(" OR ", ors) + ")";
         }
         if (excludePathPatterns != null)
         {
             for (int i = 0; i < excludePathPatterns.Count; i++)
-                sql += $" AND path NOT LIKE @excludePathPattern{i} ESCAPE '\\'";
+                sql += $" AND NOT {BuildPathColumnFilterPredicate("path", "excludePathPattern", i, excludePathPatterns[i])}";
         }
         if (excludeTests)
             sql += $" AND NOT {TestPathCondition.Replace("f.path", "path")}";
@@ -3347,13 +3347,13 @@ public partial class DbReader
         {
             var ors = new List<string>(pathPatterns.Count);
             for (int i = 0; i < pathPatterns.Count; i++)
-                ors.Add($"path LIKE @pathPattern{i} ESCAPE '\\'");
+                ors.Add(BuildPathColumnFilterPredicate("path", "pathPattern", i, pathPatterns[i]));
             sql += " AND (" + string.Join(" OR ", ors) + ")";
         }
         if (excludePathPatterns != null)
         {
             for (int i = 0; i < excludePathPatterns.Count; i++)
-                sql += $" AND path NOT LIKE @excludePathPattern{i} ESCAPE '\\'";
+                sql += $" AND NOT {BuildPathColumnFilterPredicate("path", "excludePathPattern", i, excludePathPatterns[i])}";
         }
         if (excludeTests)
             sql += $" AND NOT {TestPathCondition.Replace("f.path", "path")}";

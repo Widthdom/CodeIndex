@@ -301,7 +301,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, indexStderr);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
-                ["--db", dbPath, "--json", "--exclude-tests", "--exclude-path", "generated"],
+                ["--db", dbPath, "--json", "--exclude-tests", "--exclude-path", "src/generated"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);

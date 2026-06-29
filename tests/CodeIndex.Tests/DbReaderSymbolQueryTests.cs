@@ -173,7 +173,7 @@ public partial class DbReaderTests
             limit: 2,
             kind: "function",
             lang: "csharp",
-            pathPatterns: ["generic_hotspot_rank"],
+            pathPatterns: ["src/*generic_hotspot_rank*"],
             excludePathPatterns: null,
             excludeTests: false,
             sortMode: SymbolSortMode.Complexity);
@@ -1293,7 +1293,7 @@ public partial class DbReaderTests
         ]);
 
         var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
-            pathPatterns: ["unused_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+            pathPatterns: ["src/config/unused_fixture.cs"], excludePathPatterns: null, excludeTests: false);
 
         Assert.Equal(["Hidden", "InternalOnly", "PathResolver", "ConnectionString", "AdoptionService", "AppSettings", "TokenService", "ApplyConfiguration", "UseIOptions"], unused.Select(symbol => symbol.Name).ToArray());
         Assert.Equal("likely_unused_private", unused[0].UnusedBucket);
@@ -1357,7 +1357,7 @@ public partial class DbReaderTests
             limit: 10,
             kind: null,
             lang: "csharp",
-            pathPatterns: ["output_models.cs"],
+            pathPatterns: ["src/*output_models.cs*"],
             excludePathPatterns: null,
             excludeTests: false,
             bucketFilter: "reflection_or_config_suspect");
@@ -1416,7 +1416,7 @@ public partial class DbReaderTests
             limit: 10,
             kind: null,
             lang: "csharp",
-            pathPatterns: ["metadata_hooks.cs"],
+            pathPatterns: ["src/*metadata_hooks.cs*"],
             excludePathPatterns: null,
             excludeTests: false,
             bucketFilter: "reflection_or_config_suspect");
@@ -1506,9 +1506,9 @@ public partial class DbReaderTests
         _writer.InsertReferences(references);
 
         var unused = _reader.GetUnusedSymbols(limit: 1, kind: null, lang: "csharp",
-            pathPatterns: ["fast_unused_limit_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+            pathPatterns: ["src/*fast_unused_limit_fixture.cs*"], excludePathPatterns: null, excludeTests: false);
         var count = _reader.CountUnusedSymbols(kind: null, lang: "csharp",
-            pathPatterns: ["fast_unused_limit_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+            pathPatterns: ["src/*fast_unused_limit_fixture.cs*"], excludePathPatterns: null, excludeTests: false);
 
         var result = Assert.Single(unused);
         Assert.Equal("HiddenUnusedAfterReferencedPrefix", result.Name);
@@ -1570,7 +1570,7 @@ public partial class DbReaderTests
         ]);
 
         var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
-            pathPatterns: ["cli_options_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+            pathPatterns: ["src/*cli_options_fixture.cs*"], excludePathPatterns: null, excludeTests: false);
 
         Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "ShowHelp").UnusedBucket);
         Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "ProjectPath").UnusedBucket);
@@ -1708,7 +1708,7 @@ public partial class DbReaderTests
         ]);
 
         var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
-            pathPatterns: ["local_use_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+            pathPatterns: ["src/*local_use_fixture.cs*"], excludePathPatterns: null, excludeTests: false);
 
         Assert.DoesNotContain(unused, symbol => symbol.Name == "Hidden");
         Assert.DoesNotContain(unused, symbol => symbol.Name == "HiddenInterpolated");
@@ -1794,9 +1794,9 @@ public partial class DbReaderTests
         ]);
 
         var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
-            pathPatterns: ["chunked_raw_string_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+            pathPatterns: ["src/*chunked_raw_string_fixture.cs*"], excludePathPatterns: null, excludeTests: false);
         var count = _reader.CountUnusedSymbols(kind: null, lang: "csharp",
-            pathPatterns: ["chunked_raw_string_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+            pathPatterns: ["src/*chunked_raw_string_fixture.cs*"], excludePathPatterns: null, excludeTests: false);
 
         Assert.DoesNotContain(unused, symbol => symbol.Name == "UsedRowsSql");
         Assert.Contains(unused, symbol => symbol.Name == "ActuallyUnused");
@@ -1863,7 +1863,7 @@ public partial class DbReaderTests
         ]);
 
         var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
-            pathPatterns: ["reflection_unused_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+            pathPatterns: ["src/*reflection_unused_fixture.cs*"], excludePathPatterns: null, excludeTests: false);
 
         Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "UserDto").UnusedBucket);
         var property = Assert.Single(unused, symbol => symbol.Name == "FullName");
@@ -1958,7 +1958,7 @@ public partial class DbReaderTests
         ]);
 
         var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
-            pathPatterns: ["reflection_type_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+            pathPatterns: ["src/*reflection_type_fixture.cs*"], excludePathPatterns: null, excludeTests: false);
 
         Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "ReflectiveModel").UnusedBucket);
         Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "MyJsonContext").UnusedBucket);
@@ -2124,7 +2124,7 @@ public partial class DbReaderTests
         ]);
 
         var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
-            pathPatterns: ["reflection_property_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+            pathPatterns: ["src/*reflection_property_fixture.cs*"], excludePathPatterns: null, excludeTests: false);
 
         Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "Target").UnusedBucket);
         Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "Id").UnusedBucket);
@@ -2225,7 +2225,7 @@ public partial class DbReaderTests
         ]);
 
         var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
-            pathPatterns: ["reflection_property_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+            pathPatterns: ["src/*reflection_property_fixture.cs*"], excludePathPatterns: null, excludeTests: false);
 
         Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "BoundValue").UnusedBucket);
         Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "Title").UnusedBucket);
@@ -2336,7 +2336,7 @@ public partial class DbReaderTests
         ]);
 
         var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
-            pathPatterns: ["reflection_property_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+            pathPatterns: ["src/*reflection_property_fixture.cs*"], excludePathPatterns: null, excludeTests: false);
 
         Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "Services").UnusedBucket);
         Assert.Equal("public_or_exported_no_refs", Assert.Single(unused, symbol => symbol.Name == "LegacyName").UnusedBucket);
@@ -2499,7 +2499,7 @@ public partial class DbReaderTests
         ]);
 
         var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
-            pathPatterns: ["serialization_reflection_contract_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+            pathPatterns: ["src/*serialization_reflection_contract_fixture.cs*"], excludePathPatterns: null, excludeTests: false);
 
         Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "ExtensionData").UnusedBucket);
         Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "ReflectedType").UnusedBucket);
@@ -2570,7 +2570,7 @@ public partial class DbReaderTests
         ]);
 
         var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
-            pathPatterns: ["reflection_multiline_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+            pathPatterns: ["src/*reflection_multiline_fixture.cs*"], excludePathPatterns: null, excludeTests: false);
 
         var property = Assert.Single(unused, symbol => symbol.Name == "FullName");
         Assert.Equal("reflection_or_config_suspect", property.UnusedBucket);
@@ -2654,7 +2654,7 @@ public partial class DbReaderTests
         ]);
 
         var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
-            pathPatterns: ["reflection_string_bracket_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+            pathPatterns: ["src/*reflection_string_bracket_fixture.cs*"], excludePathPatterns: null, excludeTests: false);
 
         var buggy = Assert.Single(unused, symbol => symbol.Name == "BuggyName");
         Assert.Equal("reflection_or_config_suspect", buggy.UnusedBucket);
@@ -2732,7 +2732,7 @@ public partial class DbReaderTests
         ]);
 
         var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
-            pathPatterns: [$"reflection_string_bracket_inline_{anchor.GetHashCode():x8}.cs"],
+            pathPatterns: [$"src/*reflection_string_bracket_inline_{anchor.GetHashCode():x8}*"],
             excludePathPatterns: null, excludeTests: false);
 
         var property = Assert.Single(unused, symbol => symbol.Name == "Name");
@@ -2810,7 +2810,7 @@ public partial class DbReaderTests
         ]);
 
         var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
-            pathPatterns: ["reflection_standalone_bracket_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+            pathPatterns: ["src/*reflection_standalone_bracket_fixture.cs*"], excludePathPatterns: null, excludeTests: false);
 
         // A sits under a real reflection attribute → suspect.
         // B is a plain property and must not inherit A's reflection attribute through
@@ -2895,7 +2895,7 @@ public partial class DbReaderTests
         ]);
 
         var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
-            pathPatterns: ["reflection_comment_prefixed_inline_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+            pathPatterns: ["src/*reflection_comment_prefixed_inline_fixture.cs*"], excludePathPatterns: null, excludeTests: false);
 
         var a = Assert.Single(unused, symbol => symbol.Name == "A");
         Assert.Equal("reflection_or_config_suspect", a.UnusedBucket);
@@ -2969,7 +2969,7 @@ public partial class DbReaderTests
         ]);
 
         var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
-            pathPatterns: ["reflection_trailing_comment_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+            pathPatterns: ["src/*reflection_trailing_comment_fixture.cs*"], excludePathPatterns: null, excludeTests: false);
 
         var c = Assert.Single(unused, symbol => symbol.Name == "C");
         Assert.Equal("reflection_or_config_suspect", c.UnusedBucket);
@@ -3045,7 +3045,7 @@ public partial class DbReaderTests
         ]);
 
         var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
-            pathPatterns: ["reflection_trailing_block_comment_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+            pathPatterns: ["src/*reflection_trailing_block_comment_fixture.cs*"], excludePathPatterns: null, excludeTests: false);
 
         var d = Assert.Single(unused, symbol => symbol.Name == "D");
         Assert.Equal("reflection_or_config_suspect", d.UnusedBucket);
@@ -3126,7 +3126,7 @@ public partial class DbReaderTests
         ]);
 
         var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
-            pathPatterns: ["reflection_embedded_block_comment_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+            pathPatterns: ["src/*reflection_embedded_block_comment_fixture.cs*"], excludePathPatterns: null, excludeTests: false);
 
         var e = Assert.Single(unused, symbol => symbol.Name == "E");
         Assert.Equal("reflection_or_config_suspect", e.UnusedBucket);
@@ -3192,7 +3192,7 @@ public partial class DbReaderTests
         ]);
 
         var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
-            pathPatterns: ["reflection_comment_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+            pathPatterns: ["src/*reflection_comment_fixture.cs*"], excludePathPatterns: null, excludeTests: false);
 
         var property = Assert.Single(unused, symbol => symbol.Name == "FullName");
         Assert.Equal("reflection_or_config_suspect", property.UnusedBucket);
@@ -3289,7 +3289,7 @@ public partial class DbReaderTests
         ]);
 
         var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
-            pathPatterns: ["reflection_qualified_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+            pathPatterns: ["src/*reflection_qualified_fixture.cs*"], excludePathPatterns: null, excludeTests: false);
 
         Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "QualifiedName").UnusedBucket);
         Assert.Equal("reflection_or_config_suspect", Assert.Single(unused, symbol => symbol.Name == "SuffixedName").UnusedBucket);
@@ -3357,7 +3357,7 @@ public partial class DbReaderTests
         ]);
 
         var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
-            pathPatterns: ["reflection_block_comment_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+            pathPatterns: ["src/*reflection_block_comment_fixture.cs*"], excludePathPatterns: null, excludeTests: false);
 
         var property = Assert.Single(unused, symbol => symbol.Name == "FullName");
         Assert.Equal("reflection_or_config_suspect", property.UnusedBucket);
@@ -3404,7 +3404,7 @@ public partial class DbReaderTests
         _writer.InsertSymbols(symbols);
 
         var unused = _reader.GetUnusedSymbols(limit: 3000, kind: null, lang: "csharp",
-            pathPatterns: ["large_public_unused_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+            pathPatterns: ["src/*large_public_unused_fixture.cs*"], excludePathPatterns: null, excludeTests: false);
 
         Assert.Equal(2500, unused.Count);
     }

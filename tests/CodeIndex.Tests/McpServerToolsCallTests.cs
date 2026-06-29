@@ -8062,7 +8062,7 @@ public partial class McpServerTests
             },
         ]);
 
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"unused_fixture.cs"}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"src/*unused_fixture.cs*"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
         Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
@@ -8090,7 +8090,7 @@ public partial class McpServerTests
         Assert.Equal("reflection_or_config_suspect", symbols[8]!["unusedBucket"]!.GetValue<string>());
         Assert.Contains("returned buckets", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
 
-        var filteredRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"unused_fixture.cs","bucket":"likely_unused_private","minConfidence":"medium"}}}""")!;
+        var filteredRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"src/*unused_fixture.cs*","bucket":"likely_unused_private","minConfidence":"medium"}}}""")!;
         var filteredResponse = _server.HandleMessage(filteredRequest)!;
         var filteredStructured = filteredResponse["result"]!["structuredContent"]!;
         var filteredSymbols = filteredStructured["symbols"]!.AsArray();
@@ -8269,7 +8269,7 @@ public partial class McpServerTests
             },
         ]);
 
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"reflection_unused_fixture.cs"}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"src/*reflection_unused_fixture.cs*"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
         Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
@@ -8341,7 +8341,7 @@ public partial class McpServerTests
             },
         ]);
 
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"reflection_comment_fixture.cs"}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"src/*reflection_comment_fixture.cs*"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
         Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
@@ -8415,7 +8415,7 @@ public partial class McpServerTests
             cmd.ExecuteNonQuery();
         }
 
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"reflection_missing_chunks_fixture.cs"}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"src/*reflection_missing_chunks_fixture.cs*"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
         Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
@@ -8478,7 +8478,7 @@ public partial class McpServerTests
             },
         ]);
 
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"cli_options_fixture.cs"}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"src/*cli_options_fixture.cs*"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
         Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
@@ -8578,7 +8578,7 @@ public partial class McpServerTests
             },
         ]);
 
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"reflection_qualified_fixture.cs"}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"src/*reflection_qualified_fixture.cs*"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
         Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
@@ -8652,7 +8652,7 @@ public partial class McpServerTests
             },
         ]);
 
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"reflection_block_comment_fixture.cs"}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"src/*reflection_block_comment_fixture.cs*"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
         Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
@@ -8742,7 +8742,7 @@ public partial class McpServerTests
         }
         writer.InsertSymbols(symbols);
 
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"large_public_unused_fixture.cs","limit":3000}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"src/*large_public_unused_fixture.cs*","limit":3000}}}""")!;
         var response = _server.HandleMessage(request)!;
 
         Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
@@ -8996,7 +8996,7 @@ public partial class McpServerTests
             },
         ]);
 
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"reflection_diversified_unused_fixture.cs","limit":4}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"src/*reflection_diversified_unused_fixture.cs*","limit":4}}}""")!;
         var response = _server.HandleMessage(request)!;
 
         Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);

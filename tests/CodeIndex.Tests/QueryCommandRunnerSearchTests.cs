@@ -6624,7 +6624,7 @@ jobs:
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
-                "src/--json-dir/Demo.cs",
+                "--json-dir/Demo.cs",
                 "csharp",
                 "class Demo { void Alpha() {} }\n");
 
@@ -10027,7 +10027,7 @@ jobs:
     }
 
     [Fact]
-    public void RunSearch_ZeroResultsSuggestsDirectoryGlobPath_Issue3814()
+    public void RunSearch_PlainDirectoryPathFilterDoesNotSuggestGlob_Issue4163()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_path_glob_hint");
         try
@@ -10042,9 +10042,7 @@ jobs:
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             using var document = ParseJsonOutput(stdout);
-            var hint = document.RootElement.GetProperty("path_filter_hint");
-            Assert.Equal("path_filter_looks_like_directory", hint.GetProperty("reason").GetString());
-            Assert.Contains("src/CodeIndex/**", hint.GetProperty("suggested_action").GetString());
+            Assert.False(document.RootElement.TryGetProperty("path_filter_hint", out _));
 
             var (exactFileExitCode, exactFileStdout, exactFileStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["MissingNeedle", "--db", dbPath, "--path", "src/CodeIndex/Foo.cs", "--json"],

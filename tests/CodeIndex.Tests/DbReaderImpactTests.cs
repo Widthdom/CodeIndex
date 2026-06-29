@@ -84,7 +84,7 @@ public partial class DbReaderTests
             }
             """);
 
-        var analysis = _reader.AnalyzeImpact("C", maxDepth: 5, limit: 20, lang: "csharp", pathPatterns: ["impact_cycle"]);
+        var analysis = _reader.AnalyzeImpact("C", maxDepth: 5, limit: 20, lang: "csharp", pathPatterns: ["src/*impact_cycle*"]);
 
         Assert.False(analysis.Truncated);
         Assert.Null(analysis.TruncatedReason);
@@ -107,7 +107,7 @@ public partial class DbReaderTests
             }
             """);
 
-        var analysis = _reader.AnalyzeImpact("Leaf", maxDepth: 5, limit: 20, lang: "csharp", pathPatterns: ["impact_direct_cycle"]);
+        var analysis = _reader.AnalyzeImpact("Leaf", maxDepth: 5, limit: 20, lang: "csharp", pathPatterns: ["src/*impact_direct_cycle*"]);
 
         Assert.False(analysis.Truncated);
         Assert.Null(analysis.TruncatedReason);
@@ -129,7 +129,7 @@ public partial class DbReaderTests
             }
             """);
 
-        var analysis = _reader.AnalyzeImpact("Leaf", maxDepth: 1, limit: 20, lang: "csharp", pathPatterns: ["impact_boundary_root_cycle"]);
+        var analysis = _reader.AnalyzeImpact("Leaf", maxDepth: 1, limit: 20, lang: "csharp", pathPatterns: ["src/*impact_boundary_root_cycle*"]);
 
         Assert.False(analysis.Truncated);
         Assert.Null(analysis.TruncatedReason);
@@ -152,7 +152,7 @@ public partial class DbReaderTests
             }
             """);
 
-        var analysis = _reader.AnalyzeImpact("Leaf", maxDepth: 1, limit: 20, lang: "csharp", pathPatterns: ["impact_depth_reason"]);
+        var analysis = _reader.AnalyzeImpact("Leaf", maxDepth: 1, limit: 20, lang: "csharp", pathPatterns: ["src/*impact_depth_reason*"]);
 
         Assert.False(analysis.Truncated);
         Assert.Null(analysis.TruncatedReason);
@@ -180,9 +180,9 @@ public partial class DbReaderTests
             """);
 
         var depth1 = _reader.AnalyzeImpact(
-            "Leaf", maxDepth: 1, limit: 20, lang: "csharp", pathPatterns: ["impact_analyze_depth_chain"]);
+            "Leaf", maxDepth: 1, limit: 20, lang: "csharp", pathPatterns: ["src/*impact_analyze_depth_chain*"]);
         var depth2 = _reader.AnalyzeImpact(
-            "Leaf", maxDepth: 2, limit: 20, lang: "csharp", pathPatterns: ["impact_analyze_depth_chain"]);
+            "Leaf", maxDepth: 2, limit: 20, lang: "csharp", pathPatterns: ["src/*impact_analyze_depth_chain*"]);
 
         Assert.Equal(new (string?, int)[] { ("Mid", 1) }, depth1.Callers.Select(r => (r.CallerName, r.Depth)).ToArray());
         Assert.Equal(ImpactTerminationReasons.MaxDepthReached, depth1.TerminationReason);
@@ -207,7 +207,7 @@ public partial class DbReaderTests
             }
             """);
 
-        var analysis = _reader.AnalyzeImpact("Leaf", maxDepth: 1, limit: 20, lang: "csharp", pathPatterns: ["impact_depth_completed"]);
+        var analysis = _reader.AnalyzeImpact("Leaf", maxDepth: 1, limit: 20, lang: "csharp", pathPatterns: ["src/*impact_depth_completed*"]);
 
         Assert.False(analysis.Truncated);
         Assert.Null(analysis.TruncatedReason);
@@ -228,7 +228,7 @@ public partial class DbReaderTests
             }
             """);
 
-        var analysis = _reader.AnalyzeImpact("Leaf", maxDepth: 0, limit: 20, lang: "csharp", pathPatterns: ["impact_depth_zero"]);
+        var analysis = _reader.AnalyzeImpact("Leaf", maxDepth: 0, limit: 20, lang: "csharp", pathPatterns: ["src/*impact_depth_zero*"]);
 
         Assert.False(analysis.Truncated);
         Assert.Null(analysis.TruncatedReason);
@@ -304,7 +304,7 @@ public partial class DbReaderTests
             }
             """);
 
-        var analysis = _reader.AnalyzeImpact("Leaf", maxDepth: 1, limit: 50, lang: "csharp", pathPatterns: ["impact_no_truncate"]);
+        var analysis = _reader.AnalyzeImpact("Leaf", maxDepth: 1, limit: 50, lang: "csharp", pathPatterns: ["src/*impact_no_truncate*"]);
 
         Assert.False(analysis.Truncated);
         Assert.Null(analysis.TruncatedReason);

@@ -14382,19 +14382,16 @@ public static partial class QueryCommandRunner
         if (pattern.Length == 0 || ContainsGlobMeta(pattern) || pattern.EndsWith("/**", StringComparison.Ordinal))
             return null;
 
-        if (!string.IsNullOrEmpty(Path.GetExtension(pattern)))
-        {
-            var exactMatches = reader.ListFiles(
-                query: null,
-                limit: 1,
-                lang: options.Lang,
-                pathPatterns: [pattern],
-                excludePathPatterns: options.ExcludePaths,
-                excludeTests: options.ExcludeTests,
-                since: options.Since);
-            if (exactMatches.Count > 0)
-                return null;
-        }
+        var anchoredMatches = reader.ListFiles(
+            query: null,
+            limit: 1,
+            lang: options.Lang,
+            pathPatterns: [pattern],
+            excludePathPatterns: options.ExcludePaths,
+            excludeTests: options.ExcludeTests,
+            since: options.Since);
+        if (anchoredMatches.Count > 0)
+            return null;
 
         var suggested = pattern + "/**";
         var prefixMatches = reader.ListFiles(
