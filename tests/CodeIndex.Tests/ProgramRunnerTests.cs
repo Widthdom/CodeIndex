@@ -588,10 +588,28 @@ public class ProgramRunnerTests
     }
 
     [Fact]
-    public void RunDoctor_EnvironmentInventory_PrintsAuditView()
+    public void RunDoctor_EnvironmentInventory_PrintsCompactSummaryByDefault_Issue4148()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
             ["doctor", "--env-inventory"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Empty(stderr);
+        Assert.Contains("environment_inventory_summary:", stdout);
+        Assert.Contains("by_domain:", stdout);
+        Assert.Contains("by_sensitivity:", stdout);
+        Assert.Contains("by_category:", stdout);
+        Assert.Contains("auth_secret", stdout);
+        Assert.DoesNotContain("CDIDX_GITHUB_TOKEN", stdout);
+        Assert.Contains("cdidx doctor --env-inventory=full", stdout);
+    }
+
+    [Fact]
+    public void RunDoctor_EnvironmentInventoryFull_PrintsAuditView()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["doctor", "--env-inventory=full"],
             appVersion: "1.10.0"));
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
@@ -627,8 +645,10 @@ public class ProgramRunnerTests
         Assert.Equal("1.10.0", root.GetProperty("version").GetString());
         Assert.True(root.GetProperty("terminal").TryGetProperty("stdout_tty", out _));
         Assert.True(root.GetProperty("paths").TryGetProperty("db", out _));
-        Assert.False(root.GetProperty("redaction").GetProperty("paths_redacted").GetBoolean());
+        Assert.True(root.GetProperty("redaction").GetProperty("paths_redacted").GetBoolean());
         Assert.True(root.GetProperty("redaction").GetProperty("secrets_redacted").GetBoolean());
+        Assert.False(root.TryGetProperty("environment_inventory", out _));
+        Assert.DoesNotContain(visiblePath, stdout);
 
         var envByName = root.GetProperty("cdidx_env")
             .EnumerateArray()
@@ -638,8 +658,38 @@ public class ProgramRunnerTests
                 StringComparer.Ordinal);
         Assert.Equal("<redacted>", envByName["CDIDX_GITHUB_TOKEN"].GetProperty("value").GetString());
         Assert.True(envByName["CDIDX_GITHUB_TOKEN"].GetProperty("sensitive").GetBoolean());
-        Assert.Equal(visiblePath, envByName["CDIDX_VISIBLE_PATH"].GetProperty("value").GetString());
+        Assert.Contains("[redacted]", envByName["CDIDX_VISIBLE_PATH"].GetProperty("value").GetString(), StringComparison.Ordinal);
         Assert.False(envByName["CDIDX_VISIBLE_PATH"].GetProperty("sensitive").GetBoolean());
+
+        var summary = root.GetProperty("environment_inventory_summary");
+        Assert.Equal(EnvironmentVariableInventory.Items.Count, summary.GetProperty("total").GetInt32());
+        Assert.Contains(
+            summary.GetProperty("by_domain").EnumerateArray(),
+            element => element.GetProperty("name").GetString() == EnvironmentVariableInventory.DomainAuthSecret
+                       && element.GetProperty("count").GetInt32() > 0);
+        Assert.Contains(
+            summary.GetProperty("by_sensitivity").EnumerateArray(),
+            element => element.GetProperty("name").GetString() == EnvironmentVariableInventory.SensitivitySecret
+                       && element.GetProperty("count").GetInt32() > 0);
+        Assert.Contains(
+            summary.GetProperty("by_category").EnumerateArray(),
+            element => element.GetProperty("name").GetString() == "mcp"
+                       && element.GetProperty("count").GetInt32() > 0);
+    }
+
+    [Fact]
+    public void RunDoctor_JsonFullInventoryRequiresExplicitMode_Issue4148()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["doctor", "--json", "--env-inventory=full"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Empty(stderr);
+        using var document = JsonDocument.Parse(stdout);
+        var root = document.RootElement;
+        Assert.True(root.GetProperty("redaction").GetProperty("paths_redacted").GetBoolean());
+        Assert.True(root.TryGetProperty("environment_inventory_summary", out _));
 
         var inventoryByName = root.GetProperty("environment_inventory")
             .EnumerateArray()
@@ -657,6 +707,28 @@ public class ProgramRunnerTests
         Assert.Equal(
             EnvironmentVariableInventory.DomainDisplay,
             inventoryByName[QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable].GetProperty("domain").GetString());
+    }
+
+    [Fact]
+    public void RunDoctor_JsonShowPathsAllowsLocalPathDiagnostics_Issue4148()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_VISIBLE_PATH");
+        const string visiblePath = "/tmp/cdidx-visible-path-4148";
+        env.Set("CDIDX_VISIBLE_PATH", visiblePath);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["doctor", "--json", "--show-paths"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Empty(stderr);
+        using var document = JsonDocument.Parse(stdout);
+        var root = document.RootElement;
+        Assert.False(root.GetProperty("redaction").GetProperty("paths_redacted").GetBoolean());
+        var visibleEnv = root.GetProperty("cdidx_env")
+            .EnumerateArray()
+            .Single(element => element.GetProperty("name").GetString() == "CDIDX_VISIBLE_PATH");
+        Assert.Equal(visiblePath, visibleEnv.GetProperty("value").GetString());
     }
 
     [Fact]

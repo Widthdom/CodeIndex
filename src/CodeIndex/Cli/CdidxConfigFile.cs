@@ -642,6 +642,7 @@ internal static class CdidxConfigFile
     {
         var wantsJson = args.Any(static arg => arg == "--json" || arg.StartsWith("--json=", StringComparison.Ordinal));
         var json = false;
+        var showPaths = false;
         var remaining = new List<string>();
         foreach (var arg in args)
         {
@@ -661,12 +662,19 @@ internal static class CdidxConfigFile
                     "use `cdidx config show --json`.");
             }
 
+            if (arg == "--show-paths")
+            {
+                showPaths = true;
+                continue;
+            }
+
             remaining.Add(arg);
         }
 
         if (remaining.Count > 0)
-            return CommandErrorWriter.WriteJsonOrHuman(wantsJson, jsonOptions, "config show does not accept positional arguments.", CommandExitCodes.UsageError, "run `cdidx config show` from the workspace whose config should be shown.");
+            return CommandErrorWriter.WriteJsonOrHuman(wantsJson, jsonOptions, "config show does not accept positional arguments.", CommandExitCodes.UsageError, "use `cdidx config show [--json] [--show-paths]` from the workspace whose config should be shown.");
 
+        var redactPaths = json && !showPaths;
         var disabled = string.Equals(CdidxEnvironment.GetProcessEnvironmentVariable(DisableEnvVar), "1", StringComparison.Ordinal);
         var discovery = DiscoverConfigFile(Environment.CurrentDirectory);
         var loadResult = disabled
@@ -676,15 +684,17 @@ internal static class CdidxConfigFile
         var active = ActiveWorkspace.Load();
         var workspaceManifest = WorkspaceManifestLoader.Discover(Environment.CurrentDirectory);
         var payload = new ConfigShowJsonResult(
-            path,
-            active,
+            FormatConfigShowPath(path, redactPaths),
+            FormatActiveWorkspaceForShow(active, redactPaths),
             ["cli", "env", "config_file", "active_workspace", "cwd_default"],
             SupportedConfigFiles,
-            BuildConfigFileStatus(disabled, discovery, loadResult),
-            BuildActiveWorkspaceStatus(active),
-            BuildWorkspaceManifestStatus(workspaceManifest),
-            discovery.SearchedPaths,
-            BuildEffectiveConfig(loadResult));
+            BuildConfigFileStatus(disabled, discovery, loadResult, redactPaths),
+            BuildActiveWorkspaceStatus(active, redactPaths),
+            BuildWorkspaceManifestStatus(workspaceManifest, redactPaths),
+            FormatConfigShowPaths(discovery.SearchedPaths, redactPaths),
+            BuildEffectiveConfig(loadResult, redactPaths),
+            EnvironmentVariableInventory.BuildSummary(),
+            new DoctorRedactionJsonResult(redactPaths, true));
         if (json)
             Console.WriteLine(JsonSerializer.Serialize(payload, jsonOptions));
         else
@@ -701,7 +711,8 @@ internal static class CdidxConfigFile
     private static ConfigFileStatusJsonResult BuildConfigFileStatus(
         bool disabled,
         ConfigFileDiscoveryResult discovery,
-        LoadResult loadResult)
+        LoadResult loadResult,
+        bool redactPaths)
     {
         if (disabled)
         {
@@ -710,7 +721,7 @@ internal static class CdidxConfigFile
                 DisableEnvVar,
                 null,
                 null,
-                discovery.SearchedPaths,
+                FormatConfigShowPaths(discovery.SearchedPaths, redactPaths),
                 discovery.SupportedFiles);
         }
 
@@ -719,9 +730,9 @@ internal static class CdidxConfigFile
             return new ConfigFileStatusJsonResult(
                 StatusInvalid,
                 StatusInvalid,
-                loadResult.Path ?? discovery.Path,
-                loadResult.Error,
-                discovery.SearchedPaths,
+                FormatConfigShowPath(loadResult.Path ?? discovery.Path, redactPaths),
+                FormatConfigShowText(loadResult.Error, redactPaths),
+                FormatConfigShowPaths(discovery.SearchedPaths, redactPaths),
                 discovery.SupportedFiles);
         }
 
@@ -730,9 +741,9 @@ internal static class CdidxConfigFile
             return new ConfigFileStatusJsonResult(
                 StatusLoaded,
                 StatusLoaded,
-                discovery.Path,
+                FormatConfigShowPath(discovery.Path, redactPaths),
                 null,
-                discovery.SearchedPaths,
+                FormatConfigShowPaths(discovery.SearchedPaths, redactPaths),
                 discovery.SupportedFiles);
         }
 
@@ -741,11 +752,11 @@ internal static class CdidxConfigFile
             discovery.Reason,
             null,
             null,
-            discovery.SearchedPaths,
+            FormatConfigShowPaths(discovery.SearchedPaths, redactPaths),
             discovery.SupportedFiles);
     }
 
-    private static ActiveWorkspaceStatusJsonResult BuildActiveWorkspaceStatus(ActiveWorkspaceState? active)
+    private static ActiveWorkspaceStatusJsonResult BuildActiveWorkspaceStatus(ActiveWorkspaceState? active, bool redactPaths)
     {
         if (active is null)
             return new ActiveWorkspaceStatusJsonResult(StatusNotFound, StatusNotFound, null, null, null, null);
@@ -753,10 +764,10 @@ internal static class CdidxConfigFile
         return new ActiveWorkspaceStatusJsonResult(
             StatusLoaded,
             StatusLoaded,
-            ResolveActiveWorkspaceStatePathForStatus(),
+            FormatConfigShowPath(ResolveActiveWorkspaceStatePathForStatus(), redactPaths),
             active.Name,
-            active.Root,
-            active.DbPath);
+            FormatConfigShowPath(active.Root, redactPaths),
+            FormatConfigShowPath(active.DbPath, redactPaths));
     }
 
     private static string? ResolveActiveWorkspaceStatePathForStatus()
@@ -774,15 +785,15 @@ internal static class CdidxConfigFile
         }
     }
 
-    private static WorkspaceManifestStatusJsonResult BuildWorkspaceManifestStatus(WorkspaceManifestDiscoveryResult discovery)
+    private static WorkspaceManifestStatusJsonResult BuildWorkspaceManifestStatus(WorkspaceManifestDiscoveryResult discovery, bool redactPaths)
         => new(
             discovery.Path is null ? discovery.Status : StatusFound,
             discovery.Path is null ? discovery.Reason : StatusFound,
-            discovery.Path,
-            discovery.SearchedPaths,
+            FormatConfigShowPath(discovery.Path, redactPaths),
+            FormatConfigShowPaths(discovery.SearchedPaths, redactPaths),
             discovery.SupportedFiles);
 
-    private static IReadOnlyDictionary<string, ConfigEffectiveValueJsonResult> BuildEffectiveConfig(LoadResult loadResult)
+    private static IReadOnlyDictionary<string, ConfigEffectiveValueJsonResult> BuildEffectiveConfig(LoadResult loadResult, bool redactPaths)
     {
         var result = new SortedDictionary<string, ConfigEffectiveValueJsonResult>(StringComparer.Ordinal);
         foreach (var item in EnvironmentVariableInventory.Items.OrderBy(static item => item.Name, StringComparer.Ordinal))
@@ -817,7 +828,7 @@ internal static class CdidxConfigFile
 
             result[item.Name] = new ConfigEffectiveValueJsonResult(
                 item.Name,
-                FormatEffectiveConfigValue(item.Name, rawValue, sensitive),
+                FormatEffectiveConfigValue(item.Name, rawValue, sensitive, redactPaths),
                 source,
                 item.DefaultBehavior,
                 sensitive,
@@ -828,13 +839,36 @@ internal static class CdidxConfigFile
         return result;
     }
 
-    private static string FormatEffectiveConfigValue(string envName, string rawValue, bool sensitive)
+    private static ActiveWorkspaceState? FormatActiveWorkspaceForShow(ActiveWorkspaceState? active, bool redactPaths)
+        => active is null
+            ? null
+            : active with
+            {
+                Root = FormatConfigShowPath(active.Root, redactPaths)!,
+                DbPath = FormatConfigShowPath(active.DbPath, redactPaths)!,
+            };
+
+    private static IReadOnlyList<string> FormatConfigShowPaths(IReadOnlyList<string> paths, bool redactPaths)
+    {
+        var result = new string[paths.Count];
+        for (var i = 0; i < paths.Count; i++)
+            result[i] = FormatConfigShowPath(paths[i], redactPaths)!;
+        return result;
+    }
+
+    private static string? FormatConfigShowPath(string? path, bool redactPaths)
+        => FormatConfigShowText(path, redactPaths);
+
+    private static string? FormatConfigShowText(string? value, bool redactPaths)
+        => value is null ? null : DiagnosticRedactor.RedactSensitiveText(value, "[redacted]", redactPaths);
+
+    private static string FormatEffectiveConfigValue(string envName, string rawValue, bool sensitive, bool redactPaths)
     {
         if (sensitive)
             return "<redacted>";
         if (rawValue.Length == 0)
             return "<empty>";
-        return ConsoleUi.FormatBoundedValue(DiagnosticRedactor.RedactSensitiveText(rawValue, redactPaths: false));
+        return ConsoleUi.FormatBoundedValue(DiagnosticRedactor.RedactSensitiveText(rawValue, redactPaths: redactPaths));
     }
 
     private static void ValidateOptionalObject(JsonElement root, string key, IReadOnlyList<string> knownKeys, string path, UnknownKeyDiagnosticState unknownKeys, List<string> errors)
