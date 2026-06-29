@@ -1355,12 +1355,6 @@ internal static class SearchAuditRecipes
                     ["audit", "performance"],
                     "False positives include tiny scalar probes; prioritize command/reader pairs, prepared command cache reuse, and transaction lifetime boundaries.")
                 {
-                    PathPatterns =
-                    [
-                        "src/CodeIndex/Database/**",
-                        "src/CodeIndex/Cli/DbCommandRunner.cs",
-                        "src/CodeIndex/Cli/IndexCommandRunner*.cs",
-                    ],
                     MatchOrigins = ["code"],
                     RiskEvidence =
                     [

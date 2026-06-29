@@ -1553,7 +1553,7 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(resourceRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "async-dispose-boundary");
         Assert.Contains(resourceRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "file-open-sharing-policy");
         Assert.Equal("CreateCommand(", resourceDbCommandQuery.GetProperty("query").GetString());
-        Assert.Contains(resourceDbCommandQuery.GetProperty("path_patterns").EnumerateArray(), path => path.GetString() == "src/CodeIndex/Database/**");
+        Assert.Equal(0, resourceDbCommandQuery.GetProperty("path_patterns").GetArrayLength());
         Assert.Equal("ToArray()", resourceToArrayQuery.GetProperty("query").GetString());
         Assert.Contains(resourceToArrayQuery.GetProperty("path_patterns").EnumerateArray(), path => path.GetString() == "src/CodeIndex/Mcp/**");
         Assert.Contains(resourceToArrayQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("limit, pagination, or JSON-size policy", StringComparison.Ordinal));
@@ -3981,6 +3981,93 @@ public partial class QueryCommandRunnerTests
             Assert.Contains(query.GetProperty("guard_filters").EnumerateArray(), filter =>
                 filter.GetProperty("query").GetString() == "MatchTimeout(" &&
                 filter.GetProperty("scope").GetString() == "same_line");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_ResourceMaterializationRecipeScopesDbCommandOwnershipToSource_Issue4155()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_resource_db_command");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/CodeIndex/Database/DbReader.Example.cs",
+                "csharp",
+                """
+                public static class DbReaderExample
+                {
+                    public static object Build(dynamic connection) => connection.CreateCommand();
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/CodeIndex/Cli/QueryCommandRunner.Example.cs",
+                "csharp",
+                """
+                public static class QueryCommandRunnerExample
+                {
+                    public static object Build(dynamic connection) => connection.CreateCommand();
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/CodeIndex/Cli/DiffCommandRunner.Example.cs",
+                "csharp",
+                """
+                public static class DiffCommandRunnerExample
+                {
+                    public static object Build(dynamic connection) => connection.CreateCommand();
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/CodeIndex/Mcp/McpServer.Example.cs",
+                "csharp",
+                """
+                public static class McpServerExample
+                {
+                    public static object Build(dynamic connection) => connection.CreateCommand();
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "tests/CodeIndex.Tests/DbCommandExample.cs",
+                "csharp",
+                """
+                public static class DbCommandExample
+                {
+                    public static object Build(dynamic connection) => connection.CreateCommand();
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "resource-materialization-audit/db-command-reader-ownership", "--db", dbPath, "--json", "--limit", "10"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var query = Assert.Single(document.RootElement.GetProperty("queries").EnumerateArray());
+            var paths = query
+                .GetProperty("results")
+                .EnumerateArray()
+                .Select(result => result.GetProperty("path").GetString())
+                .ToArray();
+
+            Assert.Equal("db-command-reader-ownership", query.GetProperty("name").GetString());
+            Assert.Equal(4, query.GetProperty("count").GetInt32());
+            Assert.Contains("src/CodeIndex/Database/DbReader.Example.cs", paths);
+            Assert.Contains("src/CodeIndex/Cli/QueryCommandRunner.Example.cs", paths);
+            Assert.Contains("src/CodeIndex/Cli/DiffCommandRunner.Example.cs", paths);
+            Assert.Contains("src/CodeIndex/Mcp/McpServer.Example.cs", paths);
+            Assert.DoesNotContain("tests/CodeIndex.Tests/DbCommandExample.cs", paths);
+            Assert.Equal(0, query.GetProperty("path_patterns").GetArrayLength());
         }
         finally
         {
