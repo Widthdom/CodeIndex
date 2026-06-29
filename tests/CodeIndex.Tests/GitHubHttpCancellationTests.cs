@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using CodeIndex.Cli;
 
 namespace CodeIndex.Tests;
@@ -61,6 +62,107 @@ public sealed class GitHubHttpCancellationTests : IDisposable
         Assert.Contains(client.DefaultRequestHeaders.UserAgent, value => value.Product?.Name == "cdidx");
         Assert.Empty(client.DefaultRequestHeaders.Accept);
         Assert.False(client.DefaultRequestHeaders.Contains("X-GitHub-Api-Version"));
+    }
+
+    [Fact]
+    public async Task GitHubHttpClientFactory_SendWithRetryAsync_RetriesTransientGet_Issue4145()
+    {
+        var handler = new FakeHttpMessageHandler();
+        handler.QueueException(new HttpRequestException("connection reset"));
+        handler.QueueJson(HttpStatusCode.ServiceUnavailable, """{"message":"try later"}""");
+        handler.QueueJson(HttpStatusCode.OK, """{"ok":true}""");
+        using var client = new HttpClient(handler)
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+
+        using var response = await GitHubHttpClientFactory.SendWithRetryAsync(
+            client,
+            static () =>
+            {
+                var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/Widthdom/CodeIndex/releases/latest");
+                GitHubHttpClientFactory.ApplyDefaultHeaders(request.Headers);
+                return request;
+            },
+            HttpCompletionOption.ResponseHeadersRead,
+            CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(GitHubHttpClientFactory.MaxRetryAttempts, handler.RequestCount);
+        Assert.All(handler.Requests, request =>
+        {
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.True(request.HasHeaderValue("User-Agent", "cdidx"));
+            Assert.True(request.HasHeaderValue("X-GitHub-Api-Version", "2022-11-28"));
+        });
+    }
+
+    [Fact]
+    public async Task GitHubHttpClientFactory_SendWithRetryAsync_DoesNotRetryRateLimit_Issue4145()
+    {
+        var handler = new FakeHttpMessageHandler();
+        var rateLimited = new HttpResponseMessage((HttpStatusCode)429)
+        {
+            Content = new StringContent("""{"message":"rate limited"}"""),
+        };
+        rateLimited.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromSeconds(60));
+        handler.QueueResponse(rateLimited);
+        using var client = new HttpClient(handler)
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+
+        using var response = await GitHubHttpClientFactory.SendWithRetryAsync(
+            client,
+            static () => new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/rate_limit"),
+            HttpCompletionOption.ResponseHeadersRead,
+            CancellationToken.None);
+
+        Assert.Equal((HttpStatusCode)429, response.StatusCode);
+        Assert.Equal(1, handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task GitHubHttpClientFactory_SendWithRetryAsync_DoesNotRetryPost_Issue4145()
+    {
+        var handler = new FakeHttpMessageHandler();
+        handler.QueueJson(HttpStatusCode.ServiceUnavailable, """{"message":"try later"}""");
+        using var client = new HttpClient(handler)
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+
+        using var response = await GitHubHttpClientFactory.SendWithRetryAsync(
+            client,
+            static () => new HttpRequestMessage(HttpMethod.Post, "https://api.github.com/repos/Widthdom/CodeIndex/issues")
+            {
+                Content = new StringContent("{}"),
+            },
+            HttpCompletionOption.ResponseHeadersRead,
+            CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal(1, handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task GitHubHttpClientFactory_SendWithRetryAsync_CallerCancellationStopsFakeTimeout_Issue4145()
+    {
+        var handler = new FakeHttpMessageHandler();
+        handler.QueueTimeout();
+        using var client = new HttpClient(handler)
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            GitHubHttpClientFactory.SendWithRetryAsync(
+                client,
+                static () => new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/Widthdom/CodeIndex/releases/latest"),
+                HttpCompletionOption.ResponseHeadersRead,
+                cts.Token));
+        Assert.Equal(1, handler.RequestCount);
     }
 
     [Fact]
