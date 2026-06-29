@@ -7,7 +7,7 @@ namespace CodeIndex.Tests;
 /// <summary>
 /// Guards the single-source-of-truth contract introduced by #1570: <see cref="CliFlagSchema"/>
 /// drives both the per-command parser allowlists (`TryWriteUnsupportedOptionError` /
-/// `ValidateFindArgs`) and the bash / zsh / fish completion generators in <see cref="ConsoleUi"/>.
+/// `ValidateFindArgs`) and the bash / zsh / fish completion generators in <see cref="ConsoleCompletionRenderer"/>.
 /// These tests fail fast when the schema and the generated completion scripts drift apart,
 /// or when a flag's <c>Commands</c> / <c>AlsoAcceptedBy</c> sets reference unknown subcommands.
 /// #1570 で導入した「フラグ単一情報源」の契約を守るためのテスト群。スキーマと
@@ -16,10 +16,9 @@ namespace CodeIndex.Tests;
 public class CliFlagSchemaTests
 {
     [Fact]
-    public void AllCommands_MatchesConsoleUiCommandsList()
+    public void AllCommands_MatchesCliCommandCatalog()
     {
-        var consoleUiCommands = GetConsoleUiCommands();
-        Assert.Equal(consoleUiCommands, CliFlagSchema.AllCommands);
+        Assert.Equal(CliCommandCatalog.Commands, CliFlagSchema.AllCommands);
     }
 
     [Fact]
@@ -243,7 +242,7 @@ public class CliFlagSchemaTests
         // surfaces in the completion script but isn't in the schema would be a zombie flag.
         // bash 補完の各 subcommand ブランチに現れるフラグが、schema 上もそのコマンドの
         // 補完対象として登録されていることを確認する（補完だけ生き残った ghost フラグの検出）。
-        var script = ConsoleUi.GetCompletionScript("bash");
+        var script = ConsoleCompletionRenderer.GetCompletionScript("bash");
         foreach (var command in EnumeratedBashBranches)
         {
             var flags = ExtractBashSubcommandFlags(script, command);
@@ -267,7 +266,7 @@ public class CliFlagSchemaTests
         // surface in that branch's bash completion list. Otherwise users can't tab-complete
         // a parser-accepted flag from the SSoT.
         // schema が宣言した補完対象フラグが bash 補完にも必ず出ること（逆方向）。
-        var script = ConsoleUi.GetCompletionScript("bash");
+        var script = ConsoleCompletionRenderer.GetCompletionScript("bash");
         foreach (var command in EnumeratedBashBranches)
         {
             var flags = ExtractBashSubcommandFlags(script, command);
@@ -285,7 +284,7 @@ public class CliFlagSchemaTests
         // (flag.Name, command) pairs implied by the schema's `Commands` field (AlsoAcceptedBy
         // is intentionally hidden from completions).
         // fish の `complete` 行から復元した (flag, command) ペアが、schema の Commands と一致すること。
-        var script = ConsoleUi.GetCompletionScript("fish");
+        var script = ConsoleCompletionRenderer.GetCompletionScript("fish");
         var emitted = ExtractFishFlagCommandPairs(script);
 
         var expected = new HashSet<(string Flag, string Command)>();
@@ -311,22 +310,13 @@ public class CliFlagSchemaTests
         }
     }
 
-    // Mirrors the EnumeratedCompletionCommands list inside ConsoleUi — the only commands
+    // Mirrors the EnumeratedCompletionCommands list inside ConsoleCompletionRenderer - the only commands
     // that get their own bash/zsh branch (everything else falls into the generic else branch).
-    // ConsoleUi 側の EnumeratedCompletionCommands に対応する一覧。
+    // ConsoleCompletionRenderer 側の EnumeratedCompletionCommands に対応する一覧。
     private static readonly string[] EnumeratedBashBranches =
     [
         "find", "excerpt", "references", "inspect", "hotspots", "status", "db", "report", "suggestions", "search",
     ];
-
-    private static IReadOnlyList<string> GetConsoleUiCommands()
-    {
-        var field = typeof(ConsoleUi).GetField("Commands", BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.NotNull(field);
-        var value = (string[]?)field!.GetValue(null);
-        Assert.NotNull(value);
-        return value!;
-    }
 
     private static HashSet<string> GetProgramRunnerStringSet(string fieldName)
     {
