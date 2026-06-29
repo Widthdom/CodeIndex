@@ -47,8 +47,8 @@ internal static class PostExtractionHookCallbackProtocol
 }
 
 [JsonSourceGenerationOptions(PropertyNameCaseInsensitive = true)]
-[JsonSerializable(typeof(PostExtractionHookCallbackProtocol.WorkerRequest))]
-[JsonSerializable(typeof(PostExtractionHookCallbackProtocol.WorkerResponse))]
-[JsonSerializable(typeof(PostExtractionHookCallbackWorker.WorkerRequest))]
-[JsonSerializable(typeof(PostExtractionHookCallbackWorker.WorkerResponse))]
+[JsonSerializable(typeof(PostExtractionHookCallbackProtocol.WorkerRequest), TypeInfoPropertyName = "ProtocolWorkerRequest")]
+[JsonSerializable(typeof(PostExtractionHookCallbackProtocol.WorkerResponse), TypeInfoPropertyName = "ProtocolWorkerResponse")]
+[JsonSerializable(typeof(PostExtractionHookCallbackWorker.WorkerRequest), TypeInfoPropertyName = "CompatibilityWorkerRequest")]
+[JsonSerializable(typeof(PostExtractionHookCallbackWorker.WorkerResponse), TypeInfoPropertyName = "CompatibilityWorkerResponse")]
 internal partial class PostExtractionHookCallbackProtocolJsonContext : JsonSerializerContext;
