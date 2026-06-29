@@ -14045,10 +14045,7 @@ public partial class SymbolExtractorTests
 
         if (value is IEnumerable enumerable)
         {
-            var items = new List<object?>();
-            foreach (var item in enumerable)
-                items.Add(item);
-
+            var items = SnapshotEnumerable(enumerable, path);
             for (var index = 0; index < items.Count; index++)
             {
                 foreach (var nested in EnumerateRegexValues(items[index], $"{path}[{index}]", seen))
@@ -14096,6 +14093,36 @@ public partial class SymbolExtractorTests
             foreach (var nested in EnumerateRegexValues(child, $"{path}.{property.Name}", seen))
                 yield return nested;
         }
+    }
+
+    private static IReadOnlyList<object?> SnapshotEnumerable(IEnumerable enumerable, string path)
+    {
+        const int MaxAttempts = 3;
+
+        for (var attempt = 1; attempt <= MaxAttempts; attempt++)
+        {
+            try
+            {
+                var snapshot = new List<object?>();
+                foreach (var item in enumerable)
+                    snapshot.Add(item);
+
+                return snapshot;
+            }
+            catch (InvalidOperationException) when (attempt < MaxAttempts)
+            {
+                System.Threading.Thread.Sleep(1);
+            }
+            catch (InvalidOperationException ex)
+            {
+                throw new InvalidOperationException(
+                    $"Failed to snapshot enumerable while inspecting built-in regex values at '{path}'.",
+                    ex);
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Failed to snapshot enumerable while inspecting built-in regex values at '{path}'.");
     }
 
     private sealed class RegexReflectionFixture
