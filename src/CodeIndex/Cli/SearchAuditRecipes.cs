@@ -1,5 +1,6 @@
 using CodeIndex;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -1255,6 +1256,170 @@ internal static class SearchAuditRecipes
                 }
             ]),
         AllScopedRecipe(
+            "phrase-risk-patterns",
+            "Precision-focused audit searches for noisy code phrases, broad words, and configuration text that need semantic triage facets.",
+            [
+                new(
+                    "async-void-code",
+                    "async void",
+                    "Find exact async void declarations in production source instead of broad async/void lexical coincidences.",
+                    ["audit", "bug"],
+                    "False positives include required event handlers, framework callbacks, and intentionally fire-and-forget boundaries.")
+                {
+                    PathPatterns = [.. DefaultSourcePathPatternsValue],
+                    ExcludePaths = [.. DefaultSourceExcludePathsValue],
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: async void hides exceptions and cancellation from normal Task-based callers.",
+                        "positive: UI/event-handler or host callback signatures can require async void; verify the boundary and exception handling."
+                    ],
+                },
+                new(
+                    "throw-new-exception-code",
+                    "throw new Exception",
+                    "Find exact generic Exception construction in production source instead of broad throw/exception lexical matches.",
+                    ["audit", "bug"],
+                    "False positives include top-level compatibility shims and temporary placeholders already tracked for typed exception cleanup.")
+                {
+                    PathPatterns = [.. DefaultSourcePathPatternsValue],
+                    ExcludePaths = [.. DefaultSourceExcludePathsValue],
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: generic Exception loses typed recovery, category, and diagnostic-contract information.",
+                        "positive: boundary normalization or compatibility wrappers may intentionally translate to a generic exception only after preserving context."
+                    ],
+                },
+                new(
+                    "task-result-property-review",
+                    ".Result",
+                    "Find exact Result property accesses in production source so reviewers can separate Task blocking from ordinary DTO Result properties.",
+                    ["audit", "bug"],
+                    "False positives include DTO, command-result, parse-result, and search-result property access; prioritize hits whose receiver is Task or ValueTask.")
+                {
+                    PathPatterns = [.. DefaultSourcePathPatternsValue],
+                    ExcludePaths = [.. DefaultSourceExcludePathsValue],
+                    MatchOrigins = ["code"],
+                    ResultKinds = ["identifier"],
+                    RiskEvidence =
+                    [
+                        "risk: Task.Result and ValueTask.AsTask().Result can block async continuations and hide cancellation or timeout policy.",
+                        "positive: DTOs and result-wrapper properties named Result should be classified separately from sync-over-async blocking."
+                    ],
+                },
+                new(
+                    "unsafe-keyword-code",
+                    "unsafe ",
+                    "Find exact unsafe keyword usage in production source without documentation, installer text, or compatibility-note matches.",
+                    ["audit", "security"],
+                    "False positives include comments about unsafe APIs and safe-handle names; code-origin matches should be reviewed for pointer and buffer safety.")
+                {
+                    PathPatterns = [.. DefaultSourcePathPatternsValue],
+                    ExcludePaths = [.. DefaultSourceExcludePathsValue],
+                    MatchOrigins = ["code"],
+                    ResultKinds = ["identifier"],
+                    RiskEvidence =
+                    [
+                        "risk: unsafe code can bypass runtime memory safety and needs pointer lifetime, bounds, and pinning review.",
+                        "positive: isolated interop boundaries with SafeHandle, fixed-size buffers, and focused tests reduce triage priority."
+                    ],
+                },
+                new(
+                    "active-test-skip-assignment",
+                    "Skip =",
+                    "Find exact active test skip annotations without broad skip prose, changelog, or documentation matches.",
+                    ["audit", "test"],
+                    "False positives include fixture text that demonstrates skip syntax; active attributes and test-case metadata are the primary review target.")
+                {
+                    Severity = "info",
+                    PathPatterns = ["tests/**"],
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: active Skip assignments can hide disabled coverage in the test suite.",
+                        "positive: documented platform-specific skips or intentionally external-dependency tests may be acceptable when tracked."
+                    ],
+                },
+                new(
+                    "readalltext-call-site",
+                    "ReadAllText",
+                    "Find production ReadAllText call sites while excluding documentation, project files, and config text.",
+                    ["audit", "performance"],
+                    "False positives include bounded helpers or tiny trusted files; prefer this call-site query when bare ReadAllText is noisy.")
+                {
+                    PathPatterns = [.. DefaultSourcePathPatternsValue],
+                    ExcludePaths = [.. DefaultSourceExcludePathsValue],
+                    MatchOrigins = ["code"],
+                    ResultKinds = ["call_site"],
+                    RiskEvidence =
+                    [
+                        "risk: whole-file text reads can materialize unbounded input without sharing or size policy.",
+                        "positive: nearby length checks, BoundedFile helpers, or tiny trusted files can make a hit intentional."
+                    ],
+                },
+                new(
+                    "version-project-config",
+                    "Version=\"",
+                    "Find exact XML Version attributes in project and package configuration instead of documentation or prose matches.",
+                    ["audit"],
+                    "False positives include generated fixture projects and examples; this query is for configuration/version-surface inventory, not source-code risk.")
+                {
+                    Severity = "info",
+                    PathPatterns =
+                    [
+                        "*.csproj",
+                        "*.props",
+                        "*.targets",
+                        "src/**/*.csproj",
+                        "tests/**/*.csproj",
+                        "Directory.Packages.props",
+                        "Directory.Build.props",
+                        "Directory.Build.targets"
+                    ],
+                    RiskEvidence =
+                    [
+                        "risk: dependency and package Version attributes belong to configuration review rather than source-code vulnerability sweeps.",
+                        "positive: exact XML attribute matching keeps version prose, docs, and changelog examples out of this inventory."
+                    ],
+                },
+                new(
+                    "todo-production-comment",
+                    "TODO",
+                    "Find TODO comments in production source without fixture, documentation, and changelog examples dominating the result set.",
+                    ["audit"],
+                    "False positives include intentionally tracked follow-up markers; broad TODO inventory should be requested separately when docs and tests are in scope.")
+                {
+                    Severity = "info",
+                    PathPatterns = [.. DefaultSourcePathPatternsValue],
+                    ExcludePaths = [.. DefaultSourceExcludePathsValue],
+                    MatchOrigins = ["comment"],
+                    ResultKinds = ["comment"],
+                    RiskEvidence =
+                    [
+                        "risk: production TODO comments can mark incomplete behavior that deserves explicit issue tracking.",
+                        "positive: comments that reference an existing issue or explain non-actionable compatibility work are lower risk."
+                    ],
+                },
+                new(
+                    "obsolete-production-code",
+                    "Obsolete",
+                    "Find Obsolete usage in production source without documentation, fixture, and changelog examples dominating the result set.",
+                    ["audit", "bug"],
+                    "False positives include compatibility shims and deliberate API lifecycle annotations; prioritize call sites or declarations that affect runtime paths.")
+                {
+                    PathPatterns = [.. DefaultSourcePathPatternsValue],
+                    ExcludePaths = [.. DefaultSourceExcludePathsValue],
+                    MatchOrigins = ["code"],
+                    ResultKinds = ["identifier"],
+                    RiskEvidence =
+                    [
+                        "risk: Obsolete APIs or attributes in production code can hide compatibility debt or unsupported runtime behavior.",
+                        "positive: explicit migration comments, compatibility guards, or attribute declarations with planned removal can make the hit intentional."
+                    ],
+                }
+            ]),
+        AllScopedRecipe(
             "broad-token-audit",
             "Opt-in broad token search for audits that intentionally need lexical, parser, LSP, cancellation, and auth-token coverage.",
             [
@@ -1423,9 +1588,10 @@ internal static class SearchAuditRecipes
                 return false;
             }
 
-            var root = JsonNode.Parse(
+            var root = BoundedJson.ParseNode(
                 text,
-                documentOptions: new JsonDocumentOptions { MaxDepth = 16 });
+                MaxRecipeSourceBytes,
+                maxDepth: 16);
             var recipeArray = root as JsonArray ?? root?["recipes"] as JsonArray;
             if (recipeArray is null)
             {
@@ -1448,7 +1614,7 @@ internal static class SearchAuditRecipes
             AddDiagnostic(diagnostics, $"{sourceLabel} does not exist.");
             return false;
         }
-        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException or InvalidOperationException)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException or IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             AddDiagnostic(diagnostics, $"{sourceLabel} could not be loaded ({SafeDiagnosticFormatter.FormatExceptionCategory("recipe_load", ex)}).");
             return false;

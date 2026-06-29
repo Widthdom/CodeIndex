@@ -593,9 +593,10 @@ internal static class IndexWatchRunner
 
         try
         {
-            using var doc = JsonDocument.Parse(
-                subRunJson.AsMemory(0, trimmedLength),
-                new JsonDocumentOptions { MaxDepth = MaxHumanSummaryJsonDepth });
+            using var doc = BoundedJson.ParseDocument(
+                subRunJson[..trimmedLength],
+                MaxHumanSummarySubRunJsonChars * 4,
+                MaxHumanSummaryJsonDepth);
             var root = doc.RootElement;
             if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("summary", out var summary)
                 || summary.ValueKind != JsonValueKind.Object)
@@ -610,7 +611,7 @@ internal static class IndexWatchRunner
                 "parsed",
                 null);
         }
-        catch (JsonException ex)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
             return new WatchSubRunSummary(null, null, null, "invalid_json", CommandErrorWriter.FormatSanitizedExceptionMessage(ex));
         }

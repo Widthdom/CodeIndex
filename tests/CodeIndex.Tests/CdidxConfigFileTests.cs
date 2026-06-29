@@ -251,6 +251,42 @@ public class CdidxConfigFileTests
     }
 
     [Fact]
+    public void LoadAndApply_Utf16BomConfigAboveUtf8ParseLimitReturnsInvalidJson_Issue4127()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var path = Path.Combine(dir, ".cdidxrc.json");
+            var encoding = Encoding.Unicode;
+            var valueLength = CdidxConfigFile.MaxConfigFileBytes / 2;
+            string json;
+            byte[] bytes;
+            do
+            {
+                valueLength--;
+                var value = new string('あ', valueLength);
+                json = $$"""{ "debug": "{{value}}" }""";
+                bytes = [.. encoding.GetPreamble(), .. encoding.GetBytes(json)];
+            }
+            while (bytes.Length > CdidxConfigFile.MaxConfigFileBytes);
+
+            Assert.True(json.Length <= CdidxConfigFile.MaxConfigFileBytes);
+            Assert.True(bytes.Length <= CdidxConfigFile.MaxConfigFileBytes);
+            Assert.True(Encoding.UTF8.GetByteCount(json) > CdidxConfigFile.MaxConfigFileBytes);
+            File.WriteAllBytes(path, bytes);
+
+            var env = new TestEnvironment();
+            var result = CdidxConfigFile.Load(dir, env.Read);
+
+            Assert.True(result.Failed);
+            Assert.Contains("Invalid JSON", result.Error);
+            Assert.Contains("JSON payload exceeds", result.Error);
+            Assert.Empty(result.Settings);
+        }
+        finally { TestProjectHelper.DeleteDirectory(dir); }
+    }
+
+    [Fact]
     public void LoadAndApply_ProjectConfigJsonResolvesOutputPathFromWorkspaceRoot()
     {
         var dir = CreateTempDir();

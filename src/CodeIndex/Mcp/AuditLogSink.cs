@@ -52,11 +52,6 @@ internal sealed class AuditLogSink : IDisposable
         "(?i)(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|sk-(?:proj-)?[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}|\\bBearer\\s+[A-Za-z0-9._~+/=\\-]{16,}(?=$|[^A-Za-z0-9._~+/=\\-])|://[^/\\s:@]+:[^/\\s:@]+@|(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|authorization)=[^&\\s]+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant,
         RegexTimeoutPolicy.RedactionRegexTimeout);
-    private static readonly JsonDocumentOptions ArgValueScalarJsonDocumentOptions = new()
-    {
-        MaxDepth = MaxArgValueDepth + 1,
-    };
-
     private readonly string _path;
     private readonly long _maxBytes;
     private readonly bool _includeValues;
@@ -733,9 +728,10 @@ internal sealed class AuditLogSink : IDisposable
         try
         {
             var json = value.ToJsonString();
-            if (!state.TryReserveSerializedBytes(Encoding.UTF8.GetByteCount(json)))
+            var jsonByteCount = Encoding.UTF8.GetByteCount(json);
+            if (!state.TryReserveSerializedBytes(jsonByteCount))
                 return CreateTruncatedValue();
-            return JsonNode.Parse(json, documentOptions: ArgValueScalarJsonDocumentOptions) ?? CreateTruncatedValue();
+            return BoundedJson.ParseNode(json, jsonByteCount, MaxArgValueDepth + 1) ?? CreateTruncatedValue();
         }
         catch
         {

@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using CodeIndex.Diagnostics;
 
 namespace CodeIndex;
 
@@ -28,11 +29,11 @@ internal static class WorkerProtocolJsonValidator
 
         try
         {
-            using var document = JsonDocument.Parse(json, new JsonDocumentOptions { MaxDepth = maxDepth });
+            using var document = BoundedJson.ParseDocument(json, maxStringCharacters, maxDepth);
             ValidateElement(document.RootElement, maxProperties, effectiveMaxStringCharacters, ref propertyCount, out error);
             return error.Length == 0;
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
             error = SafeDiagnosticFormatter.FormatCategoryType("worker_protocol_error", nameof(JsonException));
             return false;

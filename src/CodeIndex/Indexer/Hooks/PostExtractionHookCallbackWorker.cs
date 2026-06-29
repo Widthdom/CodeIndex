@@ -5,6 +5,7 @@ using System.Runtime.Loader;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using CodeIndex.Cli;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
@@ -141,11 +142,12 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
             PostExtractionHookCallbackWorker.WorkerResponse? response;
             try
             {
-                response = JsonSerializer.Deserialize<PostExtractionHookCallbackWorker.WorkerResponse>(
+                response = BoundedJson.Deserialize<PostExtractionHookCallbackWorker.WorkerResponse>(
                     responseJson,
+                    maxProtocolLineBytes,
                     PostExtractionHookCallbackWorker.JsonOptions);
             }
-            catch (JsonException ex)
+            catch (Exception ex) when (ex is JsonException or InvalidDataException)
             {
                 return FailureAfterKill(
                     $"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex)} while parsing hook callback response.",
@@ -548,7 +550,7 @@ internal static class PostExtractionHookCallbackWorker
 
                 try
                 {
-                    request = JsonSerializer.Deserialize<WorkerRequest>(requestJson, JsonOptions)
+                    request = BoundedJson.Deserialize<WorkerRequest>(requestJson, maxProtocolLineUtf8Bytes, JsonOptions)
                         ?? throw new InvalidOperationException("worker request was empty.");
                 }
                 catch (Exception ex)
