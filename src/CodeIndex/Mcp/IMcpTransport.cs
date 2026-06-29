@@ -7,12 +7,16 @@ namespace CodeIndex.Mcp;
 /// call carries the server's response, or null when the request was a notification that yields
 /// no response. The contract is strictly one read followed by one write — the MCP loop is
 /// single-threaded today, and pluggable transports rely on that pairing to map a request body
-/// to its response on connection-oriented transports such as HTTP.
+/// to its response on connection-oriented transports such as HTTP. Implementations must make
+/// <see cref="IAsyncDisposable.DisposeAsync"/> idempotent and use it to release/cancel pending
+/// transport work without requiring additional server-loop calls.
 /// MCP サーバーが扱う JSON-RPC フレームの読み書きを抽象化する (issue #1558)。<see cref="ReadFrameAsync"/>
 /// で 1 件のクライアント→サーバーメッセージを受け取り（クローズで null）、対応する
 /// <see cref="WriteFrameAsync"/> でサーバー応答を返す（通知の場合は null）。MCP ループは現状
 /// 単一スレッドであり、HTTP のようにリクエストとレスポンスを紐付ける必要があるため、
-/// 「読み 1 回 → 書き 1 回」のペアリングを厳密に守る。
+/// 「読み 1 回 → 書き 1 回」のペアリングを厳密に守る。実装は
+/// <see cref="IAsyncDisposable.DisposeAsync"/> を冪等にし、追加の server loop 呼び出しなしに
+/// 未完了の transport 作業を解放またはキャンセルする。
 /// </summary>
 internal interface IMcpTransport : IAsyncDisposable
 {

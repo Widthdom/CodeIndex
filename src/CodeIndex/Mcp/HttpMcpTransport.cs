@@ -26,7 +26,7 @@ namespace CodeIndex.Mcp;
 /// サーバー起点の JSON-RPC 通知は `/events` で bounded な multi-client SSE fan-out channel
 /// として公開する。
 /// </summary>
-internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
+internal sealed partial class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 {
     internal const int DefaultMaxRequestBodyBytes = 1_000_000;
     internal const int DefaultMaxResponseBodyBytes = 1_000_000;
@@ -88,6 +88,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     private readonly int _maxEventStreams;
     private readonly TimeSpan _eventStreamWriteTimeout;
     private readonly Task _acceptLoop;
+    private readonly object _disposeSync = new();
     // The configured bearer token's SHA-256 digest, precomputed once at construction so the
     // per-request auth path never hashes the secret. Storing the digest (not the token) keeps the
     // per-request work proportional only to the attacker-supplied input length, eliminating the
@@ -115,12 +116,13 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     private long _authDenialMalformedTokenCount;
     private long _authDenialOversizedTokenCount;
     private long _authDenialWrongTokenCount;
+    private Task? _disposeTask;
     private string? _lastResponseAbortCleanupFailure;
     private string? _lastResponseCloseCleanupFailure;
     private string? _lastEventStreamDropReason;
     private string? _lastAuthDenialReason;
     private string? _lastRequestLogDropReason;
-    private bool _disposed;
+    private int _disposeStarted;
     private bool _ownedSemaphoreGatesDisposed;
 
     /// <summary>
@@ -249,6 +251,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
     internal string? AuthDisabledWarning => AuthDisabled ? LoopbackAuthDisabledWarning : null;
 
     internal bool OwnedSemaphoreGatesDisposedForTests => Volatile.Read(ref _ownedSemaphoreGatesDisposed);
+
+    private bool IsDisposed => Volatile.Read(ref _disposeStarted) != 0;
 
     internal Func<string, CancellationToken, Task<string?>>? OutOfBandFrameHandler { get; set; }
 
@@ -491,7 +495,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
     public async Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
         if (_pendingRequest is not null)
             throw new InvalidOperationException("HttpMcpTransport: ReadFrameAsync called twice without an intervening WriteFrameAsync.");
 
@@ -520,7 +524,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
                 {
                     context = await _listener.GetContextAsync().ConfigureAwait(false);
                 }
-                catch (HttpListenerException) when (cancellationToken.IsCancellationRequested || _disposed)
+                catch (HttpListenerException) when (cancellationToken.IsCancellationRequested || IsDisposed)
                 {
                     break;
                 }
@@ -777,7 +781,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
     public async Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
         var request = _pendingRequest
             ?? throw new InvalidOperationException("HttpMcpTransport: WriteFrameAsync called without a pending ReadFrameAsync.");
         _pendingRequest = null;
@@ -1493,80 +1497,6 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         Volatile.Write(ref _lastEventStreamDropReason, $"{reason}:{category}:{exception.GetType().Name}");
     }
 
-    public async ValueTask DisposeAsync()
-    {
-        if (_disposed)
-            return;
-        _disposed = true;
-        try { _acceptCts.Cancel(); } catch { /* ignore */ }
-        try
-        {
-            if (_pendingRequest is not null)
-            {
-                AbortResponseBestEffort(_pendingRequest.Context.Response, "pending request disposal");
-                _pendingRequest = null;
-            }
-            _listener.Close();
-        }
-        catch
-        {
-            // Disposal must not throw — the parent server is already on its way down.
-            // dispose は例外を投げない方針: 親サーバーは既に終了処理中なので。
-        }
-        var acceptLoopCompleted = false;
-        try
-        {
-            await _acceptLoop.WaitAsync(DisposeAcceptLoopTimeout).ConfigureAwait(false);
-            acceptLoopCompleted = true;
-        }
-        catch (TimeoutException)
-        {
-            // Disposal is best-effort; a platform-delayed listener teardown must not hang shutdown.
-            // dispose は best-effort。プラットフォーム都合で listener 終了が遅れても shutdown を止めない。
-        }
-        catch
-        {
-            acceptLoopCompleted = true;
-        }
-
-        if (acceptLoopCompleted)
-            _acceptCts.Dispose();
-        if (_requestLogQueue is not null)
-        {
-            _requestLogQueue.Writer.TryComplete();
-            try
-            {
-                if (_requestLogTask is not null)
-                    await _requestLogTask.WaitAsync(DisposeAcceptLoopTimeout).ConfigureAwait(false);
-            }
-            catch
-            {
-                // Request logging is best-effort; shutdown must not wait indefinitely.
-                // request log は best-effort。shutdown を無期限に待たせない。
-            }
-        }
-        if (acceptLoopCompleted && await WaitForOwnedSemaphoreGatesIdleAsync().ConfigureAwait(false))
-        {
-            _queueSlots.Dispose();
-            _handlerSemaphore.Dispose();
-            Volatile.Write(ref _ownedSemaphoreGatesDisposed, true);
-        }
-    }
-
-    private async Task<bool> WaitForOwnedSemaphoreGatesIdleAsync()
-    {
-        var deadline = DateTimeOffset.UtcNow.Add(DisposeAcceptLoopTimeout);
-        while (_queueSlots.CurrentCount != _maxQueuedRequests
-            || _handlerSemaphore.CurrentCount != _maxConcurrentHandlers)
-        {
-            if (DateTimeOffset.UtcNow >= deadline)
-                return false;
-            await Task.Delay(10).ConfigureAwait(false);
-        }
-
-        return true;
-    }
-
     private void MarkRejected(PendingRequest request, string reason)
     {
         request.RejectionReason = reason;
@@ -1673,7 +1603,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             return;
 
         Interlocked.Decrement(ref _pendingRequestLogCount);
-        if (!_disposed)
+        if (!IsDisposed)
             RecordRequestLogDrop("queue_full", null);
     }
 
