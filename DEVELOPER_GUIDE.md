@@ -101,6 +101,7 @@ in [DISTRIBUTION.md](DISTRIBUTION.md):
 | NuGet global tool | Install/update on a clean .NET 8 tool environment. |
 | NuGet trusted publishing | GitHub Actions variable `NUGET_TRUSTED_PUBLISHING_USER` is set to the NuGet.org username that created the trusted publishing policy; this can differ from the package owner. |
 | Release assets | Published asset exists for every advertised RID. |
+| Release workflow privilege split | `.github/workflows/release.yml` keeps `prepare-release-files` on `contents: read`, hands only the short-lived `release-payload` artifact to `create-release`, and scopes Windows signing secrets to the signing step. |
 | GHCR container image | Published `linux/amd64` and `linux/arm64` images run `cdidx --version`, omit runtime `git`, and expose provenance/SBOM attestations. |
 | Package metadata | License, repository URL, tags, and runtime prerequisites are correct. |
 | Documentation links | README, USER_GUIDE, and package metadata links resolve to the intended docs. |
@@ -2447,6 +2448,7 @@ channel をすべて確認してください。
 | NuGet global tool | clean な .NET 8 tool environment での install/update。 |
 | NuGet trusted publishing | GitHub Actions variable `NUGET_TRUSTED_PUBLISHING_USER` が trusted publishing policy を作成した NuGet.org ユーザー名に設定されていること。この値は package owner と異なり得る。 |
 | release asset | advertised RID ごとに published release asset があること。 |
+| release workflow の権限分離 | `.github/workflows/release.yml` は `prepare-release-files` を `contents: read` に保ち、短命の `release-payload` artifact だけを `create-release` に渡し、Windows 署名 secret を署名 step のみにスコープする。 |
 | GHCR container image | 公開済みの `linux/amd64` / `linux/arm64` image で `cdidx --version` が動作し、runtime `git` を含まず、provenance / SBOM attestation を公開していること。 |
 | package metadata | license、repository URL、tag、runtime prerequisite が正しいこと。 |
 | documentation link | README、USER_GUIDE、package metadata からの link が意図した docs を指すこと。 |
