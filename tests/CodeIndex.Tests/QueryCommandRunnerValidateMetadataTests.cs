@@ -40,6 +40,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("replacement_char", issue.GetProperty("kind").GetString());
             Assert.Equal(FileIssue.OriginSourceLiteral, issue.GetProperty("origin").GetString());
             Assert.Equal(FileIssue.SeverityInfo, issue.GetProperty("severity").GetString());
+            Assert.Equal(FileIssue.CategoryIntentionalSourceLiteral, issue.GetProperty("category").GetString());
+            Assert.False(issue.GetProperty("actionable").GetBoolean());
         }
         finally
         {
@@ -89,6 +91,86 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("[info, source_literal, test_fixture]", stdout);
             Assert.Contains("U+FFFD source literal", stdout);
             Assert.Contains("(4 issues: replacement_char: 4)", stderr);
+            Assert.Contains("Summary: actionable: 0", stderr);
+            Assert.Contains("category: expected_fixture_literal: 4", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunValidate_JsonSummaryClassifiesExpectedFixtureAndDecodingRisk_Issue4138()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_validate_summary_4138");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            Directory.CreateDirectory(Path.Combine(projectRoot, "tests", "fixtures"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "tests", "fixtures", "literal.cs"),
+                "class Literal { const char Value = '\uFFFD'; }\n");
+
+            var decodeBytes = new List<byte>();
+            decodeBytes.AddRange(System.Text.Encoding.UTF8.GetBytes("class Decode { const string Value = \""));
+            decodeBytes.Add(0xFF);
+            decodeBytes.AddRange(System.Text.Encoding.UTF8.GetBytes("\"; }\n"));
+            File.WriteAllBytes(Path.Combine(projectRoot, "src", "decode.cs"), decodeBytes.ToArray());
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--db", dbPath, "--json", "--quiet"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+                ["--db", dbPath, "--json", "--kind", "replacement_char"],
+                _jsonOptions));
+            var (arrayExitCode, arrayStdout, arrayStderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+                ["--db", dbPath, "--json=array", "--kind", "replacement_char"],
+                _jsonOptions));
+            var (compactExitCode, compactStdout, compactStderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+                ["--db", dbPath, "--format", "compact", "--kind", "replacement_char"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(CommandExitCodes.Success, arrayExitCode);
+            Assert.Equal(CommandExitCodes.Success, compactExitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(string.Empty, arrayStderr);
+            Assert.Equal(string.Empty, compactStderr);
+
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var summary = root.GetProperty("summary");
+            Assert.Equal(2, summary.GetProperty("total").GetInt32());
+            Assert.Equal(1, summary.GetProperty("actionable").GetInt32());
+            Assert.Equal(1, summary.GetProperty("informational").GetInt32());
+            Assert.Equal("mixed", summary.GetProperty("actionability").GetString());
+            Assert.Equal(1, summary.GetProperty("by_category").GetProperty(FileIssue.CategoryExpectedFixtureLiteral).GetInt32());
+            Assert.Equal(1, summary.GetProperty("by_category").GetProperty(FileIssue.CategoryDecodingRisk).GetInt32());
+
+            var issues = root.GetProperty("issues").EnumerateArray().ToList();
+            Assert.Contains(issues, issue =>
+                issue.GetProperty("category").GetString() == FileIssue.CategoryExpectedFixtureLiteral
+                && !issue.GetProperty("actionable").GetBoolean());
+            Assert.Contains(issues, issue =>
+                issue.GetProperty("category").GetString() == FileIssue.CategoryDecodingRisk
+                && issue.GetProperty("actionable").GetBoolean());
+
+            using var arrayDocument = JsonDocument.Parse(arrayStdout);
+            Assert.All(arrayDocument.RootElement.EnumerateArray(), issue =>
+            {
+                Assert.True(issue.TryGetProperty("category", out _));
+                Assert.True(issue.TryGetProperty("actionable", out _));
+            });
+
+            using var compactDocument = ParseJsonOutput(compactStdout);
+            Assert.Equal("compact", compactDocument.RootElement.GetProperty("format").GetString());
+            Assert.Equal("mixed", compactDocument.RootElement.GetProperty("summary").GetProperty("actionability").GetString());
+            Assert.Equal(2, compactDocument.RootElement.GetProperty("issues").GetArrayLength());
         }
         finally
         {

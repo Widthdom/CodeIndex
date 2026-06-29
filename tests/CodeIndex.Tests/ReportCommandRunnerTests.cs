@@ -890,6 +890,36 @@ public class ReportCommandRunnerTests
     }
 
     [Fact]
+    public void Run_JsonMode_KeepsStdoutJsonOnlyAndStderrClean_Issue4146()
+    {
+        var workDir = CreateWorkDir();
+        try
+        {
+            var output = Path.Combine(workDir, "bundle.tgz");
+            var (exitCode, stdout, stderr) = RunAndCaptureStreams([
+                "--output", output,
+                "--db", Path.Combine(workDir, "missing.db"),
+                "--no-log",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal(ReportCommandRunner.RedactedPlaceholder, document.RootElement.GetProperty("output_path").GetString());
+            Assert.False(document.RootElement.GetProperty("log_included").GetBoolean());
+            Assert.False(document.RootElement.GetProperty("db_included").GetBoolean());
+            Assert.DoesNotContain("Bug report bundle", stdout, StringComparison.Ordinal);
+            Assert.DoesNotContain(output, stdout, StringComparison.Ordinal);
+            Assert.True(File.Exists(output));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
     public void Run_JsonMode_RedactsLocalSummaryPaths_Issue3554()
     {
         var workDir = CreateWorkDir();
