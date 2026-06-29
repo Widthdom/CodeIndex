@@ -9608,6 +9608,8 @@ public static partial class QueryCommandRunner
                 {
                     CommandErrorWriter.WriteStderr(BuildZeroResultLine("No unsuppressed unused symbols found", options));
                     WriteUnusedDefaultSuppressionSummary(suppression);
+                    WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
+                    WriteDegradedGraphZeroResult(reader, "symbols", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
                 else
                 {
