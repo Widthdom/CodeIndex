@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 
@@ -807,7 +808,10 @@ internal static class ExportImportCommandRunner
                 return false;
             }
 
-            var parsedManifest = JsonSerializer.Deserialize<ExportManifest>(manifestBytes, CreateImportManifestJsonOptions(jsonOptions));
+            var parsedManifest = BoundedJson.Deserialize<ExportManifest>(
+                manifestBytes.GetBuffer().AsSpan(0, (int)manifestBytes.Length),
+                MaxImportManifestBytes,
+                CreateImportManifestJsonOptions(jsonOptions));
             if (parsedManifest == null)
             {
                 manifest = null!;

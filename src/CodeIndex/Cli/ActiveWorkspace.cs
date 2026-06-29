@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
@@ -12,11 +13,6 @@ internal static class ActiveWorkspace
     internal const int MaxWorkspaceNameChars = 128;
     private const int MaxStateBytes = 64 * 1024;
     internal const int MaxStateJsonDepth = 16;
-    private static readonly JsonDocumentOptions StateJsonDocumentOptions = new()
-    {
-        MaxDepth = MaxStateJsonDepth,
-    };
-
     internal static string StatePath
     {
         get
@@ -51,7 +47,7 @@ internal static class ActiveWorkspace
                 return null;
             }
 
-            using var document = JsonDocument.Parse(text, StateJsonDocumentOptions);
+            using var document = BoundedJson.ParseDocument(text, MaxStateBytes, MaxStateJsonDepth);
             var root = document.RootElement;
             var name = ReadString(root, "name") ?? "default";
             var workspaceRoot = ReadString(root, "root");
@@ -64,7 +60,7 @@ internal static class ActiveWorkspace
 
             return state;
         }
-        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
             WriteLoadWarning("state file", DescribeLoadFailure(ex));
             return null;

@@ -68,11 +68,6 @@ internal static class GitHubIssueReporter
         "(\"(?:token|access_token|authorization|password|secret|client_secret|private_key|api_key)\"\\s*:\\s*)(\"(?:\\\\.|[^\"])*\"|[^,}\\]\\s]+)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
         TimeSpan.FromMilliseconds(100));
-    private static readonly JsonDocumentOptions GitHubApiResponseJsonDocumentOptions = new()
-    {
-        MaxDepth = MaxGitHubApiResponseJsonDepth,
-    };
-
     // Static HttpClient singleton — .NET best practice for reuse.
     // 静的 HttpClient シングルトン — .NET の再利用ベストプラクティス。
     private static readonly HttpClient s_defaultHttpClient = CreateDefaultHttpClient();
@@ -857,9 +852,10 @@ internal static class GitHubIssueReporter
     }
 
     internal static JsonNode? ParseGitHubApiResponseJson(string json)
-        => JsonNode.Parse(
+        => BoundedJson.ParseNode(
             json,
-            documentOptions: GitHubApiResponseJsonDocumentOptions);
+            MaxGitHubApiResponseBodyBytes,
+            MaxGitHubApiResponseJsonDepth);
 
     private static bool IsRecoverableGitHubApiResponseException(Exception ex)
         => ex is JsonException or InvalidDataException or InvalidOperationException;
@@ -914,7 +910,7 @@ internal static class GitHubIssueReporter
             redactedJson = BoundApiErrorBodyForFormatting(node.ToJsonString());
             return true;
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
             return false;
         }

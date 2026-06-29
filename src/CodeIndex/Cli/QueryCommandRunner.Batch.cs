@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 
 namespace CodeIndex.Cli;
 
@@ -178,7 +179,7 @@ public static partial class QueryCommandRunner
 
         try
         {
-            using var document = JsonDocument.Parse(line, BatchJsonDocumentOptions);
+            using var document = BoundedJson.ParseDocument(line, BatchMaxLineUtf8Bytes, BatchMaxJsonDepth);
             if (document.RootElement.ValueKind != JsonValueKind.Array || document.RootElement.GetArrayLength() == 0)
             {
                 CommandErrorWriter.WriteStderr($"Error: batch line {lineNumber} must be a non-empty JSON string array.");
@@ -211,7 +212,7 @@ public static partial class QueryCommandRunner
             subArgs = values.Skip(1).ToArray();
             return true;
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
             CommandErrorWriter.WriteJsonOrHuman(
                 true,
