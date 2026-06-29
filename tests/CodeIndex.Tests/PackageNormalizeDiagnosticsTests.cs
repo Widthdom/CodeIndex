@@ -1,9 +1,18 @@
 using CodeIndex.PackageNormalize;
+using CodeIndex.Diagnostics;
 
 namespace CodeIndex.Tests;
 
 public class PackageNormalizeDiagnosticsTests
 {
+    [Fact]
+    public void RedactionRegexTimeout_MatchesDiagnosticPolicy_Issue4224()
+    {
+        Assert.Equal(
+            RegexTimeoutPolicy.RedactionRegexTimeout,
+            PackageNormalizeDiagnostics.RedactionRegexTimeout);
+    }
+
     [Fact]
     public void FormatException_RedactsExceptionMessages_Issue4124()
     {
