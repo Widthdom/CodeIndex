@@ -1041,6 +1041,8 @@ public static partial class QueryCommandRunner
                 Console.WriteLine($"  - {query.Name}: {query.Query} ({mode})");
                 Console.WriteLine($"    {query.Description}");
                 Console.WriteLine($"    false positives: {query.FalsePositiveGuidance}");
+                if (query.StringComparisonTaxonomy is not null)
+                    Console.WriteLine($"    string comparison domains: {FormatSearchRecipeStringComparisonDomains(query.StringComparisonTaxonomy)}");
                 if (query.BroadCatchTaxonomy is not null)
                 {
                     Console.WriteLine($"    broad catch boundaries: {string.Join(", ", query.BroadCatchTaxonomy.BoundaryCategories.Select(category => category.Name))}");
@@ -1487,6 +1489,8 @@ public static partial class QueryCommandRunner
                 Console.WriteLine(queryResult.Description);
                 Console.WriteLine($"labels: {string.Join(", ", queryResult.RecommendedLabels)}");
                 Console.WriteLine($"false positives: {queryResult.FalsePositiveGuidance}");
+                if (queryResult.StringComparisonTaxonomy is not null)
+                    Console.WriteLine($"string comparison domains: {FormatSearchRecipeStringComparisonDomains(queryResult.StringComparisonTaxonomy)}");
                 if (queryResult.BroadCatchTaxonomy is not null)
                 {
                     Console.WriteLine($"broad catch boundaries: {string.Join(", ", queryResult.BroadCatchTaxonomy.BoundaryCategories.Select(category => category.Name))}");
@@ -1826,6 +1830,7 @@ public static partial class QueryCommandRunner
                 [],
                 [],
                 null,
+                null,
                 rows.Count,
                 rows.Count,
                 rows.Count,
@@ -1922,6 +1927,7 @@ public static partial class QueryCommandRunner
                 [.. recipeQuery.MatchOrigins],
                 [.. recipeQuery.ExcludeOrigins],
                 [.. recipeQuery.ResultKinds],
+                recipeQuery.StringComparisonTaxonomy,
                 recipeQuery.BroadCatchTaxonomy,
                 rows.Count,
                 rows.Count,
@@ -1990,6 +1996,7 @@ public static partial class QueryCommandRunner
                 [.. recipeQuery.MatchOrigins],
                 [.. recipeQuery.ExcludeOrigins],
                 [.. recipeQuery.ResultKinds],
+                recipeQuery.StringComparisonTaxonomy,
                 recipeQuery.BroadCatchTaxonomy,
                 rows.Count,
                 rows.Count,
@@ -2755,6 +2762,12 @@ public static partial class QueryCommandRunner
             sb.AppendLine();
         }
 
+        if (queryResult.StringComparisonTaxonomy is not null)
+        {
+            AppendSearchIssueDraftStringComparisonTaxonomy(sb, queryResult.StringComparisonTaxonomy);
+            sb.AppendLine();
+        }
+
         if (queryResult.BroadCatchTaxonomy is not null)
         {
             AppendSearchIssueDraftBroadCatchTaxonomy(sb, queryResult.BroadCatchTaxonomy);
@@ -2811,6 +2824,16 @@ public static partial class QueryCommandRunner
         sb.AppendLine("### Diagnostic behavior categories");
         foreach (var behavior in taxonomy.DiagnosticBehaviors)
             sb.AppendLine($"- `{behavior.Name}`: {behavior.Description}");
+    }
+
+    private static void AppendSearchIssueDraftStringComparisonTaxonomy(StringBuilder sb, SearchRecipeStringComparisonTaxonomyJsonResult taxonomy)
+    {
+        sb.AppendLine("## String-comparison taxonomy");
+        sb.AppendLine(taxonomy.TriageGuidance);
+        sb.AppendLine();
+        sb.AppendLine("### Domain categories");
+        foreach (var category in taxonomy.DomainCategories)
+            sb.AppendLine($"- `{category.Name}`: {category.Description} Review: {category.ReviewGuidance}");
     }
 
     private static void AppendSearchIssueDraftTriageMetadata(StringBuilder sb, IssueDraftTriageMetadataJsonResult triage)
@@ -3117,8 +3140,12 @@ public static partial class QueryCommandRunner
             [.. query.MatchOrigins],
             [.. query.ExcludeOrigins],
             [.. query.ResultKinds],
+            query.StringComparisonTaxonomy,
             query.BroadCatchTaxonomy,
             query.ExactSubstring)).ToList());
+
+    private static string FormatSearchRecipeStringComparisonDomains(SearchRecipeStringComparisonTaxonomyJsonResult taxonomy)
+        => string.Join(", ", taxonomy.DomainCategories.Select(category => category.Name));
 
     private static SearchRecipeCompactListItemJsonResult ToSearchRecipeCompactListItem(SearchAuditRecipe recipe, IReadOnlyList<SearchAuditRecipeQuery> queries) => new(
         recipe.Name,

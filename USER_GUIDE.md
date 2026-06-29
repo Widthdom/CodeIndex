@@ -1072,10 +1072,15 @@ next to the evidence path. For example,
 expected diagnostic behaviors so users can distinguish intentional top-level,
 cleanup, probe, diagnostic-sanitization, and worker boundaries from catches that
 should be narrowed or rethrown.
+`string-comparison-semantics` and `risky-code/path-case-heuristic` include
+string-comparison taxonomy metadata for `path_filesystem`, `protocol_tokens`,
+`cli_options`, `stable_identifiers`, `human_text`, and `machine_formatting`
+domains, so `OrdinalIgnoreCase`, `StringComparer.Ordinal`, `InvariantCulture`,
+and invariant casing hits can be classified before filing.
 Built-in recipes include `risky-code`, `json-parse-apis`,
-`auth-token-audit`, `dogfood-risk-patterns`, `dotnet-risk-patterns`,
-`sqlite-query-policy-surfaces`, `xml-parser-security`, `filesystem-traversal`,
-`bounded-read-evidence`, and the
+`auth-token-audit`, `string-comparison-semantics`, `dogfood-risk-patterns`,
+`dotnet-risk-patterns`, `sqlite-query-policy-surfaces`, `xml-parser-security`,
+`filesystem-traversal`, `bounded-read-evidence`, and the
 opt-in broad `broad-token-audit` recipe.
 `--recipe <name>` applies normal search filters such as `--lang`, `--path`,
 `--exclude-path`, `--exclude-tests`, `--limit`, and snippet controls to every
@@ -3764,8 +3769,9 @@ result level、正規化済みの repository-relative artifact URI を出力し�
 
 search audit recipe は、名前付き recipe を複数の curated search query に展開します。
 組み込み recipe には `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、`xml-parser-security`、
-`auth-token-audit`、`dogfood-risk-patterns`、`sqlite-query-policy-surfaces`、
-`filesystem-traversal`、`bounded-read-evidence`、`broad-token-audit` があります。
+`auth-token-audit`、`string-comparison-semantics`、`dogfood-risk-patterns`、
+`sqlite-query-policy-surfaces`、`filesystem-traversal`、`bounded-read-evidence`、
+`broad-token-audit` があります。
 `--list-recipes` は利用可能な名前、
 説明、推奨 label、query text、exact-match mode、false-positive guidance、guard filter、
 risk evidence、query 固有の audit taxonomy metadata を表示します。
@@ -3779,6 +3785,11 @@ issue-draft export や下流の triage tool が evidence path の近くに revie
 broad catch の境界カテゴリと期待される diagnostic behavior を含めるため、意図的な
 top-level、cleanup、probe、diagnostic-sanitization、worker 境界と、narrowing または
 rethrow が必要な catch を区別できます。
+`string-comparison-semantics` と `risky-code/path-case-heuristic` は
+`path_filesystem`、`protocol_tokens`、`cli_options`、`stable_identifiers`、
+`human_text`、`machine_formatting` の domain を持つ string-comparison taxonomy metadata
+を含みます。これにより、`OrdinalIgnoreCase`、`StringComparer.Ordinal`、
+`InvariantCulture`、invariant casing の hit を起票前に分類できます。
 `--recipe <name>` は `--lang`、`--path`、`--exclude-path`、`--exclude-tests`、
 `--limit`、snippet control など通常の search filter を recipe 内の各 query に適用します。
 `--json` 併用時、recipe run は通常の newline-delimited search stream ではなく、recipe
