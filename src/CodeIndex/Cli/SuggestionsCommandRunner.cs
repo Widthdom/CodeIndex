@@ -640,16 +640,53 @@ internal static class SuggestionsCommandRunner
     private static Options Parse(string[] args)
     {
         var options = new Options();
+        var (valueOptions, flagOnlyOptions) = CliFlagSchema.GetParserFlagsPartitionedByValueBearing("suggestions");
         for (var i = 0; i < args.Length; i++)
         {
             var arg = args[i];
-            switch (arg)
+            var normalizedArg = arg;
+            string? inlineValue = null;
+            if (arg.StartsWith("--", StringComparison.Ordinal))
+            {
+                var separator = arg.IndexOf('=');
+                if (separator >= 0)
+                {
+                    normalizedArg = arg[..separator];
+                    inlineValue = arg[(separator + 1)..];
+                }
+
+                if (inlineValue != null && flagOnlyOptions.Contains(normalizedArg))
+                {
+                    options.Error = $"Error: {normalizedArg} does not take a value.";
+                    return options;
+                }
+
+                if (!valueOptions.Contains(normalizedArg) && !flagOnlyOptions.Contains(normalizedArg))
+                {
+                    options.Error = $"Error: {arg} is not supported for suggestions.";
+                    return options;
+                }
+            }
+
+            bool TryReadSchemaValue(string option, out string value, out string? error)
+            {
+                if (inlineValue != null)
+                {
+                    value = inlineValue;
+                    error = null;
+                    return true;
+                }
+
+                return TryReadValue(args, ref i, option, out value, out error);
+            }
+
+            switch (normalizedArg)
             {
                 case "--json":
                     options.Json = true;
                     break;
                 case "--db":
-                    if (!TryReadValue(args, ref i, "--db", out var dbPath, out var dbError))
+                    if (!TryReadSchemaValue("--db", out var dbPath, out var dbError))
                     {
                         options.Error = dbError;
                         return options;
@@ -657,7 +694,7 @@ internal static class SuggestionsCommandRunner
                     options.DbPath = dbPath;
                     break;
                 case "--status":
-                    if (!TryReadValue(args, ref i, "--status", out var status, out var statusError))
+                    if (!TryReadSchemaValue("--status", out var status, out var statusError))
                     {
                         options.Error = statusError;
                         return options;
@@ -668,7 +705,7 @@ internal static class SuggestionsCommandRunner
                     break;
                 case "--language":
                 case "--lang":
-                    if (!TryReadValue(args, ref i, arg, out var language, out var languageError))
+                    if (!TryReadSchemaValue(normalizedArg, out var language, out var languageError))
                     {
                         options.Error = languageError;
                         return options;
@@ -676,7 +713,7 @@ internal static class SuggestionsCommandRunner
                     options.Language = language;
                     break;
                 case "--category":
-                    if (!TryReadValue(args, ref i, "--category", out var category, out var categoryError))
+                    if (!TryReadSchemaValue("--category", out var category, out var categoryError))
                     {
                         options.Error = categoryError;
                         return options;
@@ -684,7 +721,7 @@ internal static class SuggestionsCommandRunner
                     options.Category = category;
                     break;
                 case "--agent":
-                    if (!TryReadValue(args, ref i, "--agent", out var agent, out var agentError))
+                    if (!TryReadSchemaValue("--agent", out var agent, out var agentError))
                     {
                         options.Error = agentError;
                         return options;
@@ -692,7 +729,7 @@ internal static class SuggestionsCommandRunner
                     options.Agent = agent;
                     break;
                 case "--limit":
-                    if (!TryReadValue(args, ref i, "--limit", out var limit, out var limitError))
+                    if (!TryReadSchemaValue("--limit", out var limit, out var limitError))
                     {
                         options.Error = limitError;
                         return options;
@@ -705,7 +742,7 @@ internal static class SuggestionsCommandRunner
                     options.Limit = parsedLimit;
                     break;
                 case "--offset":
-                    if (!TryReadValue(args, ref i, "--offset", out var offset, out var offsetError))
+                    if (!TryReadSchemaValue("--offset", out var offset, out var offsetError))
                     {
                         options.Error = offsetError;
                         return options;
@@ -719,7 +756,7 @@ internal static class SuggestionsCommandRunner
                     options.OffsetSpecified = true;
                     break;
                 case "--since":
-                    if (!TryReadValue(args, ref i, "--since", out var since, out var sinceError))
+                    if (!TryReadSchemaValue("--since", out var since, out var sinceError))
                     {
                         options.Error = sinceError;
                         return options;
@@ -730,7 +767,7 @@ internal static class SuggestionsCommandRunner
                         options.Since = parsedSince;
                     break;
                 case "--format":
-                    if (!TryReadValue(args, ref i, "--format", out var format, out var formatError))
+                    if (!TryReadSchemaValue("--format", out var format, out var formatError))
                     {
                         options.Error = formatError;
                         return options;
@@ -740,7 +777,7 @@ internal static class SuggestionsCommandRunner
                         options.Error = "Error: --format must be one of json, markdown, issue-drafts.";
                     break;
                 case "--open-issues":
-                    if (!TryReadValue(args, ref i, "--open-issues", out var openIssuesPath, out var openIssuesError))
+                    if (!TryReadSchemaValue("--open-issues", out var openIssuesPath, out var openIssuesError))
                     {
                         options.Error = openIssuesError;
                         return options;
@@ -748,7 +785,7 @@ internal static class SuggestionsCommandRunner
                     options.OpenIssuesPath = openIssuesPath;
                     break;
                 case "--repo":
-                    if (!TryReadValue(args, ref i, "--repo", out var repository, out var repositoryError))
+                    if (!TryReadSchemaValue("--repo", out var repository, out var repositoryError))
                     {
                         options.Error = repositoryError;
                         return options;
@@ -756,7 +793,7 @@ internal static class SuggestionsCommandRunner
                     options.OpenIssuesRepository = repository;
                     break;
                 case "--duplicate-confidence":
-                    if (!TryReadValue(args, ref i, "--duplicate-confidence", out var duplicateConfidence, out var duplicateConfidenceError))
+                    if (!TryReadSchemaValue("--duplicate-confidence", out var duplicateConfidence, out var duplicateConfidenceError))
                     {
                         options.Error = duplicateConfidenceError;
                         return options;
@@ -773,7 +810,7 @@ internal static class SuggestionsCommandRunner
                     }
                     break;
                 case "--duplicate-threshold":
-                    if (!TryReadValue(args, ref i, "--duplicate-threshold", out var duplicateThreshold, out var duplicateThresholdError))
+                    if (!TryReadSchemaValue("--duplicate-threshold", out var duplicateThreshold, out var duplicateThresholdError))
                     {
                         options.Error = duplicateThresholdError;
                         return options;
@@ -790,82 +827,7 @@ internal static class SuggestionsCommandRunner
                     }
                     break;
                 default:
-                    if (arg.StartsWith("--db=", StringComparison.Ordinal))
-                        options.DbPath = arg["--db=".Length..];
-                    else if (arg.StartsWith("--status=", StringComparison.Ordinal))
-                        options.Status = arg["--status=".Length..];
-                    else if (arg.StartsWith("--language=", StringComparison.Ordinal))
-                        options.Language = arg["--language=".Length..];
-                    else if (arg.StartsWith("--lang=", StringComparison.Ordinal))
-                        options.Language = arg["--lang=".Length..];
-                    else if (arg.StartsWith("--category=", StringComparison.Ordinal))
-                        options.Category = arg["--category=".Length..];
-                    else if (arg.StartsWith("--agent=", StringComparison.Ordinal))
-                        options.Agent = arg["--agent=".Length..];
-                    else if (arg.StartsWith("--limit=", StringComparison.Ordinal))
-                    {
-                        var inlineLimit = arg["--limit=".Length..];
-                        if (!TryParseNonNegativeInt("--limit", inlineLimit, out var parsedInlineLimit, out var parsedInlineLimitError))
-                            options.Error = parsedInlineLimitError;
-                        else
-                            options.Limit = parsedInlineLimit;
-                    }
-                    else if (arg.StartsWith("--offset=", StringComparison.Ordinal))
-                    {
-                        var inlineOffset = arg["--offset=".Length..];
-                        if (!TryParseNonNegativeInt("--offset", inlineOffset, out var parsedInlineOffset, out var parsedInlineOffsetError))
-                        {
-                            options.Error = parsedInlineOffsetError;
-                        }
-                        else
-                        {
-                            options.Offset = parsedInlineOffset;
-                            options.OffsetSpecified = true;
-                        }
-                    }
-                    else if (arg.StartsWith("--format=", StringComparison.Ordinal))
-                        options.ExportFormat = arg["--format=".Length..];
-                    else if (arg.StartsWith("--open-issues=", StringComparison.Ordinal))
-                        options.OpenIssuesPath = arg["--open-issues=".Length..];
-                    else if (arg.StartsWith("--repo=", StringComparison.Ordinal))
-                        options.OpenIssuesRepository = arg["--repo=".Length..];
-                    else if (arg.StartsWith("--duplicate-confidence=", StringComparison.Ordinal))
-                    {
-                        var inlineConfidence = arg["--duplicate-confidence=".Length..];
-                        if (IssueDuplicatePreflight.TryNormalizeDuplicateConfidence(inlineConfidence, out var normalizedInlineConfidence))
-                        {
-                            options.DuplicateConfidence = normalizedInlineConfidence;
-                            options.DuplicateThreshold = IssueDuplicatePreflight.ThresholdForDuplicateConfidence(normalizedInlineConfidence);
-                            options.DuplicateConfidenceSpecified = true;
-                        }
-                        else
-                        {
-                            options.Error = $"Error: --duplicate-confidence must be one of low, medium, high; got '{inlineConfidence}'.";
-                        }
-                    }
-                    else if (arg.StartsWith("--duplicate-threshold=", StringComparison.Ordinal))
-                    {
-                        var inlineThreshold = arg["--duplicate-threshold=".Length..];
-                        if (TryParseScoreThreshold("--duplicate-threshold", inlineThreshold, out var parsedInlineThreshold, out var parsedInlineThresholdError))
-                        {
-                            options.DuplicateThreshold = parsedInlineThreshold;
-                            options.DuplicateConfidence = IssueDuplicatePreflight.CustomDuplicateConfidence;
-                            options.DuplicateThresholdSpecified = true;
-                        }
-                        else
-                        {
-                            options.Error = parsedInlineThresholdError;
-                        }
-                    }
-                    else if (arg.StartsWith("--since=", StringComparison.Ordinal))
-                    {
-                        var inlineSince = arg["--since=".Length..];
-                        if (!DateTimeOffset.TryParse(inlineSince, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsedInlineSince))
-                            options.Error = $"Error: could not parse --since value '{inlineSince}' as a date/time.";
-                        else
-                            options.Since = parsedInlineSince;
-                    }
-                    else if (arg.StartsWith("-", StringComparison.Ordinal))
+                    if (arg.StartsWith("-", StringComparison.Ordinal))
                         options.Error = $"Error: {arg} is not supported for suggestions.";
                     else if (options.Id == null)
                         options.Id = arg;

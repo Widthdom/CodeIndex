@@ -251,7 +251,7 @@ internal static class CliFlagSchema
             new() { Name = "--max-results", ValuePlaceholder = "<n>", Description = "Search alias for --limit", Commands = Set("search") },
             new() { Name = "--top", ValuePlaceholder = "<n>", Description = "Max results", Commands = Set(LimitCapableCommands) },
             new() { Name = "--offset", ValuePlaceholder = "<n>", Description = "Suggestions: skip this many filtered rows before output", Commands = Set("suggestions") },
-            new() { Name = "--lang", ValuePlaceholder = "<lang>", Description = "Filter by language", Commands = Set(LangCapableCommands) },
+            new() { Name = "--lang", ValuePlaceholder = "<lang>", Description = "Filter by language", Commands = Set(LangCapableCommands), AlsoAcceptedBy = Set("suggestions") },
             new() { Name = "--language", ValuePlaceholder = "<lang>", Description = "Suggestions: filter by language; languages: look up one language by canonical name or recognized language spelling", Commands = Set("suggestions", "languages") },
             new() { Name = "--extension", ValuePlaceholder = "<ext>", Description = "Languages: look up language support by extension or recognized filename pattern", Commands = Set(LanguagesFilterCommands) },
             new() { Name = "--alias", ValuePlaceholder = "<alias>", Description = "Languages: look up language support by display alias", Commands = Set(LanguagesFilterCommands) },
