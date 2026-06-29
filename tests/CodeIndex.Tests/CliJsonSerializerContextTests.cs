@@ -65,6 +65,7 @@ public class CliJsonSerializerContextTests
         yield return [typeof(RepoModuleResult)];
         yield return [typeof(SearchHighlight)];
         yield return [typeof(SearchResult)];
+        yield return [typeof(StatusHeadFreshness)];
         yield return [typeof(StatusResult)];
         yield return [typeof(SymbolAnalysisResult)];
         yield return [typeof(SymbolHotspotJsonResult)];

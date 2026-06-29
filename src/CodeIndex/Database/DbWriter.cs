@@ -50,6 +50,10 @@ public class DbWriter
         set => ScopedBatchProgressCheckpointForTesting.Value = value;
     }
 
+    // Transaction ownership (#4154): the semaphore is held for the outermost writer
+    // transaction lifetime. Same-stack nested calls from the owning thread and
+    // AsyncLocal token skip the semaphore and become SAVEPOINTs; other flows wait even
+    // when ExecutionContext copied the token into Task.Run.
     private readonly object _transactionStateLock = new();
     private readonly SemaphoreSlim _transactionGate = new(1, 1);
     private readonly AsyncLocal<Guid?> _currentTransactionGateToken = new();

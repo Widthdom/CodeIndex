@@ -94,6 +94,34 @@ internal static class SearchAuditRecipes
                 "The catch is not a real boundary and should be narrowed, rethrown, or converted to stable diagnostics.")
         ],
         "Classify each broad catch by boundary first. Treat top-level and worker boundaries as intentional only when they normalize to stable sanitized diagnostics; cleanup and probe catches are acceptable only when best-effort behavior is documented and bounded; otherwise narrow the catch or surface a stable diagnostic.");
+    private static readonly SearchRecipeStringComparisonTaxonomyJsonResult StringComparisonSemanticsTaxonomy = new(
+        [
+            new(
+                "path_filesystem",
+                "Filesystem path equality, prefix, dictionary, and sort decisions whose correctness depends on path normalization and filesystem case sensitivity.",
+                "Require evidence from the indexed filesystem case-sensitivity signal or a centralized path comparer before accepting case-insensitive ordinal behavior."),
+            new(
+                "protocol_tokens",
+                "Protocol and file-format tokens such as URI schemes, HTTP headers, MIME types, JSON member names, and other machine-specified ASCII domains.",
+                "Ordinal or ordinal-ignore-case comparisons are usually expected when the protocol defines byte, ASCII, or invariant token semantics."),
+            new(
+                "cli_options",
+                "CLI option names, command aliases, environment-variable names, labels, and other command/control tokens.",
+                "Case-insensitive ordinal handling can be intentional for command ergonomics; keep these hits separate from path or human-text comparisons."),
+            new(
+                "stable_identifiers",
+                "Persisted keys, cache keys, database identifiers, symbol names, and index terms that need stable process- and culture-independent lookup semantics.",
+                "Use ordinal comparers consistently with the persistence format and avoid culture-sensitive transforms unless the stored contract says otherwise."),
+            new(
+                "human_text",
+                "User-facing text, localized messages, display names, search phrases, and documentation prose whose meaning can be culture-sensitive.",
+                "Prefer explicit culture-aware comparison, casing, formatting, or parsing for human text; invariant or ordinal behavior needs a machine-token justification."),
+            new(
+                "machine_formatting",
+                "Round-trippable numeric, date/time, diagnostic, serialization, and protocol formatting intended for machines instead of readers.",
+                "InvariantCulture is usually expected for machine-readable formats, but it should not be reused as a blanket answer for human-facing text.")
+        ],
+        "Classify each string comparison by data domain before filing. Path hits need filesystem case-sensitivity and normalization evidence; protocol, CLI, and stable-identifier hits are commonly ordinal; human-facing text needs culture-sensitive review; invariant casing should show machine-token intent or be replaced by comparer overloads.");
 
     internal static IReadOnlyList<string> DefaultSourcePathPatterns => DefaultSourcePathPatternsValue;
     internal static IReadOnlyList<string> DefaultSourceExcludePaths => DefaultSourceExcludePathsValue;
@@ -312,6 +340,7 @@ internal static class SearchAuditRecipes
                         "risk: path equality and path dictionaries may need the indexed filesystem case-sensitivity signal.",
                         "positive: protocol tokens, option names, labels, header names, or language keywords are non-path domains."
                     ],
+                    StringComparisonTaxonomy = StringComparisonSemanticsTaxonomy,
                 },
                 new(
                     "regex-construction",
@@ -497,6 +526,101 @@ internal static class SearchAuditRecipes
                 }
             ],
             DefaultExecutableExcludeOriginsValue),
+        SourceScopedRecipe(
+            "string-comparison-semantics",
+            "Audit string comparison, casing, and culture choices by path, protocol, CLI, identifier, and human-text semantics.",
+            [
+                new(
+                    "ordinal-ignore-case",
+                    "OrdinalIgnoreCase",
+                    "Find case-insensitive ordinal comparisons that need path/protocol/CLI/identifier/human-text classification.",
+                    ["audit", "bug", "portability"],
+                    "False positives include protocol tokens, CLI options, labels, headers, and stable machine identifiers where ordinal-ignore-case is the intended contract.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: path equality, path-prefix checks, and path dictionaries need filesystem case-sensitivity and normalization evidence instead of unconditional case-insensitive ordinal checks.",
+                        "positive: protocol tokens, CLI options, headers, labels, and persisted machine keys usually need ordinal semantics and should be separated from path/culture findings."
+                    ],
+                    MatchOrigins = ["code"],
+                    StringComparisonTaxonomy = StringComparisonSemanticsTaxonomy,
+                },
+                new(
+                    "string-comparer-ordinal-family",
+                    "StringComparer.Ordinal",
+                    "Find StringComparer.Ordinal* comparer use in dictionaries, sets, and ordering so key domains can be classified.",
+                    ["audit", "bug", "portability"],
+                    "This intentionally includes StringComparer.OrdinalIgnoreCase; use ordinal-ignore-case for the case-insensitive cross-cutting bucket, then classify the key domain here.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: dictionary and set comparers define lookup semantics; classify keys as paths, protocol tokens, CLI names, stable identifiers, or human text.",
+                        "positive: protocol tokens, command names, generated IDs, and database/cache keys often require stable ordinal or ordinal-ignore-case comparers."
+                    ],
+                    MatchOrigins = ["code"],
+                    StringComparisonTaxonomy = StringComparisonSemanticsTaxonomy,
+                },
+                new(
+                    "string-comparison-ordinal-family",
+                    "StringComparison.Ordinal",
+                    "Find StringComparison.Ordinal* overloads so equality, contains, prefix, and sort semantics can be classified by domain.",
+                    ["audit", "bug", "portability"],
+                    "This intentionally includes StringComparison.OrdinalIgnoreCase; use ordinal-ignore-case for the case-insensitive cross-cutting bucket, then classify whether the comparison is path-sensitive, protocol/CLI-sensitive, identifier-sensitive, or human-facing.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: ordinal-family overloads on StartsWith, Contains, Equals, Compare, or EndsWith can be wrong for human text and can miss filesystem case-sensitivity policy for paths.",
+                        "positive: protocol tokens, CLI switches, enum-like identifiers, and persisted keys often require ordinal-family overloads for repeatable behavior."
+                    ],
+                    MatchOrigins = ["code"],
+                    StringComparisonTaxonomy = StringComparisonSemanticsTaxonomy,
+                },
+                new(
+                    "invariant-culture",
+                    "InvariantCulture",
+                    "Find invariant culture formatting, parsing, or comparison paths that need machine-format versus human-text classification.",
+                    ["audit", "bug"],
+                    "False positives include serialization, diagnostics, protocol fields, and round-trip numeric or date/time formatting intended for machines.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: InvariantCulture used on user-facing text can ignore user locale, casing, and collation expectations.",
+                        "positive: machine-readable formatting, parsing, protocol serialization, and stable diagnostics usually require invariant culture."
+                    ],
+                    MatchOrigins = ["code"],
+                    StringComparisonTaxonomy = StringComparisonSemanticsTaxonomy,
+                },
+                new(
+                    "lower-invariant-casing",
+                    "ToLowerInvariant",
+                    "Find invariant lowercasing that may need comparer overloads or human-culture-aware casing instead of string normalization.",
+                    ["audit", "bug"],
+                    "False positives include machine tokens normalized for protocol, CLI, cache-key, or persisted-key contracts.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: invariant lowercasing can allocate, lose original spelling, and be wrong for human-facing text or path semantics.",
+                        "positive: protocol tokens, CLI switches, and stable machine keys can justify invariant normalization when the stored contract is documented."
+                    ],
+                    MatchOrigins = ["code"],
+                    StringComparisonTaxonomy = StringComparisonSemanticsTaxonomy,
+                },
+                new(
+                    "upper-invariant-casing",
+                    "ToUpperInvariant",
+                    "Find invariant uppercasing that may need comparer overloads or human-culture-aware casing instead of string normalization.",
+                    ["audit", "bug"],
+                    "False positives include machine tokens normalized for protocol, CLI, cache-key, or persisted-key contracts.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: invariant uppercasing can allocate, lose original spelling, and be wrong for human-facing text or path semantics.",
+                        "positive: protocol tokens, CLI switches, and stable machine keys can justify invariant normalization when the stored contract is documented."
+                    ],
+                    MatchOrigins = ["code"],
+                    StringComparisonTaxonomy = StringComparisonSemanticsTaxonomy,
+                }
+            ]),
         SourceScopedRecipe(
             "auth-token-audit",
             "Audit credential and auth-token material without the parser, protocol, LSP, and cancellation-token noise from bare token searches.",
@@ -2050,6 +2174,7 @@ internal sealed record SearchAuditRecipeQuery(
     public List<string> MatchOrigins { get; init; } = [];
     public List<string> ExcludeOrigins { get; init; } = [];
     public List<string> ResultKinds { get; init; } = [];
+    public SearchRecipeStringComparisonTaxonomyJsonResult? StringComparisonTaxonomy { get; init; }
     public SearchRecipeBroadCatchTaxonomyJsonResult? BroadCatchTaxonomy { get; init; }
 }
 
@@ -2120,6 +2245,9 @@ internal sealed record SearchRecipeQueryListItemJsonResult(
     [property: JsonPropertyName("match_origins")] List<string> MatchOrigins,
     [property: JsonPropertyName("exclude_origins")] List<string> ExcludeOrigins,
     [property: JsonPropertyName("result_kinds")] List<string> ResultKinds,
+    [property: JsonPropertyName("string_comparison_taxonomy")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    SearchRecipeStringComparisonTaxonomyJsonResult? StringComparisonTaxonomy,
     [property: JsonPropertyName("broad_catch_taxonomy")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     SearchRecipeBroadCatchTaxonomyJsonResult? BroadCatchTaxonomy,
@@ -2147,6 +2275,15 @@ internal sealed record SearchRecipeBroadCatchBoundaryJsonResult(
 internal sealed record SearchRecipeBroadCatchDiagnosticBehaviorJsonResult(
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("description")] string Description);
+
+internal sealed record SearchRecipeStringComparisonTaxonomyJsonResult(
+    [property: JsonPropertyName("domain_categories")] List<SearchRecipeStringComparisonDomainJsonResult> DomainCategories,
+    [property: JsonPropertyName("triage_guidance")] string TriageGuidance);
+
+internal sealed record SearchRecipeStringComparisonDomainJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("description")] string Description,
+    [property: JsonPropertyName("review_guidance")] string ReviewGuidance);
 
 internal sealed record SearchRecipeRunJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
@@ -2203,6 +2340,9 @@ internal sealed record SearchRecipeQueryResultJsonResult(
     [property: JsonPropertyName("match_origins")] List<string> MatchOrigins,
     [property: JsonPropertyName("exclude_origins")] List<string> ExcludeOrigins,
     [property: JsonPropertyName("result_kinds")] List<string> ResultKinds,
+    [property: JsonPropertyName("string_comparison_taxonomy")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    SearchRecipeStringComparisonTaxonomyJsonResult? StringComparisonTaxonomy,
     [property: JsonPropertyName("broad_catch_taxonomy")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     SearchRecipeBroadCatchTaxonomyJsonResult? BroadCatchTaxonomy,
@@ -2300,6 +2440,9 @@ internal sealed record SearchRecipeCompactQueryResultJsonResult(
     [property: JsonPropertyName("match_origins")] List<string> MatchOrigins,
     [property: JsonPropertyName("exclude_origins")] List<string> ExcludeOrigins,
     [property: JsonPropertyName("result_kinds")] List<string> ResultKinds,
+    [property: JsonPropertyName("string_comparison_taxonomy")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    SearchRecipeStringComparisonTaxonomyJsonResult? StringComparisonTaxonomy,
     [property: JsonPropertyName("broad_catch_taxonomy")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     SearchRecipeBroadCatchTaxonomyJsonResult? BroadCatchTaxonomy,
