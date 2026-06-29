@@ -876,6 +876,30 @@ public partial class ReleaseWorkflowTests
     }
 
     [Fact]
+    public void PackageNormalizer_RejectsDuplicateZipEntryNames()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RejectsDuplicateZipEntryNames));
+        try
+        {
+            var packagePath = Path.Combine(projectRoot, "duplicate-entry-name.nupkg");
+            CreatePackageWithEntries(
+                packagePath,
+                ("package/services/metadata/core-properties/random.psmdcp", ""),
+                ("payload.txt", "one"),
+                ("payload.txt", "two"));
+
+            var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
+            Assert.Contains("payload.txt", exception.Message);
+            Assert.Contains("duplicate destination name 'payload.txt'", exception.Message);
+            AssertNoNormalizeTempFiles(projectRoot, packagePath);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void PackageNormalizer_ScrubsSafeExternalAttributes()
     {
         var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_ScrubsSafeExternalAttributes));

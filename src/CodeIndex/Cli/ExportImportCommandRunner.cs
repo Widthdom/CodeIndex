@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using CodeIndex.Archives;
 using CodeIndex.Database;
 using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
@@ -738,6 +739,20 @@ internal static class ExportImportCommandRunner
         var entries = new Dictionary<string, ZipArchiveEntry>(StringComparer.Ordinal);
         foreach (var entry in archive.Entries)
         {
+            if (!ZipArchiveSafetyPolicy.TryNormalizeRelativeEntryName(entry.FullName, out var normalizedEntryName, out var entryNameFailureReason))
+            {
+                errorCode = "import_archive_unsafe_entry_name";
+                message = $"archive contains unsafe entry {ConsoleUi.FormatBoundedValue(entry.FullName)}: ZIP entry name {entryNameFailureReason}; expected only {FormatExpectedImportArchiveEntryNames()}.";
+                return false;
+            }
+
+            if (!string.Equals(normalizedEntryName, entry.FullName, StringComparison.Ordinal))
+            {
+                errorCode = "import_archive_noncanonical_entry_name";
+                message = $"archive contains non-canonical entry {ConsoleUi.FormatBoundedValue(entry.FullName)} that normalizes to {ConsoleUi.FormatBoundedValue(normalizedEntryName)}; expected only {FormatExpectedImportArchiveEntryNames()}.";
+                return false;
+            }
+
             if (!IsExpectedImportArchiveEntryName(entry.FullName))
             {
                 errorCode = "import_archive_unexpected_entry";
@@ -745,15 +760,13 @@ internal static class ExportImportCommandRunner
                 return false;
             }
 
-            if (entries.ContainsKey(entry.FullName))
+            if (!ZipArchiveSafetyPolicy.TryAddUniqueEntryName(entries, entry.FullName, entry))
             {
                 phase = GetImportArchiveEntryPhase(entry.FullName);
                 errorCode = "import_archive_duplicate_entry";
                 message = $"archive contains duplicate entry {ConsoleUi.FormatBoundedValue(entry.FullName)}.";
                 return false;
             }
-
-            entries.Add(entry.FullName, entry);
         }
 
         if (!entries.TryGetValue(ManifestEntryName, out var foundManifestEntry))

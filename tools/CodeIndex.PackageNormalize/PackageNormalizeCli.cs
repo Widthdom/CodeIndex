@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using CodeIndex.Archives;
 
 namespace CodeIndex.PackageNormalize;
 
@@ -772,49 +773,13 @@ public static class PackageCorePropertiesNormalizer
 
     private static string ValidateZipEntryName(string entryName, string role)
     {
-        if (entryName.Length == 0)
-            throw new InvalidOperationException($"ZIP {role} entry name must not be empty.");
+        if (ZipArchiveSafetyPolicy.TryNormalizeRelativeEntryName(entryName, out var normalizedName, out var failureReason))
+            return normalizedName;
 
-        if (entryName.Contains('\\'))
-            throw new InvalidOperationException($"ZIP {role} entry {PackageNormalizeDiagnostics.FormatEntryName(entryName)} must use '/' separators, not backslashes.");
-
-        if (entryName.Contains('\0'))
-            throw new InvalidOperationException($"ZIP {role} entry {PackageNormalizeDiagnostics.FormatEntryName(entryName)} must not contain NUL characters.");
-
-        if (entryName[0] == '/' || StartsWithWindowsDrivePrefix(entryName))
-            throw new InvalidOperationException($"ZIP {role} entry {PackageNormalizeDiagnostics.FormatEntryName(entryName)} must be a relative path.");
-
-        var segments = entryName.Split('/');
-        var normalizedSegments = new List<string>(segments.Length);
-        foreach (var segment in segments)
-        {
-            if (segment.Length == 0)
-                throw new InvalidOperationException($"ZIP {role} entry {PackageNormalizeDiagnostics.FormatEntryName(entryName)} must not contain empty path segments.");
-
-            if (segment == "..")
-                throw new InvalidOperationException($"ZIP {role} entry {PackageNormalizeDiagnostics.FormatEntryName(entryName)} must not contain parent-directory segments.");
-
-            if (segment == ".")
-                continue;
-
-            normalizedSegments.Add(segment);
-        }
-
-        if (normalizedSegments.Count == 0)
-            throw new InvalidOperationException($"ZIP {role} entry {PackageNormalizeDiagnostics.FormatEntryName(entryName)} must not normalize to an empty path.");
-
-        var normalizedName = string.Join('/', normalizedSegments);
-        if (normalizedName[0] == '/' || StartsWithWindowsDrivePrefix(normalizedName))
-            throw new InvalidOperationException($"ZIP {role} entry {PackageNormalizeDiagnostics.FormatEntryName(entryName)} must be a relative path.");
-
-        return normalizedName;
-    }
-
-    private static bool StartsWithWindowsDrivePrefix(string entryName)
-    {
-        return entryName.Length >= 2
-            && entryName[1] == ':'
-            && ((entryName[0] >= 'A' && entryName[0] <= 'Z') || (entryName[0] >= 'a' && entryName[0] <= 'z'));
+        var subject = entryName.Length == 0
+            ? $"ZIP {role} entry name"
+            : $"ZIP {role} entry {PackageNormalizeDiagnostics.FormatEntryName(entryName)}";
+        throw new InvalidOperationException($"{subject} {failureReason}.");
     }
 
     private static void ValidateEntrySize(ZipArchiveEntry sourceEntry, PackageNormalizeLimits limits)
