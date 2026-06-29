@@ -41,6 +41,8 @@ The test project mirrors the production areas closely.
   When moving repeated extractor scenarios out of a giant suite, keep the new partial file grouped by a readable domain such as language, build-file format, or protocol surface, and prefer small semantic assertion helpers over repeated raw substring or predicate assertions.
 - `FileIndexerTests.cs`, `FileIndexerContentLoadingTests.cs`, `FileIndexerTestSupport.cs`
   File scanning, language detection, scan-result language reuse, content-sensitive header safeguards, content loading/canonicalization, checksum, Git LFS pointer detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage. Shared `FileIndexerTests` helpers live in `FileIndexerTestSupport.cs`.
+- `PathCompatibilityMatrixTests.cs`
+  Cross-platform path compatibility matrix coverage for path casing, boundary-prefix comparisons, Windows long-path prefixing, POSIX sensitive-file permissions, symlink/dangling-entry scan behavior, submodule passthrough under default skip directories, and git skip-worktree path normalization. Keep new platform/path fixture scenarios here when the same assumption needs to be visible across indexing, Git helper, DB/query, installer, or status surfaces.
 - `DatabaseTests.cs`, `DbReader*Tests.cs`
   SQLite schema, write paths, migrations, and query behavior. DbReader coverage is split by query family, including search, SQL qualified-name handling, file dependencies, impact, and symbol-query suites, while shared seeded fixture state remains on the root `DbReaderTests` part.
 - `ConcurrencyTests.cs`
@@ -292,6 +294,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   巨大 suite から繰り返しの extractor シナリオを切り出す場合は、言語、build-file 形式、protocol surface など読みやすい領域ごとの partial file にまとめ、raw substring や predicate assertion の繰り返しより小さな semantic assertion helper を優先してください。
 - `FileIndexerTests.cs`、`FileIndexerContentLoadingTests.cs`、`FileIndexerTestSupport.cs`
   ファイル走査、言語判定、scan result 言語の再利用、content loading / canonicalization、checksum、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」、binary/NUL byte 除外、Windows 専用の 260 文字以上 path walker/purge カバレッジも含みます。共有 `FileIndexerTests` helper は `FileIndexerTestSupport.cs` に置きます。
+- `PathCompatibilityMatrixTests.cs`
+  path casing、boundary-prefix 比較、Windows long-path prefix、POSIX の sensitive file 権限、symlink / dangling entry の scan 挙動、既定 skip directory 配下の submodule passthrough、git skip-worktree path 正規化を横断する compatibility matrix カバレッジです。同じ platform/path 前提を indexing、Git helper、DB/query、installer、status の各 surface で見える形にしたい場合は、新しい fixture シナリオをここに追加してください。
 - `DatabaseTests.cs`、`DbReader*Tests.cs`
   SQLite スキーマ、書き込み経路、マイグレーション、クエリ挙動のテスト。DbReader のカバレッジは search、SQL qualified name、file dependency、impact、symbol query などの query family ごとの partial suite に分割し、共有の seed 済み fixture 状態は root 側の `DbReaderTests` に残します。
 - `ConcurrencyTests.cs`
