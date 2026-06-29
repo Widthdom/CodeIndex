@@ -677,7 +677,25 @@ public class IndexWatchRunnerTests
             Assert.Equal(JsonOutputContract.ApiVersion, watchStarted.RootElement.GetProperty("api_version").GetString());
             Assert.Equal("[redacted]", watchStarted.RootElement.GetProperty("project_root").GetString());
             Assert.Equal("[redacted]", watchStarted.RootElement.GetProperty("db").GetString());
+            Assert.Equal(50, watchStarted.RootElement.GetProperty("debounce_ms").GetInt32());
             Assert.Equal(123, watchStarted.RootElement.GetProperty("watch_pending_path_limit").GetInt32());
+            var expectedPathComparison = GitHelper.ResolveIgnoreCase(projectRoot, CancellationToken.None)
+                ? "ordinal_ignore_case"
+                : "ordinal";
+            var contract = watchStarted.RootElement.GetProperty("watch_contract");
+            Assert.Equal("quiet_window", contract.GetProperty("debounce").GetString());
+            Assert.Equal(50, contract.GetProperty("debounce_ms").GetInt32());
+            Assert.Equal(IndexWatchRunner.MaxDebounceMs, contract.GetProperty("max_debounce_ms").GetInt32());
+            Assert.Equal(50, contract.GetProperty("poll_interval_ms").GetInt32());
+            Assert.Equal(123, contract.GetProperty("watch_pending_path_limit").GetInt32());
+            Assert.Equal(expectedPathComparison, contract.GetProperty("path_comparison").GetString());
+            Assert.Equal("distinct_paths_refresh_debounce", contract.GetProperty("change_coalescing").GetString());
+            Assert.Equal("old_and_new_paths", contract.GetProperty("rename_events").GetString());
+            Assert.Equal("full_rescan_after_debounce", contract.GetProperty("overflow_recovery").GetString());
+            Assert.Equal("full_rescan_after_debounce", contract.GetProperty("watcher_error_recovery").GetString());
+            Assert.Equal("emit_stopped_after_current_poll_or_sub_run", contract.GetProperty("cancellation").GetString());
+            Assert.Equal("json_quiet_sub_runs", contract.GetProperty("sub_run_output").GetString());
+            Assert.Equal("unsupported", contract.GetProperty("mcp_watch_mode").GetString());
         }
         finally
         {
