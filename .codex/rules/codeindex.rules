@@ -412,51 +412,156 @@ prefix_rule(
 )
 
 prefix_rule(
+    pattern = ["gh", "issue", "list"],
+    decision = "allowed",
+    justification = "GitHub CLI issue investigation is part of the normal CodeIndex development workflow.",
+    match = ["gh issue list --repo Widthdom/CodeIndex --state open --limit 10"],
+)
+
+prefix_rule(
+    pattern = ["gh", "issue", "view"],
+    decision = "allowed",
+    justification = "GitHub CLI issue investigation is part of the normal CodeIndex development workflow.",
+    match = ["gh issue view 123 --repo Widthdom/CodeIndex"],
+)
+
+prefix_rule(
+    pattern = ["gh", "issue", "create"],
+    decision = "allowed",
+    justification = "GitHub CLI issue creation is part of the normal CodeIndex development workflow.",
+    match = ["gh issue create --repo Widthdom/CodeIndex --title 'Follow-up' --body 'Details'"],
+)
+
+prefix_rule(
+    pattern = ["gh", "issue", "edit"],
+    decision = "allowed",
+    justification = "GitHub CLI issue editing is part of the normal CodeIndex development workflow.",
+    match = ["gh issue edit 123 --repo Widthdom/CodeIndex --add-label bug"],
+)
+
+prefix_rule(
+    pattern = ["gh", "issue", "comment"],
+    decision = "allowed",
+    justification = "GitHub CLI issue comments are part of the normal CodeIndex development workflow.",
+    match = ["gh issue comment 123 --repo Widthdom/CodeIndex --body 'Working on this'"],
+)
+
+prefix_rule(
+    pattern = ["gh", "pr", "list"],
+    decision = "allowed",
+    justification = "GitHub CLI pull request investigation is part of the normal CodeIndex development workflow.",
+    match = ["gh pr list --repo Widthdom/CodeIndex --state open"],
+)
+
+prefix_rule(
+    pattern = ["gh", "pr", "view"],
+    decision = "allowed",
+    justification = "GitHub CLI pull request investigation is part of the normal CodeIndex development workflow.",
+    match = ["gh pr view 123 --repo Widthdom/CodeIndex"],
+)
+
+prefix_rule(
+    pattern = ["gh", "pr", "create"],
+    decision = "allowed",
+    justification = "GitHub CLI pull request creation is part of the normal CodeIndex development workflow.",
+    match = ["gh pr create --repo Widthdom/CodeIndex --title 'Update' --body 'Details'"],
+)
+
+prefix_rule(
+    pattern = ["gh", "pr", "edit"],
+    decision = "allowed",
+    justification = "GitHub CLI pull request editing is part of the normal CodeIndex development workflow.",
+    match = ["gh pr edit 123 --repo Widthdom/CodeIndex --title 'Updated title'"],
+)
+
+prefix_rule(
+    pattern = ["gh", "pr", "comment"],
+    decision = "allowed",
+    justification = "GitHub CLI pull request comments are part of the normal CodeIndex development workflow.",
+    match = ["gh pr comment 123 --repo Widthdom/CodeIndex --body 'Updated'"],
+)
+
+prefix_rule(
+    pattern = ["gh", "pr", "ready"],
+    decision = "allowed",
+    justification = "GitHub CLI pull request readiness changes are part of the normal CodeIndex development workflow.",
+    match = ["gh pr ready 123 --repo Widthdom/CodeIndex"],
+)
+
+prefix_rule(
+    pattern = ["gh", "pr", "close"],
+    decision = "allowed",
+    justification = "GitHub CLI pull request closing is part of the normal CodeIndex development workflow.",
+    match = ["gh pr close 123 --repo Widthdom/CodeIndex"],
+)
+
+prefix_rule(
+    pattern = ["gh", "repo", "view"],
+    decision = "allowed",
+    justification = "GitHub CLI repository metadata investigation is part of the normal CodeIndex development workflow.",
+    match = ["gh repo view Widthdom/CodeIndex"],
+)
+
+prefix_rule(
+    pattern = ["gh", "status"],
+    decision = "allowed",
+    justification = "GitHub CLI status inspection is part of the normal CodeIndex development workflow.",
+    match = ["gh status"],
+)
+
+prefix_rule(
     pattern = ["gh", "auth"],
     decision = "forbidden",
-    justification = "High-risk GitHub CLI operations are blocked.",
+    justification = "GitHub CLI authentication changes are blocked.",
     match = ["gh auth login"],
 )
 
 prefix_rule(
     pattern = ["gh", "api"],
     decision = "forbidden",
-    justification = "High-risk GitHub CLI operations are blocked.",
+    justification = "Arbitrary GitHub API calls are too powerful for normal development command policy.",
     match = ["gh api repos/Widthdom/CodeIndex"],
 )
 
 prefix_rule(
     pattern = ["gh", "secret"],
     decision = "forbidden",
-    justification = "High-risk GitHub CLI operations are blocked.",
+    justification = "GitHub secret operations are blocked.",
     match = ["gh secret set TOKEN"],
 )
 
 prefix_rule(
     pattern = ["gh", "release"],
     decision = "forbidden",
-    justification = "High-risk GitHub CLI operations are blocked.",
+    justification = "GitHub release publishing operations are blocked.",
     match = ["gh release create v1.0.0"],
 )
 
 prefix_rule(
     pattern = ["gh", "repo", "create"],
     decision = "forbidden",
-    justification = "High-risk GitHub CLI operations are blocked.",
+    justification = "GitHub repository creation is blocked.",
     match = ["gh repo create demo"],
 )
 
 prefix_rule(
     pattern = ["gh", "repo", "fork"],
     decision = "forbidden",
-    justification = "High-risk GitHub CLI operations are blocked.",
+    justification = "GitHub repository forking is blocked.",
     match = ["gh repo fork Widthdom/CodeIndex"],
+)
+
+prefix_rule(
+    pattern = ["gh", "repo", "delete"],
+    decision = "forbidden",
+    justification = "GitHub repository deletion is blocked.",
+    match = ["gh repo delete Widthdom/CodeIndex"],
 )
 
 prefix_rule(
     pattern = ["gh", "pr", "merge"],
     decision = "forbidden",
-    justification = "High-risk GitHub CLI operations are blocked.",
+    justification = "GitHub pull request merge changes remote state and is blocked.",
     match = ["gh pr merge 123"],
 )
 

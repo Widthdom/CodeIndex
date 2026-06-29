@@ -61,6 +61,9 @@ Command-search enforcement is tool-specific and adapter-driven:
 - Codex uses `.codex/hooks.json`, which invokes `.codex/hooks/bash_guard.py` and `.codex/hooks/permission_request_guard.py`.
 - Claude Code uses `.claude/settings.json`, which invokes `.claude/hooks/bash-guard.py`.
 - Both Bash guard adapters delegate shared command policy to `.agent_harness/command_guard_core.py`; update the shared core for common command policy and review both adapters only when tool-specific behavior changes.
+- Codex uses the `codeindex_workspace` permission profile for workspace writes plus limited GitHub CLI network access to `github.com` and `api.github.com`.
+- Codex may use normal development GitHub CLI commands including `gh issue list/view/create/edit/comment`, `gh pr list/view/create/edit/comment/ready/close`, `gh repo view`, and `gh status`.
+- Keep `gh auth`, `gh api`, `gh secret`, `gh release`, `gh repo create`, `gh repo fork`, `gh repo delete`, and `gh pr merge` blocked. `gh api` is blocked because arbitrary REST/GraphQL calls can bypass subcommand-level policy intent; `gh pr merge` is blocked because it mutates remote PR state in a high-risk way.
 
 ### Claude Code
 
