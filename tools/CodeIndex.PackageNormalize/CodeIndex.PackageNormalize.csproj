@@ -12,4 +12,8 @@
     <InternalsVisibleTo Include="CodeIndex.Tests" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="../../src/CodeIndex/Archives/ZipArchiveSafetyPolicy.cs" Link="Archives/ZipArchiveSafetyPolicy.cs" />
+  </ItemGroup>
+
 </Project>

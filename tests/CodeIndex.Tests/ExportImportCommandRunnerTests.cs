@@ -140,6 +140,70 @@ public class ExportImportCommandRunnerTests
     }
 
     [Theory]
+    [InlineData("../manifest.json", "import_archive_unsafe_entry_name", "parent-directory")]
+    [InlineData("./manifest.json", "import_archive_noncanonical_entry_name", "non-canonical entry")]
+    [InlineData("payload.txt", "import_archive_unexpected_entry", "unexpected entry")]
+    public void RunImport_RejectsUnsafeOrUnexpectedArchiveEntriesBeforeReadingManifest(
+        string entryName,
+        string expectedErrorCode,
+        string expectedMessage)
+    {
+        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_import_entries_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var archivePath = CreateArchiveWithTextEntries(workDir, "unsafe-entry.cdidx.zip", (entryName, "{}"));
+            var dbPath = Path.Combine(workDir, "codeindex.db");
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport([archivePath, "--db", dbPath, "--json"], jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            AssertExportImportError(stdout, "import", "open_archive", expectedErrorCode);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Contains(expectedMessage, document.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
+            Assert.False(File.Exists(dbPath));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
+    public void RunImport_RejectsDuplicateArchiveEntriesBeforeReadingManifest()
+    {
+        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_import_duplicate_entries_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var archivePath = CreateArchiveWithTextEntries(
+                workDir,
+                "duplicate-entry.cdidx.zip",
+                ("manifest.json", "{"),
+                ("manifest.json", "{}"));
+            var dbPath = Path.Combine(workDir, "codeindex.db");
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport([archivePath, "--db", dbPath, "--json"], jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            AssertExportImportError(stdout, "import", "manifest", "import_archive_duplicate_entry");
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Contains("duplicate entry", document.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
+            Assert.False(File.Exists(dbPath));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(workDir);
+        }
+    }
+
+    [Theory]
     [InlineData("")]
     [InlineData("-wal")]
     [InlineData("-shm")]
@@ -1255,12 +1319,7 @@ public class ExportImportCommandRunnerTests
 
     private static string CreateArchiveWithManifest(string workDir, string manifest)
     {
-        var archivePath = Path.Combine(workDir, "codeindex.cdidx.zip");
-        using var archive = ZipFile.Open(archivePath, ZipArchiveMode.Create);
-        var entry = archive.CreateEntry("manifest.json");
-        using var writer = new StreamWriter(entry.Open());
-        writer.Write(manifest);
-        return archivePath;
+        return CreateArchiveWithTextEntries(workDir, "codeindex.cdidx.zip", ("manifest.json", manifest));
     }
 
     private static string CreateArchiveWithManifestAndDatabase(string workDir, string manifest, byte[] databaseBytes)
@@ -1274,6 +1333,23 @@ public class ExportImportCommandRunnerTests
         var databaseEntry = archive.CreateEntry("codeindex.db");
         using (var stream = databaseEntry.Open())
             stream.Write(databaseBytes, 0, databaseBytes.Length);
+
+        return archivePath;
+    }
+
+    private static string CreateArchiveWithTextEntries(
+        string workDir,
+        string archiveFileName,
+        params (string EntryName, string Content)[] entries)
+    {
+        var archivePath = Path.Combine(workDir, archiveFileName);
+        using var archive = ZipFile.Open(archivePath, ZipArchiveMode.Create);
+        foreach (var (entryName, content) in entries)
+        {
+            var entry = archive.CreateEntry(entryName);
+            using var writer = new StreamWriter(entry.Open());
+            writer.Write(content);
+        }
 
         return archivePath;
     }
