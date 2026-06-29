@@ -7,8 +7,6 @@ internal sealed class GeneratedCodePatternMatcher
 {
     internal static readonly GeneratedCodePatternMatcher Empty = new([]);
 
-    private static readonly TimeSpan MatchTimeout = TimeSpan.FromMilliseconds(50);
-
     private readonly Rule[] _rules;
 
     private GeneratedCodePatternMatcher(Rule[] rules)
@@ -131,10 +129,7 @@ internal sealed class GeneratedCodePatternMatcher
         }
         builder.Append('$');
 
-        var options = RegexOptions.CultureInvariant | RegexOptions.NonBacktracking;
-        if (ignoreCase)
-            options |= RegexOptions.IgnoreCase;
-        return new Regex(builder.ToString(), options, MatchTimeout);
+        return RegexRegistry.CreateGeneratedCodePatternRegex(builder.ToString(), ignoreCase);
     }
 
     private sealed record Rule(string Pattern, bool MatchBasenameOnly, Regex Matcher);
