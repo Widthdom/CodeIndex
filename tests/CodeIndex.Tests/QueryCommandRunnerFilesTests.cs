@@ -578,6 +578,13 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(staleHead, json.GetProperty("indexed_head_commit").GetString());
             Assert.Equal(staleHead, json.GetProperty("indexed_head_sha").GetString());
             Assert.True(json.GetProperty("worktree_head_changed").GetBoolean());
+            var headFreshness = json.GetProperty("head_freshness");
+            Assert.Equal("head_changed", headFreshness.GetProperty("state").GetString());
+            Assert.Equal("worktree_head_changed", headFreshness.GetProperty("state_reason").GetString());
+            Assert.Equal(staleHead, headFreshness.GetProperty("indexed_head").GetString());
+            Assert.Equal("latest_index", headFreshness.GetProperty("indexed_head_source").GetString());
+            Assert.Equal(staleHead, headFreshness.GetProperty("legacy_full_scan_head").GetString());
+            Assert.True(headFreshness.GetProperty("worktree_head_changed").GetBoolean());
         }
         finally
         {
@@ -1268,6 +1275,21 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunStatus_Explain_PrintsHeadFreshnessSummaryDescriptionWithoutDatabase_Issue4152()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--explain", "head_freshness"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("Compact HEAD freshness summary (head_freshness)", stdout);
+        Assert.Contains("state=fresh", stdout);
+        Assert.Contains("state=head_current", stdout);
+        Assert.Contains("indexed_head_source", stdout);
+    }
+
+    [Fact]
     public void RunStatus_Explain_RejectsUnknownStatusField()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
@@ -1299,9 +1321,28 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("ASCII COLLATE NOCASE", json.GetProperty("degraded").GetString());
         Assert.Contains("cdidx backfill-fold", json.GetProperty("remediation").GetString());
         Assert.Contains("fold_ready", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("head_freshness", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
         Assert.Contains("indexed_head_sha", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
         Assert.Contains("indexed_head_commit", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
         Assert.Contains("path_case_sensitive", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
+    }
+
+    [Fact]
+    public void RunStatus_ExplainJson_PrintsHeadFreshnessSummaryDescription_Issue4152()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--explain", "head_freshness", "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
+        Assert.Equal("head_freshness", json.GetProperty("field").GetString());
+        Assert.Equal("Compact HEAD freshness summary", json.GetProperty("label").GetString());
+        Assert.Contains("status --check", json.GetProperty("ready").GetString());
+        Assert.Contains("state=stale", json.GetProperty("degraded").GetString());
+        Assert.Contains("indexed_head_source=latest_index", json.GetProperty("remediation").GetString());
     }
 
     [Fact]
@@ -1568,6 +1609,11 @@ public partial class QueryCommandRunnerTests
             Assert.True(check.GetProperty("checked").GetBoolean());
             Assert.True(check.GetProperty("matches_workspace").GetBoolean());
             Assert.Equal("matched", check.GetProperty("reason").GetString());
+            var headFreshness = json.GetProperty("head_freshness");
+            Assert.Equal("fresh", headFreshness.GetProperty("state").GetString());
+            Assert.Equal("matched", headFreshness.GetProperty("state_reason").GetString());
+            Assert.Equal("unavailable", headFreshness.GetProperty("indexed_head_source").GetString());
+            Assert.True(headFreshness.GetProperty("workspace_matches_index").GetBoolean());
             Assert.Equal(1, check.GetProperty("matched_file_count").GetInt32());
             Assert.Contains("index fresh", json.GetProperty("summary").GetString());
         }

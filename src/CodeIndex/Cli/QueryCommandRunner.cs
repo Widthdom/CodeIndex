@@ -246,6 +246,12 @@ public static partial class QueryCommandRunner
                 "the field is absent when Git comparison is unavailable or history is not comparable.",
                 "Run `cdidx index <projectPath>` when the value is positive before trusting freshness-sensitive results."),
             new(
+                "head_freshness",
+                "Compact HEAD freshness summary",
+                "`state=fresh` means `status --check` proved the index matches the workspace; without `--check`, `state=head_current` means only the runtime HEAD matched `indexed_head` (see `indexed_head_source`).",
+                "`state=stale`, `state=head_changed`, `state=check_unavailable`, or `state=unchecked` means consumers should inspect `state_reason`, `indexed_head_source`, and the nested head fields before trusting freshness-sensitive results.",
+                "Use this summary for machine routing, and use `indexed_head_sha` over legacy `indexed_head_commit` when `indexed_head_source=latest_index`."),
+            new(
                 "path_case_sensitive",
                 "Filesystem case sensitivity",
                 "`true` means the indexed workspace path comparison is case-sensitive; `false` means case-insensitive.",

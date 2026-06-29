@@ -850,6 +850,7 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(EnvironmentVariableInventoryItem))]
 [JsonSerializable(typeof(EnvironmentVariableInventoryLocation))]
 [JsonSerializable(typeof(StatusResult))]
+[JsonSerializable(typeof(StatusHeadFreshness))]
 [JsonSerializable(typeof(StatusSqliteConnectionPolicy))]
 [JsonSerializable(typeof(StatusFailedOrPartialIndexRun))]
 [JsonSerializable(typeof(StatusReadinessDegradation))]
