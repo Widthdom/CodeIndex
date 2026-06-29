@@ -1348,6 +1348,10 @@ public partial class QueryCommandRunnerTests
             .GetProperty("recipes")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "resource-materialization-audit");
+        var nullableContractsRecipe = root
+            .GetProperty("recipes")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "nullable-contracts");
         var broadTokenRecipe = root
             .GetProperty("recipes")
             .EnumerateArray()
@@ -1468,6 +1472,18 @@ public partial class QueryCommandRunnerTests
             .GetProperty("queries")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "todo-production-comment");
+        var nullableReturnQuery = nullableContractsRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "return-null-contract");
+        var nullForgivingQuery = nullableContractsRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "null-forgiving-suppression");
+        var typedDiagnosticQuery = nullableContractsRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "typed-diagnostic-evidence");
 
         Assert.True(root.GetProperty("count").GetInt32() >= 7);
         Assert.Contains(recipe.GetProperty("recommended_labels").EnumerateArray(), label => label.GetString() == "audit");
@@ -1590,6 +1606,23 @@ public partial class QueryCommandRunnerTests
         Assert.Equal("ToArray()", resourceToArrayQuery.GetProperty("query").GetString());
         Assert.Contains(resourceToArrayQuery.GetProperty("path_patterns").EnumerateArray(), path => path.GetString() == "src/CodeIndex/Mcp/**");
         Assert.Contains(resourceToArrayQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("limit, pagination, or JSON-size policy", StringComparison.Ordinal));
+        Assert.Contains(nullableContractsRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "default-forgiving-suppression");
+        Assert.Contains(nullableContractsRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "argument-null-guard");
+        Assert.Contains(nullableContractsRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "argument-string-guard");
+        Assert.Equal("return null", nullableReturnQuery.GetProperty("query").GetString());
+        Assert.Contains(nullableReturnQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("optional lookup", StringComparison.Ordinal));
+        var nullableTaxonomy = nullableReturnQuery.GetProperty("nullable_contract_taxonomy");
+        Assert.Contains(nullableTaxonomy.GetProperty("return_domains").EnumerateArray(), item => item.GetProperty("name").GetString() == "optional_lookup");
+        Assert.Contains(nullableTaxonomy.GetProperty("return_domains").EnumerateArray(), item => item.GetProperty("name").GetString() == "parse_miss");
+        Assert.Contains(nullableTaxonomy.GetProperty("return_domains").EnumerateArray(), item => item.GetProperty("name").GetString() == "unsupported_language_capability");
+        Assert.Contains(nullableTaxonomy.GetProperty("return_domains").EnumerateArray(), item => item.GetProperty("name").GetString() == "legacy_schema_absence");
+        Assert.Contains(nullableTaxonomy.GetProperty("return_domains").EnumerateArray(), item => item.GetProperty("name").GetString() == "unexpected_invariant_violation");
+        Assert.Contains(nullableTaxonomy.GetProperty("suppression_evidence").EnumerateArray(), item => item.GetProperty("name").GetString() == "reflection_or_serialization_boundary");
+        Assert.Contains("Classify nullable returns by domain", nullableTaxonomy.GetProperty("triage_guidance").GetString(), StringComparison.Ordinal);
+        Assert.Equal("null!", nullForgivingQuery.GetProperty("query").GetString());
+        Assert.Contains(nullForgivingQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("reflection_or_serialization_boundary", StringComparison.Ordinal));
+        Assert.Equal("info", typedDiagnosticQuery.GetProperty("severity").GetString());
+        Assert.Contains(typedDiagnosticQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("stable code", StringComparison.Ordinal));
         Assert.Equal("all", broadTokenRecipe.GetProperty("default_scope").GetString());
         Assert.Equal(0, broadTokenRecipe.GetProperty("default_path_patterns").GetArrayLength());
         Assert.Equal(0, broadTokenRecipe.GetProperty("default_exclude_paths").GetArrayLength());
@@ -1824,7 +1857,8 @@ public partial class QueryCommandRunnerTests
 
         using var document = ParseJsonOutput(stdout);
         var root = document.RootElement;
-        var recipe = Assert.Single(root.GetProperty("recipes").EnumerateArray());
+        var recipes = root.GetProperty("recipes").EnumerateArray().ToList();
+        var recipe = recipes.Single(item => item.GetProperty("name").GetString() == "unsupported-operation-boundaries");
         var queryNames = recipe.GetProperty("queries")
             .EnumerateArray()
             .Select(query => query.GetProperty("name").GetString() ?? string.Empty)
@@ -1832,7 +1866,8 @@ public partial class QueryCommandRunnerTests
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
         Assert.Equal(string.Empty, stderr);
-        Assert.Equal(1, root.GetProperty("count").GetInt32());
+        Assert.Equal(2, root.GetProperty("count").GetInt32());
+        Assert.Contains(recipes, item => item.GetProperty("name").GetString() == "nullable-contracts");
         Assert.Equal("unsupported-operation-boundaries", recipe.GetProperty("name").GetString());
         Assert.Contains("not-supported-exception", queryNames);
         Assert.Contains("platform-not-supported-exception", queryNames);
@@ -1866,7 +1901,7 @@ public partial class QueryCommandRunnerTests
         };
 
         Assert.Equal(
-            ["risky-code", "string-comparison-semantics", "auth-token-audit", "dogfood-risk-patterns", "sqlite-query-policy-surfaces", "json-parse-apis", "dotnet-risk-patterns", "unsupported-operation-boundaries", "xml-parser-security", "filesystem-traversal", "bounded-read-evidence", "resource-materialization-audit", "phrase-risk-patterns", "broad-token-audit"],
+            ["risky-code", "string-comparison-semantics", "auth-token-audit", "dogfood-risk-patterns", "sqlite-query-policy-surfaces", "json-parse-apis", "dotnet-risk-patterns", "unsupported-operation-boundaries", "nullable-contracts", "xml-parser-security", "filesystem-traversal", "bounded-read-evidence", "resource-materialization-audit", "phrase-risk-patterns", "broad-token-audit"],
             recipes.Select(recipe => recipe.Name).ToArray());
 
         AssertRecipe(
@@ -1998,6 +2033,12 @@ public partial class QueryCommandRunnerTests
             ["src/**"],
             expectedSourceExcludes,
             ["not-supported-exception", "platform-not-supported-exception", "unsupported-message", "not-supported-message"]);
+        AssertRecipe(
+            "nullable-contracts",
+            SearchAuditRecipes.DefaultAuditScope,
+            ["src/**"],
+            expectedSourceExcludes,
+            ["return-null-contract", "null-forgiving-suppression", "default-forgiving-suppression", "argument-null-guard", "argument-string-guard", "typed-diagnostic-evidence"]);
         AssertRecipe(
             "xml-parser-security",
             SearchAuditRecipes.DefaultAuditScope,
@@ -4426,6 +4467,89 @@ public partial class QueryCommandRunnerTests
             Assert.Contains(queries, query => query.GetProperty("name").GetString() == "relaxed-json-encoder");
             Assert.Contains(queries, query => query.GetProperty("name").GetString() == "plugin-activator");
             Assert.All(queries, query => Assert.Contains(query.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.StartsWith("risk:", StringComparison.Ordinal)));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_NullableContractsRecipeClassifiesContracts_Issue4161()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_nullable_contracts_recipe");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/contracts.cs",
+                "csharp",
+                """
+                public sealed class NullableContracts
+                {
+                    private string _delayed = null!;
+                    private string _serialized = default!;
+
+                    public string? FindOptional(string key)
+                    {
+                        if (key.Length == 0)
+                            return null;
+
+                        return "value";
+                    }
+
+                    public static bool TryRead(bool ok, out string value)
+                    {
+                        value = null!;
+                        if (!ok)
+                            return false;
+
+                        value = "ok";
+                        return true;
+                    }
+
+                    public void Guard(string input)
+                    {
+                        ArgumentNullException.ThrowIfNull(input);
+                        ArgumentException.ThrowIfNullOrWhiteSpace(input);
+                        throw new CodeIndexException(code: "bad", message: "bad");
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "--recipe",
+                    "nullable-contracts",
+                    "--include-query",
+                    "return-null-contract,null-forgiving-suppression,default-forgiving-suppression,argument-null-guard,argument-string-guard,typed-diagnostic-evidence",
+                    "--db",
+                    dbPath,
+                    "--json",
+                    "--limit",
+                    "10",
+                    "--lang",
+                    "csharp"
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var queries = document.RootElement.GetProperty("queries").EnumerateArray().ToList();
+
+            Assert.Equal(6, queries.Count);
+            Assert.Equal(1, queries.Single(item => item.GetProperty("name").GetString() == "return-null-contract").GetProperty("count").GetInt32());
+            Assert.Equal(1, queries.Single(item => item.GetProperty("name").GetString() == "null-forgiving-suppression").GetProperty("count").GetInt32());
+            Assert.Equal(1, queries.Single(item => item.GetProperty("name").GetString() == "default-forgiving-suppression").GetProperty("count").GetInt32());
+            Assert.Equal(1, queries.Single(item => item.GetProperty("name").GetString() == "argument-null-guard").GetProperty("count").GetInt32());
+            Assert.Equal(1, queries.Single(item => item.GetProperty("name").GetString() == "argument-string-guard").GetProperty("count").GetInt32());
+            Assert.Equal(1, queries.Single(item => item.GetProperty("name").GetString() == "typed-diagnostic-evidence").GetProperty("count").GetInt32());
+
+            var returnNullQuery = queries.Single(item => item.GetProperty("name").GetString() == "return-null-contract");
+            Assert.Contains(returnNullQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("unsupported capability", StringComparison.Ordinal));
+            Assert.Contains(returnNullQuery.GetProperty("nullable_contract_taxonomy").GetProperty("return_domains").EnumerateArray(), item => item.GetProperty("name").GetString() == "unexpected_invariant_violation");
         }
         finally
         {

@@ -1834,6 +1834,7 @@ public static partial class QueryCommandRunner
                 [],
                 null,
                 null,
+                null,
                 rows.Count,
                 rows.Count,
                 rows.Count,
@@ -1932,6 +1933,7 @@ public static partial class QueryCommandRunner
                 [.. recipeQuery.ResultKinds],
                 recipeQuery.StringComparisonTaxonomy,
                 recipeQuery.BroadCatchTaxonomy,
+                recipeQuery.NullableContractTaxonomy,
                 rows.Count,
                 rows.Count,
                 rows.Count + minimumOmitted,
@@ -3153,6 +3155,7 @@ public static partial class QueryCommandRunner
             [.. query.ResultKinds],
             query.StringComparisonTaxonomy,
             query.BroadCatchTaxonomy,
+            query.NullableContractTaxonomy,
             query.ExactSubstring)).ToList());
 
     private static string FormatSearchRecipeStringComparisonDomains(SearchRecipeStringComparisonTaxonomyJsonResult taxonomy)
@@ -13469,6 +13472,10 @@ public static partial class QueryCommandRunner
             CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.UsageError}]: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}");
             CommandErrorWriter.WriteStderr("Hint: shorten the search text or split generated input into smaller literal queries.");
             return CommandExitCodes.UsageError;
+        }
+        catch (BatchOutputCaptureLimitExceededException)
+        {
+            throw;
         }
         catch (Exception ex)
         {

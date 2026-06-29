@@ -72,7 +72,9 @@ internal sealed record ConfigShowJsonResult(
     ActiveWorkspaceStatusJsonResult ActiveWorkspaceStatus,
     WorkspaceManifestStatusJsonResult WorkspaceManifest,
     IReadOnlyList<string> SearchedPaths,
-    IReadOnlyDictionary<string, ConfigEffectiveValueJsonResult> EffectiveConfig);
+    IReadOnlyDictionary<string, ConfigEffectiveValueJsonResult> EffectiveConfig,
+    EnvironmentVariableInventorySummaryJsonResult EnvironmentInventorySummary,
+    DoctorRedactionJsonResult Redaction);
 
 internal sealed record ConfigFileStatusJsonResult(
     string Status,

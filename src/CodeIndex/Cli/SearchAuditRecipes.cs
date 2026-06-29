@@ -15,6 +15,7 @@ internal static class SearchAuditRecipes
     internal const string RecipePathsEnvironmentVariable = "CDIDX_SEARCH_RECIPE_PATHS";
     private const string BoundedRegexAliasUsing = "using Regex = CodeIndex.Indexer.BoundedRegex";
     private const string BoundedRegexPath = "src/CodeIndex/Indexer/BoundedRegex.cs";
+    private const string RegexRegistryPath = "src/CodeIndex/Indexer/RegexRegistry.cs";
     private const int MaxRecipeSourceFiles = 8;
     internal const int MaxRecipeSourceBytes = 128 * 1024;
     private const int MaxExternalRecipesPerFile = 32;
@@ -121,6 +122,45 @@ internal static class SearchAuditRecipes
                 "InvariantCulture is usually expected for machine-readable formats, but it should not be reused as a blanket answer for human-facing text.")
         ],
         "Classify each string comparison by data domain before filing. Path hits need filesystem case-sensitivity and normalization evidence; protocol, CLI, and stable-identifier hits are commonly ordinal; human-facing text needs culture-sensitive review; invariant casing should show machine-token intent or be replaced by comparer overloads.");
+
+    private static readonly SearchRecipeNullableContractTaxonomyJsonResult NullableContractTaxonomy = new(
+        [
+            new(
+                "optional_lookup",
+                "A lookup where absence is an expected data state, such as a missing file row, metadata key, symbol, or configured value.",
+                "Keep the nullable return when the method name, XML docs, or caller handling makes absence explicit; otherwise prefer Try* or an option/result wrapper."),
+            new(
+                "parse_miss",
+                "A parser, extractor, or classifier miss where the input is valid but no supported construct was recognized.",
+                "Prefer TryParse/TryExtract shapes or a result that distinguishes a valid miss from malformed input."),
+            new(
+                "unsupported_language_capability",
+                "A language, extractor, or query capability that is intentionally unavailable for the active file or symbol kind.",
+                "Surface stable capability diagnostics for user-facing boundaries instead of returning null through CLI, JSON, MCP, or LSP output."),
+            new(
+                "legacy_schema_absence",
+                "A compatibility path where older indexes or imported databases legitimately lack a column, table, or metadata stamp.",
+                "Keep the legacy fallback explicit and covered by migration/read-compatibility tests."),
+            new(
+                "unexpected_invariant_violation",
+                "A path where null would mean an internal invariant, required row, or post-validation state was broken.",
+                "Fail with a typed diagnostic, assertion, or exception rather than silently returning null.")
+        ],
+        [
+            new(
+                "try_pattern_out_parameter",
+                "A null-forgiving assignment to an out parameter that is only read when the Try* method returns true."),
+            new(
+                "reflection_or_serialization_boundary",
+                "A suppression required because reflection, source generation, or serialization initializes members outside normal constructors."),
+            new(
+                "delayed_initialization_field",
+                "A field assigned by an explicit Open/Initialize path before use."),
+            new(
+                "false_state_sentinel",
+                "A placeholder assigned before returning false, where callers must not read the placeholder.")
+        ],
+        "Classify nullable returns by domain before changing behavior. Optional lookup and parse-miss nulls can remain when callers branch explicitly; unsupported capabilities and legacy schema absence need stable diagnostics or documented fallbacks at user-facing boundaries; invariant violations should not be nullable contracts. For null-forgiving suppressions, require nearby tests or contract evidence for reflection/serialization, delayed initialization, or false-state Try* sentinels.");
 
     internal static IReadOnlyList<string> DefaultSourcePathPatterns => DefaultSourcePathPatternsValue;
     internal static IReadOnlyList<string> DefaultSourceExcludePaths => DefaultSourceExcludePathsValue;
@@ -352,11 +392,12 @@ internal static class SearchAuditRecipes
                     [
                         "using Regex = CodeIndex.Indexer.BoundedRegex"
                     ],
-                    ExcludePaths = [BoundedRegexPath],
+                    ExcludePaths = [BoundedRegexPath, RegexRegistryPath],
                     RiskEvidence =
                     [
                         "risk: raw System.Text.RegularExpressions.Regex construction should show an explicit timeout, non-backtracking mode, or bounded input.",
-                        "positive: bounded-wrapper aliases are reported by bounded-regex-alias instead of this raw construction query."
+                        "positive: bounded-wrapper aliases are reported by bounded-regex-alias instead of this raw construction query.",
+                        "positive: shared regex factories in RegexRegistry.cs are the centralized raw-construction exception."
                     ],
                     GuardFilters = BoundedRegexEvidenceGuardFilters(),
                 },
@@ -1130,11 +1171,12 @@ internal static class SearchAuditRecipes
                     [
                         "using Regex = CodeIndex.Indexer.BoundedRegex"
                     ],
-                    ExcludePaths = [BoundedRegexPath],
+                    ExcludePaths = [BoundedRegexPath, RegexRegistryPath],
                     RiskEvidence =
                     [
                         "risk: raw System.Text.RegularExpressions.Regex construction should show an explicit timeout, non-backtracking mode, or bounded input.",
-                        "positive: bounded-wrapper aliases are reported by bounded-regex-alias instead of this raw construction query."
+                        "positive: bounded-wrapper aliases are reported by bounded-regex-alias instead of this raw construction query.",
+                        "positive: shared regex factories in RegexRegistry.cs are the centralized raw-construction exception."
                     ],
                     GuardFilters = BoundedRegexEvidenceGuardFilters(),
                 },
@@ -1322,6 +1364,99 @@ internal static class SearchAuditRecipes
                         "positive: CodeIndexException categories, command-specific usage errors, MCP protocol errors, or typed capability metadata reduce triage risk."
                     ],
                     MatchOrigins = ["code", "string_literal"],
+                }
+            ]),
+        SourceScopedRecipe(
+            "nullable-contracts",
+            "Audit nullable return contracts, null-forgiving suppressions, and guard/diagnostic evidence by domain.",
+            [
+                new(
+                    "return-null-contract",
+                    "return null",
+                    "Find nullable return sites that should be classified as optional lookup, parse miss, unsupported capability, legacy schema absence, or invariant violation.",
+                    ["audit", "bug"],
+                    "False positives include explicit optional lookup or parser-miss contracts whose callers already branch on null.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: user-facing null returns can conflate optional lookup, parse miss, unsupported capability, legacy schema absence, and unexpected invariant violations.",
+                        "positive: Try* methods, explicit nullable return docs, typed result wrappers, and stable diagnostics show the null contract has been classified."
+                    ],
+                    MatchOrigins = ["code"],
+                    NullableContractTaxonomy = NullableContractTaxonomy,
+                },
+                new(
+                    "null-forgiving-suppression",
+                    "null!",
+                    "Find null-forgiving suppressions that need false-state, delayed-initialization, reflection, or serialization evidence.",
+                    ["audit", "bug"],
+                    "False positives include Try* out-parameter placeholders, delayed initialization that is enforced before use, and reflection/serialization members covered by tests.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: null-forgiving suppressions can hide invariant bugs when the value is later read on a successful path.",
+                        "positive: tests or nearby contracts for Try* false-state placeholders, delayed initialization, and reflection_or_serialization_boundary suppressions make the suppression intentional."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "default-forgiving-suppression",
+                    "default!",
+                    "Find default-forgiving suppressions that may hide an unclassified value-state contract.",
+                    ["audit", "bug"],
+                    "False positives include generic false-state placeholders whose callers cannot observe the value when the operation reports failure.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: default! can bypass nullable analysis without documenting which state makes the placeholder safe.",
+                        "positive: a Try* false return, immediate error assignment, and tests that assert callers ignore the placeholder reduce risk."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "argument-null-guard",
+                    "ArgumentNullException.ThrowIfNull",
+                    "Find positive evidence that a public or boundary-facing API rejects null before nullable contracts reach deeper code.",
+                    ["audit"],
+                    "This is positive evidence; still verify user-facing errors are typed and do not replace domain-specific parse or lookup misses.")
+                {
+                    Severity = "info",
+                    RiskEvidence =
+                    [
+                        "positive: explicit null guards clarify required inputs before optional return contracts are evaluated.",
+                        "risk: guards do not classify nullable return domains by themselves; pair them with result contracts or diagnostics where absence is expected."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "argument-string-guard",
+                    "ArgumentException.ThrowIfNullOrWhiteSpace",
+                    "Find positive evidence that string inputs reject null or blank values before lookup, parse, or capability code runs.",
+                    ["audit"],
+                    "This is positive evidence; still verify empty/missing domain states use result contracts or typed diagnostics instead of raw nulls.")
+                {
+                    Severity = "info",
+                    RiskEvidence =
+                    [
+                        "positive: explicit null-or-whitespace guards separate invalid input from optional lookup or parse-miss nulls.",
+                        "risk: string guards do not replace stable diagnostics for unsupported language capability or legacy schema absence."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "typed-diagnostic-evidence",
+                    "CodeIndexException",
+                    "Find typed diagnostic evidence that user-facing failures use stable codes instead of raw nullable sentinels.",
+                    ["audit"],
+                    "This is positive evidence; false positives include catch filters and comments that mention typed diagnostics without creating or emitting one.")
+                {
+                    Severity = "info",
+                    RiskEvidence =
+                    [
+                        "positive: CodeIndexException carries stable code, category, path, and hint fields for user-facing failures.",
+                        "risk: catch filters or comments alone do not prove nullable returns at the same boundary were classified."
+                    ],
+                    MatchOrigins = ["code"],
                 }
             ]),
         SourceScopedRecipe(
@@ -2295,6 +2430,7 @@ internal sealed record SearchAuditRecipeQuery(
     public List<string> ResultKinds { get; init; } = [];
     public SearchRecipeStringComparisonTaxonomyJsonResult? StringComparisonTaxonomy { get; init; }
     public SearchRecipeBroadCatchTaxonomyJsonResult? BroadCatchTaxonomy { get; init; }
+    public SearchRecipeNullableContractTaxonomyJsonResult? NullableContractTaxonomy { get; init; }
 }
 
 internal sealed record SearchRecipeListJsonResult(
@@ -2370,6 +2506,9 @@ internal sealed record SearchRecipeQueryListItemJsonResult(
     [property: JsonPropertyName("broad_catch_taxonomy")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     SearchRecipeBroadCatchTaxonomyJsonResult? BroadCatchTaxonomy,
+    [property: JsonPropertyName("nullable_contract_taxonomy")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    SearchRecipeNullableContractTaxonomyJsonResult? NullableContractTaxonomy,
     [property: JsonPropertyName("exact_substring")] bool ExactSubstring);
 
 internal sealed record SearchRecipeGuardFilterJsonResult(
@@ -2403,6 +2542,20 @@ internal sealed record SearchRecipeStringComparisonDomainJsonResult(
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("review_guidance")] string ReviewGuidance);
+
+internal sealed record SearchRecipeNullableContractTaxonomyJsonResult(
+    [property: JsonPropertyName("return_domains")] List<SearchRecipeNullableReturnDomainJsonResult> ReturnDomains,
+    [property: JsonPropertyName("suppression_evidence")] List<SearchRecipeNullableSuppressionEvidenceJsonResult> SuppressionEvidence,
+    [property: JsonPropertyName("triage_guidance")] string TriageGuidance);
+
+internal sealed record SearchRecipeNullableReturnDomainJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("description")] string Description,
+    [property: JsonPropertyName("preferred_contract")] string PreferredContract);
+
+internal sealed record SearchRecipeNullableSuppressionEvidenceJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("description")] string Description);
 
 internal sealed record SearchRecipeRunJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
@@ -2465,6 +2618,9 @@ internal sealed record SearchRecipeQueryResultJsonResult(
     [property: JsonPropertyName("broad_catch_taxonomy")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     SearchRecipeBroadCatchTaxonomyJsonResult? BroadCatchTaxonomy,
+    [property: JsonPropertyName("nullable_contract_taxonomy")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    SearchRecipeNullableContractTaxonomyJsonResult? NullableContractTaxonomy,
     [property: JsonPropertyName("count")] int Count,
     [property: JsonPropertyName("emitted_count")] int EmittedCount,
     [property: JsonPropertyName("minimum_matched_count")] int MinimumMatchedCount,
