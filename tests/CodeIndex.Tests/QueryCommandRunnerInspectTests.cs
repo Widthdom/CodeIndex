@@ -971,6 +971,67 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutline_Json_YamlNestedPathsDoNotDuplicateParentKeys_Issue4151()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_yaml_paths_4151");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                ".github/workflows/release.yml",
+                "yaml",
+                """
+                name: Release
+                on:
+                  push:
+                    tags:
+                      - 'v*'
+                permissions:
+                  contents: read
+                jobs:
+                  preflight:
+                    runs-on: ubuntu-latest
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                [
+                    ".github/workflows/release.yml",
+                    "--db", dbPath,
+                    "--json",
+                    "--outline-fields", "name,display_name,path,container_name"
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+
+            using var document = ParseJsonOutput(stdout);
+            var symbols = document.RootElement.GetProperty("symbols").EnumerateArray().ToList();
+
+            Assert.Contains(symbols, symbol =>
+                symbol.GetProperty("name").GetString() == "on.push"
+                && symbol.GetProperty("display_name").GetString() == "on.push"
+                && symbol.GetProperty("path").GetString() == "on.push"
+                && symbol.GetProperty("container_name").GetString() == "on");
+            Assert.Contains(symbols, symbol =>
+                symbol.GetProperty("name").GetString() == "permissions.contents"
+                && symbol.GetProperty("display_name").GetString() == "permissions.contents"
+                && symbol.GetProperty("path").GetString() == "permissions.contents"
+                && symbol.GetProperty("container_name").GetString() == "permissions");
+            Assert.Contains(symbols, symbol =>
+                symbol.GetProperty("name").GetString() == "jobs.preflight"
+                && symbol.GetProperty("display_name").GetString() == "jobs.preflight"
+                && symbol.GetProperty("path").GetString() == "jobs.preflight"
+                && symbol.GetProperty("container_name").GetString() == "jobs");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunOutline_CompactJson_CapsSymbolsAndReportsTruncation_Issue3009()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_compact_json");

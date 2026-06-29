@@ -779,6 +779,44 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void BeginTransaction_SameOwnerNestedScopeUsesSavepointRollback_Issue4154()
+    {
+        using (var outer = _writer.BeginTransaction(CancellationToken.None, "outer writer transaction"))
+        {
+            _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/outer.cs",
+                Lang = "csharp",
+                Size = 12,
+                Lines = 1,
+                Modified = new DateTime(2026, 6, 29, 0, 0, 0, DateTimeKind.Utc),
+                Checksum = "outer",
+            });
+
+            using (var nested = _writer.BeginTransaction(CancellationToken.None, "nested writer savepoint"))
+            {
+                Assert.Equal(2, GetTransactionDepth(_writer));
+                _writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/nested.cs",
+                    Lang = "csharp",
+                    Size = 12,
+                    Lines = 1,
+                    Modified = new DateTime(2026, 6, 29, 0, 0, 1, DateTimeKind.Utc),
+                    Checksum = "nested",
+                });
+            }
+
+            Assert.Equal(1, GetTransactionDepth(_writer));
+            outer.Commit();
+        }
+
+        Assert.Equal(0, GetTransactionDepth(_writer));
+        Assert.True(_writer.HasFileAtPath("src/outer.cs"));
+        Assert.False(_writer.HasFileAtPath("src/nested.cs"));
+    }
+
+    [Fact]
     public async Task BeginTransaction_CancelledWhileGateHeld_ThrowsOperationCanceled_Issue3772()
     {
         using var held = _writer.BeginTransaction(CancellationToken.None, "owner operation");

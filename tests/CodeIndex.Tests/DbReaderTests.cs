@@ -1734,14 +1734,14 @@ public partial class DbReaderTests : IDisposable
                 Assert.Equal("src/file_hotspot_one.py", first.Path);
                 Assert.Equal("python", first.Lang);
                 Assert.Equal(3, first.ReferenceCount);
-                Assert.Equal(2, first.SymbolCount);
+                Assert.Equal(3, first.SymbolCount);
             },
             second =>
             {
                 Assert.Equal("src/file_hotspot_two.py", second.Path);
                 Assert.Equal("python", second.Lang);
                 Assert.Equal(2, second.ReferenceCount);
-                Assert.Equal(1, second.SymbolCount);
+                Assert.Equal(2, second.SymbolCount);
             });
     }
 

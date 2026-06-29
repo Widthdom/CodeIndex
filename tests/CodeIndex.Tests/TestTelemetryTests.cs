@@ -288,6 +288,129 @@ public sealed class TestTelemetryTests
         }
     }
 
+    [Fact]
+    public void LoadSkips_ReportsOnlyXunitSkipAttributesWithGovernanceMetadata()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_skip_telemetry");
+        try
+        {
+            var testsDirectory = Path.Combine(projectRoot, "tests");
+            Directory.CreateDirectory(testsDirectory);
+            File.WriteAllText(Path.Combine(testsDirectory, "ParserTests.cs"), """
+                namespace Sample;
+
+                public sealed class ParserTests
+                {
+                    // [Fact(Skip = "comment-only")]
+                    private const string Fixture = "[Theory(Skip = \"string-only\")]";
+
+                    [Trait("Scenario", "Parser")]
+                    [Trait("Area", "Search")]
+                    [Fact(Skip = "owner: @Widthdom; expires: 2026-12-31; blocked by #4143")]
+                    public void SkipsWithGovernance()
+                    {
+                    }
+
+                    [Theory(Skip = SkipReasons.Platform)]
+                    [InlineData(1)]
+                    public async Task UsesExpressionSkip()
+                    {
+                        await Task.CompletedTask;
+                    }
+
+                    [Fact]
+                    public void ActiveTest()
+                    {
+                    }
+                }
+                """);
+
+            var summary = SkipTelemetry.Load(testsDirectory, top: 10);
+
+            Assert.Equal(1, summary.CSharpFileCount);
+            Assert.Equal(2, summary.SkippedTests);
+            Assert.Equal(1, summary.WithOwner);
+            Assert.Equal(1, summary.WithExpiry);
+            Assert.Equal(1, summary.WithScenario);
+            Assert.Empty(summary.Warnings);
+
+            var governed = Assert.Single(summary.Entries, entry => entry.TestName == "SkipsWithGovernance");
+            Assert.Equal("ParserTests.cs", governed.FilePath);
+            Assert.Equal("Search", governed.Area);
+            Assert.Equal("Parser", governed.Scenario);
+            Assert.Equal("owner: @Widthdom; expires: 2026-12-31; blocked by #4143", governed.Reason);
+            Assert.True(governed.HasOwner);
+            Assert.True(governed.HasExpiry);
+            Assert.True(governed.HasScenario);
+
+            var expression = Assert.Single(summary.Entries, entry => entry.TestName == "UsesExpressionSkip");
+            Assert.Equal("Parser", expression.Area);
+            Assert.Equal("Uncategorized", expression.Scenario);
+            Assert.Equal("SkipReasons.Platform", expression.Reason);
+            Assert.False(expression.HasOwner);
+            Assert.False(expression.HasExpiry);
+            Assert.False(expression.HasScenario);
+
+            Assert.Contains(summary.ByArea, count => count.Name == "Search" && count.Count == 1);
+            Assert.Contains(summary.ByArea, count => count.Name == "Parser" && count.Count == 1);
+            Assert.Contains(summary.ByScenario, count => count.Name == "Parser" && count.Count == 1);
+            Assert.Contains(summary.ByScenario, count => count.Name == "Uncategorized" && count.Count == 1);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RenderSkips_IncludesSkipGovernanceBreakdown()
+    {
+        var summary = new SkipTelemetrySummary(
+            TestsDirectory: "tests/CodeIndex.Tests",
+            CSharpFileCount: 1,
+            SkippedTests: 1,
+            WithOwner: 1,
+            WithExpiry: 1,
+            WithScenario: 1,
+            DisplayLimit: 10,
+            Entries:
+            [
+                new SkipTelemetryEntry(
+                    "ParserTests.cs",
+                    8,
+                    "SkipsWithGovernance",
+                    "Search",
+                    "Parser",
+                    "owner: @Widthdom; expires: 2026-12-31",
+                    HasOwner: true,
+                    HasExpiry: true,
+                    HasScenario: true)
+            ],
+            ByArea: [new SkipTelemetryCount("Search", 1)],
+            ByScenario: [new SkipTelemetryCount("Parser", 1)],
+            ByReason: [new SkipTelemetryCount("owner: @Widthdom; expires: 2026-12-31", 1)],
+            Warnings: []);
+
+        var output = SkipTelemetryRenderer.Render(summary);
+
+        Assert.Contains("Test skip governance summary", output, StringComparison.Ordinal);
+        Assert.Contains("Skipped test annotations: 1", output, StringComparison.Ordinal);
+        Assert.Contains("Governance tokens: owner: 1; expires: 1; scenario/category trait: 1", output, StringComparison.Ordinal);
+        Assert.Contains("By area:", output, StringComparison.Ordinal);
+        Assert.Contains("- Search: 1", output, StringComparison.Ordinal);
+        Assert.Contains("[area: Search; scenario: Parser; owner: yes; expires: yes]", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LoadSkips_MissingDirectoryReturnsWarning()
+    {
+        var summary = SkipTelemetry.Load(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")), top: 10);
+
+        Assert.Equal(0, summary.SkippedTests);
+        var warning = Assert.Single(summary.Warnings);
+        Assert.Contains("Tests directory not found", warning, StringComparison.Ordinal);
+    }
+
     private static string MinimalTrx(string testName) => $$"""
         <?xml version="1.0" encoding="utf-8"?>
         <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">

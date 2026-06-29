@@ -1352,6 +1352,10 @@ public partial class QueryCommandRunnerTests
             .GetProperty("recipes")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "broad-token-audit");
+        var comparisonRecipe = root
+            .GetProperty("recipes")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "string-comparison-semantics");
         var phraseRiskRecipe = root
             .GetProperty("recipes")
             .EnumerateArray()
@@ -1364,10 +1368,26 @@ public partial class QueryCommandRunnerTests
             .GetProperty("queries")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "file-read-all-text");
+        var pathCaseQuery = recipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "path-case-heuristic");
         var tokenQuery = recipe
             .GetProperty("queries")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "token-term");
+        var comparisonOrdinalIgnoreCaseQuery = comparisonRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "ordinal-ignore-case");
+        var comparisonOrdinalFamilyQuery = comparisonRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "string-comparison-ordinal-family");
+        var comparisonInvariantCultureQuery = comparisonRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "invariant-culture");
         var authBearerQuery = authTokenRecipe
             .GetProperty("queries")
             .EnumerateArray()
@@ -1501,6 +1521,19 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(broadCatchTaxonomy.GetProperty("diagnostic_behaviors").EnumerateArray(), item => item.GetProperty("name").GetString() == "stable_sanitized_diagnostic");
         Assert.Contains(broadCatchTaxonomy.GetProperty("diagnostic_behaviors").EnumerateArray(), item => item.GetProperty("name").GetString() == "narrow_or_rethrow_required");
         Assert.Contains("Classify each broad catch by boundary first", broadCatchTaxonomy.GetProperty("triage_guidance").GetString(), StringComparison.Ordinal);
+        var pathCaseTaxonomy = pathCaseQuery.GetProperty("string_comparison_taxonomy");
+        Assert.Contains(pathCaseTaxonomy.GetProperty("domain_categories").EnumerateArray(), item => item.GetProperty("name").GetString() == "path_filesystem");
+        Assert.Contains(pathCaseTaxonomy.GetProperty("domain_categories").EnumerateArray(), item => item.GetProperty("name").GetString() == "protocol_tokens");
+        Assert.Contains(pathCaseTaxonomy.GetProperty("domain_categories").EnumerateArray(), item => item.GetProperty("name").GetString() == "human_text");
+        Assert.Contains("Path hits need filesystem", pathCaseTaxonomy.GetProperty("triage_guidance").GetString(), StringComparison.Ordinal);
+        Assert.Equal("OrdinalIgnoreCase", comparisonOrdinalIgnoreCaseQuery.GetProperty("query").GetString());
+        Assert.Contains(comparisonOrdinalIgnoreCaseQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("protocol tokens", StringComparison.Ordinal));
+        Assert.Contains(comparisonOrdinalIgnoreCaseQuery.GetProperty("string_comparison_taxonomy").GetProperty("domain_categories").EnumerateArray(), item => item.GetProperty("name").GetString() == "cli_options");
+        Assert.Contains("OrdinalIgnoreCase", comparisonOrdinalFamilyQuery.GetProperty("false_positive_guidance").GetString(), StringComparison.Ordinal);
+        Assert.Equal("InvariantCulture", comparisonInvariantCultureQuery.GetProperty("query").GetString());
+        Assert.Contains(comparisonInvariantCultureQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("machine-readable formatting", StringComparison.Ordinal));
+        Assert.Contains(comparisonRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "lower-invariant-casing");
+        Assert.Contains(comparisonRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "upper-invariant-casing");
         Assert.Equal("auth token", tokenQuery.GetProperty("query").GetString());
         Assert.Contains("broad-token-audit", tokenQuery.GetProperty("false_positive_guidance").GetString(), StringComparison.Ordinal);
         Assert.Contains(tokenQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("auth-token material", StringComparison.Ordinal));
@@ -1833,7 +1866,7 @@ public partial class QueryCommandRunnerTests
         };
 
         Assert.Equal(
-            ["risky-code", "auth-token-audit", "dogfood-risk-patterns", "sqlite-query-policy-surfaces", "json-parse-apis", "dotnet-risk-patterns", "unsupported-operation-boundaries", "xml-parser-security", "filesystem-traversal", "bounded-read-evidence", "resource-materialization-audit", "phrase-risk-patterns", "broad-token-audit"],
+            ["risky-code", "string-comparison-semantics", "auth-token-audit", "dogfood-risk-patterns", "sqlite-query-policy-surfaces", "json-parse-apis", "dotnet-risk-patterns", "unsupported-operation-boundaries", "xml-parser-security", "filesystem-traversal", "bounded-read-evidence", "resource-materialization-audit", "phrase-risk-patterns", "broad-token-audit"],
             recipes.Select(recipe => recipe.Name).ToArray());
 
         AssertRecipe(
@@ -1890,6 +1923,12 @@ public partial class QueryCommandRunnerTests
             ["src/**"],
             expectedSourceExcludes,
             ["bearer-token", "authorization-header", "github-token", "api-token", "access-token", "token-secret"]);
+        AssertRecipe(
+            "string-comparison-semantics",
+            SearchAuditRecipes.DefaultAuditScope,
+            ["src/**"],
+            expectedSourceExcludes,
+            ["ordinal-ignore-case", "string-comparer-ordinal-family", "string-comparison-ordinal-family", "invariant-culture", "lower-invariant-casing", "upper-invariant-casing"]);
         AssertRecipe(
             "dogfood-risk-patterns",
             SearchAuditRecipes.DefaultAuditScope,
@@ -4626,6 +4665,84 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("## Broad-catch taxonomy", body, StringComparison.Ordinal);
             Assert.Contains("`top_level_normalization`", body, StringComparison.Ordinal);
             Assert.Contains("`stable_sanitized_diagnostic`", body, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_StringComparisonSemanticsRecipeEmitsTaxonomy_Issue4137()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_string_comparison_taxonomy_4137");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                public sealed class App
+                {
+                    public bool IsInside(string path, string root)
+                    {
+                        return path.StartsWith(root, StringComparison.OrdinalIgnoreCase);
+                    }
+                }
+                """);
+
+            var (listExitCode, listStdout, listStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--list-recipes"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, listExitCode);
+            Assert.Equal(string.Empty, listStderr);
+            Assert.Contains("string-comparison-semantics", listStdout, StringComparison.Ordinal);
+            Assert.Contains("string comparison domains: path_filesystem", listStdout, StringComparison.Ordinal);
+            Assert.Contains("protocol_tokens", listStdout, StringComparison.Ordinal);
+            Assert.Contains("human_text", listStdout, StringComparison.Ordinal);
+
+            var (jsonExitCode, jsonStdout, jsonStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "string-comparison-semantics/ordinal-ignore-case", "--db", dbPath, "--json", "--limit", "5"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, jsonExitCode);
+            Assert.Equal(string.Empty, jsonStderr);
+            using var jsonDocument = ParseJsonOutput(jsonStdout);
+            var jsonQuery = Assert.Single(jsonDocument.RootElement.GetProperty("queries").EnumerateArray());
+            var taxonomy = jsonQuery.GetProperty("string_comparison_taxonomy");
+            Assert.Equal("ordinal-ignore-case", jsonQuery.GetProperty("name").GetString());
+            Assert.Contains(taxonomy.GetProperty("domain_categories").EnumerateArray(), item => item.GetProperty("name").GetString() == "path_filesystem");
+            Assert.Contains(taxonomy.GetProperty("domain_categories").EnumerateArray(), item => item.GetProperty("name").GetString() == "protocol_tokens");
+            Assert.Contains(taxonomy.GetProperty("domain_categories").EnumerateArray(), item => item.GetProperty("name").GetString() == "human_text");
+            Assert.Contains("filesystem case-sensitivity", taxonomy.GetProperty("triage_guidance").GetString(), StringComparison.Ordinal);
+
+            var (compactExitCode, compactStdout, compactStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "string-comparison-semantics/ordinal-ignore-case", "--db", dbPath, "--format", "compact", "--limit", "5"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, compactExitCode);
+            Assert.Equal(string.Empty, compactStderr);
+            using var compactDocument = ParseJsonOutput(compactStdout);
+            var compactQuery = Assert.Single(compactDocument.RootElement.GetProperty("queries").EnumerateArray());
+            Assert.Contains(
+                compactQuery.GetProperty("string_comparison_taxonomy").GetProperty("domain_categories").EnumerateArray(),
+                item => item.GetProperty("name").GetString() == "cli_options");
+
+            var (draftExitCode, draftStdout, draftStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "string-comparison-semantics/ordinal-ignore-case", "--db", dbPath, "--format", "issue-drafts", "--limit", "5"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, draftExitCode);
+            Assert.Equal(string.Empty, draftStderr);
+            using var draftDocument = ParseJsonOutput(draftStdout);
+            var draft = Assert.Single(draftDocument.RootElement.GetProperty("drafts").EnumerateArray());
+            var body = draft.GetProperty("body").GetString();
+            Assert.Contains("## String-comparison taxonomy", body, StringComparison.Ordinal);
+            Assert.Contains("`path_filesystem`", body, StringComparison.Ordinal);
+            Assert.Contains("`human_text`", body, StringComparison.Ordinal);
         }
         finally
         {
