@@ -310,20 +310,19 @@ public class CodeIndexExceptionTests
         return exception ?? throw new InvalidOperationException("Failed to create SqliteException for retry test.");
     }
 
+    public static IEnumerable<object[]> CodeIndexExceptionExitCodes()
+    {
+        foreach (var contract in CliContractManifest.ErrorCodes)
+        {
+            if (contract.CodeIndexExceptionExitCode.HasValue)
+                yield return [contract.Code, contract.CodeIndexExceptionExitCode.Value];
+        }
+
+        yield return ["E999_UNKNOWN", CommandExitCodes.DatabaseError];
+    }
+
     [Theory]
-    [InlineData(CommandErrorCodes.DbNotFound, CommandExitCodes.NotFound)]
-    [InlineData(CommandErrorCodes.DirectoryNotFound, CommandExitCodes.NotFound)]
-    [InlineData(CommandErrorCodes.DbLocked, CommandExitCodes.TransientDatabaseError)]
-    [InlineData(CommandErrorCodes.DbNotWritable, CommandExitCodes.DatabaseError)]
-    [InlineData(CommandErrorCodes.DbIntegrityFailed, CommandExitCodes.DatabaseError)]
-    [InlineData(CommandErrorCodes.SchemaTooNew, CommandExitCodes.DatabaseError)]
-    [InlineData(CommandErrorCodes.TempStoreExhausted, CommandExitCodes.DatabaseError)]
-    [InlineData(CommandErrorCodes.DbError, CommandExitCodes.DatabaseError)]
-    [InlineData(CommandErrorCodes.FeatureUnavailable, CommandExitCodes.FeatureUnavailable)]
-    [InlineData(CommandErrorCodes.UsageError, CommandExitCodes.InvalidArgument)]
-    [InlineData(CommandErrorCodes.Interrupted, CommandExitCodes.CancelledBySignal)]
-    [InlineData(CommandErrorCodes.FileSystemCaseProbeFailed, CommandExitCodes.DatabaseError)]
-    [InlineData("E999_UNKNOWN", CommandExitCodes.DatabaseError)]
+    [MemberData(nameof(CodeIndexExceptionExitCodes))]
     public void MapCodeIndexExceptionExitCode_MapsKnownCodesToTaxonomy(string code, int expectedExitCode)
     {
         Assert.Equal(expectedExitCode, ProgramRunner.MapCodeIndexExceptionExitCode(code));
