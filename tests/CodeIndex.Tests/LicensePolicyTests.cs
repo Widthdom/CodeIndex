@@ -1,3 +1,5 @@
+using CodeIndex.Cli;
+
 namespace CodeIndex.Tests;
 
 /// <summary>
@@ -6,6 +8,50 @@ namespace CodeIndex.Tests;
 /// </summary>
 public class LicensePolicyTests
 {
+    private static readonly string[] CanonicalLegalNoticeFiles =
+    [
+        "LICENSE",
+        "COMMERCIAL_LICENSE.md",
+        "INTEGRATION_POLICY.md",
+        "TRADEMARKS.md",
+        "LICENSES/FSL-1.1-ALv2.txt",
+        "LICENSES/Apache-2.0.txt",
+    ];
+
+    private static readonly string[] RootLegalNoticeFiles =
+    [
+        "LICENSE",
+        "COMMERCIAL_LICENSE.md",
+        "INTEGRATION_POLICY.md",
+        "TRADEMARKS.md",
+    ];
+
+    private static readonly string[] LicensePolicyWorkflowTriggerPaths =
+    [
+        "LICENSE",
+        "LICENSES/**",
+        "COMMERCIAL_LICENSE.md",
+        "INTEGRATION_POLICY.md",
+        "TRADEMARKS.md",
+        "README.md",
+        "USER_GUIDE.md",
+        "DEVELOPER_GUIDE.md",
+        "DISTRIBUTION.md",
+        "docs/NUGET_README.md",
+        "MAINTAINERS.md",
+        "CONTRIBUTING.md",
+        "src/CodeIndex/CodeIndex.csproj",
+        "src/CodeIndex/Cli/ConsoleUi.cs",
+        "install.sh",
+        "install_modules/20-installer.sh",
+        "install_modules/40-uninstall.sh",
+        ".github/workflows/release.yml",
+        ".github/workflows/license-policy.yml",
+        "tests/CodeIndex.Tests/LicensePolicyTests.cs",
+        "tests/CodeIndex.Tests/InstallScriptTests.cs",
+        "tests/CodeIndex.Tests/ReleaseWorkflowTests.cs",
+    ];
+
     [Fact]
     public void LicenseFile_UsesFslWithFutureApacheLicenseNotice()
     {
@@ -80,6 +126,75 @@ public class LicensePolicyTests
         Assert.Contains("confusingly similar name", trademarks);
     }
 
+    [Fact]
+    public void LicenseDistributionSurfacesStayAligned_Issue4172()
+    {
+        var root = GetRepositoryRoot();
+        var project = ReadRepositoryFile(root, "src/CodeIndex/CodeIndex.csproj");
+        var installer = ReadRepositoryFile(root, "install_modules/20-installer.sh");
+        var uninstaller = ReadRepositoryFile(root, "install_modules/40-uninstall.sh");
+        var releaseWorkflow = ReadRepositoryFile(root, ".github/workflows/release.yml");
+        var policyWorkflow = ReadRepositoryFile(root, ".github/workflows/license-policy.yml");
+        var readme = ReadRepositoryFile(root, "README.md");
+        var userGuide = ReadRepositoryFile(root, "USER_GUIDE.md");
+        var distribution = ReadRepositoryFile(root, "DISTRIBUTION.md");
+        var nugetReadme = ReadRepositoryFile(root, "docs/NUGET_README.md");
+
+        foreach (var legalNoticeFile in CanonicalLegalNoticeFiles)
+        {
+            var msbuildPath = legalNoticeFile.Replace("/", "\\", StringComparison.Ordinal);
+            Assert.Contains($@"<None Include=""..\..\{msbuildPath}"" Pack=""true""", project);
+            Assert.Contains(legalNoticeFile, releaseWorkflow);
+            Assert.Contains(legalNoticeFile, policyWorkflow);
+        }
+
+        foreach (var legalNoticeFile in RootLegalNoticeFiles)
+        {
+            Assert.Contains($@"[ -f ""${{INSTALL_DIR}}/{legalNoticeFile}"" ] || return 1", installer);
+            Assert.Contains($@"""${{INSTALL_DIR}}/{legalNoticeFile}""", uninstaller);
+        }
+
+        Assert.Contains(@"[ -f ""${INSTALL_DIR}/LICENSES/FSL-1.1-ALv2.txt"" ] || return 1", installer);
+        Assert.Contains(@"[ -f ""${INSTALL_DIR}/LICENSES/Apache-2.0.txt"" ] || return 1", installer);
+        Assert.Contains(@"local optional_assets=""LICENSE COMMERCIAL_LICENSE.md INTEGRATION_POLICY.md TRADEMARKS.md LICENSES""", installer);
+        Assert.Contains(@"""${INSTALL_DIR}/LICENSES""", uninstaller);
+
+        var (_, licenseSummary, licenseStderr) = ConsoleCapture.Capture(() =>
+        {
+            ConsoleUi.PrintLicenseSummary();
+            return 0;
+        });
+        Assert.Equal(string.Empty, licenseStderr);
+        AssertContainsAll(licenseSummary, CanonicalLegalNoticeFiles);
+        Assert.Contains("distribution are allowed for non-competing purposes", licenseSummary);
+        Assert.Contains("separate written agreement with Widthdom", licenseSummary);
+
+        foreach (var triggerPath in LicensePolicyWorkflowTriggerPaths)
+            Assert.Equal(2, CountOccurrences(policyWorkflow, $"- '{triggerPath}'"));
+        Assert.Contains("actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0", policyWorkflow);
+        Assert.Contains("8.0.413", policyWorkflow);
+        Assert.Contains("9.0.301", policyWorkflow);
+        Assert.Contains("dotnet test tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework net8.0 --filter FullyQualifiedName~LicensePolicyTests --nologo", policyWorkflow);
+
+        AssertContainsAll(readme, new[]
+        {
+            "License and Fair Source Use",
+            "ライセンスと Fair Source の扱い",
+            "FSL-1.1-ALv2",
+            "COMMERCIAL_LICENSE.md",
+            "INTEGRATION_POLICY.md",
+            "TRADEMARKS.md",
+        });
+        AssertContainsAll(userGuide, CanonicalLegalNoticeFiles);
+        AssertContainsAll(distribution, new[]
+        {
+            "Package metadata preserves license",
+            "INTEGRATION_POLICY.md",
+            "COMMERCIAL_LICENSE.md",
+        });
+        Assert.Contains("Integration Policy", nugetReadme);
+    }
+
     private static int CountOccurrences(string haystack, string needle)
     {
         var count = 0;
@@ -91,6 +206,23 @@ public class LicensePolicyTests
         }
 
         return count;
+    }
+
+    private static void AssertContainsAll(string haystack, IEnumerable<string> needles)
+    {
+        foreach (var needle in needles)
+            Assert.Contains(needle, haystack);
+    }
+
+    private static string ReadRepositoryFile(string root, string relativePath)
+        => File.ReadAllText(GetRepositoryPath(root, relativePath));
+
+    private static string GetRepositoryPath(string root, string relativePath)
+    {
+        var path = root;
+        foreach (var part in relativePath.Split('/'))
+            path = Path.Combine(path, part);
+        return path;
     }
 
     private static string GetRepositoryRoot()
