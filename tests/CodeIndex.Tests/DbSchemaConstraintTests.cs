@@ -1,5 +1,7 @@
 using CodeIndex.Database;
+using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
+using System.Text.RegularExpressions;
 
 namespace CodeIndex.Tests;
 
@@ -64,6 +66,33 @@ public class DbSchemaConstraintTests
             SqliteConnection.ClearAllPools();
             if (File.Exists(dbPath))
                 File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void InitializeSchema_KindCheckConstraintsMatchCatalog_Issue4178()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_schema_kind_checks_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+
+            using var conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString);
+            conn.Open();
+            var symbolsSql = ReadCreateSql(conn, "symbols");
+            var referencesSql = ReadCreateSql(conn, "symbol_references");
+
+            AssertSameSet(SymbolKindCatalog.SymbolKinds, ExtractCheckValues(symbolsSql, "kind"));
+            AssertSameSet(SymbolKindCatalog.SymbolKinds, ExtractCheckValues(symbolsSql, "container_kind"));
+            AssertSameSet(SymbolKindCatalog.ReferenceKinds, ExtractCheckValues(referencesSql, "reference_kind"));
+            AssertSameSet(SymbolKindCatalog.SymbolKinds, ExtractCheckValues(referencesSql, "container_kind"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                TestProjectHelper.DeleteFile(dbPath);
         }
     }
 
@@ -172,6 +201,36 @@ public class DbSchemaConstraintTests
         cmd.CommandText = "SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH @query";
         cmd.Parameters.AddWithValue("@query", query);
         return (long)cmd.ExecuteScalar()!;
+    }
+
+    private static string ReadCreateSql(SqliteConnection conn, string tableName)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = @name";
+        cmd.Parameters.AddWithValue("@name", tableName);
+        return (string)cmd.ExecuteScalar()!;
+    }
+
+    private static string[] ExtractCheckValues(string createSql, string columnName)
+    {
+        var match = Regex.Match(
+            createSql,
+            $@"\b{Regex.Escape(columnName)}\s+TEXT\s+CHECK\s*\((?<constraint>.*?)\)",
+            RegexOptions.Singleline | RegexOptions.CultureInvariant);
+        Assert.True(match.Success, $"Expected CHECK constraint for {columnName} in: {createSql}");
+
+        return Regex.Matches(match.Groups["constraint"].Value, "'(?<value>(?:''|[^'])*)'")
+            .Cast<Match>()
+            .Select(valueMatch => valueMatch.Groups["value"].Value.Replace("''", "'", StringComparison.Ordinal))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static void AssertSameSet(IEnumerable<string> expected, string[] actual)
+    {
+        Assert.Equal(
+            expected.Order(StringComparer.Ordinal).ToArray(),
+            actual);
     }
 
     private static string[] ForeignKeyTargets(SqliteConnection conn, string tableName)
