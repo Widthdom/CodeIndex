@@ -26,13 +26,25 @@ public class DiagnosticRedactorTests
             redactedTypes.Order(StringComparer.Ordinal));
     }
 
-    [Fact]
-    public void IsSensitiveName_CoversSharedCredentialNames_Issue3933()
+    [Theory]
+    [InlineData("--github-token")]
+    [InlineData("CDIDX_ACCESS_KEY")]
+    [InlineData("serviceCredential")]
+    [InlineData("authorization")]
+    [InlineData("private-key")]
+    [InlineData("session_cookie")]
+    public void IsSensitiveName_CoversSharedCredentialNames_Issue3933_Issue4175(string name)
     {
-        Assert.True(DiagnosticRedactor.IsSensitiveName("--github-token"));
-        Assert.True(DiagnosticRedactor.IsSensitiveName("CDIDX_ACCESS_KEY"));
-        Assert.True(DiagnosticRedactor.IsSensitiveName("serviceCredential"));
-        Assert.False(DiagnosticRedactor.IsSensitiveName("--workspace"));
+        Assert.True(DiagnosticRedactor.IsSensitiveName(name));
+    }
+
+    [Theory]
+    [InlineData("--workspace")]
+    [InlineData("query")]
+    [InlineData("session_id")]
+    public void IsSensitiveName_LeavesNonCredentialNamesVisible_Issue4175(string name)
+    {
+        Assert.False(DiagnosticRedactor.IsSensitiveName(name));
     }
 
     [Fact]

@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Cli;
+using CodeIndex.Diagnostics;
 using CodeIndex.Mcp;
 
 namespace CodeIndex.Tests;
@@ -182,6 +183,54 @@ public class AuditLogSinkTests
         Assert.Equal(AuditLogSink.RedactedValue, sanitized["nested"]!["password"]!.GetValue<string>());
         Assert.Equal(AuditLogSink.RedactedValue, sanitized["nested"]!["db_pwd"]!.GetValue<string>());
         Assert.Equal(AuditLogSink.RedactedValue, sanitized["nested"]!["auth_header"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("auth")]
+    [InlineData("authorization")]
+    [InlineData("bearer_token")]
+    [InlineData("password")]
+    [InlineData("passwd")]
+    [InlineData("db-pwd")]
+    [InlineData("secret")]
+    [InlineData("apiKey")]
+    [InlineData("api-key")]
+    [InlineData("api_key")]
+    [InlineData("accesskey")]
+    [InlineData("access-key")]
+    [InlineData("access_key")]
+    [InlineData("private-key")]
+    [InlineData("serviceCredential")]
+    [InlineData("session_cookie")]
+    public void SanitizeArgValue_SecretKeyTaxonomyMatchesDiagnosticRedactor_Issue4175(string key)
+    {
+        var state = new AuditLogSink.ArgValueSanitizationState();
+
+        var sanitized = AuditLogSink.SanitizeArgValue(key, JsonValue.Create("visible-value"), state);
+
+        Assert.True(DiagnosticRedactor.IsSensitiveName(key));
+        Assert.NotNull(sanitized);
+        Assert.True(state.Redacted);
+        Assert.Equal(AuditLogSink.RedactedValue, sanitized!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("query")]
+    [InlineData("path")]
+    [InlineData("limit")]
+    [InlineData("host_port")]
+    [InlineData("public_key")]
+    [InlineData("session_id")]
+    public void SanitizeArgValue_NonSecretKeyTaxonomyMatchesDiagnosticRedactor_Issue4175(string key)
+    {
+        var state = new AuditLogSink.ArgValueSanitizationState();
+
+        var sanitized = AuditLogSink.SanitizeArgValue(key, JsonValue.Create("visible-value"), state);
+
+        Assert.False(DiagnosticRedactor.IsSensitiveName(key));
+        Assert.NotNull(sanitized);
+        Assert.False(state.Redacted);
+        Assert.Equal("visible-value", sanitized!.GetValue<string>());
     }
 
     [Fact]
@@ -901,6 +950,32 @@ public class AuditLogSinkTests
         finally
         {
             releaseWriter.Set();
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Dispose_DrainsQueuedRecordsAndIgnoresLaterRecords_Issue4175()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"cdidx_audit_dispose_{Guid.NewGuid():N}.jsonl");
+        var sink = new AuditLogSink(path, AuditLogSink.DefaultMaxBytes, includeValues: false);
+        try
+        {
+            sink.Record(CreateAuditEvent("search"));
+
+            sink.Dispose();
+            sink.Record(CreateAuditEvent("after_dispose"));
+
+            var lines = File.ReadAllLines(path);
+            Assert.Single(lines);
+            using var doc = JsonDocument.Parse(lines[0]);
+            Assert.Equal("search", doc.RootElement.GetProperty("tool").GetString());
+            Assert.True(sink.SnapshotDiagnostics().Disposed);
+        }
+        finally
+        {
+            sink.Dispose();
             if (File.Exists(path))
                 File.Delete(path);
         }

@@ -881,32 +881,7 @@ internal sealed class AuditLogSink : IDisposable
     }
 
     private static bool IsSecretLikeKey(string key)
-    {
-        var normalized = NormalizeKey(key);
-        return normalized.Contains("pwd", StringComparison.Ordinal)
-            || normalized.Contains("auth", StringComparison.Ordinal)
-            || normalized.Contains("password", StringComparison.Ordinal)
-            || normalized.Contains("passwd", StringComparison.Ordinal)
-            || normalized.Contains("secret", StringComparison.Ordinal)
-            || normalized.Contains("token", StringComparison.Ordinal)
-            || normalized.Contains("apikey", StringComparison.Ordinal)
-            || normalized.Contains("accesskey", StringComparison.Ordinal)
-            || normalized.Contains("privatekey", StringComparison.Ordinal)
-            || normalized.Contains("authorization", StringComparison.Ordinal)
-            || normalized.Contains("credential", StringComparison.Ordinal)
-            || normalized.Contains("sessioncookie", StringComparison.Ordinal);
-    }
-
-    private static string NormalizeKey(string key)
-    {
-        var sb = new StringBuilder(key.Length);
-        foreach (var ch in key)
-        {
-            if (char.IsLetterOrDigit(ch))
-                sb.Append(char.ToLowerInvariant(ch));
-        }
-        return sb.ToString();
-    }
+        => SensitiveNameClassifier.IsSensitiveName(key);
 
     internal sealed class ArgValueSanitizationState
     {

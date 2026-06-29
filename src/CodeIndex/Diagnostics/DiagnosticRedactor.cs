@@ -322,19 +322,7 @@ internal static class DiagnosticRedactor
     }
 
     internal static bool IsSensitiveName(string? name) =>
-        !string.IsNullOrWhiteSpace(name)
-        && (name.Contains("token", StringComparison.OrdinalIgnoreCase)
-            || name.Contains("password", StringComparison.OrdinalIgnoreCase)
-            || name.Contains("passwd", StringComparison.OrdinalIgnoreCase)
-            || name.Contains("pwd", StringComparison.OrdinalIgnoreCase)
-            || name.Contains("secret", StringComparison.OrdinalIgnoreCase)
-            || name.Contains("auth", StringComparison.OrdinalIgnoreCase)
-            || name.Contains("apikey", StringComparison.OrdinalIgnoreCase)
-            || name.Contains("api-key", StringComparison.OrdinalIgnoreCase)
-            || name.Contains("api_key", StringComparison.OrdinalIgnoreCase)
-            || name.Contains("access-key", StringComparison.OrdinalIgnoreCase)
-            || name.Contains("access_key", StringComparison.OrdinalIgnoreCase)
-            || name.Contains("credential", StringComparison.OrdinalIgnoreCase));
+        SensitiveNameClassifier.IsSensitiveName(name);
 
     private static bool TryRedactReportJsonLogLine(
         string line,
