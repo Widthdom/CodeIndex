@@ -115,6 +115,20 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void EnumerateRegexValues_SnapshotsEnumerableBeforeRecursing_Issue4173()
+    {
+        var fixture = new MutatingEnumerableReflectionFixture();
+
+        var regexes = EnumerateRegexValues(
+                fixture.Values,
+                "fixture.Values",
+                new HashSet<object>(ReferenceEqualityComparer.Instance))
+            .ToList();
+
+        Assert.Contains(regexes, item => item.Path == "fixture.Values[0].Regex");
+    }
+
+    [Fact]
     public void BuiltInSymbolRegexes_WithIgnoreCaseUseCultureInvariant_Issue3516()
     {
         var regexes = EnumerateStaticRegexValues(
@@ -14031,12 +14045,14 @@ public partial class SymbolExtractorTests
 
         if (value is IEnumerable enumerable)
         {
-            var index = 0;
+            var items = new List<object?>();
             foreach (var item in enumerable)
+                items.Add(item);
+
+            for (var index = 0; index < items.Count; index++)
             {
-                foreach (var nested in EnumerateRegexValues(item, $"{path}[{index}]", seen))
+                foreach (var nested in EnumerateRegexValues(items[index], $"{path}[{index}]", seen))
                     yield return nested;
-                index++;
             }
 
             yield break;
@@ -14087,6 +14103,37 @@ public partial class SymbolExtractorTests
         public Regex ValidRegex { get; } = new BoundedRegex("valid");
 
         public object UnsupportedReadableProperty => throw new NotSupportedException("Synthetic unsupported property.");
+    }
+
+    private sealed class MutatingEnumerableReflectionFixture
+    {
+        private readonly List<object> _values = new();
+
+        public MutatingEnumerableReflectionFixture()
+        {
+            _values.Add(new MutatingRegexHolder(_values));
+        }
+
+        public IEnumerable<object> Values => _values;
+    }
+
+    private sealed class MutatingRegexHolder(List<object> values)
+    {
+        private bool _mutated;
+
+        public Regex Regex
+        {
+            get
+            {
+                if (!_mutated)
+                {
+                    _mutated = true;
+                    values.Add(new object());
+                }
+
+                return new BoundedRegex("valid");
+            }
+        }
     }
 
     private static string WriteFile(string projectRoot, string relativePath, string content)
