@@ -221,11 +221,14 @@ internal static class UpdateChecker
         CancellationToken cancellationToken)
     {
         using var requestCancellation = GitHubHttpClientFactory.CreateRequestCancellationScope(timeout, cancellationToken);
-        using var request = new HttpRequestMessage(HttpMethod.Get, LatestReleaseUrl);
-        GitHubHttpClientFactory.ApplyDefaultHeaders(request.Headers);
-
-        using var response = await client.SendAsync(
-            request,
+        using var response = await GitHubHttpClientFactory.SendWithRetryAsync(
+            client,
+            static () =>
+            {
+                var request = new HttpRequestMessage(HttpMethod.Get, LatestReleaseUrl);
+                GitHubHttpClientFactory.ApplyDefaultHeaders(request.Headers);
+                return request;
+            },
             HttpCompletionOption.ResponseHeadersRead,
             requestCancellation.Token).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
@@ -243,11 +246,14 @@ internal static class UpdateChecker
         CancellationToken cancellationToken)
     {
         using var requestCancellation = GitHubHttpClientFactory.CreateRequestCancellationScope(timeout, cancellationToken);
-        using var request = new HttpRequestMessage(HttpMethod.Get, ReleasesUrl);
-        GitHubHttpClientFactory.ApplyDefaultHeaders(request.Headers);
-
-        using var response = await client.SendAsync(
-            request,
+        using var response = await GitHubHttpClientFactory.SendWithRetryAsync(
+            client,
+            static () =>
+            {
+                var request = new HttpRequestMessage(HttpMethod.Get, ReleasesUrl);
+                GitHubHttpClientFactory.ApplyDefaultHeaders(request.Headers);
+                return request;
+            },
             HttpCompletionOption.ResponseHeadersRead,
             requestCancellation.Token).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)

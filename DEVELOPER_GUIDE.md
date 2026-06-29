@@ -101,6 +101,7 @@ in [DISTRIBUTION.md](DISTRIBUTION.md):
 | NuGet global tool | Install/update on a clean .NET 8 tool environment. |
 | NuGet trusted publishing | GitHub Actions variable `NUGET_TRUSTED_PUBLISHING_USER` is set to the NuGet.org username that created the trusted publishing policy; this can differ from the package owner. |
 | Release assets | Published asset exists for every advertised RID. |
+| Release workflow privilege split | `.github/workflows/release.yml` keeps `prepare-release-files` and `verify-release-install` on `contents: read`, hands only the short-lived `release-payload` artifact to `create-release`, removes temporary GPG material before publishing continues, and scopes Windows signing secrets to the signing step. |
 | GHCR container image | Published `linux/amd64` and `linux/arm64` images run `cdidx --version`, omit runtime `git`, and expose provenance/SBOM attestations. |
 | Package metadata | License, repository URL, tags, and runtime prerequisites are correct. |
 | Documentation links | README, USER_GUIDE, and package metadata links resolve to the intended docs. |
@@ -1142,13 +1143,21 @@ For the AI agent search-rule template, see [AI Integration](USER_GUIDE.md#ai-int
 | Field group | Fields |
 |---|---|
 | Readiness and graph trust | `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `language_readiness`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`. |
-| Workspace and HEAD freshness | `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`. |
+| Workspace and HEAD freshness | `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`, `head_freshness`. |
 | Version and forward compatibility | `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`. |
 | Unknown-extension and runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `hooks`, `hook_diagnostics`, `trust_overrides`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `mac_profile_diagnostics`, `stale_after_seconds`, `index_age_seconds`, `last_failed_or_partial_index_run`, `last_failed_or_partial_index_run.progress_persisted`, `last_failed_or_partial_index_run.recovery_hint`. |
 | Database maintenance | `db_size_bytes`, `wal_size_bytes`, `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `busy_timeout_ms`, `page_count`, `freelist_count`, `page_size`, `auto_vacuum`), `prepared_command_cache` (`count`, `capacity`, `hit_count`, `miss_count`, `eviction_count`), `maintenance_guidance`. |
 | Remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`. |
 | MCP-only session diagnostics | `mcp_session`, `mcp.rate_limit.bucket_limit`, and `mcp.rate_limit.bucket_limit_rejection_count`. `mcp_session` is session-scoped diagnostics rather than persisted DB state. It contains `log_level`, bounded `roots`, optional `client_info`, and bounded optional `client_capabilities`. When advertised roots are capped, `roots_truncated`, `root_count`, `root_limit`, and `root_uri_length_limit` describe the truncation. When client capabilities are capped, `client_capabilities_truncated`, `client_capabilities_truncation_reason`, `client_capabilities_serialized_bytes`, `client_capabilities_byte_limit`, and `client_capabilities_depth_limit` describe the retained diagnostic subset. `mcp.rate_limit.bucket_limit` is the configured process-local `(tool, caller)` bucket cap, and `mcp.rate_limit.bucket_limit_rejection_count` counts calls denied because creating a new bucket would exceed that cap. |
 | Documentation sync | Keep this list synchronized with `README.md` and `AGENT_GUIDE.md`; `DocumentationStatusContractTests` fails when any required field is missing from one of those docs. |
+
+`head_freshness` is a compact summary for machine consumers. `state=fresh`
+requires a successful `status --check` workspace comparison, `state=head_current`
+only proves the runtime HEAD matched the `indexed_head` selected by
+`indexed_head_source`, and
+`indexed_head_source` tells consumers whether `indexed_head` came from the latest
+index stamp (`indexed_head_sha`) or the legacy full-scan-only stamp
+(`indexed_head_commit`).
 
 Runtime diagnostic subcontracts:
 
@@ -2458,6 +2467,7 @@ channel をすべて確認してください。
 | NuGet global tool | clean な .NET 8 tool environment での install/update。 |
 | NuGet trusted publishing | GitHub Actions variable `NUGET_TRUSTED_PUBLISHING_USER` が trusted publishing policy を作成した NuGet.org ユーザー名に設定されていること。この値は package owner と異なり得る。 |
 | release asset | advertised RID ごとに published release asset があること。 |
+| release workflow の権限分離 | `.github/workflows/release.yml` は `prepare-release-files` と `verify-release-install` を `contents: read` に保ち、短命の `release-payload` artifact だけを `create-release` に渡し、一時 GPG material を公開処理の続行前に削除し、Windows 署名 secret を署名 step のみにスコープする。 |
 | GHCR container image | 公開済みの `linux/amd64` / `linux/arm64` image で `cdidx --version` が動作し、runtime `git` を含まず、provenance / SBOM attestation を公開していること。 |
 | package metadata | license、repository URL、tag、runtime prerequisite が正しいこと。 |
 | documentation link | README、USER_GUIDE、package metadata からの link が意図した docs を指すこと。 |
@@ -3557,13 +3567,20 @@ AI エージェント向け検索ルールのテンプレートについては�
 | field group | fields |
 |---|---|
 | readiness / graph trust | `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `language_readiness`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`。 |
-| workspace / HEAD freshness | `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`。 |
+| workspace / HEAD freshness | `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`, `head_freshness`。 |
 | version / forward compatibility | `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`。 |
 | unknown-extension / runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `hooks`, `hook_diagnostics`, `trust_overrides`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `mac_profile_diagnostics`, `stale_after_seconds`, `index_age_seconds`, `last_failed_or_partial_index_run`, `last_failed_or_partial_index_run.progress_persisted`, `last_failed_or_partial_index_run.recovery_hint`。 |
 | database maintenance | `db_size_bytes`, `wal_size_bytes`, `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `busy_timeout_ms`, `page_count`, `freelist_count`, `page_size`, `auto_vacuum`), `prepared_command_cache` (`count`, `capacity`, `hit_count`, `miss_count`, `eviction_count`), `maintenance_guidance`。 |
 | remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`。 |
 | MCP-only session diagnostics | `mcp_session`, `mcp.rate_limit.bucket_limit`, `mcp.rate_limit.bucket_limit_rejection_count`。`mcp_session` は persisted DB state ではなく session-scoped diagnostics で、`log_level`、上限付きの `roots`、任意の `client_info`、上限付きの任意の `client_capabilities` を含みます。advertised root が切り詰められた場合は `roots_truncated`、`root_count`、`root_limit`、`root_uri_length_limit` が切り詰め内容を示します。client capabilities が切り詰められた場合は `client_capabilities_truncated`、`client_capabilities_truncation_reason`、`client_capabilities_serialized_bytes`、`client_capabilities_byte_limit`、`client_capabilities_depth_limit` が保持された診断 subset を示します。`mcp.rate_limit.bucket_limit` は process-local な `(tool, caller)` bucket 上限、`mcp.rate_limit.bucket_limit_rejection_count` は新規 bucket 作成がその上限を超えるため拒否された呼び出し数です。 |
 | documentation sync | この一覧は `README.md` と `AGENT_GUIDE.md` と同期してください。必須 field がそれらの docs から欠けると `DocumentationStatusContractTests` が失敗します。 |
+
+`head_freshness` は machine consumer 向けの compact summary です。
+`state=fresh` は `status --check` の workspace 比較成功が必要で、
+`state=head_current` は runtime HEAD と `indexed_head_source` が選んだ
+`indexed_head` の一致だけを示します。
+`indexed_head_source` は `indexed_head` が最新 index stamp (`indexed_head_sha`) 由来か、
+legacy full-scan 限定 stamp (`indexed_head_commit`) 由来かを示します。
 
 runtime diagnostic subcontract:
 
