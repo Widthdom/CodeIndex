@@ -16,6 +16,58 @@ internal static class TestProjectHelper
         return projectRoot;
     }
 
+    internal static string ProjectPath(string projectRoot, params string[] relativeSegments)
+    {
+        if (string.IsNullOrWhiteSpace(projectRoot))
+            throw new ArgumentException("Project root is required.", nameof(projectRoot));
+
+        var fullRoot = Path.GetFullPath(projectRoot);
+        var combined = fullRoot;
+        foreach (var segment in relativeSegments)
+        {
+            if (string.IsNullOrEmpty(segment))
+                continue;
+            if (Path.IsPathRooted(segment))
+                throw new ArgumentException("Fixture paths must be relative to the project root.", nameof(relativeSegments));
+
+            combined = Path.Combine(combined, segment);
+        }
+
+        var fullPath = Path.GetFullPath(combined);
+        if (!IsSameOrChildPath(fullRoot, fullPath))
+            throw new ArgumentException("Fixture path escapes the project root.", nameof(relativeSegments));
+
+        return fullPath;
+    }
+
+    internal static string CreateDirectory(string projectRoot, params string[] relativeSegments)
+    {
+        var path = ProjectPath(projectRoot, relativeSegments);
+        Directory.CreateDirectory(path);
+        return path;
+    }
+
+    internal static string WriteTextFile(string projectRoot, string relativePath, string content)
+    {
+        var path = ProjectPath(projectRoot, relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, content);
+        return path;
+    }
+
+    internal static string AppendTextFile(string projectRoot, string relativePath, string content)
+    {
+        var path = ProjectPath(projectRoot, relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.AppendAllText(path, content);
+        return path;
+    }
+
+    internal static string ReadTextFile(string projectRoot, string relativePath)
+    {
+        return File.ReadAllText(ProjectPath(projectRoot, relativePath));
+    }
+
     internal static void InitializeGitRepo(string projectRoot)
     {
         RunGit(projectRoot, "init");
@@ -24,9 +76,7 @@ internal static class TestProjectHelper
         RunGit(projectRoot, "config", "commit.gpgsign", "false");
         RunGit(projectRoot, "config", "tag.gpgsign", "false");
 
-        var excludePath = Path.Combine(projectRoot, ".git", "info", "exclude");
-        Directory.CreateDirectory(Path.GetDirectoryName(excludePath)!);
-        File.AppendAllText(excludePath, ".cdidx/\n");
+        AppendTextFile(projectRoot, Path.Combine(".git", "info", "exclude"), ".cdidx/\n");
     }
 
     internal static string CreateProjectDb(string projectRoot)
@@ -193,5 +243,15 @@ internal static class TestProjectHelper
             File.SetAttributes(dir, FileAttributes.Normal);
 
         File.SetAttributes(path, FileAttributes.Normal);
+    }
+
+    private static bool IsSameOrChildPath(string root, string candidate)
+    {
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var normalizedRoot = Path.TrimEndingDirectorySeparator(root);
+        var normalizedCandidate = Path.TrimEndingDirectorySeparator(candidate);
+
+        return string.Equals(normalizedRoot, normalizedCandidate, comparison) ||
+               normalizedCandidate.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, comparison);
     }
 }

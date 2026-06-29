@@ -1075,8 +1075,12 @@ should be narrowed or rethrown.
 Built-in recipes include `risky-code`, `json-parse-apis`,
 `auth-token-audit`, `dogfood-risk-patterns`, `dotnet-risk-patterns`,
 `sqlite-query-policy-surfaces`, `xml-parser-security`, `filesystem-traversal`,
-`bounded-read-evidence`, and the
+`bounded-read-evidence`, `phrase-risk-patterns`, and the
 opt-in broad `broad-token-audit` recipe.
+Use `phrase-risk-patterns` for noisy audit phrases such as `async void`,
+`throw new Exception`, `.Result`, `unsafe`, `Skip =`, `Version="`, `TODO`, and
+`Obsolete` when you need exact-substring, origin, result-kind, file-kind, or
+production/test scope facets before filing findings.
 `--recipe <name>` applies normal search filters such as `--lang`, `--path`,
 `--exclude-path`, `--exclude-tests`, `--limit`, and snippet controls to every
 query in the recipe. With `--json`, recipe runs emit one aggregate JSON payload
@@ -3765,7 +3769,12 @@ result level、正規化済みの repository-relative artifact URI を出力し�
 search audit recipe は、名前付き recipe を複数の curated search query に展開します。
 組み込み recipe には `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、`xml-parser-security`、
 `auth-token-audit`、`dogfood-risk-patterns`、`sqlite-query-policy-surfaces`、
-`filesystem-traversal`、`bounded-read-evidence`、`broad-token-audit` があります。
+`filesystem-traversal`、`bounded-read-evidence`、`phrase-risk-patterns`、
+`broad-token-audit` があります。
+`phrase-risk-patterns` は `async void`、`throw new Exception`、`.Result`、`unsafe`、
+`Skip =`、`Version="`、`TODO`、`Obsolete` のようなノイズの多い監査語句を対象に、
+issue 化前に exact-substring、origin、result-kind、file-kind、production/test scope の
+facet で切り分けたい場合に使います。
 `--list-recipes` は利用可能な名前、
 説明、推奨 label、query text、exact-match mode、false-positive guidance、guard filter、
 risk evidence、query 固有の audit taxonomy metadata を表示します。
