@@ -1948,6 +1948,7 @@ public partial class McpServer
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
         var pathPatterns = ReadScopedPathList(args);
+        List<string> requestedPathPatterns = pathPatterns is null ? [] : [.. pathPatterns];
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         if (!TryResolveMcpRecipeAuditScope(args, recipe, ref pathPatterns, excludePaths, ref excludeTests, out var auditScope, out var auditScopeError))
@@ -1977,6 +1978,13 @@ public partial class McpServer
             foreach (var recipeQuery in recipe.Queries)
             {
                 var exact = hasExactOverride ? userExact : recipeQuery.ExactSubstring;
+                ResolveMcpRecipeQueryScope(
+                    recipeQuery,
+                    pathPatterns,
+                    excludePaths,
+                    out var queryPathPatterns,
+                    out var queryExcludePaths);
+                var requiredPathPatterns = GetMcpSearchRecipeRequiredPathPatterns(requestedPathPatterns, recipeQuery);
                 List<SearchResult> results;
                 try
                 {
@@ -1985,8 +1993,8 @@ public partial class McpServer
                         FetchLimitForSearchRecipeEnvelope(limit),
                         lang,
                         false,
-                        pathPatterns,
-                        excludePaths,
+                        queryPathPatterns,
+                        queryExcludePaths,
                         excludeTests,
                         deduplicate,
                         since,
@@ -1994,7 +2002,8 @@ public partial class McpServer
                         false,
                         guardFilters: guardFilters,
                         guardWindow: guardWindow,
-                        guardScope: guardScope);
+                        guardScope: guardScope,
+                        requiredPathPatterns: requiredPathPatterns);
                 }
                 catch (SearchQueryLimitException)
                 {
@@ -2089,6 +2098,27 @@ public partial class McpServer
 
         return true;
     }
+
+    private static void ResolveMcpRecipeQueryScope(
+        SearchAuditRecipeQuery query,
+        List<string>? recipePathPatterns,
+        List<string> recipeExcludePaths,
+        out List<string>? queryPathPatterns,
+        out List<string> queryExcludePaths)
+    {
+        queryPathPatterns = query.PathPatterns.Count > 0
+            ? [.. query.PathPatterns]
+            : recipePathPatterns is null ? null : [.. recipePathPatterns];
+        queryExcludePaths = [.. recipeExcludePaths];
+        AddDistinct(queryExcludePaths, query.ExcludePaths);
+    }
+
+    private static IReadOnlyList<string>? GetMcpSearchRecipeRequiredPathPatterns(
+        IReadOnlyList<string> requestedPathPatterns,
+        SearchAuditRecipeQuery query)
+        => requestedPathPatterns.Count > 0 && query.PathPatterns.Count > 0
+            ? requestedPathPatterns
+            : null;
 
     private static void AddDistinct(List<string> target, IEnumerable<string> values)
     {

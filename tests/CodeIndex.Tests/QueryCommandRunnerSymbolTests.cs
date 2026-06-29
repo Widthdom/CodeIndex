@@ -35,7 +35,7 @@ public partial class QueryCommandRunnerTests
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.True(exitCode == CommandExitCodes.Success, stderr);
             Assert.Equal(string.Empty, stderr);
             Assert.True(json.GetProperty("count").GetInt32() > 0);
             Assert.Equal(1, json.GetProperty("files").GetInt32());
@@ -47,16 +47,90 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunSymbols_FormatCompact_ReturnsTargetedHint_Issue3446()
+    public void RunSymbols_FormatCompact_ReturnsBoundedRows_Issue4165()
     {
-        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-            ["--format", "compact"],
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_compact_issue4165");
+        try
+        {
+            var dbPath = CreateSymbolsEditorFormatFixtureDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Run", "--db", dbPath, "--format", "compact", "--exact-name", "--sort", "hotspot", "--lang", "csharp", "--kind", "function", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.True(exitCode == CommandExitCodes.Success, stderr);
+            Assert.Equal(string.Empty, stderr);
+
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var row = Assert.Single(root.GetProperty("symbols").EnumerateArray().ToList());
+
+            Assert.Equal("compact", root.GetProperty("format").GetString());
+            Assert.Equal(1, root.GetProperty("count").GetInt32());
+            Assert.Equal(1, root.GetProperty("emitted_count").GetInt32());
+            Assert.Equal(0, root.GetProperty("omitted_count").GetInt32());
+            Assert.False(root.GetProperty("truncated").GetBoolean());
+            Assert.Equal("Run", row.GetProperty("name").GetString());
+            Assert.Equal("src/App.cs", row.GetProperty("path").GetString());
+            Assert.Equal("hotspot", row.GetProperty("sort_mode").GetString());
+            Assert.True(row.GetProperty("hotspot_score").GetDouble() >= 0);
+            Assert.True(row.GetProperty("ranking_reference_score").GetDouble() >= 0);
+            Assert.True(row.GetProperty("ranking_hotspot_score").GetDouble() >= 0);
+            Assert.True(row.GetProperty("generic_name_penalty").GetDouble() > 0);
+            Assert.True(row.GetProperty("structural_rank_penalty").GetDouble() > 0);
+            Assert.Equal(1, row.GetProperty("definition_sites").GetInt32());
+            Assert.False(row.TryGetProperty("signature", out _));
+            Assert.True(root.TryGetProperty("query_context", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_SummaryOnlyJsonOmitsRowsWithMetadata_Issue4165()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_summary_only_issue4165");
+        try
+        {
+            var dbPath = CreateSymbolsEditorFormatFixtureDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Run", "--db", dbPath, "--json", "--summary-only", "--exact-name", "--lang", "csharp", "--kind", "function", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.True(exitCode == CommandExitCodes.Success, stderr);
+            Assert.Equal(string.Empty, stderr);
+
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+
+            Assert.Equal(1, root.GetProperty("count").GetInt32());
+            Assert.Equal(0, root.GetProperty("emitted_count").GetInt32());
+            Assert.Equal(1, root.GetProperty("omitted_count").GetInt32());
+            Assert.True(root.GetProperty("summary_only").GetBoolean());
+            Assert.True(root.GetProperty("truncated").GetBoolean());
+            Assert.False(root.TryGetProperty("symbols", out _));
+            Assert.Equal("summary_only", Assert.Single(root.GetProperty("omitted_by").EnumerateArray().ToList()).GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_CountJsonMaxJsonBytesRejectsBareVerbatimZero_Issue4165()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+            ["@", "--json", "--count", "--exact-name", "--lang", "csharp", "--max-json-bytes", "1"],
             _jsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Contains("--format compact is not supported by symbols.", stderr);
-        Assert.Contains("Usage: cdidx symbols", stderr);
-        Assert.Contains("--format json", stderr);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("symbols count JSON output", stderr);
+        Assert.Contains("exceeds --max-json-bytes 1", stderr);
     }
 
     [Fact]
@@ -5347,7 +5421,7 @@ public partial class QueryCommandRunnerTests
             MarkGraphAndFoldReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
-                ["--db", dbPath, "--json", "--kind", "function", "--path", "Helper.cs", "--group-by-name"],
+                ["--db", dbPath, "--json", "--kind", "function", "--path", "src/*Helper*.cs", "--group-by-name"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
@@ -5550,7 +5624,7 @@ public partial class QueryCommandRunnerTests
             MarkGraphAndFoldReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
-                ["--db", dbPath, "--kind", "function", "--path", "Helper.cs", "--group-by-name"],
+                ["--db", dbPath, "--kind", "function", "--path", "src/*Helper*.cs", "--group-by-name"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
@@ -5809,7 +5883,7 @@ public partial class QueryCommandRunnerTests
             MarkGraphAndFoldReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
-                ["--db", dbPath, "--json", "--kind", "function", "--path", "Helper", "--group-by-name", "--limit", "2"],
+                ["--db", dbPath, "--json", "--kind", "function", "--path", "src/*Helper*.cs", "--group-by-name", "--limit", "2"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
@@ -6679,6 +6753,11 @@ public partial class QueryCommandRunnerTests
             public class App
             {
                 public void Run() { }
+
+                public void Call()
+                {
+                    Run();
+                }
             }
             """);
         return dbPath;

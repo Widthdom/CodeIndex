@@ -41,6 +41,8 @@ The test project mirrors the production areas closely.
   When moving repeated extractor scenarios out of a giant suite, keep the new partial file grouped by a readable domain such as language, build-file format, or protocol surface, and prefer small semantic assertion helpers over repeated raw substring or predicate assertions.
 - `FileIndexerTests.cs`, `FileIndexerContentLoadingTests.cs`, `FileIndexerTestSupport.cs`
   File scanning, language detection, scan-result language reuse, content-sensitive header safeguards, content loading/canonicalization, checksum, Git LFS pointer detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage. Shared `FileIndexerTests` helpers live in `FileIndexerTestSupport.cs`.
+- `PathCompatibilityMatrixTests.cs`
+  Cross-platform path compatibility matrix coverage for path casing, boundary-prefix comparisons, Windows long-path prefixing, POSIX sensitive-file permissions, symlink/dangling-entry scan behavior, submodule passthrough under default skip directories, and git skip-worktree path normalization. Keep new platform/path fixture scenarios here when the same assumption needs to be visible across indexing, Git helper, DB/query, installer, or status surfaces.
 - `DatabaseTests.cs`, `DbReader*Tests.cs`
   SQLite schema, write paths, migrations, and query behavior. DbReader coverage is split by query family, including search, SQL qualified-name handling, file dependencies, impact, and symbol-query suites, while shared seeded fixture state remains on the root `DbReaderTests` part.
   `DbSchemaConstraintTests.cs` also locks schema constraints to `SymbolKindCatalog` and required file foreign keys so DB readiness checks fail when code enums and SQLite CHECK clauses drift.
@@ -113,16 +115,16 @@ The test project mirrors the production areas closely.
   Golden-file regression fixtures for the CLI `--json` output contracts (issue #1548). Each test runs one command (`status`, `search`, `references`, `impact`, `excerpt`) against a deterministic in-memory fixture, normalizes volatile fields (timestamps, absolute paths, commit SHAs, FTS5 scores, SQLite page counts), and diffs against the matching file under `tests/CodeIndex.Tests/golden/`. Renames, removals, reordered arrays, or new keys fail the snapshot so the contract change is forced to land alongside an intentional golden update. See "JSON `--json` output snapshots" below for the update procedure.
 - `PropertyBasedParserTests.cs`
   FsCheck-driven property tests for parser-heavy paths called out in issue #1572: `ArgHelper.WantsHelp` and `ProgramRunner.IsProjectPathArg` never throw on arbitrary inputs; `FileIndexer.NormalizePathSeparators` is idempotent under double application; the literal-safe FTS5 sanitizer (`DbReader.SanitizeFtsQuery`) always emits a query that a real in-memory FTS5 virtual table can parse. They complement, not replace, the example-based tests in `ArgHelperTests.cs` / `QueryCommandRunnerTests.cs`.
-- `TestProjectHelper.cs`, `RepositoryTestPaths.cs`, `TestConsoleLock.cs`
-  Shared test helpers. Use `TestProjectHelper.DeleteDirectory` / `DeleteFile` for ordinary temp cleanup and `DeleteSqliteDatabaseFiles` when SQLite `-wal` / `-shm` sidecars must be removed with the database. MCP indexing tests should route temporary codeindex DB cleanup through this helper as well. Do not copy local retry loops unless the test needs a genuinely specialized path shape such as Windows long-path fixtures.
+- `TestProjectHelper.cs`, `TestDeterminism.cs`, `RepositoryTestPaths.cs`, `TestConsoleLock.cs`
+  Shared test helpers. Use `TestProjectHelper.DeleteDirectory` / `DeleteFile` for ordinary temp cleanup and `DeleteSqliteDatabaseFiles` when SQLite `-wal` / `-shm` sidecars must be removed with the database. Use `TestDeterminism` for bounded polling, eventual assertions, blocked-task observation, same-start concurrent workers, and seeded random inputs. MCP indexing tests should route temporary codeindex DB cleanup through this helper as well. Do not copy local retry loops unless the test needs a genuinely specialized path shape such as Windows long-path fixtures.
 
 ## Conventions
 
 - Keep test names descriptive. The current suite mostly uses `Method_Scenario_ExpectedBehavior`.
 - Keep tests deterministic. Do not depend on machine-global git config, locale-specific output, or ambient files.
+- Prefer `ManualTimeProvider` for fake clocks and `TestDeterminism.CreateRandom` for randomized fixture input so repeated test runs replay the same timeline and data. Use `TestDeterminism.WaitUntilAsync` for bounded polling/eventual assertions instead of local `Task.Delay` loops or fixed sleeps, and use `TestDeterminism.RunConcurrentlyAsync` when a test needs workers to start from the same gate.
 - Prefer small fixtures and explicit assertions over broad snapshot-style checks. The one narrow exception is the `--json` output contract harness (`JsonOutputSnapshotTests`), which pins the full field shape on purpose — see "JSON `--json` output snapshots" below.
 - When repeated expected-value construction obscures a boundary contract such as raw bytes vs canonical content, use a narrowly named local helper instead of duplicating the low-level expression at each assertion.
-- Skipped tests must remain auditable. Prefer explicit `[Fact(Skip = ...)]` / `[Theory(Skip = ...)]` reasons with `owner:` and `expires:` tokens unless the reason is a permanent target or lane guard, and add `Trait("Scenario", "...")` or `Trait("Category", "...")` when the surrounding suite name is too broad. Use `Trait("Area", "...")` when the file name does not identify the owning area. Run `dotnet run --project tools/CodeIndex.TestTelemetry -- skips --tests-directory tests/CodeIndex.Tests` to summarize skipped tests by area, scenario/category, and reason; the report parses xUnit attributes rather than ordinary `Skip =` text in comments or fixtures.
 - When a production comment or error string is bilingual, preserve that expectation in tests where it matters.
 - If a behavior change is user-visible, update tests, `CHANGELOG.md`, and any affected docs together.
 
@@ -164,6 +166,14 @@ Prefer the existing helper before writing new setup code.
 - Tests that mutate process-global environment variables should use `EnvironmentVariableScope.Capture(...)` so the original values are restored from a single disposable cleanup path even if setup or assertions fail.
 
 Use these helpers when possible so test behavior stays consistent across files and operating systems.
+
+### `TestDeterminism` and `ManualTimeProvider`
+
+Use `ManualTimeProvider` when production code accepts a `TimeProvider`, and advance it explicitly with `Advance(...)` instead of sampling wall-clock time in fixture data.
+
+Use `TestDeterminism.WaitUntilAsync(...)` for eventual assertions and asynchronous polling. It applies a shared timeout and poll interval, and accepts a diagnostic callback so timeout failures include the observed state. For loops that should stop after either enough work or a slow-host cap, use `WaitUntilOrTimeoutAsync(...)`.
+
+Use `TestDeterminism.AssertTaskRemainsBlockedAsync(...)` when a test needs a short bounded observation that a task has not completed, and `RunConcurrentlyAsync(...)` when workers should be released from one gate. Use `CreateRandom(...)` for deterministic pseudo-random fixture data instead of constructing ambient or time-seeded `Random` instances.
 
 ### `RepositoryTestPaths`
 
@@ -294,6 +304,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   巨大 suite から繰り返しの extractor シナリオを切り出す場合は、言語、build-file 形式、protocol surface など読みやすい領域ごとの partial file にまとめ、raw substring や predicate assertion の繰り返しより小さな semantic assertion helper を優先してください。
 - `FileIndexerTests.cs`、`FileIndexerContentLoadingTests.cs`、`FileIndexerTestSupport.cs`
   ファイル走査、言語判定、scan result 言語の再利用、content loading / canonicalization、checksum、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」、binary/NUL byte 除外、Windows 専用の 260 文字以上 path walker/purge カバレッジも含みます。共有 `FileIndexerTests` helper は `FileIndexerTestSupport.cs` に置きます。
+- `PathCompatibilityMatrixTests.cs`
+  path casing、boundary-prefix 比較、Windows long-path prefix、POSIX の sensitive file 権限、symlink / dangling entry の scan 挙動、既定 skip directory 配下の submodule passthrough、git skip-worktree path 正規化を横断する compatibility matrix カバレッジです。同じ platform/path 前提を indexing、Git helper、DB/query、installer、status の各 surface で見える形にしたい場合は、新しい fixture シナリオをここに追加してください。
 - `DatabaseTests.cs`、`DbReader*Tests.cs`
   SQLite スキーマ、書き込み経路、マイグレーション、クエリ挙動のテスト。DbReader のカバレッジは search、SQL qualified name、file dependency、impact、symbol query などの query family ごとの partial suite に分割し、共有の seed 済み fixture 状態は root 側の `DbReaderTests` に残します。
   `DbSchemaConstraintTests.cs` は DB readiness check が code enum と SQLite CHECK 句の drift を検出できるよう、schema constraint と `SymbolKindCatalog`、必須 file foreign key の同期も固定します。
@@ -363,17 +375,17 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   CLI の `--json` 出力契約に対するゴールデンファイル回帰フィクスチャ (issue #1548)。各テストは `status` / `search` / `references` / `impact` / `excerpt` を決定的なインメモリ fixture に対して実行し、揺らぐフィールド（timestamp、絶対パス、commit SHA、FTS5 score、SQLite page count など）を正規化したうえで `tests/CodeIndex.Tests/golden/` 配下のファイルと差分比較します。フィールドの rename / 削除 / 並び替え / 新規追加が起きると snapshot が失敗するため、契約変更は意図的な golden 更新と同じ PR で揃えざるを得ません。更新手順は下記「JSON `--json` 出力 snapshot」を参照してください。
 - `PropertyBasedParserTests.cs`
   issue #1572 で挙げられたパーサー系経路に対する FsCheck 駆動の property テスト: `ArgHelper.WantsHelp` と `ProgramRunner.IsProjectPathArg` が任意入力で例外を投げないこと、`FileIndexer.NormalizePathSeparators` が二重適用で idempotent であること、literal-safe な FTS5 サニタイザ (`DbReader.SanitizeFtsQuery`) が常にインメモリ FTS5 仮想テーブルで parse 可能なクエリを出力すること。`ArgHelperTests.cs` / `QueryCommandRunnerTests.cs` の例ベーステストを置き換えるものではなく補完します。
-- `TestProjectHelper.cs`、`RepositoryTestPaths.cs`、`TestConsoleLock.cs`
-  共有テストヘルパー。通常の temp cleanup は `TestProjectHelper.DeleteDirectory` / `DeleteFile` を使い、SQLite の `-wal` / `-shm` sidecar を DB と一緒に消す必要がある場合は `DeleteSqliteDatabaseFiles` を使ってください。MCP indexing test の一時 codeindex DB cleanup もこの helper に寄せてください。Windows long-path fixture のように特殊な path shape が必要な場合を除き、ローカルの retry loop をコピーしないでください。
+- `TestProjectHelper.cs`、`TestDeterminism.cs`、`RepositoryTestPaths.cs`、`TestConsoleLock.cs`
+  共有テストヘルパー。通常の temp cleanup は `TestProjectHelper.DeleteDirectory` / `DeleteFile` を使い、SQLite の `-wal` / `-shm` sidecar を DB と一緒に消す必要がある場合は `DeleteSqliteDatabaseFiles` を使ってください。境界付きポーリング、最終的な条件成立のアサーション、ブロック中タスクの観測、同時開始するワーカー、固定シード乱数入力には `TestDeterminism` を使ってください。MCP indexing test の一時 codeindex DB cleanup もこの helper に寄せてください。Windows long-path fixture のように特殊な path shape が必要な場合を除き、ローカルの retry loop をコピーしないでください。
 
 ## 規約
 
 - テスト名は説明的にする。現在のスイートは `Method_Scenario_ExpectedBehavior` 形式が中心です。
 - テストは決定的に保つ。マシン全体の git 設定、ロケール依存出力、外部の残存ファイルに依存しないこと。
+- 本番コードが `TimeProvider` を受け取れる場合は `ManualTimeProvider` を使い、fixture data の時刻は wall clock ではなく明示的に進めてください。ランダム入力は `TestDeterminism.CreateRandom` を使い、同じ timeline とデータを再実行できるようにします。境界付きポーリング / 最終的な条件成立のアサーションには、ローカルの `Task.Delay` loop や固定 sleep ではなく `TestDeterminism.WaitUntilAsync` を使い、ワーカーを同じ gate から開始したい場合は `TestDeterminism.RunConcurrentlyAsync` を使ってください。
 - 広いスナップショット風の検証より、小さなフィクスチャと明示的な assertion を優先する。例外は `--json` 出力契約の harness (`JsonOutputSnapshotTests`) で、こちらは意図的にフィールド形状全体を固定します（下記「JSON `--json` 出力 snapshot」参照）。
 - raw bytes と canonical content のような境界契約で期待値生成が重複して読みづらくなる場合は、各 assertion に低レベル式を複製せず、契約名が分かる小さな local helper に寄せてください。
 - 境界を証明するテストでは、その境界をまたぐ最小の fixture を使う。1 ページ、1 chunk、1 cache、1 offset overflow で十分なら、それ以上に synthetic data を増やさない。ただし、より大きいサイズ自体が契約の一部なら例外です。
-- skip されたテストは監査可能に保ってください。恒久的な target / lane guard であることが理由から明確な場合を除き、`[Fact(Skip = ...)]` / `[Theory(Skip = ...)]` の理由には `owner:` と `expires:` token を含めます。周辺の suite 名だけでは分類が広すぎる場合は `Trait("Scenario", "...")` または `Trait("Category", "...")` を追加し、file 名だけで担当領域が分からない場合は `Trait("Area", "...")` も使います。`dotnet run --project tools/CodeIndex.TestTelemetry -- skips --tests-directory tests/CodeIndex.Tests` で、skip されたテストを area、scenario/category、理由ごとに集計できます。この report はコメントや fixture 中の通常の `Skip =` 文字列ではなく、xUnit 属性を parse します。
 - 本番コードのコメントやエラー文字列が英日併記前提なら、重要な箇所ではその期待もテストに反映する。
 - ユーザーに見える挙動を変えたら、テストに加えて `CHANGELOG.md` と関連ドキュメントも同じ変更に含める。
 
@@ -415,6 +427,14 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - Process-global な環境変数を変更するテストでは `EnvironmentVariableScope.Capture(...)` を使い、setup や assertion が失敗しても単一の disposable cleanup 経路で元の値へ戻してください。
 
 テスト挙動をファイル間・OS間で揃えるため、可能な限りこれらを使ってください。
+
+### `TestDeterminism` と `ManualTimeProvider`
+
+本番コードが `TimeProvider` を受け取れる場合は `ManualTimeProvider` を使い、fixture data の時刻は wall clock から読むのではなく `Advance(...)` で明示的に進めてください。
+
+最終的な条件成立のアサーションや非同期ポーリングには `TestDeterminism.WaitUntilAsync(...)` を使います。共通 timeout と poll interval を適用し、diagnostic callback を渡せるため timeout failure に観測状態を含められます。十分な作業量に達した場合か遅い host 向け上限に達した場合のどちらでも止めたいループでは `WaitUntilOrTimeoutAsync(...)` を使います。
+
+短い観測時間だけ task が未完了であることを確認する場合は `TestDeterminism.AssertTaskRemainsBlockedAsync(...)`、ワーカーを 1 つの gate から同時に解放したい場合は `RunConcurrentlyAsync(...)` を使います。擬似ランダムな fixture data には、ambient または時刻 seed の `Random` を直接作らず `CreateRandom(...)` を使ってください。
 
 ### `RepositoryTestPaths`
 

@@ -41,7 +41,7 @@ public partial class DbReaderTests
         var dependency = Assert.Single(_reader.GetFileDependencies(
             limit: 10,
             lang: "csharp",
-            pathPatterns: ["DenseCaller.cs"],
+            pathPatterns: ["src/*DenseCaller.cs*"],
             excludePathPatterns: null,
             excludeTests: false));
 

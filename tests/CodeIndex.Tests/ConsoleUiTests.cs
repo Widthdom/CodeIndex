@@ -284,9 +284,9 @@ public class ConsoleUiTests
         Assert.Contains("--focus-column <n>         find/excerpt: focus a specific 1-based column", output);
         Assert.Contains("--focus-line <line>        find/excerpt: focus a specific line", output);
         Assert.Contains("cdidx map [--db <path>] [--json] [--format <text|json|compact|issue-drafts>] [--pretty] [--compact] [--summary-only] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--bytes] [--sections <tree,languages,hotspots,metrics>] [--depth <n>] [--min-entrypoint-confidence <0.0..1.0>]", output);
-        Assert.Contains("cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json[=array]] [--format <text|json|count|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--sort <hotspot|references|size|complexity|path>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]", output);
+        Assert.Contains("cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json[=array]] [--format <text|json|count|compact|lsp|qf|sarif>] [--summary-only] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--sort <hotspot|references|size|complexity|path>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]", output);
         Assert.Contains("--sort <mode>              Symbols/outline: order audit output by a ranking signal; outline also accepts source, kind, span, and name", output);
-        Assert.Contains("cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json[=ndjson|array]] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]", output);
+        Assert.Contains("cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json[=ndjson|array]] [--format <text|json|count|compact>] [--summary-only] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]", output);
         Assert.Contains("cdidx validate [--db <path>] [--json[=array]] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--severity <info|warning|error>] [--path <glob>]", output);
         Assert.Contains("Note: if a query itself starts with '-', pass it with --query <query> or -- <query>", output);
         Assert.DoesNotContain("cdidx validate [--db <path>] [--json] [--limit <n>] [--lang <lang>]", output);
@@ -405,8 +405,8 @@ public class ConsoleUiTests
         var output = CaptureFullUsageOutput(showBanner: false);
 
         AssertSearchUsageFragments(output);
-        Assert.Contains("cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json[=array]] [--format <text|json|count|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--sort <hotspot|references|size|complexity|path>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]", output);
-        Assert.Contains("cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json[=ndjson|array]] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]", output);
+        Assert.Contains("cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json[=array]] [--format <text|json|count|compact|lsp|qf|sarif>] [--summary-only] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--sort <hotspot|references|size|complexity|path>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]", output);
+        Assert.Contains("cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json[=ndjson|array]] [--format <text|json|count|compact>] [--summary-only] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]", output);
         Assert.Contains("cdidx hotspots [--db <path>] [--json] [--summary-only] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]", output);
         Assert.Contains("cdidx unused", output);
         Assert.Contains("[--cursor <unused:offset>] [--audit-scope <source|all>]", output);
@@ -927,9 +927,9 @@ public class ConsoleUiTests
     }
 
     [Fact]
-    public void PrintCompletions_BashCompletesFlagValues()
+    public void CompletionRenderer_BashCompletesFlagValues()
     {
-        var output = ConsoleUi.GetCompletionScript("bash");
+        var output = ConsoleCompletionRenderer.GetCompletionScript("bash");
 
         Assert.Contains("--db|--path|--exclude-path|--open-issues|--output|-o|--metrics) COMPREPLY=($(compgen -f -- \"$cur\"))", output);
         Assert.Contains("--lang) COMPREPLY=($(compgen -W \"", output);
@@ -942,12 +942,12 @@ public class ConsoleUiTests
     }
 
     [Fact]
-    public void PrintCompletions_TopLevelGlobalLogFlagsAcrossShells()
+    public void CompletionRenderer_TopLevelGlobalLogFlagsAcrossShells()
     {
-        var bash = ConsoleUi.GetCompletionScript("bash");
-        var zsh = ConsoleUi.GetCompletionScript("zsh");
-        var fish = ConsoleUi.GetCompletionScript("fish");
-        var powershell = ConsoleUi.GetCompletionScript("powershell");
+        var bash = ConsoleCompletionRenderer.GetCompletionScript("bash");
+        var zsh = ConsoleCompletionRenderer.GetCompletionScript("zsh");
+        var fish = ConsoleCompletionRenderer.GetCompletionScript("fish");
+        var powershell = ConsoleCompletionRenderer.GetCompletionScript("powershell");
 
         foreach (var flag in new[] { "--log-format", "--log-retain-count", "--log-max-size-mb" })
         {
@@ -964,10 +964,10 @@ public class ConsoleUiTests
     }
 
     [Fact]
-    public void PrintCompletions_ZshAndFishCompleteKindValuesFromSharedSet()
+    public void CompletionRenderer_ZshAndFishCompleteKindValuesFromSharedSet()
     {
-        var zsh = ConsoleUi.GetCompletionScript("zsh");
-        var fish = ConsoleUi.GetCompletionScript("fish");
+        var zsh = ConsoleCompletionRenderer.GetCompletionScript("zsh");
+        var fish = ConsoleCompletionRenderer.GetCompletionScript("fish");
 
         Assert.Contains(":language:(", zsh);
         Assert.Contains(":kind:(", zsh);
@@ -979,9 +979,9 @@ public class ConsoleUiTests
     }
 
     [Fact]
-    public void PrintCompletions_PowerShellRegistersNativeCompleter()
+    public void CompletionRenderer_PowerShellRegistersNativeCompleter()
     {
-        var output = ConsoleUi.GetCompletionScript("powershell");
+        var output = ConsoleCompletionRenderer.GetCompletionScript("powershell");
 
         Assert.Contains("generated for version", output);
         Assert.Contains("Regenerate this script after upgrading cdidx.", output);
@@ -1003,18 +1003,81 @@ public class ConsoleUiTests
     [InlineData("zsh", "# cdidx zsh completions generated for version")]
     [InlineData("fish", "# cdidx fish completions generated for version")]
     [InlineData("powershell", "# cdidx PowerShell completions generated for version")]
-    public void PrintCompletions_EmbedsVersionMarker(string shell, string marker)
+    public void CompletionRenderer_EmbedsVersionMarker(string shell, string marker)
     {
-        var output = ConsoleUi.GetCompletionScript(shell);
+        var output = ConsoleCompletionRenderer.GetCompletionScript(shell);
 
         Assert.Contains(marker, output);
         Assert.Contains("Regenerate this script after upgrading cdidx.", output);
     }
 
-    [Fact]
-    public void PrintCompletions_PowerShellIncludesSharedFlagValues()
+    [Theory]
+    [MemberData(nameof(CompletionFormatSnapshots))]
+    public void CompletionRenderer_ShellFormatSnapshotMatchesBaseline(string shell, string expectedSnapshot)
     {
-        var output = ConsoleUi.GetCompletionScript("pwsh");
+        var output = ConsoleCompletionRenderer.GetCompletionScript(shell);
+
+        Assert.Equal(expectedSnapshot, BuildCompletionFormatSnapshot(shell, output));
+    }
+
+    public static TheoryData<string, string> CompletionFormatSnapshots() => new()
+    {
+        {
+            "bash",
+            """
+            # cdidx bash completions generated for version <version>
+            # Regenerate this script after upgrading cdidx.
+            _cdidx() {
+            commands="index backfill-fold optimize search recipes audit definition goto references callers callees symbols files find excerpt map inspect outline status validate-config validate deps impact unused hotspots suggestions languages batch mcp completions db vacuum report license upgrade"
+            COMPREPLY=($(compgen -W "$commands --help --version --license --pretty --quiet -q --silent --color --palette --ascii --metrics --debug-unsafe --strict-version --log-format --log-retain-count --log-max-size-mb --no-progress" -- "$cur"))
+            elif [ "$cmd" = "search" ]; then
+            complete -F _cdidx cdidx
+            """
+        },
+        {
+            "zsh",
+            """
+            #compdef cdidx
+            # cdidx zsh completions generated for version <version>
+            # Regenerate this script after upgrading cdidx.
+            _cdidx() {
+            commands=(
+            _arguments -C \
+            '1:command:->cmds' \
+            elif [[ $subcmd == search ]]; then
+            _cdidx
+            """
+        },
+        {
+            "fish",
+            """
+            # cdidx fish completions generated for version <version>
+            # Regenerate this script after upgrading cdidx.
+            complete -c cdidx -n '__fish_use_subcommand' -a 'index' -d 'index command'
+            complete -c cdidx -n '__fish_use_subcommand' -l license -d 'Show license summary'
+            complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols find inspect' -l exact -d 'Backward-compatible exact shorthand'
+            complete -c cdidx -n '__fish_seen_subcommand_from search references callers callees find excerpt inspect impact' -l max-line-width -r -d 'Clamp long single-line payloads (0 disables clamping)'
+            """
+        },
+        {
+            "powershell",
+            """
+            # cdidx PowerShell completions generated for version <version>
+            # Regenerate this script after upgrading cdidx.
+            Register-ArgumentCompleter -Native -CommandName cdidx -ScriptBlock {
+            $commands = @('index', 'backfill-fold', 'optimize', 'search', 'recipes', 'audit', 'definition', 'goto', 'references', 'callers', 'callees', 'symbols', 'files', 'find', 'excerpt', 'map', 'inspect', 'outline', 'status', 'validate-config', 'validate', 'deps', 'impact', 'unused', 'hotspots', 'suggestions', 'languages', 'batch', 'mcp', 'completions', 'db', 'vacuum', 'report', 'license', 'upgrade')
+            $topLevelFlags = @('--pretty', '--quiet', '-q', '--silent', '--color', '--palette', '--ascii', '--metrics', '--debug-unsafe', '--strict-version', '--log-format', '--log-retain-count', '--log-max-size-mb', '--no-progress')
+            switch ($subcmd) {
+            'search' { $flags = @(...) }
+            }
+            """
+        },
+    };
+
+    [Fact]
+    public void CompletionRenderer_PowerShellIncludesSharedFlagValues()
+    {
+        var output = ConsoleCompletionRenderer.GetCompletionScript("pwsh");
 
         Assert.Contains("'csharp'", output);
         Assert.Contains("'python'", output);
@@ -1029,9 +1092,9 @@ public class ConsoleUiTests
     [Theory]
     [InlineData("bash", "if [ \"$cmd\" = \"hotspots\" ]", "--group-by-name", "--exact-name")]
     [InlineData("zsh", "elif [[ $subcmd == hotspots ]]; then", "--group-by-name[Hotspots: collapse same-name rows; JSON keeps capped paths plus full definition details]", "--exact-name[Exact symbol-name equality]")]
-    public void PrintCompletions_BashAndZshScopeGroupByNameToHotspots(string shell, string hotspotsBranchMarker, string groupedFlagToken, string genericExactNameToken)
+    public void CompletionRenderer_BashAndZshScopeGroupByNameToHotspots(string shell, string hotspotsBranchMarker, string groupedFlagToken, string genericExactNameToken)
     {
-        var output = ConsoleUi.GetCompletionScript(shell);
+        var output = ConsoleCompletionRenderer.GetCompletionScript(shell);
         Assert.Contains(hotspotsBranchMarker, output);
         Assert.Contains(groupedFlagToken, output);
 
@@ -1043,7 +1106,7 @@ public class ConsoleUiTests
     }
 
     [Fact]
-    public void PrintCompletions_FishIncludesFindOptions()
+    public void CompletionRenderer_FishIncludesFindOptions()
     {
         // #1570: fish completion is now emitted from `CliFlagSchema`. The hand-written
         // `__fish_seen_subcommand_from <list>` strings change to the canonical
@@ -1054,7 +1117,7 @@ public class ConsoleUiTests
         // accepting the unified wording.
         // #1570 によりスキーマ駆動。`__fish_seen_subcommand_from` の並びは `CliFlagSchema.AllCommands`
         // 順、`--exact` の説明は統一表記 (`Backward-compatible exact shorthand`)。
-        var output = ConsoleUi.GetCompletionScript("fish");
+        var output = ConsoleCompletionRenderer.GetCompletionScript("fish");
         Assert.Contains("__fish_seen_subcommand_from search definition goto references callers callees symbols files find inspect impact", output);
         Assert.Contains("__fish_seen_subcommand_from find excerpt", output);
         // `--exact` schema membership: search + find + the name-resolution commands.
@@ -1071,9 +1134,9 @@ public class ConsoleUiTests
     [Theory]
     [InlineData("bash")]
     [InlineData("zsh")]
-    public void PrintCompletions_BashAndZshIncludeFindFocusOptions(string shell)
+    public void CompletionRenderer_BashAndZshIncludeFindFocusOptions(string shell)
     {
-        var output = ConsoleUi.GetCompletionScript(shell);
+        var output = ConsoleCompletionRenderer.GetCompletionScript(shell);
         Assert.Contains("find", output);
         Assert.Contains("--before", output);
         Assert.Contains("--after", output);
@@ -1101,11 +1164,11 @@ public class ConsoleUiTests
     }
 
     [Fact]
-    public void PrintCompletions_ExcerptFlagSetsMatchAcrossShells()
+    public void CompletionRenderer_ExcerptFlagSetsMatchAcrossShells()
     {
-        var bashExcerpt = ExtractBashSubcommandFlags(ConsoleUi.GetCompletionScript("bash"), "excerpt", "references");
-        var zshExcerpt = ExtractZshSubcommandFlags(ConsoleUi.GetCompletionScript("zsh"), "excerpt", "references");
-        var fishExcerpt = ExtractFishSubcommandFlags(ConsoleUi.GetCompletionScript("fish"), "excerpt");
+        var bashExcerpt = ExtractBashSubcommandFlags(ConsoleCompletionRenderer.GetCompletionScript("bash"), "excerpt", "references");
+        var zshExcerpt = ExtractZshSubcommandFlags(ConsoleCompletionRenderer.GetCompletionScript("zsh"), "excerpt", "references");
+        var fishExcerpt = ExtractFishSubcommandFlags(ConsoleCompletionRenderer.GetCompletionScript("fish"), "excerpt");
 
         // --help is universal in bash but is not enumerated by the zsh/fish scripts;
         // exclude it from the parity comparison so the flag sets line up cleanly.
@@ -1123,11 +1186,11 @@ public class ConsoleUiTests
     }
 
     [Fact]
-    public void PrintCompletions_ReportFlagSetsMatchAcrossShells()
+    public void CompletionRenderer_ReportFlagSetsMatchAcrossShells()
     {
-        var bashScript = ConsoleUi.GetCompletionScript("bash");
-        var zshScript = ConsoleUi.GetCompletionScript("zsh");
-        var fishScript = ConsoleUi.GetCompletionScript("fish");
+        var bashScript = ConsoleCompletionRenderer.GetCompletionScript("bash");
+        var zshScript = ConsoleCompletionRenderer.GetCompletionScript("zsh");
+        var fishScript = ConsoleCompletionRenderer.GetCompletionScript("fish");
         var bashReport = ExtractBashSubcommandFlags(bashScript, "report", "suggestions");
         var zshReport = ExtractZshSubcommandFlags(zshScript, "report", "suggestions");
         var fishReport = ExtractFishSubcommandFlags(fishScript, "report");
@@ -1192,15 +1255,83 @@ public class ConsoleUiTests
         return flags;
     }
 
-    [Fact]
-    public void GetCompletionLangs_IncludesWindowsBatchAndYamlAliases()
+    private static string BuildCompletionFormatSnapshot(string shell, string output)
     {
-        var method = typeof(ConsoleUi).GetMethod("GetCompletionLangs", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        var lines = Regex.Replace(
+                output.Replace("\r\n", "\n"),
+                @"generated for version [^\n]+",
+                "generated for version <version>")
+            .Split('\n');
 
-        Assert.NotNull(method);
-        var value = method!.Invoke(null, []);
+        return shell switch
+        {
+            "bash" => JoinSnapshotLines(
+                lines,
+                "# cdidx bash completions generated for version",
+                "# Regenerate this script after upgrading cdidx.",
+                "_cdidx() {",
+                "commands=\"",
+                "COMPREPLY=($(compgen -W \"$commands --help --version --license",
+                "elif [ \"$cmd\" = \"search\" ]; then",
+                "complete -F _cdidx cdidx"),
+            "zsh" => JoinSnapshotLines(
+                lines,
+                "#compdef cdidx",
+                "# cdidx zsh completions generated for version",
+                "# Regenerate this script after upgrading cdidx.",
+                "_cdidx() {",
+                "commands=(",
+                "_arguments -C \\",
+                "'1:command:->cmds' \\",
+                "elif [[ $subcmd == search ]]; then",
+                "_cdidx"),
+            "fish" => JoinSnapshotLines(
+                lines,
+                "# cdidx fish completions generated for version",
+                "# Regenerate this script after upgrading cdidx.",
+                "complete -c cdidx -n '__fish_use_subcommand' -a 'index'",
+                "complete -c cdidx -n '__fish_use_subcommand' -l license",
+                "complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols find inspect' -l exact",
+                "complete -c cdidx -n '__fish_seen_subcommand_from search references callers callees find excerpt inspect impact' -l max-line-width"),
+            "powershell" => JoinSnapshotLines(
+                lines,
+                "# cdidx PowerShell completions generated for version",
+                "# Regenerate this script after upgrading cdidx.",
+                "Register-ArgumentCompleter -Native -CommandName cdidx -ScriptBlock {",
+                "$commands = @(",
+                "$topLevelFlags = @(",
+                "switch ($subcmd) {",
+                "'search' { $flags = @(",
+                "}"),
+            _ => throw new ArgumentOutOfRangeException(nameof(shell), shell, "Unknown shell"),
+        };
+    }
 
-        var langs = value?.ToString() ?? string.Empty;
+    private static string JoinSnapshotLines(string[] lines, params string[] prefixes) =>
+        string.Join("\n", prefixes.Select(prefix => NormalizeCompletionSnapshotLine(FindSnapshotLine(lines, prefix))));
+
+    private static string FindSnapshotLine(string[] lines, string prefix)
+    {
+        var normalizedLines = lines
+            .Select(line => line.Trim())
+            .ToArray();
+        var match = normalizedLines.FirstOrDefault(line => string.Equals(line, prefix, StringComparison.Ordinal))
+            ?? normalizedLines.FirstOrDefault(line => line.StartsWith(prefix, StringComparison.Ordinal));
+        Assert.True(match is not null, $"Expected completion snapshot line prefix: {prefix}");
+        return match!;
+    }
+
+    private static string NormalizeCompletionSnapshotLine(string line)
+    {
+        if (line.StartsWith("'search' { $flags = @(", StringComparison.Ordinal))
+            return "'search' { $flags = @(...) }";
+        return line;
+    }
+
+    [Fact]
+    public void CompletionRenderer_GetCompletionLangsIncludesWindowsBatchAndYamlAliases()
+    {
+        var langs = ConsoleCompletionRenderer.GetCompletionLangs();
         var tokens = langs.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         Assert.Contains("bat", tokens);
         Assert.Contains("batch", tokens);
@@ -1211,9 +1342,9 @@ public class ConsoleUiTests
     [Theory]
     [InlineData("bash")]
     [InlineData("zsh")]
-    public void PrintCompletions_BashAndZshScopeMaxLineWidthToSearchBranch(string shell)
+    public void CompletionRenderer_BashAndZshScopeMaxLineWidthToSearchBranch(string shell)
     {
-        var output = ConsoleUi.GetCompletionScript(shell).Replace("\r\n", "\n");
+        var output = ConsoleCompletionRenderer.GetCompletionScript(shell).Replace("\r\n", "\n");
         if (shell == "bash")
         {
             Assert.Contains("elif [ \"$cmd\" = \"search\" ]; then", output);

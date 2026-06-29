@@ -1007,6 +1007,7 @@ cdidx search --list-recipes --names --json              # small deterministic re
 cdidx recipes --summary-only --json                     # compact recipe-list alias for automation
 cdidx search --recipe risky-code --json                 # run a curated audit query set and return grouped JSON
 cdidx search --recipe bounded-read-evidence --json      # show positive evidence for bounded file-read helper paths
+cdidx search --recipe resource-materialization-audit --json  # audit resource lifetimes, file-open policy, streams, and eager materialization
 cdidx search --recipe nullable-contracts --json         # classify nullable returns, null-forgiving suppressions, and guard evidence
 cdidx search --recipe risky-code/raw-diagnostic-echo --json  # run one child query from a recipe
 cdidx search --recipe risky-code --include-query raw-diagnostic-echo --exclude-query cancellation-gap --json
@@ -1095,7 +1096,8 @@ Built-in recipes include `risky-code`, `json-parse-apis`,
 `auth-token-audit`, `string-comparison-semantics`, `dogfood-risk-patterns`,
 `dotnet-risk-patterns`, `sqlite-query-policy-surfaces`, `xml-parser-security`,
 `unsupported-operation-boundaries`, `nullable-contracts`,
-`filesystem-traversal`, `bounded-read-evidence`, `phrase-risk-patterns`, and the
+`filesystem-traversal`, `bounded-read-evidence`, `resource-materialization-audit`,
+`phrase-risk-patterns`, and the
 opt-in broad `broad-token-audit` recipe.
 Use `phrase-risk-patterns` for noisy audit phrases such as `async void`,
 `throw new Exception`, `.Result`, `unsafe`, `Skip =`, `Version="`, `TODO`, and
@@ -1263,6 +1265,9 @@ cdidx symbols --visibility public,internal           # public/internal symbols
 cdidx symbols --exclude-visibility private           # hide private symbols
 cdidx symbols --kind function --sort hotspot --json  # hotspot-ranked audit stream
 cdidx symbols --kind function --sort size --json     # largest definitions first
+cdidx symbols --kind function --format compact --limit 20
+cdidx symbols --kind function --json --summary-only
+cdidx symbols --kind function --format compact --max-json-bytes 12000
 cdidx symbols Run --json=array                       # JSON array instead of NDJSON rows
 cdidx symbols Run --format lsp                       # LSP locations; qf and sarif are also supported
 ```
@@ -1272,6 +1277,13 @@ Use `--exact-name` when you already have a precise candidate list (e.g. names re
 For audit passes, add `--sort hotspot|references|size|complexity|path`.
 `--json` rows include `sort_mode`, `reference_count`, `hotspot_score`,
 `size_lines`, and `complexity_score` whenever an audit sort is active.
+Use `--format compact` when discovery output must stay small: it emits one JSON
+object with `count`, `file_count`, `emitted_count`, `omitted_count`,
+`truncated`, `omitted_by`, `query_context`, and freshness metadata. Compact
+symbol rows keep location, kind/name, language, container/visibility, and active
+rank fields while omitting large signature/body fields. Add `--summary-only` to
+return only the aggregate metadata, or add `--max-json-bytes <n>` to trim rows
+until the JSON payload fits the byte budget.
 
 Output:
 
@@ -1294,7 +1306,7 @@ When `definition --body` is combined with `--json`, `body_content` is capped to 
 
 `symbols`, `definition`, `unused`, and `hotspots` accept `--visibility <public|protected|internal|private[,..]>` and `--exclude-visibility <...>` to include or exclude symbols by stored visibility. `public` also matches language-specific exported forms such as Rust/Zig `pub`, Swift `open`, and JavaScript/TypeScript `export`; `private` also matches Swift `fileprivate`.
 
-`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, and `find` also share repeatable `--path <glob>` glob-style path filters (multiple values are OR'd together), repeatable `--exclude-path <glob>`, and `--exclude-tests`. Use `*` and `?` to match path segments, and plain text still behaves like a substring filter when you do not include wildcards. Search results prefer source files over tests and docs, and `search` boosts files whose symbol names or paths match the query exactly.
+`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, and `find` also share repeatable `--path <path-or-glob>` path filters (multiple values are OR'd together), repeatable `--exclude-path <path-or-glob>`, and `--exclude-tests`. Use `*` and `?` for glob matching. Without wildcards, values are normalized as repo-relative paths (`./foo` and `/foo` become `foo`) and match only that exact file/directory path or files below that directory, not arbitrary substrings. Search results prefer source files over tests and docs, and `search` boosts files whose symbol names or paths match the query exactly.
 
 `search --json`, `search --format compact`, named search batches, and MCP `search` return compact match-centered snippets instead of whole chunks. Each result includes `chunk_start_line`, `chunk_end_line`, `snippet_start_line`, `snippet_end_line`, `snippet`, `match_lines`, `highlights`, `context_before`, `context_after`, `truncated_line_count`, `dropped_match_line_count`, and `truncation_context`, plus optional `enclosing_symbol_name`, `enclosing_symbol_kind`, `enclosing_symbol_start_line`, `enclosing_symbol_end_line`, and `enclosing_container_name` when the match line is inside an indexed symbol. Use `--snippet-lines <n>` to shrink or widen the excerpt window (default: 8, max: 20), and `--max-line-width <n>` to clamp each line around the strongest match when a minified / transpiled file would otherwise return a single huge line (default: 512, max: 4096; `0` disables clamping). `--snippet-focus <leftmost|quality|proximity>` controls that long-line focus; `quality` is the default, `leftmost` keeps the legacy earliest-match behavior, and `proximity` favors dense multi-token clusters. Clamped lines are marked with `...(+N)...` in the snippet and expose `highlights[].truncated` / `highlights[].original_line_length` in JSON / MCP output.
 Search JSON also exposes `match_origins`, `match_facets`, and `result_kinds` so tools can distinguish matches in code, comments, string literals, regex literals, CLI help text, declarations, identifiers, and likely call sites. Each highlight includes its own `match_origins`; `--exclude-comments`, `--exclude-strings`, `--origin` / `--match-origin`, `--exclude-origin`, and `--result-kind` use those facets to hide or keep specific match classes. Broad audit output can be reduced with `--unique path|symbol|origin`, `--count-by path|symbol|origin`, `--format grouped`, `--first-per-file`, `--sample <n>`, `--search-fields <fields>`, `--results-only`, and `--max-json-bytes <n>`.
@@ -1374,6 +1386,9 @@ Use `--path <glob>` for a bounded file set, or pass `--all` to opt in to a repo-
 cdidx files                            # all indexed files
 cdidx files --lang csharp              # only C# files
 cdidx files --path src/Services --exclude-path Migrations
+cdidx files --format compact --limit 50
+cdidx files --json --summary-only
+cdidx files --format compact --max-json-bytes 8000
 ```
 
 Output:
@@ -1384,6 +1399,13 @@ csharp           85 lines  src/Controllers/UserController.cs
 csharp           42 lines  src/Models/User.cs
 (3 files)
 ```
+
+Use `--format compact` for a bounded JSON file-discovery document with
+`count`, `file_count`, `emitted_count`, `omitted_count`, `truncated`,
+`omitted_by`, `query_context`, and freshness metadata. Compact file rows include
+`path`, `lang`, `lines`, `size`, `symbol_count`, and `reference_count`.
+`--summary-only` omits file rows entirely, and `--max-json-bytes <n>` trims rows
+until the payload fits the requested byte budget.
 
 ### Check status
 
@@ -1549,7 +1571,7 @@ same source location.
 | `--exclude-visibility <v[,v]>` | `definition`, `symbols`, `unused`, `hotspots` | Exclude symbols with the requested visibility values. Accepts the same comma-separated values and alias expansion as `--visibility`. |
 | `--path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | Restrict results to glob-style path patterns. `*` and `?` are wildcards. Repeatable; multiple values are OR'd together. Quote shell globs such as `--path 'src/**'` so the shell passes one literal pattern. |
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | Pass a query literal explicitly, useful when the query starts with `-`. Query commands except `find` also accept `-- <query>` as a one-token query escape while continuing to parse later options. |
-| `--recipe <name>` | `search` | Run a reusable audit recipe such as `risky-code`, `json-parse-apis`, `dotnet-risk-patterns`, `unsupported-operation-boundaries`, `nullable-contracts`, `xml-parser-security`, `filesystem-traversal`, or `bounded-read-evidence`. Use `recipe/query` form, such as `risky-code/raw-diagnostic-echo`, to run one child query directly. Unknown recipe/query selectors include likely matches across recipe groups. Recipe runs default to `--audit-scope source`, applying recipe production-code path and exclusion metadata before normal search filters and snippet controls; `--limit` / `--top` is per child query. Text, `--json` / `--format json`, `--format compact`, and `--format issue-drafts` are supported, and issue drafts include a replay command. |
+| `--recipe <name>` | `search` | Run a reusable audit recipe such as `risky-code`, `json-parse-apis`, `dotnet-risk-patterns`, `unsupported-operation-boundaries`, `nullable-contracts`, `xml-parser-security`, `filesystem-traversal`, `bounded-read-evidence`, or `resource-materialization-audit`. Use `recipe/query` form, such as `risky-code/raw-diagnostic-echo`, to run one child query directly. Unknown recipe/query selectors include likely matches across recipe groups. Recipe runs default to `--audit-scope source`, applying recipe production-code path and exclusion metadata before normal search filters and snippet controls; `--limit` / `--top` is per child query. Text, `--json` / `--format json`, `--format compact`, and `--format issue-drafts` are supported, and issue drafts include a replay command. |
 | `--include-query <name>` / `--exclude-query <name>` | `search --recipe <name>` | Include or exclude child recipe queries by name. Repeatable and comma-separated; names are listed by `cdidx search --list-recipes`. |
 | `--cursor <cursor>` | `search --recipe <name/query>`, `outline`, `unused` | Fetch the next page for one selected recipe child query, outline result, or unused-symbol page. Use the `next_cursor` returned by the previous JSON or compact output; outline cursors use `outline:<offset>`. |
 | `--audit-scope <source\|all>` | `search`, `unused` | Choose audit path scope. For recipe search, `source` applies recipe production-code path and exclusion metadata. For ad hoc and named-query searches, `source` adds `src/**`, default doc/test/changelog exclusions, and `--exclude-tests` when no user path was supplied. `all` intentionally searches every indexed path unless other filters exclude it. JSON output reports the effective scope, path filters, and exclusions where applicable. |
@@ -3751,6 +3773,7 @@ cdidx search --list-recipes --names --json              # 小さく決定的な 
 cdidx recipes --summary-only --json                     # automation 向けの compact recipe list alias
 cdidx search --recipe risky-code --json                 # curated audit query set を実行し、grouped JSON を返す
 cdidx search --recipe bounded-read-evidence --json      # 上限付き file-read helper 経路の陽性根拠を表示
+cdidx search --recipe resource-materialization-audit --json  # resource lifetime、file-open policy、stream、eager materialization を監査
 cdidx search --recipe nullable-contracts --json         # nullable return、null-forgiving suppression、guard evidence を分類
 cdidx search --recipe risky-code/raw-diagnostic-echo --json  # recipe 内の child query を1つだけ実行
 cdidx search --recipe risky-code --include-query raw-diagnostic-echo --exclude-query cancellation-gap --json
@@ -3809,7 +3832,8 @@ search audit recipe は、名前付き recipe を複数の curated search query 
 組み込み recipe には `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、
 `auth-token-audit`、`string-comparison-semantics`、`dogfood-risk-patterns`、
 `sqlite-query-policy-surfaces`、`unsupported-operation-boundaries`、`xml-parser-security`、
-`nullable-contracts`、`filesystem-traversal`、`bounded-read-evidence`、`phrase-risk-patterns`、
+`nullable-contracts`、`filesystem-traversal`、`bounded-read-evidence`、
+`resource-materialization-audit`、`phrase-risk-patterns`、
 `broad-token-audit` があります。
 `phrase-risk-patterns` は `async void`、`throw new Exception`、`.Result`、`unsafe`、
 `Skip =`、`Version="`、`TODO`、`Obsolete` のようなノイズの多い監査語句を対象に、
@@ -3988,6 +4012,9 @@ cdidx symbols --visibility public,internal           # public/internal シンボ
 cdidx symbols --exclude-visibility private           # private シンボルを除外
 cdidx symbols --kind function --sort hotspot --json  # hotspot ranking の audit stream
 cdidx symbols --kind function --sort size --json     # 大きい definition から表示
+cdidx symbols --kind function --format compact --limit 20
+cdidx symbols --kind function --json --summary-only
+cdidx symbols --kind function --format compact --max-json-bytes 12000
 cdidx symbols Run --json=array                       # NDJSON 行ではなく JSON array
 cdidx symbols Run --format lsp                       # LSP locations。qf / sarif も対応
 ```
@@ -3997,6 +4024,14 @@ cdidx symbols Run --format lsp                       # LSP locations。qf / sari
 audit では `--sort hotspot|references|size|complexity|path` を追加できます。
 audit sort が有効な `--json` row には `sort_mode`、`reference_count`、
 `hotspot_score`、`size_lines`、`complexity_score` が含まれます。
+discovery 出力を小さく保つ必要がある場合は `--format compact` を使います。
+これは `count`、`file_count`、`emitted_count`、`omitted_count`、
+`truncated`、`omitted_by`、`query_context`、freshness metadata を含む 1 つの
+JSON object を返します。compact な symbol row は location、kind/name、
+language、container/visibility、rank field を残し、巨大になりやすい
+signature/body field は省略します。`--summary-only` を追加すると集計 metadata
+だけを返し、`--max-json-bytes <n>` を追加すると JSON payload が byte budget に
+収まるまで row を切り詰めます。
 
 出力:
 
@@ -4099,6 +4134,9 @@ cdidx find "guard" --all --count --json
 cdidx files                            # 全インデックス済みファイル
 cdidx files --lang csharp              # C#ファイルのみ
 cdidx files --path src/Services --exclude-path Migrations
+cdidx files --format compact --limit 50
+cdidx files --json --summary-only
+cdidx files --format compact --max-json-bytes 8000
 ```
 
 出力:
@@ -4109,6 +4147,13 @@ csharp           85 lines  src/Controllers/UserController.cs
 csharp           42 lines  src/Models/User.cs
 (3 files)
 ```
+
+`--format compact` は、`count`、`file_count`、`emitted_count`、
+`omitted_count`、`truncated`、`omitted_by`、`query_context`、freshness metadata
+を持つ、境界付きの JSON file-discovery document を返します。compact な file
+row には `path`、`lang`、`lines`、`size`、`symbol_count`、`reference_count` が
+含まれます。`--summary-only` は file row を完全に省略し、
+`--max-json-bytes <n>` は指定された byte budget に収まるまで row を切り詰めます。
 
 ### 状態確認
 
@@ -4273,7 +4318,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--exclude-visibility <v[,v]>` | `definition`, `symbols`, `unused`, `hotspots` | 指定した可視性のシンボルを除外する。値と alias 展開は `--visibility` と同じ |
 | `--path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | glob 形式のパスパターンで結果を絞る。`*` と `?` がワイルドカード。繰り返し指定可（複数値は OR で結合）。`--path 'src/**'` のように shell glob を引用し、shell が 1 つの literal pattern として渡すようにする。 |
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | クエリを明示的なリテラルとして渡す。クエリが `-` で始まる場合に有用。`find` 以外のクエリ系コマンドでは `-- <query>` も1トークンのクエリエスケープとして受け付け、その後のオプション解析を続ける。 |
-| `--recipe <name>` | `search` | `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、`unsupported-operation-boundaries`、`nullable-contracts`、`xml-parser-security`、`filesystem-traversal`、`bounded-read-evidence` などの再利用可能な audit recipe を実行する。`risky-code/raw-diagnostic-echo` のような `recipe/query` 形式で child query を1つだけ直接実行できる。未知の recipe/query selector には recipe group をまたいだ近い候補が表示される。Recipe 実行は既定で `--audit-scope source` になり、recipe の本番コード向け path / exclusion metadata を適用したうえで、通常の search filter と snippet control を選択された各 query に適用する。`--limit` / `--top` は child query ごとの上限になる。text、`--json` / `--format json`、`--format compact`、`--format issue-drafts` に対応し、issue draft には再実行コマンドを含める。 |
+| `--recipe <name>` | `search` | `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、`unsupported-operation-boundaries`、`nullable-contracts`、`xml-parser-security`、`filesystem-traversal`、`bounded-read-evidence`、`resource-materialization-audit` などの再利用可能な audit recipe を実行する。`risky-code/raw-diagnostic-echo` のような `recipe/query` 形式で child query を1つだけ直接実行できる。未知の recipe/query selector には recipe group をまたいだ近い候補が表示される。Recipe 実行は既定で `--audit-scope source` になり、recipe の本番コード向け path / exclusion metadata を適用したうえで、通常の search filter と snippet control を選択された各 query に適用する。`--limit` / `--top` は child query ごとの上限になる。text、`--json` / `--format json`、`--format compact`、`--format issue-drafts` に対応し、issue draft には再実行コマンドを含める。 |
 | `--include-query <name>` / `--exclude-query <name>` | `search --recipe <name>` | recipe 内の child query を名前で含める、または除外する。繰り返し指定とカンマ区切りに対応し、名前は `cdidx search --list-recipes` で確認できる。 |
 | `--cursor <cursor>` | `search --recipe <name/query>`、`outline`、`unused` | 選択した recipe child query、outline 結果、unused-symbol page の次ページを取得する。直前の JSON または compact output が返す `next_cursor` を指定し、outline cursor は `outline:<offset>` 形式を使う。 |
 | `--audit-scope <source\|all>` | `search`, `unused` | audit path scope を選ぶ。Recipe search の `source` は recipe の本番コード向け path / exclusion metadata を適用する。Ad hoc / named-query search の `source` は user path がない場合に `src/**`、既定の docs/tests/changelog exclusion、`--exclude-tests` を追加する。`all` は他の filter で除外しない限り、すべての indexed path を意図的に検索する。JSON 出力には該当する場合、有効な scope、path filter、exclusion が含まれる。 |
@@ -4960,7 +5005,7 @@ system では、同じ `cdidx index . --quiet` を step として追加してく
 - 候補シンボル名がある場合は、まず `symbols` で候補を固める。対象が決まったら `--exact-name` を付ける。1ファイルの構造だけ見たいときは `outline`、定義・参照・caller・callee のまとまった文脈が欲しいときは `inspect` を使う。
 - 実装本文が必要なら bounded な `definition --body` を使い、graph 結果にもインライン抜粋が必要なら `references --body`、`callers --body`、`callees --body`、`impact --body` を使う。返却 body が完全かどうかを判断する前に `body_content_truncated` を確認する。候補が解決済みなら `--exact` を付け、`Run` が `RunAsync` や `RunImpact` に広がらないようにする。graph fallback や degraded metadata は信頼度の情報として扱う。
 - 生テキスト、コメント、文字列、オプション名、生成コード、または現在の `languages` 出力で構造化 graph 対応がない言語には `search` を使う。記号を多く含む literal には `--exact-substring`、`NEAR` や `OR` などの FTS5 構文を意図して使う場合だけ `--fts` を使う。
-- 広い検索は早い段階で `--path <text>`、繰り返し指定できる `--exclude-path <text>`、テストが目的でない場合の `--exclude-tests` で絞る。生成・minified・transpiled などノイズの大きいファイルでは `--snippet-lines <n>` と `--max-line-width <n>` で payload を小さくする。
+- 広い検索は早い段階で `--path <path-or-glob>`、繰り返し指定できる `--exclude-path <path-or-glob>`、テストが目的でない場合の `--exclude-tests` で絞る。ワイルドカードなしの値は `./foo` や `/foo` を `foo` に正規化したリポジトリ相対パスとして扱い、そのファイル/ディレクトリの完全一致またはそのディレクトリ配下だけに一致する。任意の部分文字列一致ではない。生成・minified・transpiled などノイズの大きいファイルでは `--snippet-lines <n>` と `--max-line-width <n>` で payload を小さくする。
 - 候補パスの把握には `files`、既知ファイル内の再探索には `find`、必要行だけ読むときは `excerpt` を使い、ファイル全体を開かない。
 - ファイル単位の影響確認には `deps --reverse`、callable symbol の波及確認には `impact`、潜在的な未使用定義には `unused`、中心的なシンボルの把握には `hotspots` を使う。これらは現在の graph 対応とインデックス鮮度に依存するため、`languages` と `status --check --json` を併用する。
 - `unused` はインデックス済み参照を抑制シグナルとして扱う。C# の `nameof(...)`、`typeof(...)`、`GetMethod("Foo")` のような直接の reflection member-name literal や `GetProperty("Display" + "Name")` のような literal 連結は index されるが、動的に組み立てられる reflection 名は引き続き手動確認が必要になることがある。

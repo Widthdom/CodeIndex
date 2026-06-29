@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using CodeIndex.Archives;
 using CodeIndex.Database;
 using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
@@ -594,12 +595,12 @@ internal static class ExportImportCommandRunner
         {
             var ors = new List<string>(filters.PathPatterns.Count);
             for (var i = 0; i < filters.PathPatterns.Count; i++)
-                ors.Add($"f.path LIKE @pathPattern{i} ESCAPE '\\'");
+                ors.Add(DbReader.BuildPathFilterPredicate("f", "pathPattern", i, filters.PathPatterns[i]));
             sql += " AND (" + string.Join(" OR ", ors) + ")";
         }
 
         for (var i = 0; i < filters.ExcludePathPatterns.Count; i++)
-            sql += $" AND f.path NOT LIKE @excludePathPattern{i} ESCAPE '\\'";
+            sql += $" AND NOT {DbReader.BuildPathFilterPredicate("f", "excludePathPattern", i, filters.ExcludePathPatterns[i])}";
 
         if (filters.ExcludeTests)
             sql += $" AND NOT {DbReader.TestPathCondition}";
@@ -610,11 +611,8 @@ internal static class ExportImportCommandRunner
         if (!string.IsNullOrWhiteSpace(filters.Lang))
             SqliteCommandPolicy.Add(cmd, "@lang", filters.Lang);
 
-        for (var i = 0; i < filters.PathPatterns.Count; i++)
-            SqliteCommandPolicy.Add(cmd, $"@pathPattern{i}", DbReader.BuildPathLikePattern(filters.PathPatterns[i]));
-
-        for (var i = 0; i < filters.ExcludePathPatterns.Count; i++)
-            SqliteCommandPolicy.Add(cmd, $"@excludePathPattern{i}", DbReader.BuildPathLikePattern(filters.ExcludePathPatterns[i]));
+        DbReader.AddPathFilterParameterSet(cmd, "pathPattern", filters.PathPatterns);
+        DbReader.AddPathFilterParameterSet(cmd, "excludePathPattern", filters.ExcludePathPatterns);
     }
 
     private static string? GetNullableString(SqliteDataReader reader, int ordinal)
@@ -738,6 +736,20 @@ internal static class ExportImportCommandRunner
         var entries = new Dictionary<string, ZipArchiveEntry>(StringComparer.Ordinal);
         foreach (var entry in archive.Entries)
         {
+            if (!ZipArchiveSafetyPolicy.TryNormalizeRelativeEntryName(entry.FullName, out var normalizedEntryName, out var entryNameFailureReason))
+            {
+                errorCode = "import_archive_unsafe_entry_name";
+                message = $"archive contains unsafe entry {ConsoleUi.FormatBoundedValue(entry.FullName)}: ZIP entry name {entryNameFailureReason}; expected only {FormatExpectedImportArchiveEntryNames()}.";
+                return false;
+            }
+
+            if (!string.Equals(normalizedEntryName, entry.FullName, StringComparison.Ordinal))
+            {
+                errorCode = "import_archive_noncanonical_entry_name";
+                message = $"archive contains non-canonical entry {ConsoleUi.FormatBoundedValue(entry.FullName)} that normalizes to {ConsoleUi.FormatBoundedValue(normalizedEntryName)}; expected only {FormatExpectedImportArchiveEntryNames()}.";
+                return false;
+            }
+
             if (!IsExpectedImportArchiveEntryName(entry.FullName))
             {
                 errorCode = "import_archive_unexpected_entry";
@@ -745,15 +757,13 @@ internal static class ExportImportCommandRunner
                 return false;
             }
 
-            if (entries.ContainsKey(entry.FullName))
+            if (!ZipArchiveSafetyPolicy.TryAddUniqueEntryName(entries, entry.FullName, entry))
             {
                 phase = GetImportArchiveEntryPhase(entry.FullName);
                 errorCode = "import_archive_duplicate_entry";
                 message = $"archive contains duplicate entry {ConsoleUi.FormatBoundedValue(entry.FullName)}.";
                 return false;
             }
-
-            entries.Add(entry.FullName, entry);
         }
 
         if (!entries.TryGetValue(ManifestEntryName, out var foundManifestEntry))

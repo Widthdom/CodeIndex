@@ -49,8 +49,8 @@ internal sealed class AuditLogSink : IDisposable
     private static readonly TimeSpan DisposeWriterTimeout = TimeSpan.FromSeconds(5);
 
     private static readonly Regex SecretValuePattern = new(
-        "(?i)(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|sk-(?:proj-)?[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}|\\bBearer\\s+[A-Za-z0-9._~+/=\\-]{16,}(?=$|[^A-Za-z0-9._~+/=\\-])|://[^/\\s:@]+:[^/\\s:@]+@|(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|authorization)=[^&\\s]+)",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant,
+        $@"(github_pat_[A-Za-z0-9_]{{20,}}|gh[pousr]_[A-Za-z0-9_]{{20,}}|sk-(?:proj-)?[A-Za-z0-9_-]{{20,}}|xox[baprs]-[A-Za-z0-9-]{{20,}}|AKIA[0-9A-Z]{{16}}|\bBearer\s+[A-Za-z0-9._~+/=\-]{{16,}}(?=$|[^A-Za-z0-9._~+/=\-])|://[^/\s:@]+:[^/\s:@]+@|(?<![\w.-])(?:--?)?[\w.-]*(?:{SensitiveNameClassifier.RegexFragmentPattern})[\w.-]*(?:=|:)[^&\s]+)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
         RegexTimeoutPolicy.RedactionRegexTimeout);
     private readonly string _path;
     private readonly long _maxBytes;
@@ -881,32 +881,7 @@ internal sealed class AuditLogSink : IDisposable
     }
 
     private static bool IsSecretLikeKey(string key)
-    {
-        var normalized = NormalizeKey(key);
-        return normalized.Contains("pwd", StringComparison.Ordinal)
-            || normalized.Contains("auth", StringComparison.Ordinal)
-            || normalized.Contains("password", StringComparison.Ordinal)
-            || normalized.Contains("passwd", StringComparison.Ordinal)
-            || normalized.Contains("secret", StringComparison.Ordinal)
-            || normalized.Contains("token", StringComparison.Ordinal)
-            || normalized.Contains("apikey", StringComparison.Ordinal)
-            || normalized.Contains("accesskey", StringComparison.Ordinal)
-            || normalized.Contains("privatekey", StringComparison.Ordinal)
-            || normalized.Contains("authorization", StringComparison.Ordinal)
-            || normalized.Contains("credential", StringComparison.Ordinal)
-            || normalized.Contains("sessioncookie", StringComparison.Ordinal);
-    }
-
-    private static string NormalizeKey(string key)
-    {
-        var sb = new StringBuilder(key.Length);
-        foreach (var ch in key)
-        {
-            if (char.IsLetterOrDigit(ch))
-                sb.Append(char.ToLowerInvariant(ch));
-        }
-        return sb.ToString();
-    }
+        => SensitiveNameClassifier.IsSensitiveName(key);
 
     internal sealed class ArgValueSanitizationState
     {

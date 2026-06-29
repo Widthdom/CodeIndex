@@ -135,7 +135,7 @@ internal static class CliFlagSchema
     private static readonly string[] ByteFormatCommands = ["files", "map"];
     private static readonly string[] EntrypointConfidenceCommands = ["map"];
     private static readonly string[] MapSectionCommands = ["map"];
-    private static readonly string[] SummaryOnlyCommands = ["map", "search", "recipes", "audit", "deps", "hotspots"];
+    private static readonly string[] SummaryOnlyCommands = ["map", "search", "recipes", "audit", "symbols", "files", "deps", "hotspots"];
     private static readonly string[] DependencyCycleCommands = ["deps"];
     private static readonly string[] LanguagesFilterCommands = ["languages"];
 
@@ -203,7 +203,7 @@ internal static class CliFlagSchema
 
     private static readonly string[] FormatCommands =
     [
-        "search", "recipes", "audit", "definition", "references", "callers", "callees", "symbols", "find", "map", "inspect", "validate", "deps", "suggestions",
+        "search", "recipes", "audit", "definition", "references", "callers", "callees", "symbols", "files", "find", "map", "inspect", "validate", "deps", "suggestions",
     ];
 
     private static readonly string[] ProfileCommands =
@@ -251,7 +251,7 @@ internal static class CliFlagSchema
             new() { Name = "--max-results", ValuePlaceholder = "<n>", Description = "Search alias for --limit", Commands = Set("search") },
             new() { Name = "--top", ValuePlaceholder = "<n>", Description = "Max results", Commands = Set(LimitCapableCommands) },
             new() { Name = "--offset", ValuePlaceholder = "<n>", Description = "Suggestions: skip this many filtered rows before output", Commands = Set("suggestions") },
-            new() { Name = "--lang", ValuePlaceholder = "<lang>", Description = "Filter by language", Commands = Set(LangCapableCommands) },
+            new() { Name = "--lang", ValuePlaceholder = "<lang>", Description = "Filter by language", Commands = Set(LangCapableCommands), AlsoAcceptedBy = Set("suggestions") },
             new() { Name = "--language", ValuePlaceholder = "<lang>", Description = "Suggestions: filter by language; languages: look up one language by canonical name or recognized language spelling", Commands = Set("suggestions", "languages") },
             new() { Name = "--extension", ValuePlaceholder = "<ext>", Description = "Languages: look up language support by extension or recognized filename pattern", Commands = Set(LanguagesFilterCommands) },
             new() { Name = "--alias", ValuePlaceholder = "<alias>", Description = "Languages: look up language support by display alias", Commands = Set(LanguagesFilterCommands) },
@@ -281,7 +281,7 @@ internal static class CliFlagSchema
             new() { Name = "--bytes", Description = "Files: sort by size and show raw byte counts in human output; map: show raw byte counts", Commands = Set(ByteFormatCommands) },
             new() { Name = "--min-entrypoint-confidence", ValuePlaceholder = "<0.0..1.0>", Description = "Map: omit entrypoint candidates below this confidence", Commands = Set(EntrypointConfidenceCommands) },
             new() { Name = "--sections", ValuePlaceholder = "<tree,languages,hotspots,metrics>", Description = "Map: comma-separated response sections to include", Commands = Set(MapSectionCommands) },
-            new() { Name = "--summary-only", Description = "Map/Diff/Recipes/Audit/Deps/Hotspots: return only aggregate summary fields where supported", Commands = Set(SummaryOnlyCommands) },
+            new() { Name = "--summary-only", Description = "Map/Diff/Recipes/Audit/Files/Symbols/Deps/Hotspots: return only aggregate summary fields where supported", Commands = Set(SummaryOnlyCommands) },
             new() { Name = "--cycles", Description = "Deps: return dependency cycles from a bounded approximate candidate-edge scan", Commands = Set(DependencyCycleCommands) },
             new() { Name = "--suppress-noise", Description = "Deps: suppress generic framework/noise symbols in edge symbol samples", Commands = Set("deps") },
             new() { Name = "--symbol", ValuePlaceholder = "<name>", Description = "Deps: keep only edges with an exact sampled symbol name", Commands = Set("deps") },
@@ -339,7 +339,7 @@ internal static class CliFlagSchema
             new() { Name = "--sample", ValuePlaceholder = "<n>", Description = "Search: deterministically sample returned rows down to n results", Commands = Set("search") },
             new() { Name = "--per-file-limit", ValuePlaceholder = "<n>", Description = "Search/Audit grouped output: representative matches per file", Commands = Set("search", "audit") },
             new() { Name = "--total-limit", ValuePlaceholder = "<n>", Description = "Search/Audit recipes: cap emitted rows across all child queries", Commands = Set("search", "audit") },
-            new() { Name = "--max-json-bytes", ValuePlaceholder = "<n>", Description = "Search/Recipes/Audit/Deps/Hotspots JSON: fail before emitting more than this many JSON bytes", Commands = Set("search", "recipes", "audit", "deps", "hotspots") },
+            new() { Name = "--max-json-bytes", ValuePlaceholder = "<n>", Description = "Search/Recipes/Audit/Files/Symbols/Deps/Hotspots JSON: bound emitted JSON bytes; discovery commands truncate rows with metadata", Commands = Set("search", "recipes", "audit", "files", "symbols", "deps", "hotspots") },
             new() { Name = "--next-steps", Description = "Search: print inspect/excerpt follow-up commands for top hits", Commands = Set("search") },
             new() { Name = "--exclude-comments", Description = "Search: suppress comment-only matches after origin classification", Commands = Set("search") },
             new() { Name = "--exclude-strings", Description = "Search: suppress string, regex, and help-text matches after origin classification", Commands = Set("search") },

@@ -75,6 +75,38 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_DisposeAsync_IsIdempotentForConcurrentCallers_Issue4176()
+    {
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
+
+        var disposeTasks = new Task[8];
+        for (var i = 0; i < disposeTasks.Length; i++)
+            disposeTasks[i] = Task.Run(async () => await harness.DisposeTransportAsync());
+
+        await Task.WhenAll(disposeTasks).WaitAsync(TimeSpan.FromSeconds(10));
+        await harness.DisposeTransportAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+        await harness.WaitForServerLoopAsync();
+
+        Assert.True(harness.OwnedSemaphoreGatesDisposed);
+    }
+
+    [Fact]
+    public async Task HttpTransport_DisposeAsync_CancelsOpenEventStreams_Issue4176()
+    {
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
+
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
+        await WaitUntilAsync(() => harness.HasEventStreams, "the event stream to be registered before disposal");
+
+        await harness.DisposeTransportAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+        await WaitUntilAsync(() => !harness.HasEventStreams, "disposal to remove the event stream");
+
+        Assert.True(harness.OwnedSemaphoreGatesDisposed);
+    }
+
+    [Fact]
     public void HttpTransport_TimeoutDiagnosticsUseStableCategories_Issue3990()
     {
         Assert.Equal(
@@ -1833,6 +1865,12 @@ public class HttpMcpTransportTests : IDisposable
             var content = new StringContent(body, Encoding.UTF8, "application/json");
             return await client.PostAsync(Endpoint, content);
         }
+
+        public ValueTask DisposeTransportAsync()
+            => _transport.DisposeAsync();
+
+        public Task WaitForServerLoopAsync()
+            => _loopTask.WaitAsync(TimeSpan.FromSeconds(5));
 
         public async ValueTask DisposeAsync()
         {

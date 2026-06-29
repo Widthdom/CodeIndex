@@ -1,4 +1,3 @@
-using System.Buffers;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
@@ -18,20 +17,20 @@ internal sealed class LspServer : IDisposable
     private const int DefaultLimit = 50;
     internal const int MaxWorkspaceSymbols = 1000;
     private const int MaxWorkspaceFolders = 32;
-    internal const int MaxLspFrameBytes = 8 * 1024 * 1024;
-    internal const int MaxLspResponseFrameBytes = MaxLspFrameBytes;
-    internal const int MaxLspHeaderLineBytes = 8 * 1024;
-    internal const int MaxLspHeaderCount = 64;
-    internal const int MaxLspHeaderBytes = 64 * 1024;
+    internal const int MaxLspFrameBytes = LspProtocol.MaxFrameBytes;
+    internal const int MaxLspResponseFrameBytes = LspProtocol.MaxResponseFrameBytes;
+    internal const int MaxLspHeaderLineBytes = LspProtocol.MaxHeaderLineBytes;
+    internal const int MaxLspHeaderCount = LspProtocol.MaxHeaderCount;
+    internal const int MaxLspHeaderBytes = LspProtocol.MaxHeaderBytes;
     internal const int MaxPositionDocumentBytes = 4 * 1024 * 1024;
     internal const int MaxLiveDocumentBytes = 16 * 1024 * 1024;
-    internal const int MaxPooledPayloadBufferBytes = 1024 * 1024;
+    internal const int MaxPooledPayloadBufferBytes = LspProtocol.MaxPooledPayloadBufferBytes;
     internal const int MaxLiveDocuments = 64;
     internal const int MaxContentChangesPerNotification = 64;
     internal const int MaxTextDocumentUriChars = McpBoundedText.MaxResourceUriChars;
-    internal const int MaxLspRequestIdRawBytes = 4 * 1024;
-    internal const int MaxJsonDepth = 32;
-    internal const int MaxRequestIdStringChars = 256;
+    internal const int MaxLspRequestIdRawBytes = LspProtocol.MaxRequestIdRawBytes;
+    internal const int MaxJsonDepth = LspProtocol.MaxJsonDepth;
+    internal const int MaxRequestIdStringChars = LspProtocol.MaxRequestIdStringChars;
     internal const int MaxDocumentSymbols = 1000;
     internal const int MaxDocumentSymbolMaterialization = MaxDocumentSymbols;
     internal const int MaxDocumentSymbolDetailChars = 512;
@@ -61,16 +60,16 @@ internal sealed class LspServer : IDisposable
     private const string FailurePositionLineMissing = "position_line_missing";
     private const string FailurePositionFileUnreadable = "position_file_unreadable";
     private const string FailureNoTokenAtPosition = "no_token_at_position";
-    internal const string ReadDiagnosticEndOfStream = "end_of_stream";
-    internal const string ReadDiagnosticIncompleteHeader = "incomplete_header";
-    internal const string ReadDiagnosticHeaderLineTooLarge = "header_line_too_large";
-    internal const string ReadDiagnosticHeaderSectionTooLarge = "header_section_too_large";
-    internal const string ReadDiagnosticDuplicateContentLength = "duplicate_content_length";
-    internal const string ReadDiagnosticMalformedContentLength = "malformed_content_length";
-    internal const string ReadDiagnosticNegativeContentLength = "negative_content_length";
-    internal const string ReadDiagnosticContentLengthTooLarge = "content_length_too_large";
-    internal const string ReadDiagnosticMissingContentLength = "missing_content_length";
-    internal const string ReadDiagnosticIncompleteBody = "incomplete_body";
+    internal const string ReadDiagnosticEndOfStream = LspProtocol.ReadDiagnosticEndOfStream;
+    internal const string ReadDiagnosticIncompleteHeader = LspProtocol.ReadDiagnosticIncompleteHeader;
+    internal const string ReadDiagnosticHeaderLineTooLarge = LspProtocol.ReadDiagnosticHeaderLineTooLarge;
+    internal const string ReadDiagnosticHeaderSectionTooLarge = LspProtocol.ReadDiagnosticHeaderSectionTooLarge;
+    internal const string ReadDiagnosticDuplicateContentLength = LspProtocol.ReadDiagnosticDuplicateContentLength;
+    internal const string ReadDiagnosticMalformedContentLength = LspProtocol.ReadDiagnosticMalformedContentLength;
+    internal const string ReadDiagnosticNegativeContentLength = LspProtocol.ReadDiagnosticNegativeContentLength;
+    internal const string ReadDiagnosticContentLengthTooLarge = LspProtocol.ReadDiagnosticContentLengthTooLarge;
+    internal const string ReadDiagnosticMissingContentLength = LspProtocol.ReadDiagnosticMissingContentLength;
+    internal const string ReadDiagnosticIncompleteBody = LspProtocol.ReadDiagnosticIncompleteBody;
     private static readonly string[] SemanticTokenTypes =
     [
         "namespace",
@@ -110,10 +109,6 @@ internal sealed class LspServer : IDisposable
         "documentation",
         "defaultLibrary",
     ];
-    private static readonly JsonReaderOptions LspJsonReaderOptions = new()
-    {
-        MaxDepth = MaxJsonDepth,
-    };
     private readonly DbReader _reader;
     private readonly string _version;
     private readonly JsonSerializerOptions _jsonOptions;
@@ -123,12 +118,7 @@ internal sealed class LspServer : IDisposable
     private bool _exitRequested;
     private bool _exitRequestedBeforeShutdown;
     private readonly List<string> _workspaceFolders = [];
-    private readonly Dictionary<string, string> _liveDocuments;
-    private readonly Dictionary<string, int> _liveDocumentByteCounts;
-    private readonly List<string> _liveDocumentOrder = [];
-    private long _liveDocumentBytes;
-    private long _liveDocumentEvictionCount;
-    private long _liveDocumentEvictedBytes;
+    private readonly LspLiveDocumentStore _liveDocumentStore;
     private long _contentChangeEntriesDropped;
 
     private readonly record struct PositionTokenContext(string Token, string IndexedPath, string? WorkspaceRoot, int Line, int StartCharacter, int EndCharacter);
@@ -140,35 +130,6 @@ internal sealed class LspServer : IDisposable
         string Message,
         int? ContentLength = null,
         int? MaxContentLength = null);
-    private readonly record struct LspMessageReadResult(bool Success, string Payload, LspMessageReadDiagnostic? Diagnostic);
-    private readonly record struct LspHeaderLineReadResult(string? Line, LspHeaderLineReadFailure Failure);
-    private readonly struct SensitivePayloadBufferLease : IDisposable
-    {
-        private readonly bool _rented;
-        private readonly int _usedBytes;
-
-        internal SensitivePayloadBufferLease(byte[] buffer, int usedBytes, bool rented)
-        {
-            Buffer = buffer;
-            _usedBytes = usedBytes;
-            _rented = rented;
-        }
-
-        internal byte[] Buffer { get; }
-
-        public void Dispose()
-        {
-            SensitiveBufferPolicy.ReturnSensitivePayloadBuffer(Buffer, _usedBytes, _rented);
-        }
-    }
-
-    private enum LspHeaderLineReadFailure
-    {
-        None,
-        EndOfStream,
-        IncompleteHeader,
-        LineTooLarge,
-    }
 
     public LspServer(DbReader reader, string version, JsonSerializerOptions jsonOptions, string? projectRoot = null)
     {
@@ -177,20 +138,24 @@ internal sealed class LspServer : IDisposable
         _jsonOptions = jsonOptions;
         _projectRoot = string.IsNullOrWhiteSpace(projectRoot) ? null : projectRoot;
         _pathStringComparison = PathCasing.ComparisonFor(_projectRoot ?? Environment.CurrentDirectory);
-        _liveDocuments = new Dictionary<string, string>(
-            _pathStringComparison == StringComparison.OrdinalIgnoreCase
-                ? StringComparer.OrdinalIgnoreCase
-                : StringComparer.Ordinal);
-        _liveDocumentByteCounts = new Dictionary<string, int>(_liveDocuments.Comparer);
+        var liveDocumentComparer = _pathStringComparison == StringComparison.OrdinalIgnoreCase
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+        _liveDocumentStore = new LspLiveDocumentStore(
+            liveDocumentComparer,
+            _pathStringComparison,
+            MaxLiveDocuments,
+            MaxPositionDocumentBytes,
+            MaxLiveDocumentBytes);
         if (_projectRoot != null)
             _workspaceFolders.Add(Path.GetFullPath(_projectRoot));
     }
 
-    internal long LiveDocumentBytesForTests => _liveDocumentBytes;
+    internal long LiveDocumentBytesForTests => _liveDocumentStore.Bytes;
 
-    internal long LiveDocumentEvictionCountForTests => _liveDocumentEvictionCount;
+    internal long LiveDocumentEvictionCountForTests => _liveDocumentStore.EvictionCount;
 
-    internal long LiveDocumentEvictedBytesForTests => _liveDocumentEvictedBytes;
+    internal long LiveDocumentEvictedBytesForTests => _liveDocumentStore.EvictedBytes;
 
     internal long ContentChangeEntriesDroppedForTests => _contentChangeEntriesDropped;
 
@@ -239,7 +204,7 @@ internal sealed class LspServer : IDisposable
         }
         catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
-            return Error(null, -32700, FormatParseErrorMessage(payload));
+            return Error(null, -32700, LspProtocol.FormatParseErrorMessage(payload));
         }
 
         using (document)
@@ -255,7 +220,7 @@ internal sealed class LspServer : IDisposable
 
                 var method = root.TryGetProperty("method", out var methodElement) ? methodElement.GetString() : null;
                 hasId = root.TryGetProperty("id", out var idElement);
-                if (hasId && !TryParseRequestId(payload, idElement, out id, out var requestIdError))
+                if (hasId && !LspProtocol.TryParseRequestId(payload, idElement, out id, out var requestIdError))
                     return Error(null, -32600, requestIdError);
 
                 if (method == null)
@@ -299,115 +264,13 @@ internal sealed class LspServer : IDisposable
         }
     }
 
-    private static bool TryParseRequestId(string payload, JsonElement idElement, out JsonNode? id, out string errorMessage)
-    {
-        id = null;
-        errorMessage = "Invalid Request";
-        if (!TryGetTopLevelRequestIdRawByteCount(payload, out var rawIdBytes) || rawIdBytes > MaxLspRequestIdRawBytes)
-        {
-            errorMessage = $"Request id must be {MaxLspRequestIdRawBytes} raw JSON bytes or fewer.";
-            return false;
-        }
-
-        var rawId = idElement.GetRawText();
-        if (Encoding.UTF8.GetByteCount(rawId) > MaxLspRequestIdRawBytes)
-        {
-            errorMessage = $"Request id must be {MaxLspRequestIdRawBytes} raw JSON bytes or fewer.";
-            return false;
-        }
-
-        return TryCloneRequestId(idElement, out id);
-    }
-
-    private static bool TryCloneRequestId(JsonElement idElement, out JsonNode? id)
-    {
-        id = null;
-        switch (idElement.ValueKind)
-        {
-            case JsonValueKind.String:
-                var value = idElement.GetString();
-                if (value == null || value.Length > MaxRequestIdStringChars)
-                    return false;
-                id = JsonValue.Create(value);
-                return true;
-
-            case JsonValueKind.Number:
-                if (!idElement.TryGetInt64(out var number))
-                    return false;
-                id = JsonValue.Create(number);
-                return true;
-
-            case JsonValueKind.Null:
-                return true;
-
-            default:
-                return false;
-        }
-    }
-
-    private static bool TryGetTopLevelRequestIdRawByteCount(string payload, out int rawIdBytes)
-    {
-        rawIdBytes = 0;
-        var payloadByteCount = Encoding.UTF8.GetByteCount(payload);
-        using var lease = RentSensitivePayloadBuffer(payloadByteCount);
-        var buffer = lease.Buffer;
-        try
-        {
-            _ = Encoding.UTF8.GetBytes(payload.AsSpan(), buffer);
-            var reader = new Utf8JsonReader(buffer.AsSpan(0, payloadByteCount), LspJsonReaderOptions);
-            if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
-                return true;
-
-            while (reader.Read())
-            {
-                if (reader.TokenType == JsonTokenType.EndObject && reader.CurrentDepth == 0)
-                    break;
-                if (reader.TokenType != JsonTokenType.PropertyName || reader.CurrentDepth != 1)
-                    continue;
-
-                var isId = reader.ValueTextEquals("id"u8);
-                if (!reader.Read())
-                    return false;
-
-                var valueStart = reader.TokenStartIndex;
-                reader.Skip();
-                if (isId)
-                {
-                    var rawLength = reader.BytesConsumed - valueStart;
-                    if (rawLength > int.MaxValue)
-                        return false;
-                    rawIdBytes = (int)rawLength;
-                }
-            }
-
-            return true;
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-    }
-
     internal static bool ShouldRentPayloadBuffer(int byteCount)
     {
-        if (byteCount < 0)
-            throw new ArgumentOutOfRangeException(nameof(byteCount), byteCount, "Byte count must be non-negative.");
-        return byteCount <= MaxPooledPayloadBufferBytes;
+        return LspProtocol.ShouldRentPayloadBuffer(byteCount);
     }
 
     internal static void ClearSensitivePayloadBufferForTests(byte[] buffer, int usedBytes) =>
-        SensitiveBufferPolicy.ClearUsedSensitiveBytes(buffer, usedBytes);
-
-    private static SensitivePayloadBufferLease RentSensitivePayloadBuffer(int byteCount)
-    {
-        if (byteCount < 0)
-            throw new ArgumentOutOfRangeException(nameof(byteCount), byteCount, "Byte count must be non-negative.");
-        var rented = ShouldRentPayloadBuffer(byteCount);
-        var buffer = rented
-            ? ArrayPool<byte>.Shared.Rent(byteCount)
-            : new byte[byteCount];
-        return new SensitivePayloadBufferLease(buffer, byteCount, rented);
-    }
+        LspProtocol.ClearSensitivePayloadBufferForTests(buffer, usedBytes);
 
     private static string SanitizeUnknownMethod(string method)
     {
@@ -518,7 +381,7 @@ internal sealed class LspServer : IDisposable
     {
         var uri = GetTextDocumentUri(root);
         if (TryGetLiveDocumentKeyFromUri(uri, out var key))
-            RemoveLiveDocument(key);
+            _liveDocumentStore.Remove(key);
         return null;
     }
 
@@ -527,57 +390,9 @@ internal sealed class LspServer : IDisposable
         if (!TryGetLiveDocumentKeyFromUri(uri, out var key))
             return;
 
-        var textBytes = Encoding.UTF8.GetByteCount(text);
-        if (textBytes > MaxPositionDocumentBytes || textBytes > MaxLiveDocumentBytes)
-        {
-            RemoveLiveDocument(key);
-            return;
-        }
-
-        if (!_liveDocuments.ContainsKey(key))
-            _liveDocumentOrder.Add(key);
-        else if (_liveDocumentByteCounts.TryGetValue(key, out var previousBytes))
-            _liveDocumentBytes = Math.Max(0, _liveDocumentBytes - previousBytes);
-
-        _liveDocuments[key] = text;
-        _liveDocumentByteCounts[key] = textBytes;
-        _liveDocumentBytes += textBytes;
-        EnsureLiveDocumentCapacity();
-        Activity.Current?.SetTag("lsp.live_documents.bytes", _liveDocumentBytes);
-        Activity.Current?.SetTag("lsp.live_documents.eviction_count", _liveDocumentEvictionCount);
-    }
-
-    private void EnsureLiveDocumentCapacity()
-    {
-        while ((_liveDocuments.Count > MaxLiveDocuments || _liveDocumentBytes > MaxLiveDocumentBytes)
-            && _liveDocumentOrder.Count > 0)
-        {
-            var oldestKey = _liveDocumentOrder[0];
-            RemoveLiveDocument(oldestKey, recordEviction: true);
-        }
-
-        if (_liveDocuments.Count > MaxLiveDocuments || _liveDocumentBytes > MaxLiveDocumentBytes)
-        {
-            _liveDocuments.Clear();
-            _liveDocumentByteCounts.Clear();
-            _liveDocumentOrder.Clear();
-            _liveDocumentBytes = 0;
-        }
-    }
-
-    private void RemoveLiveDocument(string key, bool recordEviction = false)
-    {
-        if (_liveDocumentByteCounts.Remove(key, out var bytes))
-        {
-            _liveDocumentBytes = Math.Max(0, _liveDocumentBytes - bytes);
-            if (recordEviction)
-            {
-                _liveDocumentEvictionCount++;
-                _liveDocumentEvictedBytes += bytes;
-            }
-        }
-        _liveDocuments.Remove(key);
-        _liveDocumentOrder.RemoveAll(existing => string.Equals(existing, key, _pathStringComparison));
+        _liveDocumentStore.SetText(key, text);
+        Activity.Current?.SetTag("lsp.live_documents.bytes", _liveDocumentStore.Bytes);
+        Activity.Current?.SetTag("lsp.live_documents.eviction_count", _liveDocumentStore.EvictionCount);
     }
 
     private bool TryGetLiveDocumentKeyFromUri(string uri, out string key)
@@ -1354,7 +1169,7 @@ internal sealed class LspServer : IDisposable
 
     private bool TryReadPositionLine(string path, int targetLine, out string sourceLine, out string? failureReason)
     {
-        if (_liveDocuments.TryGetValue(Path.GetFullPath(path), out var liveText))
+        if (_liveDocumentStore.TryGetText(Path.GetFullPath(path), out var liveText))
             return TryReadPositionLineFromText(liveText, targetLine, out sourceLine, out failureReason);
 
         return TryReadPositionLineFromFile(path, targetLine, out sourceLine, out failureReason);
@@ -1915,11 +1730,6 @@ internal sealed class LspServer : IDisposable
         },
     };
 
-    private static string FormatParseErrorMessage(string payload)
-        => string.Create(
-            CultureInfo.InvariantCulture,
-            $"Parse error (payload_bytes={Encoding.UTF8.GetByteCount(payload)}, max_json_depth={MaxJsonDepth})");
-
     /// <summary>
     /// Compatibility wrapper that reads without caller cancellation. Prefer <see cref="TryReadMessageAsync"/>
     /// for cancellable transports.
@@ -1938,223 +1748,39 @@ internal sealed class LspServer : IDisposable
         out LspMessageReadDiagnostic? diagnostic,
         CancellationToken cancellationToken = default)
     {
-        var result = TryReadMessageCoreAsync(input, cancellationToken).AsTask().GetAwaiter().GetResult();
-        payload = result.Payload;
-        diagnostic = result.Diagnostic;
-        return result.Success;
+        var success = LspProtocol.TryReadMessage(input, out payload, out var protocolDiagnostic, cancellationToken);
+        diagnostic = protocolDiagnostic.HasValue ? ToServerDiagnostic(protocolDiagnostic.Value) : null;
+        return success;
     }
 
     internal static async ValueTask<MessageReadResult> TryReadMessageAsync(
         Stream input,
         CancellationToken cancellationToken = default)
     {
-        var result = await TryReadMessageCoreAsync(input, cancellationToken).ConfigureAwait(false);
+        var result = await LspProtocol.TryReadMessageAsync(input, cancellationToken).ConfigureAwait(false);
         return new MessageReadResult(result.Success, result.Payload);
     }
 
-    private static async ValueTask<LspMessageReadResult> TryReadMessageCoreAsync(
-        Stream input,
-        CancellationToken cancellationToken)
-    {
-        var contentLength = -1;
-        var hasContentLength = false;
-        var headerCount = 0;
-        var headerBytes = 0;
-        while (true)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var line = await ReadAsciiLineAsync(input, cancellationToken).ConfigureAwait(false);
-            if (line.Line == null)
-                return new LspMessageReadResult(false, string.Empty, CreateHeaderReadDiagnostic(line.Failure));
-            if (line.Line.Length == 0)
-                break;
-            headerCount++;
-            headerBytes += line.Line.Length;
-            if (headerCount > MaxLspHeaderCount || headerBytes > MaxLspHeaderBytes)
-            {
-                var diagnostic = new LspMessageReadDiagnostic(
-                    ReadDiagnosticHeaderSectionTooLarge,
-                    $"LSP headers exceeded {MaxLspHeaderCount} lines or {MaxLspHeaderBytes} bytes.");
-                return new LspMessageReadResult(false, string.Empty, diagnostic);
-            }
-            var colon = line.Line.IndexOf(':');
-            if (colon <= 0)
-                continue;
-            var name = line.Line[..colon].Trim();
-            var value = line.Line[(colon + 1)..].Trim();
-            if (string.Equals(name, "Content-Length", StringComparison.OrdinalIgnoreCase))
-            {
-                if (hasContentLength)
-                {
-                    var diagnostic = new LspMessageReadDiagnostic(
-                        ReadDiagnosticDuplicateContentLength,
-                        "LSP frame contained more than one Content-Length header.");
-                    return new LspMessageReadResult(false, string.Empty, diagnostic);
-                }
-
-                if (value.StartsWith("-", StringComparison.Ordinal))
-                {
-                    var diagnostic = new LspMessageReadDiagnostic(
-                        ReadDiagnosticNegativeContentLength,
-                        "LSP Content-Length must not be negative.");
-                    return new LspMessageReadResult(false, string.Empty, diagnostic);
-                }
-
-                if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed))
-                {
-                    var diagnostic = new LspMessageReadDiagnostic(
-                        ReadDiagnosticMalformedContentLength,
-                        "LSP Content-Length must be a base-10 byte count.");
-                    return new LspMessageReadResult(false, string.Empty, diagnostic);
-                }
-
-                if (parsed > MaxLspFrameBytes)
-                {
-                    var diagnostic = new LspMessageReadDiagnostic(
-                        ReadDiagnosticContentLengthTooLarge,
-                        $"LSP Content-Length exceeded the {MaxLspFrameBytes} byte limit.",
-                        parsed,
-                        MaxLspFrameBytes);
-                    return new LspMessageReadResult(false, string.Empty, diagnostic);
-                }
-
-                hasContentLength = true;
-                contentLength = parsed;
-            }
-        }
-
-        if (contentLength < 0)
-        {
-            var diagnostic = new LspMessageReadDiagnostic(
-                ReadDiagnosticMissingContentLength,
-                "LSP frame did not include a Content-Length header.");
-            return new LspMessageReadResult(false, string.Empty, diagnostic);
-        }
-
-        using var lease = RentSensitivePayloadBuffer(contentLength);
-        var buffer = lease.Buffer;
-        var offset = 0;
-        while (offset < contentLength)
-        {
-            var read = await ReadAsync(input, buffer, offset, contentLength - offset, cancellationToken).ConfigureAwait(false);
-            if (read == 0)
-            {
-                var diagnostic = new LspMessageReadDiagnostic(
-                    ReadDiagnosticIncompleteBody,
-                    "LSP frame ended before the declared Content-Length body was complete.",
-                    contentLength,
-                    MaxLspFrameBytes);
-                return new LspMessageReadResult(false, string.Empty, diagnostic);
-            }
-            offset += read;
-        }
-
-        return new LspMessageReadResult(true, Encoding.UTF8.GetString(buffer, 0, contentLength), null);
-    }
-
-    private static LspMessageReadDiagnostic CreateHeaderReadDiagnostic(LspHeaderLineReadFailure failure) => failure switch
-    {
-        LspHeaderLineReadFailure.LineTooLarge => new LspMessageReadDiagnostic(
-            ReadDiagnosticHeaderLineTooLarge,
-            $"LSP header line exceeded the {MaxLspHeaderLineBytes} byte limit."),
-        LspHeaderLineReadFailure.IncompleteHeader => new LspMessageReadDiagnostic(
-            ReadDiagnosticIncompleteHeader,
-            "LSP frame ended before the header section was complete."),
-        _ => new LspMessageReadDiagnostic(
-            ReadDiagnosticEndOfStream,
-            "LSP input ended before a frame was available."),
-    };
+    private static LspMessageReadDiagnostic ToServerDiagnostic(LspProtocol.ReadDiagnostic diagnostic)
+        => new(diagnostic.Code, diagnostic.Message, diagnostic.ContentLength, diagnostic.MaxContentLength);
 
     private async Task WriteResponseMessageAsync(Stream output, JsonObject response, CancellationToken cancellationToken)
     {
         var payload = response.ToJsonString(_jsonOptions);
-        if (await TryWriteMessageAsync(output, payload, cancellationToken).ConfigureAwait(false))
+        if (await LspProtocol.TryWriteMessageAsync(output, payload, cancellationToken).ConfigureAwait(false))
             return;
 
         var id = response["id"]?.DeepClone();
         var errorPayload = Error(id, JsonRpcInternalErrorCode, "Response too large").ToJsonString(_jsonOptions);
-        if (!await TryWriteMessageAsync(output, errorPayload, cancellationToken).ConfigureAwait(false))
+        if (!await LspProtocol.TryWriteMessageAsync(output, errorPayload, cancellationToken).ConfigureAwait(false))
             throw new InvalidOperationException("LSP response error exceeded the response frame byte limit.");
     }
 
-    internal static void WriteMessage(Stream output, string payload)
-    {
-        if (!TryWriteMessage(output, payload, out _))
-            throw new InvalidOperationException($"LSP response body exceeded the {MaxLspResponseFrameBytes} byte limit.");
-    }
+    internal static void WriteMessage(Stream output, string payload) =>
+        LspProtocol.WriteMessage(output, payload);
 
-    internal static bool TryWriteMessage(Stream output, string payload, out int bodyBytes)
-    {
-        var body = Encoding.UTF8.GetBytes(payload);
-        bodyBytes = body.Length;
-        if (body.Length > MaxLspResponseFrameBytes)
-            return false;
-
-        var header = Encoding.ASCII.GetBytes($"Content-Length: {body.Length}\r\n\r\n");
-        output.Write(header);
-        output.Write(body);
-        output.Flush();
-        return true;
-    }
-
-    private static async Task<bool> TryWriteMessageAsync(Stream output, string payload, CancellationToken cancellationToken)
-    {
-        var body = Encoding.UTF8.GetBytes(payload);
-        if (body.Length > MaxLspResponseFrameBytes)
-            return false;
-
-        var header = Encoding.ASCII.GetBytes($"Content-Length: {body.Length}\r\n\r\n");
-        await output.WriteAsync(header.AsMemory(), cancellationToken).ConfigureAwait(false);
-        await output.WriteAsync(body.AsMemory(), cancellationToken).ConfigureAwait(false);
-        await output.FlushAsync(cancellationToken).ConfigureAwait(false);
-        return true;
-    }
-
-    private static async ValueTask<LspHeaderLineReadResult> ReadAsciiLineAsync(
-        Stream input,
-        CancellationToken cancellationToken)
-    {
-        var buffer = ArrayPool<byte>.Shared.Rent(MaxLspHeaderLineBytes + 1);
-        var length = 0;
-        try
-        {
-            while (true)
-            {
-                var read = await ReadAsync(input, buffer, length, 1, cancellationToken).ConfigureAwait(false);
-                if (read == 0)
-                {
-                    var failure = length == 0
-                        ? LspHeaderLineReadFailure.EndOfStream
-                        : LspHeaderLineReadFailure.IncompleteHeader;
-                    return new LspHeaderLineReadResult(null, failure);
-                }
-
-                var value = buffer[length];
-                if (value == '\n')
-                    break;
-                if (value != '\r')
-                {
-                    if (length >= MaxLspHeaderLineBytes)
-                    {
-                        return new LspHeaderLineReadResult(null, LspHeaderLineReadFailure.LineTooLarge);
-                    }
-                    length++;
-                }
-            }
-
-            return new LspHeaderLineReadResult(Encoding.ASCII.GetString(buffer, 0, length), LspHeaderLineReadFailure.None);
-        }
-        finally
-        {
-            SensitiveBufferPolicy.ReturnNonSensitiveProtocolBuffer(buffer);
-        }
-    }
-
-    private static ValueTask<int> ReadAsync(Stream input, byte[] buffer, int offset, int count, CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return input.ReadAsync(buffer.AsMemory(offset, count), cancellationToken);
-    }
+    internal static bool TryWriteMessage(Stream output, string payload, out int bodyBytes) =>
+        LspProtocol.TryWriteMessage(output, payload, out bodyBytes);
 
     public void Dispose()
     {

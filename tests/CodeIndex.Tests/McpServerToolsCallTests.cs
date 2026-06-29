@@ -3398,6 +3398,51 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Status_RateLimitEnvironmentInventoryStaysAligned_Issue4177()
+    {
+        var rateLimitInventory = EnvironmentVariableInventory.Items
+            .Where(item => item.Name is RateLimiterOptions.RpsEnvVar or RateLimiterOptions.BurstEnvVar or RateLimiterOptions.BucketIdleSecondsEnvVar)
+            .ToDictionary(item => item.Name, StringComparer.Ordinal);
+
+        foreach (var name in new[] { RateLimiterOptions.RpsEnvVar, RateLimiterOptions.BurstEnvVar, RateLimiterOptions.BucketIdleSecondsEnvVar })
+        {
+            var item = rateLimitInventory[name];
+            Assert.Equal(EnvironmentVariableInventory.DomainConfig, item.Domain);
+            Assert.Equal("mcp", item.Category);
+            Assert.Equal(EnvironmentVariableInventory.SensitivityPublic, item.Sensitivity);
+            Assert.Equal("performance", item.Policy);
+            Assert.Equal("yes", item.ConfigFileSupported);
+        }
+
+        using var env = EnvironmentVariableScope.Capture(
+            RateLimiterOptions.RpsEnvVar,
+            RateLimiterOptions.BurstEnvVar,
+            RateLimiterOptions.BucketIdleSecondsEnvVar);
+        env.Set(RateLimiterOptions.RpsEnvVar, "2.5");
+        env.Set(RateLimiterOptions.BurstEnvVar, "4");
+        env.Set(RateLimiterOptions.BucketIdleSecondsEnvVar, "30");
+
+        using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: true);
+        var response = server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!)!;
+
+        var mcp = response["result"]!["structuredContent"]!["mcp"]!;
+        var limits = mcp["limits"]!;
+        Assert.Equal(RateLimiterOptions.MaxRefillTokensPerSecond, limits["rate_limit_max_rps"]!.GetValue<double>());
+        Assert.Equal(RateLimiterOptions.MaxBurstCapacity, limits["rate_limit_max_burst"]!.GetValue<double>());
+        Assert.Equal(RateLimiterOptions.DefaultMaxBucketCount, limits["rate_limit_max_buckets"]!.GetValue<int>());
+
+        var rateLimit = mcp["rate_limit"]!;
+        Assert.True(rateLimit["enabled"]!.GetValue<bool>());
+        Assert.Equal(2.5, rateLimit["rps"]!.GetValue<double>());
+        Assert.Equal(4.0, rateLimit["burst"]!.GetValue<double>());
+        Assert.Equal(30.0, rateLimit["bucket_idle_ttl_seconds"]!.GetValue<double>());
+        Assert.Equal(RateLimiterOptions.DefaultMaxBucketCount, rateLimit["bucket_limit"]!.GetValue<int>());
+        Assert.Equal(0, rateLimit["bucket_limit_rejection_count"]!.GetValue<int>());
+        Assert.True(rateLimit["next_prune_in_ms"]!.GetValue<long>() >= 0);
+    }
+
+    [Fact]
     public void ToolsCall_Search_RejectsFalseExactNameAlias()
     {
         InsertIndexedFile("src/search_false_alias.cs", "csharp", "void Run() { }\n");
@@ -8062,7 +8107,7 @@ public partial class McpServerTests
             },
         ]);
 
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"unused_fixture.cs"}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"src/*unused_fixture.cs*"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
         Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
@@ -8090,7 +8135,7 @@ public partial class McpServerTests
         Assert.Equal("reflection_or_config_suspect", symbols[8]!["unusedBucket"]!.GetValue<string>());
         Assert.Contains("returned buckets", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
 
-        var filteredRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"unused_fixture.cs","bucket":"likely_unused_private","minConfidence":"medium"}}}""")!;
+        var filteredRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"src/*unused_fixture.cs*","bucket":"likely_unused_private","minConfidence":"medium"}}}""")!;
         var filteredResponse = _server.HandleMessage(filteredRequest)!;
         var filteredStructured = filteredResponse["result"]!["structuredContent"]!;
         var filteredSymbols = filteredStructured["symbols"]!.AsArray();
@@ -8269,7 +8314,7 @@ public partial class McpServerTests
             },
         ]);
 
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"reflection_unused_fixture.cs"}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"src/*reflection_unused_fixture.cs*"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
         Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
@@ -8341,7 +8386,7 @@ public partial class McpServerTests
             },
         ]);
 
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"reflection_comment_fixture.cs"}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"src/*reflection_comment_fixture.cs*"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
         Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
@@ -8415,7 +8460,7 @@ public partial class McpServerTests
             cmd.ExecuteNonQuery();
         }
 
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"reflection_missing_chunks_fixture.cs"}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"src/*reflection_missing_chunks_fixture.cs*"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
         Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
@@ -8478,7 +8523,7 @@ public partial class McpServerTests
             },
         ]);
 
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"cli_options_fixture.cs"}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"src/*cli_options_fixture.cs*"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
         Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
@@ -8578,7 +8623,7 @@ public partial class McpServerTests
             },
         ]);
 
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"reflection_qualified_fixture.cs"}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"src/*reflection_qualified_fixture.cs*"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
         Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
@@ -8652,7 +8697,7 @@ public partial class McpServerTests
             },
         ]);
 
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"reflection_block_comment_fixture.cs"}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"src/*reflection_block_comment_fixture.cs*"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
         Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
@@ -8742,7 +8787,7 @@ public partial class McpServerTests
         }
         writer.InsertSymbols(symbols);
 
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"large_public_unused_fixture.cs","limit":3000}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"src/*large_public_unused_fixture.cs*","limit":3000}}}""")!;
         var response = _server.HandleMessage(request)!;
 
         Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
@@ -8996,7 +9041,7 @@ public partial class McpServerTests
             },
         ]);
 
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"reflection_diversified_unused_fixture.cs","limit":4}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp","path":"src/*reflection_diversified_unused_fixture.cs*","limit":4}}}""")!;
         var response = _server.HandleMessage(request)!;
 
         Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
@@ -9229,6 +9274,35 @@ public partial class McpServerTests
         Assert.Equal("client-a/1.2.3", data["caller"]!.GetValue<string>());
         Assert.True(data["retry_after_ms"]!.GetValue<long>() >= 1);
         Assert.Equal(2, second["id"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void CreateRateLimitedErrorResponse_BoundsToolAndCallerMetadata_Issue4177()
+    {
+        var tool = new string('t', McpBoundedText.MaxToolNameChars + 8);
+        var caller = new string('c', McpBoundedText.MaxClientIdentityChars + 8);
+        var toolDisplay = McpBoundedText.ForDisplay(tool, McpBoundedText.MaxToolNameChars);
+        var callerDisplay = McpBoundedText.ForDisplay(caller, McpBoundedText.MaxClientIdentityChars);
+
+        var response = McpServer.CreateRateLimitedErrorResponse(JsonValue.Create(7), tool, caller, retryAfterMs: 250);
+        var serialized = response.ToJsonString();
+
+        Assert.DoesNotContain(tool, serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain(caller, serialized, StringComparison.Ordinal);
+        var error = response["error"]!;
+        Assert.Equal(McpErrorEnvelope.CodeRateLimited, error["code"]!.GetValue<int>());
+        Assert.Contains(toolDisplay.Text, error["message"]!.GetValue<string>(), StringComparison.Ordinal);
+        var data = error["data"]!;
+        Assert.Equal(McpErrorEnvelope.CategoryRateLimited, data["category"]!.GetValue<string>());
+        Assert.True(data["retry_safe"]!.GetValue<bool>());
+        Assert.Equal("rate_limited", data["error_category"]!.GetValue<string>());
+        Assert.Equal(toolDisplay.Text, data["tool"]!.GetValue<string>());
+        Assert.Equal(tool.Length, data["tool_length"]!.GetValue<int>());
+        Assert.True(data["tool_truncated"]!.GetValue<bool>());
+        Assert.Equal(callerDisplay.Text, data["caller"]!.GetValue<string>());
+        Assert.Equal(caller.Length, data["caller_length"]!.GetValue<int>());
+        Assert.True(data["caller_truncated"]!.GetValue<bool>());
+        Assert.Equal(250, data["retry_after_ms"]!.GetValue<long>());
     }
 
     [Fact]
