@@ -361,12 +361,7 @@ public partial class DbReader
     }
 
     private static Regex CreateFindRegexMatcher(string query, bool exact)
-    {
-        var options = RegexOptions.CultureInvariant;
-        if (!exact)
-            options |= RegexOptions.IgnoreCase;
-        return new Regex(query, options, ResolveFindRegexMatchTimeout());
-    }
+        => RegexRegistry.CreateFindRegex(query, exact, ResolveFindRegexMatchTimeout());
 
     private static TimeSpan ResolveFindRegexMatchTimeout()
         => FindRegexMatchTimeoutForTesting is { } timeout && timeout > TimeSpan.Zero
