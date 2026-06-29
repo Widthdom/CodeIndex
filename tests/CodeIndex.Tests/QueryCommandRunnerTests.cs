@@ -1021,6 +1021,55 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunBatch_JsonSummaryReportsCaptureLimitFromWithDb_Issue4142()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_summary_capture_limit");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var overLimitLine = new string('x', JsonEnvelopeWrapper.MaxCapturedOutputChars + 1024);
+            TestProjectHelper.InsertIndexedFile(dbPath, "docs/huge.txt", "text", overLimitLine);
+            var input = """
+            ["excerpt","docs/huge.txt","--start","1","--max-line-width","0"]
+
+            """;
+
+            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+                input,
+                () => QueryCommandRunner.RunBatch(["--db", dbPath, "--json-summary"], _jsonOptions));
+            var lines = ParseJsonLines(stdout);
+
+            Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, lines.Count);
+            using var excerptRecordDocument = lines[0];
+            using var summaryDocument = lines[1];
+
+            var excerptRecord = excerptRecordDocument.RootElement;
+            Assert.Equal("batch_result", excerptRecord.GetProperty("record").GetString());
+            Assert.Equal("error", excerptRecord.GetProperty("status").GetString());
+            Assert.Equal("excerpt", excerptRecord.GetProperty("command").GetString());
+            Assert.Equal(CommandExitCodes.InvalidArgument, excerptRecord.GetProperty("exit_code").GetInt32());
+            Assert.DoesNotContain("database", excerptRecord.GetProperty("stderr").GetString()!, StringComparison.OrdinalIgnoreCase);
+            var error = excerptRecord.GetProperty("error");
+            Assert.Contains("stdout exceeded", error.GetProperty("message").GetString());
+            Assert.Equal(CommandErrorCodes.UsageError, error.GetProperty("error_code").GetString());
+            Assert.Equal(JsonEnvelopeWrapper.MaxCapturedOutputChars, error.GetProperty("max_chars").GetInt32());
+            Assert.Equal("stdout", error.GetProperty("stream").GetString());
+
+            var summary = summaryDocument.RootElement;
+            Assert.Equal("batch_summary", summary.GetProperty("record").GetString());
+            Assert.Equal(1, summary.GetProperty("commands_processed").GetInt32());
+            Assert.Equal(1, summary.GetProperty("command_failures").GetInt32());
+            Assert.Equal(CommandExitCodes.InvalidArgument, summary.GetProperty("exit_code").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunBatch_EmptySqliteFileRejectedBeforeQuery_Issue2037()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2037_batch_empty_sqlite");
