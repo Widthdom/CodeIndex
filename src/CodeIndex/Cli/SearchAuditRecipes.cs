@@ -1316,6 +1316,134 @@ internal static class SearchAuditRecipes
                     MatchOrigins = ["code"],
                 }
             ]),
+        SourceScopedRecipe(
+            "resource-materialization-audit",
+            "Classify resource lifetime, stream ownership, file-open policy, and eager materialization hotspots by subsystem.",
+            [
+                new(
+                    "disposable-boundary",
+                    "IDisposable",
+                    "Find disposable ownership boundaries that should have explicit teardown, signal-unregistration, or lifetime-transfer review.",
+                    ["audit", "performance"],
+                    "False positives include small scope helpers and test-only leases; prioritize command, MCP, LSP, worker, and database boundaries.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: disposable ownership can cross subsystem boundaries and leak handles, registrations, processes, or SQLite objects when teardown is ambiguous.",
+                        "positive: sealed scopes with deterministic Dispose ordering, ownership-transfer comments, or using/await using call sites usually explain intentional lifetime management."
+                    ],
+                },
+                new(
+                    "async-dispose-boundary",
+                    "DisposeAsync",
+                    "Find async disposal paths where cancellation, stream flush, process drain, or transport shutdown ordering needs review.",
+                    ["audit", "performance"],
+                    "False positives include thin interface implementations and tests; prioritize long-running command, DB, MCP, and transport paths.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: async disposal can lose flush/drain failures or race with shutdown cancellation when ownership is unclear.",
+                        "positive: await using, explicit ConfigureAwait, bounded drain, or best-effort diagnostic handling can make the boundary intentional."
+                    ],
+                },
+                new(
+                    "db-command-reader-ownership",
+                    "CreateCommand(",
+                    "Find database command creation sites so DB command, reader, and transaction ownership can be reviewed together.",
+                    ["audit", "performance"],
+                    "False positives include tiny scalar probes; prioritize command/reader pairs, prepared command cache reuse, and transaction lifetime boundaries.")
+                {
+                    PathPatterns =
+                    [
+                        "src/CodeIndex/Database/**",
+                        "src/CodeIndex/Cli/DbCommandRunner.cs",
+                        "src/CodeIndex/Cli/IndexCommandRunner*.cs",
+                    ],
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: SQLite commands and readers should have clear ownership so prepared statements, transactions, and connections are not retained longer than intended.",
+                        "positive: using/await using, ExecuteTrackedReader ownership, or prepared-command cache policy nearby can explain the site."
+                    ],
+                },
+                new(
+                    "file-stream-ownership",
+                    "FileStream",
+                    "Find explicit FileStream ownership boundaries that should document sharing mode, length checks, and disposal scope.",
+                    ["audit", "performance", "security"],
+                    "False positives include bounded helper internals and fixed test archives; prioritize production streams that cross subsystem or async boundaries.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: raw FileStream ownership can hide platform-specific sharing, long-path, locking, or max-byte assumptions.",
+                        "positive: BoundedFile helpers, explicit FileShare, max-byte enforcement, or short local using scopes are strong safe evidence."
+                    ],
+                },
+                new(
+                    "file-open-sharing-policy",
+                    "File.Open(",
+                    "Find File.Open call sites that should show explicit FileShare, access mode, long-path, and bounded-read policy.",
+                    ["audit", "performance", "security"],
+                    "False positives include wrappers whose purpose is centralizing file-open policy.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: File.Open defaults and overload choices can create cross-platform locking, symlink, or unbounded-read surprises.",
+                        "positive: explicit FileMode, FileAccess, FileShare, LongPath normalization, or BoundedFile routing makes the policy auditable."
+                    ],
+                },
+                new(
+                    "openread-sharing-policy",
+                    "OpenRead",
+                    "Find OpenRead-style helpers and call sites that should be classified by ownership transfer and sharing policy.",
+                    ["audit", "performance", "security"],
+                    "False positives include the shared BoundedFile helper and trusted archive entry readers.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: OpenRead call sites can inherit default sharing or transfer stream ownership across subsystem boundaries.",
+                        "positive: BoundedFile.OpenRead, archive-entry ownership, or immediate using scopes generally explain the site."
+                    ],
+                },
+                new(
+                    "memory-stream-materialization",
+                    "MemoryStream",
+                    "Find MemoryStream materialization sites so bounded accumulators, serialization buffers, and in-memory payload copies can be separated.",
+                    ["audit", "performance"],
+                    "False positives include bounded JSON writers, tiny protocol envelopes, and test fixtures with fixed input sizes.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: MemoryStream can hide eager payload materialization before byte limits or cancellation are enforced.",
+                        "positive: max-byte helpers, capped initial capacity, streaming JSON writers, or bounded downstream consumers make the allocation intentional."
+                    ],
+                },
+                new(
+                    "query-mcp-toarray-materialization",
+                    "ToArray()",
+                    "Find eager ToArray conversions in query and MCP paths where result materialization can scale with workspace or protocol size.",
+                    ["audit", "performance"],
+                    "False positives include small option lists and stable protocol field snapshots; prioritize search results, module lists, path sets, and JSON arrays.")
+                {
+                    PathPatterns =
+                    [
+                        "src/CodeIndex/Cli/QueryCommandRunner*.cs",
+                        "src/CodeIndex/Mcp/**",
+                    ],
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: eager ToArray in query/MCP paths can materialize large result sets before limit, pagination, or JSON-size policy is applied.",
+                        "positive: bounded list sizes, option metadata, or immutable snapshot requirements can make the conversion intentional."
+                    ],
+                }
+            ]),
         AllScopedRecipe(
             "phrase-risk-patterns",
             "Precision-focused audit searches for noisy code phrases, broad words, and configuration text that need semantic triage facets.",

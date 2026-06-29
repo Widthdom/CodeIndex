@@ -1344,6 +1344,10 @@ public partial class QueryCommandRunnerTests
             .GetProperty("recipes")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "bounded-read-evidence");
+        var resourceRecipe = root
+            .GetProperty("recipes")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "resource-materialization-audit");
         var broadTokenRecipe = root
             .GetProperty("recipes")
             .EnumerateArray()
@@ -1424,6 +1428,14 @@ public partial class QueryCommandRunnerTests
             .GetProperty("queries")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "enumerate-without-options");
+        var resourceDbCommandQuery = resourceRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "db-command-reader-ownership");
+        var resourceToArrayQuery = resourceRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "query-mcp-toarray-materialization");
         var phraseResultQuery = phraseRiskRecipe
             .GetProperty("queries")
             .EnumerateArray()
@@ -1537,6 +1549,14 @@ public partial class QueryCommandRunnerTests
             filter.GetProperty("option").GetString() == "--reject-after" &&
             filter.GetProperty("query").GetString() == "EnumerationOptions");
         Assert.Contains(boundedReadRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "bounded-memory-accumulator");
+        Assert.Equal("source", resourceRecipe.GetProperty("default_scope").GetString());
+        Assert.Contains(resourceRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "async-dispose-boundary");
+        Assert.Contains(resourceRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "file-open-sharing-policy");
+        Assert.Equal("CreateCommand(", resourceDbCommandQuery.GetProperty("query").GetString());
+        Assert.Contains(resourceDbCommandQuery.GetProperty("path_patterns").EnumerateArray(), path => path.GetString() == "src/CodeIndex/Database/**");
+        Assert.Equal("ToArray()", resourceToArrayQuery.GetProperty("query").GetString());
+        Assert.Contains(resourceToArrayQuery.GetProperty("path_patterns").EnumerateArray(), path => path.GetString() == "src/CodeIndex/Mcp/**");
+        Assert.Contains(resourceToArrayQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("limit, pagination, or JSON-size policy", StringComparison.Ordinal));
         Assert.Equal("all", broadTokenRecipe.GetProperty("default_scope").GetString());
         Assert.Equal(0, broadTokenRecipe.GetProperty("default_path_patterns").GetArrayLength());
         Assert.Equal(0, broadTokenRecipe.GetProperty("default_exclude_paths").GetArrayLength());
@@ -1813,7 +1833,7 @@ public partial class QueryCommandRunnerTests
         };
 
         Assert.Equal(
-            ["risky-code", "auth-token-audit", "dogfood-risk-patterns", "sqlite-query-policy-surfaces", "json-parse-apis", "dotnet-risk-patterns", "unsupported-operation-boundaries", "xml-parser-security", "filesystem-traversal", "bounded-read-evidence", "phrase-risk-patterns", "broad-token-audit"],
+            ["risky-code", "auth-token-audit", "dogfood-risk-patterns", "sqlite-query-policy-surfaces", "json-parse-apis", "dotnet-risk-patterns", "unsupported-operation-boundaries", "xml-parser-security", "filesystem-traversal", "bounded-read-evidence", "resource-materialization-audit", "phrase-risk-patterns", "broad-token-audit"],
             recipes.Select(recipe => recipe.Name).ToArray());
 
         AssertRecipe(
@@ -1957,6 +1977,21 @@ public partial class QueryCommandRunnerTests
             ["src/**"],
             expectedSourceExcludes,
             ["bounded-file-open-helper", "bounded-memory-accumulator", "bounded-full-byte-read-helper"]);
+        AssertRecipe(
+            "resource-materialization-audit",
+            SearchAuditRecipes.DefaultAuditScope,
+            ["src/**"],
+            expectedSourceExcludes,
+            [
+                "disposable-boundary",
+                "async-dispose-boundary",
+                "db-command-reader-ownership",
+                "file-stream-ownership",
+                "file-open-sharing-policy",
+                "openread-sharing-policy",
+                "memory-stream-materialization",
+                "query-mcp-toarray-materialization"
+            ]);
         AssertRecipe(
             "phrase-risk-patterns",
             SearchAuditRecipes.AllAuditScope,
@@ -3946,6 +3981,71 @@ public partial class QueryCommandRunnerTests
             Assert.Contains(query.GetProperty("guard_filters").EnumerateArray(), filter =>
                 filter.GetProperty("query").GetString() == "MatchTimeout(" &&
                 filter.GetProperty("scope").GetString() == "same_line");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_ResourceMaterializationRecipeScopesQueryMcpToArray_Issue4155()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_resource_materialization");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/CodeIndex/Cli/QueryCommandRunner.Example.cs",
+                "csharp",
+                """
+                public static class QueryCommandRunnerExample
+                {
+                    public static string[] Build(string[] values) => values.ToArray();
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/CodeIndex/Mcp/McpToolHandlers.Example.cs",
+                "csharp",
+                """
+                public static class McpToolHandlersExample
+                {
+                    public static string[] Build(string[] values) => values.ToArray();
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/CodeIndex/Indexer/IndexerExample.cs",
+                "csharp",
+                """
+                public static class IndexerExample
+                {
+                    public static string[] Build(string[] values) => values.ToArray();
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "resource-materialization-audit/query-mcp-toarray-materialization", "--db", dbPath, "--json", "--limit", "10"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var query = Assert.Single(document.RootElement.GetProperty("queries").EnumerateArray());
+            var paths = query
+                .GetProperty("results")
+                .EnumerateArray()
+                .Select(result => result.GetProperty("path").GetString())
+                .ToArray();
+
+            Assert.Equal("query-mcp-toarray-materialization", query.GetProperty("name").GetString());
+            Assert.Equal(2, query.GetProperty("count").GetInt32());
+            Assert.Contains("src/CodeIndex/Cli/QueryCommandRunner.Example.cs", paths);
+            Assert.Contains("src/CodeIndex/Mcp/McpToolHandlers.Example.cs", paths);
+            Assert.DoesNotContain("src/CodeIndex/Indexer/IndexerExample.cs", paths);
+            Assert.Contains(query.GetProperty("path_patterns").EnumerateArray(), path => path.GetString() == "src/CodeIndex/Mcp/**");
         }
         finally
         {
