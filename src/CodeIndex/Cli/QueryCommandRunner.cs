@@ -1446,21 +1446,20 @@ public static partial class QueryCommandRunner
             if (options.OutputFormat == OutputFormatCompact)
             {
                 var compactQueryResults = CollectSearchRecipeCompactQueryResults(reader, selection.Queries, scope, options, userExact, out var compactTotal);
-                var json = JsonSerializer.Serialize(
-                        new SearchRecipeCompactRunJsonResult(
-                            JsonOutputContract.ApiVersion,
-                            ToSearchRecipeListItem(recipe, selection.Queries),
-                            scope,
-                            selection.Queries.Count,
-                            compactTotal,
-                            BuildSearchRecipeRunSummary(compactQueryResults, options.Limit, options.TotalLimit, compactTotal),
-                            compactQueryResults),
-                        CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeCompactRunJsonResult);
+                var compactPayload = BuildSearchRecipeCompactRunPayload(
+                    recipe,
+                    selection.Queries,
+                    scope,
+                    options,
+                    jsonOptions,
+                    compactQueryResults,
+                    compactTotal);
+                var compactJson = compactPayload.ToJsonString(GetJsonNodeSerializationOptions(jsonOptions));
                 return WriteJsonObjectWithOptionalByteLimit(
-                    json,
+                    compactJson,
                     options,
                     "recipe compact",
-                    "Reduce --limit, use --snippet-lines 0, or increase --max-json-bytes.");
+                    "Reduce --limit or --total-limit, select one child query with --recipe <recipe>/<query>, stream rows with --json=ndjson, or increase --max-json-bytes.");
             }
 
             var queryResults = CollectSearchRecipeQueryResults(reader, selection.Queries, scope, options, userExact, out var total);
@@ -1531,6 +1530,102 @@ public static partial class QueryCommandRunner
             CommandErrorWriter.WriteStderr($"({total} recipe results across {selection.Queries.Count} queries)");
             return CommandExitCodes.Success;
         });
+    }
+
+    private static JsonObject BuildSearchRecipeCompactRunPayload(
+        SearchAuditRecipe recipe,
+        IReadOnlyList<SearchAuditRecipeQuery> selectedQueries,
+        SearchRecipeScopeJsonResult scope,
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        List<SearchRecipeCompactQueryResultJsonResult> compactQueryResults,
+        int compactTotal)
+    {
+        var run = new SearchRecipeCompactRunJsonResult(
+            JsonOutputContract.ApiVersion,
+            new SearchRecipeCompactListItemJsonResult(
+                recipe.Name,
+                recipe.Description,
+                recipe.DefaultScope,
+                selectedQueries.Count,
+                recipe.RecommendedLabels,
+                recipe.DefaultPathPatterns,
+                recipe.DefaultExcludePaths),
+            scope,
+            selectedQueries.Count,
+            compactTotal,
+            BuildSearchRecipeRunSummary(compactQueryResults, options.Limit, options.TotalLimit, compactTotal),
+            compactQueryResults);
+        var payload = JsonSerializer.SerializeToNode(
+            run,
+            CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeCompactRunJsonResult)!.AsObject();
+        payload["compact"] = true;
+        AddJsonByteLimitField(payload, options);
+        payload["truncation"] = BuildSearchRecipeCompactTruncationMetadata(compactQueryResults, options);
+        payload["next_commands"] = BuildSearchRecipeCompactNextCommands(recipe.Name, compactQueryResults, options);
+        return payload;
+    }
+
+    private static JsonObject BuildSearchRecipeCompactTruncationMetadata(
+        IReadOnlyList<SearchRecipeCompactQueryResultJsonResult> queryResults,
+        QueryCommandOptions options)
+    {
+        var queries = new JsonArray();
+        var truncatedQueryCount = 0;
+        var emittedResultCount = 0;
+        var minimumMatchedResultCount = 0;
+        var minimumOmittedResultCount = 0;
+        foreach (var query in queryResults)
+        {
+            if (query.Truncated)
+                truncatedQueryCount++;
+            emittedResultCount += query.EmittedCount;
+            minimumMatchedResultCount += query.MinimumMatchedCount;
+            minimumOmittedResultCount += query.MinimumOmittedResultCount;
+            queries.Add(new JsonObject
+            {
+                ["name"] = query.Name,
+                ["returned"] = query.Results.Count,
+                ["emitted_count"] = query.EmittedCount,
+                ["minimum_matched_count"] = query.MinimumMatchedCount,
+                ["minimum_omitted_result_count"] = query.MinimumOmittedResultCount,
+                ["result_limit"] = query.ResultLimit,
+                ["truncated"] = query.Truncated,
+                ["next_cursor"] = query.NextCursor,
+            });
+        }
+
+        var metadata = new JsonObject
+        {
+            ["selected_query_count"] = queryResults.Count,
+            ["limit_per_query"] = options.Limit,
+            ["total_limit"] = options.TotalLimit,
+            ["emitted_result_count"] = emittedResultCount,
+            ["minimum_matched_result_count"] = minimumMatchedResultCount,
+            ["minimum_omitted_result_count"] = minimumOmittedResultCount,
+            ["truncated_query_count"] = truncatedQueryCount,
+            ["queries"] = queries,
+        };
+        if (options.MaxJsonBytes.HasValue)
+            metadata["aggregate_byte_limit"] = options.MaxJsonBytes.Value;
+        return metadata;
+    }
+
+    private static JsonArray BuildSearchRecipeCompactNextCommands(
+        string recipeName,
+        IReadOnlyList<SearchRecipeCompactQueryResultJsonResult> queryResults,
+        QueryCommandOptions options)
+    {
+        var commands = new JsonArray();
+        foreach (var query in queryResults.Where(query => query.NextCursor != null).Take(3))
+        {
+            commands.Add($"cdidx search --recipe {recipeName}/{query.Name} --format compact --cursor {query.NextCursor} --limit {options.Limit.ToString(CultureInfo.InvariantCulture)}");
+        }
+
+        if (commands.Count == 0 && queryResults.Count > 1)
+            commands.Add($"cdidx search --recipe {recipeName}/{queryResults[0].Name} --format compact --limit {options.Limit.ToString(CultureInfo.InvariantCulture)}");
+        commands.Add($"cdidx search --recipe {recipeName} --json=ndjson --results-only --max-json-bytes <bytes>");
+        return commands;
     }
 
     private static int RunSearchRecipeAggregation(QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool userExact)
@@ -6219,6 +6314,13 @@ public static partial class QueryCommandRunner
                 CommandExitCodes.UsageError,
                 "choose --summary-only for aggregate fields only, or --sections <tree,languages,hotspots,metrics> for selected detail sections.",
                 ConsoleUi.GetUsageLine("map"));
+        var mapEmitsJson = options.Json || options.OutputFormat is OutputFormatCompact or OutputFormatIssueDrafts;
+        if (options.MaxJsonBytes.HasValue && !mapEmitsJson)
+            return CommandErrorWriter.Write(
+                "--max-json-bytes is only supported with JSON map output.",
+                CommandExitCodes.UsageError,
+                "Use `cdidx map --compact --max-json-bytes <n>`, `cdidx map --json --sections <tree,languages,hotspots,metrics> --max-json-bytes <n>`, or remove --max-json-bytes.",
+                ConsoleUi.GetUsageLine("map"));
 
         return WithDb(options, jsonOptions, reader =>
         {
@@ -6237,15 +6339,31 @@ public static partial class QueryCommandRunner
                 || options.ExcludeTests || options.Lang != null;
             if (options.OutputFormat == OutputFormatIssueDrafts)
             {
-                Console.WriteLine(BuildRepoMapIssueDraftsPayload(map, options, jsonOptions));
-                return map.FileCount == 0 && hasFilter ? ZeroResultExitCode(options) : CommandExitCodes.Success;
+                var issueDraftsJson = BuildRepoMapIssueDraftsPayload(map, options, jsonOptions);
+                var issueDraftsExitCode = WriteJsonObjectWithOptionalByteLimit(
+                    issueDraftsJson,
+                    options,
+                    "map issue-draft",
+                    "Reduce --limit, narrow --path/--lang filters, or increase --max-json-bytes.",
+                    "map");
+                return issueDraftsExitCode != CommandExitCodes.Success
+                    ? issueDraftsExitCode
+                    : map.FileCount == 0 && hasFilter ? ZeroResultExitCode(options) : CommandExitCodes.Success;
             }
             if (map.FileCount == 0 && hasFilter)
             {
                 if (options.Json)
                 {
                     var payload = BuildRepoMapJsonPayload(map, options, jsonOptions, compactTruncation);
-                    Console.WriteLine(payload.ToJsonString(jsonOptions));
+                    var json = payload.ToJsonString(GetJsonNodeSerializationOptions(jsonOptions));
+                    var zeroJsonExitCode = WriteJsonObjectWithOptionalByteLimit(
+                        json,
+                        options,
+                        "map",
+                        "Use `--summary-only`, narrow --sections/--path/--lang filters, switch to --compact, or increase --max-json-bytes.",
+                        "map");
+                    if (zeroJsonExitCode != CommandExitCodes.Success)
+                        return zeroJsonExitCode;
                 }
                 else
                 {
@@ -6257,7 +6375,13 @@ public static partial class QueryCommandRunner
             if (options.Json)
             {
                 var payload = BuildRepoMapJsonPayload(map, options, jsonOptions, compactTruncation);
-                Console.WriteLine(payload.ToJsonString(jsonOptions));
+                var json = payload.ToJsonString(GetJsonNodeSerializationOptions(jsonOptions));
+                return WriteJsonObjectWithOptionalByteLimit(
+                    json,
+                    options,
+                    "map",
+                    "Use `--summary-only`, narrow --sections/--path/--lang filters, switch to --compact, or increase --max-json-bytes.",
+                    "map");
             }
             else
             {
@@ -6323,6 +6447,7 @@ public static partial class QueryCommandRunner
             KeepRepoMapJsonProperties(payload, RepoMapSummaryJsonProperties);
             payload["summary_only"] = true;
             payload["sections"] = new JsonArray();
+            AddJsonByteLimitField(payload, options);
             return payload;
         }
 
@@ -6331,7 +6456,11 @@ public static partial class QueryCommandRunner
             if (options.ContextAfterExplicit)
                 payload["depth"] = options.ContextAfter;
             if (options.Compact && compactTruncation != null)
+            {
                 AddCompactJsonFields(payload, GetCompactSectionLimit(options), compactTruncation);
+                payload["next_commands"] = BuildRepoMapNextCommands(options);
+            }
+            AddJsonByteLimitField(payload, options);
             return payload;
         }
 
@@ -6345,7 +6474,11 @@ public static partial class QueryCommandRunner
         if (options.ContextAfterExplicit)
             payload["depth"] = options.ContextAfter;
         if (options.Compact && compactTruncation != null)
+        {
             AddCompactJsonFields(payload, GetCompactSectionLimit(options), compactTruncation);
+            payload["next_commands"] = BuildRepoMapNextCommands(options);
+        }
+        AddJsonByteLimitField(payload, options);
         return payload;
     }
 
@@ -6392,6 +6525,7 @@ public static partial class QueryCommandRunner
             payload["indexed_head_commit"] = map.IndexedHeadCommit;
         if (map.WorktreeHeadChanged != null)
             payload["worktree_head_changed"] = map.WorktreeHeadChanged;
+        AddJsonByteLimitField(payload, options);
         return payload.ToJsonString(GetJsonNodeSerializationOptions(jsonOptions));
     }
 
@@ -6945,6 +7079,33 @@ public static partial class QueryCommandRunner
         payload["compact"] = true;
         payload["compact_limit"] = compactLimit;
         payload["truncation"] = truncation;
+    }
+
+    private static void AddJsonByteLimitField(JsonObject payload, QueryCommandOptions options)
+    {
+        if (options.MaxJsonBytes.HasValue)
+            payload["output_byte_limit"] = options.MaxJsonBytes.Value;
+    }
+
+    private static JsonArray BuildRepoMapNextCommands(QueryCommandOptions options)
+    {
+        var jsonFlag = options.Compact ? "--compact" : "--json";
+        var commands = new JsonArray
+        {
+            $"cdidx map {jsonFlag} --summary-only",
+        };
+
+        if (options.MapSections == null)
+        {
+            commands.Add($"cdidx map {jsonFlag} --sections tree --limit {GetCompactSectionLimit(options).ToString(CultureInfo.InvariantCulture)}");
+            commands.Add($"cdidx map {jsonFlag} --sections hotspots --limit {GetCompactSectionLimit(options).ToString(CultureInfo.InvariantCulture)}");
+        }
+        else
+        {
+            commands.Add($"cdidx map {jsonFlag} --sections {string.Join(',', options.MapSections)} --limit {GetCompactSectionLimit(options).ToString(CultureInfo.InvariantCulture)}");
+        }
+
+        return commands;
     }
 
     private static void TruncateCompactSection<T>(List<T> items, int sectionLimit, JsonObject sections, string sectionName)

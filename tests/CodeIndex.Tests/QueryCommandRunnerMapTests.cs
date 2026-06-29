@@ -256,6 +256,66 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunMap_CompactJsonHonorsMaxJsonBytesAndReportsNextCommands_Issue4183()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_compact_bytes");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            for (var i = 0; i < QueryCommandRunner.DefaultCompactSectionLimit + 2; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    $"src/module{i}/App{i}.cs",
+                    "csharp",
+                    $"namespace Module{i}; public class App{i} {{ public void Run() {{ }} }}\n");
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--compact", "--max-json-bytes", "200000"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.True(json.GetProperty("compact").GetBoolean());
+            Assert.Equal(200000, json.GetProperty("output_byte_limit").GetInt32());
+            Assert.NotEmpty(json.GetProperty("next_commands").EnumerateArray());
+            Assert.True(json
+                .GetProperty("truncation")
+                .GetProperty("sections")
+                .GetProperty("top_files")
+                .GetProperty("truncated")
+                .GetBoolean());
+
+            var (jsonExitCode, jsonStdout, jsonStderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--json", "--summary-only", "--max-json-bytes", "200000"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, jsonExitCode);
+            Assert.Equal(string.Empty, jsonStderr);
+            using var jsonDocument = ParseJsonOutput(jsonStdout);
+            Assert.True(jsonDocument.RootElement.GetProperty("summary_only").GetBoolean());
+            Assert.Equal(200000, jsonDocument.RootElement.GetProperty("output_byte_limit").GetInt32());
+
+            var (capExitCode, capStdout, capStderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--compact", "--max-json-bytes", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, capExitCode);
+            Assert.Equal(string.Empty, capStdout);
+            Assert.Contains("map JSON output", capStderr, StringComparison.Ordinal);
+            Assert.Contains("Usage: cdidx map", capStderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunMap_SectionsHotspotsJson_MapsSectionToReturnedProperties_Issue3938()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_hotspots_section");

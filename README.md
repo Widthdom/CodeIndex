@@ -73,7 +73,9 @@ cdidx definition UserService
 cdidx inspect QueryCommandRunner --outline-only
 cdidx outline src/CodeIndex/Cli/QueryCommandRunner.cs --compact --kind function --sort size --limit 10
 cdidx unused --compact --by-bucket
+cdidx map --compact --max-json-bytes 65536
 cdidx map --format issue-drafts --limit 10
+cdidx search --recipe risky-code --format compact --max-json-bytes 65536
 cdidx validate
 ```
 
@@ -277,7 +279,9 @@ cdidx definition UserService
 cdidx inspect QueryCommandRunner --outline-only
 cdidx outline src/CodeIndex/Cli/QueryCommandRunner.cs --compact --kind function --sort size --limit 10
 cdidx unused --compact --by-bucket
+cdidx map --compact --max-json-bytes 65536
 cdidx map --format issue-drafts --limit 10
+cdidx search --recipe risky-code --format compact --max-json-bytes 65536
 cdidx validate
 ```
 
