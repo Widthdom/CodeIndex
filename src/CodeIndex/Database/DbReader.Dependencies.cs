@@ -255,13 +255,13 @@ public partial class DbReader
         {
             var ors = new List<string>(pathPatterns.Count);
             for (int i = 0; i < pathPatterns.Count; i++)
-                ors.Add($"{sourceFilterAlias}.path LIKE @pathPattern{i} ESCAPE '\\'");
+                ors.Add(BuildPathFilterPredicate(sourceFilterAlias, "pathPattern", i, pathPatterns[i]));
             sql += " AND (" + string.Join(" OR ", ors) + ")";
         }
         if (!reverse && excludePathPatterns is { Count: > 0 })
         {
             for (int i = 0; i < excludePathPatterns.Count; i++)
-                sql += $" AND {sourceFilterAlias}.path NOT LIKE @excludePath{i} ESCAPE '\\'";
+                sql += $" AND NOT {BuildPathFilterPredicate(sourceFilterAlias, "excludePath", i, excludePathPatterns[i])}";
         }
         if (excludeTests)
             sql += $" AND NOT {DependencyTestPathCondition($"{sourceFilterAlias}.path")}";
@@ -366,13 +366,13 @@ public partial class DbReader
         {
             var ors = new List<string>(pathPatterns.Count);
             for (int i = 0; i < pathPatterns.Count; i++)
-                ors.Add($"{targetFilterAlias}.path LIKE @pathPattern{i} ESCAPE '\\'");
+                ors.Add(BuildPathFilterPredicate(targetFilterAlias, "pathPattern", i, pathPatterns[i]));
             sql += " AND (" + string.Join(" OR ", ors) + ")";
         }
         if (reverse && excludePathPatterns is { Count: > 0 })
         {
             for (int i = 0; i < excludePathPatterns.Count; i++)
-                sql += $" AND {targetFilterAlias}.path NOT LIKE @excludePath{i} ESCAPE '\\'";
+                sql += $" AND NOT {BuildPathFilterPredicate(targetFilterAlias, "excludePath", i, excludePathPatterns[i])}";
         }
         if (excludeTests)
             sql += $" AND NOT {DependencyTestPathCondition($"{targetFilterAlias}.path")}";
@@ -535,15 +535,9 @@ public partial class DbReader
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", lang);
         if (pathPatterns is { Count: > 0 })
-        {
-            for (int i = 0; i < pathPatterns.Count; i++)
-                SqliteCommandPolicy.Add(cmd, $"@pathPattern{i}", BuildPathLikePattern(pathPatterns[i]));
-        }
+            AddPathFilterParameterSet(cmd, "pathPattern", pathPatterns);
         if (excludePathPatterns is { Count: > 0 })
-        {
-            for (int i = 0; i < excludePathPatterns.Count; i++)
-                SqliteCommandPolicy.Add(cmd, $"@excludePath{i}", BuildPathLikePattern(excludePathPatterns[i]));
-        }
+            AddPathFilterParameterSet(cmd, "excludePath", excludePathPatterns);
         SqliteCommandPolicy.Add(cmd, "@limit", DependencyNoiseProfile.GetRankingCandidateLimit(limit));
         SqliteCommandPolicy.Add(cmd, "@symbolSampleLimit", DependencySymbolSampleLimit);
 
@@ -616,13 +610,13 @@ public partial class DbReader
         {
             var ors = new List<string>(pathPatterns.Count);
             for (int i = 0; i < pathPatterns.Count; i++)
-                ors.Add($"{constrainedAlias}.path LIKE @pathPattern{i} ESCAPE '\\'");
+                ors.Add(BuildPathFilterPredicate(constrainedAlias, "pathPattern", i, pathPatterns[i]));
             sql += " AND (" + string.Join(" OR ", ors) + ")";
         }
         if (excludePathPatterns is { Count: > 0 })
         {
             for (int i = 0; i < excludePathPatterns.Count; i++)
-                sql += $" AND {constrainedAlias}.path NOT LIKE @excludePath{i} ESCAPE '\\'";
+                sql += $" AND NOT {BuildPathFilterPredicate(constrainedAlias, "excludePath", i, excludePathPatterns[i])}";
         }
         if (excludeTests)
         {
@@ -670,15 +664,9 @@ public partial class DbReader
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", lang);
         if (pathPatterns is { Count: > 0 })
-        {
-            for (int i = 0; i < pathPatterns.Count; i++)
-                SqliteCommandPolicy.Add(cmd, $"@pathPattern{i}", BuildPathLikePattern(pathPatterns[i]));
-        }
+            AddPathFilterParameterSet(cmd, "pathPattern", pathPatterns);
         if (excludePathPatterns is { Count: > 0 })
-        {
-            for (int i = 0; i < excludePathPatterns.Count; i++)
-                SqliteCommandPolicy.Add(cmd, $"@excludePath{i}", BuildPathLikePattern(excludePathPatterns[i]));
-        }
+            AddPathFilterParameterSet(cmd, "excludePath", excludePathPatterns);
         SqliteCommandPolicy.Add(cmd, "@limit", limit);
         SqliteCommandPolicy.Add(cmd, "@symbolSampleLimit", DependencySymbolSampleLimit);
 

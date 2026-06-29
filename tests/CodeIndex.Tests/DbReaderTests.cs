@@ -43,18 +43,30 @@ public partial class DbReaderTests : IDisposable
     }
 
     [Theory]
-    [InlineData("plain", "%plain%")]
-    [InlineData("src/Services", "%src/Services%")]
+    [InlineData("plain", "plain")]
+    [InlineData("./install.sh", "install.sh")]
+    [InlineData("/install.sh", "install.sh")]
+    [InlineData("src/", "src")]
+    [InlineData("src/Services", "src/Services")]
     [InlineData("*.py", "%.py")]
     [InlineData("src/*.py", "src/%.py")]
     [InlineData("foo?bar", "foo_bar")]
-    [InlineData(@"literal\*.py", "%literal*.py%")]
-    [InlineData(@"literal\?.py", "%literal?.py%")]
-    [InlineData(@"literal\[name\].py", "%literal[name].py%")]
-    [InlineData(@"src\Foo.cs", @"%src\\Foo.cs%")]
+    [InlineData(@"literal\*.py", "literal*.py")]
+    [InlineData(@"literal\?.py", "literal?.py")]
+    [InlineData(@"literal\[name\].py", "literal[name].py")]
+    [InlineData(@"src\Foo.cs", @"src\\Foo.cs")]
     public void BuildPathLikePattern_TreatsGlobTokensAsWildcards(string input, string expected)
     {
         Assert.Equal(expected, DbReader.BuildPathLikePattern(input));
+    }
+
+    [Theory]
+    [InlineData("tools", "tools/%")]
+    [InlineData("./install.sh", "install.sh/%")]
+    [InlineData("/src/", "src/%")]
+    public void BuildPathSubtreeLikePattern_NormalizesRepoRelativePrefixes_Issue4163(string input, string expected)
+    {
+        Assert.Equal(expected, DbReader.BuildPathSubtreeLikePattern(input));
     }
 
     [Fact]
@@ -4538,7 +4550,7 @@ public partial class DbReaderTests : IDisposable
     {
         // Two --path values should match any file whose path matches either pattern.
         // 2つの --path 値は、どちらかのパターンにマッチするファイルを返す。
-        var results = _reader.ListFiles(pathPatterns: new[] { "auth", "docs/" });
+        var results = _reader.ListFiles(pathPatterns: new[] { "src/auth.py", "docs/" });
 
         Assert.Equal(2, results.Count);
         var paths = results.Select(r => r.Path).ToHashSet();
@@ -4549,10 +4561,40 @@ public partial class DbReaderTests : IDisposable
     [Fact]
     public void ListFiles_PathFiltersAndExcludePaths_WorkTogether()
     {
-        var results = _reader.ListFiles(pathPatterns: new[] { "src/" }, excludePathPatterns: ["api"]);
+        var results = _reader.ListFiles(pathPatterns: new[] { "src/" }, excludePathPatterns: ["src/api.js"]);
 
         Assert.Single(results);
         Assert.Equal("src/auth.py", results[0].Path);
+    }
+
+    [Fact]
+    public void ListFiles_PathFilterAnchorsPlainFilePaths_Issue4163()
+    {
+        InsertIndexedFile("install.sh", "shell", "echo install\n");
+        InsertIndexedFile("install_modules/40-uninstall.sh", "shell", "echo uninstall\n");
+        InsertIndexedFile("install_modules/60-reinstall.sh", "shell", "echo reinstall\n");
+
+        Assert.Equal(
+            ["install.sh"],
+            _reader.ListFiles(pathPatterns: ["install.sh"]).Select(result => result.Path));
+        Assert.Equal(
+            ["install.sh"],
+            _reader.ListFiles(pathPatterns: ["./install.sh"]).Select(result => result.Path));
+        Assert.Equal(
+            ["install.sh"],
+            _reader.ListFiles(pathPatterns: ["/install.sh"]).Select(result => result.Path));
+    }
+
+    [Fact]
+    public void ListFiles_PathFilterAnchorsPlainDirectoryPrefixes_Issue4163()
+    {
+        InsertIndexedFile("tools/build.cs", "csharp", "public class BuildTool {}\n");
+        InsertIndexedFile("tests/CodeIndex.Tests/McpServerToolsCallTests.cs", "csharp", "public class McpServerToolsCallTests {}\n");
+
+        var paths = _reader.ListFiles(pathPatterns: ["tools"]).Select(result => result.Path).ToHashSet(StringComparer.Ordinal);
+
+        Assert.Contains("tools/build.cs", paths);
+        Assert.DoesNotContain("tests/CodeIndex.Tests/McpServerToolsCallTests.cs", paths);
     }
 
     [Fact]

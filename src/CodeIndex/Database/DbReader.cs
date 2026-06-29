@@ -1245,8 +1245,8 @@ public partial class DbReader : IDisposable
     internal static string BuildPathLikePattern(string input)
     {
         ValidatePathLikePattern(input);
-        var hasWildcard = false;
-        var builder = new StringBuilder(input.Length + 2);
+        input = NormalizePathLikePatternInput(input);
+        var builder = new StringBuilder(input.Length);
         var escaped = false;
 
         foreach (var ch in input)
@@ -1270,11 +1270,9 @@ public partial class DbReader : IDisposable
             {
                 case '*':
                     builder.Append('%');
-                    hasWildcard = true;
                     break;
                 case '?':
                     builder.Append('_');
-                    hasWildcard = true;
                     break;
                 case '\\':
                     escaped = true;
@@ -1293,8 +1291,43 @@ public partial class DbReader : IDisposable
         if (escaped)
             builder.Append("\\\\");
 
-        var pattern = builder.ToString();
-        return hasWildcard ? pattern : $"%{pattern}%";
+        return builder.ToString();
+    }
+
+    internal static string BuildPathSubtreeLikePattern(string input)
+        => BuildPathLikePattern(input) + "/%";
+
+    private static string NormalizePathLikePatternInput(string input)
+    {
+        while (input.StartsWith("./", StringComparison.Ordinal))
+            input = input[2..];
+        while (input.StartsWith("/", StringComparison.Ordinal))
+            input = input[1..];
+        return input.TrimEnd('/');
+    }
+
+    private static bool PathLikePatternHasWildcard(string input)
+    {
+        var escaped = false;
+        foreach (var ch in NormalizePathLikePatternInput(input))
+        {
+            if (escaped)
+            {
+                escaped = false;
+                continue;
+            }
+
+            if (ch == '\\')
+            {
+                escaped = true;
+                continue;
+            }
+
+            if (ch is '*' or '?')
+                return true;
+        }
+
+        return false;
     }
 
     private static void ValidatePathLikePattern(string input)
@@ -1667,18 +1700,16 @@ public partial class DbReader : IDisposable
         if (pathPatterns != null && pathPatterns.Count > 0)
         {
             // Multiple --path values are OR'd together / 複数の --path 値は OR で結合する。
-            // Plain text keeps the old substring behavior, while glob tokens
-            // (`*` / `?`) are translated to SQL LIKE wildcards.
             var ors = new List<string>(pathPatterns.Count);
             for (int i = 0; i < pathPatterns.Count; i++)
-                ors.Add($"f.path LIKE {SqliteDynamicSql.BuildParameterName("pathPattern", i)} ESCAPE '\\'");
+                ors.Add(BuildPathFilterPredicate("f", "pathPattern", i, pathPatterns[i]));
             sql += " AND (" + string.Join(" OR ", ors) + ")";
         }
 
         if (excludePathPatterns != null)
         {
             for (int i = 0; i < excludePathPatterns.Count; i++)
-                sql += $" AND f.path NOT LIKE {SqliteDynamicSql.BuildParameterName("excludePathPattern", i)} ESCAPE '\\'";
+                sql += $" AND NOT {BuildPathFilterPredicate("f", "excludePathPattern", i, excludePathPatterns[i])}";
         }
 
         if (excludeTests)
@@ -1690,10 +1721,10 @@ public partial class DbReader : IDisposable
         EnsurePathFilterParameterBudget(pathPatterns, excludePathPatterns);
 
         if (pathPatterns != null)
-            SqliteDynamicSql.AddParameters(cmd, "pathPattern", pathPatterns, SqliteType.Text, "path filters", static pattern => BuildPathLikePattern(pattern));
+            AddPathFilterParameterSet(cmd, "pathPattern", pathPatterns);
 
         if (excludePathPatterns != null)
-            SqliteDynamicSql.AddParameters(cmd, "excludePathPattern", excludePathPatterns, SqliteType.Text, "path filters", static pattern => BuildPathLikePattern(pattern));
+            AddPathFilterParameterSet(cmd, "excludePathPattern", excludePathPatterns);
     }
 
     private static void AppendAdditionalPathIncludeFilters(ref string sql, IReadOnlyList<string>? pathPatterns, string parameterPrefix)
@@ -1701,10 +1732,10 @@ public partial class DbReader : IDisposable
         if (pathPatterns == null || pathPatterns.Count == 0)
             return;
 
-        SqliteDynamicSql.EnsureParameterBudget(pathPatterns.Count, "additional path include filters");
+        SqliteDynamicSql.EnsureParameterBudget(CountPathFilterParameters(pathPatterns), "additional path include filters");
         var ors = new List<string>(pathPatterns.Count);
         for (int i = 0; i < pathPatterns.Count; i++)
-            ors.Add($"f.path LIKE {SqliteDynamicSql.BuildParameterName(parameterPrefix, i)} ESCAPE '\\'");
+            ors.Add(BuildPathFilterPredicate("f", parameterPrefix, i, pathPatterns[i]));
         sql += " AND (" + string.Join(" OR ", ors) + ")";
     }
 
@@ -1713,7 +1744,7 @@ public partial class DbReader : IDisposable
         if (pathPatterns == null)
             return;
 
-        SqliteDynamicSql.AddParameters(cmd, parameterPrefix, pathPatterns, SqliteType.Text, "additional path include filters", static pattern => BuildPathLikePattern(pattern));
+        AddPathFilterParameterSet(cmd, parameterPrefix, pathPatterns);
     }
 
     internal static string BuildPathFiltersSql(string fileAlias, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
@@ -1727,18 +1758,16 @@ public partial class DbReader : IDisposable
         if (pathPatterns != null && pathPatterns.Count > 0)
         {
             // Multiple --path values are OR'd together / 複数の --path 値は OR で結合する。
-            // Plain text keeps the old substring behavior, while glob tokens
-            // (`*` / `?`) are translated to SQL LIKE wildcards.
             var ors = new List<string>(pathPatterns.Count);
             for (int i = 0; i < pathPatterns.Count; i++)
-                ors.Add($"{fileAlias}.path LIKE {SqliteDynamicSql.BuildParameterName("pathPattern", i)} ESCAPE '\\'");
+                ors.Add(BuildPathFilterPredicate(fileAlias, "pathPattern", i, pathPatterns[i]));
             sql += " AND (" + string.Join(" OR ", ors) + ")";
         }
 
         if (excludePathPatterns != null)
         {
             for (int i = 0; i < excludePathPatterns.Count; i++)
-                sql += $" AND {fileAlias}.path NOT LIKE {SqliteDynamicSql.BuildParameterName("excludePathPattern", i)} ESCAPE '\\'";
+                sql += $" AND NOT {BuildPathFilterPredicate(fileAlias, "excludePathPattern", i, excludePathPatterns[i])}";
         }
 
         if (excludeTests)
@@ -1747,8 +1776,32 @@ public partial class DbReader : IDisposable
         return sql;
     }
 
+    internal static string BuildPathFilterPredicate(string fileAlias, string parameterPrefix, int index, string rawPattern)
+    {
+        var parameterName = SqliteDynamicSql.BuildParameterName(parameterPrefix, index);
+        if (PathLikePatternHasWildcard(rawPattern))
+            return $"{fileAlias}.path LIKE {parameterName} ESCAPE '\\'";
+
+        var subtreeParameterName = SqliteDynamicSql.BuildParameterName(parameterPrefix + "Subtree", index);
+        return $"({fileAlias}.path = {parameterName} OR {fileAlias}.path LIKE {subtreeParameterName} ESCAPE '\\')";
+    }
+
+    internal static void AddPathFilterParameterSet(SqliteCommand cmd, string parameterPrefix, IReadOnlyList<string> pathPatterns)
+    {
+        for (var i = 0; i < pathPatterns.Count; i++)
+        {
+            var pattern = pathPatterns[i];
+            SqliteCommandPolicy.Add(cmd, SqliteDynamicSql.BuildParameterName(parameterPrefix, i), BuildPathLikePattern(pattern));
+            if (!PathLikePatternHasWildcard(pattern))
+                SqliteCommandPolicy.Add(cmd, SqliteDynamicSql.BuildParameterName(parameterPrefix + "Subtree", i), BuildPathSubtreeLikePattern(pattern));
+        }
+    }
+
     private static void EnsurePathFilterParameterBudget(IReadOnlyCollection<string>? pathPatterns, IReadOnlyCollection<string>? excludePathPatterns)
-        => SqliteDynamicSql.EnsureParameterBudget((pathPatterns?.Count ?? 0) + (excludePathPatterns?.Count ?? 0), "path filters");
+        => SqliteDynamicSql.EnsureParameterBudget(CountPathFilterParameters(pathPatterns) + CountPathFilterParameters(excludePathPatterns), "path filters");
+
+    private static int CountPathFilterParameters(IReadOnlyCollection<string>? pathPatterns)
+        => pathPatterns?.Sum(static pattern => PathLikePatternHasWildcard(pattern) ? 1 : 2) ?? 0;
 
     internal static DateTime? GetNullableDateTime(SqliteDataReader reader, int ordinal)
     {

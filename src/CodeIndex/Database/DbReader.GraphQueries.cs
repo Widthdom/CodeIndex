@@ -2339,34 +2339,25 @@ public partial class DbReader
             sql += " AND f.lang = @metadataAmbigLangFilter";
             SqliteCommandPolicy.Add(cmd, "@metadataAmbigLangFilter", lang);
         }
-        // Path / exclude-path parameters share the same glob-aware LIKE
-        // translation as the rest of the reader. Plain text keeps substring
-        // behavior, while `*` / `?` become wildcards. Passing the raw CLI
-        // value here would let `--path src/A/*.cs` stay literal and undercount
-        // ambiguous targets, so centralize the conversion in
-        // BuildPathLikePattern.
-        // path / exclude-path のパラメータは reader 全体で共通の glob 対応
-        // LIKE 変換を使う。ワイルドカードを含まない文字列は従来どおり部分文字列、
-        // `*` / `?` はワイルドカードとして扱う。CLI の生値をそのまま渡すと
-        // `--path src/A/*.cs` がリテラル扱いのままになり、曖昧性の件数を誤って
-        // 数え込むため、変換は BuildPathLikePattern に集約する。
+        // Path / exclude-path parameters share the same anchored path filter
+        // predicate as the rest of the reader: plain values match an exact path
+        // or subtree, while `*` / `?` keep glob-style LIKE matching.
+        // path / exclude-path は reader 全体で共通の anchored path filter 条件を
+        // 使う。ワイルドカードを含まない値は完全一致または配下に一致し、
+        // `*` / `?` は glob 風の LIKE matching として扱う。
         if (pathPatterns is { Count: > 0 })
         {
             var ors = new List<string>(pathPatterns.Count);
             for (int i = 0; i < pathPatterns.Count; i++)
-            {
-                ors.Add($"f.path LIKE @metadataAmbigPath{i} ESCAPE '\\'");
-                SqliteCommandPolicy.Add(cmd, $"@metadataAmbigPath{i}", BuildPathLikePattern(pathPatterns[i]));
-            }
+                ors.Add(BuildPathFilterPredicate("f", "metadataAmbigPath", i, pathPatterns[i]));
             sql += " AND (" + string.Join(" OR ", ors) + ")";
+            AddPathFilterParameterSet(cmd, "metadataAmbigPath", pathPatterns);
         }
         if (excludePathPatterns is { Count: > 0 })
         {
             for (int i = 0; i < excludePathPatterns.Count; i++)
-            {
-                sql += $" AND f.path NOT LIKE @metadataAmbigExcludePath{i} ESCAPE '\\'";
-                SqliteCommandPolicy.Add(cmd, $"@metadataAmbigExcludePath{i}", BuildPathLikePattern(excludePathPatterns[i]));
-            }
+                sql += $" AND NOT {BuildPathFilterPredicate("f", "metadataAmbigExcludePath", i, excludePathPatterns[i])}";
+            AddPathFilterParameterSet(cmd, "metadataAmbigExcludePath", excludePathPatterns);
         }
         if (excludeTests)
             sql += $" AND NOT {TestPathCondition}";
