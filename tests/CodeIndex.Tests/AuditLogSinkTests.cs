@@ -215,6 +215,22 @@ public class AuditLogSinkTests
     }
 
     [Theory]
+    [InlineData("--private-key=visible4175")]
+    [InlineData("session_cookie=visible4175")]
+    [InlineData("authorization:visible4175")]
+    [InlineData("https://host.test/path?access-key=visible4175")]
+    public void SanitizeArgValue_RedactsSharedSecretAssignmentsInScalarValues_Issue4175(string value)
+    {
+        var state = new AuditLogSink.ArgValueSanitizationState();
+
+        var sanitized = AuditLogSink.SanitizeArgValue("query", JsonValue.Create(value), state);
+
+        Assert.NotNull(sanitized);
+        Assert.True(state.Redacted);
+        Assert.Equal(AuditLogSink.RedactedValue, sanitized!.GetValue<string>());
+    }
+
+    [Theory]
     [InlineData("query")]
     [InlineData("path")]
     [InlineData("limit")]
