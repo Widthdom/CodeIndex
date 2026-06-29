@@ -739,6 +739,8 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(IndexUpdateJsonResult))]
 [JsonSerializable(typeof(IndexUpdateSummaryJsonResult))]
 [JsonSerializable(typeof(IndexWatchEventJsonResult))]
+[JsonSerializable(typeof(IndexWatchStartedJsonResult))]
+[JsonSerializable(typeof(IndexWatchContractJsonResult))]
 [JsonSerializable(typeof(IndexWatchRecoveryCommandJsonResult))]
 [JsonSerializable(typeof(ExportImportCommandRunner.ImportResult))]
 [JsonSerializable(typeof(HookCommandJsonResult))]

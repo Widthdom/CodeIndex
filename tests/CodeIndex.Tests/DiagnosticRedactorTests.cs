@@ -11,28 +11,72 @@ public class DiagnosticRedactorTests
         var awsKey = "AKIA" + new string('A', 16);
         var bearer = "Bearer " + new string('b', 20);
         var highEntropy = "Abcdefghijklmnopqrstuvwxyz123456";
-        var text = $"key={awsKey} {bearer} api_key=secret {highEntropy}";
+        var privateKeyValue = "visible4175";
+        var text = $"key={awsKey} {bearer} api_key=secret private-key={privateKeyValue} {highEntropy}";
 
         var redacted = DiagnosticRedactor.RedactSuggestionText(text, out var redactedTypes);
 
         Assert.Contains(DiagnosticRedactor.SuggestionRedactedAwsAccessKey, redacted);
         Assert.Contains(DiagnosticRedactor.SuggestionRedactedBearerToken, redacted);
         Assert.Contains("api_key=" + DiagnosticRedactor.SuggestionRedactedCredential, redacted);
+        Assert.Contains("private-key=" + DiagnosticRedactor.SuggestionRedactedCredential, redacted);
         Assert.Contains(DiagnosticRedactor.SuggestionRedactedHighEntropyToken, redacted);
         Assert.DoesNotContain(awsKey, redacted);
         Assert.DoesNotContain("secret", redacted);
+        Assert.DoesNotContain(privateKeyValue, redacted);
         Assert.Equal(
             ["aws_access_key", "bearer_token", "credential", "high_entropy_token"],
             redactedTypes.Order(StringComparer.Ordinal));
     }
 
-    [Fact]
-    public void IsSensitiveName_CoversSharedCredentialNames_Issue3933()
+    [Theory]
+    [InlineData("--github-token")]
+    [InlineData("CDIDX_ACCESS_KEY")]
+    [InlineData("serviceCredential")]
+    [InlineData("authorization")]
+    [InlineData("private-key")]
+    [InlineData("session_cookie")]
+    public void IsSensitiveName_CoversSharedCredentialNames_Issue3933_Issue4175(string name)
     {
-        Assert.True(DiagnosticRedactor.IsSensitiveName("--github-token"));
-        Assert.True(DiagnosticRedactor.IsSensitiveName("CDIDX_ACCESS_KEY"));
-        Assert.True(DiagnosticRedactor.IsSensitiveName("serviceCredential"));
-        Assert.False(DiagnosticRedactor.IsSensitiveName("--workspace"));
+        Assert.True(DiagnosticRedactor.IsSensitiveName(name));
+    }
+
+    [Theory]
+    [InlineData("--workspace")]
+    [InlineData("query")]
+    [InlineData("session_id")]
+    public void IsSensitiveName_LeavesNonCredentialNamesVisible_Issue4175(string name)
+    {
+        Assert.False(DiagnosticRedactor.IsSensitiveName(name));
+    }
+
+    [Theory]
+    [InlineData("--private-key=visible4175", "--private-key=<redacted>")]
+    [InlineData("accesskey=visible4175", "accesskey=<redacted>")]
+    [InlineData("session_cookie=visible4175", "session_cookie=<redacted>")]
+    [InlineData("authorization=visible4175", "authorization=<redacted>")]
+    [InlineData("--private-key visible4175", "--private-key <redacted>")]
+    public void RedactSensitiveText_RedactsSharedSensitiveNameAssignments_Issue4175(
+        string input,
+        string expected)
+    {
+        var redacted = DiagnosticRedactor.RedactSensitiveText(input);
+
+        Assert.Equal(expected, redacted);
+        Assert.DoesNotContain("visible4175", redacted);
+    }
+
+    [Theory]
+    [InlineData("https://host.test/path?token=hunter2", "https://host.test/path?token=<redacted>")]
+    [InlineData("--workspace --token hunter2", "--workspace --token <redacted>")]
+    public void RedactSensitiveText_DoesNotLetBenignPrefixesHideSharedSecrets_Issue4175(
+        string input,
+        string expected)
+    {
+        var redacted = DiagnosticRedactor.RedactSensitiveText(input);
+
+        Assert.Equal(expected, redacted);
+        Assert.DoesNotContain("hunter2", redacted);
     }
 
     [Fact]

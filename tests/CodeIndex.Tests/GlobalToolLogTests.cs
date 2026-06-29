@@ -370,12 +370,19 @@ public class GlobalToolLogTests
             "--github-token",
             "gh-secret",
             "--serviceCredential=credential-secret",
+            "--private-key=visible4175",
+            "--session_cookie",
+            "session-visible4175",
         ]);
 
         Assert.Contains("--github-token <redacted>", formatted);
         Assert.Contains("--serviceCredential=<redacted>", formatted);
+        Assert.Contains("--private-key=<redacted>", formatted);
+        Assert.Contains("--session_cookie <redacted>", formatted);
         Assert.DoesNotContain("gh-secret", formatted);
         Assert.DoesNotContain("credential-secret", formatted);
+        Assert.DoesNotContain("visible4175", formatted);
+        Assert.DoesNotContain("session-visible4175", formatted);
     }
 
     [Fact]
