@@ -1,5 +1,3 @@
-using System.Formats.Tar;
-using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -39,7 +37,6 @@ public static class ReportCommandRunner
     internal const UnixFileMode BundleFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
     internal static readonly DateTimeOffset BundleEntryModificationTime = DateTimeOffset.UnixEpoch;
     private const string SchemaTableLabelPrefix = "table_";
-    private const string TruncatedLogLineSuffix = "...[line truncated]";
     private const int SupportManifestVersion = 2;
 
     public static int Run(string[] cmdArgs, JsonSerializerOptions jsonOptions, string? appVersion = null)
@@ -373,68 +370,13 @@ public static class ReportCommandRunner
         out ReportRedactionSummary redactions,
         out bool logTailTruncated,
         out bool logLineCharsTruncated)
-    {
-        linesIncluded = 0;
-        logTailTruncated = false;
-        logLineCharsTruncated = false;
-        var redactionCounter = new ReportRedactionCounter();
-        var logDir = GlobalToolLog.ResolveLogDirectoryForReport();
-        if (string.IsNullOrWhiteSpace(logDir) || !Directory.Exists(logDir))
-        {
-            redactions = redactionCounter.ToSummary();
-            return $"no cdidx lifecycle log directory found (looked at: {RedactedPlaceholder}).\n";
-        }
-
-        var logFiles = SelectRecentLogFiles(
-            new DirectoryInfo(logDir).EnumerateFiles("stderr-*.log", SearchOption.TopDirectoryOnly),
-            out var olderLogFilesOmitted);
-        logTailTruncated = olderLogFilesOmitted;
-        if (logFiles.Count == 0)
-        {
-            redactions = redactionCounter.ToSummary();
-            return $"no cdidx lifecycle log files found in: {RedactedPlaceholder}\n";
-        }
-
-        var collected = new LinkedList<string>();
-        foreach (var file in logFiles)
-        {
-            if (collected.Count >= maxLines)
-            {
-                logTailTruncated = true;
-                break;
-            }
-            ReportLogTailReadResult result;
-            try
-            {
-                result = ReadLogFileTailLinesResult(file.FullName, maxLines - collected.Count);
-            }
-            catch (IOException)
-            {
-                continue;
-            }
-            if (result.LinesTruncated || result.BytesTruncated)
-                logTailTruncated = true;
-            if (result.LineCharsTruncated)
-                logLineCharsTruncated = true;
-            var lines = result.Lines;
-            for (var i = lines.Count - 1; i >= 0 && collected.Count < maxLines; i--)
-                collected.AddFirst(lines[i]);
-        }
-
-        var sb = new StringBuilder();
-        sb.AppendLine($"# cdidx lifecycle log (last {collected.Count} lines, newest last)");
-        sb.AppendLine($"# source directory: {RedactedPlaceholder}");
-        sb.AppendLine();
-        foreach (var line in collected)
-        {
-            var redacted = RedactLogLine(line, includeArgs);
-            redactionCounter.Observe(line, redacted);
-            sb.AppendLine(redacted);
-        }
-        linesIncluded = collected.Count;
-        redactions = redactionCounter.ToSummary();
-        return sb.ToString();
-    }
+        => ReportLogTailBuilder.BuildRecentLogTail(
+            maxLines,
+            includeArgs,
+            out linesIncluded,
+            out redactions,
+            out logTailTruncated,
+            out logLineCharsTruncated);
 
     internal static ReportSupportManifest BuildSupportManifest(
         ReportCommandOptions options,
@@ -678,106 +620,8 @@ public static class ReportCommandRunner
             degradedFields.Add(field);
     }
 
-    private static IReadOnlyList<FileInfo> SelectRecentLogFiles(IEnumerable<FileInfo> files, out bool olderLogFilesOmitted)
-    {
-        var recent = new List<FileInfo>(MaxRecentLogFiles);
-        olderLogFilesOmitted = false;
-        foreach (var file in files)
-        {
-            var insertAt = recent.FindIndex(
-                existing => string.Compare(file.Name, existing.Name, StringComparison.Ordinal) > 0);
-            if (insertAt < 0)
-            {
-                if (recent.Count < MaxRecentLogFiles)
-                    recent.Add(file);
-                else
-                    olderLogFilesOmitted = true;
-                continue;
-            }
-
-            recent.Insert(insertAt, file);
-            if (recent.Count > MaxRecentLogFiles)
-            {
-                olderLogFilesOmitted = true;
-                recent.RemoveAt(recent.Count - 1);
-            }
-        }
-
-        return recent;
-    }
-
     internal static IReadOnlyList<string> ReadLogFileTailLines(string path, int maxLines)
-        => ReadLogFileTailLinesResult(path, maxLines).Lines;
-
-    private static ReportLogTailReadResult ReadLogFileTailLinesResult(string path, int maxLines)
-    {
-        if (maxLines <= 0)
-            return new ReportLogTailReadResult([], LinesTruncated: false, BytesTruncated: false, LineCharsTruncated: false);
-
-        using var stream = BoundedFile.OpenReadForTailWindow(path, MaxLogFileTailBytes, out var bytesTruncated);
-        using var reader = new StreamReader(
-            stream,
-            Encoding.UTF8,
-            detectEncodingFromByteOrderMarks: !bytesTruncated,
-            bufferSize: 8192,
-            leaveOpen: false);
-        if (bytesTruncated)
-        {
-            if (ReadBoundedLogLine(reader, out _) == null)
-                return new ReportLogTailReadResult([], LinesTruncated: false, BytesTruncated: true, LineCharsTruncated: false);
-        }
-
-        var lines = new Queue<string>(maxLines + 1);
-        var lineCharsTruncated = false;
-        string? line;
-        while ((line = ReadBoundedLogLine(reader, out var lineTruncated)) != null)
-        {
-            lineCharsTruncated |= lineTruncated;
-            if (lines.Count == maxLines + 1)
-                lines.Dequeue();
-            lines.Enqueue(line);
-        }
-
-        var linesTruncated = lines.Count > maxLines;
-        if (linesTruncated)
-            lines.Dequeue();
-        return new ReportLogTailReadResult(lines.ToArray(), linesTruncated, bytesTruncated, lineCharsTruncated);
-    }
-
-    private static string? ReadBoundedLogLine(StreamReader reader, out bool lineTruncated)
-    {
-        lineTruncated = false;
-        var displayLimit = MaxLogTailLineChars - TruncatedLogLineSuffix.Length;
-        var sb = new StringBuilder(Math.Min(MaxLogTailLineChars, 1024));
-        while (true)
-        {
-            var next = reader.Read();
-            if (next < 0)
-                return sb.Length == 0 && !lineTruncated ? null : sb.ToString();
-
-            var c = (char)next;
-            if (c == '\n')
-                return sb.ToString();
-            if (c == '\r')
-            {
-                if (reader.Peek() == '\n')
-                    reader.Read();
-                return sb.ToString();
-            }
-
-            if (lineTruncated)
-                continue;
-
-            if (sb.Length < displayLimit)
-            {
-                sb.Append(c);
-                continue;
-            }
-
-            sb.Append(TruncatedLogLineSuffix);
-            lineTruncated = true;
-        }
-    }
+        => ReportLogTailBuilder.ReadLogFileTailLines(path, maxLines);
 
     internal static string RedactSensitiveFields(string line)
     {
@@ -788,39 +632,7 @@ public static class ReportCommandRunner
         DiagnosticRedactor.RedactReportLogLine(line, includeArgs, RedactedPlaceholder);
 
     internal static void WriteBundle(string outputPath, ReportBundle bundle, Action? beforeWriteEntries = null)
-    {
-        var fullOutputPath = Path.GetFullPath(outputPath);
-        var dir = Path.GetDirectoryName(fullOutputPath);
-        if (!string.IsNullOrEmpty(dir))
-            Directory.CreateDirectory(dir);
-
-        AtomicFileWriter.Write(
-            fullOutputPath,
-            stream =>
-            {
-                using var gz = new GZipStream(stream, CompressionLevel.Optimal, leaveOpen: true);
-                using var tar = new TarWriter(gz, TarEntryFormat.Pax, leaveOpen: true);
-                beforeWriteEntries?.Invoke();
-
-                foreach (var (name, bytes) in bundle.Files)
-                {
-                    var entry = new PaxTarEntry(TarEntryType.RegularFile, name)
-                    {
-                        DataStream = new MemoryStream(bytes, writable: false),
-                        Mode = BundleFileMode,
-                        ModificationTime = BundleEntryModificationTime,
-                    };
-                    tar.WriteEntry(entry);
-                }
-            },
-            ApplyBundleFileMode);
-    }
-
-    private static void ApplyBundleFileMode(string path)
-    {
-        if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(path, BundleFileMode);
-    }
+        => ReportBundleWriter.Write(outputPath, bundle, beforeWriteEntries);
 
     internal static ReportCommandOptions ParseArgs(string[] args)
     {
