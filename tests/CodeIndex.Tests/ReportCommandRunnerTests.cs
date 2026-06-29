@@ -172,7 +172,13 @@ public class ReportCommandRunnerTests
 
             using var manifest = ReadJsonEntry(entries, "support-manifest.json");
             var root = manifest.RootElement;
-            Assert.Equal(1, root.GetProperty("manifest_version").GetInt32());
+            Assert.Equal(2, root.GetProperty("manifest_version").GetInt32());
+            var artifact = root.GetProperty("artifact");
+            Assert.Equal(ReportCommandRunner.BundleArtifactFormat, artifact.GetProperty("format").GetString());
+            Assert.Equal(ReportCommandRunner.BundleArtifactMediaType, artifact.GetProperty("media_type").GetString());
+            Assert.True(JsonArrayContains(artifact.GetProperty("recommended_extensions"), ".tgz"));
+            Assert.True(JsonArrayContains(artifact.GetProperty("recommended_extensions"), ".tar.gz"));
+            Assert.True(artifact.GetProperty("json_metadata_stdout_only").GetBoolean());
             Assert.Equal(entries.Count, root.GetProperty("bundle").GetProperty("files").GetInt32());
             Assert.False(root.GetProperty("bundle").GetProperty("db_included").GetBoolean());
             Assert.False(root.GetProperty("bundle").GetProperty("log_included").GetBoolean());
@@ -879,9 +885,88 @@ public class ReportCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(ReportCommandRunner.RedactedPlaceholder, json.GetProperty("output_path").GetString());
+            Assert.Equal(ReportCommandRunner.BundleArtifactFormat, json.GetProperty("artifact_format").GetString());
+            Assert.Equal(ReportCommandRunner.BundleArtifactMediaType, json.GetProperty("artifact_media_type").GetString());
+            Assert.True(JsonArrayContains(json.GetProperty("recommended_extensions"), ".tgz"));
+            Assert.True(JsonArrayContains(json.GetProperty("recommended_extensions"), ".tar.gz"));
+            Assert.True(json.GetProperty("json_metadata_stdout_only").GetBoolean());
+            Assert.Equal(0, json.GetProperty("warnings").GetArrayLength());
             Assert.True(json.GetProperty("files").GetInt32() >= 4);
             Assert.False(json.GetProperty("log_included").GetBoolean());
             Assert.False(json.GetProperty("db_included").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
+    public void Run_JsonMode_KeepsStdoutJsonOnlyAndStderrClean_Issue4146()
+    {
+        var workDir = CreateWorkDir();
+        try
+        {
+            var output = Path.Combine(workDir, "bundle.tgz");
+            var (exitCode, stdout, stderr) = RunAndCaptureStreams([
+                "--output", output,
+                "--db", Path.Combine(workDir, "missing.db"),
+                "--no-log",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal(ReportCommandRunner.RedactedPlaceholder, document.RootElement.GetProperty("output_path").GetString());
+            Assert.False(document.RootElement.GetProperty("log_included").GetBoolean());
+            Assert.False(document.RootElement.GetProperty("db_included").GetBoolean());
+            Assert.DoesNotContain("Bug report bundle", stdout, StringComparison.Ordinal);
+            Assert.DoesNotContain(output, stdout, StringComparison.Ordinal);
+            Assert.True(File.Exists(output));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
+    public void Run_JsonMode_WithJsonExtension_WarnsButKeepsStdoutArtifactMetadata_Issue4153()
+    {
+        var workDir = CreateWorkDir();
+        try
+        {
+            var output = Path.Combine(workDir, "bundle.json");
+            var (exitCode, stdout, stderr) = RunAndCaptureStreams([
+                "--output", output,
+                "--db", Path.Combine(workDir, "missing.db"),
+                "--no-log",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("Warning:", stderr);
+            Assert.Contains("gzip-compressed tar report bundle", stderr);
+            Assert.Contains(".tgz", stderr);
+            Assert.Contains("--json only changes stdout metadata", stderr);
+            Assert.DoesNotContain("Bug report bundle", stdout, StringComparison.Ordinal);
+
+            using var json = JsonDocument.Parse(stdout);
+            var root = json.RootElement;
+            Assert.Equal(ReportCommandRunner.RedactedPlaceholder, root.GetProperty("output_path").GetString());
+            Assert.Equal(ReportCommandRunner.BundleArtifactFormat, root.GetProperty("artifact_format").GetString());
+            Assert.Equal(ReportCommandRunner.BundleArtifactMediaType, root.GetProperty("artifact_media_type").GetString());
+            Assert.True(root.GetProperty("json_metadata_stdout_only").GetBoolean());
+            Assert.True(JsonArrayContains(root.GetProperty("recommended_extensions"), ".tar.gz"));
+            Assert.Equal(1, root.GetProperty("warnings").GetArrayLength());
+            Assert.Contains(
+                "not JSON output",
+                root.GetProperty("warnings")[0].GetString(),
+                StringComparison.Ordinal);
+
+            var entries = ReadTarGzEntries(output);
+            Assert.Contains("support-manifest.json", entries.Keys);
         }
         finally
         {

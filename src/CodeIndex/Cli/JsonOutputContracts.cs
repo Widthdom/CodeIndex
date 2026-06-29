@@ -319,6 +319,11 @@ internal sealed record DiffSummaryOnlyJsonResult(
 internal sealed record ReportBundleSummary(
     [property: JsonPropertyName("output_path")] string OutputPath,
     [property: JsonPropertyName("version")] string Version,
+    [property: JsonPropertyName("artifact_format")] string ArtifactFormat,
+    [property: JsonPropertyName("artifact_media_type")] string ArtifactMediaType,
+    [property: JsonPropertyName("recommended_extensions")] List<string> RecommendedExtensions,
+    [property: JsonPropertyName("json_metadata_stdout_only")] bool JsonMetadataStdoutOnly,
+    [property: JsonPropertyName("warnings")] List<string> Warnings,
     [property: JsonPropertyName("files")] int Files,
     [property: JsonPropertyName("schema_tables")] int SchemaTables,
     [property: JsonPropertyName("log_lines_included")] int LogLinesIncluded,
@@ -805,6 +810,8 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(SearchRecipeBroadCatchTaxonomyJsonResult))]
 [JsonSerializable(typeof(SearchRecipeBroadCatchBoundaryJsonResult))]
 [JsonSerializable(typeof(SearchRecipeBroadCatchDiagnosticBehaviorJsonResult))]
+[JsonSerializable(typeof(SearchRecipeStringComparisonTaxonomyJsonResult))]
+[JsonSerializable(typeof(SearchRecipeStringComparisonDomainJsonResult))]
 [JsonSerializable(typeof(SearchRecipeFilterSupportJsonResult))]
 [JsonSerializable(typeof(SearchRecipeLimitSemanticsJsonResult))]
 [JsonSerializable(typeof(SearchRecipeQueryFreshnessJsonResult))]
@@ -853,6 +860,7 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(EnvironmentVariableInventorySummaryJsonResult))]
 [JsonSerializable(typeof(EnvironmentVariableInventorySummaryBucketJsonResult))]
 [JsonSerializable(typeof(StatusResult))]
+[JsonSerializable(typeof(StatusHeadFreshness))]
 [JsonSerializable(typeof(StatusSqliteConnectionPolicy))]
 [JsonSerializable(typeof(StatusFailedOrPartialIndexRun))]
 [JsonSerializable(typeof(StatusReadinessDegradation))]

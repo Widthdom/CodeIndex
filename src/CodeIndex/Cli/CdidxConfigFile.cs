@@ -857,7 +857,11 @@ internal static class CdidxConfigFile
     }
 
     private static string? FormatConfigShowPath(string? path, bool redactPaths)
-        => FormatConfigShowText(path, redactPaths);
+        => path is null
+            ? null
+            : redactPaths
+                ? DiagnosticRedactor.RedactSensitiveText(path, "[redacted]", redactPaths: true)
+                : path;
 
     private static string? FormatConfigShowText(string? value, bool redactPaths)
         => value is null ? null : DiagnosticRedactor.RedactSensitiveText(value, "[redacted]", redactPaths);

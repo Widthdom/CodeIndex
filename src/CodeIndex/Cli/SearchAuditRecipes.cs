@@ -93,9 +93,52 @@ internal static class SearchAuditRecipes
                 "The catch is not a real boundary and should be narrowed, rethrown, or converted to stable diagnostics.")
         ],
         "Classify each broad catch by boundary first. Treat top-level and worker boundaries as intentional only when they normalize to stable sanitized diagnostics; cleanup and probe catches are acceptable only when best-effort behavior is documented and bounded; otherwise narrow the catch or surface a stable diagnostic.");
+    private static readonly SearchRecipeStringComparisonTaxonomyJsonResult StringComparisonSemanticsTaxonomy = new(
+        [
+            new(
+                "path_filesystem",
+                "Filesystem path equality, prefix, dictionary, and sort decisions whose correctness depends on path normalization and filesystem case sensitivity.",
+                "Require evidence from the indexed filesystem case-sensitivity signal or a centralized path comparer before accepting case-insensitive ordinal behavior."),
+            new(
+                "protocol_tokens",
+                "Protocol and file-format tokens such as URI schemes, HTTP headers, MIME types, JSON member names, and other machine-specified ASCII domains.",
+                "Ordinal or ordinal-ignore-case comparisons are usually expected when the protocol defines byte, ASCII, or invariant token semantics."),
+            new(
+                "cli_options",
+                "CLI option names, command aliases, environment-variable names, labels, and other command/control tokens.",
+                "Case-insensitive ordinal handling can be intentional for command ergonomics; keep these hits separate from path or human-text comparisons."),
+            new(
+                "stable_identifiers",
+                "Persisted keys, cache keys, database identifiers, symbol names, and index terms that need stable process- and culture-independent lookup semantics.",
+                "Use ordinal comparers consistently with the persistence format and avoid culture-sensitive transforms unless the stored contract says otherwise."),
+            new(
+                "human_text",
+                "User-facing text, localized messages, display names, search phrases, and documentation prose whose meaning can be culture-sensitive.",
+                "Prefer explicit culture-aware comparison, casing, formatting, or parsing for human text; invariant or ordinal behavior needs a machine-token justification."),
+            new(
+                "machine_formatting",
+                "Round-trippable numeric, date/time, diagnostic, serialization, and protocol formatting intended for machines instead of readers.",
+                "InvariantCulture is usually expected for machine-readable formats, but it should not be reused as a blanket answer for human-facing text.")
+        ],
+        "Classify each string comparison by data domain before filing. Path hits need filesystem case-sensitivity and normalization evidence; protocol, CLI, and stable-identifier hits are commonly ordinal; human-facing text needs culture-sensitive review; invariant casing should show machine-token intent or be replaced by comparer overloads.");
 
     internal static IReadOnlyList<string> DefaultSourcePathPatterns => DefaultSourcePathPatternsValue;
     internal static IReadOnlyList<string> DefaultSourceExcludePaths => DefaultSourceExcludePathsValue;
+
+    private static List<SearchGuardFilter> BoundedRegexEvidenceGuardFilters() =>
+    [
+        new(SearchGuardRole.Reject, SearchGuardDirection.Before, "RegexOptions.NonBacktracking", SearchGuardScope.Window),
+        new(SearchGuardRole.Reject, SearchGuardDirection.After, "RegexOptions.NonBacktracking", SearchGuardScope.Window),
+        new(SearchGuardRole.Reject, SearchGuardDirection.Before, "RegexOptions.NonBacktracking", SearchGuardScope.SameLine),
+        new(SearchGuardRole.Reject, SearchGuardDirection.After, "RegexOptions.NonBacktracking", SearchGuardScope.SameLine),
+        new(SearchGuardRole.Reject, SearchGuardDirection.Before, "TimeSpan.", SearchGuardScope.Window),
+        new(SearchGuardRole.Reject, SearchGuardDirection.After, "TimeSpan.", SearchGuardScope.Window),
+        new(SearchGuardRole.Reject, SearchGuardDirection.After, "TimeSpan.", SearchGuardScope.SameLine),
+        new(SearchGuardRole.Reject, SearchGuardDirection.After, "matchTimeout:", SearchGuardScope.Window),
+        new(SearchGuardRole.Reject, SearchGuardDirection.After, "matchTimeout:", SearchGuardScope.SameLine),
+        new(SearchGuardRole.Reject, SearchGuardDirection.After, "MatchTimeout(", SearchGuardScope.Window),
+        new(SearchGuardRole.Reject, SearchGuardDirection.After, "MatchTimeout(", SearchGuardScope.SameLine)
+    ];
 
     private static SearchAuditRecipeQuery StaticRegexApiQuery(string name, string query, string apiName) =>
         new(
@@ -115,6 +158,7 @@ internal static class SearchAuditRecipes
                 $"risk: static System.Text.RegularExpressions.Regex.{apiName} can run without the shared timeout policy.",
                 "positive: BoundedRegex aliases, explicit timeout overloads, or tightly bounded trusted inputs can make a hit intentional."
             ],
+            GuardFilters = BoundedRegexEvidenceGuardFilters(),
             MatchOrigins = ["code"],
         };
 
@@ -136,6 +180,7 @@ internal static class SearchAuditRecipes
                 "risk: raw System.Text.RegularExpressions.Regex static APIs can run without explicit timeout or shared bounded-regex policy.",
                 "positive: BoundedRegex aliases and instance names ending in Regex are filtered out; remaining hits should be classified as timeout-backed, generated/precompiled, trusted small input, or non-matching helpers such as Escape."
             ],
+            GuardFilters = BoundedRegexEvidenceGuardFilters(),
             MatchOrigins = ["code"],
         };
 
@@ -294,6 +339,7 @@ internal static class SearchAuditRecipes
                         "risk: path equality and path dictionaries may need the indexed filesystem case-sensitivity signal.",
                         "positive: protocol tokens, option names, labels, header names, or language keywords are non-path domains."
                     ],
+                    StringComparisonTaxonomy = StringComparisonSemanticsTaxonomy,
                 },
                 new(
                     "regex-construction",
@@ -312,6 +358,7 @@ internal static class SearchAuditRecipes
                         "risk: raw System.Text.RegularExpressions.Regex construction should show an explicit timeout, non-backtracking mode, or bounded input.",
                         "positive: bounded-wrapper aliases are reported by bounded-regex-alias instead of this raw construction query."
                     ],
+                    GuardFilters = BoundedRegexEvidenceGuardFilters(),
                 },
                 new(
                     "bounded-regex-alias",
@@ -341,6 +388,7 @@ internal static class SearchAuditRecipes
                         "risk: fully qualified BCL Regex construction bypasses local aliases and should carry timeout/non-backtracking evidence.",
                         "positive: explicit timeout arguments or RegexOptions.NonBacktracking can make the construction bounded."
                     ],
+                    GuardFilters = BoundedRegexEvidenceGuardFilters(),
                 },
                 StaticRegexApiQuery(
                     "static-regex-is-match",
@@ -476,6 +524,101 @@ internal static class SearchAuditRecipes
                 }
             ],
             DefaultExecutableExcludeOriginsValue),
+        SourceScopedRecipe(
+            "string-comparison-semantics",
+            "Audit string comparison, casing, and culture choices by path, protocol, CLI, identifier, and human-text semantics.",
+            [
+                new(
+                    "ordinal-ignore-case",
+                    "OrdinalIgnoreCase",
+                    "Find case-insensitive ordinal comparisons that need path/protocol/CLI/identifier/human-text classification.",
+                    ["audit", "bug", "portability"],
+                    "False positives include protocol tokens, CLI options, labels, headers, and stable machine identifiers where ordinal-ignore-case is the intended contract.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: path equality, path-prefix checks, and path dictionaries need filesystem case-sensitivity and normalization evidence instead of unconditional case-insensitive ordinal checks.",
+                        "positive: protocol tokens, CLI options, headers, labels, and persisted machine keys usually need ordinal semantics and should be separated from path/culture findings."
+                    ],
+                    MatchOrigins = ["code"],
+                    StringComparisonTaxonomy = StringComparisonSemanticsTaxonomy,
+                },
+                new(
+                    "string-comparer-ordinal-family",
+                    "StringComparer.Ordinal",
+                    "Find StringComparer.Ordinal* comparer use in dictionaries, sets, and ordering so key domains can be classified.",
+                    ["audit", "bug", "portability"],
+                    "This intentionally includes StringComparer.OrdinalIgnoreCase; use ordinal-ignore-case for the case-insensitive cross-cutting bucket, then classify the key domain here.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: dictionary and set comparers define lookup semantics; classify keys as paths, protocol tokens, CLI names, stable identifiers, or human text.",
+                        "positive: protocol tokens, command names, generated IDs, and database/cache keys often require stable ordinal or ordinal-ignore-case comparers."
+                    ],
+                    MatchOrigins = ["code"],
+                    StringComparisonTaxonomy = StringComparisonSemanticsTaxonomy,
+                },
+                new(
+                    "string-comparison-ordinal-family",
+                    "StringComparison.Ordinal",
+                    "Find StringComparison.Ordinal* overloads so equality, contains, prefix, and sort semantics can be classified by domain.",
+                    ["audit", "bug", "portability"],
+                    "This intentionally includes StringComparison.OrdinalIgnoreCase; use ordinal-ignore-case for the case-insensitive cross-cutting bucket, then classify whether the comparison is path-sensitive, protocol/CLI-sensitive, identifier-sensitive, or human-facing.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: ordinal-family overloads on StartsWith, Contains, Equals, Compare, or EndsWith can be wrong for human text and can miss filesystem case-sensitivity policy for paths.",
+                        "positive: protocol tokens, CLI switches, enum-like identifiers, and persisted keys often require ordinal-family overloads for repeatable behavior."
+                    ],
+                    MatchOrigins = ["code"],
+                    StringComparisonTaxonomy = StringComparisonSemanticsTaxonomy,
+                },
+                new(
+                    "invariant-culture",
+                    "InvariantCulture",
+                    "Find invariant culture formatting, parsing, or comparison paths that need machine-format versus human-text classification.",
+                    ["audit", "bug"],
+                    "False positives include serialization, diagnostics, protocol fields, and round-trip numeric or date/time formatting intended for machines.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: InvariantCulture used on user-facing text can ignore user locale, casing, and collation expectations.",
+                        "positive: machine-readable formatting, parsing, protocol serialization, and stable diagnostics usually require invariant culture."
+                    ],
+                    MatchOrigins = ["code"],
+                    StringComparisonTaxonomy = StringComparisonSemanticsTaxonomy,
+                },
+                new(
+                    "lower-invariant-casing",
+                    "ToLowerInvariant",
+                    "Find invariant lowercasing that may need comparer overloads or human-culture-aware casing instead of string normalization.",
+                    ["audit", "bug"],
+                    "False positives include machine tokens normalized for protocol, CLI, cache-key, or persisted-key contracts.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: invariant lowercasing can allocate, lose original spelling, and be wrong for human-facing text or path semantics.",
+                        "positive: protocol tokens, CLI switches, and stable machine keys can justify invariant normalization when the stored contract is documented."
+                    ],
+                    MatchOrigins = ["code"],
+                    StringComparisonTaxonomy = StringComparisonSemanticsTaxonomy,
+                },
+                new(
+                    "upper-invariant-casing",
+                    "ToUpperInvariant",
+                    "Find invariant uppercasing that may need comparer overloads or human-culture-aware casing instead of string normalization.",
+                    ["audit", "bug"],
+                    "False positives include machine tokens normalized for protocol, CLI, cache-key, or persisted-key contracts.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: invariant uppercasing can allocate, lose original spelling, and be wrong for human-facing text or path semantics.",
+                        "positive: protocol tokens, CLI switches, and stable machine keys can justify invariant normalization when the stored contract is documented."
+                    ],
+                    MatchOrigins = ["code"],
+                    StringComparisonTaxonomy = StringComparisonSemanticsTaxonomy,
+                }
+            ]),
         SourceScopedRecipe(
             "auth-token-audit",
             "Audit credential and auth-token material without the parser, protocol, LSP, and cancellation-token noise from bare token searches.",
@@ -993,6 +1136,7 @@ internal static class SearchAuditRecipes
                         "risk: raw System.Text.RegularExpressions.Regex construction should show an explicit timeout, non-backtracking mode, or bounded input.",
                         "positive: bounded-wrapper aliases are reported by bounded-regex-alias instead of this raw construction query."
                     ],
+                    GuardFilters = BoundedRegexEvidenceGuardFilters(),
                 },
                 new(
                     "bounded-regex-alias",
@@ -1022,6 +1166,7 @@ internal static class SearchAuditRecipes
                         "risk: fully qualified BCL Regex construction bypasses local aliases and should carry timeout/non-backtracking evidence.",
                         "positive: explicit timeout arguments or RegexOptions.NonBacktracking can make the construction bounded."
                     ],
+                    GuardFilters = BoundedRegexEvidenceGuardFilters(),
                 },
                 StaticRegexApiQuery(
                     "static-regex-is-match",
@@ -1116,6 +1261,67 @@ internal static class SearchAuditRecipes
                         "positive: compatibility wrappers, process-exit boundaries, and already-completed task observation should be reviewed as sync API bridges rather than automatic defects."
                     ],
                     MatchOrigins = ["code"],
+                }
+            ]),
+        SourceScopedRecipe(
+            "unsupported-operation-boundaries",
+            "Audit unsupported-operation exceptions and messages for stable command, protocol, and capability diagnostics.",
+            [
+                new(
+                    "not-supported-exception",
+                    "NotSupportedException",
+                    "Find generic unsupported-operation exception handling that may need typed diagnostics at user-facing boundaries.",
+                    ["audit", "bug"],
+                    "False positives include internal stream capability overrides, path API catch filters, and tests that intentionally assert framework exception behavior.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: generic NotSupportedException can escape command, MCP, LSP, or installer boundaries as inconsistent diagnostics or exit codes.",
+                        "positive: CodeIndexException, CommandErrorWriter.WriteJsonOrHuman, MCP protocol errors, or bounded diagnostic categories make unsupported operations machine-readable."
+                    ],
+                    MatchOrigins = ["code", "string_literal"],
+                },
+                new(
+                    "platform-not-supported-exception",
+                    "PlatformNotSupportedException",
+                    "Find platform-specific unsupported paths that may need stable capability guidance or graceful degradation.",
+                    ["audit", "bug", "portability"],
+                    "False positives include guarded platform probes that degrade silently after confirming an alternate supported path.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: platform unsupported errors can become surprising command failures without recovery guidance or capability metadata.",
+                        "positive: OperatingSystem guards, documented fallback behavior, and fixed recovery hints are safer evidence."
+                    ],
+                    MatchOrigins = ["code", "string_literal"],
+                },
+                new(
+                    "unsupported-message",
+                    "unsupported",
+                    "Find unsupported-operation messages that may need the same taxonomy as exception-based unsupported paths.",
+                    ["audit", "bug"],
+                    "False positives include capability documentation, field names such as unsupported_symbol_kind, and internal recipe metadata.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: free-form unsupported messages can diverge across CLI, JSON, MCP, and LSP surfaces.",
+                        "positive: stable error codes, capability fields, supported-value allowlists, and fixed next-step hints make unsupported states actionable."
+                    ],
+                    MatchOrigins = ["code", "string_literal"],
+                },
+                new(
+                    "not-supported-message",
+                    "not supported",
+                    "Find phrase-based not-supported diagnostics that may need structured unsupported-operation classification.",
+                    ["audit", "bug"],
+                    "False positives include docs, comments, and internal capability explanations that are not emitted as command or protocol errors.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: phrase-only not-supported diagnostics can force users and automation to parse prose instead of stable categories.",
+                        "positive: CodeIndexException categories, command-specific usage errors, MCP protocol errors, or typed capability metadata reduce triage risk."
+                    ],
+                    MatchOrigins = ["code", "string_literal"],
                 }
             ]),
         SourceScopedRecipe(
@@ -1232,6 +1438,170 @@ internal static class SearchAuditRecipes
                 {
                     PathPatterns = ["src/CodeIndex/Indexer/Scanning/FileContentLoader.cs"],
                     MatchOrigins = ["code"],
+                }
+            ]),
+        AllScopedRecipe(
+            "phrase-risk-patterns",
+            "Precision-focused audit searches for noisy code phrases, broad words, and configuration text that need semantic triage facets.",
+            [
+                new(
+                    "async-void-code",
+                    "async void",
+                    "Find exact async void declarations in production source instead of broad async/void lexical coincidences.",
+                    ["audit", "bug"],
+                    "False positives include required event handlers, framework callbacks, and intentionally fire-and-forget boundaries.")
+                {
+                    PathPatterns = [.. DefaultSourcePathPatternsValue],
+                    ExcludePaths = [.. DefaultSourceExcludePathsValue],
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: async void hides exceptions and cancellation from normal Task-based callers.",
+                        "positive: UI/event-handler or host callback signatures can require async void; verify the boundary and exception handling."
+                    ],
+                },
+                new(
+                    "throw-new-exception-code",
+                    "throw new Exception",
+                    "Find exact generic Exception construction in production source instead of broad throw/exception lexical matches.",
+                    ["audit", "bug"],
+                    "False positives include top-level compatibility shims and temporary placeholders already tracked for typed exception cleanup.")
+                {
+                    PathPatterns = [.. DefaultSourcePathPatternsValue],
+                    ExcludePaths = [.. DefaultSourceExcludePathsValue],
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: generic Exception loses typed recovery, category, and diagnostic-contract information.",
+                        "positive: boundary normalization or compatibility wrappers may intentionally translate to a generic exception only after preserving context."
+                    ],
+                },
+                new(
+                    "task-result-property-review",
+                    ".Result",
+                    "Find exact Result property accesses in production source so reviewers can separate Task blocking from ordinary DTO Result properties.",
+                    ["audit", "bug"],
+                    "False positives include DTO, command-result, parse-result, and search-result property access; prioritize hits whose receiver is Task or ValueTask.")
+                {
+                    PathPatterns = [.. DefaultSourcePathPatternsValue],
+                    ExcludePaths = [.. DefaultSourceExcludePathsValue],
+                    MatchOrigins = ["code"],
+                    ResultKinds = ["identifier"],
+                    RiskEvidence =
+                    [
+                        "risk: Task.Result and ValueTask.AsTask().Result can block async continuations and hide cancellation or timeout policy.",
+                        "positive: DTOs and result-wrapper properties named Result should be classified separately from sync-over-async blocking."
+                    ],
+                },
+                new(
+                    "unsafe-keyword-code",
+                    "unsafe ",
+                    "Find exact unsafe keyword usage in production source without documentation, installer text, or compatibility-note matches.",
+                    ["audit", "security"],
+                    "False positives include comments about unsafe APIs and safe-handle names; code-origin matches should be reviewed for pointer and buffer safety.")
+                {
+                    PathPatterns = [.. DefaultSourcePathPatternsValue],
+                    ExcludePaths = [.. DefaultSourceExcludePathsValue],
+                    MatchOrigins = ["code"],
+                    ResultKinds = ["identifier"],
+                    RiskEvidence =
+                    [
+                        "risk: unsafe code can bypass runtime memory safety and needs pointer lifetime, bounds, and pinning review.",
+                        "positive: isolated interop boundaries with SafeHandle, fixed-size buffers, and focused tests reduce triage priority."
+                    ],
+                },
+                new(
+                    "active-test-skip-assignment",
+                    "Skip =",
+                    "Find exact active test skip annotations without broad skip prose, changelog, or documentation matches.",
+                    ["audit", "test"],
+                    "False positives include fixture text that demonstrates skip syntax; active attributes and test-case metadata are the primary review target.")
+                {
+                    Severity = "info",
+                    PathPatterns = ["tests/**"],
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: active Skip assignments can hide disabled coverage in the test suite.",
+                        "positive: documented platform-specific skips or intentionally external-dependency tests may be acceptable when tracked."
+                    ],
+                },
+                new(
+                    "readalltext-call-site",
+                    "ReadAllText",
+                    "Find production ReadAllText call sites while excluding documentation, project files, and config text.",
+                    ["audit", "performance"],
+                    "False positives include bounded helpers or tiny trusted files; prefer this call-site query when bare ReadAllText is noisy.")
+                {
+                    PathPatterns = [.. DefaultSourcePathPatternsValue],
+                    ExcludePaths = [.. DefaultSourceExcludePathsValue],
+                    MatchOrigins = ["code"],
+                    ResultKinds = ["call_site"],
+                    RiskEvidence =
+                    [
+                        "risk: whole-file text reads can materialize unbounded input without sharing or size policy.",
+                        "positive: nearby length checks, BoundedFile helpers, or tiny trusted files can make a hit intentional."
+                    ],
+                },
+                new(
+                    "version-project-config",
+                    "Version=\"",
+                    "Find exact XML Version attributes in project and package configuration instead of documentation or prose matches.",
+                    ["audit"],
+                    "False positives include generated fixture projects and examples; this query is for configuration/version-surface inventory, not source-code risk.")
+                {
+                    Severity = "info",
+                    PathPatterns =
+                    [
+                        "*.csproj",
+                        "*.props",
+                        "*.targets",
+                        "src/**/*.csproj",
+                        "tests/**/*.csproj",
+                        "Directory.Packages.props",
+                        "Directory.Build.props",
+                        "Directory.Build.targets"
+                    ],
+                    RiskEvidence =
+                    [
+                        "risk: dependency and package Version attributes belong to configuration review rather than source-code vulnerability sweeps.",
+                        "positive: exact XML attribute matching keeps version prose, docs, and changelog examples out of this inventory."
+                    ],
+                },
+                new(
+                    "todo-production-comment",
+                    "TODO",
+                    "Find TODO comments in production source without fixture, documentation, and changelog examples dominating the result set.",
+                    ["audit"],
+                    "False positives include intentionally tracked follow-up markers; broad TODO inventory should be requested separately when docs and tests are in scope.")
+                {
+                    Severity = "info",
+                    PathPatterns = [.. DefaultSourcePathPatternsValue],
+                    ExcludePaths = [.. DefaultSourceExcludePathsValue],
+                    MatchOrigins = ["comment"],
+                    ResultKinds = ["comment"],
+                    RiskEvidence =
+                    [
+                        "risk: production TODO comments can mark incomplete behavior that deserves explicit issue tracking.",
+                        "positive: comments that reference an existing issue or explain non-actionable compatibility work are lower risk."
+                    ],
+                },
+                new(
+                    "obsolete-production-code",
+                    "Obsolete",
+                    "Find Obsolete usage in production source without documentation, fixture, and changelog examples dominating the result set.",
+                    ["audit", "bug"],
+                    "False positives include compatibility shims and deliberate API lifecycle annotations; prioritize call sites or declarations that affect runtime paths.")
+                {
+                    PathPatterns = [.. DefaultSourcePathPatternsValue],
+                    ExcludePaths = [.. DefaultSourceExcludePathsValue],
+                    MatchOrigins = ["code"],
+                    ResultKinds = ["identifier"],
+                    RiskEvidence =
+                    [
+                        "risk: Obsolete APIs or attributes in production code can hide compatibility debt or unsupported runtime behavior.",
+                        "positive: explicit migration comments, compatibility guards, or attribute declarations with planned removal can make the hit intentional."
+                    ],
                 }
             ]),
         AllScopedRecipe(
@@ -1801,6 +2171,7 @@ internal sealed record SearchAuditRecipeQuery(
     public List<string> MatchOrigins { get; init; } = [];
     public List<string> ExcludeOrigins { get; init; } = [];
     public List<string> ResultKinds { get; init; } = [];
+    public SearchRecipeStringComparisonTaxonomyJsonResult? StringComparisonTaxonomy { get; init; }
     public SearchRecipeBroadCatchTaxonomyJsonResult? BroadCatchTaxonomy { get; init; }
 }
 
@@ -1871,6 +2242,9 @@ internal sealed record SearchRecipeQueryListItemJsonResult(
     [property: JsonPropertyName("match_origins")] List<string> MatchOrigins,
     [property: JsonPropertyName("exclude_origins")] List<string> ExcludeOrigins,
     [property: JsonPropertyName("result_kinds")] List<string> ResultKinds,
+    [property: JsonPropertyName("string_comparison_taxonomy")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    SearchRecipeStringComparisonTaxonomyJsonResult? StringComparisonTaxonomy,
     [property: JsonPropertyName("broad_catch_taxonomy")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     SearchRecipeBroadCatchTaxonomyJsonResult? BroadCatchTaxonomy,
@@ -1880,7 +2254,10 @@ internal sealed record SearchRecipeGuardFilterJsonResult(
     [property: JsonPropertyName("role")] string Role,
     [property: JsonPropertyName("direction")] string Direction,
     [property: JsonPropertyName("query")] string Query,
-    [property: JsonPropertyName("option")] string Option);
+    [property: JsonPropertyName("option")] string Option,
+    [property: JsonPropertyName("scope")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? Scope);
 
 internal sealed record SearchRecipeBroadCatchTaxonomyJsonResult(
     [property: JsonPropertyName("boundary_categories")] List<SearchRecipeBroadCatchBoundaryJsonResult> BoundaryCategories,
@@ -1895,6 +2272,15 @@ internal sealed record SearchRecipeBroadCatchBoundaryJsonResult(
 internal sealed record SearchRecipeBroadCatchDiagnosticBehaviorJsonResult(
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("description")] string Description);
+
+internal sealed record SearchRecipeStringComparisonTaxonomyJsonResult(
+    [property: JsonPropertyName("domain_categories")] List<SearchRecipeStringComparisonDomainJsonResult> DomainCategories,
+    [property: JsonPropertyName("triage_guidance")] string TriageGuidance);
+
+internal sealed record SearchRecipeStringComparisonDomainJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("description")] string Description,
+    [property: JsonPropertyName("review_guidance")] string ReviewGuidance);
 
 internal sealed record SearchRecipeRunJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
@@ -1951,6 +2337,9 @@ internal sealed record SearchRecipeQueryResultJsonResult(
     [property: JsonPropertyName("match_origins")] List<string> MatchOrigins,
     [property: JsonPropertyName("exclude_origins")] List<string> ExcludeOrigins,
     [property: JsonPropertyName("result_kinds")] List<string> ResultKinds,
+    [property: JsonPropertyName("string_comparison_taxonomy")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    SearchRecipeStringComparisonTaxonomyJsonResult? StringComparisonTaxonomy,
     [property: JsonPropertyName("broad_catch_taxonomy")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     SearchRecipeBroadCatchTaxonomyJsonResult? BroadCatchTaxonomy,
@@ -2048,6 +2437,9 @@ internal sealed record SearchRecipeCompactQueryResultJsonResult(
     [property: JsonPropertyName("match_origins")] List<string> MatchOrigins,
     [property: JsonPropertyName("exclude_origins")] List<string> ExcludeOrigins,
     [property: JsonPropertyName("result_kinds")] List<string> ResultKinds,
+    [property: JsonPropertyName("string_comparison_taxonomy")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    SearchRecipeStringComparisonTaxonomyJsonResult? StringComparisonTaxonomy,
     [property: JsonPropertyName("broad_catch_taxonomy")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     SearchRecipeBroadCatchTaxonomyJsonResult? BroadCatchTaxonomy,

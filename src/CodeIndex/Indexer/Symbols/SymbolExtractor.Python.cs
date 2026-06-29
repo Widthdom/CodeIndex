@@ -117,13 +117,21 @@ public static partial class SymbolExtractor
         return endExclusive == text.Length ? text : text[..endExclusive];
     }
 
-    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindPythonIndentedBodyRange(string[] lines, int startLineIndex)
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindPythonIndentedBodyRange(string[] lines, int startLineIndex, int startColumn = 0)
     {
         var declarationIndent = CountIndent(lines[startLineIndex]);
-        int? firstBodyLine = null;
-        var lastBodyLine = startLineIndex + 1;
+        var (headerEndLineIndex, colonColumn) = FindPythonLogicalHeaderColon(lines, startLineIndex, startColumn);
+        if (colonColumn >= 0)
+        {
+            var suffix = lines[headerEndLineIndex][(colonColumn + 1)..].Trim();
+            if (suffix.Length > 0 && !suffix.StartsWith('#'))
+                return (headerEndLineIndex + 1, headerEndLineIndex + 1, headerEndLineIndex + 1);
+        }
 
-        for (var i = startLineIndex + 1; i < lines.Length; i++)
+        int? firstBodyLine = null;
+        var lastBodyLine = headerEndLineIndex + 1;
+
+        for (var i = headerEndLineIndex + 1; i < lines.Length; i++)
         {
             if (string.IsNullOrWhiteSpace(lines[i]))
                 continue;
@@ -138,7 +146,67 @@ public static partial class SymbolExtractor
 
         return firstBodyLine.HasValue
             ? (lastBodyLine, firstBodyLine.Value, lastBodyLine)
-            : (startLineIndex + 1, null, null);
+            : (headerEndLineIndex + 1, null, null);
+    }
+
+    private static (int LineIndex, int ColonColumn) FindPythonLogicalHeaderColon(string[] lines, int startLineIndex, int startColumn)
+    {
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var inString = false;
+        var quote = '\0';
+
+        for (var i = startLineIndex; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            var column = i == startLineIndex ? Math.Clamp(startColumn, 0, line.Length) : 0;
+            for (var j = column; j < line.Length; j++)
+            {
+                var ch = line[j];
+                if (inString)
+                {
+                    if (ch == '\\')
+                    {
+                        j++;
+                        continue;
+                    }
+
+                    if (ch == quote)
+                        inString = false;
+                    continue;
+                }
+
+                if (ch is '\'' or '"')
+                {
+                    inString = true;
+                    quote = ch;
+                    continue;
+                }
+
+                if (ch == '#')
+                    break;
+                if (ch == '(')
+                    parenDepth++;
+                else if (ch == ')' && parenDepth > 0)
+                    parenDepth--;
+                else if (ch == '[')
+                    bracketDepth++;
+                else if (ch == ']' && bracketDepth > 0)
+                    bracketDepth--;
+                else if (ch == '{')
+                    braceDepth++;
+                else if (ch == '}' && braceDepth > 0)
+                    braceDepth--;
+                else if (ch == ':' && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                    return (i, j);
+            }
+
+            if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && !EndsWithPythonLineContinuation(line))
+                return (i, -1);
+        }
+
+        return (startLineIndex, -1);
     }
 
     private static string BuildPythonLogicalHeaderSignature(string[] lines, int startLineIndex, int startColumn)
@@ -1296,46 +1364,7 @@ public static partial class SymbolExtractor
 
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindIndentRange(string[] lines, int startIndex)
     {
-        var currentLine = lines[startIndex];
-        var currentIndent = CountIndent(currentLine);
-        var trimmedCurrent = currentLine.Trim();
-
-        if (trimmedCurrent.Contains(':'))
-        {
-            var suffix = trimmedCurrent[(trimmedCurrent.IndexOf(':') + 1)..].Trim();
-            if (suffix.Length > 0 && !suffix.StartsWith('#'))
-                return (startIndex + 1, startIndex + 1, startIndex + 1);
-        }
-
-        int? bodyStartLine = null;
-        int endLine = startIndex + 1;
-
-        for (int i = startIndex + 1; i < lines.Length; i++)
-        {
-            var trimmed = lines[i].Trim();
-            if (trimmed.Length == 0)
-                continue;
-
-            var indent = CountIndent(lines[i]);
-            if (bodyStartLine == null)
-            {
-                if (indent <= currentIndent)
-                    return (endLine, null, null);
-
-                bodyStartLine = i + 1;
-                endLine = i + 1;
-                continue;
-            }
-
-            if (indent <= currentIndent)
-                return (endLine, bodyStartLine, endLine);
-
-            endLine = i + 1;
-        }
-
-        return bodyStartLine == null
-            ? (startIndex + 1, null, null)
-            : (endLine, bodyStartLine, endLine);
+        return FindPythonIndentedBodyRange(lines, startIndex);
     }
 
 }

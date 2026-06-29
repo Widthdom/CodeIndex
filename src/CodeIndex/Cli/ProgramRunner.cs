@@ -4081,10 +4081,14 @@ internal static partial class ProgramRunner
             OperationTimeoutCategories.UpgradeDownload,
             timeout,
             cancellationToken);
-        using var request = new HttpRequestMessage(HttpMethod.Get, BuildReleaseAssetUrl(releaseTag, ReleaseChecksumAssetName));
-        GitHubHttpClientFactory.ApplyReleaseDownloadHeaders(request.Headers);
-        using var response = await client.SendAsync(
-            request,
+        using var response = await GitHubHttpClientFactory.SendWithRetryAsync(
+            client,
+            () =>
+            {
+                var request = new HttpRequestMessage(HttpMethod.Get, BuildReleaseAssetUrl(releaseTag, ReleaseChecksumAssetName));
+                GitHubHttpClientFactory.ApplyReleaseDownloadHeaders(request.Headers);
+                return request;
+            },
             HttpCompletionOption.ResponseHeadersRead,
             downloadScope.Token).ConfigureAwait(false);
         await GitHubHttpClientFactory.EnsureSuccessStatusCodeWithBoundedDiagnosticsAsync(
@@ -4161,10 +4165,14 @@ internal static partial class ProgramRunner
             OperationTimeoutCategories.UpgradeDownload,
             timeout,
             cancellationToken);
-        using var request = new HttpRequestMessage(HttpMethod.Get, BuildInstallerScriptUrl(releaseTag));
-        GitHubHttpClientFactory.ApplyReleaseDownloadHeaders(request.Headers);
-        using var response = await client.SendAsync(
-            request,
+        using var response = await GitHubHttpClientFactory.SendWithRetryAsync(
+            client,
+            () =>
+            {
+                var request = new HttpRequestMessage(HttpMethod.Get, BuildInstallerScriptUrl(releaseTag));
+                GitHubHttpClientFactory.ApplyReleaseDownloadHeaders(request.Headers);
+                return request;
+            },
             HttpCompletionOption.ResponseHeadersRead,
             downloadScope.Token).ConfigureAwait(false);
         await GitHubHttpClientFactory.EnsureSuccessStatusCodeWithBoundedDiagnosticsAsync(

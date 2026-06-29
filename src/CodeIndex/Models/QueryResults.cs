@@ -121,7 +121,11 @@ public enum SearchGuardScope
     SameLine,
 }
 
-public sealed record SearchGuardFilter(SearchGuardRole Role, SearchGuardDirection Direction, string Query);
+public sealed record SearchGuardFilter(
+    SearchGuardRole Role,
+    SearchGuardDirection Direction,
+    string Query,
+    SearchGuardScope? Scope = null);
 
 public sealed class SearchGuardEvidence
 {
@@ -1009,6 +1013,16 @@ public class StatusResult
     [JsonPropertyName("commits_ahead_of_indexed_head")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? CommitsAheadOfIndexedHead { get; set; }
+    /// <summary>
+    /// Compact machine-facing summary of the runtime HEAD, latest indexed HEAD stamp, legacy
+    /// full-scan HEAD stamp, and optional `status --check` workspace comparison. This is
+    /// additive context for automation; the individual legacy fields remain authoritative.
+    /// runtime HEAD / 最新 index HEAD stamp / legacy full-scan HEAD stamp / 任意の
+    /// `status --check` 比較をまとめた機械向け summary。
+    /// </summary>
+    [JsonPropertyName("head_freshness")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public StatusHeadFreshness? HeadFreshness => StatusHeadFreshness.FromStatus(this);
     public Dictionary<string, long> Languages { get; set; } = new();
     public Dictionary<string, long>? SymbolKinds { get; set; }
     [JsonPropertyName("symbol_kind_limit")]
@@ -1242,6 +1256,129 @@ public class StatusResult
     [JsonPropertyName("last_failed_or_partial_index_run")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public StatusFailedOrPartialIndexRun? LastFailedOrPartialIndexRun { get; set; }
+}
+
+public sealed class StatusHeadFreshness
+{
+    public string State { get; init; } = "unchecked";
+    [JsonPropertyName("state_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? StateReason { get; init; }
+    [JsonPropertyName("runtime_head")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RuntimeHead { get; init; }
+    [JsonPropertyName("indexed_head")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? IndexedHead { get; init; }
+    [JsonPropertyName("indexed_head_source")]
+    public string IndexedHeadSource { get; init; } = "unavailable";
+    [JsonPropertyName("legacy_full_scan_head")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LegacyFullScanHead { get; init; }
+    [JsonPropertyName("indexed_head_branch")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? IndexedHeadBranch { get; init; }
+    [JsonPropertyName("indexed_head_timestamp")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTime? IndexedHeadTimestamp { get; init; }
+    [JsonPropertyName("workspace_check_indexed_head_commit")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WorkspaceCheckIndexedHeadCommit { get; init; }
+    [JsonPropertyName("workspace_check_workspace_head_commit")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WorkspaceCheckWorkspaceHeadCommit { get; init; }
+    [JsonPropertyName("workspace_matches_index")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? WorkspaceMatchesIndex { get; init; }
+    [JsonPropertyName("worktree_head_changed")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? WorktreeHeadChanged { get; init; }
+    [JsonPropertyName("commits_ahead_of_indexed_head")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? CommitsAheadOfIndexedHead { get; init; }
+
+    public static StatusHeadFreshness? FromStatus(StatusResult status)
+    {
+        if (!HasHeadFreshnessSignal(status))
+            return null;
+
+        var indexedHead = NullIfWhiteSpace(status.IndexedHeadSha) ?? NullIfWhiteSpace(status.IndexedHeadCommit);
+        var workspaceCheck = status.WorkspaceCheck;
+
+        return new StatusHeadFreshness
+        {
+            State = ResolveState(status, workspaceCheck),
+            StateReason = ResolveStateReason(status, workspaceCheck),
+            RuntimeHead = NullIfWhiteSpace(status.GitHead),
+            IndexedHead = indexedHead,
+            IndexedHeadSource = ResolveIndexedHeadSource(status),
+            LegacyFullScanHead = NullIfWhiteSpace(status.IndexedHeadCommit),
+            IndexedHeadBranch = NullIfWhiteSpace(status.IndexedHeadBranch),
+            IndexedHeadTimestamp = status.IndexedHeadTimestamp,
+            WorkspaceCheckIndexedHeadCommit = NullIfWhiteSpace(workspaceCheck?.IndexedHeadCommit),
+            WorkspaceCheckWorkspaceHeadCommit = NullIfWhiteSpace(workspaceCheck?.WorkspaceHeadCommit),
+            WorkspaceMatchesIndex = status.IndexMatchesWorkspace ?? workspaceCheck?.MatchesWorkspace,
+            WorktreeHeadChanged = status.WorktreeHeadChanged,
+            CommitsAheadOfIndexedHead = status.CommitsAheadOfIndexedHead,
+        };
+    }
+
+    private static bool HasHeadFreshnessSignal(StatusResult status) =>
+        status.WorkspaceCheck is not null
+        || !string.IsNullOrWhiteSpace(status.GitHead)
+        || !string.IsNullOrWhiteSpace(status.IndexedHeadSha)
+        || !string.IsNullOrWhiteSpace(status.IndexedHeadCommit)
+        || !string.IsNullOrWhiteSpace(status.IndexedHeadBranch)
+        || status.IndexedHeadTimestamp.HasValue
+        || status.WorktreeHeadChanged.HasValue
+        || status.CommitsAheadOfIndexedHead.HasValue
+        || status.IndexMatchesWorkspace.HasValue;
+
+    private static string ResolveState(StatusResult status, IndexFreshnessCheckResult? workspaceCheck)
+    {
+        if (workspaceCheck is not null)
+        {
+            if (!workspaceCheck.Checked)
+                return "check_unavailable";
+            if (!workspaceCheck.MatchesWorkspace)
+                return IsHeadChanged(status, workspaceCheck) ? "head_changed" : "stale";
+            return "fresh";
+        }
+
+        if (status.WorktreeHeadChanged == true)
+            return "head_changed";
+        if (status.WorktreeHeadChanged == false)
+            return "head_current";
+        return "unchecked";
+    }
+
+    private static string? ResolveStateReason(StatusResult status, IndexFreshnessCheckResult? workspaceCheck)
+    {
+        if (workspaceCheck is not null)
+            return string.IsNullOrWhiteSpace(workspaceCheck.Reason) ? null : workspaceCheck.Reason;
+        if (status.WorktreeHeadChanged == true)
+            return "worktree_head_changed";
+        if (status.WorktreeHeadChanged == false)
+            return "head_current";
+        return null;
+    }
+
+    private static bool IsHeadChanged(StatusResult status, IndexFreshnessCheckResult workspaceCheck) =>
+        workspaceCheck.HeadChanged
+        || status.WorktreeHeadChanged == true
+        || string.Equals(workspaceCheck.Reason, "head_changed", StringComparison.Ordinal);
+
+    private static string ResolveIndexedHeadSource(StatusResult status)
+    {
+        if (!string.IsNullOrWhiteSpace(status.IndexedHeadSha))
+            return "latest_index";
+        if (!string.IsNullOrWhiteSpace(status.IndexedHeadCommit))
+            return "legacy_full_scan";
+        return "unavailable";
+    }
+
+    private static string? NullIfWhiteSpace(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value;
 }
 
 public sealed class StatusSqliteConnectionPolicy

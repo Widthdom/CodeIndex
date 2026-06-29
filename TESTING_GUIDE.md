@@ -118,6 +118,7 @@ The test project mirrors the production areas closely.
 - Keep tests deterministic. Do not depend on machine-global git config, locale-specific output, or ambient files.
 - Prefer small fixtures and explicit assertions over broad snapshot-style checks. The one narrow exception is the `--json` output contract harness (`JsonOutputSnapshotTests`), which pins the full field shape on purpose — see "JSON `--json` output snapshots" below.
 - When repeated expected-value construction obscures a boundary contract such as raw bytes vs canonical content, use a narrowly named local helper instead of duplicating the low-level expression at each assertion.
+- Skipped tests must remain auditable. Prefer explicit `[Fact(Skip = ...)]` / `[Theory(Skip = ...)]` reasons with `owner:` and `expires:` tokens unless the reason is a permanent target or lane guard, and add `Trait("Scenario", "...")` or `Trait("Category", "...")` when the surrounding suite name is too broad. Use `Trait("Area", "...")` when the file name does not identify the owning area. Run `dotnet run --project tools/CodeIndex.TestTelemetry -- skips --tests-directory tests/CodeIndex.Tests` to summarize skipped tests by area, scenario/category, and reason; the report parses xUnit attributes rather than ordinary `Skip =` text in comments or fixtures.
 - When a production comment or error string is bilingual, preserve that expectation in tests where it matters.
 - If a behavior change is user-visible, update tests, `CHANGELOG.md`, and any affected docs together.
 
@@ -364,6 +365,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - 広いスナップショット風の検証より、小さなフィクスチャと明示的な assertion を優先する。例外は `--json` 出力契約の harness (`JsonOutputSnapshotTests`) で、こちらは意図的にフィールド形状全体を固定します（下記「JSON `--json` 出力 snapshot」参照）。
 - raw bytes と canonical content のような境界契約で期待値生成が重複して読みづらくなる場合は、各 assertion に低レベル式を複製せず、契約名が分かる小さな local helper に寄せてください。
 - 境界を証明するテストでは、その境界をまたぐ最小の fixture を使う。1 ページ、1 chunk、1 cache、1 offset overflow で十分なら、それ以上に synthetic data を増やさない。ただし、より大きいサイズ自体が契約の一部なら例外です。
+- skip されたテストは監査可能に保ってください。恒久的な target / lane guard であることが理由から明確な場合を除き、`[Fact(Skip = ...)]` / `[Theory(Skip = ...)]` の理由には `owner:` と `expires:` token を含めます。周辺の suite 名だけでは分類が広すぎる場合は `Trait("Scenario", "...")` または `Trait("Category", "...")` を追加し、file 名だけで担当領域が分からない場合は `Trait("Area", "...")` も使います。`dotnet run --project tools/CodeIndex.TestTelemetry -- skips --tests-directory tests/CodeIndex.Tests` で、skip されたテストを area、scenario/category、理由ごとに集計できます。この report はコメントや fixture 中の通常の `Skip =` 文字列ではなく、xUnit 属性を parse します。
 - 本番コードのコメントやエラー文字列が英日併記前提なら、重要な箇所ではその期待もテストに反映する。
 - ユーザーに見える挙動を変えたら、テストに加えて `CHANGELOG.md` と関連ドキュメントも同じ変更に含める。
 

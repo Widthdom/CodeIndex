@@ -284,7 +284,7 @@ sections below show examples and option details for the most common workflows.
 | Status | `status` | Show DB statistics, freshness, and readiness metadata | `status` |
 | Status | `languages` | List language extensions and symbol/reference/graph capabilities; add `--indexed-only` and `--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` for workspace audits | `languages` |
 | Diagnostics | `db --integrity-check` | Run SQLite `PRAGMA integrity_check` against the DB | -- |
-| Diagnostics | `report --output <path>` | Build a redacted bug-report bundle | -- |
+| Diagnostics | `report --output <bundle.tgz>` | Build a redacted bug-report bundle | -- |
 | Feedback | `suggestions` | List, inspect, and export local suggestion history | -- |
 | Portability | `export ctags` | Write a native `tags` file for Vim, Emacs, Sublime, and other ctags consumers | -- |
 | Portability | `export` / `import` | Share a built CodeIndex database as a portable archive | -- |
@@ -457,6 +457,7 @@ cdidx validate --kind replacement_char --severity warning --path src/
 cdidx validate --exclude-tests --exclude-path 'fixtures/**'
 cdidx validate --json=array --limit 50 --path legacy/
 cdidx validate --json --limit 50 --path legacy/
+cdidx validate --format compact --limit 50
 ```
 
 `validate` reports indexed files that are likely to produce misleading snippets
@@ -467,8 +468,15 @@ JSON-form instruction payloads.
 For `replacement_char`, JSON and MCP responses include `origin` (`source_literal`
 or `decode_replacement`) and `severity` so agents can distinguish intentional
 U+FFFD literals from likely encoding damage.
+Validation issue rows also include `category` and `actionable` when emitted by
+current binaries; expected fixture literals are grouped as
+`expected_fixture_literal` with `actionable: false`, while decoder replacement
+risks are grouped as `decoding_risk` with `actionable: true`.
 Human-readable output prints the same markers in brackets and adds
 `test_fixture` when a finding comes from a test or fixture path.
+The default JSON object includes a `summary` grouped by kind, severity, origin,
+category, and actionability. Use `--format compact` when an agent or pipeline
+only needs that summary plus compact issue rows.
 Use `--severity warning` to hide informational source literals and focus on
 findings that indicate likely encoding damage.
 Use `--exclude-tests` and repeatable `--exclude-path` to keep validation output
@@ -477,7 +485,7 @@ issue list.
 UTF-8 BOM markers in Visual Studio `.sln` files are treated as expected solution
 file noise and are not reported by default.
 Use `--json=array` when a pipeline expects a bare issue array instead of the
-default `{ "count": ..., "issues": [...] }` object.
+default `{ "count": ..., "summary": ..., "issues": [...] }` object.
 LFS pointers are recorded as `lfs_pointer_skipped`; their placeholder body is
 not indexed, and their checksum stays tied to the pointer identity until you run
 `git lfs pull` and then `cdidx index .` to index the real file content.
@@ -1072,11 +1080,21 @@ next to the evidence path. For example,
 expected diagnostic behaviors so users can distinguish intentional top-level,
 cleanup, probe, diagnostic-sanitization, and worker boundaries from catches that
 should be narrowed or rethrown.
+`string-comparison-semantics` and `risky-code/path-case-heuristic` include
+string-comparison taxonomy metadata for `path_filesystem`, `protocol_tokens`,
+`cli_options`, `stable_identifiers`, `human_text`, and `machine_formatting`
+domains, so `OrdinalIgnoreCase`, `StringComparer.Ordinal`, `InvariantCulture`,
+and invariant casing hits can be classified before filing.
 Built-in recipes include `risky-code`, `json-parse-apis`,
-`auth-token-audit`, `dogfood-risk-patterns`, `dotnet-risk-patterns`,
-`sqlite-query-policy-surfaces`, `xml-parser-security`, `filesystem-traversal`,
-`bounded-read-evidence`, and the
+`auth-token-audit`, `string-comparison-semantics`, `dogfood-risk-patterns`,
+`dotnet-risk-patterns`, `sqlite-query-policy-surfaces`, `xml-parser-security`,
+`unsupported-operation-boundaries`, `filesystem-traversal`, `bounded-read-evidence`,
+`phrase-risk-patterns`, and the
 opt-in broad `broad-token-audit` recipe.
+Use `phrase-risk-patterns` for noisy audit phrases such as `async void`,
+`throw new Exception`, `.Result`, `unsafe`, `Skip =`, `Version="`, `TODO`, and
+`Obsolete` when you need exact-substring, origin, result-kind, file-kind, or
+production/test scope facets before filing findings.
 `--recipe <name>` applies normal search filters such as `--lang`, `--path`,
 `--exclude-path`, `--exclude-tests`, `--limit`, and snippet controls to every
 query in the recipe. With `--json`, recipe runs emit one aggregate JSON payload
@@ -1430,16 +1448,16 @@ cdidx report --output report.tgz
 cdidx report --output report.tgz --json
 ```
 
-`cdidx report --output <path>` packages a redacted `.tar.gz` you can attach to a GitHub issue. The bundle includes the cdidx version, .NET runtime, OS / process architecture, and a `schema.txt` with a capped SQLite table list plus bounded row counts (no table row contents). It also tails the recent cdidx lifecycle log (`stderr-yyyyMMdd.log`), with the database path, lifecycle-log source directory, `process_path=`, `base_dir=`, `cwd=`, `db=`, `path=`, and `args=` lines replaced by `[redacted]` so local filesystem paths and literal query strings never leave your machine. Tar entry modification times are fixed for reproducible archive metadata; the actual generation timestamp is recorded inside `metadata.json`, `env.txt`, and `support-manifest.json`.
+`cdidx report --output <path>` packages a redacted gzip-compressed tar archive you can attach to a GitHub issue. Use `.tgz` or `.tar.gz`; if the output path has a misleading extension such as `.json`, the command still writes the archive but warns on stderr and records the warning in JSON summary metadata. `--json` only changes the command summary written to stdout; it does not make the output artifact JSON. The bundle includes the cdidx version, .NET runtime, OS / process architecture, and a `schema.txt` with a capped SQLite table list plus bounded row counts (no table row contents). It also tails the recent cdidx lifecycle log (`stderr-yyyyMMdd.log`), with the database path, lifecycle-log source directory, `process_path=`, `base_dir=`, `cwd=`, `db=`, `path=`, and `args=` lines replaced by `[redacted]` so local filesystem paths and literal query strings never leave your machine. Tar entry modification times are fixed for reproducible archive metadata; the actual generation timestamp is recorded inside `metadata.json`, `env.txt`, and `support-manifest.json`.
 
 | Flag | Default | Effect |
 |---|---|---|
-| `--output <path>` / `-o <path>` | (required) | Destination `.tar.gz`. The directory is created if missing; on POSIX, the archive and tar entries are owner-readable/writable only. |
+| `--output <path>` / `-o <path>` | (required) | Destination gzip-compressed tar bundle; `.tgz` or `.tar.gz` is recommended. The directory is created if missing; on POSIX, the archive and tar entries are owner-readable/writable only. |
 | `--db <path>` | `.cdidx/codeindex.db` | Override the database whose schema is summarized. If absent, `schema.txt` records that no DB was found. Schema summaries cap table entries at 64, displayed table names at 96 characters, and row-count scans at 1000 rows per table. |
 | `--log-lines <n>` | `200` | How many trailing lifecycle-log lines to include (`0` disables the tail; values above `2000` are clamped). Report collection considers at most the 32 newest lifecycle log files; each file contributes from a bounded 1,048,576-byte tail window instead of being loaded fully. |
 | `--no-log` | | Skip the lifecycle log entirely. |
 | `--include-args` | | Keep literal `cwd=` and `args=` values in the log tail (opt-in; share only with trusted recipients). |
-| `--json` | | Print a stable summary envelope (`output_path`, `version`, `files`, `schema_tables`, `log_lines_included`, `log_included`, `db_included`, `db_path`) instead of the human-friendly output. |
+| `--json` | | Print a stable stdout summary envelope (`output_path`, `version`, `artifact_format`, `artifact_media_type`, `recommended_extensions`, `json_metadata_stdout_only`, `warnings`, `files`, `schema_tables`, `log_lines_included`, `log_included`, `db_included`, `db_path`) instead of the human-friendly output. |
 
 ## Search query syntax
 
@@ -1513,7 +1531,7 @@ same source location.
 | `--exclude-visibility <v[,v]>` | `definition`, `symbols`, `unused`, `hotspots` | Exclude symbols with the requested visibility values. Accepts the same comma-separated values and alias expansion as `--visibility`. |
 | `--path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | Restrict results to glob-style path patterns. `*` and `?` are wildcards. Repeatable; multiple values are OR'd together. Quote shell globs such as `--path 'src/**'` so the shell passes one literal pattern. |
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | Pass a query literal explicitly, useful when the query starts with `-`. Query commands except `find` also accept `-- <query>` as a one-token query escape while continuing to parse later options. |
-| `--recipe <name>` | `search` | Run a reusable audit recipe such as `risky-code`, `json-parse-apis`, `dotnet-risk-patterns`, `xml-parser-security`, `filesystem-traversal`, or `bounded-read-evidence`. Use `recipe/query` form, such as `risky-code/raw-diagnostic-echo`, to run one child query directly. Unknown recipe/query selectors include likely matches across recipe groups. Recipe runs default to `--audit-scope source`, applying recipe production-code path and exclusion metadata before normal search filters and snippet controls; `--limit` / `--top` is per child query. Text, `--json` / `--format json`, `--format compact`, and `--format issue-drafts` are supported, and issue drafts include a replay command. |
+| `--recipe <name>` | `search` | Run a reusable audit recipe such as `risky-code`, `json-parse-apis`, `dotnet-risk-patterns`, `unsupported-operation-boundaries`, `xml-parser-security`, `filesystem-traversal`, or `bounded-read-evidence`. Use `recipe/query` form, such as `risky-code/raw-diagnostic-echo`, to run one child query directly. Unknown recipe/query selectors include likely matches across recipe groups. Recipe runs default to `--audit-scope source`, applying recipe production-code path and exclusion metadata before normal search filters and snippet controls; `--limit` / `--top` is per child query. Text, `--json` / `--format json`, `--format compact`, and `--format issue-drafts` are supported, and issue drafts include a replay command. |
 | `--include-query <name>` / `--exclude-query <name>` | `search --recipe <name>` | Include or exclude child recipe queries by name. Repeatable and comma-separated; names are listed by `cdidx search --list-recipes`. |
 | `--cursor <cursor>` | `search --recipe <name/query>`, `outline`, `unused` | Fetch the next page for one selected recipe child query, outline result, or unused-symbol page. Use the `next_cursor` returned by the previous JSON or compact output; outline cursors use `outline:<offset>`. |
 | `--audit-scope <source\|all>` | `search`, `unused` | Choose audit path scope. For recipe search, `source` applies recipe production-code path and exclusion metadata. For ad hoc and named-query searches, `source` adds `src/**`, default doc/test/changelog exclusions, and `--exclude-tests` when no user path was supplied. `all` intentionally searches every indexed path unless other filters exclude it. JSON output reports the effective scope, path filters, and exclusions where applicable. |
@@ -2979,7 +2997,7 @@ cdidx index . --quiet
 | Status | `status` | DB stats、freshness、readiness metadata を表示 | `status` |
 | Status | `languages` | language extensions と symbol/graph capabilities を一覧 | `languages` |
 | Diagnostics | `db --integrity-check` | DB に対して SQLite `PRAGMA integrity_check` を実行 | -- |
-| Diagnostics | `report --output <path>` | redact 済み bug-report bundle を作成 | -- |
+| Diagnostics | `report --output <bundle.tgz>` | redact 済み bug-report bundle を作成 | -- |
 | Feedback | `suggestions` | local suggestion history を list / inspect / export | -- |
 | Portability | `export ctags` | Vim、Emacs、Sublime など ctags consumer 向けに `tags` file を出力 | -- |
 | Portability | `export` / `import` | build 済み CodeIndex database を portable archive として共有 | -- |
@@ -3145,6 +3163,7 @@ cdidx validate --kind replacement_char --severity warning --path src/
 cdidx validate --exclude-tests --exclude-path 'fixtures/**'
 cdidx validate --json=array --limit 50 --path legacy/
 cdidx validate --json --limit 50 --path legacy/
+cdidx validate --format compact --limit 50
 ```
 
 `validate` は、snippet や symbol name を誤らせやすい indexed file を報告します。
@@ -3154,15 +3173,20 @@ placeholder、Dockerfile の JSON-form instruction payload の parse / truncatio
 診断などです。
 `replacement_char` の JSON / MCP response には `origin` (`source_literal` /
 `decode_replacement`) と `severity` が入り、意図的な U+FFFD literal と
-エンコーディング破損の可能性を agent が区別できます。human-readable output
+エンコーディング破損の可能性を agent が区別できます。現在の binary が出力する
+validation issue row には `category` と `actionable` も入り、想定済み fixture literal は
+`expected_fixture_literal` / `actionable: false`、decoder replacement のリスクは
+`decoding_risk` / `actionable: true` として grouped summary に載ります。human-readable output
 にも同じ marker が角括弧で表示され、test / fixture path の finding には
-`test_fixture` が付きます。`--severity warning`
+`test_fixture` が付きます。既定の JSON object には kind、severity、origin、category、
+actionability ごとの `summary` が入り、agent や pipeline が summary と compact な issue row だけを
+必要とする場合は `--format compact` を使えます。`--severity warning`
 を使うと、informational な source literal を隠して、エンコーディング破損の
 可能性がある finding に集中できます。fixture や generated sample が issue list を
 支配する場合は、`--exclude-tests` と繰り返し指定できる `--exclude-path` で
 本番コード側の path に validation output を絞れます。Visual Studio の `.sln`
 file に含まれる UTF-8 BOM marker は solution file の既知ノイズとして扱われ、
-既定では報告されません。pipeline が既定の `{ "count": ..., "issues": [...] }`
+既定では報告されません。pipeline が既定の `{ "count": ..., "summary": ..., "issues": [...] }`
 object ではなく bare issue array を期待する場合は `--json=array` を使えます。LFS pointer
 は `lfs_pointer_skipped` として記録され、placeholder 本文は index されず、checksum は
 実体を取得するまで pointer identity に紐づきます。実体を index するには `git lfs pull`
@@ -3763,9 +3787,15 @@ MCP `search` tool では同じ mode を camelCase 引数 `requireBefore`, `requi
 result level、正規化済みの repository-relative artifact URI を出力します。
 
 search audit recipe は、名前付き recipe を複数の curated search query に展開します。
-組み込み recipe には `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、`xml-parser-security`、
-`auth-token-audit`、`dogfood-risk-patterns`、`sqlite-query-policy-surfaces`、
-`filesystem-traversal`、`bounded-read-evidence`、`broad-token-audit` があります。
+組み込み recipe には `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、
+`auth-token-audit`、`string-comparison-semantics`、`dogfood-risk-patterns`、
+`sqlite-query-policy-surfaces`、`unsupported-operation-boundaries`、`xml-parser-security`、
+`filesystem-traversal`、`bounded-read-evidence`、`phrase-risk-patterns`、
+`broad-token-audit` があります。
+`phrase-risk-patterns` は `async void`、`throw new Exception`、`.Result`、`unsafe`、
+`Skip =`、`Version="`、`TODO`、`Obsolete` のようなノイズの多い監査語句を対象に、
+issue 化前に exact-substring、origin、result-kind、file-kind、production/test scope の
+facet で切り分けたい場合に使います。
 `--list-recipes` は利用可能な名前、
 説明、推奨 label、query text、exact-match mode、false-positive guidance、guard filter、
 risk evidence、query 固有の audit taxonomy metadata を表示します。
@@ -3779,6 +3809,11 @@ issue-draft export や下流の triage tool が evidence path の近くに revie
 broad catch の境界カテゴリと期待される diagnostic behavior を含めるため、意図的な
 top-level、cleanup、probe、diagnostic-sanitization、worker 境界と、narrowing または
 rethrow が必要な catch を区別できます。
+`string-comparison-semantics` と `risky-code/path-case-heuristic` は
+`path_filesystem`、`protocol_tokens`、`cli_options`、`stable_identifiers`、
+`human_text`、`machine_formatting` の domain を持つ string-comparison taxonomy metadata
+を含みます。これにより、`OrdinalIgnoreCase`、`StringComparer.Ordinal`、
+`InvariantCulture`、invariant casing の hit を起票前に分類できます。
 `--recipe <name>` は `--lang`、`--path`、`--exclude-path`、`--exclude-tests`、
 `--limit`、snippet control など通常の search filter を recipe 内の各 query に適用します。
 `--json` 併用時、recipe run は通常の newline-delimited search stream ではなく、recipe
@@ -4122,16 +4157,16 @@ cdidx report --output report.tgz
 cdidx report --output report.tgz --json
 ```
 
-`cdidx report --output <path>` は GitHub Issue に添付できる匿名化済み `.tar.gz` を生成します。バンドルには cdidx のバージョン、.NET ランタイム、OS / プロセスアーキテクチャ、上限付きの SQLite テーブル一覧と bounded な行数を記録した `schema.txt`（table の行内容は含まれません）が入ります。さらに直近のライフサイクルログ（`stderr-yyyyMMdd.log`）の末尾も含まれますが、DB パス、ライフサイクルログの source directory、`process_path=`、`base_dir=`、`cwd=`、`db=`、`path=`、`args=` 行は `[redacted]` に置換されるため、ローカルファイルシステムのパスや具体的なクエリ文字列が端末から外に出ることはありません。tar entry の modification time は再現性のある archive metadata にするため固定され、実際の生成時刻は `metadata.json`、`env.txt`、`support-manifest.json` に記録されます。
+`cdidx report --output <path>` は GitHub Issue に添付できる匿名化済みの gzip 圧縮 tar archive を生成します。`.tgz` または `.tar.gz` を使ってください。出力先が `.json` のような誤解を招く拡張子でも archive は書き出されますが、stderr に warning が出力され、JSON summary metadata の `warnings` にも記録されます。`--json` は stdout に出す command summary だけを JSON にし、出力 artifact 自体を JSON にするものではありません。バンドルには cdidx のバージョン、.NET ランタイム、OS / プロセスアーキテクチャ、上限付きの SQLite テーブル一覧と bounded な行数を記録した `schema.txt`（table の行内容は含まれません）が入ります。さらに直近のライフサイクルログ（`stderr-yyyyMMdd.log`）の末尾も含まれますが、DB パス、ライフサイクルログの source directory、`process_path=`、`base_dir=`、`cwd=`、`db=`、`path=`、`args=` 行は `[redacted]` に置換されるため、ローカルファイルシステムのパスや具体的なクエリ文字列が端末から外に出ることはありません。tar entry の modification time は再現性のある archive metadata にするため固定され、実際の生成時刻は `metadata.json`、`env.txt`、`support-manifest.json` に記録されます。
 
 | フラグ | 既定値 | 効果 |
 |---|---|---|
-| `--output <path>` / `-o <path>` | （必須） | 出力先 `.tar.gz`。親ディレクトリが無ければ作成します。POSIX では archive と tar entry は owner の読み書きのみになります。 |
+| `--output <path>` / `-o <path>` | （必須） | 出力先の gzip 圧縮 tar bundle。`.tgz` または `.tar.gz` を推奨します。親ディレクトリが無ければ作成します。POSIX では archive と tar entry は owner の読み書きのみになります。 |
 | `--db <path>` | `.cdidx/codeindex.db` | スキーマ要約対象の DB を上書きします。存在しなければ `schema.txt` に「DB が見つからなかった」旨が記録されます。スキーマ要約は table entry を 64 件、表示 table 名を 96 文字、行数 scan を table ごとに 1000 行までに制限します。 |
 | `--log-lines <n>` | `200` | ライフサイクルログ末尾を何行含めるか（`0` で末尾を含めません。`2000` を超える値は clamp されます）。report 収集は最新 32 件までの lifecycle log file を対象にし、各ログファイルは全体を読み込まず、末尾 1,048,576 byte の範囲から収集します。 |
 | `--no-log` | | ライフサイクルログを完全に省略します。 |
 | `--include-args` | | ログ末尾の `cwd=` / `args=` 値を伏字化せずそのまま含めます（信頼できる相手にだけ使用してください）。 |
-| `--json` | | 人間向け出力の代わりに、安定したサマリ JSON（`output_path` / `version` / `files` / `schema_tables` / `log_lines_included` / `log_included` / `db_included` / `db_path`）を出力します。 |
+| `--json` | | 人間向け出力の代わりに、安定した stdout summary JSON（`output_path` / `version` / `artifact_format` / `artifact_media_type` / `recommended_extensions` / `json_metadata_stdout_only` / `warnings` / `files` / `schema_tables` / `log_lines_included` / `log_included` / `db_included` / `db_path`）を出力します。 |
 
 ## 検索クエリ構文
 
@@ -4203,7 +4238,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--exclude-visibility <v[,v]>` | `definition`, `symbols`, `unused`, `hotspots` | 指定した可視性のシンボルを除外する。値と alias 展開は `--visibility` と同じ |
 | `--path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | glob 形式のパスパターンで結果を絞る。`*` と `?` がワイルドカード。繰り返し指定可（複数値は OR で結合）。`--path 'src/**'` のように shell glob を引用し、shell が 1 つの literal pattern として渡すようにする。 |
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | クエリを明示的なリテラルとして渡す。クエリが `-` で始まる場合に有用。`find` 以外のクエリ系コマンドでは `-- <query>` も1トークンのクエリエスケープとして受け付け、その後のオプション解析を続ける。 |
-| `--recipe <name>` | `search` | `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、`xml-parser-security`、`filesystem-traversal`、`bounded-read-evidence` などの再利用可能な audit recipe を実行する。`risky-code/raw-diagnostic-echo` のような `recipe/query` 形式で child query を1つだけ直接実行できる。未知の recipe/query selector には recipe group をまたいだ近い候補が表示される。Recipe 実行は既定で `--audit-scope source` になり、recipe の本番コード向け path / exclusion metadata を適用したうえで、通常の search filter と snippet control を選択された各 query に適用する。`--limit` / `--top` は child query ごとの上限になる。text、`--json` / `--format json`、`--format compact`、`--format issue-drafts` に対応し、issue draft には再実行コマンドを含める。 |
+| `--recipe <name>` | `search` | `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、`unsupported-operation-boundaries`、`xml-parser-security`、`filesystem-traversal`、`bounded-read-evidence` などの再利用可能な audit recipe を実行する。`risky-code/raw-diagnostic-echo` のような `recipe/query` 形式で child query を1つだけ直接実行できる。未知の recipe/query selector には recipe group をまたいだ近い候補が表示される。Recipe 実行は既定で `--audit-scope source` になり、recipe の本番コード向け path / exclusion metadata を適用したうえで、通常の search filter と snippet control を選択された各 query に適用する。`--limit` / `--top` は child query ごとの上限になる。text、`--json` / `--format json`、`--format compact`、`--format issue-drafts` に対応し、issue draft には再実行コマンドを含める。 |
 | `--include-query <name>` / `--exclude-query <name>` | `search --recipe <name>` | recipe 内の child query を名前で含める、または除外する。繰り返し指定とカンマ区切りに対応し、名前は `cdidx search --list-recipes` で確認できる。 |
 | `--cursor <cursor>` | `search --recipe <name/query>`、`outline`、`unused` | 選択した recipe child query、outline 結果、unused-symbol page の次ページを取得する。直前の JSON または compact output が返す `next_cursor` を指定し、outline cursor は `outline:<offset>` 形式を使う。 |
 | `--audit-scope <source\|all>` | `search`, `unused` | audit path scope を選ぶ。Recipe search の `source` は recipe の本番コード向け path / exclusion metadata を適用する。Ad hoc / named-query search の `source` は user path がない場合に `src/**`、既定の docs/tests/changelog exclusion、`--exclude-tests` を追加する。`all` は他の filter で除外しない限り、すべての indexed path を意図的に検索する。JSON 出力には該当する場合、有効な scope、path filter、exclusion が含まれる。 |

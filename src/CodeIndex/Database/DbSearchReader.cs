@@ -698,10 +698,11 @@ public partial class DbReader
             var keep = true;
             foreach (var filter in guardFilters)
             {
-                var evaluation = FindGuardEvidence(result.Path, primaryMatch, filter, guardWindow, guardScope, primaryMatchContext.GetEffectiveLang(result), lineWindowCache);
+                var effectiveGuardScope = filter.Scope ?? guardScope;
+                var evaluation = FindGuardEvidence(result.Path, primaryMatch, filter, guardWindow, effectiveGuardScope, primaryMatchContext.GetEffectiveLang(result), lineWindowCache);
                 var matched = evaluation.Evidence != null;
                 var passed = filter.Role == SearchGuardRole.Require ? matched : !matched;
-                guardChecks.Add(CreateSearchGuardCheck(filter, guardScope, evaluation, matched, passed));
+                guardChecks.Add(CreateSearchGuardCheck(filter, effectiveGuardScope, evaluation, matched, passed));
                 if (!passed)
                 {
                     keep = false;
