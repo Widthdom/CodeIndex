@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
@@ -192,7 +193,7 @@ public partial class QueryCommandRunnerTests
                 [$"--db={dbPath}", "--path=--json-dir", "--count", "--json"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.True(exitCode == CommandExitCodes.Success, stderr);
             Assert.Equal(string.Empty, stderr);
             using var document = ParseJsonOutput(stdout);
             Assert.Equal(1, document.RootElement.GetProperty("count").GetInt32());
@@ -2753,6 +2754,55 @@ public partial class QueryCommandRunnerTests
             var file = Assert.Single(files);
             Assert.Equal("src/app.cs", file.GetProperty("path").GetString());
             Assert.Equal("csharp", file.GetProperty("lang").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFiles_FormatCompactMaxJsonBytesTruncatesRowsWithMetadata_Issue4165()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_files_compact_cap_4165");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            for (var i = 0; i < 3; i++)
+            {
+                var suffix = new string((char)('a' + i), 160);
+                TestProjectHelper.InsertIndexedFile(dbPath, $"src/{suffix}.cs", "csharp", "class App {}\n");
+            }
+
+            string[] baseArgs = ["--db", dbPath, "--format", "compact", "--limit", "3"];
+            var (fullExitCode, fullStdout, fullStderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(baseArgs, _jsonOptions));
+            var cap = Encoding.UTF8.GetByteCount(fullStdout) - 80;
+
+            Assert.Equal(CommandExitCodes.Success, fullExitCode);
+            Assert.Equal(string.Empty, fullStderr);
+            Assert.True(cap > 0);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                [.. baseArgs, "--max-json-bytes", cap.ToString()],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var files = root.GetProperty("files").EnumerateArray().ToArray();
+            var omittedBy = root.GetProperty("omitted_by").EnumerateArray().Select(item => item.GetString()).ToArray();
+
+            Assert.True(Encoding.UTF8.GetByteCount(stdout) <= cap);
+            Assert.Equal("compact", root.GetProperty("format").GetString());
+            Assert.Equal(3, root.GetProperty("count").GetInt32());
+            Assert.True(root.GetProperty("emitted_count").GetInt32() < 3);
+            Assert.Equal(root.GetProperty("emitted_count").GetInt32(), files.Length);
+            Assert.True(root.GetProperty("omitted_count").GetInt32() > 0);
+            Assert.True(root.GetProperty("truncated").GetBoolean());
+            Assert.True(root.GetProperty("byte_limit_reached").GetBoolean());
+            Assert.Contains("max_json_bytes", omittedBy);
         }
         finally
         {

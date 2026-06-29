@@ -1263,6 +1263,9 @@ cdidx symbols --visibility public,internal           # public/internal symbols
 cdidx symbols --exclude-visibility private           # hide private symbols
 cdidx symbols --kind function --sort hotspot --json  # hotspot-ranked audit stream
 cdidx symbols --kind function --sort size --json     # largest definitions first
+cdidx symbols --kind function --format compact --limit 20
+cdidx symbols --kind function --json --summary-only
+cdidx symbols --kind function --format compact --max-json-bytes 12000
 cdidx symbols Run --json=array                       # JSON array instead of NDJSON rows
 cdidx symbols Run --format lsp                       # LSP locations; qf and sarif are also supported
 ```
@@ -1272,6 +1275,13 @@ Use `--exact-name` when you already have a precise candidate list (e.g. names re
 For audit passes, add `--sort hotspot|references|size|complexity|path`.
 `--json` rows include `sort_mode`, `reference_count`, `hotspot_score`,
 `size_lines`, and `complexity_score` whenever an audit sort is active.
+Use `--format compact` when discovery output must stay small: it emits one JSON
+object with `count`, `file_count`, `emitted_count`, `omitted_count`,
+`truncated`, `omitted_by`, `query_context`, and freshness metadata. Compact
+symbol rows keep location, kind/name, language, container/visibility, and active
+rank fields while omitting large signature/body fields. Add `--summary-only` to
+return only the aggregate metadata, or add `--max-json-bytes <n>` to trim rows
+until the JSON payload fits the byte budget.
 
 Output:
 
@@ -1374,6 +1384,9 @@ Use `--path <glob>` for a bounded file set, or pass `--all` to opt in to a repo-
 cdidx files                            # all indexed files
 cdidx files --lang csharp              # only C# files
 cdidx files --path src/Services --exclude-path Migrations
+cdidx files --format compact --limit 50
+cdidx files --json --summary-only
+cdidx files --format compact --max-json-bytes 8000
 ```
 
 Output:
@@ -1384,6 +1397,13 @@ csharp           85 lines  src/Controllers/UserController.cs
 csharp           42 lines  src/Models/User.cs
 (3 files)
 ```
+
+Use `--format compact` for a bounded JSON file-discovery document with
+`count`, `file_count`, `emitted_count`, `omitted_count`, `truncated`,
+`omitted_by`, `query_context`, and freshness metadata. Compact file rows include
+`path`, `lang`, `lines`, `size`, `symbol_count`, and `reference_count`.
+`--summary-only` omits file rows entirely, and `--max-json-bytes <n>` trims rows
+until the payload fits the requested byte budget.
 
 ### Check status
 
@@ -3988,6 +4008,9 @@ cdidx symbols --visibility public,internal           # public/internal シンボ
 cdidx symbols --exclude-visibility private           # private シンボルを除外
 cdidx symbols --kind function --sort hotspot --json  # hotspot ranking の audit stream
 cdidx symbols --kind function --sort size --json     # 大きい definition から表示
+cdidx symbols --kind function --format compact --limit 20
+cdidx symbols --kind function --json --summary-only
+cdidx symbols --kind function --format compact --max-json-bytes 12000
 cdidx symbols Run --json=array                       # NDJSON 行ではなく JSON array
 cdidx symbols Run --format lsp                       # LSP locations。qf / sarif も対応
 ```
@@ -3997,6 +4020,14 @@ cdidx symbols Run --format lsp                       # LSP locations。qf / sari
 audit では `--sort hotspot|references|size|complexity|path` を追加できます。
 audit sort が有効な `--json` row には `sort_mode`、`reference_count`、
 `hotspot_score`、`size_lines`、`complexity_score` が含まれます。
+discovery 出力を小さく保つ必要がある場合は `--format compact` を使います。
+これは `count`、`file_count`、`emitted_count`、`omitted_count`、
+`truncated`、`omitted_by`、`query_context`、freshness metadata を含む 1 つの
+JSON object を返します。compact な symbol row は location、kind/name、
+language、container/visibility、rank field を残し、巨大になりやすい
+signature/body field は省略します。`--summary-only` を追加すると集計 metadata
+だけを返し、`--max-json-bytes <n>` を追加すると JSON payload が byte budget に
+収まるまで row を切り詰めます。
 
 出力:
 
@@ -4099,6 +4130,9 @@ cdidx find "guard" --all --count --json
 cdidx files                            # 全インデックス済みファイル
 cdidx files --lang csharp              # C#ファイルのみ
 cdidx files --path src/Services --exclude-path Migrations
+cdidx files --format compact --limit 50
+cdidx files --json --summary-only
+cdidx files --format compact --max-json-bytes 8000
 ```
 
 出力:
@@ -4109,6 +4143,13 @@ csharp           85 lines  src/Controllers/UserController.cs
 csharp           42 lines  src/Models/User.cs
 (3 files)
 ```
+
+`--format compact` は、`count`、`file_count`、`emitted_count`、
+`omitted_count`、`truncated`、`omitted_by`、`query_context`、freshness metadata
+を持つ、境界付きの JSON file-discovery document を返します。compact な file
+row には `path`、`lang`、`lines`、`size`、`symbol_count`、`reference_count` が
+含まれます。`--summary-only` は file row を完全に省略し、
+`--max-json-bytes <n>` は指定された byte budget に収まるまで row を切り詰めます。
 
 ### 状態確認
 
