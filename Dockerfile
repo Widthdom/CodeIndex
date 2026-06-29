@@ -13,6 +13,7 @@ RUN case "$TARGETARCH" in \
       *) echo "Unsupported container architecture: $TARGETARCH" >&2; exit 1 ;; \
     esac && \
     dotnet restore src/CodeIndex/CodeIndex.csproj \
+      --runtime "$rid" \
       --locked-mode
 
 COPY src/CodeIndex/ src/CodeIndex/
