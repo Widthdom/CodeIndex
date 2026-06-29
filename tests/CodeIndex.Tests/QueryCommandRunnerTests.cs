@@ -4516,6 +4516,7 @@ public partial class QueryCommandRunnerTests
             Assert.True(json.GetProperty("nodes").GetArrayLength() >= 2);
             Assert.True(json.GetProperty("edges").GetArrayLength() >= 1);
             Assert.True(json.GetProperty("edges")[0].TryGetProperty("reference_count", out _));
+            Assert.True(json.GetProperty("edges")[0].TryGetProperty("ranking_score", out _));
             Assert.True(json.GetProperty("edges")[0].TryGetProperty("symbols", out _));
         }
         finally
@@ -4531,9 +4532,9 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            InsertFileWithReferences(dbPath, "src/Caller.cs", ["Regex", "Path", "Write", "Domain.Alpha"]);
+            InsertFileWithReferences(dbPath, "src/Caller.cs", ["Append", "AppendLine", "Encoding", "Regex", "Path", "ToString", "Write", "Domain.Alpha"]);
             InsertFileWithReference(dbPath, "src/NoiseCaller.cs", "Regex");
-            InsertFileWithSymbols(dbPath, "src/Targets.cs", ["Regex", "Path", "Write", "Domain.Alpha"]);
+            InsertFileWithSymbols(dbPath, "src/Targets.cs", ["Append", "AppendLine", "Encoding", "Regex", "Path", "ToString", "Write", "Domain.Alpha"]);
             MarkDependencyGraphReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
@@ -4560,7 +4561,8 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(1, json.GetProperty("count").GetInt32());
             Assert.Equal("src/Caller.cs", edge.GetProperty("source_path").GetString());
             Assert.Equal("src/Targets.cs", edge.GetProperty("target_path").GetString());
-            Assert.Equal(4, edge.GetProperty("reference_count").GetInt32());
+            Assert.Equal(8, edge.GetProperty("reference_count").GetInt32());
+            Assert.True(edge.GetProperty("ranking_score").GetDouble() > 0.0);
             Assert.Equal("Domain.Alpha", edge.GetProperty("symbols").GetString());
             Assert.True(queryContext.GetProperty("suppress_noise").GetBoolean());
             Assert.Equal("Domain.Alpha", queryContext.GetProperty("symbol")[0].GetString());
@@ -4569,9 +4571,9 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(2, symbolFilter.GetProperty("edges_before").GetInt32());
             Assert.Equal(1, symbolFilter.GetProperty("edges_after").GetInt32());
             Assert.Equal(1, symbolFilter.GetProperty("edges_removed").GetInt32());
-            Assert.Equal(5, symbolFilter.GetProperty("symbols_before").GetInt32());
+            Assert.Equal(9, symbolFilter.GetProperty("symbols_before").GetInt32());
             Assert.Equal(1, symbolFilter.GetProperty("symbols_after").GetInt32());
-            Assert.Equal(4, symbolFilter.GetProperty("symbols_removed").GetInt32());
+            Assert.Equal(8, symbolFilter.GetProperty("symbols_removed").GetInt32());
         }
         finally
         {

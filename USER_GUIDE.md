@@ -276,7 +276,7 @@ sections below show examples and option details for the most common workflows.
 | Graph | `references` | Find indexed references for a symbol name | `references` |
 | Graph | `callers` | Find callers of a symbol in graph-supported languages | `callers` |
 | Graph | `callees` | Find callees used by a caller symbol | `callees` |
-| Graph | `deps` | Show file-level dependency edges | `deps` |
+| Graph | `deps` | Show file-level dependency edges ranked by noise-adjusted `ranking_score` while preserving raw `reference_count` | `deps` |
 | Analysis | `impact` | Traverse transitive callers from a resolved symbol | `impact_analysis` |
 | Analysis | `unused` | Find symbols defined but not referenced, with confidence buckets | `unused_symbols` |
 | Analysis | `hotspots` | Rank high-impact symbols/files by reference volume; SQL scopes can use statement grouping | `symbol_hotspots` |
@@ -490,14 +490,21 @@ cdidx unused --kind function --path src/ --limit 50
 cdidx unused --bucket likely_unused_private --min-confidence medium
 cdidx unused --actionable --confidence medium
 cdidx unused --json --count
+cdidx unused --all --json --count
 cdidx unused --compact --bucket likely_unused_private --min-confidence medium
 cdidx unused --json --by-bucket
 cdidx unused --compact --by-bucket
 ```
 
 `unused` compares definitions with indexed references and groups results by
-confidence. JSON output includes `summary.by_bucket`, `summary.by_confidence`,
-and `bucket_taxonomy` for the `likely_unused_private`,
+confidence. Broad `unused` audits suppress low-confidence contract-domain
+candidates by default so public API surfaces, generated/config/reflection hooks,
+and other contract-like symbols do not dominate first-pass audits. Text output
+reports suppressed totals on stderr, and JSON output exposes
+`default_suppression` plus `summary.suppressed`; pass `--all` to include those
+candidates in normal results and counts. JSON output includes
+`summary.by_bucket`, `summary.by_confidence`, and `bucket_taxonomy` for the
+`likely_unused_private`,
 `maybe_unused_nonpublic`, `public_or_exported_no_refs`, and
 `reflection_or_config_suspect` buckets. In regular JSON, `--by-bucket` also
 groups returned symbols under those bucket keys; with `--compact`, the same
@@ -1541,7 +1548,7 @@ same source location.
 | `--rank-by <weighted\|count\|kind>` | `callers`, `callees` | Choose the caller/callee ranking model. `weighted` is the default and scores `instantiate=3.0`, `call=1.0`, `subscribe=0.1`; `count` sorts by raw `reference_count`; `kind` groups by reference kind first, then count. |
 | `--body` | `definition`, `references`, `callers`, `callees`, `impact`, `inspect` | Include reconstructed body content or capped graph-location excerpts |
 | `--count` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `impact`, `unused`, `hotspots` | Return only counts. `search` / `definition` / `references` / `callers` / `callees` / `symbols` / `files` / `find` / `unused` / `hotspots` ignore `--limit` and return authoritative totals; only `impact` still reports the visible page count and may truncate with `--limit` (with `--json`: a single count object; commands that expose file counts add `files`) |
-| `--group-by <symbol\|file\|statement>` | `hotspots` | Choose the hotspot grouping unit. The default is `symbol` for non-SQL scopes and `statement` for `--lang sql`, preserving SQL's statement-oriented grouping; JSON includes `grouped_by` so mixed-language callers can verify the active unit. `file` rolls symbol hotspot volume up to target files. |
+| `--group-by <symbol\|file\|statement>` | `hotspots` | Choose the hotspot grouping unit. The default is `symbol` for non-SQL scopes and `statement` for `--lang sql`, preserving SQL's statement-oriented grouping; JSON includes `grouped_by` so mixed-language callers can verify the active unit. `file` rolls symbol hotspot volume up to target files and orders by `ranking_score`, preserving raw `reference_count` while applying generic-name and small-file structural penalties; JSON includes `reference_score`, `ranking_score`, `generic_name_penalty`, and `structural_rank_penalty`. |
 | `--group-by-name` | `hotspots` | Collapse rows that share the same `(name, kind)` across files into one representative result while preserving definition-site metadata in JSON. Per-group `paths` stays a capped 20-entry sample for compatibility, `paths_truncated` only reports that this sample omitted additional paths, and `definition_site_details` contains the full definition-site list with path, language, line, container, visibility, and disambiguation key. `representative` identifies the selected display site so partial/type families are not hidden behind the sampled paths. In normal JSON, the top-level `count` is the number of returned name/kind groups after `--limit`; with `--count`, `count`, `files`, and `definition_site_total` are full totals that ignore `--limit`. Use each hotspot's `reference_count` for raw incoming references. Hotspot ordering uses `ranking_score`, which starts from the weighted invocation score (`call` / `instantiate` = 1.0, `subscribe` = 0.3) and applies `generic_name_penalty` to broad names such as `Combine` or `GetString`; JSON keeps `reference_score`, `ranking_score`, and `generic_name_penalty` for diagnostics. Metadata-only edges such as `attribute`, `annotation`, and `type_reference` remain excluded from default hotspots. |
 | `--with-paths` | `impact` | Emit a `paths` array on each caller listing the shortest call chains `[resolvedRoot, intermediate..., callerName]`, plus `path_details` with per-hop definition path, definition line, language, kind, family key, logical target key, and reference site metadata. Same-depth diamond convergence (e.g. `A → B → foo` and `A → C → foo`) surfaces both routes that the default dedup collapses while keeping same-name and partial symbols distinguishable. Per-row cap (10) keeps JSON payloads bounded; `paths_truncated` signals overflow. Off by default; default behavior is unchanged. |
 | `--start <line>` | `excerpt` | Start line for excerpt reconstruction (max: 10000000) |
@@ -2964,7 +2971,7 @@ cdidx index . --quiet
 | Graph | `references` | symbol name の indexed references を検索 | `references` |
 | Graph | `callers` | graph-supported language で symbol の callers を検索 | `callers` |
 | Graph | `callees` | caller symbol が使う callees を検索 | `callees` |
-| Graph | `deps` | file-level dependency edges を表示 | `deps` |
+| Graph | `deps` | 生の `reference_count` を残しつつ noise-adjusted な `ranking_score` で並べた file-level dependency edges を表示 | `deps` |
 | Analysis | `impact` | 解決した symbol から transitive callers を探索 | `impact_analysis` |
 | Analysis | `unused` | 参照されていない可能性がある symbols を confidence bucket 付きで表示 | `unused_symbols` |
 | Analysis | `hotspots` | reference volume で high-impact symbols/files を ranking。SQL scope は statement grouping も使用可 | `symbol_hotspots` |
@@ -3169,13 +3176,19 @@ cdidx unused --kind function --path src/ --limit 50
 cdidx unused --bucket likely_unused_private --min-confidence medium
 cdidx unused --actionable --confidence medium
 cdidx unused --json --count
+cdidx unused --all --json --count
 cdidx unused --compact --bucket likely_unused_private --min-confidence medium
 cdidx unused --json --by-bucket
 cdidx unused --compact --by-bucket
 ```
 
 `unused` は definitions と indexed references を比較し、confidence ごとに結果を
-分類します。JSON 出力には `likely_unused_private`、`maybe_unused_nonpublic`、
+分類します。広い `unused` audit では、Public API surface、generated/config/reflection
+hook、その他の contract-like symbol が初回 audit を支配しないように、低 confidence の
+contract-domain 候補を既定で抑制します。text 出力は stderr に抑制件数を表示し、
+JSON 出力は `default_suppression` と `summary.suppressed` を公開します。これらの候補を
+通常の結果と count に戻すには `--all` を指定してください。JSON 出力には
+`likely_unused_private`、`maybe_unused_nonpublic`、
 `public_or_exported_no_refs`、`reflection_or_config_suspect` bucket 用の
 `summary.by_bucket`、`summary.by_confidence`、`bucket_taxonomy` が含まれます。
 通常の JSON では `--by-bucket` が返却されたシンボルを bucket key ごとに grouped します。
@@ -4224,7 +4237,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--kind <kind>` | `definition`, `references`, `callers`, `callees`, `symbols`, `inspect`, `outline`, `hotspots`, `unused`, `validate` | 種別でフィルタ（大文字小文字を区別しない。`--kind FUNCTION` は `--kind function` と同じ扱い）。`outline` は `--kind function,class` のようなカンマ区切りの symbol kind も受け付ける。`definition` / `symbols` / `inspect` / `outline` / `hotspots` / `unused` は symbol kind（`function`、`lambda`、`async_function`、`generator`、`async_generator`、`test.method`、`class`、`struct`、`interface`、`protocol`、`enum`、`property`、`event`、`delegate`、`namespace`、`import`）、`references` は全ての reference kind（`call`、`instantiate`、`subscribe`、`attribute`、`annotation`、`type_reference`）を受け付ける。`callers` / `callees` は call-graph 種別のみ（`call`、`instantiate`、`subscribe`）を受け付け、非 call-graph 種別（`--kind attribute` / `--kind annotation` / `--kind type_reference`）は usage error で拒否する — metadata 行は注釈対象そのものではなく body-range 上の外側シンボルに帰属し、`type_reference` は宣言型・generic 制約・`is`/`as`/`instanceof`・XML-doc `cref` といった compile-time な型位置エッジであり実行時呼び出しではないため、`callers` / `callees` はいずれの kind にも正しく答えられない。metadata / 型位置参照の列挙は `references --kind attribute` / `references --kind annotation` / `references --kind type_reference` を使う。`inspect` は定義候補と primary file context を絞り込み、graph evidence はクエリした symbol name に紐づけたまま返す。`references` の既定は全 reference kind を表示して metadata 参照も見えるままにするが、`callers` / `callees` / `hotspots` / `impact` の既定は call-graph kind（`call`、`instantiate`、`subscribe`）のみで、`attribute` / `annotation` / `type_reference` のような metadata edge は除外する。同じ物理位置にある constructor の `call` + `instantiate` 重複行は引き続き集約する。`validate` は `bom` などの issue kind を使う |
 | `--body` | `definition`, `references`, `callers`, `callees`, `impact`, `inspect` | 再構成した本文、または上限付きの graph 位置抜粋を含める |
 | `--count` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `impact`, `unused`, `hotspots` | 件数だけを返す。`search` / `definition` / `references` / `callers` / `callees` / `symbols` / `files` / `find` / `unused` / `hotspots` は `--limit` を無視した総件数を返し、`impact` だけは visible page count のままで `--limit` によって切り詰められることがある（`--json` 併用時は単一の count オブジェクト。files 件数を出すコマンドは `files` も返す） |
-| `--group-by <symbol\|file\|statement>` | `hotspots` | hotspot の集計単位を選ぶ。既定は非 SQL scope では `symbol`、`--lang sql` では既存の statement-oriented grouping を保つため `statement`。JSON には `grouped_by` が入り、mixed-language 呼び出しでも現在の単位を確認できる。`file` は symbol hotspot の参照量を対象ファイル単位にまとめる。 |
+| `--group-by <symbol\|file\|statement>` | `hotspots` | hotspot の集計単位を選ぶ。既定は非 SQL scope では `symbol`、`--lang sql` では既存の statement-oriented grouping を保つため `statement`。JSON には `grouped_by` が入り、mixed-language 呼び出しでも現在の単位を確認できる。`file` は symbol hotspot の参照量を対象ファイル単位にまとめ、raw な `reference_count` を残しつつ、generic-name と small-file structural penalty を適用した `ranking_score` で並べる。JSON には `reference_score`、`ranking_score`、`generic_name_penalty`、`structural_rank_penalty` を返す。 |
 | `--group-by-name` | `hotspots` | ファイルをまたいで同じ `(name, kind)` を共有する行を代表1件に集約し、JSON では definition-site metadata を保持したまま返す。互換性のため group ごとの `paths` は 20 件までの sample として残し、`paths_truncated` はこの sample に未掲載の path があることだけを示す。`definition_site_details` には path、language、line、container、visibility、disambiguation key を含む全 definition-site list を返す。`representative` は表示対象として選ばれた site を示し、partial/type family が path sample の裏に隠れないようにする。通常 JSON の top-level `count` は `--limit` 適用後に返された name/kind group 数であり、`--count` 併用時の `count`、`files`、`definition_site_total` は `--limit` を無視した総数を返す。生の incoming reference 数は各 hotspot の `reference_count` を参照する。hotspot の順位付けは `ranking_score` を使い、重み付き invocation score（`call` / `instantiate` = 1.0、`subscribe` = 0.3）を基準に `Combine` や `GetString` のような広い名前へ `generic_name_penalty` を適用する。JSON には診断用に `reference_score`、`ranking_score`、`generic_name_penalty` を返す。`attribute` / `annotation` / `type_reference` のような metadata-only edge は既定の hotspots から除外されたまま。 |
 | `--with-paths` | `impact` | 各 caller に `paths` 配列を付け、`[resolvedRoot, 中間..., callerName]` の順で最短呼び出し経路を列挙する。さらに `path_details` に各 hop の definition path、definition line、language、kind、family key、logical target key、reference site metadata を出す。同 depth で複数経路が収束するダイヤモンド（例: `A → B → foo` と `A → C → foo`）でも、既定 dedup で潰れる経路をすべて表示しつつ、同名 symbol や partial symbol を区別できる。1 行あたりの保持上限は 10 経路で、超過時は `paths_truncated` を `true` にする。既定では出力しないため、フラグ未指定時の挙動は変更しない。 |
 | `--start <line>` | `excerpt` | 抜粋再構成の開始行（最大: 10000000） |

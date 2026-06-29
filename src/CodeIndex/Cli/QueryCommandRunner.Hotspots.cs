@@ -324,6 +324,10 @@ public static partial class QueryCommandRunner
                                 ["path"] = result.Path,
                                 ["lang"] = result.Lang,
                                 ["reference_count"] = result.ReferenceCount,
+                                ["reference_score"] = result.ReferenceScore,
+                                ["ranking_score"] = result.RankingScore,
+                                ["generic_name_penalty"] = result.GenericNamePenalty,
+                                ["structural_rank_penalty"] = result.StructuralRankPenalty,
                                 ["symbol_count"] = result.SymbolCount,
                             });
                         }
@@ -343,7 +347,7 @@ public static partial class QueryCommandRunner
                 {
                     foreach (var result in fileResults)
                     {
-                        Console.WriteLine($"{result.ReferenceCount,5} refs  {result.SymbolCount,5} symbols  {result.Path}");
+                        Console.WriteLine($"{FormatHotspotScore(result.RankingScore),5} score {result.ReferenceCount,5} refs  {result.SymbolCount,5} symbols  {result.Path}");
                     }
                     CommandErrorWriter.WriteStderr($"({fileResults.Count} file hotspots; grouped_by={groupBy})");
                     WriteHotspotFamilyWarningIfNeeded(json: false, fileHotspotSignal);

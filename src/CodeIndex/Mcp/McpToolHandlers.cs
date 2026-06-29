@@ -4424,6 +4424,7 @@ public partial class McpServer
                 ["source"] = edge.SourcePath,
                 ["target"] = edge.TargetPath,
                 ["reference_count"] = edge.ReferenceCount,
+                ["ranking_score"] = edge.RankingScore,
             });
         }
 
