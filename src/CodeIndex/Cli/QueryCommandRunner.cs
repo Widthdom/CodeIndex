@@ -2917,6 +2917,14 @@ public static partial class QueryCommandRunner
         return $"--{role}-{direction}";
     }
 
+    private static string? FormatSearchGuardFilterScope(SearchGuardFilter guardFilter)
+        => guardFilter.Scope switch
+        {
+            SearchGuardScope.Window => "window",
+            SearchGuardScope.SameLine => "same_line",
+            _ => null
+        };
+
     private static string FormatSearchSnippetFocusMode(SearchSnippetFocusMode mode)
         => mode.ToString().ToLowerInvariant();
 
@@ -3141,7 +3149,8 @@ public static partial class QueryCommandRunner
                 filter.Role == SearchGuardRole.Require ? "require" : "reject",
                 filter.Direction == SearchGuardDirection.Before ? "before" : "after",
                 filter.Query,
-                BuildSearchGuardReplayOptionName(filter)))
+                BuildSearchGuardReplayOptionName(filter),
+                FormatSearchGuardFilterScope(filter)))
             .ToList();
 
     private static List<SearchDisplayRow> BuildSearchDisplayRows(
