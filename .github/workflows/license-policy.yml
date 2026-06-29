@@ -11,11 +11,22 @@ on:
       - 'INTEGRATION_POLICY.md'
       - 'TRADEMARKS.md'
       - 'README.md'
+      - 'USER_GUIDE.md'
+      - 'DEVELOPER_GUIDE.md'
+      - 'DISTRIBUTION.md'
+      - 'docs/NUGET_README.md'
       - 'MAINTAINERS.md'
       - 'CONTRIBUTING.md'
       - 'src/CodeIndex/CodeIndex.csproj'
+      - 'src/CodeIndex/Cli/ConsoleUi.cs'
+      - 'install.sh'
+      - 'install_modules/20-installer.sh'
+      - 'install_modules/40-uninstall.sh'
       - '.github/workflows/release.yml'
       - '.github/workflows/license-policy.yml'
+      - 'tests/CodeIndex.Tests/LicensePolicyTests.cs'
+      - 'tests/CodeIndex.Tests/InstallScriptTests.cs'
+      - 'tests/CodeIndex.Tests/ReleaseWorkflowTests.cs'
   pull_request:
     branches:
       - main
@@ -26,11 +37,22 @@ on:
       - 'INTEGRATION_POLICY.md'
       - 'TRADEMARKS.md'
       - 'README.md'
+      - 'USER_GUIDE.md'
+      - 'DEVELOPER_GUIDE.md'
+      - 'DISTRIBUTION.md'
+      - 'docs/NUGET_README.md'
       - 'MAINTAINERS.md'
       - 'CONTRIBUTING.md'
       - 'src/CodeIndex/CodeIndex.csproj'
+      - 'src/CodeIndex/Cli/ConsoleUi.cs'
+      - 'install.sh'
+      - 'install_modules/20-installer.sh'
+      - 'install_modules/40-uninstall.sh'
       - '.github/workflows/release.yml'
       - '.github/workflows/license-policy.yml'
+      - 'tests/CodeIndex.Tests/LicensePolicyTests.cs'
+      - 'tests/CodeIndex.Tests/InstallScriptTests.cs'
+      - 'tests/CodeIndex.Tests/ReleaseWorkflowTests.cs'
   workflow_dispatch:
 
 permissions:
@@ -38,7 +60,7 @@ permissions:
 
 jobs:
   policy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -91,3 +113,13 @@ jobs:
 
           grep -F "if: github.repository == 'Widthdom/CodeIndex'" .github/workflows/release.yml >/dev/null
           grep -F "LICENSE LICENSES/FSL-1.1-ALv2.txt LICENSES/Apache-2.0.txt COMMERCIAL_LICENSE.md INTEGRATION_POLICY.md TRADEMARKS.md" .github/workflows/release.yml >/dev/null
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0
+        with:
+          dotnet-version: |
+            8.0.413
+            9.0.301
+
+      - name: Run license policy contract tests
+        run: dotnet test tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework net8.0 --filter FullyQualifiedName~LicensePolicyTests --nologo

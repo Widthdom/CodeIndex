@@ -23,7 +23,7 @@ internal static class CommandErrorWriter
         WriteStderr($"{prefix}: {message}");
         WriteStderr($"Hint: {hint ?? DefaultHint}");
         if (usage != null)
-            WriteStderr($"Usage: {usage}");
+            WriteStderr(FormatUsage(usage));
     }
 
     internal static int Write(
@@ -80,4 +80,7 @@ internal static class CommandErrorWriter
 
     internal static string FormatSanitizedExceptionDetail(Exception ex, int maxMessageChars = 240)
         => DiagnosticRedactor.FormatExceptionDetail(ex, maxMessageChars);
+
+    private static string FormatUsage(string usage)
+        => usage.StartsWith("Usage:", StringComparison.Ordinal) ? usage : $"Usage: {usage}";
 }

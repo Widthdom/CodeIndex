@@ -11,7 +11,7 @@ permissions:
 jobs:
   dbwriter:
     name: DbWriter mutation testing
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
 
     steps:
@@ -33,9 +33,6 @@ jobs:
             ~/.dotnet/tools
             ~/.nuget/packages
           key: ${{ runner.os }}-mutation-stryker-4.14.0-${{ hashFiles('**/packages.lock.json', 'global.json') }}
-          restore-keys: |
-            ${{ runner.os }}-mutation-stryker-4.14.0-
-            ${{ runner.os }}-mutation-
 
       - name: Restore
         run: dotnet restore CodeIndex.sln --locked-mode
