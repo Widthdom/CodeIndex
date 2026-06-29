@@ -207,6 +207,35 @@ public class CliFlagSchemaTests
     }
 
     [Fact]
+    public void SuggestionsParserFlags_IncludeHiddenLangAlias_Issue4162()
+    {
+        var accepted = CliFlagSchema.GetAcceptedFlagNamesForCommand("suggestions");
+        Assert.Contains("--language", accepted);
+        Assert.Contains("--lang", accepted);
+
+        var (withValues, flagOnly) = CliFlagSchema.GetParserFlagsPartitionedByValueBearing("suggestions");
+        Assert.Contains("--lang", withValues);
+        Assert.Contains("--language", withValues);
+        Assert.Contains("--json", flagOnly);
+        Assert.DoesNotContain("--json", withValues);
+
+        Assert.DoesNotContain(CliFlagSchema.GetCompletionFlagsForCommand("suggestions"), flag => flag.Name == "--lang");
+
+        var parse = typeof(SuggestionsCommandRunner).GetMethod("Parse", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(parse);
+
+        var parsed = parse!.Invoke(null, [new[] { "--lang=csharp", "--json" }]);
+        Assert.NotNull(parsed);
+        Assert.Equal("csharp", parsed!.GetType().GetProperty("Language")!.GetValue(parsed));
+        Assert.Equal(true, parsed.GetType().GetProperty("Json")!.GetValue(parsed));
+        Assert.Null(parsed.GetType().GetProperty("Error")!.GetValue(parsed));
+
+        var rejected = parse.Invoke(null, [new[] { "--json=true" }]);
+        Assert.NotNull(rejected);
+        Assert.Equal("Error: --json does not take a value.", rejected!.GetType().GetProperty("Error")!.GetValue(rejected));
+    }
+
+    [Fact]
     public void EveryNonHelpFlagInBashCompletion_IsBackedBySchemaEntry()
     {
         // Walks every per-subcommand bash branch and asserts each `--foo` token corresponds
