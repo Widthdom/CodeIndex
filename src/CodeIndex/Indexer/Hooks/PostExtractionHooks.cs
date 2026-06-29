@@ -3,7 +3,6 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.Loader;
 using System.Text.Json.Serialization;
-using CodeIndex.Cli;
 using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using CodeIndex.Indexer.Extensibility;
@@ -81,13 +80,13 @@ public sealed class PostExtractionHookRunner : IDisposable
         int? maxSymbolCount = null,
         int? maxReferenceCount = null)
     {
-        var resolution = ResolveDefaultHooksDirectory(includeAcceptedOverrideDiagnostic: false);
+        var resolution = PostExtractionHookDirectoryResolver.ResolveDefault(includeAcceptedOverrideDiagnostic: false);
         return Discover(resolution.Directory, maxFileSizeBytes, resolution.Diagnostics, maxSymbolCount, maxReferenceCount);
     }
 
     public static PostExtractionHookDiscoverySnapshot DiscoverDefaultMetadata()
     {
-        var resolution = ResolveDefaultHooksDirectory(includeAcceptedOverrideDiagnostic: true);
+        var resolution = PostExtractionHookDirectoryResolver.ResolveDefault(includeAcceptedOverrideDiagnostic: true);
         return DiscoverMetadata(resolution.Directory, resolution.Diagnostics, resolution.TrustOverrides);
     }
 
@@ -109,10 +108,13 @@ public sealed class PostExtractionHookRunner : IDisposable
         if (string.IsNullOrWhiteSpace(hooksDirectory) || !Directory.Exists(hooksDirectory))
             return new PostExtractionHookDiscoverySnapshot([], runner.Diagnostics, runner.CallbackBudget, initialTrustOverrides);
 
-        if (!HookDirectoryIsSupported(hooksDirectory, runner))
+        if (!PostExtractionHookAssemblyDiscovery.DirectoryIsSupported(hooksDirectory, runner.EnqueueDiagnostic))
             return new PostExtractionHookDiscoverySnapshot([], runner.Diagnostics, runner.CallbackBudget, initialTrustOverrides);
 
-        var hooks = EnumerateHookAssemblyPaths(hooksDirectory, runner, discoveryLimit.Value)
+        var hooks = PostExtractionHookAssemblyDiscovery.EnumerateAssemblyPaths(
+                hooksDirectory,
+                discoveryLimit.Value,
+                runner.EnqueueDiagnostic)
             .Select(dllPath =>
             {
                 var fullPath = Path.GetFullPath(dllPath);
@@ -145,8 +147,8 @@ public sealed class PostExtractionHookRunner : IDisposable
         var runner = new PostExtractionHookRunner(
             loaded,
             callbackBudget.Value,
-            NormalizeHookMaterializationLimit(maxSymbolCount),
-            NormalizeHookMaterializationLimit(maxReferenceCount));
+            PostExtractionHookMutationMaterializer.NormalizeLimit(maxSymbolCount),
+            PostExtractionHookMutationMaterializer.NormalizeLimit(maxReferenceCount));
         runner.EnqueueDiagnostic(callbackBudget.Diagnostic);
         runner.EnqueueDiagnostics(initialDiagnostics);
         var maxProtocolLineBytes = WorkerProtocolLineLimits.ResolveForSourceFileBytes(maxFileSizeBytes);
@@ -156,19 +158,25 @@ public sealed class PostExtractionHookRunner : IDisposable
         if (string.IsNullOrWhiteSpace(hooksDirectory) || !Directory.Exists(hooksDirectory))
             return runner;
 
-        if (!HookDirectoryIsSupported(hooksDirectory, runner))
+        if (!PostExtractionHookAssemblyDiscovery.DirectoryIsSupported(hooksDirectory, runner.EnqueueDiagnostic))
             return runner;
 
         var maxAssemblyBytes = ResolveDiscoveryMaxBytes();
         runner.EnqueueDiagnostic(maxAssemblyBytes.Diagnostic);
-        foreach (var dllPath in EnumerateHookAssemblyPaths(hooksDirectory, runner, discoveryLimit.Value))
+        foreach (var dllPath in PostExtractionHookAssemblyDiscovery.EnumerateAssemblyPaths(
+                     hooksDirectory,
+                     discoveryLimit.Value,
+                     runner.EnqueueDiagnostic))
         {
             ExtensionAssemblyLoadContext? loadContext = null;
             var retainedLoadContext = false;
             Assembly assembly;
             try
             {
-                if (!HookAssemblyCandidateIsWithinBudget(dllPath, runner, maxAssemblyBytes.Value))
+                if (!PostExtractionHookAssemblyDiscovery.CandidateIsWithinBudget(
+                        dllPath,
+                        maxAssemblyBytes.Value,
+                        runner.EnqueueDiagnostic))
                     continue;
 
                 loadContext = new ExtensionAssemblyLoadContext(
@@ -197,7 +205,11 @@ public sealed class PostExtractionHookRunner : IDisposable
                 continue;
             }
 
-            if (!HookAssemblyTypesAreWithinBudget(dllPath, types, runner))
+            if (!PostExtractionHookAssemblyDiscovery.TypesAreWithinBudget(
+                    dllPath,
+                    types,
+                    ResolveTypeInspectionLimit(),
+                    runner.EnqueueDiagnostic))
             {
                 loadContext?.Unload();
                 continue;
@@ -244,184 +256,6 @@ public sealed class PostExtractionHookRunner : IDisposable
         return runner;
     }
 
-    private static bool HookDirectoryIsSupported(string hooksDirectory, PostExtractionHookRunner runner)
-    {
-        DirectoryInfo directoryInfo;
-        try
-        {
-            directoryInfo = new DirectoryInfo(hooksDirectory);
-            directoryInfo.Refresh();
-        }
-        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
-        {
-            runner.EnqueueDiagnostic(
-                hooksDirectory,
-                null,
-                "Hook directory skipped: could not inspect directory.",
-                category: "hook_directory_inspection_failed");
-            return false;
-        }
-
-        if (!directoryInfo.Exists)
-            return false;
-
-        if (FileSystemBoundary.IsSymlinkOrReparsePoint(directoryInfo))
-        {
-            runner.EnqueueDiagnostic(
-                hooksDirectory,
-                null,
-                "Hook directory skipped: symbolic links and reparse points are not supported.",
-                category: "hook_directory_reparse_point");
-            return false;
-        }
-
-        return true;
-    }
-
-    private static IReadOnlyList<string> EnumerateHookAssemblyPaths(
-        string hooksDirectory,
-        PostExtractionHookRunner runner,
-        int discoveryLimit)
-    {
-        using var enumerator = TryEnumerateHookFiles(hooksDirectory, runner);
-        if (enumerator == null)
-            return [];
-
-        var candidates = new List<string>(Math.Min(discoveryLimit, 128));
-        while (TryMoveNextHookFile(hooksDirectory, enumerator, runner, out var dllPath))
-        {
-            if (candidates.Count >= discoveryLimit)
-            {
-                runner.EnqueueDiagnostic(
-                    hooksDirectory,
-                    null,
-                    $"Hook discovery skipped remaining assemblies after the {discoveryLimit} DLL candidate limit.",
-                    category: "hook_candidate_limit_exceeded");
-                break;
-            }
-
-            candidates.Add(dllPath);
-        }
-
-        return candidates
-            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-    }
-
-    private static IEnumerator<string>? TryEnumerateHookFiles(string hooksDirectory, PostExtractionHookRunner runner)
-    {
-        try
-        {
-            return CodeIndex.FileSystemTraversalPolicy.EnumerateFiles(hooksDirectory, "*.dll").GetEnumerator();
-        }
-        catch (Exception ex) when (ExtensionDiscoveryDiagnosticClassifier.IsDiscoveryException(ex))
-        {
-            var diagnostic = ExtensionDiscoveryDiagnosticClassifier.ClassifyDirectoryEnumerationFailure(
-                "hook",
-                "Hook directory",
-                ex);
-            runner.EnqueueDiagnostic(
-                hooksDirectory,
-                null,
-                $"Hook directory skipped: {diagnostic.Message}.",
-                category: diagnostic.Category);
-            return null;
-        }
-    }
-
-    private static bool HookAssemblyCandidateIsWithinBudget(
-        string dllPath,
-        PostExtractionHookRunner runner,
-        long maxAssemblyBytes)
-    {
-        FileInfo fileInfo;
-        try
-        {
-            fileInfo = new FileInfo(dllPath);
-        }
-        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
-        {
-            runner.EnqueueDiagnostic(
-                dllPath,
-                null,
-                "Hook assembly skipped: could not inspect file.",
-                category: "hook_file_inspection_failed");
-            return false;
-        }
-
-        if (!fileInfo.Exists)
-        {
-            runner.EnqueueDiagnostic(
-                dllPath,
-                null,
-                "Hook assembly skipped: file does not exist.",
-                category: "hook_file_missing");
-            return false;
-        }
-
-        if ((fileInfo.Attributes & FileAttributes.Directory) != 0)
-        {
-            runner.EnqueueDiagnostic(
-                dllPath,
-                null,
-                "Hook assembly skipped: path is a directory.",
-                category: "hook_path_is_directory");
-            return false;
-        }
-
-        if (FileSystemBoundary.IsSymlinkOrReparsePoint(fileInfo))
-        {
-            runner.EnqueueDiagnostic(
-                dllPath,
-                null,
-                "Hook assembly skipped: symbolic links and reparse points are not supported.",
-                category: "hook_reparse_point");
-            return false;
-        }
-
-        if (fileInfo.Length > maxAssemblyBytes)
-        {
-            runner.EnqueueDiagnostic(
-                dllPath,
-                null,
-                $"Hook assembly skipped: file is too large ({fileInfo.Length} bytes; maximum {maxAssemblyBytes}).",
-                category: "hook_file_too_large");
-            return false;
-        }
-
-        return true;
-    }
-
-    private static bool TryMoveNextHookFile(
-        string hooksDirectory,
-        IEnumerator<string> enumerator,
-        PostExtractionHookRunner runner,
-        out string dllPath)
-    {
-        dllPath = string.Empty;
-        try
-        {
-            if (!enumerator.MoveNext())
-                return false;
-
-            dllPath = enumerator.Current;
-            return true;
-        }
-        catch (Exception ex) when (ExtensionDiscoveryDiagnosticClassifier.IsDiscoveryException(ex))
-        {
-            var diagnostic = ExtensionDiscoveryDiagnosticClassifier.ClassifyDirectoryEnumerationFailure(
-                "hook",
-                "Hook directory",
-                ex);
-            runner.EnqueueDiagnostic(
-                hooksDirectory,
-                null,
-                $"Hook directory skipped: {diagnostic.Message}.",
-                category: diagnostic.Category);
-            return false;
-        }
-    }
-
     public IReadOnlyList<PostExtractionHookInfo> Hooks => hooks.Select(hook => hook.Info).ToList();
 
     internal IReadOnlyList<AssemblyLoadContext?> LoadContextsForTests
@@ -439,7 +273,7 @@ public sealed class PostExtractionHookRunner : IDisposable
         foreach (var hook in hooks)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var workingSymbols = CloneSymbols(symbols, maxSymbolCount, out var inputTruncated);
+            var workingSymbols = PostExtractionHookMutationMaterializer.CloneSymbols(symbols, maxSymbolCount, out var inputTruncated);
             if (inputTruncated && maxSymbolCount is { } symbolLimit)
             {
                 EnqueueHookMaterializationDiagnostic(
@@ -460,7 +294,7 @@ public sealed class PostExtractionHookRunner : IDisposable
                     null,
                     cancellationToken))
             {
-                ReplaceList(symbols, workingSymbols);
+                PostExtractionHookMutationMaterializer.ReplaceList(symbols, workingSymbols);
             }
         }
     }
@@ -473,7 +307,7 @@ public sealed class PostExtractionHookRunner : IDisposable
         foreach (var hook in hooks)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var workingReferences = CloneReferences(references, maxReferenceCount, out var inputTruncated);
+            var workingReferences = PostExtractionHookMutationMaterializer.CloneReferences(references, maxReferenceCount, out var inputTruncated);
             if (inputTruncated && maxReferenceCount is { } referenceLimit)
             {
                 EnqueueHookMaterializationDiagnostic(
@@ -494,7 +328,7 @@ public sealed class PostExtractionHookRunner : IDisposable
                     maxReferenceCount,
                     cancellationToken))
             {
-                ReplaceList(references, workingReferences);
+                PostExtractionHookMutationMaterializer.ReplaceList(references, workingReferences);
             }
         }
     }
@@ -565,7 +399,7 @@ public sealed class PostExtractionHookRunner : IDisposable
                     symbolLimit,
                     "output");
             }
-            ReplaceList(symbols, result.Symbols);
+            PostExtractionHookMutationMaterializer.ReplaceList(symbols, result.Symbols);
         }
         if (result.References != null && references != null)
         {
@@ -578,7 +412,7 @@ public sealed class PostExtractionHookRunner : IDisposable
                     referenceLimit,
                     "output");
             }
-            ReplaceList(references, result.References);
+            PostExtractionHookMutationMaterializer.ReplaceList(references, result.References);
         }
 
         if (result.CallbackError != null)
@@ -629,7 +463,7 @@ public sealed class PostExtractionHookRunner : IDisposable
         long? durationMs = null,
         string category = "unspecified")
     {
-        diagnostics.Enqueue(CreateDiagnostic(assemblyPath, typeName, message, callback, durationMs, category));
+        diagnostics.Enqueue(PostExtractionHookDiagnosticFactory.Create(assemblyPath, typeName, message, callback, durationMs, category));
     }
 
     private void EnqueueDiagnostic(PostExtractionHookDiagnostic? diagnostic)
@@ -658,9 +492,6 @@ public sealed class PostExtractionHookRunner : IDisposable
             callback,
             category: recordKind == "symbol" ? "hook_symbol_count_truncated" : "hook_reference_count_truncated");
     }
-
-    private static int? NormalizeHookMaterializationLimit(int? value)
-        => value is > 0 ? value : null;
 
     private static HookBudgetResolution<TimeSpan> ResolveCallbackBudget()
     {
@@ -693,7 +524,7 @@ public sealed class PostExtractionHookRunner : IDisposable
         {
             return new HookBudgetResolution<int>(
                 MaxDiscoveryLimit,
-                CreateDiagnostic(
+                PostExtractionHookDiagnosticFactory.Create(
                     "<configuration>",
                     null,
                     $"{DiscoveryLimitEnvironmentVariable} value {value} exceeded the maximum {MaxDiscoveryLimit}; clamped to {MaxDiscoveryLimit}.",
@@ -723,7 +554,7 @@ public sealed class PostExtractionHookRunner : IDisposable
         {
             return new HookBudgetResolution<long>(
                 MaxDiscoveryMaxBytes,
-                CreateDiagnostic(
+                PostExtractionHookDiagnosticFactory.Create(
                     "<configuration>",
                     null,
                     $"{DiscoveryMaxBytesEnvironmentVariable} value {value} exceeded the maximum {MaxDiscoveryMaxBytes}; clamped to {MaxDiscoveryMaxBytes}.",
@@ -744,23 +575,6 @@ public sealed class PostExtractionHookRunner : IDisposable
     private static int NormalizeTypeInspectionLimit(int value)
         => value <= 0 ? DefaultTypeInspectionLimit : value;
 
-    private static bool HookAssemblyTypesAreWithinBudget(
-        string dllPath,
-        IReadOnlyCollection<Type> types,
-        PostExtractionHookRunner runner)
-    {
-        var limit = ResolveTypeInspectionLimit();
-        if (types.Count <= limit)
-            return true;
-
-        runner.EnqueueDiagnostic(
-            dllPath,
-            null,
-            $"Hook assembly skipped: too many loadable types ({types.Count}; maximum {limit}).",
-            category: "hook_type_limit_exceeded");
-        return false;
-    }
-
     private static HookBudgetResolution<TimeSpan> NormalizeCallbackBudgetMilliseconds(long milliseconds)
     {
         if (milliseconds <= 0)
@@ -770,7 +584,7 @@ public sealed class PostExtractionHookRunner : IDisposable
         {
             return new HookBudgetResolution<TimeSpan>(
                 TimeSpan.FromMilliseconds(MaxCallbackBudgetMilliseconds),
-                CreateDiagnostic(
+                PostExtractionHookDiagnosticFactory.Create(
                     "<configuration>",
                     null,
                     $"{CallbackBudgetEnvironmentVariable} value {milliseconds} exceeded the maximum {MaxCallbackBudgetMilliseconds}; clamped to {MaxCallbackBudgetMilliseconds}.",
@@ -789,7 +603,7 @@ public sealed class PostExtractionHookRunner : IDisposable
         {
             return new HookBudgetResolution<TimeSpan>(
                 TimeSpan.FromMilliseconds(MaxCallbackBudgetMilliseconds),
-                CreateDiagnostic(
+                PostExtractionHookDiagnosticFactory.Create(
                     "<configuration>",
                     null,
                     $"{CallbackBudgetEnvironmentVariable} value {value.TotalMilliseconds:0} exceeded the maximum {MaxCallbackBudgetMilliseconds}; clamped to {MaxCallbackBudgetMilliseconds}.",
@@ -798,222 +612,6 @@ public sealed class PostExtractionHookRunner : IDisposable
 
         return new HookBudgetResolution<TimeSpan>(value, null);
     }
-
-    private static List<SymbolRecord> CloneSymbols(IEnumerable<SymbolRecord> symbols, int? maxCount, out bool truncated)
-    {
-        var result = new List<SymbolRecord>();
-        truncated = false;
-        foreach (var symbol in symbols)
-        {
-            if (maxCount is { } limit && result.Count >= limit)
-            {
-                truncated = true;
-                break;
-            }
-
-            result.Add(CloneSymbol(symbol));
-        }
-
-        return result;
-    }
-
-    private static SymbolRecord CloneSymbol(SymbolRecord symbol)
-        => new()
-        {
-            Id = symbol.Id,
-            FileId = symbol.FileId,
-            Kind = symbol.Kind,
-            SubKind = symbol.SubKind,
-            Name = symbol.Name,
-            Line = symbol.Line,
-            StartLine = symbol.StartLine,
-            StartColumn = symbol.StartColumn,
-            EndLine = symbol.EndLine,
-            BodyStartLine = symbol.BodyStartLine,
-            BodyEndLine = symbol.BodyEndLine,
-            Signature = symbol.Signature,
-            ContainerKind = symbol.ContainerKind,
-            ContainerName = symbol.ContainerName,
-            ContainerQualifiedName = symbol.ContainerQualifiedName,
-            FamilyKey = symbol.FamilyKey,
-            Visibility = symbol.Visibility,
-            ReturnType = symbol.ReturnType,
-            IsMetadataTarget = symbol.IsMetadataTarget,
-            MetadataTargetSource = symbol.MetadataTargetSource,
-            SameLineSignatureOccurrenceIndex = symbol.SameLineSignatureOccurrenceIndex,
-        };
-
-    private static List<ReferenceRecord> CloneReferences(IEnumerable<ReferenceRecord> references, int? maxCount, out bool truncated)
-    {
-        var result = new List<ReferenceRecord>();
-        truncated = false;
-        foreach (var reference in references)
-        {
-            if (maxCount is { } limit && result.Count >= limit)
-            {
-                truncated = true;
-                break;
-            }
-
-            result.Add(CloneReference(reference));
-        }
-
-        return result;
-    }
-
-    private static ReferenceRecord CloneReference(ReferenceRecord reference)
-        => new()
-        {
-            Id = reference.Id,
-            FileId = reference.FileId,
-            SymbolName = reference.SymbolName,
-            ReferenceKind = reference.ReferenceKind,
-            Line = reference.Line,
-            Column = reference.Column,
-            Context = reference.Context,
-            ContainerKind = reference.ContainerKind,
-            ContainerName = reference.ContainerName,
-            IsSelfReference = reference.IsSelfReference,
-            IsMutualRecursion = reference.IsMutualRecursion,
-        };
-
-    private static void ReplaceList<T>(IList<T> target, IReadOnlyList<T> replacement)
-    {
-        target.Clear();
-        foreach (var item in replacement)
-            target.Add(item);
-    }
-
-    private static HookDirectoryResolution ResolveDefaultHooksDirectory(bool includeAcceptedOverrideDiagnostic)
-    {
-        var overridePath = global::CodeIndex.EnvironmentAccess.GetProcessEnvironmentVariable(HooksDirectoryEnvironmentVariable);
-        if (!string.IsNullOrWhiteSpace(overridePath))
-            return ResolveOverrideHooksDirectory(overridePath, includeAcceptedOverrideDiagnostic);
-
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return new HookDirectoryResolution(
-            string.IsNullOrWhiteSpace(home)
-                ? null
-                : Path.Combine(home, ".config", "cdidx", "hooks"),
-            [],
-            []);
-    }
-
-    private static HookDirectoryResolution ResolveOverrideHooksDirectory(
-        string overridePath,
-        bool includeAcceptedOverrideDiagnostic)
-    {
-        var diagnostics = new List<PostExtractionHookDiagnostic>();
-        var trustOverrides = new List<ExtensionTrustOverride>();
-        string fullPath;
-        try
-        {
-            fullPath = Path.GetFullPath(overridePath);
-        }
-        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException)
-        {
-            diagnostics.Add(CreateDiagnostic(
-                overridePath,
-                null,
-                "Hook directory override rejected: path could not be resolved.",
-                category: "hook_directory_override_invalid_path"));
-            return new HookDirectoryResolution(null, diagnostics, []);
-        }
-
-        try
-        {
-            var directoryInfo = new DirectoryInfo(fullPath);
-            if (!directoryInfo.Exists)
-            {
-                diagnostics.Add(CreateDiagnostic(
-                    fullPath,
-                    null,
-                    "Hook directory override rejected: directory does not exist.",
-                    category: "hook_directory_override_missing"));
-                return new HookDirectoryResolution(null, diagnostics, []);
-            }
-
-            if ((directoryInfo.Attributes & FileAttributes.ReparsePoint) != 0
-                || !string.IsNullOrEmpty(directoryInfo.LinkTarget))
-            {
-                diagnostics.Add(CreateDiagnostic(
-                    fullPath,
-                    null,
-                    "Hook directory override rejected: symbolic links and reparse points are not supported.",
-                    category: "hook_directory_override_rejected"));
-                return new HookDirectoryResolution(null, diagnostics, []);
-            }
-        }
-        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
-        {
-            diagnostics.Add(CreateDiagnostic(
-                fullPath,
-                null,
-                "Hook directory override rejected: directory could not be inspected.",
-                category: "hook_directory_override_inspection_failed"));
-            return new HookDirectoryResolution(null, diagnostics, []);
-        }
-
-        AddUnixPermissionDiagnostic(fullPath, diagnostics);
-        if (includeAcceptedOverrideDiagnostic)
-        {
-            diagnostics.Add(CreateDiagnostic(
-                fullPath,
-                null,
-                "Hook directory override accepted: hook assemblies execute local extension code from this trusted directory.",
-                category: "hook_directory_override_accepted"));
-            trustOverrides.Add(new ExtensionTrustOverride(
-                "hook_directory_override",
-                HooksDirectoryEnvironmentVariable,
-                DiagnosticSanitizer.ForPath(overridePath),
-                DiagnosticSanitizer.ForPath(fullPath),
-                "Hook directory override accepted by environment; hook assemblies execute local extension code from this trusted directory."));
-        }
-
-        return new HookDirectoryResolution(fullPath, diagnostics, trustOverrides);
-    }
-
-    private static void AddUnixPermissionDiagnostic(string fullPath, List<PostExtractionHookDiagnostic> diagnostics)
-    {
-        if (OperatingSystem.IsWindows())
-            return;
-
-        try
-        {
-            var mode = File.GetUnixFileMode(fullPath);
-            if ((mode & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0)
-            {
-                diagnostics.Add(CreateDiagnostic(
-                    fullPath,
-                    null,
-                    "Hook directory override warning: directory is group- or world-writable; only trusted users should be able to modify hook assemblies.",
-                    category: "hook_directory_override_unsafe_permissions"));
-            }
-        }
-        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
-        {
-            diagnostics.Add(CreateDiagnostic(
-                fullPath,
-                null,
-                "Hook directory override warning: directory permissions could not be inspected.",
-                category: "hook_directory_override_permission_inspection_failed"));
-        }
-    }
-
-    private static PostExtractionHookDiagnostic CreateDiagnostic(
-        string assemblyPath,
-        string? typeName,
-        string message,
-        string? callback = null,
-        long? durationMs = null,
-        string category = "unspecified")
-        => new(
-            DiagnosticSanitizer.ForPath(assemblyPath),
-            DiagnosticSanitizer.ForOptionalLabel(typeName),
-            DiagnosticSanitizer.ForMessage(message),
-            DiagnosticSanitizer.ForOptionalLabel(callback),
-            durationMs,
-            DiagnosticSanitizer.ForMessage(category));
 
     public void Dispose()
     {
@@ -1043,11 +641,6 @@ public sealed class PostExtractionHookRunner : IDisposable
         PostExtractionHookInfo Info,
         AssemblyLoadContext? LoadContext,
         PostExtractionHookCallbackWorkerClient Worker);
-
-    private sealed record HookDirectoryResolution(
-        string? Directory,
-        IReadOnlyList<PostExtractionHookDiagnostic> Diagnostics,
-        IReadOnlyList<ExtensionTrustOverride> TrustOverrides);
 
     private sealed record HookBudgetResolution<T>(T Value, PostExtractionHookDiagnostic? Diagnostic);
 }
