@@ -1162,9 +1162,21 @@ JSON string array per stdin line. Each array starts with a query command name,
 followed by that command's normal arguments. Each stdin line is capped at
 1,048,576 characters, each decoded string argument is capped at 8,192
 characters, and each command can carry at most 256 arguments after the command
-name. With no input, `batch` exits 0 and prints nothing by default. Pass
-`--json-summary` when a non-interactive caller needs an explicit final JSON
-object with `commands_processed`, including `0` for immediate EOF:
+name. By default, child commands stream their normal stdout/stderr directly, so
+callers can keep the standalone command output shape. With no input, `batch`
+exits 0 and prints nothing by default. Pass `--json-summary` when a
+non-interactive caller needs a machine-readable batch stream: each non-blank
+stdin line emits one JSON envelope before the final summary. Parsed commands use
+`record: "batch_result"` with `line`, `command`, `arguments`, `exit_code`, and
+captured child `stdout` / `stderr`; malformed or over-limit lines use
+`record: "batch_error"` with an `error` object. Child command text, JSON rows,
+and hints stay inside those strings instead of being written beside batch
+metadata. The final `record: "batch_summary"` object reports
+`commands_processed`, `line_errors`, `command_failures`, and `exit_code`,
+including `commands_processed: 0` for immediate EOF. For clean automation, feed
+stdin from a pipe or file; an interactive TTY may echo typed JSONL before
+`cdidx` reads it, but that echo is terminal behavior rather than process
+stdout/stderr.
 
 ```bash
 printf '%s\n' \
@@ -1175,7 +1187,7 @@ printf '%s\n' \
 
 ```bash
 printf '' | cdidx batch --db .cdidx/codeindex.db --json-summary
-# {"api_version":"1","command":"batch","input_lines_read":0,"commands_processed":0,"line_errors":0,"command_failures":0,"exit_code":0}
+# {"api_version":"1","record":"batch_summary","command":"batch","input_lines_read":0,"commands_processed":0,"line_errors":0,"command_failures":0,"exit_code":0}
 ```
 
 Output:
@@ -3855,9 +3867,20 @@ cdidx search "authenticate" --json --verbose
 `cdidx batch --db <path>` を使うと 1 つの SQLite connection を開いたまま処理できます。
 stdin の各行は JSON 文字列配列で、先頭に query command 名、その後ろに通常の引数を並べます。
 各 stdin 行は 1,048,576 文字まで、デコード後の各文字列引数は 8,192 文字まで、
-各 command は command 名の後ろに最大 256 引数までです。入力がない場合、`batch` は既定で
-exit 0 かつ無出力です。非対話の呼び出し元が即時 EOF を明示的に判定したい場合は
-`--json-summary` を渡すと、`commands_processed: 0` を含む最終 JSON オブジェクトを出力できます:
+各 command は command 名の後ろに最大 256 引数までです。既定では child command の通常の
+stdout / stderr を直接 stream するため、単発 command と同じ出力形状を維持できます。
+入力がない場合、`batch` は既定で exit 0 かつ無出力です。非対話の呼び出し元が
+machine-readable な batch stream を必要とする場合は `--json-summary` を渡します。
+この場合、空白でない stdin 行ごとに 1 つの JSON envelope を出力してから final summary を出します。
+parse 済み command は `record: "batch_result"` として `line`、`command`、`arguments`、
+`exit_code`、捕捉した child `stdout` / `stderr` を持ちます。malformed line や上限超過 line は
+`record: "batch_error"` と `error` object を持ちます。child command の text、JSON row、hint は
+batch metadata と並べて直接出力せず、これらの文字列 field に入ります。最後の
+`record: "batch_summary"` object は `commands_processed`、`line_errors`、`command_failures`、
+`exit_code` を報告し、即時 EOF では `commands_processed: 0` を含みます。automation で
+clean な入出力が必要な場合は stdin を pipe または file から渡してください。interactive TTY では
+入力した JSONL が `cdidx` の読み取り前に echo される場合がありますが、これは process の
+stdout / stderr ではなく terminal の挙動です。
 
 ```bash
 printf '%s\n' \
@@ -3868,7 +3891,7 @@ printf '%s\n' \
 
 ```bash
 printf '' | cdidx batch --db .cdidx/codeindex.db --json-summary
-# {"api_version":"1","command":"batch","input_lines_read":0,"commands_processed":0,"line_errors":0,"command_failures":0,"exit_code":0}
+# {"api_version":"1","record":"batch_summary","command":"batch","input_lines_read":0,"commands_processed":0,"line_errors":0,"command_failures":0,"exit_code":0}
 ```
 
 出力:
