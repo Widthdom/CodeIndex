@@ -15,6 +15,7 @@ internal static class SearchAuditRecipes
     internal const string RecipePathsEnvironmentVariable = "CDIDX_SEARCH_RECIPE_PATHS";
     private const string BoundedRegexAliasUsing = "using Regex = CodeIndex.Indexer.BoundedRegex";
     private const string BoundedRegexPath = "src/CodeIndex/Indexer/BoundedRegex.cs";
+    private const string RegexRegistryPath = "src/CodeIndex/Indexer/RegexRegistry.cs";
     private const int MaxRecipeSourceFiles = 8;
     internal const int MaxRecipeSourceBytes = 128 * 1024;
     private const int MaxExternalRecipesPerFile = 32;
@@ -306,11 +307,12 @@ internal static class SearchAuditRecipes
                     [
                         "using Regex = CodeIndex.Indexer.BoundedRegex"
                     ],
-                    ExcludePaths = [BoundedRegexPath],
+                    ExcludePaths = [BoundedRegexPath, RegexRegistryPath],
                     RiskEvidence =
                     [
                         "risk: raw System.Text.RegularExpressions.Regex construction should show an explicit timeout, non-backtracking mode, or bounded input.",
-                        "positive: bounded-wrapper aliases are reported by bounded-regex-alias instead of this raw construction query."
+                        "positive: bounded-wrapper aliases are reported by bounded-regex-alias instead of this raw construction query.",
+                        "positive: shared regex factories in RegexRegistry.cs are the centralized raw-construction exception."
                     ],
                 },
                 new(
@@ -987,11 +989,12 @@ internal static class SearchAuditRecipes
                     [
                         "using Regex = CodeIndex.Indexer.BoundedRegex"
                     ],
-                    ExcludePaths = [BoundedRegexPath],
+                    ExcludePaths = [BoundedRegexPath, RegexRegistryPath],
                     RiskEvidence =
                     [
                         "risk: raw System.Text.RegularExpressions.Regex construction should show an explicit timeout, non-backtracking mode, or bounded input.",
-                        "positive: bounded-wrapper aliases are reported by bounded-regex-alias instead of this raw construction query."
+                        "positive: bounded-wrapper aliases are reported by bounded-regex-alias instead of this raw construction query.",
+                        "positive: shared regex factories in RegexRegistry.cs are the centralized raw-construction exception."
                     ],
                 },
                 new(
