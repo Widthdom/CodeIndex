@@ -12,16 +12,24 @@ public sealed class DocumentationDriftTests
         @"`(?<file>[A-Za-z0-9_.-]+\.md)`",
         RegexOptions.Compiled);
 
-    private static readonly Regex CdidxCommandReferenceRegex = new(
-        @"(?:^|[`|>\s])(?<prefix>cdidx|dotnet\s+\./src/CodeIndex/bin/Debug/net8\.0/cdidx\.dll|dotnet\s+run\s+--project\s+src/CodeIndex\s+--)\s+(?<token>[^\s`|;&]+)",
+    private static readonly Regex CdidxCommandLineRegex = new(
+        @"^\s*(?:[$>]\s*)?(?:[A-Z_][A-Z0-9_]*=\S+\s+)*(?<prefix>cdidx|dotnet\s+\./src/CodeIndex/bin/Debug/net8\.0/cdidx\.dll|dotnet\s+run\s+--project\s+src/CodeIndex\s+--)\s+(?<token>[^\s`|;&]+)",
+        RegexOptions.Compiled);
+
+    private static readonly Regex InlineCdidxCommandReferenceRegex = new(
+        @"`(?:[A-Z_][A-Z0-9_]*=\S+\s+)*(?<prefix>cdidx|dotnet\s+\./src/CodeIndex/bin/Debug/net8\.0/cdidx\.dll|dotnet\s+run\s+--project\s+src/CodeIndex\s+--)\s+(?<token>[^\s`|;&]+)[^`]*`",
         RegexOptions.Compiled);
 
     private static readonly HashSet<string> KnownCdidxEntrypointTokens = new(StringComparer.Ordinal)
     {
         "--completions",
+        "--check-updates",
+        "--debug-unsafe",
         "--help",
         "--help-all",
         "--help-flags",
+        "--strict-version",
+        "--sushi",
         "--version",
         "audit",
         "backfill-fold",
@@ -60,6 +68,7 @@ public sealed class DocumentationDriftTests
         "status",
         "suggestions",
         "symbols",
+        "test-extractor",
         "unused",
         "upgrade",
         "vacuum",
@@ -104,10 +113,18 @@ public sealed class DocumentationDriftTests
         {
             var content = RepositoryTestPaths.ReadText(relativePath.Split('/'));
             var lines = content.ReplaceLineEndings("\n").Split('\n');
+            var inFencedCodeBlock = false;
 
             for (var lineNumber = 0; lineNumber < lines.Length; lineNumber++)
             {
-                foreach (Match match in CdidxCommandReferenceRegex.Matches(lines[lineNumber]))
+                var line = lines[lineNumber];
+                if (line.TrimStart().StartsWith("```", StringComparison.Ordinal))
+                {
+                    inFencedCodeBlock = !inFencedCodeBlock;
+                    continue;
+                }
+
+                foreach (var match in EnumerateCdidxCommandMatches(line, inFencedCodeBlock))
                 {
                     var token = NormalizeCdidxToken(match.Groups["token"].Value);
                     if (ShouldSkipCdidxEntrypointToken(token))
@@ -211,6 +228,19 @@ public sealed class DocumentationDriftTests
             yield return ToRepositoryRelativePath(docsPath);
     }
 
+    private static IEnumerable<Match> EnumerateCdidxCommandMatches(string line, bool includeCommandLineMatches)
+    {
+        if (includeCommandLineMatches)
+        {
+            var lineMatch = CdidxCommandLineRegex.Match(line);
+            if (lineMatch.Success)
+                yield return lineMatch;
+        }
+
+        foreach (Match match in InlineCdidxCommandReferenceRegex.Matches(line))
+            yield return match;
+    }
+
     private static string NormalizeCdidxToken(string token)
     {
         return token.Trim().TrimEnd('.', ',', ':', ')', ']');
@@ -219,6 +249,9 @@ public sealed class DocumentationDriftTests
     private static bool ShouldSkipCdidxEntrypointToken(string token)
     {
         if (string.IsNullOrWhiteSpace(token))
+            return true;
+
+        if (token.StartsWith('v') && token.Length > 1 && char.IsDigit(token[1]))
             return true;
 
         return token[0] is '.' or '/' or '\\' or '~' or '$' or '%' or '<' or '[' or '{' or '"';
