@@ -1007,6 +1007,7 @@ cdidx search --list-recipes --names --json              # small deterministic re
 cdidx recipes --summary-only --json                     # compact recipe-list alias for automation
 cdidx search --recipe risky-code --json                 # run a curated audit query set and return grouped JSON
 cdidx search --recipe bounded-read-evidence --json      # show positive evidence for bounded file-read helper paths
+cdidx search --recipe resource-materialization-audit --json  # audit resource lifetimes, file-open policy, streams, and eager materialization
 cdidx search --recipe nullable-contracts --json         # classify nullable returns, null-forgiving suppressions, and guard evidence
 cdidx search --recipe risky-code/raw-diagnostic-echo --json  # run one child query from a recipe
 cdidx search --recipe risky-code --include-query raw-diagnostic-echo --exclude-query cancellation-gap --json
@@ -1095,7 +1096,8 @@ Built-in recipes include `risky-code`, `json-parse-apis`,
 `auth-token-audit`, `string-comparison-semantics`, `dogfood-risk-patterns`,
 `dotnet-risk-patterns`, `sqlite-query-policy-surfaces`, `xml-parser-security`,
 `unsupported-operation-boundaries`, `nullable-contracts`,
-`filesystem-traversal`, `bounded-read-evidence`, `phrase-risk-patterns`, and the
+`filesystem-traversal`, `bounded-read-evidence`, `resource-materialization-audit`,
+`phrase-risk-patterns`, and the
 opt-in broad `broad-token-audit` recipe.
 Use `phrase-risk-patterns` for noisy audit phrases such as `async void`,
 `throw new Exception`, `.Result`, `unsafe`, `Skip =`, `Version="`, `TODO`, and
@@ -1549,7 +1551,7 @@ same source location.
 | `--exclude-visibility <v[,v]>` | `definition`, `symbols`, `unused`, `hotspots` | Exclude symbols with the requested visibility values. Accepts the same comma-separated values and alias expansion as `--visibility`. |
 | `--path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | Restrict results to glob-style path patterns. `*` and `?` are wildcards. Repeatable; multiple values are OR'd together. Quote shell globs such as `--path 'src/**'` so the shell passes one literal pattern. |
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | Pass a query literal explicitly, useful when the query starts with `-`. Query commands except `find` also accept `-- <query>` as a one-token query escape while continuing to parse later options. |
-| `--recipe <name>` | `search` | Run a reusable audit recipe such as `risky-code`, `json-parse-apis`, `dotnet-risk-patterns`, `unsupported-operation-boundaries`, `nullable-contracts`, `xml-parser-security`, `filesystem-traversal`, or `bounded-read-evidence`. Use `recipe/query` form, such as `risky-code/raw-diagnostic-echo`, to run one child query directly. Unknown recipe/query selectors include likely matches across recipe groups. Recipe runs default to `--audit-scope source`, applying recipe production-code path and exclusion metadata before normal search filters and snippet controls; `--limit` / `--top` is per child query. Text, `--json` / `--format json`, `--format compact`, and `--format issue-drafts` are supported, and issue drafts include a replay command. |
+| `--recipe <name>` | `search` | Run a reusable audit recipe such as `risky-code`, `json-parse-apis`, `dotnet-risk-patterns`, `unsupported-operation-boundaries`, `nullable-contracts`, `xml-parser-security`, `filesystem-traversal`, `bounded-read-evidence`, or `resource-materialization-audit`. Use `recipe/query` form, such as `risky-code/raw-diagnostic-echo`, to run one child query directly. Unknown recipe/query selectors include likely matches across recipe groups. Recipe runs default to `--audit-scope source`, applying recipe production-code path and exclusion metadata before normal search filters and snippet controls; `--limit` / `--top` is per child query. Text, `--json` / `--format json`, `--format compact`, and `--format issue-drafts` are supported, and issue drafts include a replay command. |
 | `--include-query <name>` / `--exclude-query <name>` | `search --recipe <name>` | Include or exclude child recipe queries by name. Repeatable and comma-separated; names are listed by `cdidx search --list-recipes`. |
 | `--cursor <cursor>` | `search --recipe <name/query>`, `outline`, `unused` | Fetch the next page for one selected recipe child query, outline result, or unused-symbol page. Use the `next_cursor` returned by the previous JSON or compact output; outline cursors use `outline:<offset>`. |
 | `--audit-scope <source\|all>` | `search`, `unused` | Choose audit path scope. For recipe search, `source` applies recipe production-code path and exclusion metadata. For ad hoc and named-query searches, `source` adds `src/**`, default doc/test/changelog exclusions, and `--exclude-tests` when no user path was supplied. `all` intentionally searches every indexed path unless other filters exclude it. JSON output reports the effective scope, path filters, and exclusions where applicable. |
@@ -3751,6 +3753,7 @@ cdidx search --list-recipes --names --json              # 小さく決定的な 
 cdidx recipes --summary-only --json                     # automation 向けの compact recipe list alias
 cdidx search --recipe risky-code --json                 # curated audit query set を実行し、grouped JSON を返す
 cdidx search --recipe bounded-read-evidence --json      # 上限付き file-read helper 経路の陽性根拠を表示
+cdidx search --recipe resource-materialization-audit --json  # resource lifetime、file-open policy、stream、eager materialization を監査
 cdidx search --recipe nullable-contracts --json         # nullable return、null-forgiving suppression、guard evidence を分類
 cdidx search --recipe risky-code/raw-diagnostic-echo --json  # recipe 内の child query を1つだけ実行
 cdidx search --recipe risky-code --include-query raw-diagnostic-echo --exclude-query cancellation-gap --json
@@ -3809,7 +3812,8 @@ search audit recipe は、名前付き recipe を複数の curated search query 
 組み込み recipe には `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、
 `auth-token-audit`、`string-comparison-semantics`、`dogfood-risk-patterns`、
 `sqlite-query-policy-surfaces`、`unsupported-operation-boundaries`、`xml-parser-security`、
-`nullable-contracts`、`filesystem-traversal`、`bounded-read-evidence`、`phrase-risk-patterns`、
+`nullable-contracts`、`filesystem-traversal`、`bounded-read-evidence`、
+`resource-materialization-audit`、`phrase-risk-patterns`、
 `broad-token-audit` があります。
 `phrase-risk-patterns` は `async void`、`throw new Exception`、`.Result`、`unsafe`、
 `Skip =`、`Version="`、`TODO`、`Obsolete` のようなノイズの多い監査語句を対象に、
@@ -4273,7 +4277,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--exclude-visibility <v[,v]>` | `definition`, `symbols`, `unused`, `hotspots` | 指定した可視性のシンボルを除外する。値と alias 展開は `--visibility` と同じ |
 | `--path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | glob 形式のパスパターンで結果を絞る。`*` と `?` がワイルドカード。繰り返し指定可（複数値は OR で結合）。`--path 'src/**'` のように shell glob を引用し、shell が 1 つの literal pattern として渡すようにする。 |
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | クエリを明示的なリテラルとして渡す。クエリが `-` で始まる場合に有用。`find` 以外のクエリ系コマンドでは `-- <query>` も1トークンのクエリエスケープとして受け付け、その後のオプション解析を続ける。 |
-| `--recipe <name>` | `search` | `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、`unsupported-operation-boundaries`、`nullable-contracts`、`xml-parser-security`、`filesystem-traversal`、`bounded-read-evidence` などの再利用可能な audit recipe を実行する。`risky-code/raw-diagnostic-echo` のような `recipe/query` 形式で child query を1つだけ直接実行できる。未知の recipe/query selector には recipe group をまたいだ近い候補が表示される。Recipe 実行は既定で `--audit-scope source` になり、recipe の本番コード向け path / exclusion metadata を適用したうえで、通常の search filter と snippet control を選択された各 query に適用する。`--limit` / `--top` は child query ごとの上限になる。text、`--json` / `--format json`、`--format compact`、`--format issue-drafts` に対応し、issue draft には再実行コマンドを含める。 |
+| `--recipe <name>` | `search` | `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、`unsupported-operation-boundaries`、`nullable-contracts`、`xml-parser-security`、`filesystem-traversal`、`bounded-read-evidence`、`resource-materialization-audit` などの再利用可能な audit recipe を実行する。`risky-code/raw-diagnostic-echo` のような `recipe/query` 形式で child query を1つだけ直接実行できる。未知の recipe/query selector には recipe group をまたいだ近い候補が表示される。Recipe 実行は既定で `--audit-scope source` になり、recipe の本番コード向け path / exclusion metadata を適用したうえで、通常の search filter と snippet control を選択された各 query に適用する。`--limit` / `--top` は child query ごとの上限になる。text、`--json` / `--format json`、`--format compact`、`--format issue-drafts` に対応し、issue draft には再実行コマンドを含める。 |
 | `--include-query <name>` / `--exclude-query <name>` | `search --recipe <name>` | recipe 内の child query を名前で含める、または除外する。繰り返し指定とカンマ区切りに対応し、名前は `cdidx search --list-recipes` で確認できる。 |
 | `--cursor <cursor>` | `search --recipe <name/query>`、`outline`、`unused` | 選択した recipe child query、outline 結果、unused-symbol page の次ページを取得する。直前の JSON または compact output が返す `next_cursor` を指定し、outline cursor は `outline:<offset>` 形式を使う。 |
 | `--audit-scope <source\|all>` | `search`, `unused` | audit path scope を選ぶ。Recipe search の `source` は recipe の本番コード向け path / exclusion metadata を適用する。Ad hoc / named-query search の `source` は user path がない場合に `src/**`、既定の docs/tests/changelog exclusion、`--exclude-tests` を追加する。`all` は他の filter で除外しない限り、すべての indexed path を意図的に検索する。JSON 出力には該当する場合、有効な scope、path filter、exclusion が含まれる。 |

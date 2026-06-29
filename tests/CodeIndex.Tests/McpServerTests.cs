@@ -3694,6 +3694,28 @@ public sealed class Caller
         });
     }
 
+    private static void InsertSearchFile(DbWriter writer, string path, string content)
+    {
+        var lineCount = Math.Max(1, content.Count(c => c == '\n') + 1);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = path,
+            Lang = "csharp",
+            Size = content.Length,
+            Lines = lineCount,
+            Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertChunks([new ChunkRecord
+        {
+            FileId = fileId,
+            ChunkIndex = 0,
+            StartLine = 1,
+            EndLine = lineCount,
+            Content = content,
+        }]);
+    }
+
     private static void InsertDependencySymbols(DbWriter writer, long fileId, IReadOnlyList<string> symbolNames)
     {
         writer.InsertSymbols(symbolNames.Select((symbolName, index) => new SymbolRecord
@@ -3718,6 +3740,57 @@ public sealed class Caller
             Column = 1,
             Context = symbolName,
         }).ToArray());
+    }
+
+    [Fact]
+    public void SearchRecipe_AppliesChildPathPatternsToMcpRecipeExecution_Issue4155()
+    {
+        const string cliPath = "src/CodeIndex/Cli/QueryCommandRunner.McpRecipeIssue4155.cs";
+        const string mcpPath = "src/CodeIndex/Mcp/McpToolHandlers.McpRecipeIssue4155.cs";
+        const string indexerPath = "src/CodeIndex/Indexer/IndexerMcpRecipeIssue4155.cs";
+        var writer = new DbWriter(_db.Connection);
+        InsertSearchFile(
+            writer,
+            cliPath,
+            "using System.Linq;\npublic static class QueryCommandRunnerMcpRecipeIssue4155 { public static object[] Build(object[] values) => values.ToArray(); }\n");
+        InsertSearchFile(
+            writer,
+            mcpPath,
+            "using System.Linq;\npublic static class McpToolHandlersMcpRecipeIssue4155 { public static object[] Build(object[] values) => values.ToArray(); }\n");
+        InsertSearchFile(
+            writer,
+            indexerPath,
+            "using System.Linq;\npublic static class IndexerMcpRecipeIssue4155 { public static object[] Build(object[] values) => values.ToArray(); }\n");
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":4155,"method":"tools/call","params":{"name":"search","arguments":{"recipe":"resource-materialization-audit","limit":20}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false);
+        var paths = ExtractQueryMcpToArrayPaths(response);
+        Assert.Contains(cliPath, paths);
+        Assert.Contains(mcpPath, paths);
+        Assert.DoesNotContain(indexerPath, paths);
+
+        var filteredRequest = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":4156,"method":"tools/call","params":{"name":"search","arguments":{"recipe":"resource-materialization-audit","path":"src/CodeIndex/Mcp/**","limit":20}}}""")!;
+        var filteredResponse = _server.HandleMessage(filteredRequest)!;
+
+        Assert.False(filteredResponse["result"]?["isError"]?.GetValue<bool>() ?? false);
+        var filteredPaths = ExtractQueryMcpToArrayPaths(filteredResponse);
+        Assert.Contains(mcpPath, filteredPaths);
+        Assert.DoesNotContain(cliPath, filteredPaths);
+        Assert.DoesNotContain(indexerPath, filteredPaths);
+
+        static string[] ExtractQueryMcpToArrayPaths(JsonNode response)
+        {
+            var structured = response["result"]!["structuredContent"]!;
+            var query = structured["queries"]!.AsArray()
+                .Single(item => item!["name"]!.GetValue<string>() == "query-mcp-toarray-materialization")!;
+            return query["results"]!.AsArray()
+                .Select(result => result!["path"]!.GetValue<string>())
+                .ToArray();
+        }
     }
 
 
