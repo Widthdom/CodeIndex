@@ -38,17 +38,17 @@ internal static class DiagnosticRedactor
         RegexTimeout);
 
     private static readonly Regex SensitiveAssignmentPattern = new(
-        @"(?<![\w.-])(?<name>(?:--?)?[\w.-]+)(?<sep>=|:)(?<value>[^\s,;]+)",
+        $@"(?<![\w.-])(?<name>(?:--?)?[\w.-]*(?:{SensitiveNameClassifier.RegexFragmentPattern})[\w.-]*)(?<sep>=|:)(?<value>[^\s,;]+)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
         RegexTimeout);
 
     private static readonly Regex SuggestionNamedSecretPattern = new(
-        @"(^|[^\p{L}\p{N}_-])(?<name>[\p{L}\p{N}_-]+)=(?<value>[^&\s]+)",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant,
+        $@"(^|[^\p{{L}}\p{{N}}_-])(?<name>[\p{{L}}\p{{N}}_-]*(?:{SensitiveNameClassifier.RegexFragmentPattern})[\p{{L}}\p{{N}}_-]*)=(?<value>[^&\s]+)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant,
         RegexTimeout);
 
     private static readonly Regex SensitiveSeparatedArgumentPattern = new(
-        @"(?<![\w.-])(?<name>--?[\w.-]+)\s+(?<value>""[^""]*""|'[^']*'|[^\s,;]+)",
+        $@"(?<![\w.-])(?<name>--?[\w.-]*(?:{SensitiveNameClassifier.RegexFragmentPattern})[\w.-]*)\s+(?<value>""[^""]*""|'[^']*'|[^\s,;]+)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
         RegexTimeout);
 

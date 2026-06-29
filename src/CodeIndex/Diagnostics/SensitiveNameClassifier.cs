@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace CodeIndex.Diagnostics;
 
@@ -19,6 +20,8 @@ internal static class SensitiveNameClassifier
         "credential",
         "sessioncookie",
     ];
+
+    internal static string RegexFragmentPattern { get; } = BuildRegexFragmentPattern();
 
     internal static bool IsSensitiveName(string? name)
     {
@@ -48,5 +51,28 @@ internal static class SensitiveNameClassifier
         }
 
         return sb.ToString();
+    }
+
+    private static string BuildRegexFragmentPattern()
+    {
+        var pattern = new StringBuilder();
+        foreach (var fragment in NormalizedSensitiveFragments)
+        {
+            if (pattern.Length > 0)
+                pattern.Append('|');
+            AppendSeparatorTolerantFragment(pattern, fragment);
+        }
+
+        return pattern.ToString();
+    }
+
+    private static void AppendSeparatorTolerantFragment(StringBuilder pattern, string fragment)
+    {
+        for (var i = 0; i < fragment.Length; i++)
+        {
+            if (i > 0)
+                pattern.Append("[._-]*");
+            pattern.Append(Regex.Escape(fragment[i].ToString()));
+        }
     }
 }

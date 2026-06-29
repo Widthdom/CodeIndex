@@ -66,6 +66,19 @@ public class DiagnosticRedactorTests
         Assert.DoesNotContain("visible4175", redacted);
     }
 
+    [Theory]
+    [InlineData("https://host.test/path?token=hunter2", "https://host.test/path?token=<redacted>")]
+    [InlineData("--workspace --token hunter2", "--workspace --token <redacted>")]
+    public void RedactSensitiveText_DoesNotLetBenignPrefixesHideSharedSecrets_Issue4175(
+        string input,
+        string expected)
+    {
+        var redacted = DiagnosticRedactor.RedactSensitiveText(input);
+
+        Assert.Equal(expected, redacted);
+        Assert.DoesNotContain("hunter2", redacted);
+    }
+
     [Fact]
     public void FormatExceptionMessage_RedactsPathsAndSecrets_Issue4124()
     {
