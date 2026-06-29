@@ -318,6 +318,11 @@ internal sealed record DiffSummaryOnlyJsonResult(
 internal sealed record ReportBundleSummary(
     [property: JsonPropertyName("output_path")] string OutputPath,
     [property: JsonPropertyName("version")] string Version,
+    [property: JsonPropertyName("artifact_format")] string ArtifactFormat,
+    [property: JsonPropertyName("artifact_media_type")] string ArtifactMediaType,
+    [property: JsonPropertyName("recommended_extensions")] List<string> RecommendedExtensions,
+    [property: JsonPropertyName("json_metadata_stdout_only")] bool JsonMetadataStdoutOnly,
+    [property: JsonPropertyName("warnings")] List<string> Warnings,
     [property: JsonPropertyName("files")] int Files,
     [property: JsonPropertyName("schema_tables")] int SchemaTables,
     [property: JsonPropertyName("log_lines_included")] int LogLinesIncluded,
