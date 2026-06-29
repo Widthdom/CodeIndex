@@ -24,7 +24,7 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-24.04, windows-2022, macos-14]
         test-framework: [net8.0, net9.0]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
@@ -202,7 +202,7 @@ jobs:
             ~\AppData\Local\NuGet\packages
           # Locked restore keeps package inputs honest; avoid evicting the cache for project-only test edits.
           # locked restore がパッケージ入力を検証するため、テスト用 project だけの変更ではキャッシュを失効させない。
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/packages.lock.json', 'global.json') }}
+          key: ${{ runner.os }}-dotnet-nuget-${{ hashFiles('**/packages.lock.json', 'global.json') }}
 
       # --locked-mode requires every resolved package to match the committed
       # packages.lock.json so an unexpected transitive bump (including silent
@@ -219,7 +219,7 @@ jobs:
         id: lane
         shell: pwsh
         run: |
-          $primaryLane = "${{ matrix.os }}" -eq "ubuntu-latest" -and "${{ matrix.test-framework }}" -eq "net8.0"
+          $primaryLane = "${{ matrix.os }}" -eq "ubuntu-24.04" -and "${{ matrix.test-framework }}" -eq "net8.0"
           $primaryLaneText = if ($primaryLane) { "true" } else { "false" }
           "primary_lane=$primaryLaneText" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
@@ -274,7 +274,7 @@ jobs:
           if ($collectCoverage) {
             $testArgs += @("--collect", "XPlat Code Coverage")
           } else {
-            Write-Host "Skipping XPlat Code Coverage outside ubuntu-latest/net8.0 so platform/framework matrix lanes run only the test suite."
+            Write-Host "Skipping XPlat Code Coverage outside ubuntu-24.04/net8.0 so platform/framework matrix lanes run only the test suite."
           }
 
           function Invoke-TestRun {
@@ -336,6 +336,7 @@ jobs:
           name: TestResults-${{ matrix.os }}-${{ matrix.test-framework }}
           if-no-files-found: warn
           overwrite: true
+          retention-days: 14
           path: |
             TestResults/**/*.trx
             TestResults/**/*.txt
@@ -349,6 +350,7 @@ jobs:
           name: DiagnosticDumps-${{ matrix.os }}-${{ matrix.test-framework }}
           if-no-files-found: ignore
           overwrite: true
+          retention-days: 7
           path: |
             TestResults/**/*.dmp
             TestResults/**/*.dump
@@ -361,6 +363,7 @@ jobs:
           name: Coverage-${{ matrix.os }}-${{ matrix.test-framework }}
           if-no-files-found: warn
           overwrite: true
+          retention-days: 14
           path: TestResults/**/coverage.cobertura.xml
 
       - name: Publish
@@ -373,4 +376,5 @@ jobs:
         with:
           name: CodeIndex
           overwrite: true
+          retention-days: 14
           path: publish/**

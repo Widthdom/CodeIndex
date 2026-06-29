@@ -1,10 +1,15 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
 namespace CodeIndex.Tests;
 
 public class CiWorkflowTests
 {
+    private static readonly Regex StepBlockPattern = new(
+        @"(?ms)^      - .*?(?=^      - |\z)",
+        RegexOptions.CultureInvariant);
+
     [Fact]
     public void DotnetWorkflow_RunsTestsWithRunsettingsBlameRetryAndArtifacts()
     {
@@ -20,8 +25,8 @@ public class CiWorkflowTests
             "\"primary_lane=$primaryLaneText\" | Out-File -FilePath $env:GITHUB_OUTPUT",
             workflow);
         Assert.DoesNotContain("collect_coverage", workflow);
-        Assert.Contains("key: ${{ runner.os }}-nuget-${{ hashFiles('**/packages.lock.json', 'global.json') }}", workflow, StringComparison.Ordinal);
-        Assert.DoesNotContain("restore-keys:", normalizedWorkflow, StringComparison.Ordinal);
+        Assert.Contains("key: ${{ runner.os }}-dotnet-nuget-${{ hashFiles('**/packages.lock.json', 'global.json') }}", workflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("restore-keys:", workflow, StringComparison.Ordinal);
         Assert.DoesNotContain("'**/*.csproj'", workflow, StringComparison.Ordinal);
         Assert.Contains(
             "- name: Audit NuGet package vulnerabilities\n        if: steps.lane.outputs.primary_lane == 'true'",
@@ -30,14 +35,14 @@ public class CiWorkflowTests
             "- name: Verify developer task wrapper\n        if: steps.lane.outputs.primary_lane == 'true'\n        run: make lint",
             normalizedWorkflow);
         Assert.DoesNotContain("- name: Verify formatting", normalizedWorkflow);
-        Assert.Contains("\"${{ matrix.os }}\" -eq \"ubuntu-latest\" -and \"${{ matrix.test-framework }}\" -eq \"net8.0\"", workflow);
+        Assert.Contains("\"${{ matrix.os }}\" -eq \"ubuntu-24.04\" -and \"${{ matrix.test-framework }}\" -eq \"net8.0\"", workflow);
         Assert.Contains(
             "- name: Build\n        if: steps.lane.outputs.primary_lane != 'true'",
             normalizedWorkflow);
         Assert.Contains(
             "$collectCoverage = \"${{ steps.lane.outputs.primary_lane }}\" -eq \"true\"",
             workflow);
-        Assert.Contains("Skipping XPlat Code Coverage outside ubuntu-latest/net8.0", workflow);
+        Assert.Contains("Skipping XPlat Code Coverage outside ubuntu-24.04/net8.0", workflow);
         Assert.DoesNotContain("\"--no-build\",\n            \"--no-restore\"", normalizedWorkflow);
         Assert.Contains("--blame-crash", workflow);
         Assert.Contains("--blame-hang", workflow);
@@ -84,9 +89,57 @@ public class CiWorkflowTests
         Assert.Contains(
             "- name: Upload build artifact\n        if: steps.lane.outputs.primary_lane == 'true'",
             normalizedWorkflow);
-        Assert.DoesNotContain("if: matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'", workflow);
-        Assert.DoesNotContain("always() && matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'", workflow);
-        Assert.DoesNotContain("always() && !(matrix.os == 'windows-latest' && matrix.test-framework == 'net9.0')", workflow);
+        Assert.DoesNotContain("if: matrix.os == 'ubuntu-24.04' && matrix.test-framework == 'net8.0'", workflow);
+        Assert.DoesNotContain("always() && matrix.os == 'ubuntu-24.04' && matrix.test-framework == 'net8.0'", workflow);
+        Assert.DoesNotContain("always() && !(matrix.os == 'windows-2022' && matrix.test-framework == 'net9.0')", workflow);
+    }
+
+    [Fact]
+    public void GitHubActionsWorkflows_FollowRunnerArtifactCacheAndContinueOnErrorPolicy()
+    {
+        var workflows = ReadWorkflowFiles();
+        var allWorkflows = string.Join("\n", workflows.Select(static workflow => workflow.Content));
+
+        Assert.Contains("ubuntu-24.04", allWorkflows);
+        Assert.Contains("windows-2022", allWorkflows);
+        Assert.Contains("macos-14", allWorkflows);
+
+        foreach (var workflow in workflows)
+        {
+            AssertTopLevelContentsPermissionStaysReadOnly(workflow.FileName, workflow.Content);
+            Assert.DoesNotContain("ubuntu-latest", workflow.Content, StringComparison.Ordinal);
+            Assert.DoesNotContain("windows-latest", workflow.Content, StringComparison.Ordinal);
+            Assert.DoesNotContain("macos-latest", workflow.Content, StringComparison.Ordinal);
+        }
+
+        var continueOnErrorBlocks = FindStepBlocks(workflows, "continue-on-error: true").ToArray();
+        var continueOnErrorBlock = Assert.Single(continueOnErrorBlocks);
+        Assert.Equal("dotnet.yml", continueOnErrorBlock.FileName);
+        Assert.Contains("- name: Upload diagnostic dumps", continueOnErrorBlock.Text, StringComparison.Ordinal);
+        Assert.Contains("if: failure()", continueOnErrorBlock.Text, StringComparison.Ordinal);
+        Assert.Contains("actions/upload-artifact@", continueOnErrorBlock.Text, StringComparison.Ordinal);
+
+        foreach (var uploadBlock in FindStepBlocks(workflows, "actions/upload-artifact@"))
+        {
+            Assert.Contains("retention-days:", uploadBlock.Text, StringComparison.Ordinal);
+        }
+
+        foreach (var downloadBlock in FindStepBlocks(workflows, "actions/download-artifact@"))
+        {
+            Assert.Contains("pattern:", downloadBlock.Text, StringComparison.Ordinal);
+            Assert.Contains("path:", downloadBlock.Text, StringComparison.Ordinal);
+        }
+
+        foreach (var cacheBlock in FindStepBlocks(workflows, "actions/cache@"))
+        {
+            Assert.Contains("hashFiles('**/packages.lock.json', 'global.json')", cacheBlock.Text, StringComparison.Ordinal);
+            Assert.DoesNotContain("restore-keys:", cacheBlock.Text, StringComparison.Ordinal);
+            Assert.DoesNotContain("'**/*.csproj'", cacheBlock.Text, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("key: ${{ runner.os }}-dotnet-nuget-", GetWorkflow(workflows, "dotnet.yml"), StringComparison.Ordinal);
+        Assert.Contains("key: ${{ runner.os }}-release-nuget-", GetWorkflow(workflows, "release.yml"), StringComparison.Ordinal);
+        Assert.Contains("key: ${{ runner.os }}-mutation-stryker-4.14.0-", GetWorkflow(workflows, "mutation-testing.yml"), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -166,4 +219,41 @@ public class CiWorkflowTests
         Assert.Contains("共有状態と並列実行の監査", guide);
     }
 
+    private static IReadOnlyList<(string FileName, string Content)> ReadWorkflowFiles()
+    {
+        var workflowsDirectory = RepositoryTestPaths.Combine(".github", "workflows");
+        return Directory
+            .EnumerateFiles(workflowsDirectory, "*.yml")
+            .OrderBy(static path => Path.GetFileName(path), StringComparer.Ordinal)
+            .Select(static path => (Path.GetFileName(path), File.ReadAllText(path).ReplaceLineEndings("\n")))
+            .ToArray();
+    }
+
+    private static IEnumerable<(string FileName, string Text)> FindStepBlocks(
+        IEnumerable<(string FileName, string Content)> workflows,
+        string requiredText)
+    {
+        foreach (var workflow in workflows)
+        {
+            foreach (Match block in StepBlockPattern.Matches(workflow.Content))
+            {
+                if (block.Value.Contains(requiredText, StringComparison.Ordinal))
+                    yield return (workflow.FileName, block.Value);
+            }
+        }
+    }
+
+    private static void AssertTopLevelContentsPermissionStaysReadOnly(string fileName, string workflow)
+    {
+        var permissionsIndex = workflow.IndexOf("\npermissions:\n", StringComparison.Ordinal);
+        var jobsIndex = workflow.IndexOf("\njobs:\n", StringComparison.Ordinal);
+
+        Assert.True(
+            permissionsIndex >= 0 && jobsIndex >= 0 && permissionsIndex < jobsIndex,
+            $"{fileName} must declare top-level permissions before jobs so contents stays read-only by default.");
+        Assert.Contains("\n  contents: read\n", workflow[..jobsIndex], StringComparison.Ordinal);
+    }
+
+    private static string GetWorkflow(IReadOnlyList<(string FileName, string Content)> workflows, string fileName)
+        => workflows.Single(workflow => string.Equals(workflow.FileName, fileName, StringComparison.Ordinal)).Content;
 }

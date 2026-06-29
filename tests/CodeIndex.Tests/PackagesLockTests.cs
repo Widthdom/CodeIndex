@@ -90,7 +90,7 @@ public class PackagesLockTests
         Assert.DoesNotContain("restore-keys:", dotnetWorkflow, StringComparison.Ordinal);
         Assert.DoesNotContain("restore-keys:", releaseWorkflow, StringComparison.Ordinal);
         Assert.DoesNotContain("restore-keys:", mutationWorkflow, StringComparison.Ordinal);
-        Assert.Contains("key: ${{ runner.os }}-nuget-${{ hashFiles('**/packages.lock.json', 'global.json') }}", dotnetWorkflow, StringComparison.Ordinal);
+        Assert.Contains("key: ${{ runner.os }}-dotnet-nuget-${{ hashFiles('**/packages.lock.json', 'global.json') }}", dotnetWorkflow, StringComparison.Ordinal);
         Assert.Contains("key: ${{ runner.os }}-mutation-stryker-4.14.0-${{ hashFiles('**/packages.lock.json', 'global.json') }}", mutationWorkflow, StringComparison.Ordinal);
 
         Assert.Contains(
