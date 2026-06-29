@@ -2474,7 +2474,10 @@ public partial class DbReader
 
     private static string BuildOutlineSymbolPath(string? containerQualifiedName, string name)
     {
-        return string.IsNullOrWhiteSpace(containerQualifiedName)
+        if (string.IsNullOrWhiteSpace(containerQualifiedName))
+            return name;
+
+        return name.StartsWith(containerQualifiedName + ".", StringComparison.Ordinal)
             ? name
             : $"{containerQualifiedName}.{name}";
     }
