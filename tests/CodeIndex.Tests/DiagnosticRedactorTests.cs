@@ -11,16 +11,19 @@ public class DiagnosticRedactorTests
         var awsKey = "AKIA" + new string('A', 16);
         var bearer = "Bearer " + new string('b', 20);
         var highEntropy = "Abcdefghijklmnopqrstuvwxyz123456";
-        var text = $"key={awsKey} {bearer} api_key=secret {highEntropy}";
+        var privateKeyValue = "visible4175";
+        var text = $"key={awsKey} {bearer} api_key=secret private-key={privateKeyValue} {highEntropy}";
 
         var redacted = DiagnosticRedactor.RedactSuggestionText(text, out var redactedTypes);
 
         Assert.Contains(DiagnosticRedactor.SuggestionRedactedAwsAccessKey, redacted);
         Assert.Contains(DiagnosticRedactor.SuggestionRedactedBearerToken, redacted);
         Assert.Contains("api_key=" + DiagnosticRedactor.SuggestionRedactedCredential, redacted);
+        Assert.Contains("private-key=" + DiagnosticRedactor.SuggestionRedactedCredential, redacted);
         Assert.Contains(DiagnosticRedactor.SuggestionRedactedHighEntropyToken, redacted);
         Assert.DoesNotContain(awsKey, redacted);
         Assert.DoesNotContain("secret", redacted);
+        Assert.DoesNotContain(privateKeyValue, redacted);
         Assert.Equal(
             ["aws_access_key", "bearer_token", "credential", "high_entropy_token"],
             redactedTypes.Order(StringComparer.Ordinal));
@@ -45,6 +48,22 @@ public class DiagnosticRedactorTests
     public void IsSensitiveName_LeavesNonCredentialNamesVisible_Issue4175(string name)
     {
         Assert.False(DiagnosticRedactor.IsSensitiveName(name));
+    }
+
+    [Theory]
+    [InlineData("--private-key=visible4175", "--private-key=<redacted>")]
+    [InlineData("accesskey=visible4175", "accesskey=<redacted>")]
+    [InlineData("session_cookie=visible4175", "session_cookie=<redacted>")]
+    [InlineData("authorization=visible4175", "authorization=<redacted>")]
+    [InlineData("--private-key visible4175", "--private-key <redacted>")]
+    public void RedactSensitiveText_RedactsSharedSensitiveNameAssignments_Issue4175(
+        string input,
+        string expected)
+    {
+        var redacted = DiagnosticRedactor.RedactSensitiveText(input);
+
+        Assert.Equal(expected, redacted);
+        Assert.DoesNotContain("visible4175", redacted);
     }
 
     [Fact]

@@ -38,17 +38,17 @@ internal static class DiagnosticRedactor
         RegexTimeout);
 
     private static readonly Regex SensitiveAssignmentPattern = new(
-        @"(?<![\w.-])(?<name>(?:--?)?[\w.-]*(?:token|password|passwd|pwd|secret|auth|apikey|api-key|api_key|access-key|access_key|credential)[\w.-]*)(?<sep>=|:)(?<value>[^\s,;]+)",
+        @"(?<![\w.-])(?<name>(?:--?)?[\w.-]+)(?<sep>=|:)(?<value>[^\s,;]+)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
         RegexTimeout);
 
     private static readonly Regex SuggestionNamedSecretPattern = new(
-        @"(?i)(^|[^\p{L}\p{N}_-])(?<name>[\p{L}\p{N}_-]*(?:password|passwd|pwd|secret|token|api[-_]?key|access[-_]?key|credential)[\p{L}\p{N}_-]*)=(?<value>[^&\s]+)",
+        @"(^|[^\p{L}\p{N}_-])(?<name>[\p{L}\p{N}_-]+)=(?<value>[^&\s]+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant,
         RegexTimeout);
 
     private static readonly Regex SensitiveSeparatedArgumentPattern = new(
-        @"(?<![\w.-])(?<name>--?[\w.-]*(?:token|password|passwd|pwd|secret|auth|apikey|api-key|api_key|access-key|access_key|credential)[\w.-]*)\s+(?<value>""[^""]*""|'[^']*'|[^\s,;]+)",
+        @"(?<![\w.-])(?<name>--?[\w.-]+)\s+(?<value>""[^""]*""|'[^']*'|[^\s,;]+)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
         RegexTimeout);
 
@@ -239,9 +239,9 @@ internal static class DiagnosticRedactor
             match.Groups["scheme"].Value + match.Groups["user"].Value + ":" + placeholder + "@");
         redacted = BearerTokenPattern.Replace(redacted, "Bearer " + placeholder);
         redacted = SensitiveAssignmentPattern.Replace(redacted, match =>
-            match.Groups["name"].Value + match.Groups["sep"].Value + placeholder);
+            RedactSensitiveAssignmentMatch(match, placeholder));
         redacted = SensitiveSeparatedArgumentPattern.Replace(redacted, match =>
-            match.Groups["name"].Value + " " + placeholder);
+            RedactSensitiveSeparatedArgumentMatch(match, placeholder));
         redacted = GitHubTokenPattern.Replace(redacted, placeholder);
         redacted = LongHexPattern.Replace(redacted, placeholder);
         redacted = LongBase64Pattern.Replace(redacted, match =>
@@ -254,6 +254,22 @@ internal static class DiagnosticRedactor
         }
 
         return redacted;
+    }
+
+    private static string RedactSensitiveAssignmentMatch(Match match, string placeholder)
+    {
+        var name = match.Groups["name"].Value;
+        return IsSensitiveName(name)
+            ? name + match.Groups["sep"].Value + placeholder
+            : match.Value;
+    }
+
+    private static string RedactSensitiveSeparatedArgumentMatch(Match match, string placeholder)
+    {
+        var name = match.Groups["name"].Value;
+        return IsSensitiveName(name)
+            ? name + " " + placeholder
+            : match.Value;
     }
 
     internal static string RedactSuggestionText(string text, out IReadOnlyCollection<string> redactedTypes)
@@ -280,10 +296,7 @@ internal static class DiagnosticRedactor
                 return SuggestionRedactedBearerToken;
             });
             redacted = SuggestionNamedSecretPattern.Replace(redacted, match =>
-            {
-                types.Add("credential");
-                return $"{match.Groups[1].Value}{match.Groups["name"].Value}={SuggestionRedactedCredential}";
-            });
+                RedactSuggestionNamedSecretMatch(match, types));
             redacted = HighEntropyTokenPattern.Replace(redacted, match =>
             {
                 if (match.Value.StartsWith("[REDACTED:", StringComparison.Ordinal))
@@ -301,6 +314,16 @@ internal static class DiagnosticRedactor
             redactedTypes = types;
             return RegexTimeoutPolicy.RedactionFallback(RegexRedactionSurface.SuggestionText);
         }
+    }
+
+    private static string RedactSuggestionNamedSecretMatch(Match match, ISet<string> types)
+    {
+        var name = match.Groups["name"].Value;
+        if (!IsSensitiveName(name))
+            return match.Value;
+
+        types.Add("credential");
+        return $"{match.Groups[1].Value}{name}={SuggestionRedactedCredential}";
     }
 
     internal static string BoundDiagnosticText(string? value, int maxChars = DefaultDiagnosticValueCharLimit)
