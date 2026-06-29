@@ -874,6 +874,7 @@ public partial class QueryCommandRunnerTests
             using var summaryDocument = lines[0];
             var summary = summaryDocument.RootElement;
             Assert.Equal("1", summary.GetProperty("api_version").GetString());
+            Assert.Equal("batch_summary", summary.GetProperty("record").GetString());
             Assert.Equal("batch", summary.GetProperty("command").GetString());
             Assert.Equal(0, summary.GetProperty("input_lines_read").GetInt32());
             Assert.Equal(0, summary.GetProperty("commands_processed").GetInt32());
@@ -888,7 +889,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunBatch_JsonSummaryReportsProcessedCommandsAndFailures_Issue3906()
+    public void RunBatch_JsonSummaryReportsProcessedCommandsAndFailures_Issue3906_Issue4142()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_summary_counts");
         try
@@ -907,18 +908,160 @@ public partial class QueryCommandRunnerTests
             var lines = ParseJsonLines(stdout);
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("batch line 2 must be a non-empty JSON string array", stderr);
-            Assert.Contains("batch only supports query commands", stderr);
-            Assert.Equal(2, lines.Count);
-            using var statusDocument = lines[0];
-            using var summaryDocument = lines[1];
-            Assert.True(statusDocument.RootElement.TryGetProperty("files", out _));
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(4, lines.Count);
+            using var statusRecordDocument = lines[0];
+            using var lineErrorDocument = lines[1];
+            using var unsupportedRecordDocument = lines[2];
+            using var summaryDocument = lines[3];
+
+            var statusRecord = statusRecordDocument.RootElement;
+            Assert.Equal("batch_result", statusRecord.GetProperty("record").GetString());
+            Assert.Equal("ok", statusRecord.GetProperty("status").GetString());
+            Assert.Equal(1, statusRecord.GetProperty("line").GetInt32());
+            Assert.Equal("status", statusRecord.GetProperty("command").GetString());
+            Assert.Equal(CommandExitCodes.Success, statusRecord.GetProperty("exit_code").GetInt32());
+            Assert.Equal(string.Empty, statusRecord.GetProperty("stderr").GetString());
+            using (var statusOutputDocument = ParseJsonOutput(statusRecord.GetProperty("stdout").GetString()!))
+            {
+                Assert.True(statusOutputDocument.RootElement.TryGetProperty("files", out _));
+            }
+
+            var lineError = lineErrorDocument.RootElement;
+            Assert.Equal("batch_error", lineError.GetProperty("record").GetString());
+            Assert.Equal("error", lineError.GetProperty("status").GetString());
+            Assert.Equal(2, lineError.GetProperty("line").GetInt32());
+            Assert.Equal(CommandExitCodes.UsageError, lineError.GetProperty("exit_code").GetInt32());
+            Assert.Equal(string.Empty, lineError.GetProperty("stdout").GetString());
+            Assert.Equal(string.Empty, lineError.GetProperty("stderr").GetString());
+            Assert.Contains("batch line 2 must be a non-empty JSON string array", lineError.GetProperty("error").GetProperty("message").GetString());
+
+            var unsupportedRecord = unsupportedRecordDocument.RootElement;
+            Assert.Equal("batch_result", unsupportedRecord.GetProperty("record").GetString());
+            Assert.Equal("error", unsupportedRecord.GetProperty("status").GetString());
+            Assert.Equal(3, unsupportedRecord.GetProperty("line").GetInt32());
+            Assert.Equal("unknown", unsupportedRecord.GetProperty("command").GetString());
+            Assert.Equal(CommandExitCodes.UsageError, unsupportedRecord.GetProperty("exit_code").GetInt32());
+            Assert.Equal(string.Empty, unsupportedRecord.GetProperty("stdout").GetString());
+            Assert.Contains("batch only supports query commands", unsupportedRecord.GetProperty("stderr").GetString());
+
             var summary = summaryDocument.RootElement;
+            Assert.Equal("batch_summary", summary.GetProperty("record").GetString());
             Assert.Equal(3, summary.GetProperty("input_lines_read").GetInt32());
             Assert.Equal(2, summary.GetProperty("commands_processed").GetInt32());
             Assert.Equal(1, summary.GetProperty("line_errors").GetInt32());
             Assert.Equal(1, summary.GetProperty("command_failures").GetInt32());
             Assert.Equal(CommandExitCodes.UsageError, summary.GetProperty("exit_code").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunBatch_JsonSummaryCapturesChildTextOutput_Issue4142()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_summary_envelope");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/auth.cs",
+                "csharp",
+                """
+                public class AuthFixture
+                {
+                    public void Authenticate() { }
+                }
+                """);
+            var input = """
+            ["search","Authenticate","--exact"]
+            ["unknown"]
+
+            """;
+
+            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+                input,
+                () => QueryCommandRunner.RunBatch(["--db", dbPath, "--json-summary"], _jsonOptions));
+            var lines = ParseJsonLines(stdout);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(3, lines.Count);
+            using var searchRecordDocument = lines[0];
+            using var unsupportedRecordDocument = lines[1];
+            using var summaryDocument = lines[2];
+
+            var searchRecord = searchRecordDocument.RootElement;
+            Assert.Equal("batch_result", searchRecord.GetProperty("record").GetString());
+            Assert.Equal("ok", searchRecord.GetProperty("status").GetString());
+            Assert.Equal("search", searchRecord.GetProperty("command").GetString());
+            Assert.Contains("Authenticate", searchRecord.GetProperty("stdout").GetString());
+            Assert.Contains("results in", searchRecord.GetProperty("stderr").GetString());
+
+            var unsupportedRecord = unsupportedRecordDocument.RootElement;
+            Assert.Equal("batch_result", unsupportedRecord.GetProperty("record").GetString());
+            Assert.Equal("error", unsupportedRecord.GetProperty("status").GetString());
+            Assert.Equal("unknown", unsupportedRecord.GetProperty("command").GetString());
+            Assert.Equal(string.Empty, unsupportedRecord.GetProperty("stdout").GetString());
+            Assert.Contains("batch only supports query commands", unsupportedRecord.GetProperty("stderr").GetString());
+
+            var summary = summaryDocument.RootElement;
+            Assert.Equal("batch_summary", summary.GetProperty("record").GetString());
+            Assert.Equal(2, summary.GetProperty("commands_processed").GetInt32());
+            Assert.Equal(0, summary.GetProperty("line_errors").GetInt32());
+            Assert.Equal(1, summary.GetProperty("command_failures").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunBatch_JsonSummaryReportsCaptureLimitFromWithDb_Issue4142()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_summary_capture_limit");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var overLimitLine = new string('x', JsonEnvelopeWrapper.MaxCapturedOutputChars + 1024);
+            TestProjectHelper.InsertIndexedFile(dbPath, "docs/huge.txt", "text", overLimitLine);
+            var input = """
+            ["excerpt","docs/huge.txt","--start","1","--max-line-width","0"]
+
+            """;
+
+            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+                input,
+                () => QueryCommandRunner.RunBatch(["--db", dbPath, "--json-summary"], _jsonOptions));
+            var lines = ParseJsonLines(stdout);
+
+            Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, lines.Count);
+            using var excerptRecordDocument = lines[0];
+            using var summaryDocument = lines[1];
+
+            var excerptRecord = excerptRecordDocument.RootElement;
+            Assert.Equal("batch_result", excerptRecord.GetProperty("record").GetString());
+            Assert.Equal("error", excerptRecord.GetProperty("status").GetString());
+            Assert.Equal("excerpt", excerptRecord.GetProperty("command").GetString());
+            Assert.Equal(CommandExitCodes.InvalidArgument, excerptRecord.GetProperty("exit_code").GetInt32());
+            Assert.DoesNotContain("database", excerptRecord.GetProperty("stderr").GetString()!, StringComparison.OrdinalIgnoreCase);
+            var error = excerptRecord.GetProperty("error");
+            Assert.Contains("stdout exceeded", error.GetProperty("message").GetString());
+            Assert.Equal(CommandErrorCodes.UsageError, error.GetProperty("error_code").GetString());
+            Assert.Equal(JsonEnvelopeWrapper.MaxCapturedOutputChars, error.GetProperty("max_chars").GetInt32());
+            Assert.Equal("stdout", error.GetProperty("stream").GetString());
+
+            var summary = summaryDocument.RootElement;
+            Assert.Equal("batch_summary", summary.GetProperty("record").GetString());
+            Assert.Equal(1, summary.GetProperty("commands_processed").GetInt32());
+            Assert.Equal(1, summary.GetProperty("command_failures").GetInt32());
+            Assert.Equal(CommandExitCodes.InvalidArgument, summary.GetProperty("exit_code").GetInt32());
         }
         finally
         {

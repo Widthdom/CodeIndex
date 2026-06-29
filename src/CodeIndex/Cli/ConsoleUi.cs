@@ -119,7 +119,7 @@ public static class ConsoleUi
         ("db-restore", "cdidx db restore <name<=128> [--db <path>] [--json]"),
         ("db-restore-backups", "cdidx db restore-backups --list|--prune [--keep <n>] [--db <path>] [--json]"),
         ("diff", "cdidx diff <db1> <db2> [--json] [--summary-only] [--detailed] [--limit <n<=10000>]"),
-        ("report", "cdidx report --output <path> [--db <path>] [--json] [--log-lines <n<=2000>] [--no-log] [--include-args]"),
+        ("report", "cdidx report --output <bundle.tgz> [--db <path>] [--json] [--log-lines <n<=2000>] [--no-log] [--include-args]"),
         ("validate", "cdidx validate [--db <path>] [--json[=array]] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--severity <info|warning|error>] [--path <glob>]"),
         ("impact", "cdidx impact <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--max-hops <n>] [--count] [--with-paths]"),
         ("deps", "cdidx deps [--db <path>] [--json] [--format <dot|graphml|json-graph|edgelist>] [--summary-only] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--reverse] [--cycles]"),
@@ -130,7 +130,7 @@ public static class ConsoleUi
         ("export", "cdidx export ctags [--output <path>] [--db <path>] [--json] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests]"),
         ("import", "cdidx import <archive> [--db <path>] [--prune-paths] [--dry-run|--check] [--json]"),
         ("languages", "cdidx languages [--db <path>] [--json] [--indexed-only] [--language <lang>|--extension <ext>|--alias <alias>] [--capability <graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only>]"),
-        ("batch", "cdidx batch [--db <path>] [--json-summary]  # stdin is JSON Lines: one JSON string array per line; invalid lines emit per-line JSON errors and make the process exit non-zero"),
+        ("batch", "cdidx batch [--db <path>] [--json-summary]  # stdin is JSON Lines; --json-summary emits per-line envelopes plus a final summary"),
         ("hooks-install", "cdidx hooks install [--project <path>] [--force] [--json]"),
         ("hooks-uninstall", "cdidx hooks uninstall [--project <path>] [--force] [--json]"),
         ("hooks-status", "cdidx hooks status [--project <path>] [--json]"),
@@ -156,7 +156,8 @@ public static class ConsoleUi
         ("status", "`stats` is a compatibility alias for `status`; prefer `status` in scripts and documentation."),
         ("backfill-fold", "`fold` is a compatibility alias for `backfill-fold`; prefer `backfill-fold` in scripts and documentation."),
         ("batch", "Each stdin line must be a JSON string array such as [\"search\",\"Needle\",\"--json\"]; blank lines are skipped."),
-        ("batch", "Each input line writes one JSON result or error record; malformed lines and failed commands set a non-zero exit status after draining stdin."),
+        ("batch", "By default child commands stream their normal stdout/stderr; with --json-summary each non-blank line writes a batch_result or batch_error envelope with captured stdout/stderr."),
+        ("batch", "Malformed lines and failed commands set a non-zero exit status after draining stdin; --json-summary still appends a batch_summary record."),
         ("hooks", "install writes `.git/hooks/pre-commit`; run `cdidx hooks status` first to inspect the current hook state."),
         ("hooks-install", "Writes `.git/hooks/pre-commit`; use `cdidx hooks status` first and --force only when replacing an unmanaged hook is intended."),
         ("hooks-uninstall", "Removes the managed `.git/hooks/pre-commit`; --force is required for unmanaged hook content."),
@@ -1019,7 +1020,7 @@ public static class ConsoleUi
         Console.WriteLine("  db schema                  Dump SQLite schema entries and PRAGMA user_version");
         Console.WriteLine("  db prune --dry-run|--apply Count or delete orphaned DB rows");
         Console.WriteLine("  diff <db1> <db2>           Compare two index databases; exit 0 identical, 1 drift, 2 schema mismatch, 3 unreadable");
-        Console.WriteLine("  report --output <path>     Build a redacted crash-repro tarball (.tgz) for bug reports");
+        Console.WriteLine("  report --output <bundle.tgz> Build a redacted crash-repro tarball (.tgz/.tar.gz); --json reports stdout metadata");
         Console.WriteLine("  validate                   Report encoding issues (U+FFFD origin/severity, BOM, null bytes, mixed line endings, UTF-16 BOM, likely non-UTF8)");
         Console.WriteLine("  impact <query>             Show transitive callers; type queries may return heuristic file-level dependency hints");
         Console.WriteLine("  deps                       Show file-level dependency edges from the reference graph");

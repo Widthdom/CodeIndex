@@ -13,6 +13,24 @@ This document compares supported and planned ways to install `cdidx`.
 | Manual image build | Any base image that can run the selected install path | Either `install.sh` prerequisites or a .NET SDK for source builds | Rebuild the image with a pinned release or source revision | Mirror release assets or NuGet feeds inside the image build network | Supported as a deployment pattern for customized images |
 | Build from source | Windows, macOS, and Linux with a supported .NET SDK | .NET 8 SDK for production target; .NET 9 SDK if running the full test matrix | Pull source and rebuild | Works with restored package caches and internal NuGet mirrors | Contributor and advanced-user path |
 
+## Container Image Contract
+
+The official GHCR image is built from digest-pinned multi-arch Microsoft .NET
+base-image manifest lists. The build stage intentionally uses the
+repository-pinned .NET 9 SDK, while the runtime stage stays on .NET 8
+`runtime-deps` because the production CLI targets `net8.0`. The Dockerfile maps
+GitHub Actions `TARGETARCH` values to musl RIDs (`amd64` ->
+`linux-musl-x64`, `arm64` -> `linux-musl-arm64`) and rejects unknown
+architectures during both restore and publish.
+
+Runtime packages are intentionally limited to `ca-certificates` and `su-exec`.
+The image does not install `git`, shells beyond the Alpine base shell, package
+managers beyond `apk`, or build tools in the runtime stage. The entrypoint runs
+as root only long enough to derive the target UID/GID from `CDIDX_RUN_UID`,
+`CDIDX_RUN_GID`, or `/repo` ownership, then uses `su-exec` to run `cdidx` with
+`HOME=/repo`. Setting `CDIDX_RUN_UID=0` keeps root execution explicit for
+operators who need it.
+
 ## Planned or Community Channels
 
 | Channel | Status | Notes |
@@ -53,6 +71,7 @@ Before publishing or updating a channel, verify:
 - `install.sh --doctor vX.Y.Z` reports the configured release and API hosts.
 - `dotnet tool install -g cdidx --version <version>` succeeds on a clean .NET 8 tool environment.
 - `docker pull ghcr.io/widthdom/codeindex:<version>` succeeds for published release images, and the registry exposes provenance/SBOM attestations.
+- The GHCR image keeps the SDK/runtime version split, `TARGETARCH` to musl RID mapping, runtime package allowlist, and entrypoint privilege-drop behavior described in the container image contract.
 - `cdidx --version` runs from each installed channel.
 - `cdidx status --help` or another lightweight command runs without requiring a repository.
 - Package metadata preserves license, homepage, and repository links.

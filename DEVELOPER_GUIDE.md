@@ -101,6 +101,7 @@ in [DISTRIBUTION.md](DISTRIBUTION.md):
 | NuGet global tool | Install/update on a clean .NET 8 tool environment. |
 | NuGet trusted publishing | GitHub Actions variable `NUGET_TRUSTED_PUBLISHING_USER` is set to the NuGet.org username that created the trusted publishing policy; this can differ from the package owner. |
 | Release assets | Published asset exists for every advertised RID. |
+| Release workflow privilege split | `.github/workflows/release.yml` keeps `prepare-release-files` and `verify-release-install` on `contents: read`, hands only the short-lived `release-payload` artifact to `create-release`, removes temporary GPG material before publishing continues, and scopes Windows signing secrets to the signing step. |
 | GHCR container image | Published `linux/amd64` and `linux/arm64` images run `cdidx --version`, omit runtime `git`, and expose provenance/SBOM attestations. |
 | Package metadata | License, repository URL, tags, and runtime prerequisites are correct. |
 | Documentation links | README, USER_GUIDE, and package metadata links resolve to the intended docs. |
@@ -207,6 +208,7 @@ Set `CDIDX_SLOW_QUERY_MS=<milliseconds>` to write slow SQLite command diagnostic
 |---|---|
 | Worker protocol JSON | Isolated worker stdin frames are read through `BoundedLineReader`. The default frame cap is 32 MiB for both characters and UTF-8 bytes. When a larger `--max-file-bytes` setting needs JSON-escaping headroom, the protocol frame cap may expand up to `WorkerProtocolLineLimits.MaxExtendedLineUtf8Bytes` (384 MiB), never to `int.MaxValue`. `WorkerProtocolJsonValidator` rejects payloads over the negotiated character/UTF-8 byte cap before `JsonDocument.Parse`, parses with `DefaultMaxJsonDepth` (32), rejects more than 1,000,000 object properties, and rejects strings longer than the frame cap. |
 | User regex find | `find --regex` keeps the classic .NET regex engine for lookaround/backreference compatibility, adds `RegexOptions.CultureInvariant`, adds `IgnoreCase` unless `--exact` is set, and uses `BoundedRegex.DefaultMatchTimeout` per match. Timeouts surface as `E014_REGEX_MATCH_TIMEOUT` / `regex_timeout` in CLI JSON, and human output includes the same recovery hint. `find --all` additionally applies candidate-file and line-scan caps before walking the whole index. |
+| Shared regex construction | Production regex construction is centralized through `BoundedRegex`, `RegexRegistry`, or `RegexTimeoutPolicy`. Use `BoundedRegex` for extractor patterns and bounded static regex APIs, `RegexRegistry` for raw BCL regex factories that must preserve timeout exceptions (`find --regex`, ignore glob regexes, generated-code path patterns), and `RegexTimeoutPolicy` for diagnostic/redaction surfaces. `RegexRegistry` owns the named ignore-glob timeout (100 ms), generated-code pattern timeout (50 ms), and find-regex factory using `BoundedRegex.DefaultMatchTimeout`. Search-audit recipes treat only `BoundedRegex` aliases and `RegexRegistry.cs` as centralized positive evidence, so new production raw constructors require a deliberate factory or generated-regex entry plus tests. |
 | Filesystem traversal helpers | `FileSystemTraversalPolicy` keeps top-directory-only enumeration explicit (`IgnoreInaccessible=false`, no implicit recursion) and exposes opt-in `CancellationToken` / entry-budget options. Expected traversal failures are classified centrally so command diagnostics share the same permission, I/O, invalid-path, unsupported-path, path-too-long, and budget-exceeded taxonomy. |
 | `MaxValue` sentinels | `int.MaxValue` may be used only as an internal sentinel when the next operation clamps before SQL limits, allocation, traversal, payload sizing, or timeout conversion. User-influenced values must be reduced to named practical constants before multiplication, buffer sizing, protocol framing, or query expansion. |
 
@@ -316,6 +318,15 @@ Interactive terminal controls are allowed only when stdout is not redirected or 
 Query commands that accept path filters (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots`, and `validate`) expand `--project` into the matching project directory glob before hitting `DbReader`, so all existing SQL path predicates keep working. When the indexed project root cannot be resolved and project expansion falls back to the process current directory, CLI query context and MCP structured payloads include `project_filter_root` and `project_filter_root_fallback_reason`. `index --project` expands to the files under the selected project directory and reuses the existing `--files` update path, but rejects expansions above 65,536 files for one project or 131,072 unique files across all requested projects with an explicit-files recovery hint.
 
 `cdidx batch` is a CLI-side query loop for editor integrations and scripts that need several query commands against the same DB without spawning `cdidx` repeatedly. It opens one `DbContext` / `DbReader`, reads newline-delimited JSON string arrays from stdin, caps each decoded string argument at 8,192 characters, and dispatches only query commands through the existing `QueryCommandRunner` paths so output and validation stay identical to the standalone command shape. Immediate EOF with no commands remains exit 0 with no output by default; `--json-summary` appends a final JSON object with `commands_processed`, `line_errors`, `command_failures`, and `exit_code` for non-interactive callers that need an explicit empty-input signal.
+By default, child query commands stream their normal stdout/stderr directly. In
+`--json-summary` mode, every non-blank stdin line must instead emit one
+machine-readable batch envelope before the final summary: parsed commands use
+`record: "batch_result"` and include `line`, `command`, `arguments`,
+`exit_code`, and captured child `stdout` / `stderr`; malformed or over-limit
+lines use `record: "batch_error"` and an `error` object. Child output must not be
+written directly beside batch metadata in this mode. The final summary uses
+`record: "batch_summary"` and retains `commands_processed`, `line_errors`,
+`command_failures`, and `exit_code` for empty-input and failure accounting.
 
 Editor integrations can request standard location shapes directly. `definition`, `references`, `search`, `find`, and `validate` accept `--format <text|json|lsp|qf|sarif>`; `lsp` emits LSP `Location` arrays, `qf` emits Vim quickfix lines, and `sarif` emits SARIF 2.1.0. `goto <symbol>` returns the single unambiguous definition as one LSP `Location`, while `goto --all <symbol>` returns all matching locations.
 
@@ -1133,13 +1144,21 @@ For the AI agent search-rule template, see [AI Integration](USER_GUIDE.md#ai-int
 | Field group | Fields |
 |---|---|
 | Readiness and graph trust | `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `language_readiness`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`. |
-| Workspace and HEAD freshness | `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`. |
+| Workspace and HEAD freshness | `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`, `head_freshness`. |
 | Version and forward compatibility | `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`. |
 | Unknown-extension and runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `hooks`, `hook_diagnostics`, `trust_overrides`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `mac_profile_diagnostics`, `stale_after_seconds`, `index_age_seconds`, `last_failed_or_partial_index_run`, `last_failed_or_partial_index_run.progress_persisted`, `last_failed_or_partial_index_run.recovery_hint`. |
 | Database maintenance | `db_size_bytes`, `wal_size_bytes`, `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `busy_timeout_ms`, `page_count`, `freelist_count`, `page_size`, `auto_vacuum`), `prepared_command_cache` (`count`, `capacity`, `hit_count`, `miss_count`, `eviction_count`), `maintenance_guidance`. |
 | Remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`. |
 | MCP-only session diagnostics | `mcp_session`, `mcp.rate_limit.bucket_limit`, and `mcp.rate_limit.bucket_limit_rejection_count`. `mcp_session` is session-scoped diagnostics rather than persisted DB state. It contains `log_level`, bounded `roots`, optional `client_info`, and bounded optional `client_capabilities`. When advertised roots are capped, `roots_truncated`, `root_count`, `root_limit`, and `root_uri_length_limit` describe the truncation. When client capabilities are capped, `client_capabilities_truncated`, `client_capabilities_truncation_reason`, `client_capabilities_serialized_bytes`, `client_capabilities_byte_limit`, and `client_capabilities_depth_limit` describe the retained diagnostic subset. `mcp.rate_limit.bucket_limit` is the configured process-local `(tool, caller)` bucket cap, and `mcp.rate_limit.bucket_limit_rejection_count` counts calls denied because creating a new bucket would exceed that cap. |
 | Documentation sync | Keep this list synchronized with `README.md` and `AGENT_GUIDE.md`; `DocumentationStatusContractTests` fails when any required field is missing from one of those docs. |
+
+`head_freshness` is a compact summary for machine consumers. `state=fresh`
+requires a successful `status --check` workspace comparison, `state=head_current`
+only proves the runtime HEAD matched the `indexed_head` selected by
+`indexed_head_source`, and
+`indexed_head_source` tells consumers whether `indexed_head` came from the latest
+index stamp (`indexed_head_sha`) or the legacy full-scan-only stamp
+(`indexed_head_commit`).
 
 Runtime diagnostic subcontracts:
 
@@ -2449,6 +2468,7 @@ channel をすべて確認してください。
 | NuGet global tool | clean な .NET 8 tool environment での install/update。 |
 | NuGet trusted publishing | GitHub Actions variable `NUGET_TRUSTED_PUBLISHING_USER` が trusted publishing policy を作成した NuGet.org ユーザー名に設定されていること。この値は package owner と異なり得る。 |
 | release asset | advertised RID ごとに published release asset があること。 |
+| release workflow の権限分離 | `.github/workflows/release.yml` は `prepare-release-files` と `verify-release-install` を `contents: read` に保ち、短命の `release-payload` artifact だけを `create-release` に渡し、一時 GPG material を公開処理の続行前に削除し、Windows 署名 secret を署名 step のみにスコープする。 |
 | GHCR container image | 公開済みの `linux/amd64` / `linux/arm64` image で `cdidx --version` が動作し、runtime `git` を含まず、provenance / SBOM attestation を公開していること。 |
 | package metadata | license、repository URL、tag、runtime prerequisite が正しいこと。 |
 | documentation link | README、USER_GUIDE、package metadata からの link が意図した docs を指すこと。 |
@@ -2571,6 +2591,7 @@ query コマンドも JSON profile block 用の `--profile` と command-scoped p
 |---|---|
 | worker protocol JSON | isolated worker の stdin frame は `BoundedLineReader` で読みます。既定の frame 上限は文字数・UTF-8 byte 数ともに 32 MiB です。大きな `--max-file-bytes` によって JSON escape 分の余裕が必要な場合、protocol frame 上限は `WorkerProtocolLineLimits.MaxExtendedLineUtf8Bytes`（384 MiB）まで拡張できますが、`int.MaxValue` までは拡張しません。`WorkerProtocolJsonValidator` は `JsonDocument.Parse` の前に合意済みの文字数 / UTF-8 byte 上限を超える payload を拒否し、`DefaultMaxJsonDepth`（32）で parse し、object property 1,000,000 件超と frame 上限を超える string を拒否します。 |
 | user regex find | `find --regex` は lookaround / backreference 互換性のため classic .NET regex engine を維持し、`RegexOptions.CultureInvariant` を付け、`--exact` でない場合は `IgnoreCase` も付け、各 match に `BoundedRegex.DefaultMatchTimeout` を使います。timeout は CLI JSON で `E014_REGEX_MATCH_TIMEOUT` / `regex_timeout` として返り、人間向け出力にも同じ recovery hint が出ます。`find --all` は index 全体を走査する前に candidate file と line scan の上限も適用します。 |
+| shared regex construction | production の regex 構築は `BoundedRegex`、`RegexRegistry`、または `RegexTimeoutPolicy` に集約します。extractor pattern と bounded static regex API には `BoundedRegex`、timeout 例外を維持する必要がある raw BCL regex factory（`find --regex`、ignore glob regex、generated-code path pattern）には `RegexRegistry`、diagnostic / redaction surface には `RegexTimeoutPolicy` を使います。`RegexRegistry` は ignore glob timeout（100 ms）、generated-code pattern timeout（50 ms）、および `BoundedRegex.DefaultMatchTimeout` を使う find-regex factory の名前付き policy を所有します。search-audit recipe は `BoundedRegex` alias と `RegexRegistry.cs` だけを集約済みの positive evidence と見なすため、新しい production raw constructor は明示的な factory または generated-regex entry とテストを伴う必要があります。 |
 | filesystem traversal helper | `FileSystemTraversalPolicy` は top-directory-only enumeration を明示し（`IgnoreInaccessible=false`、暗黙の再帰なし）、任意指定の `CancellationToken` / entry budget option を公開します。想定内の traversal failure は中央で分類し、command diagnostic が permission、I/O、invalid-path、unsupported-path、path-too-long、budget-exceeded の taxonomy を共有します。 |
 | `MaxValue` sentinel | `int.MaxValue` は、次の操作が SQL limit、allocation、traversal、payload sizing、timeout conversion の前に clamp する場合だけ内部 sentinel として使えます。ユーザー影響値は multiplication、buffer sizing、protocol framing、query expansion の前に、名前付きの実用上限へ落としてください。 |
 
@@ -2705,6 +2726,14 @@ override が文書化されていない限り ANSI/progress control を抑止す
 path filter を受け付ける query コマンド（`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots`, `validate`）は、`--project` を対応する project directory glob に展開してから `DbReader` に渡す。これにより既存の SQL path predicate をそのまま利用できる。indexed project root を解決できず process current directory に fallback して project expansion する場合、CLI query context と MCP structured payload は `project_filter_root` と `project_filter_root_fallback_reason` を含める。`index --project` は選択された project directory 配下のファイルに展開し、既存の `--files` 更新経路を再利用する。ただし 1 project で 65,536 files、requested projects 全体で 131,072 unique files を超える展開は拒否し、明示的な `--files` を使う recovery hint を返す。
 
 `cdidx batch` は、同じ DB に複数の query command を投げる editor integration や script 向けの CLI 側 query loop である。1 つの `DbContext` / `DbReader` を開き、stdin から newline-delimited JSON 文字列配列を読み、デコード後の各文字列引数を 8,192 文字に制限し、query command だけを既存の `QueryCommandRunner` 経路へ dispatch するため、出力と validation は単発コマンドと同じ形を保つ。command がない即時 EOF は既定で exit 0 かつ無出力のまま維持される。非対話の呼び出し元が空入力を明示的に判定したい場合は、`--json-summary` が `commands_processed`、`line_errors`、`command_failures`、`exit_code` を含む最終 JSON オブジェクトを追加する。
+既定では child query command の通常の stdout / stderr を直接 stream する。`--json-summary`
+mode では、空白でない stdin 行ごとに final summary より前へ 1 つの machine-readable batch
+envelope を出力しなければならない。parse 済み command は `record: "batch_result"` として
+`line`、`command`、`arguments`、`exit_code`、捕捉した child `stdout` / `stderr` を含める。
+malformed line や上限超過 line は `record: "batch_error"` と `error` object を使う。この mode では
+child output を batch metadata と並べて直接出力してはならない。final summary は
+`record: "batch_summary"` を使い、empty input と failure accounting のために
+`commands_processed`、`line_errors`、`command_failures`、`exit_code` を保持する。
 
 editor integration は標準的な location 形状を直接要求できる。`definition`、`references`、`search`、`find`、`validate` は `--format <text|json|lsp|qf|sarif>` を受け付け、`lsp` は LSP `Location` 配列、`qf` は Vim quickfix 行、`sarif` は SARIF 2.1.0 を出力する。`goto <symbol>` は曖昧でない単一定義を 1 つの LSP `Location` として返し、`goto --all <symbol>` は一致する全 location を返す。
 
@@ -3540,13 +3569,20 @@ AI エージェント向け検索ルールのテンプレートについては�
 | field group | fields |
 |---|---|
 | readiness / graph trust | `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `language_readiness`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`。 |
-| workspace / HEAD freshness | `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`。 |
+| workspace / HEAD freshness | `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`, `head_freshness`。 |
 | version / forward compatibility | `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`。 |
 | unknown-extension / runtime diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `hooks`, `hook_diagnostics`, `trust_overrides`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `mac_profile_diagnostics`, `stale_after_seconds`, `index_age_seconds`, `last_failed_or_partial_index_run`, `last_failed_or_partial_index_run.progress_persisted`, `last_failed_or_partial_index_run.recovery_hint`。 |
 | database maintenance | `db_size_bytes`, `wal_size_bytes`, `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`, `busy_timeout_ms`, `page_count`, `freelist_count`, `page_size`, `auto_vacuum`), `prepared_command_cache` (`count`, `capacity`, `hit_count`, `miss_count`, `eviction_count`), `maintenance_guidance`。 |
 | remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`。 |
 | MCP-only session diagnostics | `mcp_session`, `mcp.rate_limit.bucket_limit`, `mcp.rate_limit.bucket_limit_rejection_count`。`mcp_session` は persisted DB state ではなく session-scoped diagnostics で、`log_level`、上限付きの `roots`、任意の `client_info`、上限付きの任意の `client_capabilities` を含みます。advertised root が切り詰められた場合は `roots_truncated`、`root_count`、`root_limit`、`root_uri_length_limit` が切り詰め内容を示します。client capabilities が切り詰められた場合は `client_capabilities_truncated`、`client_capabilities_truncation_reason`、`client_capabilities_serialized_bytes`、`client_capabilities_byte_limit`、`client_capabilities_depth_limit` が保持された診断 subset を示します。`mcp.rate_limit.bucket_limit` は process-local な `(tool, caller)` bucket 上限、`mcp.rate_limit.bucket_limit_rejection_count` は新規 bucket 作成がその上限を超えるため拒否された呼び出し数です。 |
 | documentation sync | この一覧は `README.md` と `AGENT_GUIDE.md` と同期してください。必須 field がそれらの docs から欠けると `DocumentationStatusContractTests` が失敗します。 |
+
+`head_freshness` は machine consumer 向けの compact summary です。
+`state=fresh` は `status --check` の workspace 比較成功が必要で、
+`state=head_current` は runtime HEAD と `indexed_head_source` が選んだ
+`indexed_head` の一致だけを示します。
+`indexed_head_source` は `indexed_head` が最新 index stamp (`indexed_head_sha`) 由来か、
+legacy full-scan 限定 stamp (`indexed_head_commit`) 由来かを示します。
 
 runtime diagnostic subcontract:
 

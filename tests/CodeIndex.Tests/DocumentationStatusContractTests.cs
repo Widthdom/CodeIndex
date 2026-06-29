@@ -21,6 +21,7 @@ public class DocumentationStatusContractTests
         "indexed_head_branch",
         "indexed_head_timestamp",
         "commits_ahead_of_indexed_head",
+        "head_freshness",
         "index_writer_version",
         "index_newer_than_reader",
         "index_newer_than_reader_reason",
