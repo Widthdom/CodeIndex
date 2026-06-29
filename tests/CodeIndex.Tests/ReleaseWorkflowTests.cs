@@ -167,6 +167,9 @@ public partial class ReleaseWorkflowTests
         var createJob = ExtractWorkflowJob(workflow, "create-release");
         var verifyJob = ExtractWorkflowJob(workflow, "verify-release-install");
 
+        Assert.DoesNotContain("\r\n", prepareJob);
+        Assert.DoesNotContain("\r\n", createJob);
+        Assert.DoesNotContain("\r\n", verifyJob);
         Assert.Contains("needs: [preflight, release]", prepareJob);
         Assert.Contains("permissions:\n      contents: read", prepareJob);
         Assert.Contains("name: Collect release files", prepareJob);
@@ -1046,7 +1049,7 @@ public partial class ReleaseWorkflowTests
                 if (line == marker)
                 {
                     inJob = true;
-                    job.AppendLine(line);
+                    job.Append(line).Append('\n');
                 }
 
                 continue;
@@ -1059,7 +1062,7 @@ public partial class ReleaseWorkflowTests
                 break;
             }
 
-            job.AppendLine(line);
+            job.Append(line).Append('\n');
         }
 
         var text = job.ToString();
