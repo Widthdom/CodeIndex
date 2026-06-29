@@ -95,7 +95,7 @@ public class HttpMcpTransportTests : IDisposable
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
 
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
         using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
         Assert.Equal(HttpStatusCode.OK, events.StatusCode);
         await WaitUntilAsync(() => harness.HasEventStreams, "the event stream to be registered before disposal");
@@ -210,7 +210,7 @@ public class HttpMcpTransportTests : IDisposable
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
 
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
         Assert.Equal(HttpStatusCode.OK, events.StatusCode);
 
@@ -240,7 +240,7 @@ public class HttpMcpTransportTests : IDisposable
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
 
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         using var response = await client.GetAsync(harness.Endpoint);
 
         Assert.Equal(HttpStatusCode.MethodNotAllowed, response.StatusCode);
@@ -255,7 +255,7 @@ public class HttpMcpTransportTests : IDisposable
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
 
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         using var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "healthz"));
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -309,7 +309,7 @@ public class HttpMcpTransportTests : IDisposable
         harness.RecordResponseCleanupFailure("abort", "test abort cleanup", new IOException("abort cleanup failed"));
         harness.RecordResponseCleanupFailure("close", "test close cleanup", new InvalidOperationException("close cleanup failed"));
 
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         using var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "healthz"));
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -332,7 +332,7 @@ public class HttpMcpTransportTests : IDisposable
             TimeSpan.FromMilliseconds(1),
             () => new string('x', HttpMcpTransport.MaxSseEventFrameBytes + 1));
 
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
         Assert.Equal(HttpStatusCode.OK, events.StatusCode);
         await WaitUntilAsync(() => harness.EventStreamDropCount > 0, "event stream drop counter");
@@ -355,7 +355,7 @@ public class HttpMcpTransportTests : IDisposable
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
         harness.SetHealthJsonProvider(() => "not-json");
 
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         using var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "healthz"));
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -373,7 +373,7 @@ public class HttpMcpTransportTests : IDisposable
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
         harness.SetHealthJsonProvider(() => oversizedJson);
 
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         using var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "healthz"));
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -389,7 +389,7 @@ public class HttpMcpTransportTests : IDisposable
         var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
         await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: "token", requestLogger: records.Enqueue);
 
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         using (var missingAuth = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
         {
             Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
@@ -461,7 +461,7 @@ public class HttpMcpTransportTests : IDisposable
             requestLogQueueCapacity: 1);
 
         var healthUri = new Uri(new Uri(harness.Endpoint), "healthz");
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         try
         {
             using var first = await client.GetAsync(healthUri);
@@ -511,7 +511,7 @@ public class HttpMcpTransportTests : IDisposable
         var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
         await using var harness = await McpHttpHarness.StartAsync(_dbPath, requestLogger: records.Enqueue);
 
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         var longPath = string.Join('/', Enumerable.Repeat("segment", 50));
         using var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), longPath));
 
@@ -625,7 +625,7 @@ public class HttpMcpTransportTests : IDisposable
             return Task.FromResult<string?>(null);
         };
 
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
         const string body = """{"jsonrpc":"2.0","method":"notifications/cancelled","params":""";
         var post = client.PostAsync(
             listen.Prefix,
@@ -660,7 +660,7 @@ public class HttpMcpTransportTests : IDisposable
             return Task.FromResult<string?>(null);
         };
 
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
         var body = BuildNestedCancellationNotification(McpServer.MaxJsonDepth + 1);
         var post = client.PostAsync(
             listen.Prefix,
@@ -695,7 +695,7 @@ public class HttpMcpTransportTests : IDisposable
             return Task.FromResult<string?>(null);
         };
 
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
         var body = BuildNestedJsonRpcResponse(McpServer.MaxJsonDepth + 1);
         var post = client.PostAsync(
             listen.Prefix,
@@ -741,7 +741,7 @@ public class HttpMcpTransportTests : IDisposable
         var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
         await using var harness = await McpHttpHarness.StartAsync(_dbPath, requestLogger: records.Enqueue);
 
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
         {
             Content = new UnknownLengthStringContent("""{"jsonrpc":"2.0","id":3755,"method":"ping"}"""),
@@ -999,7 +999,7 @@ public class HttpMcpTransportTests : IDisposable
             bearerToken: null,
             maxQueuedRequests: 1);
 
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
         var first = client.PostAsync(
             listen.Prefix,
             new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"));
@@ -1033,7 +1033,7 @@ public class HttpMcpTransportTests : IDisposable
             bearerToken: null,
             maxConcurrentHandlers: 1);
 
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
         using var events = await client.GetAsync(new Uri(new Uri(listen.Prefix), "events"), HttpCompletionOption.ResponseHeadersRead);
         Assert.Equal(HttpStatusCode.OK, events.StatusCode);
         await WaitUntilAsync(() => transport.HasEventStreams, "the first event stream to occupy the only handler slot");
@@ -1051,7 +1051,7 @@ public class HttpMcpTransportTests : IDisposable
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
 
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
 
         Assert.Equal(HttpStatusCode.OK, events.StatusCode);
@@ -1079,7 +1079,7 @@ public class HttpMcpTransportTests : IDisposable
             bearerToken: null,
             maxEventStreams: 1);
 
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        using var client = CreateHttpClient(TimeSpan.FromSeconds(5));
         using var first = await client.GetAsync(new Uri(new Uri(listen.Prefix), "events"), HttpCompletionOption.ResponseHeadersRead);
         Assert.Equal(HttpStatusCode.OK, first.StatusCode);
         await WaitUntilAsync(() => transport.EventStreamCount == 1, "the first event stream to fill the stream limit");
@@ -1097,7 +1097,7 @@ public class HttpMcpTransportTests : IDisposable
         env.Set("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S", "1");
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
 
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
         Assert.Equal(HttpStatusCode.OK, events.StatusCode);
 
@@ -1116,7 +1116,7 @@ public class HttpMcpTransportTests : IDisposable
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
         harness.SetKeepAlive(TimeSpan.FromMilliseconds(10), () => new string('x', HttpMcpTransport.MaxSseEventFrameBytes));
 
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
 
         Assert.Equal(HttpStatusCode.OK, events.StatusCode);
@@ -1128,7 +1128,7 @@ public class HttpMcpTransportTests : IDisposable
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
 
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
         Assert.Equal(HttpStatusCode.OK, events.StatusCode);
         await WaitUntilAsync(() => harness.HasEventStreams, "the event stream to be registered");
@@ -1148,7 +1148,7 @@ public class HttpMcpTransportTests : IDisposable
             eventStreamWriteTimeout: TimeSpan.FromMilliseconds(10));
         harness.BeforeEventStreamWriteForTests = token => Task.Delay(Timeout.InfiniteTimeSpan, token);
 
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
         Assert.Equal(HttpStatusCode.OK, events.StatusCode);
         await WaitUntilAsync(() => harness.HasEventStreams, "the event stream to be registered");
@@ -1175,7 +1175,7 @@ public class HttpMcpTransportTests : IDisposable
             Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
             await using var harness = await McpHttpHarness.StartAsync(dbPath);
 
-            using var client = new HttpClient();
+            using var client = CreateHttpClient();
             using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
             Assert.Equal(HttpStatusCode.OK, events.StatusCode);
 
@@ -1216,7 +1216,7 @@ public class HttpMcpTransportTests : IDisposable
             Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
             await using var harness = await McpHttpHarness.StartAsync(dbPath);
 
-            using var client = new HttpClient();
+            using var client = CreateHttpClient();
             using var firstEvents = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
             using var secondEvents = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
             Assert.Equal(HttpStatusCode.OK, firstEvents.StatusCode);
@@ -1255,7 +1255,7 @@ public class HttpMcpTransportTests : IDisposable
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: "token");
 
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         using var unauthorized = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
         Assert.Equal(HttpStatusCode.Unauthorized, unauthorized.StatusCode);
 
@@ -1283,7 +1283,7 @@ public class HttpMcpTransportTests : IDisposable
             bearerToken: bearerToken,
             authenticator: authenticator);
 
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
         {
             Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
@@ -1302,7 +1302,7 @@ public class HttpMcpTransportTests : IDisposable
         const string token = "s3cret-token";
         await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
 
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
         {
             Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
@@ -1318,7 +1318,7 @@ public class HttpMcpTransportTests : IDisposable
         var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
         await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token, requestLogger: records.Enqueue);
 
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
         {
             Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
@@ -1339,7 +1339,7 @@ public class HttpMcpTransportTests : IDisposable
         const string token = "s3cret-token";
         await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
 
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
         {
             Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
@@ -1356,7 +1356,7 @@ public class HttpMcpTransportTests : IDisposable
         const string token = "s3cret-token";
         await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
 
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
         {
             Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
@@ -1373,7 +1373,7 @@ public class HttpMcpTransportTests : IDisposable
         var token = new string('t', McpAuthenticationLimits.MaxTokenCharacters);
         await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
 
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
         {
             Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
@@ -1394,7 +1394,7 @@ public class HttpMcpTransportTests : IDisposable
         const string token = "s3cret-token";
         await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
 
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
         {
             Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
@@ -1412,7 +1412,7 @@ public class HttpMcpTransportTests : IDisposable
         const string token = "s3cret-token";
         await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
 
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
         {
             Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
@@ -1429,7 +1429,7 @@ public class HttpMcpTransportTests : IDisposable
         var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
         await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: "token", requestLogger: records.Enqueue);
 
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
         {
             Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
@@ -1451,7 +1451,7 @@ public class HttpMcpTransportTests : IDisposable
         const string token = "s3cret-token";
         await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
 
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
 
         using (var request = CreatePostRequest())
         {
@@ -1530,7 +1530,7 @@ public class HttpMcpTransportTests : IDisposable
         var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
         await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: "token", requestLogger: records.Enqueue);
 
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
         {
             Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
@@ -1556,7 +1556,7 @@ public class HttpMcpTransportTests : IDisposable
         const string token = "s3cret-token";
         await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
 
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
         {
             Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
@@ -1577,7 +1577,7 @@ public class HttpMcpTransportTests : IDisposable
         const string token = "s3cret-token";
         await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token);
 
-        using var client = new HttpClient();
+        using var client = CreateHttpClient();
         using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
         {
             Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
@@ -1650,6 +1650,16 @@ public class HttpMcpTransportTests : IDisposable
         _db.Dispose();
         try { File.Delete(_dbPath); } catch { /* best-effort cleanup */ }
         GC.SuppressFinalize(this);
+    }
+
+    private static HttpClient CreateHttpClient(TimeSpan? timeout = null)
+    {
+        // #4264: these loopback MCP tests never use cookies. Disabling them avoids
+        // environment-dependent CookieContainer initialization in sandboxed full-suite runs.
+        var client = new HttpClient(new SocketsHttpHandler { UseCookies = false });
+        if (timeout.HasValue)
+            client.Timeout = timeout.Value;
+        return client;
     }
 
     private static async Task<HttpMcpTransport.HttpRequestLogRecord[]> WaitForRequestLogRecordsAsync(
@@ -1861,7 +1871,7 @@ public class HttpMcpTransportTests : IDisposable
             if (_loopTask.IsCompleted)
                 await _loopTask.ConfigureAwait(false);
 
-            using var client = new HttpClient { Timeout = RequestTimeout };
+            using var client = HttpMcpTransportTests.CreateHttpClient(RequestTimeout);
             var content = new StringContent(body, Encoding.UTF8, "application/json");
             return await client.PostAsync(Endpoint, content);
         }
