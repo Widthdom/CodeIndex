@@ -21,7 +21,7 @@ public class CiWorkflowTests
             workflow);
         Assert.DoesNotContain("collect_coverage", workflow);
         Assert.Contains("key: ${{ runner.os }}-nuget-${{ hashFiles('**/packages.lock.json', 'global.json') }}", workflow, StringComparison.Ordinal);
-        Assert.Contains("restore-keys: |\n            ${{ runner.os }}-nuget-", normalizedWorkflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("restore-keys:", normalizedWorkflow, StringComparison.Ordinal);
         Assert.DoesNotContain("'**/*.csproj'", workflow, StringComparison.Ordinal);
         Assert.Contains(
             "- name: Audit NuGet package vulnerabilities\n        if: steps.lane.outputs.primary_lane == 'true'",
