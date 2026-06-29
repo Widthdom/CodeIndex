@@ -1,11 +1,8 @@
 using System.Diagnostics;
 using System.Globalization;
-using System.Reflection;
 using System.Runtime.Loader;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using CodeIndex.Cli;
-using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
@@ -66,14 +63,14 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
                 return Failure(startError, stopwatch.ElapsedMilliseconds);
             }
 
-            var request = new PostExtractionHookCallbackWorker.WorkerRequest(
+            var request = new PostExtractionHookCallbackProtocol.WorkerRequest(
                 callback,
                 context,
                 symbols?.ToList(),
                 references?.ToList(),
                 maxSymbols,
                 maxReferences);
-            var requestJson = JsonSerializer.Serialize(request, PostExtractionHookCallbackWorker.JsonOptions);
+            var requestJson = PostExtractionHookCallbackProtocol.SerializeRequest(request);
             var waitMilliseconds = GetRemainingWaitMilliseconds(stopwatch, callbackBudget);
             if (waitMilliseconds <= 0)
             {
@@ -139,13 +136,10 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
                 return Failure(workerError, stopwatch.ElapsedMilliseconds);
             }
 
-            PostExtractionHookCallbackWorker.WorkerResponse? response;
+            PostExtractionHookCallbackProtocol.WorkerResponse? response;
             try
             {
-                response = BoundedJson.Deserialize<PostExtractionHookCallbackWorker.WorkerResponse>(
-                    responseJson,
-                    maxProtocolLineBytes,
-                    PostExtractionHookCallbackWorker.JsonOptions);
+                response = PostExtractionHookCallbackProtocol.DeserializeResponse(responseJson, maxProtocolLineBytes);
             }
             catch (Exception ex) when (ex is JsonException or InvalidDataException)
             {
@@ -375,8 +369,7 @@ internal static class PostExtractionHookCallbackWorker
     internal const string CommandName = "__cdidx-post-extraction-hook-callback";
     internal const int WorkerKillWaitMilliseconds = 5000;
     private const int CapturedConsoleMaxChars = 32 * 1024;
-    internal static readonly JsonSerializerOptions JsonOptions =
-        WorkerProtocolJsonValidator.CreateSerializerOptions(PostExtractionHookCallbackWorkerJsonContext.Default.Options);
+    internal static readonly JsonSerializerOptions JsonOptions = PostExtractionHookCallbackProtocol.JsonOptions;
 
     internal static bool TryRunCommand(
         string[] args,
@@ -522,8 +515,8 @@ internal static class PostExtractionHookCallbackWorker
             IPostExtractionHook? hook = null;
             while (true)
             {
-                WorkerResponse response;
-                WorkerRequest request;
+                PostExtractionHookCallbackProtocol.WorkerResponse response;
+                PostExtractionHookCallbackProtocol.WorkerRequest request;
                 string? requestJson;
                 try
                 {
@@ -531,8 +524,8 @@ internal static class PostExtractionHookCallbackWorker
                 }
                 catch (BoundedLineLengthException ex)
                 {
-                    response = new WorkerResponse(null, null, null, SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex));
-                    output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
+                    response = PostExtractionHookCallbackProtocol.WorkerError("worker_protocol_error", ex);
+                    output.WriteLine(PostExtractionHookCallbackProtocol.SerializeResponse(response));
                     output.Flush();
                     return 1;
                 }
@@ -542,21 +535,20 @@ internal static class PostExtractionHookCallbackWorker
 
                 if (!WorkerProtocolJsonValidator.TryValidate(requestJson, maxProtocolLineCharacters, out var validationError))
                 {
-                    response = new WorkerResponse(null, null, null, validationError);
-                    output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
+                    response = PostExtractionHookCallbackProtocol.WorkerError(validationError);
+                    output.WriteLine(PostExtractionHookCallbackProtocol.SerializeResponse(response));
                     output.Flush();
                     continue;
                 }
 
                 try
                 {
-                    request = BoundedJson.Deserialize<WorkerRequest>(requestJson, maxProtocolLineUtf8Bytes, JsonOptions)
-                        ?? throw new InvalidOperationException("worker request was empty.");
+                    request = PostExtractionHookCallbackProtocol.DeserializeRequest(requestJson, maxProtocolLineUtf8Bytes);
                 }
                 catch (Exception ex)
                 {
-                    response = new WorkerResponse(null, null, null, SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex));
-                    output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
+                    response = PostExtractionHookCallbackProtocol.WorkerError("worker_protocol_error", ex);
+                    output.WriteLine(PostExtractionHookCallbackProtocol.SerializeResponse(response));
                     output.Flush();
                     continue;
                 }
@@ -564,14 +556,14 @@ internal static class PostExtractionHookCallbackWorker
                 try
                 {
                     hook ??= CreateHook(hookAssemblyPath, hookTypeName);
-                    response = InvokeInsideWorker(hook, request);
+                    response = PostExtractionHookCallbackInvoker.Invoke(hook, request, CapturedConsoleMaxChars);
                 }
                 catch (Exception ex)
                 {
-                    response = new WorkerResponse(null, null, null, SafeDiagnosticFormatter.FormatExceptionCategory("worker_execution_failed", ex));
+                    response = PostExtractionHookCallbackProtocol.WorkerError("worker_execution_failed", ex);
                 }
 
-                output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
+                output.WriteLine(PostExtractionHookCallbackProtocol.SerializeResponse(response));
                 output.Flush();
             }
 
@@ -595,64 +587,6 @@ internal static class PostExtractionHookCallbackWorker
             ?? throw new InvalidOperationException($"hook type `{hookTypeName}` was not found.");
         return Activator.CreateInstance(type) as IPostExtractionHook
             ?? throw new InvalidOperationException($"hook type `{hookTypeName}` could not be instantiated as `{nameof(IPostExtractionHook)}`.");
-    }
-
-    private static WorkerResponse InvokeInsideWorker(IPostExtractionHook hook, WorkerRequest request)
-    {
-        var originalOut = Console.Out;
-        var originalError = Console.Error;
-        using var capturedOut = new BoundedTextWriter(CapturedConsoleMaxChars);
-        using var capturedError = new BoundedTextWriter(CapturedConsoleMaxChars);
-        Exception? callbackFailure = null;
-        try
-        {
-            Console.SetOut(capturedOut);
-            Console.SetError(capturedError);
-            if (request.Callback == nameof(IPostExtractionHook.OnSymbolsExtracted))
-            {
-                if (request.Symbols == null)
-                    throw new InvalidOperationException("symbol callback request omitted symbols.");
-                hook.OnSymbolsExtracted(request.Context, request.Symbols);
-            }
-            else if (request.Callback == nameof(IPostExtractionHook.OnReferencesExtracted))
-            {
-                if (request.References == null)
-                    throw new InvalidOperationException("reference callback request omitted references.");
-                hook.OnReferencesExtracted(request.Context, request.References);
-            }
-            else
-            {
-                throw new InvalidOperationException($"unknown hook callback `{request.Callback}`.");
-            }
-        }
-        catch (Exception ex)
-        {
-            callbackFailure = ex is TargetInvocationException { InnerException: not null } ? ex.InnerException : ex;
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-            Console.SetError(originalError);
-        }
-
-        var symbolsTruncated = TrimToLimit(request.Symbols, request.MaxSymbols);
-        var referencesTruncated = TrimToLimit(request.References, request.MaxReferences);
-        return new WorkerResponse(
-            request.Symbols,
-            request.References,
-            callbackFailure is null ? null : SafeDiagnosticFormatter.FormatExceptionCategory("hook_callback_failed", callbackFailure),
-            null,
-            symbolsTruncated,
-            referencesTruncated);
-    }
-
-    private static bool TrimToLimit<T>(List<T>? items, int? maxCount)
-    {
-        if (items == null || maxCount is not { } limit || limit <= 0 || items.Count <= limit)
-            return false;
-
-        items.RemoveRange(limit, items.Count - limit);
-        return true;
     }
 
     private static bool TryResolveProtocolLineLimit(
@@ -699,8 +633,3 @@ internal static class PostExtractionHookCallbackWorker
         bool SymbolsTruncated = false,
         bool ReferencesTruncated = false);
 }
-
-[JsonSourceGenerationOptions(PropertyNameCaseInsensitive = true)]
-[JsonSerializable(typeof(PostExtractionHookCallbackWorker.WorkerRequest))]
-[JsonSerializable(typeof(PostExtractionHookCallbackWorker.WorkerResponse))]
-internal partial class PostExtractionHookCallbackWorkerJsonContext : JsonSerializerContext;
