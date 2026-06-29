@@ -121,7 +121,11 @@ public enum SearchGuardScope
     SameLine,
 }
 
-public sealed record SearchGuardFilter(SearchGuardRole Role, SearchGuardDirection Direction, string Query);
+public sealed record SearchGuardFilter(
+    SearchGuardRole Role,
+    SearchGuardDirection Direction,
+    string Query,
+    SearchGuardScope? Scope = null);
 
 public sealed class SearchGuardEvidence
 {

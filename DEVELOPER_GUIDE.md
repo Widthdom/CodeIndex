@@ -284,6 +284,8 @@ Every subprocess wait must have an explicit cancellation or timeout path. Captur
 
 CLI JSON output must be machine-clean: redirected stdout is written as UTF-8 without a BOM, and JSON-mode commands must not emit ANSI escape sequences even when `--color=always` or `CLICOLOR_FORCE=1` would color human output. Keep JSON-safe styling suppression close to shared formatting helpers such as `ConsoleUi.ColorizeKind` so future query output paths inherit the invariant.
 
+Stdout is owned by the command payload. In human mode that payload is the human-readable result; in JSON mode it is only the documented JSON object, array, NDJSON stream, envelope, or external format selected by `--format`. Warnings, progress, slow-query messages, lifecycle logs, worker diagnostics, and recoverable-error prose belong on stderr or the private global tool log. Commands that create artifacts while also reporting JSON, such as `report` and export commands, must keep stdout parseable as JSON and describe the artifact through the JSON summary instead of mixing human text into stdout. MCP stdio follows the same separation at the protocol level: stdout carries JSON-RPC frames only, while server diagnostics and telemetry go to stderr.
+
 JSON serialization sites are split by contract domain. Public CLI JSON uses
 `ProgramRunner.CreateDefaultJsonOptions()` and `CliJsonSerializerContext`: field
 names are snake_case, nulls are omitted, audited public top-level event/result
@@ -2666,6 +2668,14 @@ CLI JSON output は機械処理向けにきれいでなければなりません�
 場合でも ANSI escape sequence を出してはいけません。JSON-safe styling suppression は
 `ConsoleUi.ColorizeKind` など共有 formatter の近くに置き、将来の query output path も同じ
 invariant を継承できるようにしてください。
+
+stdout は command payload のための stream です。human mode では human-readable result、JSON mode では
+`--format` で選ばれた文書化済みの JSON object / array / NDJSON stream / envelope / external format だけを
+出します。warning、progress、slow-query message、lifecycle log、worker diagnostic、recoverable-error prose は
+stderr または private global tool log に出します。`report` や export command のように artifact を作りつつ
+JSON を報告する command は、stdout を JSON として parse 可能に保ち、artifact は human text を stdout に混ぜず
+JSON summary で説明してください。MCP stdio も protocol level で同じ分離に従い、stdout は JSON-RPC frame のみ、
+server diagnostic と telemetry は stderr に出します。
 
 JSON serialization site は contract domain ごとに分けます。公開 CLI JSON は
 `ProgramRunner.CreateDefaultJsonOptions()` と `CliJsonSerializerContext` を使います。field name は

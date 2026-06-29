@@ -11,6 +11,15 @@ public class FileIssue
     public const string OriginByteOrderMark = "byte_order_mark";
     public const string SeverityInfo = "info";
     public const string SeverityWarning = "warning";
+    public const string CategoryExpectedFixtureLiteral = "expected_fixture_literal";
+    public const string CategoryIntentionalSourceLiteral = "intentional_source_literal";
+    public const string CategoryDecodingRisk = "decoding_risk";
+    public const string CategoryByteOrderMark = "byte_order_mark";
+    public const string CategoryLineEndings = "line_endings";
+    public const string CategoryRawBytes = "raw_bytes";
+    public const string CategoryContentLimit = "content_limit";
+    public const string CategoryContentStructure = "content_structure";
+    public const string CategoryOther = "other";
 
     public string Path { get; set; } = string.Empty;
     public string Kind { get; set; } = string.Empty;
@@ -18,4 +27,6 @@ public class FileIssue
     public string Message { get; set; } = string.Empty;
     public string? Origin { get; set; }
     public string? Severity { get; set; }
+    public string? Category { get; set; }
+    public bool? Actionable { get; set; }
 }
