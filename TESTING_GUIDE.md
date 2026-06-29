@@ -62,6 +62,8 @@ The test project mirrors the production areas closely.
   `InstallScriptTests.RunInstallerSnippet` enforces a bounded timeout and kills the snippet process tree on timeout, so installer regressions fail with captured output instead of hanging the suite.
 - `CiWorkflowTests.cs`, `ReleaseWorkflowTests.cs`, `ReleaseWorkflowTests.PackageHelpers.cs`
   CI and release workflow contract tests. Release workflow package-normalization ZIP fixture helpers live in `ReleaseWorkflowTests.PackageHelpers.cs` so workflow assertions stay near the workflow contracts.
+- `PackageNormalizeDiagnosticsTests.cs`
+  Package normalizer diagnostic redaction coverage. Keep timeout-budget assertions aligned with the shared diagnostic redaction policy so high-load full-suite runs do not treat expected path/secret placeholders as flaky.
 - `DocumentationStatusContractTests.cs`, `DocumentationDriftTests.cs`
   Checked-in documentation contract tests. They use `RepositoryTestPaths` to keep status fields, workflow references, documented `cdidx` command examples, release/changelog workflow snippets, and representative English/Japanese guide sections synchronized.
   `DocumentationStatusContractTests.cs` includes readiness, maintenance, and MCP status fields so status JSON support contracts stay visible in the user and agent guides.
@@ -324,6 +326,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   `InstallScriptTests.RunInstallerSnippet` は bounded timeout を強制し、timeout 時は snippet の process tree を kill するため、installer 回帰は suite を hang させずに captured output 付きで失敗します。
 - `CiWorkflowTests.cs`、`ReleaseWorkflowTests.cs`、`ReleaseWorkflowTests.PackageHelpers.cs`
   CI と release workflow の契約テスト。Release workflow の package-normalization ZIP fixture helper は `ReleaseWorkflowTests.PackageHelpers.cs` に置き、workflow assertion が workflow 契約の近くに残るようにします。
+- `PackageNormalizeDiagnosticsTests.cs`
+  package normalizer の diagnostic redaction カバレッジです。高負荷の full-suite 実行で、期待される path / secret placeholder が flaky に見えないよう、timeout budget の assertion は共有 diagnostic redaction policy と同期させてください。
 - `DocumentationStatusContractTests.cs`、`DocumentationDriftTests.cs`
   checked-in documentation の契約テスト。`RepositoryTestPaths` を使って、status field、workflow 参照、文書化された `cdidx` コマンド例、release/changelog workflow の snippet、代表的な英日 guide セクションの同期を維持します。
   `DocumentationStatusContractTests.cs` は readiness、maintenance、MCP status field も含め、status JSON support contract が user guide と agent guide に残るようにします。

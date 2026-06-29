@@ -260,7 +260,10 @@ internal static class PackageNormalizeDiagnostics
     private const int MaxDiagnosticMessageChars = 512;
     private const string RedactedValue = "<redacted>";
     private const string RedactedPath = "<path>";
-    private static readonly TimeSpan RedactionRegexTimeout = TimeSpan.FromMilliseconds(100);
+    // Keep the standalone normalizer aligned with the main diagnostic redaction budget.
+    // 100 ms was too tight under full-suite net8 load and could collapse safe markers to
+    // the generic fallback before tests observed the expected <path> marker (#4224).
+    internal static readonly TimeSpan RedactionRegexTimeout = TimeSpan.FromSeconds(1);
     private static readonly Regex SensitiveAssignmentPattern = new(
         @"(?<![\w.-])(?<name>(?:--?)?[\w.-]*(?:token|password|passwd|pwd|secret|auth|apikey|api-key|api_key|access-key|access_key|credential)[\w.-]*)(?<sep>=|:)(?<value>[^\s,;]+)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
