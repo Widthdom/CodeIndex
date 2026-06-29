@@ -1823,6 +1823,7 @@ public static partial class QueryCommandRunner
                 [],
                 [],
                 null,
+                null,
                 rows.Count,
                 rows.Count,
                 rows.Count,
@@ -1920,6 +1921,7 @@ public static partial class QueryCommandRunner
                 [.. recipeQuery.ExcludeOrigins],
                 [.. recipeQuery.ResultKinds],
                 recipeQuery.BroadCatchTaxonomy,
+                recipeQuery.NullableContractTaxonomy,
                 rows.Count,
                 rows.Count,
                 rows.Count + minimumOmitted,
@@ -3123,6 +3125,7 @@ public static partial class QueryCommandRunner
             [.. query.ExcludeOrigins],
             [.. query.ResultKinds],
             query.BroadCatchTaxonomy,
+            query.NullableContractTaxonomy,
             query.ExactSubstring)).ToList());
 
     private static SearchRecipeCompactListItemJsonResult ToSearchRecipeCompactListItem(SearchAuditRecipe recipe, IReadOnlyList<SearchAuditRecipeQuery> queries) => new(
