@@ -1709,6 +1709,31 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_ListRecipesQueryFindsUnsupportedTaxonomy_Issue4144()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["--list-recipes", "--query", "unsupported", "--json"],
+            _jsonOptions));
+
+        using var document = ParseJsonOutput(stdout);
+        var root = document.RootElement;
+        var recipe = Assert.Single(root.GetProperty("recipes").EnumerateArray());
+        var queryNames = recipe.GetProperty("queries")
+            .EnumerateArray()
+            .Select(query => query.GetProperty("name").GetString() ?? string.Empty)
+            .ToList();
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(1, root.GetProperty("count").GetInt32());
+        Assert.Equal("unsupported-operation-boundaries", recipe.GetProperty("name").GetString());
+        Assert.Contains("not-supported-exception", queryNames);
+        Assert.Contains("platform-not-supported-exception", queryNames);
+        Assert.Contains("unsupported-message", queryNames);
+        Assert.Contains("not-supported-message", queryNames);
+    }
+
+    [Fact]
     public void RunSearch_BuiltInRecipeSnapshotCoversNamesScopesAndQueries_Issue3692()
     {
         using var env = EnvironmentVariableScope.Capture(SearchAuditRecipes.RecipePathsEnvironmentVariable);
@@ -1734,7 +1759,7 @@ public partial class QueryCommandRunnerTests
         };
 
         Assert.Equal(
-            ["risky-code", "auth-token-audit", "dogfood-risk-patterns", "sqlite-query-policy-surfaces", "json-parse-apis", "dotnet-risk-patterns", "xml-parser-security", "filesystem-traversal", "bounded-read-evidence", "broad-token-audit"],
+            ["risky-code", "auth-token-audit", "dogfood-risk-patterns", "sqlite-query-policy-surfaces", "json-parse-apis", "dotnet-risk-patterns", "unsupported-operation-boundaries", "xml-parser-security", "filesystem-traversal", "bounded-read-evidence", "broad-token-audit"],
             recipes.Select(recipe => recipe.Name).ToArray());
 
         AssertRecipe(
@@ -1855,6 +1880,12 @@ public partial class QueryCommandRunnerTests
             expectedSourceExcludes,
             ["sqlite-addwithvalue", "sqlite-quoted-identifier", "sqlite-typed-parameter", "regex-construction", "bounded-regex-alias", "fully-qualified-regex-construction", "static-regex-is-match", "static-regex-is-match-negated", "static-regex-is-match-parenthesized", "static-regex-match", "static-regex-match-negated", "static-regex-match-parenthesized", "static-regex-matches", "static-regex-matches-negated", "static-regex-matches-parenthesized", "static-regex-replace", "static-regex-replace-negated", "static-regex-replace-parenthesized", "static-regex-split", "static-regex-split-negated", "static-regex-split-parenthesized", "cancellation-token-none", "sync-wait-call", "sync-over-async"]);
         AssertRecipe(
+            "unsupported-operation-boundaries",
+            SearchAuditRecipes.DefaultAuditScope,
+            ["src/**"],
+            expectedSourceExcludes,
+            ["not-supported-exception", "platform-not-supported-exception", "unsupported-message", "not-supported-message"]);
+        AssertRecipe(
             "xml-parser-security",
             SearchAuditRecipes.DefaultAuditScope,
             ["src/**"],
@@ -1918,6 +1949,32 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("Task/ValueTask", syncOverAsync.RiskEvidence[0], StringComparison.Ordinal);
         Assert.Contains("Result-named properties", syncOverAsync.FalsePositiveGuidance, StringComparison.Ordinal);
         Assert.DoesNotContain(".Result", syncOverAsync.Query, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunSearch_UnsupportedTaxonomyDocumentsStructuredBoundaryEvidence_Issue4144()
+    {
+        using var env = EnvironmentVariableScope.Capture(SearchAuditRecipes.RecipePathsEnvironmentVariable);
+        env.Set(SearchAuditRecipes.RecipePathsEnvironmentVariable, null);
+
+        var recipe = Assert.Single(SearchAuditRecipes.All, item => item.Name == "unsupported-operation-boundaries");
+        var genericException = Assert.Single(recipe.Queries, query => query.Name == "not-supported-exception");
+        var platformException = Assert.Single(recipe.Queries, query => query.Name == "platform-not-supported-exception");
+        var unsupportedMessage = Assert.Single(recipe.Queries, query => query.Name == "unsupported-message");
+        var notSupportedMessage = Assert.Single(recipe.Queries, query => query.Name == "not-supported-message");
+
+        Assert.Equal("NotSupportedException", genericException.Query);
+        Assert.Contains("CodeIndexException", genericException.RiskEvidence[1], StringComparison.Ordinal);
+        Assert.Contains("MCP", genericException.RiskEvidence[0], StringComparison.Ordinal);
+        Assert.Equal(["code", "string_literal"], genericException.MatchOrigins);
+
+        Assert.Equal("PlatformNotSupportedException", platformException.Query);
+        Assert.Contains("OperatingSystem guards", platformException.RiskEvidence[1], StringComparison.Ordinal);
+
+        Assert.Equal("unsupported", unsupportedMessage.Query);
+        Assert.Contains("stable error codes", unsupportedMessage.RiskEvidence[1], StringComparison.Ordinal);
+        Assert.Equal("not supported", notSupportedMessage.Query);
+        Assert.Contains("typed capability metadata", notSupportedMessage.RiskEvidence[1], StringComparison.Ordinal);
     }
 
     [Fact]

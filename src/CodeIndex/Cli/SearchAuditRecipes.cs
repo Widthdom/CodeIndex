@@ -1119,6 +1119,67 @@ internal static class SearchAuditRecipes
                 }
             ]),
         SourceScopedRecipe(
+            "unsupported-operation-boundaries",
+            "Audit unsupported-operation exceptions and messages for stable command, protocol, and capability diagnostics.",
+            [
+                new(
+                    "not-supported-exception",
+                    "NotSupportedException",
+                    "Find generic unsupported-operation exception handling that may need typed diagnostics at user-facing boundaries.",
+                    ["audit", "bug"],
+                    "False positives include internal stream capability overrides, path API catch filters, and tests that intentionally assert framework exception behavior.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: generic NotSupportedException can escape command, MCP, LSP, or installer boundaries as inconsistent diagnostics or exit codes.",
+                        "positive: CodeIndexException, CommandErrorWriter.WriteJsonOrHuman, MCP protocol errors, or bounded diagnostic categories make unsupported operations machine-readable."
+                    ],
+                    MatchOrigins = ["code", "string_literal"],
+                },
+                new(
+                    "platform-not-supported-exception",
+                    "PlatformNotSupportedException",
+                    "Find platform-specific unsupported paths that may need stable capability guidance or graceful degradation.",
+                    ["audit", "bug", "portability"],
+                    "False positives include guarded platform probes that degrade silently after confirming an alternate supported path.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: platform unsupported errors can become surprising command failures without recovery guidance or capability metadata.",
+                        "positive: OperatingSystem guards, documented fallback behavior, and fixed recovery hints are safer evidence."
+                    ],
+                    MatchOrigins = ["code", "string_literal"],
+                },
+                new(
+                    "unsupported-message",
+                    "unsupported",
+                    "Find unsupported-operation messages that may need the same taxonomy as exception-based unsupported paths.",
+                    ["audit", "bug"],
+                    "False positives include capability documentation, field names such as unsupported_symbol_kind, and internal recipe metadata.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: free-form unsupported messages can diverge across CLI, JSON, MCP, and LSP surfaces.",
+                        "positive: stable error codes, capability fields, supported-value allowlists, and fixed next-step hints make unsupported states actionable."
+                    ],
+                    MatchOrigins = ["code", "string_literal"],
+                },
+                new(
+                    "not-supported-message",
+                    "not supported",
+                    "Find phrase-based not-supported diagnostics that may need structured unsupported-operation classification.",
+                    ["audit", "bug"],
+                    "False positives include docs, comments, and internal capability explanations that are not emitted as command or protocol errors.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: phrase-only not-supported diagnostics can force users and automation to parse prose instead of stable categories.",
+                        "positive: CodeIndexException categories, command-specific usage errors, MCP protocol errors, or typed capability metadata reduce triage risk."
+                    ],
+                    MatchOrigins = ["code", "string_literal"],
+                }
+            ]),
+        SourceScopedRecipe(
             "xml-parser-security",
             "Audit XML parser APIs and DTD/entity settings for XXE and external-resolution regressions.",
             [
