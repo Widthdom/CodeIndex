@@ -125,6 +125,21 @@ internal static class SearchAuditRecipes
     internal static IReadOnlyList<string> DefaultSourcePathPatterns => DefaultSourcePathPatternsValue;
     internal static IReadOnlyList<string> DefaultSourceExcludePaths => DefaultSourceExcludePathsValue;
 
+    private static List<SearchGuardFilter> BoundedRegexEvidenceGuardFilters() =>
+    [
+        new(SearchGuardRole.Reject, SearchGuardDirection.Before, "RegexOptions.NonBacktracking", SearchGuardScope.Window),
+        new(SearchGuardRole.Reject, SearchGuardDirection.After, "RegexOptions.NonBacktracking", SearchGuardScope.Window),
+        new(SearchGuardRole.Reject, SearchGuardDirection.Before, "RegexOptions.NonBacktracking", SearchGuardScope.SameLine),
+        new(SearchGuardRole.Reject, SearchGuardDirection.After, "RegexOptions.NonBacktracking", SearchGuardScope.SameLine),
+        new(SearchGuardRole.Reject, SearchGuardDirection.Before, "TimeSpan.", SearchGuardScope.Window),
+        new(SearchGuardRole.Reject, SearchGuardDirection.After, "TimeSpan.", SearchGuardScope.Window),
+        new(SearchGuardRole.Reject, SearchGuardDirection.After, "TimeSpan.", SearchGuardScope.SameLine),
+        new(SearchGuardRole.Reject, SearchGuardDirection.After, "matchTimeout:", SearchGuardScope.Window),
+        new(SearchGuardRole.Reject, SearchGuardDirection.After, "matchTimeout:", SearchGuardScope.SameLine),
+        new(SearchGuardRole.Reject, SearchGuardDirection.After, "MatchTimeout(", SearchGuardScope.Window),
+        new(SearchGuardRole.Reject, SearchGuardDirection.After, "MatchTimeout(", SearchGuardScope.SameLine)
+    ];
+
     private static SearchAuditRecipeQuery StaticRegexApiQuery(string name, string query, string apiName) =>
         new(
             name,
@@ -143,6 +158,7 @@ internal static class SearchAuditRecipes
                 $"risk: static System.Text.RegularExpressions.Regex.{apiName} can run without the shared timeout policy.",
                 "positive: BoundedRegex aliases, explicit timeout overloads, or tightly bounded trusted inputs can make a hit intentional."
             ],
+            GuardFilters = BoundedRegexEvidenceGuardFilters(),
             MatchOrigins = ["code"],
         };
 
@@ -164,6 +180,7 @@ internal static class SearchAuditRecipes
                 "risk: raw System.Text.RegularExpressions.Regex static APIs can run without explicit timeout or shared bounded-regex policy.",
                 "positive: BoundedRegex aliases and instance names ending in Regex are filtered out; remaining hits should be classified as timeout-backed, generated/precompiled, trusted small input, or non-matching helpers such as Escape."
             ],
+            GuardFilters = BoundedRegexEvidenceGuardFilters(),
             MatchOrigins = ["code"],
         };
 
@@ -341,6 +358,7 @@ internal static class SearchAuditRecipes
                         "risk: raw System.Text.RegularExpressions.Regex construction should show an explicit timeout, non-backtracking mode, or bounded input.",
                         "positive: bounded-wrapper aliases are reported by bounded-regex-alias instead of this raw construction query."
                     ],
+                    GuardFilters = BoundedRegexEvidenceGuardFilters(),
                 },
                 new(
                     "bounded-regex-alias",
@@ -370,6 +388,7 @@ internal static class SearchAuditRecipes
                         "risk: fully qualified BCL Regex construction bypasses local aliases and should carry timeout/non-backtracking evidence.",
                         "positive: explicit timeout arguments or RegexOptions.NonBacktracking can make the construction bounded."
                     ],
+                    GuardFilters = BoundedRegexEvidenceGuardFilters(),
                 },
                 StaticRegexApiQuery(
                     "static-regex-is-match",
@@ -1117,6 +1136,7 @@ internal static class SearchAuditRecipes
                         "risk: raw System.Text.RegularExpressions.Regex construction should show an explicit timeout, non-backtracking mode, or bounded input.",
                         "positive: bounded-wrapper aliases are reported by bounded-regex-alias instead of this raw construction query."
                     ],
+                    GuardFilters = BoundedRegexEvidenceGuardFilters(),
                 },
                 new(
                     "bounded-regex-alias",
@@ -1146,6 +1166,7 @@ internal static class SearchAuditRecipes
                         "risk: fully qualified BCL Regex construction bypasses local aliases and should carry timeout/non-backtracking evidence.",
                         "positive: explicit timeout arguments or RegexOptions.NonBacktracking can make the construction bounded."
                     ],
+                    GuardFilters = BoundedRegexEvidenceGuardFilters(),
                 },
                 StaticRegexApiQuery(
                     "static-regex-is-match",
@@ -1240,6 +1261,67 @@ internal static class SearchAuditRecipes
                         "positive: compatibility wrappers, process-exit boundaries, and already-completed task observation should be reviewed as sync API bridges rather than automatic defects."
                     ],
                     MatchOrigins = ["code"],
+                }
+            ]),
+        SourceScopedRecipe(
+            "unsupported-operation-boundaries",
+            "Audit unsupported-operation exceptions and messages for stable command, protocol, and capability diagnostics.",
+            [
+                new(
+                    "not-supported-exception",
+                    "NotSupportedException",
+                    "Find generic unsupported-operation exception handling that may need typed diagnostics at user-facing boundaries.",
+                    ["audit", "bug"],
+                    "False positives include internal stream capability overrides, path API catch filters, and tests that intentionally assert framework exception behavior.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: generic NotSupportedException can escape command, MCP, LSP, or installer boundaries as inconsistent diagnostics or exit codes.",
+                        "positive: CodeIndexException, CommandErrorWriter.WriteJsonOrHuman, MCP protocol errors, or bounded diagnostic categories make unsupported operations machine-readable."
+                    ],
+                    MatchOrigins = ["code", "string_literal"],
+                },
+                new(
+                    "platform-not-supported-exception",
+                    "PlatformNotSupportedException",
+                    "Find platform-specific unsupported paths that may need stable capability guidance or graceful degradation.",
+                    ["audit", "bug", "portability"],
+                    "False positives include guarded platform probes that degrade silently after confirming an alternate supported path.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: platform unsupported errors can become surprising command failures without recovery guidance or capability metadata.",
+                        "positive: OperatingSystem guards, documented fallback behavior, and fixed recovery hints are safer evidence."
+                    ],
+                    MatchOrigins = ["code", "string_literal"],
+                },
+                new(
+                    "unsupported-message",
+                    "unsupported",
+                    "Find unsupported-operation messages that may need the same taxonomy as exception-based unsupported paths.",
+                    ["audit", "bug"],
+                    "False positives include capability documentation, field names such as unsupported_symbol_kind, and internal recipe metadata.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: free-form unsupported messages can diverge across CLI, JSON, MCP, and LSP surfaces.",
+                        "positive: stable error codes, capability fields, supported-value allowlists, and fixed next-step hints make unsupported states actionable."
+                    ],
+                    MatchOrigins = ["code", "string_literal"],
+                },
+                new(
+                    "not-supported-message",
+                    "not supported",
+                    "Find phrase-based not-supported diagnostics that may need structured unsupported-operation classification.",
+                    ["audit", "bug"],
+                    "False positives include docs, comments, and internal capability explanations that are not emitted as command or protocol errors.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: phrase-only not-supported diagnostics can force users and automation to parse prose instead of stable categories.",
+                        "positive: CodeIndexException categories, command-specific usage errors, MCP protocol errors, or typed capability metadata reduce triage risk."
+                    ],
+                    MatchOrigins = ["code", "string_literal"],
                 }
             ]),
         SourceScopedRecipe(
@@ -2172,7 +2254,10 @@ internal sealed record SearchRecipeGuardFilterJsonResult(
     [property: JsonPropertyName("role")] string Role,
     [property: JsonPropertyName("direction")] string Direction,
     [property: JsonPropertyName("query")] string Query,
-    [property: JsonPropertyName("option")] string Option);
+    [property: JsonPropertyName("option")] string Option,
+    [property: JsonPropertyName("scope")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? Scope);
 
 internal sealed record SearchRecipeBroadCatchTaxonomyJsonResult(
     [property: JsonPropertyName("boundary_categories")] List<SearchRecipeBroadCatchBoundaryJsonResult> BoundaryCategories,

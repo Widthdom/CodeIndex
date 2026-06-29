@@ -240,11 +240,14 @@ internal static class GitHubIssueReporter
         var query = Uri.EscapeDataString($"repo:{RepoOwner}/{RepoName} is:issue is:open \"{hash}\" in:body");
         var url = $"{ApiBase}/search/issues?q={query}&per_page=1";
 
-        using var requestMessage = new HttpRequestMessage(HttpMethod.Get, url);
-        ApplyAuthenticatedGitHubApiHeaders(requestMessage, token);
-
-        using var response = await HttpClient.SendAsync(
-            requestMessage,
+        using var response = await GitHubHttpClientFactory.SendWithRetryAsync(
+            HttpClient,
+            () =>
+            {
+                var requestMessage = new HttpRequestMessage(HttpMethod.Get, url);
+                ApplyAuthenticatedGitHubApiHeaders(requestMessage, token);
+                return requestMessage;
+            },
             HttpCompletionOption.ResponseHeadersRead,
             cancellationToken);
         if (!response.IsSuccessStatusCode)
@@ -310,11 +313,14 @@ internal static class GitHubIssueReporter
                 var labels = Uri.EscapeDataString(label);
                 var url = $"{ApiBase}/repos/{RepoOwner}/{RepoName}/issues?labels={labels}&state=open&per_page=100&page={page}";
 
-                using var requestMessage = new HttpRequestMessage(HttpMethod.Get, url);
-                ApplyAuthenticatedGitHubApiHeaders(requestMessage, token);
-
-                using var response = await HttpClient.SendAsync(
-                    requestMessage,
+                using var response = await GitHubHttpClientFactory.SendWithRetryAsync(
+                    HttpClient,
+                    () =>
+                    {
+                        var requestMessage = new HttpRequestMessage(HttpMethod.Get, url);
+                        ApplyAuthenticatedGitHubApiHeaders(requestMessage, token);
+                        return requestMessage;
+                    },
                     HttpCompletionOption.ResponseHeadersRead,
                     cancellationToken);
                 if (!response.IsSuccessStatusCode)

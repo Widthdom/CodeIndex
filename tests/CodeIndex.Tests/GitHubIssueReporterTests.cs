@@ -786,7 +786,7 @@ public class GitHubIssueReporterTests : IDisposable
             Assert.Null(result.IssueUrl);
             Assert.Contains("existing-suggestion lookup failed during search", result.Error);
             Assert.Contains("502", result.Error);
-            Assert.Equal(1, handler.RequestCount);
+            Assert.Equal(GitHubHttpClientFactory.MaxRetryAttempts, handler.RequestCount);
             Assert.DoesNotContain(handler.Requests, r => r.Method == HttpMethod.Post);
         }
         finally
@@ -826,7 +826,7 @@ public class GitHubIssueReporterTests : IDisposable
             Assert.Null(result.IssueUrl);
             Assert.Contains("existing-suggestion lookup failed during label list", result.Error);
             Assert.Contains("503", result.Error);
-            Assert.Equal(2, handler.RequestCount);
+            Assert.Equal(1 + GitHubHttpClientFactory.MaxRetryAttempts, handler.RequestCount);
             Assert.DoesNotContain(handler.Requests, r => r.Method == HttpMethod.Post);
         }
         finally
@@ -1275,7 +1275,7 @@ public class GitHubIssueReporterTests : IDisposable
             Assert.Null(result.IssueUrl);
             Assert.Contains("existing-suggestion lookup failed during search", result.Error);
             Assert.Contains("503", result.Error);
-            Assert.Equal(1, handler.RequestCount);
+            Assert.Equal(GitHubHttpClientFactory.MaxRetryAttempts, handler.RequestCount);
             Assert.Equal(HttpMethod.Get, handler.Requests[0].Method);
             Assert.DoesNotContain(handler.Requests, r => r.Method == HttpMethod.Post);
         }
@@ -1763,7 +1763,7 @@ public class GitHubIssueReporterTests : IDisposable
             _responses.Add((match, response));
         }
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             _requests.Add(request);
             if (request.Content != null)
@@ -1771,12 +1771,37 @@ public class GitHubIssueReporterTests : IDisposable
             foreach (var entry in _responses)
             {
                 if (entry.Match(request))
-                    return Task.FromResult(entry.Response);
+                    return GitHubHttpClientFactory.IsTransientRetryStatusCode(entry.Response.StatusCode)
+                        ? await CloneResponseAsync(entry.Response, cancellationToken).ConfigureAwait(false)
+                        : entry.Response;
             }
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)
+            return new HttpResponseMessage(HttpStatusCode.NotFound)
             {
                 Content = new StringContent("{}", Encoding.UTF8, "application/json"),
-            });
+            };
+        }
+
+        private static async Task<HttpResponseMessage> CloneResponseAsync(
+            HttpResponseMessage response,
+            CancellationToken cancellationToken)
+        {
+            var clone = new HttpResponseMessage(response.StatusCode)
+            {
+                ReasonPhrase = response.ReasonPhrase,
+                Version = response.Version,
+            };
+            foreach (var header in response.Headers)
+                clone.Headers.TryAddWithoutValidation(header.Key, header.Value);
+
+            if (response.Content != null)
+            {
+                var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
+                clone.Content = new ByteArrayContent(bytes);
+                foreach (var header in response.Content.Headers)
+                    clone.Content.Headers.TryAddWithoutValidation(header.Key, header.Value);
+            }
+
+            return clone;
         }
     }
 

@@ -479,17 +479,21 @@ internal sealed class IssueDuplicatePreflight
         var url = $"{GitHubApiBase}/repos/{Uri.EscapeDataString(owner)}/{Uri.EscapeDataString(name)}/issues?state=open&per_page={GitHubOpenIssuesPerPage.ToString(CultureInfo.InvariantCulture)}&page={page.ToString(CultureInfo.InvariantCulture)}";
         var timeout = GitHubIssueReporter.ResolveSubmitTimeout();
         using var requestCancellation = GitHubHttpClientFactory.CreateRequestCancellationScope(timeout, cancellationToken);
-        using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        GitHubHttpClientFactory.ApplyDefaultHeaders(request.Headers);
         var token = CdidxEnvironment.GetProcessEnvironmentVariable(GitHubTokenEnvironmentVariable);
-        if (!string.IsNullOrWhiteSpace(token))
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
         HttpResponseMessage response;
         try
         {
-            response = await HttpClient.SendAsync(
-                request,
+            response = await GitHubHttpClientFactory.SendWithRetryAsync(
+                HttpClient,
+                () =>
+                {
+                    var request = new HttpRequestMessage(HttpMethod.Get, url);
+                    GitHubHttpClientFactory.ApplyDefaultHeaders(request.Headers);
+                    if (!string.IsNullOrWhiteSpace(token))
+                        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                    return request;
+                },
                 HttpCompletionOption.ResponseHeadersRead,
                 requestCancellation.Token).ConfigureAwait(false);
         }
@@ -526,17 +530,21 @@ internal sealed class IssueDuplicatePreflight
         var url = $"{GitHubApiBase}/repos/{Uri.EscapeDataString(owner)}/{Uri.EscapeDataString(name)}/labels?per_page={GitHubLabelsPerPage.ToString(CultureInfo.InvariantCulture)}&page={page.ToString(CultureInfo.InvariantCulture)}";
         var timeout = GitHubIssueReporter.ResolveSubmitTimeout();
         using var requestCancellation = GitHubHttpClientFactory.CreateRequestCancellationScope(timeout, cancellationToken);
-        using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        GitHubHttpClientFactory.ApplyDefaultHeaders(request.Headers);
         var token = CdidxEnvironment.GetProcessEnvironmentVariable(GitHubTokenEnvironmentVariable);
-        if (!string.IsNullOrWhiteSpace(token))
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
         HttpResponseMessage response;
         try
         {
-            response = await HttpClient.SendAsync(
-                request,
+            response = await GitHubHttpClientFactory.SendWithRetryAsync(
+                HttpClient,
+                () =>
+                {
+                    var request = new HttpRequestMessage(HttpMethod.Get, url);
+                    GitHubHttpClientFactory.ApplyDefaultHeaders(request.Headers);
+                    if (!string.IsNullOrWhiteSpace(token))
+                        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                    return request;
+                },
                 HttpCompletionOption.ResponseHeadersRead,
                 requestCancellation.Token).ConfigureAwait(false);
         }
