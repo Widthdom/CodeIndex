@@ -19,6 +19,13 @@ public class McpToolContractTests
         ("suggest_improvement", "evidence_paths"),
     ];
 
+    private static readonly HashSet<string> KnownStabilityValues = new(StringComparer.Ordinal)
+    {
+        "stable",
+        "experimental",
+        "deprecated",
+    };
+
     [Fact]
     public void ToolsList_AdvertisedInputPropertiesMatchArgumentAllowlist_Issue3199()
     {
@@ -171,6 +178,122 @@ public class McpToolContractTests
     }
 
     [Fact]
+    public void ToolsList_CatalogAndSchemaMetadataContractsStaySynchronized_Issue4177()
+    {
+        var result = GetToolsListResult();
+        var tools = GetAdvertisedTools(result);
+        var advertisedNames = tools.Keys.ToHashSet(StringComparer.Ordinal);
+        var failures = new List<string>();
+
+        Assert.Equal(
+            McpToolFilter.KnownToolNames.Order(StringComparer.Ordinal),
+            advertisedNames.Order(StringComparer.Ordinal));
+
+        var meta = result["_meta"]!.AsObject();
+        Assert.Equal("cdidx.mcp.tools.v1", meta["catalog_version"]!.GetValue<string>());
+        var discoveryContract = meta["discovery_contract"]!.AsObject();
+        foreach (var contractField in new[]
+                 {
+                     "tools_list_is_authoritative",
+                     "disabled_tools_are_omitted",
+                     "input_schemas_are_authoritative",
+                     "annotations_describe_read_only_or_mutating_behavior",
+                     "respect_tool_filtering",
+                 })
+        {
+            Assert.True(discoveryContract[contractField]!.GetValue<bool>(), contractField);
+        }
+
+        foreach (var (toolName, tool) in tools.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+        {
+            var inputSchema = tool["inputSchema"]!.AsObject();
+            Assert.Equal("object", inputSchema["type"]!.GetValue<string>());
+            Assert.False(inputSchema["additionalProperties"]!.GetValue<bool>(), toolName);
+            Assert.Contains(tool["x-stability"]!.GetValue<string>(), KnownStabilityValues);
+
+            var annotations = tool["annotations"]!.AsObject();
+            foreach (var annotationField in new[] { "readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint" })
+            {
+                Assert.NotNull(annotations[annotationField]);
+                _ = annotations[annotationField]!.GetValue<bool>();
+            }
+
+            var properties = inputSchema["properties"]!.AsObject();
+            foreach (var (argumentName, node) in properties.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+            {
+                if (node is not JsonObject schema)
+                {
+                    failures.Add($"{toolName}.{argumentName}: schema is not an object");
+                    continue;
+                }
+
+                var (hasValidator, validatorType) = TryGetExpectedJsonType(toolName, argumentName);
+                if (hasValidator && schema["x-expectedType"]?.GetValue<string>() != validatorType)
+                {
+                    failures.Add(
+                        $"{toolName}.{argumentName}: x-expectedType={schema["x-expectedType"]?.GetValue<string>() ?? "<missing>"}; "
+                        + $"validator={validatorType}");
+                }
+
+                if (schema["x-aliasOf"]?.GetValue<string>() is { } aliasTarget
+                    && !properties.ContainsKey(aliasTarget))
+                {
+                    failures.Add($"{toolName}.{argumentName}: x-aliasOf target '{aliasTarget}' is not advertised");
+                }
+
+                if (schema["deprecated"]?.GetValue<bool>() == true)
+                {
+                    if (schema["x-aliasOf"] == null)
+                        failures.Add($"{toolName}.{argumentName}: deprecated schema is missing x-aliasOf");
+                    if (string.IsNullOrWhiteSpace(schema["x-deprecationReason"]?.GetValue<string>()))
+                        failures.Add($"{toolName}.{argumentName}: deprecated schema is missing x-deprecationReason");
+                }
+            }
+        }
+
+        Assert.True(
+            failures.Count == 0,
+            "MCP tools/list schema metadata contract drift detected:\n" + string.Join('\n', failures));
+    }
+
+    [Fact]
+    public void ToolsList_FilteredCatalogMetaReferencesOnlyAdvertisedTools_Issue4177()
+    {
+        var result = GetToolsListResult(McpToolFilter.Parse(null, "index,backfill_fold,suggest_improvement"));
+        var tools = GetAdvertisedTools(result);
+        var advertisedNames = tools.Keys.ToHashSet(StringComparer.Ordinal);
+        var failures = new List<string>();
+
+        Assert.DoesNotContain("index", advertisedNames);
+        Assert.DoesNotContain("backfill_fold", advertisedNames);
+        Assert.DoesNotContain("suggest_improvement", advertisedNames);
+
+        var meta = result["_meta"]!.AsObject();
+        foreach (var (groupName, groupNode) in meta["capability_groups"]!.AsObject())
+        {
+            foreach (var toolName in groupNode!.AsArray().Select(item => item!.GetValue<string>()))
+            {
+                if (!advertisedNames.Contains(toolName))
+                    failures.Add($"capability_groups.{groupName}: '{toolName}' is not advertised");
+            }
+        }
+
+        foreach (var workflow in meta["recommended_workflows"]!.AsArray())
+        {
+            var workflowName = workflow!["name"]!.GetValue<string>();
+            foreach (var toolName in workflow["tools"]!.AsArray().Select(item => item!.GetValue<string>()))
+            {
+                if (!advertisedNames.Contains(toolName))
+                    failures.Add($"recommended_workflows.{workflowName}: '{toolName}' is not advertised");
+            }
+        }
+
+        Assert.True(
+            failures.Count == 0,
+            "Filtered MCP tools/list catalog metadata references disabled tools:\n" + string.Join('\n', failures));
+    }
+
+    [Fact]
     public void ToolsList_OutlineAndValidateDoNotExposeHiddenNoopArguments_Issue3198()
     {
         var advertisedSchemas = GetAdvertisedToolSchemas();
@@ -211,26 +334,11 @@ public class McpToolContractTests
 
     private static Dictionary<string, Dictionary<string, JsonObject>> GetAdvertisedToolSchemas()
     {
-        using var server = new McpServer("unused.db", "test", dbPathExplicit: false, McpToolFilter.AllowAll());
-        var request = new JsonObject
-        {
-            ["jsonrpc"] = "2.0",
-            ["id"] = 1,
-            ["method"] = "tools/list",
-        };
-        var response = server.HandleMessage(request)
-            ?? throw new InvalidOperationException("tools/list returned no response.");
-
-        var tools = response["result"]?["tools"]?.AsArray()
-            ?? throw new InvalidOperationException("tools/list response did not contain result.tools.");
+        var tools = GetAdvertisedTools();
         var result = new Dictionary<string, Dictionary<string, JsonObject>>(StringComparer.Ordinal);
 
-        foreach (var tool in tools)
+        foreach (var (toolName, toolObject) in tools)
         {
-            var toolObject = tool?.AsObject()
-                ?? throw new InvalidOperationException("tools/list returned a non-object tool entry.");
-            var toolName = toolObject["name"]?.GetValue<string>()
-                ?? throw new InvalidOperationException("tools/list returned a tool without a name.");
             var properties = toolObject["inputSchema"]?["properties"]?.AsObject()
                 ?? throw new InvalidOperationException($"Tool '{toolName}' did not expose inputSchema.properties.");
 
@@ -242,6 +350,43 @@ public class McpToolContractTests
             }
 
             result.Add(toolName, propertySchemas);
+        }
+
+        return result;
+    }
+
+    private static JsonObject GetToolsListResult(McpToolFilter? filter = null)
+    {
+        using var server = new McpServer("unused.db", "test", dbPathExplicit: false, filter ?? McpToolFilter.AllowAll());
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/list",
+        };
+        var response = server.HandleMessage(request)
+            ?? throw new InvalidOperationException("tools/list returned no response.");
+
+        return response["result"]?.AsObject()
+            ?? throw new InvalidOperationException("tools/list response did not contain a result object.");
+    }
+
+    private static Dictionary<string, JsonObject> GetAdvertisedTools()
+        => GetAdvertisedTools(GetToolsListResult());
+
+    private static Dictionary<string, JsonObject> GetAdvertisedTools(JsonObject resultObject)
+    {
+        var tools = resultObject["tools"]?.AsArray()
+            ?? throw new InvalidOperationException("tools/list response did not contain result.tools.");
+        var result = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
+
+        foreach (var tool in tools)
+        {
+            var toolObject = tool?.AsObject()
+                ?? throw new InvalidOperationException("tools/list returned a non-object tool entry.");
+            var toolName = toolObject["name"]?.GetValue<string>()
+                ?? throw new InvalidOperationException("tools/list returned a tool without a name.");
+            result.Add(toolName, toolObject);
         }
 
         return result;

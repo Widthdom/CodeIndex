@@ -1764,6 +1764,43 @@ public sealed class Caller
         Assert.Equal("Unauthorized", response["error"]!["message"]!.GetValue<string>());
     }
 
+    [Fact]
+    public void TokenAuthenticator_FailureReasonsStayStable_Issue4177()
+    {
+        var authenticator = new TokenMcpAuthenticator("s3cret");
+
+        var nonObject = authenticator.Authenticate(JsonNode.Parse("\"not-an-object\"")!);
+        Assert.False(nonObject.IsAuthenticated);
+        Assert.Equal("request is not a JSON object", nonObject.FailureReason);
+
+        var missing = authenticator.Authenticate(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}""")!);
+        Assert.False(missing.IsAuthenticated);
+        Assert.Equal("missing auth token", missing.FailureReason);
+
+        var mismatch = authenticator.Authenticate(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"auth":{"token":"wrong"}}}""")!);
+        Assert.False(mismatch.IsAuthenticated);
+        Assert.Equal("auth token mismatch", mismatch.FailureReason);
+
+        var oversizedToken = new string('x', McpAuthenticationLimits.MaxTokenCharacters + 1);
+        var oversizedRequest = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/list",
+            ["params"] = new JsonObject
+            {
+                ["auth"] = new JsonObject
+                {
+                    ["token"] = oversizedToken,
+                },
+            },
+        };
+        var oversized = authenticator.Authenticate(oversizedRequest);
+        Assert.False(oversized.IsAuthenticated);
+        Assert.Equal(McpAuthenticationLimits.OversizedTokenFailureReason, oversized.FailureReason);
+    }
 
     [Fact]
     public void TokenAuthenticator_EmptyTokenInCtor_Rejected()
