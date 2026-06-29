@@ -42,17 +42,16 @@ public class ConcurrencyTests : IDisposable
 
         // Open multiple concurrent readers — WAL mode should allow this
         // 複数の同時読み取りを開く — WALモードなら可能
-        var tasks = Enumerable.Range(0, 5).Select(_ => Task.Run(() =>
-        {
-            using var readDb = new DbContext(_dbPath);
-            readDb.TryMigrateForRead();
-            var reader = new DbReader(readDb.Connection);
-            var status = reader.GetStatus();
-            Assert.True(status.Files > 0);
-            return status.Files;
-        })).ToArray();
-
-        var results = await Task.WhenAll(tasks);
+        var results = await TestDeterminism.RunConcurrentlyAsync(
+            Enumerable.Range(0, 5).Select<int, Func<long>>(_ => () =>
+            {
+                using var readDb = new DbContext(_dbPath);
+                readDb.TryMigrateForRead();
+                var reader = new DbReader(readDb.Connection);
+                var status = reader.GetStatus();
+                Assert.True(status.Files > 0);
+                return status.Files;
+            }));
         Assert.All(results, r => Assert.True(r > 0));
     }
 
@@ -524,24 +523,19 @@ public class ConcurrencyTests : IDisposable
                 resetCmd.ExecuteNonQuery();
             }
 
-            using var start = new ManualResetEventSlim(false);
-            var graphTask = Task.Run(() =>
-            {
-                using var graphDb = new DbContext(_dbPath);
-                var w = new DbWriter(graphDb.Connection);
-                start.Wait();
-                w.MarkGraphReady();
-            });
-            var issuesTask = Task.Run(() =>
-            {
-                using var issuesDb = new DbContext(_dbPath);
-                var w = new DbWriter(issuesDb.Connection);
-                start.Wait();
-                w.MarkIssuesReady();
-            });
-
-            start.Set();
-            await Task.WhenAll(graphTask, issuesTask);
+            await TestDeterminism.RunConcurrentlyAsync(
+                () =>
+                {
+                    using var graphDb = new DbContext(_dbPath);
+                    var w = new DbWriter(graphDb.Connection);
+                    w.MarkGraphReady();
+                },
+                () =>
+                {
+                    using var issuesDb = new DbContext(_dbPath);
+                    var w = new DbWriter(issuesDb.Connection);
+                    w.MarkIssuesReady();
+                });
 
             var finalVersion = _db.GetUserVersion();
             bool graphSet = (finalVersion & DbContext.GraphReadyFlag) != 0;
@@ -560,37 +554,33 @@ public class ConcurrencyTests : IDisposable
     public async Task BeginTransaction_SharedWriterSerializesConcurrentScopes()
     {
         var writer = new DbWriter(_db.Connection);
-        using var start = new ManualResetEventSlim(false);
         var errors = new ConcurrentBag<Exception>();
 
-        var tasks = Enumerable.Range(0, 8).Select(worker => Task.Run(() =>
-        {
-            start.Wait();
-            try
+        await TestDeterminism.RunConcurrentlyAsync(
+            Enumerable.Range(0, 8).Select<int, Action>(worker => () =>
             {
-                for (var i = 0; i < 20; i++)
+                try
                 {
-                    using var txn = writer.BeginTransaction();
-                    writer.UpsertFile(new FileRecord
+                    for (var i = 0; i < 20; i++)
                     {
-                        Path = $"src/worker{worker}_{i}.cs",
-                        Lang = "csharp",
-                        Size = 10,
-                        Lines = 1,
-                        Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
-                        Checksum = $"{worker}_{i}",
-                    });
-                    txn.Commit();
+                        using var txn = writer.BeginTransaction();
+                        writer.UpsertFile(new FileRecord
+                        {
+                            Path = $"src/worker{worker}_{i}.cs",
+                            Lang = "csharp",
+                            Size = 10,
+                            Lines = 1,
+                            Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+                            Checksum = $"{worker}_{i}",
+                        });
+                        txn.Commit();
+                    }
                 }
-            }
-            catch (Exception ex)
-            {
-                errors.Add(ex);
-            }
-        })).ToArray();
-
-        start.Set();
-        await Task.WhenAll(tasks);
+                catch (Exception ex)
+                {
+                    errors.Add(ex);
+                }
+            }));
 
         Assert.True(errors.IsEmpty, string.Join(Environment.NewLine, errors.Select(e => e.ToString())));
     }
@@ -608,7 +598,7 @@ public class ConcurrencyTests : IDisposable
             writer.MarkGraphReady();
         });
         Assert.True(started.Wait(TimeSpan.FromSeconds(5)));
-        await AssertTaskRemainsBlockedAsync(markTask);
+        await TestDeterminism.AssertTaskRemainsBlockedAsync(markTask);
 
         txn.Commit();
         txn.Dispose();
@@ -631,7 +621,7 @@ public class ConcurrencyTests : IDisposable
             nested.Commit();
         });
         Assert.True(started.Wait(TimeSpan.FromSeconds(5)));
-        await AssertTaskRemainsBlockedAsync(nestedTask);
+        await TestDeterminism.AssertTaskRemainsBlockedAsync(nestedTask);
 
         outer.Commit();
         outer.Dispose();
@@ -665,29 +655,15 @@ public class ConcurrencyTests : IDisposable
     {
         const int minimumReaderIterations = 100;
         const int minimumWriterIterations = 25;
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(2);
-
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            if (writeTask.IsCompleted || readTask.IsCompleted)
-                break;
-            if (getReaderIterations() >= minimumReaderIterations &&
-                getWriterIterations() >= minimumWriterIterations)
-            {
-                break;
-            }
-
-            await Task.Delay(10);
-        }
+        await TestDeterminism.WaitUntilOrTimeoutAsync(
+            () => writeTask.IsCompleted ||
+                  readTask.IsCompleted ||
+                  (getReaderIterations() >= minimumReaderIterations &&
+                   getWriterIterations() >= minimumWriterIterations),
+            TimeSpan.FromSeconds(2));
 
         cts.Cancel();
         await Task.WhenAll(writeTask, readTask);
-    }
-
-    private static async Task AssertTaskRemainsBlockedAsync(Task task)
-    {
-        var completed = await Task.WhenAny(task, Task.Delay(TimeSpan.FromMilliseconds(100)));
-        Assert.NotSame(task, completed);
     }
 
     public void Dispose()
