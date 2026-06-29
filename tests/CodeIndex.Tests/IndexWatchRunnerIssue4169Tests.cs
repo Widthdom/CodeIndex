@@ -1,5 +1,6 @@
 using System.Text.Json;
 using CodeIndex.Cli;
+using CodeIndex.Database;
 
 namespace CodeIndex.Tests;
 
@@ -8,7 +9,7 @@ public class IndexWatchRunnerIssue4169Tests
     [Fact]
     public void FileChangeBatcher_DuplicatePathRefreshesDebounceWithoutDuplicatingBatch_Issue4169()
     {
-        var timeProvider = new ManualTimeProvider();
+        var timeProvider = new WatchManualTimeProvider();
         var batcher = new FileChangeBatcher(TimeSpan.FromMilliseconds(500), timeProvider);
         batcher.Add("/repo/a.py");
 
@@ -27,7 +28,7 @@ public class IndexWatchRunnerIssue4169Tests
     [Fact]
     public void FileChangeBatcher_OverflowWaitsForQuietAfterSubsequentEvents_Issue4169()
     {
-        var timeProvider = new ManualTimeProvider();
+        var timeProvider = new WatchManualTimeProvider();
         var batcher = new FileChangeBatcher(
             TimeSpan.FromMilliseconds(100),
             timeProvider,
@@ -120,5 +121,26 @@ public class IndexWatchRunnerIssue4169Tests
         Assert.Equal("emit_stopped_after_current_poll_or_sub_run", contract.GetProperty("cancellation").GetString());
         Assert.Equal("json_quiet_sub_runs", contract.GetProperty("sub_run_output").GetString());
         Assert.Equal("unsupported", contract.GetProperty("mcp_watch_mode").GetString());
+    }
+
+    private sealed class WatchManualTimeProvider : TimeProvider
+    {
+        private DateTimeOffset utcNow = new(2025, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        private long timestamp;
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public override DateTimeOffset GetUtcNow() => utcNow;
+
+        public override long GetTimestamp() => timestamp;
+
+        internal void Advance(TimeSpan elapsed)
+        {
+            if (elapsed < TimeSpan.Zero)
+                throw new ArgumentOutOfRangeException(nameof(elapsed), elapsed, "Elapsed time must be non-negative.");
+
+            utcNow += elapsed;
+            timestamp += elapsed.Ticks;
+        }
     }
 }
