@@ -1777,13 +1777,15 @@ public partial class DbReader : IDisposable
     }
 
     internal static string BuildPathFilterPredicate(string fileAlias, string parameterPrefix, int index, string rawPattern)
+        => BuildPathColumnFilterPredicate($"{fileAlias}.path", parameterPrefix, index, rawPattern);
+
+    internal static string BuildPathColumnFilterPredicate(string pathSql, string parameterPrefix, int index, string rawPattern)
     {
         var parameterName = SqliteDynamicSql.BuildParameterName(parameterPrefix, index);
         if (PathLikePatternHasWildcard(rawPattern))
-            return $"{fileAlias}.path LIKE {parameterName} ESCAPE '\\'";
+            return $"{pathSql} LIKE {parameterName} ESCAPE '\\'";
 
-        var subtreeParameterName = SqliteDynamicSql.BuildParameterName(parameterPrefix + "Subtree", index);
-        return $"({fileAlias}.path = {parameterName} OR {fileAlias}.path LIKE {subtreeParameterName} ESCAPE '\\')";
+        return $"({pathSql} LIKE {parameterName} ESCAPE '\\' OR {pathSql} LIKE ({parameterName} || '/%') ESCAPE '\\')";
     }
 
     internal static void AddPathFilterParameterSet(SqliteCommand cmd, string parameterPrefix, IReadOnlyList<string> pathPatterns)
@@ -1792,8 +1794,6 @@ public partial class DbReader : IDisposable
         {
             var pattern = pathPatterns[i];
             SqliteCommandPolicy.Add(cmd, SqliteDynamicSql.BuildParameterName(parameterPrefix, i), BuildPathLikePattern(pattern));
-            if (!PathLikePatternHasWildcard(pattern))
-                SqliteCommandPolicy.Add(cmd, SqliteDynamicSql.BuildParameterName(parameterPrefix + "Subtree", i), BuildPathSubtreeLikePattern(pattern));
         }
     }
 
@@ -1801,7 +1801,7 @@ public partial class DbReader : IDisposable
         => SqliteDynamicSql.EnsureParameterBudget(CountPathFilterParameters(pathPatterns) + CountPathFilterParameters(excludePathPatterns), "path filters");
 
     private static int CountPathFilterParameters(IReadOnlyCollection<string>? pathPatterns)
-        => pathPatterns?.Sum(static pattern => PathLikePatternHasWildcard(pattern) ? 1 : 2) ?? 0;
+        => pathPatterns?.Count ?? 0;
 
     internal static DateTime? GetNullableDateTime(SqliteDataReader reader, int ordinal)
     {

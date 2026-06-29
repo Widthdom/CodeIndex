@@ -5347,7 +5347,7 @@ public partial class QueryCommandRunnerTests
             MarkGraphAndFoldReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
-                ["--db", dbPath, "--json", "--kind", "function", "--path", "Helper.cs", "--group-by-name"],
+                ["--db", dbPath, "--json", "--kind", "function", "--path", "src/*Helper*.cs", "--group-by-name"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
@@ -5550,7 +5550,7 @@ public partial class QueryCommandRunnerTests
             MarkGraphAndFoldReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
-                ["--db", dbPath, "--kind", "function", "--path", "Helper.cs", "--group-by-name"],
+                ["--db", dbPath, "--kind", "function", "--path", "src/*Helper*.cs", "--group-by-name"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
@@ -5809,7 +5809,7 @@ public partial class QueryCommandRunnerTests
             MarkGraphAndFoldReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
-                ["--db", dbPath, "--json", "--kind", "function", "--path", "Helper", "--group-by-name", "--limit", "2"],
+                ["--db", dbPath, "--json", "--kind", "function", "--path", "src/*Helper*.cs", "--group-by-name", "--limit", "2"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);

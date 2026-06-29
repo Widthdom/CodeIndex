@@ -6437,7 +6437,7 @@ jobs:
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
-                "src/--json-dir/Demo.cs",
+                "--json-dir/Demo.cs",
                 "csharp",
                 "class Demo { void Alpha() {} }\n");
 

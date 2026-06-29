@@ -184,7 +184,7 @@ public partial class QueryCommandRunnerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
-                "src/--json-dir/Demo.cs",
+                "--json-dir/Demo.cs",
                 "csharp",
                 "class Demo {}\n");
 
@@ -212,7 +212,7 @@ public partial class QueryCommandRunnerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
-                "src/--count-dir/Demo.cs",
+                "--count-dir/Demo.cs",
                 "csharp",
                 "class Demo {}\n");
 

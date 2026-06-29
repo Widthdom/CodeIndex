@@ -2163,13 +2163,13 @@ public partial class DbReader
         {
             var ors = new List<string>(pathPatterns.Count);
             for (int i = 0; i < pathPatterns.Count; i++)
-                ors.Add($"src.path LIKE @pathPattern{i} ESCAPE '\\'");
+                ors.Add(BuildPathFilterPredicate("src", "pathPattern", i, pathPatterns[i]));
             innerSql += " AND (" + string.Join(" OR ", ors) + ")";
         }
         if (excludePathPatterns is { Count: > 0 })
         {
             for (int i = 0; i < excludePathPatterns.Count; i++)
-                innerSql += $" AND src.path NOT LIKE @excludePath{i} ESCAPE '\\'";
+                innerSql += $" AND NOT {BuildPathFilterPredicate("src", "excludePathPattern", i, excludePathPatterns[i])}";
         }
         if (excludeTests)
             innerSql += $" AND NOT {TestPathCondition.Replace("f.path", "src.path")}";
