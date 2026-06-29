@@ -145,14 +145,14 @@ internal static class CdidxConfigFile
         JsonDocument document;
         try
         {
-            document = JsonDocument.Parse(text, new JsonDocumentOptions
-            {
-                CommentHandling = JsonCommentHandling.Skip,
-                AllowTrailingCommas = true,
-                MaxDepth = MaxConfigJsonDepth,
-            });
+            document = BoundedJson.ParseDocument(
+                text,
+                MaxConfigFileBytes,
+                MaxConfigJsonDepth,
+                JsonCommentHandling.Skip,
+                allowTrailingCommas: true);
         }
-        catch (JsonException ex)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
             return new LoadResult(Path: path, Error: $"[cdidx] Invalid JSON in {FormatConfigDiagnosticPath(path)}: {FormatConfigExceptionMessage(ex)}");
         }

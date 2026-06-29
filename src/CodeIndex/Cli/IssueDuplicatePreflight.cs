@@ -113,9 +113,10 @@ internal sealed class IssueDuplicatePreflight
                 return false;
             }
 
-            var root = JsonNode.Parse(
+            var root = BoundedJson.ParseNode(
                 json,
-                documentOptions: new JsonDocumentOptions { MaxDepth = MaxOpenIssuesJsonDepth });
+                MaxOpenIssuesJsonBytes,
+                MaxOpenIssuesJsonDepth);
             preflight = new IssueDuplicatePreflight(true, fullPath, ParseOpenIssues(root));
             return true;
         }
@@ -125,7 +126,7 @@ internal sealed class IssueDuplicatePreflight
             error = $"invalid --open-issues file '{pathForError}' ({InvalidPreflightFileErrorCode}): {SanitizePreflightErrorDetail(DiagnosticRedactor.FormatExceptionMessage(ex, MaxPreflightErrorDetailLength))}";
             return false;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException or NotSupportedException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException or ArgumentException or NotSupportedException)
         {
             preflight = new IssueDuplicatePreflight(false, null, []);
             error = $"could not read --open-issues file '{pathForError}': {CommandErrorWriter.FormatSanitizedException(ex)}";
@@ -508,7 +509,7 @@ internal sealed class IssueDuplicatePreflight
             var json = await ReadContentWithinLimitAsync(response.Content, MaxOpenIssuesJsonBytes, requestCancellation.Token)
                 .ConfigureAwait(false)
                 ?? throw new IOException($"GitHub open-issues response exceeds maximum supported size of {MaxOpenIssuesJsonBytes} bytes.");
-            var root = JsonNode.Parse(json, documentOptions: new JsonDocumentOptions { MaxDepth = MaxOpenIssuesJsonDepth });
+            var root = BoundedJson.ParseNode(json, MaxOpenIssuesJsonBytes, MaxOpenIssuesJsonDepth);
             var rawEntryCount = root is JsonArray array ? array.Count : 0;
             return new GitHubOpenIssuePageResult(ParseOpenIssues(root, skipPullRequests: true), rawEntryCount);
         }
@@ -555,7 +556,7 @@ internal sealed class IssueDuplicatePreflight
             var json = await ReadContentWithinLimitAsync(response.Content, MaxOpenIssuesJsonBytes, requestCancellation.Token)
                 .ConfigureAwait(false)
                 ?? throw new IOException($"GitHub labels response exceeds maximum supported size of {MaxOpenIssuesJsonBytes} bytes.");
-            var root = JsonNode.Parse(json, documentOptions: new JsonDocumentOptions { MaxDepth = MaxOpenIssuesJsonDepth });
+            var root = BoundedJson.ParseNode(json, MaxOpenIssuesJsonBytes, MaxOpenIssuesJsonDepth);
             var rawEntryCount = root is JsonArray array ? array.Count : 0;
             return new GitHubRepositoryLabelPageResult(ParseRepositoryLabels(root), rawEntryCount);
         }
@@ -674,6 +675,7 @@ internal sealed class IssueDuplicatePreflight
             or OperationCanceledException
             or TimeoutException
             or JsonException
+            or InvalidDataException
             or IOException
             or InvalidOperationException
             or InvalidOpenIssuesFileException

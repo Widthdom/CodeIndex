@@ -3982,7 +3982,7 @@ public partial class FileIndexer
                 return true;
             }
         }
-        catch (JsonException ex)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
             return TryAddDockerfileJsonFormIssue(
                 issues,

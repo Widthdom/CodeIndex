@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using CodeIndex.Cli;
+using CodeIndex.Diagnostics;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
@@ -150,11 +151,12 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             SymbolExtractionWorker.WorkerResponse? response;
             try
             {
-                response = JsonSerializer.Deserialize<SymbolExtractionWorker.WorkerResponse>(
+                response = BoundedJson.Deserialize<SymbolExtractionWorker.WorkerResponse>(
                     responseJson,
+                    maxProtocolLineBytes,
                     SymbolExtractionWorker.JsonOptions);
             }
-            catch (JsonException ex)
+            catch (Exception ex) when (ex is JsonException or InvalidDataException)
             {
                 return FailureAfterKill(
                     $"{SafeDiagnosticFormatter.FormatExceptionCategory("worker_protocol_error", ex)} while parsing symbol extraction response.",
@@ -541,7 +543,7 @@ internal static class SymbolExtractionWorker
 
                 try
                 {
-                    request = JsonSerializer.Deserialize<WorkerRequest>(requestJson, JsonOptions)
+                    request = BoundedJson.Deserialize<WorkerRequest>(requestJson, maxProtocolLineUtf8Bytes, JsonOptions)
                         ?? throw new InvalidOperationException("worker request was empty.");
                 }
                 catch (Exception ex)

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
@@ -191,12 +192,12 @@ internal static class WorkspaceManifestLoader
         var root = Path.GetDirectoryName(fullPath) ?? Environment.CurrentDirectory;
         var text = DataDirectorySecurity.ReadTextWithinLimit(fullPath, MaxManifestBytes)
                    ?? throw new InvalidDataException($"{fullPath} exceeds the {MaxManifestBytes} byte limit.");
-        using var document = JsonDocument.Parse(text, new JsonDocumentOptions
-        {
-            CommentHandling = JsonCommentHandling.Skip,
-            AllowTrailingCommas = true,
-            MaxDepth = MaxManifestDepth,
-        });
+        using var document = BoundedJson.ParseDocument(
+            text,
+            MaxManifestBytes,
+            MaxManifestDepth,
+            JsonCommentHandling.Skip,
+            allowTrailingCommas: true);
 
         var element = document.RootElement;
         var strategy = ValidateIndexStrategy(ReadString(element, "index_strategy") ?? "per_member");

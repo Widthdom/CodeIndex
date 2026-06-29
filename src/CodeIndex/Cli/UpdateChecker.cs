@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using CodeIndex.Diagnostics;
 using CodeIndex.Models;
 
 namespace CodeIndex.Cli;
@@ -280,9 +281,10 @@ internal static class UpdateChecker
             content,
             MaxLatestReleaseResponseBytes,
             cancellationToken).ConfigureAwait(false);
-        using var doc = JsonDocument.Parse(
+        using var doc = BoundedJson.ParseDocument(
             payload.AsMemory(),
-            new JsonDocumentOptions { MaxDepth = MaxLatestReleaseJsonDepth });
+            (int)MaxLatestReleaseResponseBytes,
+            MaxLatestReleaseJsonDepth);
         return doc.RootElement.TryGetProperty("tag_name", out var tag)
             ? tag.GetString()
             : null;
@@ -294,9 +296,10 @@ internal static class UpdateChecker
             content,
             MaxLatestReleaseResponseBytes,
             cancellationToken).ConfigureAwait(false);
-        using var doc = JsonDocument.Parse(
+        using var doc = BoundedJson.ParseDocument(
             payload.AsMemory(),
-            new JsonDocumentOptions { MaxDepth = MaxLatestReleaseJsonDepth });
+            (int)MaxLatestReleaseResponseBytes,
+            MaxLatestReleaseJsonDepth);
         if (doc.RootElement.ValueKind != JsonValueKind.Array)
             return null;
 
@@ -389,9 +392,10 @@ internal static class UpdateChecker
             if (text is null)
                 return null;
 
-            using var doc = JsonDocument.Parse(
+            using var doc = BoundedJson.ParseDocument(
                 text,
-                new JsonDocumentOptions { MaxDepth = MaxUpdateCheckCacheJsonDepth });
+                MaxUpdateCheckCacheBytes,
+                MaxUpdateCheckCacheJsonDepth);
             var root = doc.RootElement;
             if (!root.TryGetProperty("checked_at", out var checkedAtElement)
                 || !DateTimeOffset.TryParse(
