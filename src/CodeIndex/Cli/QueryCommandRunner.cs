@@ -12661,6 +12661,8 @@ public static partial class QueryCommandRunner
             if (pathPatterns.Count == 0)
                 AddDistinct(pathPatterns, SearchAuditRecipes.DefaultSourcePathPatterns);
             AddDistinct(excludePaths, SearchAuditRecipes.DefaultSourceExcludePaths);
+            AddSourceOnlyDefaultExcludeOrigin(excludeOrigins, matchOrigins, SearchMatchClassifier.Comment);
+            AddSourceOnlyDefaultExcludeOrigin(excludeOrigins, matchOrigins, SearchMatchClassifier.HelpText);
             excludeTests = true;
         }
 
@@ -13158,6 +13160,14 @@ public static partial class QueryCommandRunner
             if (!origins.Contains(origin, StringComparer.Ordinal))
                 origins.Add(origin);
         }
+    }
+
+    private static void AddSourceOnlyDefaultExcludeOrigin(List<string> excludeOrigins, IReadOnlyList<string> matchOrigins, string origin)
+    {
+        if (matchOrigins.Contains(origin, StringComparer.Ordinal))
+            return;
+        if (!excludeOrigins.Contains(origin, StringComparer.Ordinal))
+            excludeOrigins.Add(origin);
     }
 
     private static bool TryNormalizeSearchMatchOrigin(string rawOrigin, out string origin)
@@ -14873,6 +14883,12 @@ public static partial class QueryCommandRunner
             query["visibility"] = JsonSerializer.SerializeToNode(options.VisibilityFilters, CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
         if (options.ExcludeVisibilityFilters.Count > 0)
             query["exclude_visibility"] = JsonSerializer.SerializeToNode(options.ExcludeVisibilityFilters, CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+        if (options.MatchOrigins.Count > 0)
+            query["match_origins"] = JsonSerializer.SerializeToNode(options.MatchOrigins, CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+        if (options.ExcludeOrigins.Count > 0)
+            query["exclude_origins"] = JsonSerializer.SerializeToNode(options.ExcludeOrigins, CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+        if (options.ResultKinds.Count > 0)
+            query["result_kinds"] = JsonSerializer.SerializeToNode(options.ResultKinds, CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
         if (options.UnusedCursorOffset.HasValue)
         {
             query["cursor"] = FormatUnusedCursor(options.UnusedCursorOffset.Value);
