@@ -2696,7 +2696,7 @@ internal sealed record SearchRecipeAggregationQueryJsonResult(
 
 internal sealed record SearchRecipeCompactRunJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
-    [property: JsonPropertyName("recipe")] SearchRecipeListItemJsonResult Recipe,
+    [property: JsonPropertyName("recipe")] SearchRecipeCompactListItemJsonResult Recipe,
     [property: JsonPropertyName("scope")] SearchRecipeScopeJsonResult Scope,
     [property: JsonPropertyName("query_count")] int QueryCount,
     [property: JsonPropertyName("result_count")] int ResultCount,
