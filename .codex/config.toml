@@ -2,7 +2,6 @@
 # Project-local Codex config loads only after the project is trusted.
 
 project_doc_fallback_filenames = ["AGENTS.md", "CLAUDE.md"]
-sandbox_mode = "workspace-write"
 approval_policy = "on-request"
 web_search = "disabled"
 default_permissions = "codeindex_workspace"
@@ -10,13 +9,9 @@ default_permissions = "codeindex_workspace"
 [features]
 codex_hooks = true
 
-[sandbox_workspace_write]
-network_access = false
-exclude_slash_tmp = true
-exclude_tmpdir_env_var = true
-
-[permissions.codeindex_workspace.filesystem]
-glob_scan_max_depth = 3
+[permissions.codeindex_workspace]
+extends = ":workspace"
+description = "CodeIndex workspace editing with limited GitHub CLI access."
 
 [permissions.codeindex_workspace.filesystem.":workspace_roots"]
 "." = "write"
@@ -31,4 +26,8 @@ glob_scan_max_depth = 3
 "**/*secrets*" = "deny"
 
 [permissions.codeindex_workspace.network]
-enabled = false
+enabled = true
+
+[permissions.codeindex_workspace.network.domains]
+"github.com" = "allow"
+"api.github.com" = "allow"

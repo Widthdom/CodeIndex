@@ -618,10 +618,19 @@ def _tokenized_gh_reason(args: list[str]) -> str | None:
         return _HIGH_RISK_UNKNOWN_GLOBAL_OPTION_REASON
     if subcommand in {"auth", "api", "secret", "release"}:
         return "GitHub CLI high-risk operation is blocked"
-    if subcommand == "repo" and rest and rest[0] in {"create", "fork"}:
-        return "GitHub CLI high-risk operation is blocked"
+    if subcommand == "repo":
+        repo_subcommand, _ = _subcommand_args(
+            rest,
+            {"-R", "--repo", "--hostname", "--config"},
+            valueless_options={"--help", "-h"},
+            fail_on_unknown_option=True,
+        )
+        if repo_subcommand == _UNKNOWN_GLOBAL_OPTION_SUBCOMMAND:
+            return _HIGH_RISK_UNKNOWN_GLOBAL_OPTION_REASON
+        if repo_subcommand in {"create", "fork", "delete"}:
+            return "GitHub CLI high-risk operation is blocked"
     if subcommand == "pr":
-        pr_subcommand, pr_rest = _subcommand_args(
+        pr_subcommand, _ = _subcommand_args(
             rest,
             {"-R", "--repo", "--hostname", "--config"},
             valueless_options={"--help", "-h", "--web"},
