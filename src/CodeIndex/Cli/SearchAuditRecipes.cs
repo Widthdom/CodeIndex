@@ -1,5 +1,6 @@
 using CodeIndex;
 using CodeIndex.Database;
+using CodeIndex.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -1402,9 +1403,10 @@ internal static class SearchAuditRecipes
                 return false;
             }
 
-            var root = JsonNode.Parse(
+            var root = BoundedJson.ParseNode(
                 text,
-                documentOptions: new JsonDocumentOptions { MaxDepth = 16 });
+                MaxRecipeSourceBytes,
+                maxDepth: 16);
             var recipeArray = root as JsonArray ?? root?["recipes"] as JsonArray;
             if (recipeArray is null)
             {
@@ -1427,7 +1429,7 @@ internal static class SearchAuditRecipes
             AddDiagnostic(diagnostics, $"{sourceLabel} does not exist.");
             return false;
         }
-        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException or InvalidOperationException)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException or IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             AddDiagnostic(diagnostics, $"{sourceLabel} could not be loaded ({SafeDiagnosticFormatter.FormatExceptionCategory("recipe_load", ex)}).");
             return false;

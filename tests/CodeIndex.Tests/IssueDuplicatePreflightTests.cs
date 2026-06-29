@@ -325,6 +325,26 @@ public sealed class IssueDuplicatePreflightTests : IDisposable
     }
 
     [Fact]
+    public async Task TryLoadAsync_GitHubInvalidUtf8ExpansionIsRecoverable_Issue4127()
+    {
+        var responseBytes = Enumerable
+            .Repeat((byte)0x80, (IssueDuplicatePreflight.MaxOpenIssuesJsonBytes / 3) + 1)
+            .ToArray();
+        IssueDuplicatePreflight.s_httpClientOverride = new HttpClient(new SingleResponseHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(responseBytes),
+            }));
+
+        var result = await IssueDuplicatePreflight.TryLoadAsync("github", "Widthdom/CodeIndex");
+
+        Assert.False(result.Loaded);
+        Assert.False(result.Preflight.Checked);
+        Assert.Contains(nameof(InvalidDataException), result.Error);
+        Assert.Contains("could not fetch --open-issues github", result.Error);
+    }
+
+    [Fact]
     public async Task TryLoadAsync_GitHubInternalCancellationIsSanitized_Issue3823()
     {
         IssueDuplicatePreflight.s_httpClientOverride = new HttpClient(new ThrowingOpenIssuesHandler(

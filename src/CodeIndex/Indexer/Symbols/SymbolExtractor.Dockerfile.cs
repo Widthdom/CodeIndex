@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using CodeIndex.Diagnostics;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
@@ -9,16 +10,11 @@ public static partial class SymbolExtractor
     internal const int DockerfileJsonFormMaxDepth = 8;
     internal const int DockerfileJsonFormMaxItems = 128;
     internal const int DockerfileJsonFormMaxBodyLength = 32 * 1024;
+    internal const int DockerfileJsonFormMaxUtf8Bytes = DockerfileJsonFormMaxBodyLength * 4;
     internal const int DockerfileJsonFormMaxStringLength = 4096;
 
     internal static JsonDocument ParseDockerfileJsonFormPayload(string payload)
-        => JsonDocument.Parse(payload, CreateDockerfileJsonFormDocumentOptions());
-
-    internal static JsonDocumentOptions CreateDockerfileJsonFormDocumentOptions()
-        => new()
-        {
-            MaxDepth = DockerfileJsonFormMaxDepth,
-        };
+        => BoundedJson.ParseDocument(payload, DockerfileJsonFormMaxUtf8Bytes, DockerfileJsonFormMaxDepth);
 
     private static void AddDockerfileAdditionalEnvSymbols(
         long fileId,
@@ -400,7 +396,7 @@ public static partial class SymbolExtractor
                     line);
             }
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
         }
     }
@@ -503,7 +499,7 @@ public static partial class SymbolExtractor
                 },
                 line);
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
         }
     }
@@ -679,7 +675,7 @@ public static partial class SymbolExtractor
 
             return count >= 2 ? last : null;
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
             return null;
         }

@@ -103,6 +103,18 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void EnumerateRegexValues_SkipsUnsupportedReadableProperties_Issue4127()
+    {
+        var regexes = EnumerateRegexValues(
+                new RegexReflectionFixture(),
+                "fixture",
+                new HashSet<object>(ReferenceEqualityComparer.Instance))
+            .ToList();
+
+        Assert.Contains(regexes, item => item.Path == "fixture.ValidRegex");
+    }
+
+    [Fact]
     public void BuiltInSymbolRegexes_WithIgnoreCaseUseCultureInvariant_Issue3516()
     {
         var regexes = EnumerateStaticRegexValues(
@@ -774,6 +786,18 @@ public partial class SymbolExtractorTests
 
         Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "leaf");
         Assert.DoesNotContain(symbols, symbol => symbol.Name == "root.leaf");
+    }
+
+    [Fact]
+    public void Extract_Json_UnescapePropertyNameReturnsOriginalOverBoundedParseLimit_Issue4127()
+    {
+        var longName = new string('\u3042', (SymbolExtractor.StructuredDataMaxJsonParseUtf8Bytes / 3) + 1);
+        var method = typeof(SymbolExtractor).GetMethod("UnescapeJsonPropertyName", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var unescaped = Assert.IsType<string>(method.Invoke(null, [longName]));
+
+        Assert.Equal(longName, unescaped);
     }
 
     [Fact]
@@ -14036,7 +14060,7 @@ public partial class SymbolExtractorTests
 
         foreach (var property in valueType.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
         {
-            if (property.GetIndexParameters().Length != 0)
+            if (!property.CanRead || property.GetIndexParameters().Length != 0)
                 continue;
 
             object? child;
@@ -14048,10 +14072,21 @@ public partial class SymbolExtractorTests
             {
                 continue;
             }
+            catch (NotSupportedException)
+            {
+                continue;
+            }
 
             foreach (var nested in EnumerateRegexValues(child, $"{path}.{property.Name}", seen))
                 yield return nested;
         }
+    }
+
+    private sealed class RegexReflectionFixture
+    {
+        public Regex ValidRegex { get; } = new BoundedRegex("valid");
+
+        public object UnsupportedReadableProperty => throw new NotSupportedException("Synthetic unsupported property.");
     }
 
     private static string WriteFile(string projectRoot, string relativePath, string content)

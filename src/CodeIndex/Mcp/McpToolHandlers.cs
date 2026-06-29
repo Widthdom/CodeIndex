@@ -6589,6 +6589,7 @@ public partial class McpServer
     private const int MaxSamplingContextChars = 400;
     private const int MaxSamplingToolInvocationSummaryChars = 160;
     private const int MaxSamplingResponseTextChars = 8192;
+    private const int MaxSamplingResponseJsonBytes = MaxSamplingResponseTextChars * 4;
     private const int MaxSamplingResponseJsonDepth = 16;
 
     /// <summary>
@@ -6972,7 +6973,7 @@ public partial class McpServer
                     $"Sampling response rejected: text length {text.Length.ToString(CultureInfo.InvariantCulture)} exceeds {MaxSamplingResponseTextChars.ToString(CultureInfo.InvariantCulture)} characters."));
         try
         {
-            var parsed = JsonNode.Parse(text, documentOptions: new JsonDocumentOptions { MaxDepth = MaxSamplingResponseJsonDepth });
+            var parsed = BoundedJson.ParseNode(text, MaxSamplingResponseJsonBytes, MaxSamplingResponseJsonDepth);
             if (parsed is not JsonObject obj)
                 return new SuggestionSamplingAttempt(null, BuildSamplingSchemaRejectionDiagnostic());
 
@@ -7011,12 +7012,15 @@ public partial class McpServer
                 return new SuggestionSamplingAttempt(null, BuildSamplingSchemaRejectionDiagnostic());
             return new SuggestionSamplingAttempt(new SuggestionSamplingResult(title, tags is { Length: > 0 } ? tags : null), null);
         }
-        catch (JsonException ex)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
+            var detail = ex is JsonException jsonException
+                ? JsonFrameParser.FormatExceptionDetail(jsonException)
+                : CommandErrorWriter.FormatSanitizedExceptionMessage(ex);
             return new SuggestionSamplingAttempt(
                 null,
                 BuildSamplingRejectionDiagnostic(
-                    $"Sampling response JSON rejected: {JsonFrameParser.FormatExceptionDetail(ex)}."));
+                    $"Sampling response JSON rejected: {detail}."));
         }
     }
 

@@ -22,11 +22,6 @@ internal static class DiagnosticRedactor
     internal const int MaxReportLogJsonDepth = 32;
 
     private static readonly TimeSpan RegexTimeout = RegexTimeoutPolicy.RedactionRegexTimeout;
-    private static readonly JsonDocumentOptions ReportLogJsonDocumentOptions = new()
-    {
-        MaxDepth = MaxReportLogJsonDepth,
-    };
-
     private static readonly Regex UriUserInfoPattern = new(
         @"(?<scheme>[a-z][a-z0-9+\-.]*://)(?<user>[^:@/\s]+):(?<password>[^@/\s]+)@",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
@@ -360,7 +355,7 @@ internal static class DiagnosticRedactor
 
         try
         {
-            using var document = JsonDocument.Parse(line, ReportLogJsonDocumentOptions);
+            using var document = BoundedJson.ParseDocument(line, MaxReportLogJsonLineChars * 4, MaxReportLogJsonDepth);
             if (document.RootElement.ValueKind != JsonValueKind.Object)
                 return false;
 
@@ -391,7 +386,7 @@ internal static class DiagnosticRedactor
             redacted = Encoding.UTF8.GetString(stream.ToArray());
             return true;
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
             return false;
         }
