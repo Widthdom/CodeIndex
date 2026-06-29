@@ -4636,6 +4636,7 @@ public partial class McpServer
                 limit: countOnly ? null : FetchLimitForEnvelope(limit),
                 severity: severity);
             var truncated = !countOnly && TrimToRequestedLimit(issues, limit);
+            QueryCommandRunner.AnnotateValidateIssues(issues);
             var pathFilterArray = new JsonArray();
             if (pathPatterns is not null)
             {
@@ -4653,6 +4654,7 @@ public partial class McpServer
                     ["severity"] = severity,
                     ["path"] = pathFilterArray,
                 },
+                ["summary"] = QueryCommandRunner.BuildValidateIssueSummary(issues),
                 ["top_files"] = BuildTopFileHistogram(issues, issue => issue.Path),
             };
             if (countOnly)
@@ -4688,6 +4690,8 @@ public partial class McpServer
                 ["kind"] = issue.Kind,
                 ["severity"] = issue.Severity,
                 ["origin"] = issue.Origin,
+                ["category"] = issue.Category,
+                ["actionable"] = issue.Actionable,
                 ["message"] = issue.Message,
             });
         }

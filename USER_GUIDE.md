@@ -457,6 +457,7 @@ cdidx validate --kind replacement_char --severity warning --path src/
 cdidx validate --exclude-tests --exclude-path 'fixtures/**'
 cdidx validate --json=array --limit 50 --path legacy/
 cdidx validate --json --limit 50 --path legacy/
+cdidx validate --format compact --limit 50
 ```
 
 `validate` reports indexed files that are likely to produce misleading snippets
@@ -467,8 +468,15 @@ JSON-form instruction payloads.
 For `replacement_char`, JSON and MCP responses include `origin` (`source_literal`
 or `decode_replacement`) and `severity` so agents can distinguish intentional
 U+FFFD literals from likely encoding damage.
+Validation issue rows also include `category` and `actionable` when emitted by
+current binaries; expected fixture literals are grouped as
+`expected_fixture_literal` with `actionable: false`, while decoder replacement
+risks are grouped as `decoding_risk` with `actionable: true`.
 Human-readable output prints the same markers in brackets and adds
 `test_fixture` when a finding comes from a test or fixture path.
+The default JSON object includes a `summary` grouped by kind, severity, origin,
+category, and actionability. Use `--format compact` when an agent or pipeline
+only needs that summary plus compact issue rows.
 Use `--severity warning` to hide informational source literals and focus on
 findings that indicate likely encoding damage.
 Use `--exclude-tests` and repeatable `--exclude-path` to keep validation output
@@ -477,7 +485,7 @@ issue list.
 UTF-8 BOM markers in Visual Studio `.sln` files are treated as expected solution
 file noise and are not reported by default.
 Use `--json=array` when a pipeline expects a bare issue array instead of the
-default `{ "count": ..., "issues": [...] }` object.
+default `{ "count": ..., "summary": ..., "issues": [...] }` object.
 LFS pointers are recorded as `lfs_pointer_skipped`; their placeholder body is
 not indexed, and their checksum stays tied to the pointer identity until you run
 `git lfs pull` and then `cdidx index .` to index the real file content.
@@ -3145,6 +3153,7 @@ cdidx validate --kind replacement_char --severity warning --path src/
 cdidx validate --exclude-tests --exclude-path 'fixtures/**'
 cdidx validate --json=array --limit 50 --path legacy/
 cdidx validate --json --limit 50 --path legacy/
+cdidx validate --format compact --limit 50
 ```
 
 `validate` は、snippet や symbol name を誤らせやすい indexed file を報告します。
@@ -3154,15 +3163,20 @@ placeholder、Dockerfile の JSON-form instruction payload の parse / truncatio
 診断などです。
 `replacement_char` の JSON / MCP response には `origin` (`source_literal` /
 `decode_replacement`) と `severity` が入り、意図的な U+FFFD literal と
-エンコーディング破損の可能性を agent が区別できます。human-readable output
+エンコーディング破損の可能性を agent が区別できます。現在の binary が出力する
+validation issue row には `category` と `actionable` も入り、想定済み fixture literal は
+`expected_fixture_literal` / `actionable: false`、decoder replacement のリスクは
+`decoding_risk` / `actionable: true` として grouped summary に載ります。human-readable output
 にも同じ marker が角括弧で表示され、test / fixture path の finding には
-`test_fixture` が付きます。`--severity warning`
+`test_fixture` が付きます。既定の JSON object には kind、severity、origin、category、
+actionability ごとの `summary` が入り、agent や pipeline が summary と compact な issue row だけを
+必要とする場合は `--format compact` を使えます。`--severity warning`
 を使うと、informational な source literal を隠して、エンコーディング破損の
 可能性がある finding に集中できます。fixture や generated sample が issue list を
 支配する場合は、`--exclude-tests` と繰り返し指定できる `--exclude-path` で
 本番コード側の path に validation output を絞れます。Visual Studio の `.sln`
 file に含まれる UTF-8 BOM marker は solution file の既知ノイズとして扱われ、
-既定では報告されません。pipeline が既定の `{ "count": ..., "issues": [...] }`
+既定では報告されません。pipeline が既定の `{ "count": ..., "summary": ..., "issues": [...] }`
 object ではなく bare issue array を期待する場合は `--json=array` を使えます。LFS pointer
 は `lfs_pointer_skipped` として記録され、placeholder 本文は index されず、checksum は
 実体を取得するまで pointer identity に紐づきます。実体を index するには `git lfs pull`
