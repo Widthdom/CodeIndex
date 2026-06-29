@@ -485,7 +485,6 @@ internal sealed class IndexWatchEventJsonResult
     public string? SubRunParseReason { get; init; }
     public string? OverflowReason { get; init; }
     public IndexWatchRecoveryCommandJsonResult? RecoveryCommand { get; init; }
-    public IndexWatchContractJsonResult? WatchContract { get; init; }
     public string? Reason { get; init; }
 }
 
@@ -493,23 +492,6 @@ internal sealed class IndexWatchRecoveryCommandJsonResult
 {
     public string Command { get; init; } = string.Empty;
     public List<string> Args { get; init; } = [];
-}
-
-internal sealed class IndexWatchContractJsonResult
-{
-    public string Debounce { get; init; } = string.Empty;
-    public int DebounceMs { get; init; }
-    public int MaxDebounceMs { get; init; }
-    public int PollIntervalMs { get; init; }
-    public int WatchPendingPathLimit { get; init; }
-    public string PathComparison { get; init; } = string.Empty;
-    public string ChangeCoalescing { get; init; } = string.Empty;
-    public string RenameEvents { get; init; } = string.Empty;
-    public string OverflowRecovery { get; init; } = string.Empty;
-    public string WatcherErrorRecovery { get; init; } = string.Empty;
-    public string Cancellation { get; init; } = string.Empty;
-    public string SubRunOutput { get; init; } = string.Empty;
-    public string McpWatchMode { get; init; } = string.Empty;
 }
 
 internal sealed class IndexUpdateSummaryJsonResult
@@ -757,6 +739,7 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(IndexUpdateJsonResult))]
 [JsonSerializable(typeof(IndexUpdateSummaryJsonResult))]
 [JsonSerializable(typeof(IndexWatchEventJsonResult))]
+[JsonSerializable(typeof(IndexWatchStartedJsonResult))]
 [JsonSerializable(typeof(IndexWatchContractJsonResult))]
 [JsonSerializable(typeof(IndexWatchRecoveryCommandJsonResult))]
 [JsonSerializable(typeof(ExportImportCommandRunner.ImportResult))]

@@ -710,7 +710,7 @@ internal static class IndexWatchRunner
     {
         if (baseOptions.Json)
         {
-            Console.Out.WriteLine(JsonSerializer.Serialize(new IndexWatchEventJsonResult
+            Console.Out.WriteLine(JsonSerializer.Serialize(new IndexWatchStartedJsonResult
             {
                 Status = "watching",
                 Phase = "initial_scan",
@@ -719,7 +719,7 @@ internal static class IndexWatchRunner
                 DebounceMs = (int)debounce.TotalMilliseconds,
                 WatchPendingPathLimit = maxPendingPaths,
                 WatchContract = BuildWatchContract(debounce, maxPendingPaths, ignoreCase),
-            }, CliJsonSerializerContextFactory.Create(jsonOptions).IndexWatchEventJsonResult));
+            }, CliJsonSerializerContextFactory.Create(jsonOptions).IndexWatchStartedJsonResult));
         }
         else
         {
