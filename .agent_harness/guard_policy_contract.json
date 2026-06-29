@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "surfaces": {
+    "shared_core": ".agent_harness/command_guard_core.py",
+    "codex_pre_tool": ".codex/hooks/bash_guard.py",
+    "codex_permission_request": ".codex/hooks/permission_request_guard.py",
+    "codex_hooks": ".codex/hooks.json",
+    "claude_pre_tool": ".claude/hooks/bash-guard.py",
+    "claude_settings": ".claude/settings.json"
+  },
+  "command_cases": [
+    {
+      "name": "local_cdidx_query",
+      "command": "dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search SymbolExtractor",
+      "expected": "allow"
+    },
+    {
+      "name": "repo_local_installer_doctor",
+      "command": "bash ./install.sh --doctor v1.2.3",
+      "expected": "allow"
+    },
+    {
+      "name": "normal_gh_issue_read",
+      "command": "gh issue list --repo Widthdom/CodeIndex --state open --limit 10",
+      "expected": "allow"
+    },
+    {
+      "name": "normal_gh_pr_create",
+      "command": "gh pr create --repo Widthdom/CodeIndex --title Update --body Details",
+      "expected": "allow"
+    },
+    {
+      "name": "search_escape_hatch",
+      "command": "rg SymbolExtractor src",
+      "expected": "deny"
+    },
+    {
+      "name": "git_grep_global_option",
+      "command": "git -c color.ui=false grep SymbolExtractor",
+      "expected": "deny"
+    },
+    {
+      "name": "env_chdir_wrapper",
+      "command": "env -C tools bash guard.sh",
+      "expected": "deny"
+    },
+    {
+      "name": "inline_interpreter",
+      "command": "python3 -c 'print(1)'",
+      "expected": "deny"
+    },
+    {
+      "name": "high_risk_gh_pr_merge",
+      "command": "gh pr merge 123",
+      "expected": "deny"
+    },
+    {
+      "name": "high_risk_gh_repo_delete",
+      "command": "gh repo delete Widthdom/CodeIndex",
+      "expected": "deny"
+    }
+  ]
+}
