@@ -234,18 +234,45 @@ class CommandGuardCoreTests(TestCase):
                 decision = core.evaluate_bash_command(command, cwd=root, project_root=root)
                 self.assertFalse(decision.allowed)
 
-    def test_allows_forbidden_command_words_inside_gh_arguments(self) -> None:
+    def test_allows_normal_development_gh_commands(self) -> None:
         root = Path("/tmp")
         for command in (
-            'gh issue create --title "cdidx" --body "plain issue text"',
-            'gh issue create --title "find and open are issue words" --body "cdidx find appears in docs"',
-            'gh issue list --state open --search "grep in the issue body"',
-            'gh pr create --title "search: find hint" --body "users may type git grep or open here"',
+            'gh issue list --repo Widthdom/CodeIndex --state open --limit 10 --search "grep in the issue body"',
+            "gh issue view 123 --repo Widthdom/CodeIndex",
+            'gh issue create --repo Widthdom/CodeIndex --title "find and open are issue words" --body "cdidx find appears in docs"',
+            "gh issue edit 123 --repo Widthdom/CodeIndex --add-label bug",
+            'gh issue comment 123 --repo Widthdom/CodeIndex --body "Working on this"',
+            "gh pr list --repo Widthdom/CodeIndex --state open",
+            "gh pr view 123 --repo Widthdom/CodeIndex",
+            'gh pr create --repo Widthdom/CodeIndex --title "search: find hint" --body "users may type git grep or open here"',
+            "gh pr edit 123 --repo Widthdom/CodeIndex --title update",
+            'gh pr comment 123 --repo Widthdom/CodeIndex --body "Updated"',
+            "gh pr ready 123 --repo Widthdom/CodeIndex",
+            "gh pr close 123 --repo Widthdom/CodeIndex",
+            "gh repo view Widthdom/CodeIndex",
+            "gh status",
         ):
             with self.subTest(command=command):
                 decision = core.evaluate_bash_command(command, cwd=root, project_root=root)
 
                 self.assertTrue(decision.allowed, decision.reason)
+
+    def test_denies_high_risk_gh_commands(self) -> None:
+        root = Path("/tmp")
+        for command in (
+            "gh auth login",
+            "gh api repos/Widthdom/CodeIndex/issues",
+            "gh secret list",
+            "gh release create v0.0.0",
+            "gh repo create demo",
+            "gh repo fork Widthdom/CodeIndex",
+            "gh repo delete Widthdom/CodeIndex",
+            "gh pr merge 123",
+        ):
+            with self.subTest(command=command):
+                decision = core.evaluate_bash_command(command, cwd=root, project_root=root)
+
+                self.assertFalse(decision.allowed)
 
     def test_denies_forbidden_commands_inside_shell_constructs(self) -> None:
         root = Path("/tmp")

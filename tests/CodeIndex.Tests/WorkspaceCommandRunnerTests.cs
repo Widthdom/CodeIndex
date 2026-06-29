@@ -504,9 +504,14 @@ public class WorkspaceCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Empty(stderr);
+            Assert.DoesNotContain(currentRoot, stdout);
             using var document = JsonDocument.Parse(stdout);
             var payload = document.RootElement;
             Assert.False(payload.TryGetProperty("config_path", out _));
+            Assert.True(payload.GetProperty("redaction").GetProperty("paths_redacted").GetBoolean());
+            Assert.Equal(
+                EnvironmentVariableInventory.Items.Count,
+                payload.GetProperty("environment_inventory_summary").GetProperty("total").GetInt32());
             Assert.Equal("not_found", payload.GetProperty("config_file").GetProperty("status").GetString());
             Assert.Equal("not_found", payload.GetProperty("config_file").GetProperty("reason").GetString());
             Assert.Contains(
@@ -514,12 +519,12 @@ public class WorkspaceCommandRunnerTests
                 item => item.GetString() == CdidxConfigFile.ProjectConfigRelativePath);
             Assert.Contains(
                 payload.GetProperty("searched_paths").EnumerateArray(),
-                item => item.GetString() == Path.Combine(currentRoot, CdidxConfigFile.ProjectConfigRelativePath));
+                item => item.GetString()?.Contains("[redacted]", StringComparison.Ordinal) == true);
             Assert.Equal("not_found", payload.GetProperty("active_workspace_status").GetProperty("status").GetString());
             Assert.Equal("not_found", payload.GetProperty("workspace_manifest").GetProperty("status").GetString());
             Assert.Contains(
                 payload.GetProperty("workspace_manifest").GetProperty("searched_paths").EnumerateArray(),
-                item => item.GetString() == Path.Combine(currentRoot, WorkspaceManifestLoader.FileName));
+                item => item.GetString()?.Contains("[redacted]", StringComparison.Ordinal) == true);
 
             var defaultLimit = payload.GetProperty("effective_config").GetProperty(QueryCommandRunner.DefaultLimitEnvironmentVariable);
             Assert.Equal("default", defaultLimit.GetProperty("source").GetString());
@@ -554,26 +559,30 @@ public class WorkspaceCommandRunnerTests
                 CdidxConfigFile.DisableEnvVar,
                 QueryCommandRunner.DefaultLimitEnvironmentVariable,
                 QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable,
-                "CDIDX_GITHUB_TOKEN");
+                "CDIDX_GITHUB_TOKEN",
+                "CDIDX_GLOBAL_TOOL_LOG_DIR");
             const string secret = "ghp_123456789012345678901234567890123456";
+            const string visiblePath = "/tmp/cdidx-config-show-visible-4148";
             Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
             Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
             Environment.SetEnvironmentVariable(CdidxConfigFile.DisableEnvVar, null);
             Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultLimitEnvironmentVariable, null);
             Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable, "5");
             Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", secret);
+            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", visiblePath);
             Environment.CurrentDirectory = root;
-            var currentRoot = Environment.CurrentDirectory;
 
             var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() => ProgramRunner.Run(["config", "show", "--json"], _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Empty(stderr);
             Assert.DoesNotContain(secret, stdout);
+            Assert.DoesNotContain(visiblePath, stdout);
             using var document = JsonDocument.Parse(stdout);
             var payload = document.RootElement;
             Assert.Equal("loaded", payload.GetProperty("config_file").GetProperty("status").GetString());
-            Assert.Equal(Path.Combine(currentRoot, CdidxConfigFile.FileName), payload.GetProperty("config_file").GetProperty("path").GetString());
+            Assert.Contains("[redacted]", payload.GetProperty("config_file").GetProperty("path").GetString(), StringComparison.Ordinal);
+            Assert.True(payload.GetProperty("redaction").GetProperty("paths_redacted").GetBoolean());
 
             var effective = payload.GetProperty("effective_config");
             var limit = effective.GetProperty(QueryCommandRunner.DefaultLimitEnvironmentVariable);
@@ -586,12 +595,50 @@ public class WorkspaceCommandRunnerTests
             Assert.Equal("environment", githubToken.GetProperty("source").GetString());
             Assert.True(githubToken.GetProperty("sensitive").GetBoolean());
             Assert.Equal("<redacted>", githubToken.GetProperty("value").GetString());
+            var logDir = effective.GetProperty("CDIDX_GLOBAL_TOOL_LOG_DIR");
+            Assert.Equal("environment", logDir.GetProperty("source").GetString());
+            Assert.Equal("<redacted>", logDir.GetProperty("value").GetString());
         }
         finally
         {
             Environment.CurrentDirectory = previous;
             TestProjectHelper.DeleteDirectory(root);
             TestProjectHelper.DeleteDirectory(configHome);
+        }
+    }
+
+    [Fact]
+    public void ConfigShowJson_ShowPathsKeepsRawPathDiagnostics_Issue4148()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_config_show_show_paths");
+        var previous = Environment.CurrentDirectory;
+        try
+        {
+            File.WriteAllText(Path.Combine(root, CdidxConfigFile.FileName), "{}");
+            using var env = EnvironmentVariableScope.Capture(
+                ActiveWorkspace.EnvironmentVariable,
+                CdidxConfigFile.DisableEnvVar);
+            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+            Environment.SetEnvironmentVariable(CdidxConfigFile.DisableEnvVar, null);
+            Environment.CurrentDirectory = root;
+            var currentRoot = Environment.CurrentDirectory;
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() => ProgramRunner.Run(["config", "show", "--json", "--show-paths"], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Empty(stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var payload = document.RootElement;
+            Assert.False(payload.GetProperty("redaction").GetProperty("paths_redacted").GetBoolean());
+            Assert.Equal(Path.Combine(currentRoot, CdidxConfigFile.FileName), payload.GetProperty("config_file").GetProperty("path").GetString());
+            Assert.Contains(
+                payload.GetProperty("searched_paths").EnumerateArray(),
+                item => item.GetString() == Path.Combine(currentRoot, CdidxConfigFile.ProjectConfigRelativePath));
+        }
+        finally
+        {
+            Environment.CurrentDirectory = previous;
+            TestProjectHelper.DeleteDirectory(root);
         }
     }
 

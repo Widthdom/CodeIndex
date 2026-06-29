@@ -1007,6 +1007,7 @@ cdidx search --list-recipes --names --json              # small deterministic re
 cdidx recipes --summary-only --json                     # compact recipe-list alias for automation
 cdidx search --recipe risky-code --json                 # run a curated audit query set and return grouped JSON
 cdidx search --recipe bounded-read-evidence --json      # show positive evidence for bounded file-read helper paths
+cdidx search --recipe nullable-contracts --json         # classify nullable returns, null-forgiving suppressions, and guard evidence
 cdidx search --recipe risky-code/raw-diagnostic-echo --json  # run one child query from a recipe
 cdidx search --recipe risky-code --include-query raw-diagnostic-echo --exclude-query cancellation-gap --json
 cdidx search --recipe risky-code --show-excluded --json      # include recipe scope/exclusion diagnostics
@@ -1085,11 +1086,16 @@ string-comparison taxonomy metadata for `path_filesystem`, `protocol_tokens`,
 `cli_options`, `stable_identifiers`, `human_text`, and `machine_formatting`
 domains, so `OrdinalIgnoreCase`, `StringComparer.Ordinal`, `InvariantCulture`,
 and invariant casing hits can be classified before filing.
+`nullable-contracts/return-null-contract` includes nullable return domains for
+optional lookups, parse misses, unsupported capabilities, legacy schema absence,
+and unexpected invariant violations, plus suppression evidence categories for
+`null!` / `default!` sites that are backed by Try-pattern, delayed
+initialization, or reflection/serialization contracts.
 Built-in recipes include `risky-code`, `json-parse-apis`,
 `auth-token-audit`, `string-comparison-semantics`, `dogfood-risk-patterns`,
 `dotnet-risk-patterns`, `sqlite-query-policy-surfaces`, `xml-parser-security`,
-`unsupported-operation-boundaries`, `filesystem-traversal`, `bounded-read-evidence`,
-`phrase-risk-patterns`, and the
+`unsupported-operation-boundaries`, `nullable-contracts`,
+`filesystem-traversal`, `bounded-read-evidence`, `phrase-risk-patterns`, and the
 opt-in broad `broad-token-audit` recipe.
 Use `phrase-risk-patterns` for noisy audit phrases such as `async void`,
 `throw new Exception`, `.Result`, `unsafe`, `Skip =`, `Version="`, `TODO`, and
@@ -1180,9 +1186,21 @@ JSON string array per stdin line. Each array starts with a query command name,
 followed by that command's normal arguments. Each stdin line is capped at
 1,048,576 characters, each decoded string argument is capped at 8,192
 characters, and each command can carry at most 256 arguments after the command
-name. With no input, `batch` exits 0 and prints nothing by default. Pass
-`--json-summary` when a non-interactive caller needs an explicit final JSON
-object with `commands_processed`, including `0` for immediate EOF:
+name. By default, child commands stream their normal stdout/stderr directly, so
+callers can keep the standalone command output shape. With no input, `batch`
+exits 0 and prints nothing by default. Pass `--json-summary` when a
+non-interactive caller needs a machine-readable batch stream: each non-blank
+stdin line emits one JSON envelope before the final summary. Parsed commands use
+`record: "batch_result"` with `line`, `command`, `arguments`, `exit_code`, and
+captured child `stdout` / `stderr`; malformed or over-limit lines use
+`record: "batch_error"` with an `error` object. Child command text, JSON rows,
+and hints stay inside those strings instead of being written beside batch
+metadata. The final `record: "batch_summary"` object reports
+`commands_processed`, `line_errors`, `command_failures`, and `exit_code`,
+including `commands_processed: 0` for immediate EOF. For clean automation, feed
+stdin from a pipe or file; an interactive TTY may echo typed JSONL before
+`cdidx` reads it, but that echo is terminal behavior rather than process
+stdout/stderr.
 
 ```bash
 printf '%s\n' \
@@ -1193,7 +1211,7 @@ printf '%s\n' \
 
 ```bash
 printf '' | cdidx batch --db .cdidx/codeindex.db --json-summary
-# {"api_version":"1","command":"batch","input_lines_read":0,"commands_processed":0,"line_errors":0,"command_failures":0,"exit_code":0}
+# {"api_version":"1","record":"batch_summary","command":"batch","input_lines_read":0,"commands_processed":0,"line_errors":0,"command_failures":0,"exit_code":0}
 ```
 
 Output:
@@ -1531,7 +1549,7 @@ same source location.
 | `--exclude-visibility <v[,v]>` | `definition`, `symbols`, `unused`, `hotspots` | Exclude symbols with the requested visibility values. Accepts the same comma-separated values and alias expansion as `--visibility`. |
 | `--path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | Restrict results to glob-style path patterns. `*` and `?` are wildcards. Repeatable; multiple values are OR'd together. Quote shell globs such as `--path 'src/**'` so the shell passes one literal pattern. |
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | Pass a query literal explicitly, useful when the query starts with `-`. Query commands except `find` also accept `-- <query>` as a one-token query escape while continuing to parse later options. |
-| `--recipe <name>` | `search` | Run a reusable audit recipe such as `risky-code`, `json-parse-apis`, `dotnet-risk-patterns`, `unsupported-operation-boundaries`, `xml-parser-security`, `filesystem-traversal`, or `bounded-read-evidence`. Use `recipe/query` form, such as `risky-code/raw-diagnostic-echo`, to run one child query directly. Unknown recipe/query selectors include likely matches across recipe groups. Recipe runs default to `--audit-scope source`, applying recipe production-code path and exclusion metadata before normal search filters and snippet controls; `--limit` / `--top` is per child query. Text, `--json` / `--format json`, `--format compact`, and `--format issue-drafts` are supported, and issue drafts include a replay command. |
+| `--recipe <name>` | `search` | Run a reusable audit recipe such as `risky-code`, `json-parse-apis`, `dotnet-risk-patterns`, `unsupported-operation-boundaries`, `nullable-contracts`, `xml-parser-security`, `filesystem-traversal`, or `bounded-read-evidence`. Use `recipe/query` form, such as `risky-code/raw-diagnostic-echo`, to run one child query directly. Unknown recipe/query selectors include likely matches across recipe groups. Recipe runs default to `--audit-scope source`, applying recipe production-code path and exclusion metadata before normal search filters and snippet controls; `--limit` / `--top` is per child query. Text, `--json` / `--format json`, `--format compact`, and `--format issue-drafts` are supported, and issue drafts include a replay command. |
 | `--include-query <name>` / `--exclude-query <name>` | `search --recipe <name>` | Include or exclude child recipe queries by name. Repeatable and comma-separated; names are listed by `cdidx search --list-recipes`. |
 | `--cursor <cursor>` | `search --recipe <name/query>`, `outline`, `unused` | Fetch the next page for one selected recipe child query, outline result, or unused-symbol page. Use the `next_cursor` returned by the previous JSON or compact output; outline cursors use `outline:<offset>`. |
 | `--audit-scope <source\|all>` | `search`, `unused` | Choose audit path scope. For recipe search, `source` applies recipe production-code path and exclusion metadata. For ad hoc and named-query searches, `source` adds `src/**`, default doc/test/changelog exclusions, and `--exclude-tests` when no user path was supplied. `all` intentionally searches every indexed path unless other filters exclude it. JSON output reports the effective scope, path filters, and exclusions where applicable. |
@@ -1861,7 +1879,7 @@ Precedence is **CLI flag > environment variable > config file > built-in default
 
 Secrets are intentionally **not** loadable from the file: `CDIDX_GITHUB_TOKEN`, `CDIDX_MCP_AUTH_TOKEN`, and `CDIDX_MCP_HTTP_TOKEN` are env-only so tokens never get checked into version control.
 
-Run `cdidx doctor --env-inventory` (or `cdidx doctor --json`) to audit the full environment-variable contract. Each inventory row reports a stable `domain` (`display`, `config`, `auth_secret`, `trust_boundary`, `subprocess`, `update_logging`, or `indexing_query`), sensitivity, config-file support, and `invalid_value_behavior`. Secret-bearing variables such as `CDIDX_GITHUB_TOKEN`, `CDIDX_MCP_AUTH_TOKEN`, and `CDIDX_MCP_HTTP_TOKEN` are marked `auth_secret` and are redacted from doctor/config diagnostics; trust-boundary variables such as MCP tool filters, workspace plugin trust, hook directories, and GitHub proxy credential opt-ins document whether invalid values fail closed, warn, or leave the feature disabled.
+Run `cdidx doctor --env-inventory` to audit a compact environment-variable summary grouped by `domain`, sensitivity, and category. Use `cdidx doctor --env-inventory=full` for the per-variable audit view with source locations and `invalid_value_behavior`, or `cdidx doctor --json --env-inventory=full` when a machine-readable full inventory is needed locally. `doctor --json` and `config show --json` redact local paths by default and expose the compact `environment_inventory_summary`; add `--show-paths` only for local debugging when raw path diagnostics are required. Secret-bearing variables such as `CDIDX_GITHUB_TOKEN`, `CDIDX_MCP_AUTH_TOKEN`, and `CDIDX_MCP_HTTP_TOKEN` are marked `auth_secret` and are redacted from doctor/config diagnostics; trust-boundary variables such as MCP tool filters, workspace plugin trust, hook directories, and GitHub proxy credential opt-ins document whether invalid values fail closed, warn, or leave the feature disabled.
 
 Supported schema (top-level keys are snake_case; nested indexing kind keys keep the CLI issue spelling; every key is optional):
 
@@ -3733,6 +3751,7 @@ cdidx search --list-recipes --names --json              # 小さく決定的な 
 cdidx recipes --summary-only --json                     # automation 向けの compact recipe list alias
 cdidx search --recipe risky-code --json                 # curated audit query set を実行し、grouped JSON を返す
 cdidx search --recipe bounded-read-evidence --json      # 上限付き file-read helper 経路の陽性根拠を表示
+cdidx search --recipe nullable-contracts --json         # nullable return、null-forgiving suppression、guard evidence を分類
 cdidx search --recipe risky-code/raw-diagnostic-echo --json  # recipe 内の child query を1つだけ実行
 cdidx search --recipe risky-code --include-query raw-diagnostic-echo --exclude-query cancellation-gap --json
 cdidx search --recipe risky-code --show-excluded --json      # recipe scope / exclusion diagnostics を含める
@@ -3790,7 +3809,7 @@ search audit recipe は、名前付き recipe を複数の curated search query 
 組み込み recipe には `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、
 `auth-token-audit`、`string-comparison-semantics`、`dogfood-risk-patterns`、
 `sqlite-query-policy-surfaces`、`unsupported-operation-boundaries`、`xml-parser-security`、
-`filesystem-traversal`、`bounded-read-evidence`、`phrase-risk-patterns`、
+`nullable-contracts`、`filesystem-traversal`、`bounded-read-evidence`、`phrase-risk-patterns`、
 `broad-token-audit` があります。
 `phrase-risk-patterns` は `async void`、`throw new Exception`、`.Result`、`unsafe`、
 `Skip =`、`Version="`、`TODO`、`Obsolete` のようなノイズの多い監査語句を対象に、
@@ -3814,6 +3833,11 @@ rethrow が必要な catch を区別できます。
 `human_text`、`machine_formatting` の domain を持つ string-comparison taxonomy metadata
 を含みます。これにより、`OrdinalIgnoreCase`、`StringComparer.Ordinal`、
 `InvariantCulture`、invariant casing の hit を起票前に分類できます。
+`nullable-contracts/return-null-contract` は optional lookup、parse miss、
+unsupported capability、legacy schema absence、unexpected invariant violation の
+nullable return domain と、Try-pattern、delayed initialization、reflection /
+serialization contract で裏付けられる `null!` / `default!` 用の suppression evidence
+category を含めます。
 `--recipe <name>` は `--lang`、`--path`、`--exclude-path`、`--exclude-tests`、
 `--limit`、snippet control など通常の search filter を recipe 内の各 query に適用します。
 `--json` 併用時、recipe run は通常の newline-delimited search stream ではなく、recipe
@@ -3890,9 +3914,20 @@ cdidx search "authenticate" --json --verbose
 `cdidx batch --db <path>` を使うと 1 つの SQLite connection を開いたまま処理できます。
 stdin の各行は JSON 文字列配列で、先頭に query command 名、その後ろに通常の引数を並べます。
 各 stdin 行は 1,048,576 文字まで、デコード後の各文字列引数は 8,192 文字まで、
-各 command は command 名の後ろに最大 256 引数までです。入力がない場合、`batch` は既定で
-exit 0 かつ無出力です。非対話の呼び出し元が即時 EOF を明示的に判定したい場合は
-`--json-summary` を渡すと、`commands_processed: 0` を含む最終 JSON オブジェクトを出力できます:
+各 command は command 名の後ろに最大 256 引数までです。既定では child command の通常の
+stdout / stderr を直接 stream するため、単発 command と同じ出力形状を維持できます。
+入力がない場合、`batch` は既定で exit 0 かつ無出力です。非対話の呼び出し元が
+machine-readable な batch stream を必要とする場合は `--json-summary` を渡します。
+この場合、空白でない stdin 行ごとに 1 つの JSON envelope を出力してから final summary を出します。
+parse 済み command は `record: "batch_result"` として `line`、`command`、`arguments`、
+`exit_code`、捕捉した child `stdout` / `stderr` を持ちます。malformed line や上限超過 line は
+`record: "batch_error"` と `error` object を持ちます。child command の text、JSON row、hint は
+batch metadata と並べて直接出力せず、これらの文字列 field に入ります。最後の
+`record: "batch_summary"` object は `commands_processed`、`line_errors`、`command_failures`、
+`exit_code` を報告し、即時 EOF では `commands_processed: 0` を含みます。automation で
+clean な入出力が必要な場合は stdin を pipe または file から渡してください。interactive TTY では
+入力した JSONL が `cdidx` の読み取り前に echo される場合がありますが、これは process の
+stdout / stderr ではなく terminal の挙動です。
 
 ```bash
 printf '%s\n' \
@@ -3903,7 +3938,7 @@ printf '%s\n' \
 
 ```bash
 printf '' | cdidx batch --db .cdidx/codeindex.db --json-summary
-# {"api_version":"1","command":"batch","input_lines_read":0,"commands_processed":0,"line_errors":0,"command_failures":0,"exit_code":0}
+# {"api_version":"1","record":"batch_summary","command":"batch","input_lines_read":0,"commands_processed":0,"line_errors":0,"command_failures":0,"exit_code":0}
 ```
 
 出力:
@@ -4238,7 +4273,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--exclude-visibility <v[,v]>` | `definition`, `symbols`, `unused`, `hotspots` | 指定した可視性のシンボルを除外する。値と alias 展開は `--visibility` と同じ |
 | `--path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | glob 形式のパスパターンで結果を絞る。`*` と `?` がワイルドカード。繰り返し指定可（複数値は OR で結合）。`--path 'src/**'` のように shell glob を引用し、shell が 1 つの literal pattern として渡すようにする。 |
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | クエリを明示的なリテラルとして渡す。クエリが `-` で始まる場合に有用。`find` 以外のクエリ系コマンドでは `-- <query>` も1トークンのクエリエスケープとして受け付け、その後のオプション解析を続ける。 |
-| `--recipe <name>` | `search` | `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、`unsupported-operation-boundaries`、`xml-parser-security`、`filesystem-traversal`、`bounded-read-evidence` などの再利用可能な audit recipe を実行する。`risky-code/raw-diagnostic-echo` のような `recipe/query` 形式で child query を1つだけ直接実行できる。未知の recipe/query selector には recipe group をまたいだ近い候補が表示される。Recipe 実行は既定で `--audit-scope source` になり、recipe の本番コード向け path / exclusion metadata を適用したうえで、通常の search filter と snippet control を選択された各 query に適用する。`--limit` / `--top` は child query ごとの上限になる。text、`--json` / `--format json`、`--format compact`、`--format issue-drafts` に対応し、issue draft には再実行コマンドを含める。 |
+| `--recipe <name>` | `search` | `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、`unsupported-operation-boundaries`、`nullable-contracts`、`xml-parser-security`、`filesystem-traversal`、`bounded-read-evidence` などの再利用可能な audit recipe を実行する。`risky-code/raw-diagnostic-echo` のような `recipe/query` 形式で child query を1つだけ直接実行できる。未知の recipe/query selector には recipe group をまたいだ近い候補が表示される。Recipe 実行は既定で `--audit-scope source` になり、recipe の本番コード向け path / exclusion metadata を適用したうえで、通常の search filter と snippet control を選択された各 query に適用する。`--limit` / `--top` は child query ごとの上限になる。text、`--json` / `--format json`、`--format compact`、`--format issue-drafts` に対応し、issue draft には再実行コマンドを含める。 |
 | `--include-query <name>` / `--exclude-query <name>` | `search --recipe <name>` | recipe 内の child query を名前で含める、または除外する。繰り返し指定とカンマ区切りに対応し、名前は `cdidx search --list-recipes` で確認できる。 |
 | `--cursor <cursor>` | `search --recipe <name/query>`、`outline`、`unused` | 選択した recipe child query、outline 結果、unused-symbol page の次ページを取得する。直前の JSON または compact output が返す `next_cursor` を指定し、outline cursor は `outline:<offset>` 形式を使う。 |
 | `--audit-scope <source\|all>` | `search`, `unused` | audit path scope を選ぶ。Recipe search の `source` は recipe の本番コード向け path / exclusion metadata を適用する。Ad hoc / named-query search の `source` は user path がない場合に `src/**`、既定の docs/tests/changelog exclusion、`--exclude-tests` を追加する。`all` は他の filter で除外しない限り、すべての indexed path を意図的に検索する。JSON 出力には該当する場合、有効な scope、path filter、exclusion が含まれる。 |
@@ -4566,7 +4601,7 @@ MCP のレスポンスサイズ上限は、環境変数 override で guard が�
 
 シークレットは意図的に**ファイルから読み込めません**。`CDIDX_GITHUB_TOKEN` / `CDIDX_MCP_AUTH_TOKEN` / `CDIDX_MCP_HTTP_TOKEN` は環境変数専用としており、トークンがバージョン管理に混入するのを防ぎます。
 
-`cdidx doctor --env-inventory`（または `cdidx doctor --json`）で環境変数契約全体を監査できます。各 inventory 行は安定した `domain`（`display`、`config`、`auth_secret`、`trust_boundary`、`subprocess`、`update_logging`、`indexing_query`）、sensitivity、設定ファイル対応、`invalid_value_behavior` を出力します。`CDIDX_GITHUB_TOKEN` / `CDIDX_MCP_AUTH_TOKEN` / `CDIDX_MCP_HTTP_TOKEN` のような secret 変数は `auth_secret` として扱われ、doctor / config 診断では redact されます。MCP tool filter、workspace plugin trust、hook directory、GitHub proxy credential opt-in のような trust-boundary 変数は、不正値が fail closed になるのか、警告されるのか、機能を無効のままにするのかを inventory に明示します。
+`cdidx doctor --env-inventory` で、`domain`、sensitivity、category ごとに集約した compact な環境変数 summary を監査できます。変数ごとの source location や `invalid_value_behavior` まで確認する場合は `cdidx doctor --env-inventory=full` を使い、ローカルで machine-readable な full inventory が必要な場合は `cdidx doctor --json --env-inventory=full` を使います。`doctor --json` と `config show --json` は既定でローカルパスを redact し、compact な `environment_inventory_summary` を出力します。raw path の診断が必要なローカル debugging 時だけ `--show-paths` を追加してください。`CDIDX_GITHUB_TOKEN` / `CDIDX_MCP_AUTH_TOKEN` / `CDIDX_MCP_HTTP_TOKEN` のような secret 変数は `auth_secret` として扱われ、doctor / config 診断では redact されます。MCP tool filter、workspace plugin trust、hook directory、GitHub proxy credential opt-in のような trust-boundary 変数は、不正値が fail closed になるのか、警告されるのか、機能を無効のままにするのかを inventory に明示します。
 
 対応スキーマ（top-level key は snake_case、ネストした indexing の kind key は CLI issue の表記を維持、すべて任意）:
 
