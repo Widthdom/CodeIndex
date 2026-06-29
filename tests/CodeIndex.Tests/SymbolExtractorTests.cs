@@ -103,6 +103,18 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void EnumerateRegexValues_SkipsUnsupportedReadableProperties_Issue4127()
+    {
+        var regexes = EnumerateRegexValues(
+                new RegexReflectionFixture(),
+                "fixture",
+                new HashSet<object>(ReferenceEqualityComparer.Instance))
+            .ToList();
+
+        Assert.Contains(regexes, item => item.Path == "fixture.ValidRegex");
+    }
+
+    [Fact]
     public void BuiltInSymbolRegexes_WithIgnoreCaseUseCultureInvariant_Issue3516()
     {
         var regexes = EnumerateStaticRegexValues(
@@ -14060,10 +14072,21 @@ public partial class SymbolExtractorTests
             {
                 continue;
             }
+            catch (NotSupportedException)
+            {
+                continue;
+            }
 
             foreach (var nested in EnumerateRegexValues(child, $"{path}.{property.Name}", seen))
                 yield return nested;
         }
+    }
+
+    private sealed class RegexReflectionFixture
+    {
+        public Regex ValidRegex { get; } = new BoundedRegex("valid");
+
+        public object UnsupportedReadableProperty => throw new NotSupportedException("Synthetic unsupported property.");
     }
 
     private static string WriteFile(string projectRoot, string relativePath, string content)
