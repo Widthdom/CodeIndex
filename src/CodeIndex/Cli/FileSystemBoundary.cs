@@ -117,19 +117,24 @@ internal static class FileSystemBoundary
             }
 
             var longPath = LongPath.EnsureWindowsPrefix(fullPath);
-            if (Directory.Exists(longPath))
+            var probeStatus = TryGetAttributes(longPath, out var attributes);
+            if (probeStatus == FileSystemBoundaryProbeStatus.Found)
             {
-                var directoryInfo = new DirectoryInfo(fullPath);
-                directoryInfo.Refresh();
-                if (IsSymlinkReparsePointOrDevice(directoryInfo))
+                if (IsSymlinkOrReparsePoint(attributes) || IsDevice(attributes))
                 {
                     failureReason = options.UnsafeDirectoryReason;
                     return false;
                 }
+
+                if ((attributes & FileAttributes.Directory) == 0)
+                {
+                    failureReason = options.NotDirectoryReason;
+                    return false;
+                }
             }
-            else if (File.Exists(longPath))
+            else if (probeStatus != FileSystemBoundaryProbeStatus.Missing)
             {
-                failureReason = options.NotDirectoryReason;
+                failureReason = options.InvalidPathReason;
                 return false;
             }
 

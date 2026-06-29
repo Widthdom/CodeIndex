@@ -1298,6 +1298,69 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_SourceOnlyExcludesDocumentationOriginsByDefault_Issue4184()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_source_only_origins_4184");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.cs",
+                "csharp",
+                "public class App { string Load(string path) => File.ReadAllText(path); }\n");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/CommentExample.cs",
+                "csharp",
+                "// File.ReadAllText(path) is shown here as audit documentation.\n");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/CodeIndex/Cli/ConsoleUi.cs",
+                "csharp",
+                "public static class ConsoleUi { public const string Help = \"cdidx search --query File.ReadAllText --exact-substring\"; }\n");
+
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["File.ReadAllText", "--db", dbPath, "--source-only", "--exact-substring", "--count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Equal(string.Empty, countStderr);
+            using (var countDocument = ParseJsonOutput(countStdout))
+            {
+                var root = countDocument.RootElement;
+                var excludeOrigins = root
+                    .GetProperty("query_context")
+                    .GetProperty("exclude_origins")
+                    .EnumerateArray()
+                    .Select(value => value.GetString())
+                    .ToArray();
+
+                Assert.Equal(1, root.GetProperty("count").GetInt32());
+                Assert.Contains(SearchMatchClassifier.Comment, excludeOrigins);
+                Assert.Contains(SearchMatchClassifier.HelpText, excludeOrigins);
+            }
+
+            var (helpExitCode, helpStdout, helpStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["File.ReadAllText", "--db", dbPath, "--source-only", "--exact-substring", "--origin", "help_text", "--json=array", "--limit", "10"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, helpExitCode);
+            Assert.Equal(string.Empty, helpStderr);
+            using var helpDocument = ParseJsonOutput(helpStdout);
+            var helpRow = Assert.Single(helpDocument.RootElement.EnumerateArray());
+            Assert.Equal("src/CodeIndex/Cli/ConsoleUi.cs", helpRow.GetProperty("path").GetString());
+            Assert.Contains(
+                SearchMatchClassifier.HelpText,
+                helpRow.GetProperty("match_origins").EnumerateArray().Select(value => value.GetString()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_ListRecipesJsonIncludesBuiltInAuditMetadata_Issue3144()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
@@ -3275,6 +3338,67 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.UsageError, aggregationCapExitCode);
             Assert.Equal(string.Empty, aggregationCapStdout);
             Assert.Contains("recipe aggregation JSON output", aggregationCapStderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RecipeCompactJsonHonorsMaxJsonBytesAndReportsTruncation_Issue4183()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_compact_bytes_4183");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                public sealed class App
+                {
+                    public void Run(Exception ex)
+                    {
+                        Console.WriteLine(ex.Message);
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--format", "compact", "--path", "src/**", "--origin", "code", "--total-limit", "5", "--max-json-bytes", "200000"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var truncation = root.GetProperty("truncation");
+            var query = Assert.Single(truncation.GetProperty("queries").EnumerateArray());
+
+            Assert.True(root.GetProperty("compact").GetBoolean());
+            Assert.Equal(200000, root.GetProperty("output_byte_limit").GetInt32());
+            Assert.False(root.GetProperty("recipe").TryGetProperty("queries", out _));
+            Assert.Equal(200000, truncation.GetProperty("aggregate_byte_limit").GetInt32());
+            Assert.Equal(1, truncation.GetProperty("selected_query_count").GetInt32());
+            Assert.Equal("raw-diagnostic-echo", query.GetProperty("name").GetString());
+            Assert.Equal(1, query.GetProperty("returned").GetInt32());
+            var nextCommand = Assert.Single(root.GetProperty("next_commands").EnumerateArray()).GetString()!;
+            Assert.Contains("--recipe risky-code/raw-diagnostic-echo", nextCommand, StringComparison.Ordinal);
+            Assert.Contains("--db ", nextCommand, StringComparison.Ordinal);
+            Assert.Contains("--path 'src/**'", nextCommand, StringComparison.Ordinal);
+            Assert.Contains("--origin code", nextCommand, StringComparison.Ordinal);
+            Assert.Contains("--total-limit 5", nextCommand, StringComparison.Ordinal);
+            Assert.Contains("--max-json-bytes 200000", nextCommand, StringComparison.Ordinal);
+
+            var (capExitCode, capStdout, capStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--format", "compact", "--origin", "code", "--max-json-bytes", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, capExitCode);
+            Assert.Equal(string.Empty, capStdout);
+            Assert.Contains("recipe compact JSON output", capStderr, StringComparison.Ordinal);
         }
         finally
         {
