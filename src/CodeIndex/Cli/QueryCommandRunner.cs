@@ -68,10 +68,6 @@ public static partial class QueryCommandRunner
     internal static readonly TimeSpan MaxStaleAfter = TimeSpan.FromDays(30);
     internal const string MaxStaleAfterDisplay = "30d";
     internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
-    private static readonly JsonDocumentOptions BatchJsonDocumentOptions = new()
-    {
-        MaxDepth = BatchMaxJsonDepth,
-    };
     [ThreadStatic]
     private static DbReader? s_batchReader;
     [ThreadStatic]
