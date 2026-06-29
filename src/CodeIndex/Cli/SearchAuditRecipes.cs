@@ -96,6 +96,21 @@ internal static class SearchAuditRecipes
     internal static IReadOnlyList<string> DefaultSourcePathPatterns => DefaultSourcePathPatternsValue;
     internal static IReadOnlyList<string> DefaultSourceExcludePaths => DefaultSourceExcludePathsValue;
 
+    private static List<SearchGuardFilter> BoundedRegexEvidenceGuardFilters() =>
+    [
+        new(SearchGuardRole.Reject, SearchGuardDirection.Before, "RegexOptions.NonBacktracking", SearchGuardScope.Window),
+        new(SearchGuardRole.Reject, SearchGuardDirection.After, "RegexOptions.NonBacktracking", SearchGuardScope.Window),
+        new(SearchGuardRole.Reject, SearchGuardDirection.Before, "RegexOptions.NonBacktracking", SearchGuardScope.SameLine),
+        new(SearchGuardRole.Reject, SearchGuardDirection.After, "RegexOptions.NonBacktracking", SearchGuardScope.SameLine),
+        new(SearchGuardRole.Reject, SearchGuardDirection.Before, "TimeSpan.", SearchGuardScope.Window),
+        new(SearchGuardRole.Reject, SearchGuardDirection.After, "TimeSpan.", SearchGuardScope.Window),
+        new(SearchGuardRole.Reject, SearchGuardDirection.After, "TimeSpan.", SearchGuardScope.SameLine),
+        new(SearchGuardRole.Reject, SearchGuardDirection.After, "matchTimeout:", SearchGuardScope.Window),
+        new(SearchGuardRole.Reject, SearchGuardDirection.After, "matchTimeout:", SearchGuardScope.SameLine),
+        new(SearchGuardRole.Reject, SearchGuardDirection.After, "MatchTimeout(", SearchGuardScope.Window),
+        new(SearchGuardRole.Reject, SearchGuardDirection.After, "MatchTimeout(", SearchGuardScope.SameLine)
+    ];
+
     private static SearchAuditRecipeQuery StaticRegexApiQuery(string name, string query, string apiName) =>
         new(
             name,
@@ -114,6 +129,7 @@ internal static class SearchAuditRecipes
                 $"risk: static System.Text.RegularExpressions.Regex.{apiName} can run without the shared timeout policy.",
                 "positive: BoundedRegex aliases, explicit timeout overloads, or tightly bounded trusted inputs can make a hit intentional."
             ],
+            GuardFilters = BoundedRegexEvidenceGuardFilters(),
             MatchOrigins = ["code"],
         };
 
@@ -135,6 +151,7 @@ internal static class SearchAuditRecipes
                 "risk: raw System.Text.RegularExpressions.Regex static APIs can run without explicit timeout or shared bounded-regex policy.",
                 "positive: BoundedRegex aliases and instance names ending in Regex are filtered out; remaining hits should be classified as timeout-backed, generated/precompiled, trusted small input, or non-matching helpers such as Escape."
             ],
+            GuardFilters = BoundedRegexEvidenceGuardFilters(),
             MatchOrigins = ["code"],
         };
 
@@ -311,6 +328,7 @@ internal static class SearchAuditRecipes
                         "risk: raw System.Text.RegularExpressions.Regex construction should show an explicit timeout, non-backtracking mode, or bounded input.",
                         "positive: bounded-wrapper aliases are reported by bounded-regex-alias instead of this raw construction query."
                     ],
+                    GuardFilters = BoundedRegexEvidenceGuardFilters(),
                 },
                 new(
                     "bounded-regex-alias",
@@ -340,6 +358,7 @@ internal static class SearchAuditRecipes
                         "risk: fully qualified BCL Regex construction bypasses local aliases and should carry timeout/non-backtracking evidence.",
                         "positive: explicit timeout arguments or RegexOptions.NonBacktracking can make the construction bounded."
                     ],
+                    GuardFilters = BoundedRegexEvidenceGuardFilters(),
                 },
                 StaticRegexApiQuery(
                     "static-regex-is-match",
@@ -992,6 +1011,7 @@ internal static class SearchAuditRecipes
                         "risk: raw System.Text.RegularExpressions.Regex construction should show an explicit timeout, non-backtracking mode, or bounded input.",
                         "positive: bounded-wrapper aliases are reported by bounded-regex-alias instead of this raw construction query."
                     ],
+                    GuardFilters = BoundedRegexEvidenceGuardFilters(),
                 },
                 new(
                     "bounded-regex-alias",
@@ -1021,6 +1041,7 @@ internal static class SearchAuditRecipes
                         "risk: fully qualified BCL Regex construction bypasses local aliases and should carry timeout/non-backtracking evidence.",
                         "positive: explicit timeout arguments or RegexOptions.NonBacktracking can make the construction bounded."
                     ],
+                    GuardFilters = BoundedRegexEvidenceGuardFilters(),
                 },
                 StaticRegexApiQuery(
                     "static-regex-is-match",
@@ -1878,7 +1899,10 @@ internal sealed record SearchRecipeGuardFilterJsonResult(
     [property: JsonPropertyName("role")] string Role,
     [property: JsonPropertyName("direction")] string Direction,
     [property: JsonPropertyName("query")] string Query,
-    [property: JsonPropertyName("option")] string Option);
+    [property: JsonPropertyName("option")] string Option,
+    [property: JsonPropertyName("scope")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? Scope);
 
 internal sealed record SearchRecipeBroadCatchTaxonomyJsonResult(
     [property: JsonPropertyName("boundary_categories")] List<SearchRecipeBroadCatchBoundaryJsonResult> BoundaryCategories,
