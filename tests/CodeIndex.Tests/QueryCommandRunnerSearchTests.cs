@@ -1298,6 +1298,69 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_SourceOnlyExcludesDocumentationOriginsByDefault_Issue4184()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_source_only_origins_4184");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.cs",
+                "csharp",
+                "public class App { string Load(string path) => File.ReadAllText(path); }\n");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/CommentExample.cs",
+                "csharp",
+                "// File.ReadAllText(path) is shown here as audit documentation.\n");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/CodeIndex/Cli/ConsoleUi.cs",
+                "csharp",
+                "public static class ConsoleUi { public const string Help = \"cdidx search --query File.ReadAllText --exact-substring\"; }\n");
+
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["File.ReadAllText", "--db", dbPath, "--source-only", "--exact-substring", "--count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Equal(string.Empty, countStderr);
+            using (var countDocument = ParseJsonOutput(countStdout))
+            {
+                var root = countDocument.RootElement;
+                var excludeOrigins = root
+                    .GetProperty("query_context")
+                    .GetProperty("exclude_origins")
+                    .EnumerateArray()
+                    .Select(value => value.GetString())
+                    .ToArray();
+
+                Assert.Equal(1, root.GetProperty("count").GetInt32());
+                Assert.Contains(SearchMatchClassifier.Comment, excludeOrigins);
+                Assert.Contains(SearchMatchClassifier.HelpText, excludeOrigins);
+            }
+
+            var (helpExitCode, helpStdout, helpStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["File.ReadAllText", "--db", dbPath, "--source-only", "--exact-substring", "--origin", "help_text", "--json=array", "--limit", "10"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, helpExitCode);
+            Assert.Equal(string.Empty, helpStderr);
+            using var helpDocument = ParseJsonOutput(helpStdout);
+            var helpRow = Assert.Single(helpDocument.RootElement.EnumerateArray());
+            Assert.Equal("src/CodeIndex/Cli/ConsoleUi.cs", helpRow.GetProperty("path").GetString());
+            Assert.Contains(
+                SearchMatchClassifier.HelpText,
+                helpRow.GetProperty("match_origins").EnumerateArray().Select(value => value.GetString()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_ListRecipesJsonIncludesBuiltInAuditMetadata_Issue3144()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
