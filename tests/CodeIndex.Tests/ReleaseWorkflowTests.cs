@@ -187,7 +187,9 @@ public partial class ReleaseWorkflowTests
         Assert.Contains("environment: release-production", createJob);
         Assert.Contains("permissions:\n      contents: write\n      id-token: write\n      attestations: write", createJob);
         Assert.Contains("name: Download prepared release payload", createJob);
-        Assert.Contains("name: release-payload", createJob);
+        Assert.Contains("pattern: release-payload", createJob);
+        Assert.Contains("path: .", createJob);
+        Assert.Contains("merge-multiple: true", createJob);
         Assert.Contains("name: Import release GPG key", createJob);
         Assert.Contains("name: Sign release checksum manifest", createJob);
         Assert.Contains("GNUPGHOME: ${{ runner.temp }}/release-gnupg", createJob);
