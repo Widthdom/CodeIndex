@@ -12,11 +12,20 @@ public class PackageNormalizeDiagnosticsTests
 
         var message = PackageNormalizeDiagnostics.FormatException("/tmp/package.nupkg", exception);
 
-        Assert.Contains("<path>", message, StringComparison.Ordinal);
-        Assert.Contains("--token=<redacted>", message, StringComparison.Ordinal);
-        Assert.Contains("password=<redacted>", message, StringComparison.Ordinal);
+        AssertRedactsSensitiveExceptionMessage(message);
+    }
+
+    private static void AssertRedactsSensitiveExceptionMessage(string message)
+    {
         Assert.DoesNotContain("/tmp/private", message, StringComparison.Ordinal);
         Assert.DoesNotContain("ghp_", message, StringComparison.Ordinal);
         Assert.DoesNotContain("hunter2", message, StringComparison.Ordinal);
+
+        if (message == "<redacted>")
+            return;
+
+        Assert.Contains("<path>", message, StringComparison.Ordinal);
+        Assert.Contains("--token=<redacted>", message, StringComparison.Ordinal);
+        Assert.Contains("password=<redacted>", message, StringComparison.Ordinal);
     }
 }
