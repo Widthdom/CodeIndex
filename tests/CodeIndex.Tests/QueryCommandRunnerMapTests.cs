@@ -272,7 +272,7 @@ public partial class QueryCommandRunnerTests
             }
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
-                ["--db", dbPath, "--compact", "--max-json-bytes", "200000"],
+                ["--db", dbPath, "--compact", "--path", "src/**", "--max-json-bytes", "200000"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
@@ -282,7 +282,16 @@ public partial class QueryCommandRunnerTests
 
             Assert.True(json.GetProperty("compact").GetBoolean());
             Assert.Equal(200000, json.GetProperty("output_byte_limit").GetInt32());
-            Assert.NotEmpty(json.GetProperty("next_commands").EnumerateArray());
+            var nextCommands = json.GetProperty("next_commands").EnumerateArray()
+                .Select(command => command.GetString()!)
+                .ToList();
+            Assert.NotEmpty(nextCommands);
+            Assert.All(nextCommands, command =>
+            {
+                Assert.Contains("--db ", command, StringComparison.Ordinal);
+                Assert.Contains("--path 'src/**'", command, StringComparison.Ordinal);
+                Assert.Contains("--max-json-bytes 200000", command, StringComparison.Ordinal);
+            });
             Assert.True(json
                 .GetProperty("truncation")
                 .GetProperty("sections")
@@ -291,7 +300,7 @@ public partial class QueryCommandRunnerTests
                 .GetBoolean());
 
             var (jsonExitCode, jsonStdout, jsonStderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
-                ["--db", dbPath, "--json", "--summary-only", "--max-json-bytes", "200000"],
+                ["--db", dbPath, "--json", "--summary-only", "--path", "src/**", "--max-json-bytes", "200000"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, jsonExitCode);

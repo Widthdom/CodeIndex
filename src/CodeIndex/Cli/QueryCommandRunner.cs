@@ -1619,13 +1619,125 @@ public static partial class QueryCommandRunner
         var commands = new JsonArray();
         foreach (var query in queryResults.Where(query => query.NextCursor != null).Take(3))
         {
-            commands.Add($"cdidx search --recipe {recipeName}/{query.Name} --format compact --cursor {query.NextCursor} --limit {options.Limit.ToString(CultureInfo.InvariantCulture)}");
+            commands.Add(BuildSearchRecipeCompactReplayCommand(
+                $"{recipeName}/{query.Name}",
+                options,
+                query.NextCursor,
+                resultsOnly: false,
+                includeRecipeQuerySelectors: false));
         }
 
         if (commands.Count == 0 && queryResults.Count > 1)
-            commands.Add($"cdidx search --recipe {recipeName}/{queryResults[0].Name} --format compact --limit {options.Limit.ToString(CultureInfo.InvariantCulture)}");
-        commands.Add($"cdidx search --recipe {recipeName} --json=ndjson --results-only --max-json-bytes <bytes>");
+        {
+            commands.Add(BuildSearchRecipeCompactReplayCommand(
+                $"{recipeName}/{queryResults[0].Name}",
+                options,
+                cursor: null,
+                resultsOnly: false,
+                includeRecipeQuerySelectors: false));
+        }
+        commands.Add(BuildSearchRecipeCompactReplayCommand(
+            recipeName,
+            options,
+            cursor: null,
+            resultsOnly: true,
+            includeRecipeQuerySelectors: true));
         return commands;
+    }
+
+    private static string BuildSearchRecipeCompactReplayCommand(
+        string recipeSelector,
+        QueryCommandOptions options,
+        string? cursor,
+        bool resultsOnly,
+        bool includeRecipeQuerySelectors)
+    {
+        var args = new List<string>
+        {
+            "cdidx",
+            "search",
+            "--recipe",
+            recipeSelector,
+        };
+        if (resultsOnly)
+        {
+            args.Add("--json=ndjson");
+            args.Add("--results-only");
+        }
+        else
+        {
+            args.Add("--format");
+            args.Add(OutputFormatCompact);
+        }
+        if (!string.IsNullOrWhiteSpace(cursor))
+            AddReplayValueOption(args, "--cursor", cursor);
+        AddReplayValueOption(args, "--limit", options.Limit.ToString(CultureInfo.InvariantCulture));
+        AddSearchRecipeCompactReplayOptions(args, options, includeRecipeQuerySelectors);
+        var command = string.Join(" ", args.Select(QuoteReplayShellArg));
+        return resultsOnly && !options.MaxJsonBytes.HasValue
+            ? command + " --max-json-bytes <bytes>"
+            : command;
+    }
+
+    private static void AddSearchRecipeCompactReplayOptions(List<string> args, QueryCommandOptions options, bool includeRecipeQuerySelectors)
+    {
+        if (options.DbPathExplicit)
+            AddReplayValueOption(args, "--db", options.DbPath);
+        if (options.SourceOnly)
+            args.Add("--source-only");
+        else if (options.AuditScopeExplicit)
+            AddReplayValueOption(args, "--audit-scope", options.AuditScope);
+        if (!string.IsNullOrWhiteSpace(options.Lang))
+            AddReplayValueOption(args, "--lang", options.Lang);
+        foreach (var pathPattern in options.PathPatterns)
+            AddReplayValueOption(args, "--path", pathPattern);
+        foreach (var excludePath in options.ExcludePaths)
+            AddReplayValueOption(args, "--exclude-path", excludePath);
+        if (options.ExcludeTests)
+            args.Add("--exclude-tests");
+        if (options.Since.HasValue)
+            AddReplayValueOption(args, "--since", options.Since.Value.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
+        if (options.NoDedup)
+            args.Add("--no-dedup");
+        if (options.NoVisibilityRank)
+            args.Add("--no-visibility-rank");
+        if (options.Exact)
+            args.Add("--exact");
+        if (options.ExactSubstring)
+            args.Add("--exact-substring");
+        if (options.Prefix)
+            args.Add("--prefix");
+        foreach (var guardFilter in options.GuardFilters)
+            AddReplayValueOption(args, BuildSearchGuardReplayOptionName(guardFilter), guardFilter.Query);
+        if (options.GuardFilters.Count > 0 && options.GuardWindow != DbReader.DefaultSearchGuardWindow)
+            AddReplayValueOption(args, "--guard-window", options.GuardWindow.ToString(CultureInfo.InvariantCulture));
+        if (options.GuardFilters.Count > 0 && options.GuardScope != SearchGuardScope.Window)
+            AddReplayValueOption(args, "--guard-scope", FormatSearchGuardScope(options.GuardScope));
+        if (options.ExcludeComments)
+            args.Add("--exclude-comments");
+        if (options.ExcludeStrings)
+            args.Add("--exclude-strings");
+        if (options.ExcludeFixtures)
+            args.Add("--exclude-fixtures");
+        foreach (var origin in options.MatchOrigins)
+            AddReplayValueOption(args, "--origin", origin);
+        foreach (var origin in options.ExcludeOrigins)
+            AddReplayValueOption(args, "--exclude-origin", origin);
+        foreach (var kind in options.ResultKinds)
+            AddReplayValueOption(args, "--result-kind", kind);
+        if (options.TotalLimit.HasValue)
+            AddReplayValueOption(args, "--total-limit", options.TotalLimit.Value.ToString(CultureInfo.InvariantCulture));
+        if (options.MaxJsonBytes.HasValue)
+            AddReplayValueOption(args, "--max-json-bytes", options.MaxJsonBytes.Value.ToString(CultureInfo.InvariantCulture));
+        if (options.ShowExcluded)
+            args.Add("--show-excluded");
+        if (includeRecipeQuerySelectors)
+        {
+            foreach (var includeQuery in options.IncludeRecipeQueries)
+                AddReplayValueOption(args, "--include-query", includeQuery);
+            foreach (var excludeQuery in options.ExcludeRecipeQueries)
+                AddReplayValueOption(args, "--exclude-query", excludeQuery);
+        }
     }
 
     private static int RunSearchRecipeAggregation(QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool userExact)
@@ -7089,23 +7201,55 @@ public static partial class QueryCommandRunner
 
     private static JsonArray BuildRepoMapNextCommands(QueryCommandOptions options)
     {
-        var jsonFlag = options.Compact ? "--compact" : "--json";
         var commands = new JsonArray
         {
-            $"cdidx map {jsonFlag} --summary-only",
+            BuildRepoMapReplayCommand(options, ["--summary-only"]),
         };
 
         if (options.MapSections == null)
         {
-            commands.Add($"cdidx map {jsonFlag} --sections tree --limit {GetCompactSectionLimit(options).ToString(CultureInfo.InvariantCulture)}");
-            commands.Add($"cdidx map {jsonFlag} --sections hotspots --limit {GetCompactSectionLimit(options).ToString(CultureInfo.InvariantCulture)}");
+            commands.Add(BuildRepoMapReplayCommand(options, ["--sections", "tree", "--limit", GetCompactSectionLimit(options).ToString(CultureInfo.InvariantCulture)]));
+            commands.Add(BuildRepoMapReplayCommand(options, ["--sections", "hotspots", "--limit", GetCompactSectionLimit(options).ToString(CultureInfo.InvariantCulture)]));
         }
         else
         {
-            commands.Add($"cdidx map {jsonFlag} --sections {string.Join(',', options.MapSections)} --limit {GetCompactSectionLimit(options).ToString(CultureInfo.InvariantCulture)}");
+            commands.Add(BuildRepoMapReplayCommand(options, ["--sections", string.Join(',', options.MapSections), "--limit", GetCompactSectionLimit(options).ToString(CultureInfo.InvariantCulture)]));
         }
 
         return commands;
+    }
+
+    private static string BuildRepoMapReplayCommand(QueryCommandOptions options, string[] mapArgs)
+    {
+        var args = new List<string>
+        {
+            "cdidx",
+            "map",
+            options.Compact ? "--compact" : "--json",
+        };
+        args.AddRange(mapArgs);
+        AddRepoMapReplayOptions(args, options);
+        return string.Join(" ", args.Select(QuoteReplayShellArg));
+    }
+
+    private static void AddRepoMapReplayOptions(List<string> args, QueryCommandOptions options)
+    {
+        if (options.DbPathExplicit)
+            AddReplayValueOption(args, "--db", options.DbPath);
+        if (!string.IsNullOrWhiteSpace(options.Lang))
+            AddReplayValueOption(args, "--lang", options.Lang);
+        foreach (var pathPattern in options.PathPatterns)
+            AddReplayValueOption(args, "--path", pathPattern);
+        foreach (var excludePath in options.ExcludePaths)
+            AddReplayValueOption(args, "--exclude-path", excludePath);
+        if (options.ExcludeTests)
+            args.Add("--exclude-tests");
+        if (options.ContextAfterExplicit)
+            AddReplayValueOption(args, "--depth", options.ContextAfter.ToString(CultureInfo.InvariantCulture));
+        if (options.MinEntrypointConfidence > 0)
+            AddReplayValueOption(args, "--min-entrypoint-confidence", options.MinEntrypointConfidence.ToString("0.###", CultureInfo.InvariantCulture));
+        if (options.MaxJsonBytes.HasValue)
+            AddReplayValueOption(args, "--max-json-bytes", options.MaxJsonBytes.Value.ToString(CultureInfo.InvariantCulture));
     }
 
     private static void TruncateCompactSection<T>(List<T> items, int sectionLimit, JsonObject sections, string sectionName)

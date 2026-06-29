@@ -3304,7 +3304,7 @@ public partial class QueryCommandRunnerTests
                 """);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--format", "compact", "--origin", "code", "--max-json-bytes", "200000"],
+                ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--format", "compact", "--path", "src/**", "--origin", "code", "--total-limit", "5", "--max-json-bytes", "200000"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
@@ -3321,7 +3321,12 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(1, truncation.GetProperty("selected_query_count").GetInt32());
             Assert.Equal("raw-diagnostic-echo", query.GetProperty("name").GetString());
             Assert.Equal(1, query.GetProperty("returned").GetInt32());
-            Assert.NotEmpty(root.GetProperty("next_commands").EnumerateArray());
+            var nextCommand = Assert.Single(root.GetProperty("next_commands").EnumerateArray()).GetString()!;
+            Assert.Contains("--db ", nextCommand, StringComparison.Ordinal);
+            Assert.Contains("--path 'src/**'", nextCommand, StringComparison.Ordinal);
+            Assert.Contains("--origin code", nextCommand, StringComparison.Ordinal);
+            Assert.Contains("--total-limit 5", nextCommand, StringComparison.Ordinal);
+            Assert.Contains("--max-json-bytes 200000", nextCommand, StringComparison.Ordinal);
 
             var (capExitCode, capStdout, capStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--format", "compact", "--origin", "code", "--max-json-bytes", "1"],
