@@ -490,14 +490,21 @@ cdidx unused --kind function --path src/ --limit 50
 cdidx unused --bucket likely_unused_private --min-confidence medium
 cdidx unused --actionable --confidence medium
 cdidx unused --json --count
+cdidx unused --all --json --count
 cdidx unused --compact --bucket likely_unused_private --min-confidence medium
 cdidx unused --json --by-bucket
 cdidx unused --compact --by-bucket
 ```
 
 `unused` compares definitions with indexed references and groups results by
-confidence. JSON output includes `summary.by_bucket`, `summary.by_confidence`,
-and `bucket_taxonomy` for the `likely_unused_private`,
+confidence. Broad `unused` audits suppress low-confidence contract-domain
+candidates by default so public API surfaces, generated/config/reflection hooks,
+and other contract-like symbols do not dominate first-pass audits. Text output
+reports suppressed totals on stderr, and JSON output exposes
+`default_suppression` plus `summary.suppressed`; pass `--all` to include those
+candidates in normal results and counts. JSON output includes
+`summary.by_bucket`, `summary.by_confidence`, and `bucket_taxonomy` for the
+`likely_unused_private`,
 `maybe_unused_nonpublic`, `public_or_exported_no_refs`, and
 `reflection_or_config_suspect` buckets. In regular JSON, `--by-bucket` also
 groups returned symbols under those bucket keys; with `--compact`, the same
@@ -3169,13 +3176,19 @@ cdidx unused --kind function --path src/ --limit 50
 cdidx unused --bucket likely_unused_private --min-confidence medium
 cdidx unused --actionable --confidence medium
 cdidx unused --json --count
+cdidx unused --all --json --count
 cdidx unused --compact --bucket likely_unused_private --min-confidence medium
 cdidx unused --json --by-bucket
 cdidx unused --compact --by-bucket
 ```
 
 `unused` は definitions と indexed references を比較し、confidence ごとに結果を
-分類します。JSON 出力には `likely_unused_private`、`maybe_unused_nonpublic`、
+分類します。広い `unused` audit では、Public API surface、generated/config/reflection
+hook、その他の contract-like symbol が初回 audit を支配しないように、低 confidence の
+contract-domain 候補を既定で抑制します。text 出力は stderr に抑制件数を表示し、
+JSON 出力は `default_suppression` と `summary.suppressed` を公開します。これらの候補を
+通常の結果と count に戻すには `--all` を指定してください。JSON 出力には
+`likely_unused_private`、`maybe_unused_nonpublic`、
 `public_or_exported_no_refs`、`reflection_or_config_suspect` bucket 用の
 `summary.by_bucket`、`summary.by_confidence`、`bucket_taxonomy` が含まれます。
 通常の JSON では `--by-bucket` が返却されたシンボルを bucket key ごとに grouped します。

@@ -118,6 +118,7 @@ public static partial class QueryCommandRunner
     private const int MaxUnusedPaginationPages = 10;
     internal const int MaxUnusedPaginationFetchLimit = MaxQueryResultLimit * MaxUnusedPaginationPages + 1;
     internal const int MaxUnusedPaginationOffset = MaxUnusedPaginationFetchLimit - MaxQueryResultLimit - 1;
+    private const int UnusedDefaultSuppressionOverfetchMultiplier = 6;
     private const string SearchFilterNoMatchSentinel = "\0__cdidx_no_match__";
     internal const string HotspotsGroupedByNameKind = "name_kind";
     internal const string HotspotsGroupedBySymbol = "symbol";
@@ -9432,11 +9433,13 @@ public static partial class QueryCommandRunner
             var zeroResultSqlGraphSignal = NarrowSqlGraphContractSignal(
                 baseSqlGraphSignal,
                 reader.ScopeMayIncludeSqlSymbols(options.Kind, options.Lang, unusedScope.PathPatterns, unusedScope.ExcludePaths, unusedScope.ExcludeTests));
-            if (options.CountOnly)
+            var applyDefaultSuppressions = ShouldApplyUnusedDefaultSuppressions(options, unusedScope);
+
+            UnusedCountResult CountUnusedSymbolsDetailedForCurrentQuery(Func<UnusedSymbolResult, bool>? resultFilter = null)
             {
-                if (options.Json)
+                if (resultFilter == null)
                 {
-                    var countSummary = reader.CountUnusedSymbolsDetailed(
+                    return reader.CountUnusedSymbolsDetailed(
                         options.Kind,
                         options.Lang,
                         unusedScope.PathPatterns,
@@ -9446,6 +9449,35 @@ public static partial class QueryCommandRunner
                         excludeVisibilityFilters: unusedScope.ExcludeVisibilityFilters,
                         bucketFilter: options.UnusedBucket,
                         minConfidence: options.MinUnusedConfidence);
+                }
+
+                return reader.CountUnusedSymbolsDetailedFiltered(
+                    options.Kind,
+                    options.Lang,
+                    unusedScope.PathPatterns,
+                    unusedScope.ExcludePaths,
+                    unusedScope.ExcludeTests,
+                    visibilityFilters: unusedScope.VisibilityFilters,
+                    excludeVisibilityFilters: unusedScope.ExcludeVisibilityFilters,
+                    bucketFilter: options.UnusedBucket,
+                    minConfidence: options.MinUnusedConfidence,
+                    resultFilter: resultFilter);
+            }
+
+            if (options.CountOnly)
+            {
+                var countSummary = CountUnusedSymbolsDetailedForCurrentQuery();
+                UnusedDefaultCountSuppressionResult? countSuppression = null;
+                if (applyDefaultSuppressions)
+                {
+                    var suppressedCountSummary = CountUnusedSymbolsDetailedForCurrentQuery(IsDefaultSuppressedUnusedResult);
+                    if (suppressedCountSummary.Count > 0)
+                        countSummary = CountUnusedSymbolsDetailedForCurrentQuery(result => !IsDefaultSuppressedUnusedResult(result));
+                    countSuppression = new UnusedDefaultCountSuppressionResult(countSummary, suppressedCountSummary, Applied: true);
+                }
+
+                if (options.Json)
+                {
                     var effectiveSqlGraphSignal = countSummary.Count == 0
                         ? zeroResultSqlGraphSignal
                         : NarrowSqlGraphContractSignal(
@@ -9457,15 +9489,22 @@ public static partial class QueryCommandRunner
                         ["files"] = countSummary.FileCount,
                         ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(ToUnusedCountDictionary(countSummary.BucketCounts), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
                         ["returned_contract_domain_counts"] = JsonSerializer.SerializeToNode(ToUnusedCountDictionary(countSummary.ContractDomainCounts), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
-                        ["summary"] = BuildUnusedCountSummaryJson(countSummary, jsonOptions),
+                        ["summary"] = BuildUnusedCountSummaryJson(countSummary, jsonOptions, countSuppression),
                         ["bucket_taxonomy"] = BuildUnusedBucketTaxonomyJson(),
                         ["graph_supported"] = graphSupported,
                         ["graph_support_reason"] = graphSupportReason,
                         ["graph_table_available"] = reader._hasReferencesTable,
                         ["degraded"] = !reader._hasReferencesTable
                     };
+                    if (countSuppression is { Applied: true })
+                        payload["default_suppression"] = BuildUnusedDefaultCountSuppressionJson(countSuppression, jsonOptions);
                     AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
-                    payload["query_context"] = BuildUnusedQueryContextJson(options, unusedScope, jsonOptions);
+                    var queryContext = BuildUnusedQueryContextJson(options, unusedScope, jsonOptions);
+                    if (countSuppression is { Applied: true })
+                        queryContext["default_suppression"] = true;
+                    if (options.All)
+                        queryContext["all"] = true;
+                    payload["query_context"] = queryContext;
                     if (options.Compact)
                     {
                         payload["compact"] = true;
@@ -9475,22 +9514,14 @@ public static partial class QueryCommandRunner
                 }
                 else
                 {
-                    var countSummary = reader.CountUnusedSymbols(
-                        options.Kind,
-                        options.Lang,
-                        unusedScope.PathPatterns,
-                        unusedScope.ExcludePaths,
-                        unusedScope.ExcludeTests,
-                        visibilityFilters: unusedScope.VisibilityFilters,
-                        excludeVisibilityFilters: unusedScope.ExcludeVisibilityFilters,
-                        bucketFilter: options.UnusedBucket,
-                        minConfidence: options.MinUnusedConfidence);
                     var effectiveSqlGraphSignal = countSummary.Count == 0
                         ? zeroResultSqlGraphSignal
                         : NarrowSqlGraphContractSignal(
                             baseSqlGraphSignal,
                             countSummary.IncludesSql || DbReader.IsSqlLanguage(options.Lang));
                     Console.WriteLine($"{countSummary.Count}");
+                    if (countSuppression is { Applied: true })
+                        WriteUnusedDefaultCountSuppressionSummary(countSuppression);
                     WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
                     WriteDegradedGraphZeroResult(reader, "unused", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
@@ -9507,24 +9538,35 @@ public static partial class QueryCommandRunner
                 return CommandExitCodes.UsageError;
             }
 
-            var fetchLimit = GetUnusedFetchLimit(options.Limit, pageOffset);
-            var fetchedResults = reader.GetUnusedSymbols(
-                fetchLimit,
-                options.Kind,
-                options.Lang,
-                unusedScope.PathPatterns,
-                unusedScope.ExcludePaths,
-                unusedScope.ExcludeTests,
-                visibilityFilters: unusedScope.VisibilityFilters,
-                excludeVisibilityFilters: unusedScope.ExcludeVisibilityFilters,
-                bucketFilter: options.UnusedBucket,
-                minConfidence: options.MinUnusedConfidence);
-            var results = fetchedResults
+            var fetchLimit = applyDefaultSuppressions
+                ? GetUnusedDefaultSuppressionFetchLimit(options.Limit, pageOffset)
+                : GetUnusedFetchLimit(options.Limit, pageOffset);
+            var fetchedResults = FetchUnusedResults(fetchLimit);
+            var suppression = BuildUnusedDefaultSuppressionResult(fetchedResults, applyDefaultSuppressions);
+            while (suppression.Applied
+                && suppression.VisibleResults.Count <= pageOffset + options.Limit
+                && fetchedResults.Count >= fetchLimit
+                && fetchLimit < MaxUnusedPaginationFetchLimit)
+            {
+                var nextFetchLimit = Math.Min(MaxUnusedPaginationFetchLimit, fetchLimit * 2);
+                if (nextFetchLimit == fetchLimit)
+                    break;
+
+                fetchLimit = nextFetchLimit;
+                fetchedResults = FetchUnusedResults(fetchLimit);
+                suppression = BuildUnusedDefaultSuppressionResult(fetchedResults, applyDefaultSuppressions);
+            }
+            if (suppression.Applied)
+                suppression = suppression with { SuppressedCountResult = CountUnusedSymbolsDetailedForCurrentQuery(IsDefaultSuppressedUnusedResult) };
+
+            var pageableResults = suppression.VisibleResults;
+            var results = pageableResults
                 .Skip(pageOffset)
                 .Take(options.Limit)
                 .ToList();
             var nextOffset = pageOffset + options.Limit;
-            var nextCursor = fetchedResults.Count > nextOffset && IsUnusedCursorOffsetWithinFetchCap(options.Limit, nextOffset)
+            var nextCursor = pageableResults.Count > nextOffset
+                && IsUnusedCursorOffsetWithinFetchCap(options.Limit, nextOffset)
                 ? FormatUnusedCursor(nextOffset)
                 : null;
             var sqlGraphSignal = results.Count == 0
@@ -9546,7 +9588,15 @@ public static partial class QueryCommandRunner
                         jsonOptions,
                         options,
                         unusedScope,
-                        nextCursor: nextCursor));
+                        nextCursor: nextCursor,
+                        suppression: suppression));
+                }
+                else if (suppression.Applied && GetUnusedSuppressedCount(suppression) > 0)
+                {
+                    CommandErrorWriter.WriteStderr(BuildZeroResultLine("No unsuppressed unused symbols found", options));
+                    WriteUnusedDefaultSuppressionSummary(suppression);
+                    WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
+                    WriteDegradedGraphZeroResult(reader, "symbols", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
                 else
                 {
@@ -9557,12 +9607,12 @@ public static partial class QueryCommandRunner
                     WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
                     WriteDegradedGraphZeroResult(reader, "symbols", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
-                return ZeroResultExitCode(options);
+                return UnusedZeroResultExitCode(options, suppression);
             }
 
             if (options.Json)
             {
-                Console.WriteLine(BuildUnusedJsonPayload(results, graphSupported, graphSupportReason, sqlGraphSignal, reader._hasReferencesTable, jsonOptions, options, unusedScope, byBucket: byBucket, nextCursor: nextCursor));
+                Console.WriteLine(BuildUnusedJsonPayload(results, graphSupported, graphSupportReason, sqlGraphSignal, reader._hasReferencesTable, jsonOptions, options, unusedScope, byBucket: byBucket, nextCursor: nextCursor, suppression: suppression));
             }
             else
             {
@@ -9590,9 +9640,23 @@ public static partial class QueryCommandRunner
                 CommandErrorWriter.WriteStderr($"({results.Count} returned potentially unused symbols; returned buckets: {string.Join(", ", summaryBuckets)})");
                 if (nextCursor != null)
                     CommandErrorWriter.WriteStderr($"next_cursor={nextCursor}");
+                WriteUnusedDefaultSuppressionSummary(suppression);
                 WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
             }
             return CommandExitCodes.Success;
+
+            List<UnusedSymbolResult> FetchUnusedResults(int limit)
+                => reader.GetUnusedSymbols(
+                    limit,
+                    options.Kind,
+                    options.Lang,
+                    unusedScope.PathPatterns,
+                    unusedScope.ExcludePaths,
+                    unusedScope.ExcludeTests,
+                    visibilityFilters: unusedScope.VisibilityFilters,
+                    excludeVisibilityFilters: unusedScope.ExcludeVisibilityFilters,
+                    bucketFilter: options.UnusedBucket,
+                    minConfidence: options.MinUnusedConfidence);
         });
     }
 
@@ -9628,6 +9692,22 @@ public static partial class QueryCommandRunner
         "internal",
     ];
 
+    private static readonly HashSet<string> DefaultSuppressedUnusedContractDomains = new(StringComparer.Ordinal)
+    {
+        "public_api_surface",
+        "cli_contract",
+        "json_contract",
+        "mcp_contract",
+        "lsp_contract",
+        "configuration_contract",
+        "serialization_or_reflection_contract",
+        "generated_code",
+        "documentation_surface",
+        "test_contract",
+        "framework_override",
+        "exception_diagnostic",
+    };
+
     private sealed record UnusedAuditScopeFilters(
         IReadOnlyList<string> PathPatterns,
         IReadOnlyList<string> ExcludePaths,
@@ -9635,6 +9715,17 @@ public static partial class QueryCommandRunner
         IReadOnlyList<string> VisibilityFilters,
         IReadOnlyList<string> ExcludeVisibilityFilters,
         bool AppliedSourceDefaults);
+
+    internal sealed record UnusedDefaultSuppressionResult(
+        List<UnusedSymbolResult> VisibleResults,
+        List<UnusedSymbolResult> SuppressedResults,
+        bool Applied,
+        UnusedCountResult? SuppressedCountResult = null);
+
+    internal sealed record UnusedDefaultCountSuppressionResult(
+        UnusedCountResult VisibleResult,
+        UnusedCountResult SuppressedResult,
+        bool Applied);
 
     private static UnusedAuditScopeFilters BuildUnusedAuditScopeFilters(QueryCommandOptions options)
     {
@@ -9668,6 +9759,54 @@ public static partial class QueryCommandRunner
             options.ExcludeVisibilityFilters,
             AppliedSourceDefaults: true);
     }
+
+    private static bool ShouldApplyUnusedDefaultSuppressions(QueryCommandOptions options, UnusedAuditScopeFilters unusedScope)
+    {
+        if (options.All
+            || options.UnusedActionable
+            || options.Kind != null
+            || options.UnusedBucket != null
+            || options.MinUnusedConfidence != null
+            || options.VisibilityFilters.Count > 0
+            || options.ExcludeVisibilityFilters.Count > 0)
+        {
+            return false;
+        }
+
+        return unusedScope.AppliedSourceDefaults || !options.AuditScopeExplicit || string.Equals(options.AuditScope, SearchAuditRecipes.AllAuditScope, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int GetUnusedDefaultSuppressionFetchLimit(int pageLimit, int pageOffset)
+    {
+        var visibleTarget = (long)Math.Max(pageLimit, 1) + Math.Max(pageOffset, 0) + 1;
+        var overfetch = visibleTarget * UnusedDefaultSuppressionOverfetchMultiplier;
+        return (int)Math.Min(MaxUnusedPaginationFetchLimit, Math.Max(visibleTarget, overfetch));
+    }
+
+    private static UnusedDefaultSuppressionResult ApplyUnusedDefaultSuppressions(List<UnusedSymbolResult> results)
+    {
+        var visible = new List<UnusedSymbolResult>(results.Count);
+        var suppressed = new List<UnusedSymbolResult>();
+        foreach (var result in results)
+        {
+            if (IsDefaultSuppressedUnusedResult(result))
+                suppressed.Add(result);
+            else
+                visible.Add(result);
+        }
+
+        return new UnusedDefaultSuppressionResult(visible, suppressed, Applied: true);
+    }
+
+    private static UnusedDefaultSuppressionResult BuildUnusedDefaultSuppressionResult(List<UnusedSymbolResult> results, bool applyDefaultSuppressions)
+        => applyDefaultSuppressions
+            ? ApplyUnusedDefaultSuppressions(results)
+            : new UnusedDefaultSuppressionResult(results, [], Applied: false);
+
+    private static bool IsDefaultSuppressedUnusedResult(UnusedSymbolResult result)
+        => string.Equals(result.UnusedConfidence, "low", StringComparison.Ordinal)
+           && result.UnusedContractDomain != null
+           && DefaultSuppressedUnusedContractDomains.Contains(result.UnusedContractDomain);
 
     internal static Dictionary<string, int> BuildUnusedBucketCounts(IEnumerable<UnusedSymbolResult> results)
     {
@@ -9711,27 +9850,105 @@ public static partial class QueryCommandRunner
         return ordered;
     }
 
-    internal static JsonObject BuildUnusedSummaryJson(IEnumerable<UnusedSymbolResult> results, JsonSerializerOptions jsonOptions)
+    internal static JsonObject BuildUnusedSummaryJson(IEnumerable<UnusedSymbolResult> results, JsonSerializerOptions jsonOptions, UnusedDefaultSuppressionResult? suppression = null)
     {
         var resultList = results as List<UnusedSymbolResult> ?? results.ToList();
         var context = CliJsonSerializerContextFactory.Create(jsonOptions);
-        return new JsonObject
+        var summary = new JsonObject
         {
             ["by_bucket"] = JsonSerializer.SerializeToNode(BuildUnusedBucketCounts(resultList), context.DictionaryStringInt32),
             ["by_confidence"] = JsonSerializer.SerializeToNode(BuildUnusedConfidenceCounts(resultList), context.DictionaryStringInt32),
             ["by_contract_domain"] = JsonSerializer.SerializeToNode(BuildUnusedContractDomainCounts(resultList), context.DictionaryStringInt32),
         };
+        if (suppression is { Applied: true })
+            summary["suppressed"] = BuildUnusedDefaultSuppressionJson(suppression, jsonOptions);
+        return summary;
     }
 
-    internal static JsonObject BuildUnusedCountSummaryJson(UnusedCountResult result, JsonSerializerOptions jsonOptions)
+    internal static JsonObject BuildUnusedCountSummaryJson(UnusedCountResult result, JsonSerializerOptions jsonOptions, UnusedDefaultCountSuppressionResult? suppression = null)
     {
         var context = CliJsonSerializerContextFactory.Create(jsonOptions);
-        return new JsonObject
+        var summary = new JsonObject
         {
             ["by_bucket"] = JsonSerializer.SerializeToNode(ToUnusedCountDictionary(result.BucketCounts), context.DictionaryStringInt32),
             ["by_confidence"] = JsonSerializer.SerializeToNode(ToUnusedCountDictionary(result.ConfidenceCounts), context.DictionaryStringInt32),
             ["by_contract_domain"] = JsonSerializer.SerializeToNode(ToUnusedCountDictionary(result.ContractDomainCounts), context.DictionaryStringInt32),
         };
+        if (suppression is { Applied: true })
+            summary["suppressed"] = BuildUnusedDefaultCountSuppressionJson(suppression, jsonOptions);
+        return summary;
+    }
+
+    private static int GetUnusedSuppressedCount(UnusedDefaultSuppressionResult suppression)
+        => suppression.SuppressedCountResult?.Count ?? suppression.SuppressedResults.Count;
+
+    private static Dictionary<string, int> BuildUnusedSuppressedBucketCounts(UnusedDefaultSuppressionResult suppression)
+        => suppression.SuppressedCountResult.HasValue
+            ? ToUnusedCountDictionary(suppression.SuppressedCountResult.Value.BucketCounts)
+            : BuildUnusedBucketCounts(suppression.SuppressedResults);
+
+    private static Dictionary<string, int> BuildUnusedSuppressedConfidenceCounts(UnusedDefaultSuppressionResult suppression)
+        => suppression.SuppressedCountResult.HasValue
+            ? ToUnusedCountDictionary(suppression.SuppressedCountResult.Value.ConfidenceCounts)
+            : BuildUnusedConfidenceCounts(suppression.SuppressedResults);
+
+    private static Dictionary<string, int> BuildUnusedSuppressedContractDomainCounts(UnusedDefaultSuppressionResult suppression)
+        => suppression.SuppressedCountResult.HasValue
+            ? ToUnusedCountDictionary(suppression.SuppressedCountResult.Value.ContractDomainCounts)
+            : BuildUnusedContractDomainCounts(suppression.SuppressedResults);
+
+    private static JsonObject BuildUnusedDefaultSuppressionJson(UnusedDefaultSuppressionResult suppression, JsonSerializerOptions jsonOptions)
+    {
+        var context = CliJsonSerializerContextFactory.Create(jsonOptions);
+        return new JsonObject
+        {
+            ["applied"] = suppression.Applied,
+            ["suppressed_count"] = GetUnusedSuppressedCount(suppression),
+            ["suppressed_bucket_counts"] = JsonSerializer.SerializeToNode(BuildUnusedSuppressedBucketCounts(suppression), context.DictionaryStringInt32),
+            ["suppressed_confidence_counts"] = JsonSerializer.SerializeToNode(BuildUnusedSuppressedConfidenceCounts(suppression), context.DictionaryStringInt32),
+            ["suppressed_contract_domain_counts"] = JsonSerializer.SerializeToNode(BuildUnusedSuppressedContractDomainCounts(suppression), context.DictionaryStringInt32),
+            ["include_suppressed_hint"] = "Pass --all to include low-confidence contract-domain candidates.",
+        };
+    }
+
+    private static JsonObject BuildUnusedDefaultCountSuppressionJson(UnusedDefaultCountSuppressionResult suppression, JsonSerializerOptions jsonOptions)
+    {
+        var context = CliJsonSerializerContextFactory.Create(jsonOptions);
+        return new JsonObject
+        {
+            ["applied"] = suppression.Applied,
+            ["suppressed_count"] = suppression.SuppressedResult.Count,
+            ["suppressed_bucket_counts"] = JsonSerializer.SerializeToNode(ToUnusedCountDictionary(suppression.SuppressedResult.BucketCounts), context.DictionaryStringInt32),
+            ["suppressed_confidence_counts"] = JsonSerializer.SerializeToNode(ToUnusedCountDictionary(suppression.SuppressedResult.ConfidenceCounts), context.DictionaryStringInt32),
+            ["suppressed_contract_domain_counts"] = JsonSerializer.SerializeToNode(ToUnusedCountDictionary(suppression.SuppressedResult.ContractDomainCounts), context.DictionaryStringInt32),
+            ["include_suppressed_hint"] = "Pass --all to include low-confidence contract-domain candidates.",
+        };
+    }
+
+    private static void WriteUnusedDefaultSuppressionSummary(UnusedDefaultSuppressionResult suppression)
+    {
+        var suppressedCount = GetUnusedSuppressedCount(suppression);
+        if (!suppression.Applied || suppressedCount == 0)
+            return;
+
+        WriteUnusedDefaultSuppressionSummary(suppressedCount, BuildUnusedSuppressedContractDomainCounts(suppression));
+    }
+
+    private static void WriteUnusedDefaultCountSuppressionSummary(UnusedDefaultCountSuppressionResult suppression)
+    {
+        if (!suppression.Applied || suppression.SuppressedResult.Count == 0)
+            return;
+
+        WriteUnusedDefaultSuppressionSummary(
+            suppression.SuppressedResult.Count,
+            ToUnusedCountDictionary(suppression.SuppressedResult.ContractDomainCounts));
+    }
+
+    private static void WriteUnusedDefaultSuppressionSummary(int suppressedCount, IReadOnlyDictionary<string, int> contractDomainCounts)
+    {
+        var domainCounts = contractDomainCounts.Select(pair => $"{pair.Key}: {pair.Value}");
+        CommandErrorWriter.WriteStderr(
+            $"({suppressedCount} low-confidence contract-domain candidates suppressed by default; use --all to include them; suppressed domains: {string.Join(", ", domainCounts)})");
     }
 
     private static Dictionary<string, int> ToUnusedCountDictionary(IReadOnlyDictionary<string, int> counts)
@@ -9825,7 +10042,7 @@ public static partial class QueryCommandRunner
         _ => "Unknown unused-symbol bucket.",
     };
 
-    private static string BuildUnusedJsonPayload(IEnumerable<UnusedSymbolResult> results, bool? graphSupported, string? graphSupportReason, SqlGraphContractSignal sqlGraphSignal, bool hasReferencesTable, JsonSerializerOptions jsonOptions, QueryCommandOptions? queryOptions = null, UnusedAuditScopeFilters? unusedScope = null, bool byBucket = false, string? nextCursor = null)
+    private static string BuildUnusedJsonPayload(IEnumerable<UnusedSymbolResult> results, bool? graphSupported, string? graphSupportReason, SqlGraphContractSignal sqlGraphSignal, bool hasReferencesTable, JsonSerializerOptions jsonOptions, QueryCommandOptions? queryOptions = null, UnusedAuditScopeFilters? unusedScope = null, bool byBucket = false, string? nextCursor = null, UnusedDefaultSuppressionResult? suppression = null)
     {
         var resultList = results as List<UnusedSymbolResult> ?? results.ToList();
         var payload = new JsonObject
@@ -9835,9 +10052,11 @@ public static partial class QueryCommandRunner
             ["graph_support_reason"] = graphSupportReason,
             ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(BuildUnusedBucketCounts(resultList), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
             ["returned_contract_domain_counts"] = JsonSerializer.SerializeToNode(BuildUnusedContractDomainCounts(resultList), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
-            ["summary"] = BuildUnusedSummaryJson(resultList, jsonOptions),
+            ["summary"] = BuildUnusedSummaryJson(resultList, jsonOptions, suppression),
             ["bucket_taxonomy"] = BuildUnusedBucketTaxonomyJson(),
         };
+        if (suppression is { Applied: true })
+            payload["default_suppression"] = BuildUnusedDefaultSuppressionJson(suppression, jsonOptions);
         if (nextCursor != null)
             payload["next_cursor"] = nextCursor;
         if (queryOptions?.Compact == true)
@@ -9868,9 +10087,16 @@ public static partial class QueryCommandRunner
 
         AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
         if (queryOptions != null)
-            payload["query_context"] = unusedScope != null
+        {
+            var queryContext = unusedScope != null
                 ? BuildUnusedQueryContextJson(queryOptions, unusedScope, jsonOptions)
                 : BuildQueryContextJson(queryOptions, jsonOptions);
+            if (suppression is { Applied: true })
+                queryContext["default_suppression"] = true;
+            if (queryOptions.All)
+                queryContext["all"] = true;
+            payload["query_context"] = queryContext;
+        }
         return payload.ToJsonString(GetJsonNodeSerializationOptions(jsonOptions));
     }
 
@@ -12912,6 +13138,11 @@ public static partial class QueryCommandRunner
 
     private static int ZeroResultExitCode(QueryCommandOptions options)
         => options.StrictNotFound ? CommandExitCodes.NotFound : CommandExitCodes.Success;
+
+    private static int UnusedZeroResultExitCode(QueryCommandOptions options, UnusedDefaultSuppressionResult suppression)
+        => !options.StrictNotFound && suppression.Applied && GetUnusedSuppressedCount(suppression) > 0
+            ? CommandExitCodes.Success
+            : ZeroResultExitCode(options);
 
     private static bool IsEmptySymbolAnalysis(SymbolAnalysisResult analysis)
         => analysis.File == null
