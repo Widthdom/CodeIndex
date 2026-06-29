@@ -2775,6 +2775,7 @@ public partial class DbReader
         if (!_hasReferencesTable) return [];
         var query = BuildSymbolHotspotRowsQuery(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
         var genericNamePenaltySql = GetGenericHotspotNamePenaltySql("gr.name");
+        var fileSymbolCountSql = "MAX(fsc.symbol_count)";
         var structuralRankPenaltySql = GetFileHotspotStructuralRankPenaltySql("COUNT(*)");
         var sql = query.Sql + @"
             SELECT gr.path,
@@ -2788,9 +2789,12 @@ public partial class DbReader
                        ELSE 1.0
                    END AS generic_name_penalty,
                    (" + structuralRankPenaltySql + @") AS structural_rank_penalty,
-                   COUNT(*) AS symbol_count
+                   " + fileSymbolCountSql + @" AS symbol_count
             FROM grouped_rows gr
             JOIN reference_counts rc ON rc.symbol_id = gr.symbol_id
+            JOIN file_symbol_counts fsc
+              ON fsc.path = gr.path
+             AND fsc.lang_key = COALESCE(gr.lang, '')
             WHERE rc.ref_count > 0
             GROUP BY gr.path, gr.lang
             ORDER BY ranking_score DESC,
@@ -3200,6 +3204,13 @@ public partial class DbReader
                   ON crc.logical_target_key = gr.logical_target_key
                  AND crc.name = gr.name
                  AND crc.kind = gr.kind
+            ),
+            file_symbol_counts AS (
+                SELECT path,
+                       COALESCE(lang, '') AS lang_key,
+                       COUNT(*) AS symbol_count
+                FROM filtered_candidates
+                GROUP BY path, COALESCE(lang, '')
             )";
         return new SymbolHotspotRowsQuery(sql, graphLangs, hotspotFamilyLangs);
     }
