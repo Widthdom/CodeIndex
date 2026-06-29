@@ -1348,6 +1348,10 @@ public partial class QueryCommandRunnerTests
             .GetProperty("recipes")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "broad-token-audit");
+        var phraseRiskRecipe = root
+            .GetProperty("recipes")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "phrase-risk-patterns");
         var query = recipe
             .GetProperty("queries")
             .EnumerateArray()
@@ -1420,6 +1424,18 @@ public partial class QueryCommandRunnerTests
             .GetProperty("queries")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "enumerate-without-options");
+        var phraseResultQuery = phraseRiskRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "task-result-property-review");
+        var phraseSkipQuery = phraseRiskRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "active-test-skip-assignment");
+        var phraseTodoQuery = phraseRiskRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "todo-production-comment");
 
         Assert.True(root.GetProperty("count").GetInt32() >= 7);
         Assert.Contains(recipe.GetProperty("recommended_labels").EnumerateArray(), label => label.GetString() == "audit");
@@ -1526,6 +1542,21 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(broadTokenRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "parser-token");
         Assert.Contains(broadTokenRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "cancellation-token");
         Assert.Contains(broadTokenRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "lsp-token");
+        Assert.Equal("all", phraseRiskRecipe.GetProperty("default_scope").GetString());
+        Assert.Contains(phraseRiskRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "async-void-code");
+        Assert.Contains(phraseRiskRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "throw-new-exception-code");
+        Assert.Contains(phraseRiskRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "unsafe-keyword-code");
+        Assert.Contains(phraseRiskRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "readalltext-call-site");
+        Assert.Contains(phraseRiskRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "version-project-config");
+        Assert.Contains(phraseRiskRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "obsolete-production-code");
+        Assert.Equal(".Result", phraseResultQuery.GetProperty("query").GetString());
+        Assert.Contains(phraseResultQuery.GetProperty("match_origins").EnumerateArray(), origin => origin.GetString() == "code");
+        Assert.Contains(phraseResultQuery.GetProperty("result_kinds").EnumerateArray(), kind => kind.GetString() == "identifier");
+        Assert.Contains("DTO", phraseResultQuery.GetProperty("false_positive_guidance").GetString(), StringComparison.Ordinal);
+        Assert.Equal("Skip =", phraseSkipQuery.GetProperty("query").GetString());
+        Assert.Contains(phraseSkipQuery.GetProperty("path_patterns").EnumerateArray(), path => path.GetString() == "tests/**");
+        Assert.Equal("TODO", phraseTodoQuery.GetProperty("query").GetString());
+        Assert.Contains(phraseTodoQuery.GetProperty("match_origins").EnumerateArray(), origin => origin.GetString() == "comment");
     }
 
     [Fact]
@@ -1734,7 +1765,7 @@ public partial class QueryCommandRunnerTests
         };
 
         Assert.Equal(
-            ["risky-code", "auth-token-audit", "dogfood-risk-patterns", "sqlite-query-policy-surfaces", "json-parse-apis", "dotnet-risk-patterns", "xml-parser-security", "filesystem-traversal", "bounded-read-evidence", "broad-token-audit"],
+            ["risky-code", "auth-token-audit", "dogfood-risk-patterns", "sqlite-query-policy-surfaces", "json-parse-apis", "dotnet-risk-patterns", "xml-parser-security", "filesystem-traversal", "bounded-read-evidence", "phrase-risk-patterns", "broad-token-audit"],
             recipes.Select(recipe => recipe.Name).ToArray());
 
         AssertRecipe(
@@ -1872,6 +1903,22 @@ public partial class QueryCommandRunnerTests
             ["src/**"],
             expectedSourceExcludes,
             ["bounded-file-open-helper", "bounded-memory-accumulator", "bounded-full-byte-read-helper"]);
+        AssertRecipe(
+            "phrase-risk-patterns",
+            SearchAuditRecipes.AllAuditScope,
+            [],
+            [],
+            [
+                "async-void-code",
+                "throw-new-exception-code",
+                "task-result-property-review",
+                "unsafe-keyword-code",
+                "active-test-skip-assignment",
+                "readalltext-call-site",
+                "version-project-config",
+                "todo-production-comment",
+                "obsolete-production-code"
+            ]);
         AssertRecipe(
             "broad-token-audit",
             SearchAuditRecipes.AllAuditScope,

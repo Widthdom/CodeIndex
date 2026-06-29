@@ -154,6 +154,7 @@ public partial class ReleaseWorkflowTests
         Assert.Contains("ref: ${{ needs.preflight.outputs.ref }}", workflow);
         Assert.Contains("needs: [preflight, release]", workflow);
         Assert.Contains("needs: [preflight, create-release]", workflow);
+        Assert.Contains("needs: [preflight, verify-release-install]", workflow);
         Assert.DoesNotContain("ref: ${{ inputs.tag_name || github.ref }}", workflow);
     }
 
@@ -164,6 +165,7 @@ public partial class ReleaseWorkflowTests
         var releaseJob = ExtractWorkflowJob(workflow, "release");
         var prepareJob = ExtractWorkflowJob(workflow, "prepare-release-files");
         var createJob = ExtractWorkflowJob(workflow, "create-release");
+        var verifyJob = ExtractWorkflowJob(workflow, "verify-release-install");
 
         Assert.Contains("needs: [preflight, release]", prepareJob);
         Assert.Contains("permissions:\n      contents: read", prepareJob);
@@ -185,8 +187,23 @@ public partial class ReleaseWorkflowTests
         Assert.Contains("name: release-payload", createJob);
         Assert.Contains("name: Import release GPG key", createJob);
         Assert.Contains("name: Sign release checksum manifest", createJob);
+        Assert.Contains("GNUPGHOME: ${{ runner.temp }}/release-gnupg", createJob);
+        Assert.Contains("name: Remove release GPG material", createJob);
+        Assert.Contains("rm -rf \"$GNUPGHOME\"", createJob);
         Assert.Contains("name: Attest release artifacts", createJob);
         Assert.Contains("name: Create GitHub release", createJob);
+        Assert.Contains("GH_REPO: ${{ github.repository }}", createJob);
+        Assert.DoesNotContain("name: Checkout", createJob);
+        Assert.DoesNotContain("bash install.sh", createJob);
+
+        Assert.Contains("needs: [preflight, create-release]", verifyJob);
+        Assert.Contains("permissions:\n      contents: read", verifyJob);
+        Assert.Contains("name: Verify install.sh against the published release", verifyJob);
+        Assert.Contains("releases/download/${TAG_NAME}/install.sh", verifyJob);
+        Assert.Contains("curl -fsSL", verifyJob);
+        Assert.Contains("bash install.sh \"${TAG_NAME}\"", verifyJob);
+        Assert.DoesNotContain("secrets.", verifyJob);
+        Assert.DoesNotContain("environment:", verifyJob);
 
         Assert.Contains("name: Sign Windows executable if configured", releaseJob);
         Assert.Contains("WIN_SIGNING_CERT_BASE64: ${{ secrets.WIN_SIGNING_CERT_BASE64 }}", releaseJob);
@@ -932,7 +949,7 @@ public partial class ReleaseWorkflowTests
         var project = RepositoryTestPaths.ReadText("src", "CodeIndex", "CodeIndex.csproj");
 
         Assert.Contains("publish-container:", workflow);
-        Assert.Contains("needs: [preflight, create-release]", workflow);
+        Assert.Contains("needs: [preflight, verify-release-install]", workflow);
         Assert.Contains("packages: write", workflow);
         Assert.Contains("docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4", workflow);
         Assert.Contains("docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3", workflow);
