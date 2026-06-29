@@ -13470,6 +13470,10 @@ public static partial class QueryCommandRunner
             CommandErrorWriter.WriteStderr("Hint: shorten the search text or split generated input into smaller literal queries.");
             return CommandExitCodes.UsageError;
         }
+        catch (BatchOutputCaptureLimitExceededException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             if (JsonOutputFailure.TryHandle(ex, out var exitCode))

@@ -222,7 +222,9 @@ public class ConsoleUiTests
         Assert.Contains("JSON Lines", referencesStdout);
         Assert.Contains("one JSON object per result", referencesStdout);
         Assert.Contains("stdin is JSON Lines", batchStdout);
-        Assert.Contains("invalid lines emit per-line JSON errors", batchStdout);
+        Assert.Contains("--json-summary emits per-line envelopes plus a final summary", batchStdout);
+        Assert.Contains("batch_result or batch_error envelope", batchStdout);
+        Assert.Contains("batch_summary record", batchStdout);
     }
 
     [Fact]
