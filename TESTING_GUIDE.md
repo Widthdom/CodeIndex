@@ -43,6 +43,7 @@ The test project mirrors the production areas closely.
   File scanning, language detection, scan-result language reuse, content-sensitive header safeguards, content loading/canonicalization, checksum, Git LFS pointer detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage. Shared `FileIndexerTests` helpers live in `FileIndexerTestSupport.cs`.
 - `DatabaseTests.cs`, `DbReader*Tests.cs`
   SQLite schema, write paths, migrations, and query behavior. DbReader coverage is split by query family, including search, SQL qualified-name handling, file dependencies, impact, and symbol-query suites, while shared seeded fixture state remains on the root `DbReaderTests` part.
+  `DbSchemaConstraintTests.cs` also locks schema constraints to `SymbolKindCatalog` and required file foreign keys so DB readiness checks fail when code enums and SQLite CHECK clauses drift.
 - `ConcurrencyTests.cs`
   WAL snapshot and shared-writer stress tests. The concurrent reader/writer
   snapshot tests stop after enough reader and writer iterations are observed,
@@ -61,6 +62,7 @@ The test project mirrors the production areas closely.
   CI and release workflow contract tests. Release workflow package-normalization ZIP fixture helpers live in `ReleaseWorkflowTests.PackageHelpers.cs` so workflow assertions stay near the workflow contracts.
 - `DocumentationStatusContractTests.cs`, `DocumentationDriftTests.cs`
   Checked-in documentation contract tests. They use `RepositoryTestPaths` to keep status fields, workflow references, documented `cdidx` command examples, release/changelog workflow snippets, and representative English/Japanese guide sections synchronized.
+  `DocumentationStatusContractTests.cs` includes readiness, maintenance, and MCP status fields so status JSON support contracts stay visible in the user and agent guides.
 - `IndexCommandRunnerTests.Run_CancelDuringFreshIndex_ReturnsInterruptedJson`, `Run_CancelDuringDryRunScan_ReturnsInterruptedJson`, and `Run_CancelBeforeFreshScan_ReturnsInterruptedJson`
   exercise the same in-process cancellation paths used after Ctrl-C/SIGINT wiring, including scan-time cancellation, so interrupted index runs keep returning the canonical JSON error contract.
 - `IndexCommandRunnerTests.SymbolExtractionWorker_LegacyEnvironmentHooksAreIgnored_Issue3398`
@@ -294,6 +296,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   ファイル走査、言語判定、scan result 言語の再利用、content loading / canonicalization、checksum、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」、binary/NUL byte 除外、Windows 専用の 260 文字以上 path walker/purge カバレッジも含みます。共有 `FileIndexerTests` helper は `FileIndexerTestSupport.cs` に置きます。
 - `DatabaseTests.cs`、`DbReader*Tests.cs`
   SQLite スキーマ、書き込み経路、マイグレーション、クエリ挙動のテスト。DbReader のカバレッジは search、SQL qualified name、file dependency、impact、symbol query などの query family ごとの partial suite に分割し、共有の seed 済み fixture 状態は root 側の `DbReaderTests` に残します。
+  `DbSchemaConstraintTests.cs` は DB readiness check が code enum と SQLite CHECK 句の drift を検出できるよう、schema constraint と `SymbolKindCatalog`、必須 file foreign key の同期も固定します。
 - `ConcurrencyTests.cs`
   WAL snapshot と shared-writer の stress test。concurrent reader/writer snapshot
   テストは reader / writer の十分な反復を観測した時点で停止し、遅い host 用に
@@ -311,6 +314,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   CI と release workflow の契約テスト。Release workflow の package-normalization ZIP fixture helper は `ReleaseWorkflowTests.PackageHelpers.cs` に置き、workflow assertion が workflow 契約の近くに残るようにします。
 - `DocumentationStatusContractTests.cs`、`DocumentationDriftTests.cs`
   checked-in documentation の契約テスト。`RepositoryTestPaths` を使って、status field、workflow 参照、文書化された `cdidx` コマンド例、release/changelog workflow の snippet、代表的な英日 guide セクションの同期を維持します。
+  `DocumentationStatusContractTests.cs` は readiness、maintenance、MCP status field も含め、status JSON support contract が user guide と agent guide に残るようにします。
 - `IndexCommandRunnerTests.Run_CancelDuringFreshIndex_ReturnsInterruptedJson`、`Run_CancelDuringDryRunScan_ReturnsInterruptedJson`、`Run_CancelBeforeFreshScan_ReturnsInterruptedJson`
   Ctrl-C/SIGINT 配線後に使われる in-process cancellation 経路を、scan 中のキャンセルも含めて検証し、interrupted index run が標準の JSON error contract を返し続けることを固定する。
 - `IndexCommandRunnerTests.SymbolExtractionWorker_LegacyEnvironmentHooksAreIgnored_Issue3398`
