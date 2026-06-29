@@ -33,6 +33,12 @@ internal static class IndexWatchRunner
     internal static bool DeleteSpoolFileForTesting(string? spoolPath, Action<string>? deleteOverride = null)
         => DeleteSpoolFile(spoolPath, deleteOverride);
 
+    internal static IndexWatchContractJsonResult BuildWatchContractForTesting(
+        TimeSpan debounce,
+        int maxPendingPaths,
+        bool ignoreCase)
+        => BuildWatchContract(debounce, maxPendingPaths, ignoreCase);
+
     public static int Run(
         IndexCommandOptions baseOptions,
         JsonSerializerOptions jsonOptions,
@@ -147,7 +153,7 @@ internal static class IndexWatchRunner
 
             watcher.EnableRaisingEvents = true;
 
-            EmitWatchStarted(baseOptions, jsonOptions, projectRoot, resolvedDbPath, debounce, maxPendingPaths);
+            EmitWatchStarted(baseOptions, jsonOptions, projectRoot, resolvedDbPath, debounce, maxPendingPaths, ignoreCase);
 
             while (!cancellationToken.IsCancellationRequested)
             {
@@ -699,7 +705,8 @@ internal static class IndexWatchRunner
         string projectRoot,
         string resolvedDbPath,
         TimeSpan debounce,
-        int maxPendingPaths)
+        int maxPendingPaths,
+        bool ignoreCase)
     {
         if (baseOptions.Json)
         {
@@ -711,6 +718,7 @@ internal static class IndexWatchRunner
                 Db = "[redacted]",
                 DebounceMs = (int)debounce.TotalMilliseconds,
                 WatchPendingPathLimit = maxPendingPaths,
+                WatchContract = BuildWatchContract(debounce, maxPendingPaths, ignoreCase),
             }, CliJsonSerializerContextFactory.Create(jsonOptions).IndexWatchEventJsonResult));
         }
         else
@@ -719,6 +727,27 @@ internal static class IndexWatchRunner
             CommandErrorWriter.WriteStderr($"[watch] Watching {projectRoot} for changes (debounce {(int)debounce.TotalMilliseconds} ms, pending path limit {maxPendingPaths.ToString("N0", CultureInfo.InvariantCulture)}). Press Ctrl+C to stop.");
         }
     }
+
+    private static IndexWatchContractJsonResult BuildWatchContract(
+        TimeSpan debounce,
+        int maxPendingPaths,
+        bool ignoreCase)
+        => new()
+        {
+            Debounce = "quiet_window",
+            DebounceMs = (int)debounce.TotalMilliseconds,
+            MaxDebounceMs = IndexWatchRunner.MaxDebounceMs,
+            PollIntervalMs = IndexWatchRunner.PollIntervalMs,
+            WatchPendingPathLimit = maxPendingPaths,
+            PathComparison = ignoreCase ? "ordinal_ignore_case" : "ordinal",
+            ChangeCoalescing = "distinct_paths_refresh_debounce",
+            RenameEvents = "old_and_new_paths",
+            OverflowRecovery = "full_rescan_after_debounce",
+            WatcherErrorRecovery = "full_rescan_after_debounce",
+            Cancellation = "emit_stopped_after_current_poll_or_sub_run",
+            SubRunOutput = "json_quiet_sub_runs",
+            McpWatchMode = "unsupported",
+        };
 
     private static void EmitWatchOverflow(
         IndexCommandOptions baseOptions,
