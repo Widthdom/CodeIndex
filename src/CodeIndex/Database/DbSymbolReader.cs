@@ -2774,16 +2774,28 @@ public partial class DbReader
     {
         if (!_hasReferencesTable) return [];
         var query = BuildSymbolHotspotRowsQuery(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
+        var genericNamePenaltySql = GetGenericHotspotNamePenaltySql("gr.name");
+        var structuralRankPenaltySql = GetFileHotspotStructuralRankPenaltySql("COUNT(*)");
         var sql = query.Sql + @"
             SELECT gr.path,
                    gr.lang,
                    SUM(rc.ref_count) AS ref_count,
+                   SUM(rc.ref_score) AS ref_score,
+                   (SUM(rc.ref_score * (" + genericNamePenaltySql + @")) * (" + structuralRankPenaltySql + @")) AS ranking_score,
+                   CASE
+                       WHEN SUM(rc.ref_score) > 0
+                           THEN SUM(rc.ref_score * (" + genericNamePenaltySql + @")) / SUM(rc.ref_score)
+                       ELSE 1.0
+                   END AS generic_name_penalty,
+                   (" + structuralRankPenaltySql + @") AS structural_rank_penalty,
                    COUNT(*) AS symbol_count
             FROM grouped_rows gr
             JOIN reference_counts rc ON rc.symbol_id = gr.symbol_id
             WHERE rc.ref_count > 0
             GROUP BY gr.path, gr.lang
-            ORDER BY ref_count DESC,
+            ORDER BY ranking_score DESC,
+                     ref_score DESC,
+                     ref_count DESC,
                      gr.path COLLATE BINARY ASC
             LIMIT @limit";
 
@@ -2800,11 +2812,22 @@ public partial class DbReader
                 Path = reader.GetString(0),
                 Lang = GetNullableString(reader, 1),
                 ReferenceCount = reader.GetInt32(2),
-                SymbolCount = reader.GetInt32(3),
+                ReferenceScore = reader.GetDouble(3),
+                RankingScore = reader.GetDouble(4),
+                GenericNamePenalty = reader.GetDouble(5),
+                StructuralRankPenalty = reader.GetDouble(6),
+                SymbolCount = reader.GetInt32(7),
             });
         }
         return results;
     }
+
+    private static string GetFileHotspotStructuralRankPenaltySql(string symbolCountSql)
+        => $@"CASE
+                WHEN {symbolCountSql} <= 2 THEN 0.1
+                WHEN {symbolCountSql} <= 8 THEN 0.35
+                ELSE 1.0
+            END";
 
     public HotspotCountResult CountSymbolHotspots(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
     {
