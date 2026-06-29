@@ -40,7 +40,6 @@ public partial class FileIndexer
     private const int MaxProjectMarkerFingerprintDirectories = 8192;
     private const int MaxProjectMarkerFingerprintFiles = 4096;
     private const int MaxIgnorePatternLength = 512;
-    private static readonly TimeSpan IgnoreRegexMatchTimeout = TimeSpan.FromMilliseconds(100);
     // Extension-to-language mapping / 拡張子→言語名マッピング
     private static readonly Dictionary<string, string> LangMap = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -608,10 +607,7 @@ public partial class FileIndexer
             }
 
             builder.Append('$');
-            return new RegexIgnoreMatcher(new Regex(
-                builder.ToString(),
-                RegexOptions.CultureInvariant | RegexOptions.Compiled | RegexOptions.NonBacktracking,
-                IgnoreRegexMatchTimeout));
+            return new RegexIgnoreMatcher(RegexRegistry.CreateFileIgnorePatternRegex(builder.ToString()));
         }
 
         private static bool TryBuildLiteralPattern(IReadOnlyList<PatternToken> pattern, out string literal)

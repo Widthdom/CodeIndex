@@ -55,7 +55,8 @@ internal sealed record DoctorJsonResult(
     [property: JsonPropertyName("paths")] DoctorPathsJsonResult Paths,
     [property: JsonPropertyName("config")] DoctorConfigJsonResult Config,
     [property: JsonPropertyName("cdidx_env")] IReadOnlyList<DoctorEnvironmentVariableJsonResult> CdidxEnv,
-    [property: JsonPropertyName("environment_inventory")] IReadOnlyList<EnvironmentVariableInventoryItem> EnvironmentInventory,
+    [property: JsonPropertyName("environment_inventory_summary")] EnvironmentVariableInventorySummaryJsonResult EnvironmentInventorySummary,
+    [property: JsonPropertyName("environment_inventory")] IReadOnlyList<EnvironmentVariableInventoryItem>? EnvironmentInventory,
     [property: JsonPropertyName("redaction")] DoctorRedactionJsonResult Redaction);
 
 internal sealed record DoctorTerminalJsonResult(
@@ -856,6 +857,8 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(DoctorTerminalJsonResult))]
 [JsonSerializable(typeof(EnvironmentVariableInventoryItem))]
 [JsonSerializable(typeof(EnvironmentVariableInventoryLocation))]
+[JsonSerializable(typeof(EnvironmentVariableInventorySummaryJsonResult))]
+[JsonSerializable(typeof(EnvironmentVariableInventorySummaryBucketJsonResult))]
 [JsonSerializable(typeof(StatusResult))]
 [JsonSerializable(typeof(StatusHeadFreshness))]
 [JsonSerializable(typeof(StatusSqliteConnectionPolicy))]

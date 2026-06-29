@@ -100,6 +100,28 @@ internal static class EnvironmentVariableInventory
         Item("ACCESSIBILITY_ENABLED", "terminal", SensitivityPublic, "display", "auto unicode", "no", "Accessibility hint that disables Unicode glyphs.", Location("src/CodeIndex/Cli/ConsoleUi.cs", 2288, "ConsoleUi")),
     ];
 
+    internal static EnvironmentVariableInventorySummaryJsonResult BuildSummary()
+        => new(
+            Items.Count,
+            CountBy(static item => item.Domain),
+            CountBy(static item => item.Sensitivity),
+            CountBy(static item => item.Category));
+
+    private static IReadOnlyList<EnvironmentVariableInventorySummaryBucketJsonResult> CountBy(Func<EnvironmentVariableInventoryItem, string> selector)
+    {
+        var counts = new SortedDictionary<string, int>(StringComparer.Ordinal);
+        foreach (var item in Items)
+        {
+            var key = selector(item);
+            counts[key] = counts.TryGetValue(key, out var count) ? count + 1 : 1;
+        }
+
+        var buckets = new List<EnvironmentVariableInventorySummaryBucketJsonResult>(counts.Count);
+        foreach (var (name, count) in counts)
+            buckets.Add(new EnvironmentVariableInventorySummaryBucketJsonResult(name, count));
+        return buckets;
+    }
+
     private static EnvironmentVariableInventoryItem Item(
         string name,
         string category,
@@ -207,3 +229,13 @@ internal sealed record EnvironmentVariableInventoryLocation(
     [property: JsonPropertyName("path")] string Path,
     [property: JsonPropertyName("line")] int Line,
     [property: JsonPropertyName("member")] string Member);
+
+internal sealed record EnvironmentVariableInventorySummaryJsonResult(
+    [property: JsonPropertyName("total")] int Total,
+    [property: JsonPropertyName("by_domain")] IReadOnlyList<EnvironmentVariableInventorySummaryBucketJsonResult> ByDomain,
+    [property: JsonPropertyName("by_sensitivity")] IReadOnlyList<EnvironmentVariableInventorySummaryBucketJsonResult> BySensitivity,
+    [property: JsonPropertyName("by_category")] IReadOnlyList<EnvironmentVariableInventorySummaryBucketJsonResult> ByCategory);
+
+internal sealed record EnvironmentVariableInventorySummaryBucketJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("count")] int Count);

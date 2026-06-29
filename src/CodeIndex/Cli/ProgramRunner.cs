@@ -457,8 +457,8 @@ internal static partial class ProgramRunner
     {
         var wantsJson = args.Any(static arg => arg == "--json" || arg.StartsWith("--json=", StringComparison.Ordinal));
         var json = false;
-        var redactPaths = false;
-        var envInventory = false;
+        bool? redactPaths = null;
+        var envInventory = DoctorEnvironmentInventoryMode.None;
         foreach (var arg in args)
         {
             switch (arg)
@@ -469,8 +469,15 @@ internal static partial class ProgramRunner
                 case "--redact-paths":
                     redactPaths = true;
                     break;
+                case "--show-paths":
+                    redactPaths = false;
+                    break;
                 case "--env-inventory":
-                    envInventory = true;
+                case "--env-inventory=compact":
+                    envInventory = DoctorEnvironmentInventoryMode.Compact;
+                    break;
+                case "--env-inventory=full":
+                    envInventory = DoctorEnvironmentInventoryMode.Full;
                     break;
                 default:
                     return CommandErrorWriter.WriteJsonOrHuman(
@@ -480,19 +487,25 @@ internal static partial class ProgramRunner
                             ? "doctor supports --json only; --json=<format> is not supported."
                             : $"Unknown doctor argument: {arg}",
                         CommandExitCodes.InvalidArgument,
-                        "use `cdidx doctor [--json] [--redact-paths] [--env-inventory]`.");
+                        "use `cdidx doctor [--json] [--redact-paths|--show-paths] [--env-inventory[=compact|full]]`.");
             }
         }
 
         if (json)
         {
-            WriteDoctorJson(appVersion, jsonOptions, redactPaths);
+            WriteDoctorJson(appVersion, jsonOptions, redactPaths ?? true, envInventory == DoctorEnvironmentInventoryMode.Full);
             return CommandExitCodes.Success;
         }
 
-        if (envInventory)
+        if (envInventory == DoctorEnvironmentInventoryMode.Full)
         {
             WriteEnvironmentInventory();
+            return CommandExitCodes.Success;
+        }
+
+        if (envInventory == DoctorEnvironmentInventoryMode.Compact)
+        {
+            WriteEnvironmentInventorySummary();
             return CommandExitCodes.Success;
         }
 
@@ -549,7 +562,14 @@ internal static partial class ProgramRunner
         return CommandExitCodes.Success;
     }
 
-    private static void WriteDoctorJson(string appVersion, JsonSerializerOptions jsonOptions, bool redactPaths)
+    private enum DoctorEnvironmentInventoryMode
+    {
+        None,
+        Compact,
+        Full,
+    }
+
+    private static void WriteDoctorJson(string appVersion, JsonSerializerOptions jsonOptions, bool redactPaths, bool includeFullEnvironmentInventory)
     {
         var dbResolution = DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, explicitDbPath: null, explicitDataDir: null);
         var build = ConsoleUi.LoadBuildMetadata();
@@ -582,7 +602,8 @@ internal static partial class ProgramRunner
                 DotCdidxrcJson: File.Exists(Path.Combine(Environment.CurrentDirectory, CdidxConfigFile.FileName)) ? "present" : "not_found",
                 DisableConfigFile: FormatDoctorJsonEnvironmentValue(CdidxConfigFile.DisableEnvVar, redactPaths)),
             CdidxEnv: EnumerateCdidxEnvironmentJson(redactPaths).ToArray(),
-            EnvironmentInventory: EnvironmentVariableInventory.Items,
+            EnvironmentInventorySummary: EnvironmentVariableInventory.BuildSummary(),
+            EnvironmentInventory: includeFullEnvironmentInventory ? EnvironmentVariableInventory.Items : null,
             Redaction: new DoctorRedactionJsonResult(
                 PathsRedacted: redactPaths,
                 SecretsRedacted: true));
@@ -751,6 +772,26 @@ internal static partial class ProgramRunner
             Console.WriteLine(ConsoleUi.FormatSummaryLine("location", location, indent: "    "));
             Console.WriteLine(ConsoleUi.FormatSummaryLine("description", item.Description, indent: "    "));
         }
+    }
+
+    private static void WriteEnvironmentInventorySummary()
+    {
+        var summary = EnvironmentVariableInventory.BuildSummary();
+        Console.WriteLine("environment_inventory_summary:");
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("total", summary.Total, indent: "  "));
+        WriteEnvironmentInventorySummaryBuckets("by_domain", summary.ByDomain);
+        WriteEnvironmentInventorySummaryBuckets("by_sensitivity", summary.BySensitivity);
+        WriteEnvironmentInventorySummaryBuckets("by_category", summary.ByCategory);
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("full_detail", "cdidx doctor --env-inventory=full", indent: "  "));
+    }
+
+    private static void WriteEnvironmentInventorySummaryBuckets(
+        string title,
+        IReadOnlyList<EnvironmentVariableInventorySummaryBucketJsonResult> buckets)
+    {
+        Console.WriteLine($"  {title}:");
+        foreach (var bucket in buckets)
+            Console.WriteLine(ConsoleUi.FormatSummaryLine(bucket.Name, bucket.Count, indent: "    "));
     }
 
     private static IEnumerable<DoctorEnvironmentVariableJsonResult> EnumerateCdidxEnvironmentJson(bool redactPaths)
