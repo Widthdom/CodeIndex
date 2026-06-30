@@ -28,22 +28,25 @@ public partial class FileIndexer
 
         internal bool IsIgnored(string absolutePath, bool isDirectory)
         {
-            var ignored = _parent?.IsIgnored(absolutePath, isDirectory) ?? false;
-            if (_sourceDirectory is null)
-                return ignored;
-
-            var relativePath = IgnoreRule.GetRelativeCandidatePath(_sourceDirectory, absolutePath);
-            if (relativePath is null)
-                return ignored;
-
-            var basename = _hasBasenameOnlyRule ? Path.GetFileName(relativePath) : null;
-            foreach (var rule in _rules)
+            for (IgnoreRuleSet? ruleSet = this; ruleSet is not null; ruleSet = ruleSet._parent)
             {
-                if (rule.IsMatch(relativePath, basename, isDirectory))
-                    ignored = !rule.Negated;
+                if (ruleSet._sourceDirectory is null)
+                    continue;
+
+                var relativePath = IgnoreRule.GetRelativeCandidatePath(ruleSet._sourceDirectory, absolutePath);
+                if (relativePath is null)
+                    continue;
+
+                var basename = ruleSet._hasBasenameOnlyRule ? Path.GetFileName(relativePath) : null;
+                for (var index = ruleSet._rules.Count - 1; index >= 0; index--)
+                {
+                    var rule = ruleSet._rules[index];
+                    if (rule.IsMatch(relativePath, basename, isDirectory))
+                        return !rule.Negated;
+                }
             }
 
-            return ignored;
+            return false;
         }
     }
 
