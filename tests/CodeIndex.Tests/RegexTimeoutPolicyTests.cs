@@ -147,13 +147,15 @@ public sealed class RegexTimeoutPolicyTests
     {
         var dbReader = RepositoryTestPaths.ReadText("src", "CodeIndex", "Database", "DbReader.FilesStatus.cs");
         var fileIndexer = RepositoryTestPaths.ReadText("src", "CodeIndex", "Indexer", "Scanning", "FileIndexer.cs");
+        var fileIndexerIgnoreRules = RepositoryTestPaths.ReadText("src", "CodeIndex", "Indexer", "Scanning", "FileIndexer.IgnoreRules.cs");
         var generatedCodeMatcher = RepositoryTestPaths.ReadText("src", "CodeIndex", "Indexer", "Scanning", "GeneratedCodePatternMatcher.cs");
 
         Assert.Contains("RegexRegistry.CreateFindRegex", dbReader, StringComparison.Ordinal);
-        Assert.Contains("RegexRegistry.CreateFileIgnorePatternRegex", fileIndexer, StringComparison.Ordinal);
+        Assert.Contains("RegexRegistry.CreateFileIgnorePatternRegex", fileIndexerIgnoreRules, StringComparison.Ordinal);
         Assert.Contains("RegexRegistry.CreateGeneratedCodePatternRegex", generatedCodeMatcher, StringComparison.Ordinal);
         Assert.DoesNotContain("new Regex(", dbReader, StringComparison.Ordinal);
         Assert.DoesNotContain("new Regex(", fileIndexer, StringComparison.Ordinal);
+        Assert.DoesNotContain("new Regex(", fileIndexerIgnoreRules, StringComparison.Ordinal);
         Assert.DoesNotContain("new Regex(", generatedCodeMatcher, StringComparison.Ordinal);
     }
 
