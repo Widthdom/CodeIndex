@@ -15,9 +15,11 @@ public class CiWorkflowTests
     {
         var workflow = RepositoryTestPaths.ReadWorkflow("dotnet.yml");
         var normalizedWorkflow = workflow.ReplaceLineEndings("\n");
+        var testScript = RepositoryTestPaths.ReadText(".github", "scripts", "run-dotnet-tests.ps1");
+        var normalizedTestScript = testScript.ReplaceLineEndings("\n");
 
-        Assert.Contains("--settings\", \"tests/CodeIndex.Tests/CodeIndex.Tests.runsettings", workflow);
-        Assert.DoesNotContain("--results-directory\", \"./TestResults", workflow);
+        Assert.Contains("--settings\", \"tests/CodeIndex.Tests/CodeIndex.Tests.runsettings", testScript);
+        Assert.DoesNotContain("--results-directory\", \"./TestResults", testScript);
         Assert.Contains(
             "- name: Select CI lane\n        id: lane",
             normalizedWorkflow);
@@ -40,23 +42,34 @@ public class CiWorkflowTests
             "- name: Build\n        if: steps.lane.outputs.primary_lane != 'true'",
             normalizedWorkflow);
         Assert.Contains(
-            "$collectCoverage = \"${{ steps.lane.outputs.primary_lane }}\" -eq \"true\"",
+            "run: |\n          ./.github/scripts/run-dotnet-tests.ps1 `\n            -Framework \"${{ matrix.test-framework }}\" `\n            -CollectCoverage \"${{ steps.lane.outputs.primary_lane }}\"",
+            normalizedWorkflow);
+        Assert.DoesNotContain("function Invoke-TestRun", workflow);
+        Assert.Contains(
+            "$collectCoverage = $CollectCoverage -eq \"true\"",
+            testScript);
+        Assert.Contains(
+            "[ValidateSet(\"true\", \"false\")]",
+            testScript);
+        Assert.Contains(
+            "-Framework \"${{ matrix.test-framework }}\"",
             workflow);
-        Assert.Contains("Skipping XPlat Code Coverage outside ubuntu-24.04/net8.0", workflow);
-        Assert.DoesNotContain("\"--no-build\",\n            \"--no-restore\"", normalizedWorkflow);
-        Assert.Contains("--blame-crash", workflow);
-        Assert.Contains("--blame-hang", workflow);
-        Assert.Contains("--blame-hang-timeout\", \"5m", workflow);
-        Assert.Contains("test-output-first.txt", workflow);
-        Assert.Contains("[System.Collections.Generic.List[string]]::new()", workflow);
-        Assert.Contains("if ($exitCode -ne 0)", workflow);
-        Assert.Contains("$logDirectory = Split-Path -Parent $LogPath", workflow);
-        Assert.Contains("New-Item -ItemType Directory -Force -Path $logDirectory", workflow);
-        Assert.Contains("[System.IO.File]::WriteAllLines($LogPath, [string[]]$capturedOutput)", workflow);
-        Assert.DoesNotContain("New-Item -ItemType Directory -Force -Path ./TestResults", workflow);
-        Assert.DoesNotContain("Tee-Object", workflow);
+        Assert.Contains("Skipping XPlat Code Coverage outside ubuntu-24.04/net8.0", testScript);
+        Assert.DoesNotContain("\"--no-restore\"", testScript);
+        Assert.Contains("--blame-crash", testScript);
+        Assert.Contains("--blame-hang", testScript);
+        Assert.Contains("--blame-hang-timeout\", \"5m", testScript);
+        Assert.Contains("test-output-first.txt", testScript);
+        Assert.Contains("[System.Collections.Generic.List[string]]::new()", testScript);
+        Assert.Contains("if ($exitCode -ne 0)", testScript);
+        Assert.Contains("$logDirectory = Split-Path -Parent $LogPath", testScript);
+        Assert.Contains("New-Item -ItemType Directory -Force -Path $logDirectory", testScript);
+        Assert.Contains("[System.IO.File]::WriteAllLines($LogPath, [string[]]$capturedOutput)", testScript);
+        Assert.DoesNotContain("New-Item -ItemType Directory -Force -Path ./TestResults", testScript);
+        Assert.DoesNotContain("Tee-Object", testScript);
         Assert.Contains("id: test", workflow);
-        Assert.Contains("\"summarize=true\" | Out-File -FilePath $env:GITHUB_OUTPUT", workflow);
+        Assert.Contains("Write-StepOutput -Name \"summarize\" -Value \"true\"", testScript);
+        Assert.Contains("$env:GITHUB_OUTPUT", testScript);
         Assert.Contains("steps.test.outputs.summarize == 'true' || failure()", workflow);
         Assert.Contains(
             "- name: Upload test results\n        if: always() && (steps.test.outputs.summarize == 'true' || failure())",
@@ -73,9 +86,9 @@ public class CiWorkflowTests
         Assert.DoesNotContain(
             "- name: Upload test results\n        if: always()\n",
             normalizedWorkflow);
-        Assert.Contains("Initial test run hit TestSessionTimeout; skipping flaky retry", workflow);
-        Assert.Contains("Rerunning once to classify possible flakiness.", workflow);
-        Assert.Contains("flaky-retry.txt", workflow);
+        Assert.Contains("Initial test run hit TestSessionTimeout; skipping flaky retry", testScript);
+        Assert.Contains("Rerunning once to classify possible flakiness.", testScript);
+        Assert.Contains("flaky-retry.txt", testScript);
         Assert.Contains("TestResults/**/*.trx", workflow);
         Assert.Contains("TestResults/**/*.txt", workflow);
         Assert.Contains("TestResults/**/*.xml", workflow);
@@ -92,6 +105,9 @@ public class CiWorkflowTests
         Assert.DoesNotContain("if: matrix.os == 'ubuntu-24.04' && matrix.test-framework == 'net8.0'", workflow);
         Assert.DoesNotContain("always() && matrix.os == 'ubuntu-24.04' && matrix.test-framework == 'net8.0'", workflow);
         Assert.DoesNotContain("always() && !(matrix.os == 'windows-2022' && matrix.test-framework == 'net9.0')", workflow);
+        Assert.DoesNotContain("steps.lane.outputs.primary_lane", testScript);
+        Assert.DoesNotContain("matrix.test-framework", testScript);
+        Assert.Contains("function Invoke-TestRun", normalizedTestScript);
     }
 
     [Fact]
@@ -216,6 +232,7 @@ public class CiWorkflowTests
         Assert.Contains("EnvironmentVariableScope.Capture", guide);
         Assert.Contains("TestConsoleLock.Gate", guide);
         Assert.Contains("TestProjectHelper", guide);
+        Assert.Contains(".github/scripts/run-dotnet-tests.ps1", guide);
         Assert.Contains("共有状態と並列実行の監査", guide);
     }
 
