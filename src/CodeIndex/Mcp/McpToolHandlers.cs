@@ -5333,61 +5333,25 @@ public partial class McpServer
 
     private async Task<JsonNode> ExecuteIndexAsync(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
     {
-        if (!TryReadRequiredIndexPathParameter(args, "path", out var path, out var requiredError))
-            return CreateToolErrorResponse(id, requiredError!);
+        if (!TryReadMcpIndexRequestOptions(id, args, out var indexOptions, out var indexOptionsError))
+            return indexOptionsError!;
 
-        var rebuild = args?["rebuild"]?.GetValue<bool>() ?? false;
-        var dryRun = args?["dryRun"]?.GetValue<bool>() ?? args?["dry_run"]?.GetValue<bool>() ?? false;
-        var memoryTrace = args?["memoryTrace"]?.GetValue<bool>() ?? false;
-        var requestedParallelism = ReadOptionalIntArgument(args, "parallelism");
-        var requestedDebounce = ReadOptionalIntArgument(args, "debounce");
-        var maxSymbolsPerFile = ReadOptionalIntArgument(args, "maxSymbolsPerFile") ?? IndexCommandRunner.DefaultMaxSymbolsPerFile;
-        if (maxSymbolsPerFile <= 0 || maxSymbolsPerFile > IndexCommandRunner.MaxSymbolsPerFileLimit)
-            return CreateToolErrorResponse(id, $"maxSymbolsPerFile must be between 1 and {IndexCommandRunner.MaxSymbolsPerFileLimit}");
-        var maxReferencesPerFile = ReadOptionalIntArgument(args, "maxReferencesPerFile") ?? IndexCommandRunner.DefaultMaxReferencesPerFile;
-        if (maxReferencesPerFile <= 0 || maxReferencesPerFile > IndexCommandRunner.MaxReferencesPerFileLimit)
-            return CreateToolErrorResponse(id, $"maxReferencesPerFile must be between 1 and {IndexCommandRunner.MaxReferencesPerFileLimit}");
-        if (!TryReadMcpIndexSymlinkPolicy(args, out var symlinkPolicy, out var symlinkPolicyError))
-            return CreateToolErrorResponse(id, symlinkPolicyError!);
-        var includeSymbolKinds = ReadStringOrCommaSeparatedList(args, "includeSymbolKind");
-        var excludeSymbolKinds = ReadStringOrCommaSeparatedList(args, "excludeSymbolKind");
-        var symbolKindFilter = SymbolKindFilter.Create(includeSymbolKinds, excludeSymbolKinds, parseError: null);
-        if (symbolKindFilter.ParseError != null)
-            return CreateToolErrorResponse(id, symbolKindFilter.ParseError);
-        var unsupportedModes = BuildMcpIndexUnsupportedModes(args, requestedParallelism, requestedDebounce);
-        long? maxFileBytes = null;
-        if (args?["maxFileBytes"] is { } maxFileBytesNode)
-        {
-            try
-            {
-                maxFileBytes = maxFileBytesNode.GetValue<long>();
-            }
-            catch (Exception)
-            {
-                return CreateToolErrorResponse(id, "maxFileBytes must be a positive integer less than or equal to 2147483647");
-            }
-        }
-        if (maxFileBytes is <= 0 or > int.MaxValue)
-            return CreateToolErrorResponse(id, "maxFileBytes must be a positive integer less than or equal to 2147483647");
-        var projectPath = Path.GetFullPath(path);
+        var rebuild = indexOptions!.Rebuild;
+        var dryRun = indexOptions.DryRun;
+        var memoryTrace = indexOptions.MemoryTrace;
+        var maxFileBytes = indexOptions.MaxFileBytes;
+        var maxSymbolsPerFile = indexOptions.MaxSymbolsPerFile;
+        var maxReferencesPerFile = indexOptions.MaxReferencesPerFile;
+        var symlinkPolicy = indexOptions.SymlinkPolicy;
+        var symbolKindFilter = indexOptions.SymbolKindFilter;
+        var unsupportedModes = indexOptions.UnsupportedModes;
+        var optionsPayload = indexOptions.OptionsPayload;
+        var projectPath = Path.GetFullPath(indexOptions.Path);
         var runStartedAtUtc = GetUtcNow();
         var runStopwatch = Stopwatch.StartNew();
         var memorySamples = memoryTrace
             ? new JsonArray { CaptureMcpIndexMemorySample("start", runStopwatch) }
             : null;
-        var optionsPayload = BuildMcpIndexOptionsPayload(
-            dryRun,
-            rebuild,
-            maxFileBytes,
-            maxSymbolsPerFile,
-            maxReferencesPerFile,
-            symlinkPolicy,
-            includeSymbolKinds,
-            excludeSymbolKinds,
-            memoryTrace,
-            requestedParallelism,
-            requestedDebounce,
-            args);
 
         // Prevent path traversal — only allow indexing within current working directory
         // パストラバーサル防止 — カレントディレクトリ配下のみインデックスを許可
