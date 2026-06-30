@@ -267,7 +267,8 @@ public partial class FileIndexer
     private readonly IReadOnlyList<string> _ancestorIgnoreDirectories;
     private readonly bool _ignoreCase;
     private readonly Func<string, bool?> _directoryIgnoreCaseProbe;
-    private readonly Func<string, IEnumerable<string>> _enumerateFiles;
+    private readonly Func<string, IEnumerable<string>>? _enumerateFilesForTesting;
+    private readonly Func<string, IEnumerable<string>> _enumerateFileSystemEntries;
     private readonly Dictionary<string, bool> _directoryIgnoreCaseCache;
     private readonly long _maxFileSizeBytes;
     private readonly FileContentLoader _contentLoader;
@@ -336,6 +337,7 @@ public partial class FileIndexer
         long? maxFileSizeBytes,
         Func<string, bool?>? directoryIgnoreCaseProbe,
         Func<string, IEnumerable<string>>? enumerateFiles = null,
+        Func<string, IEnumerable<string>>? enumerateFileSystemEntries = null,
         SymlinkPolicy symlinkPolicy = SymlinkPolicy.None,
         int? maxDanglingFileSystemEntryScanCandidates = null,
         IReadOnlyList<string>? generatedCodePatterns = null)
@@ -345,7 +347,8 @@ public partial class FileIndexer
         _ancestorIgnoreDirectories = BuildAncestorIgnoreDirectories(_ignoreRuleRoot, _projectRoot);
         _ignoreCase = ignoreCase;
         _directoryIgnoreCaseProbe = directoryIgnoreCaseProbe ?? ProbeExistingDirectoryIgnoreCase;
-        _enumerateFiles = enumerateFiles ?? (dir => CodeIndex.FileSystemTraversalPolicy.EnumerateFiles(LongPath.EnsureWindowsPrefix(dir)));
+        _enumerateFilesForTesting = enumerateFiles;
+        _enumerateFileSystemEntries = enumerateFileSystemEntries ?? (dir => CodeIndex.FileSystemTraversalPolicy.EnumerateFileSystemEntries(LongPath.EnsureWindowsPrefix(dir)));
         _directoryIgnoreCaseCache = new Dictionary<string, bool>(StringComparer.Ordinal);
         _maxFileSizeBytes = ResolveMaxFileSizeBytes(maxFileSizeBytes);
         _contentLoader = new FileContentLoader(_maxFileSizeBytes);
@@ -1827,16 +1830,32 @@ public partial class FileIndexer
                     ScanIssueSeverity.Warning));
             }
 
-            if (!passthrough)
-                EnumerateIndexableFilesInDirectory(dir, scanState, activeIgnoreRules, directoryIgnoreCase, cancellationToken);
+            if (_enumerateFilesForTesting is null)
+            {
+                fullyScanned &= EnumerateDirectoryEntries(
+                    dir,
+                    relativeDir,
+                    scanState,
+                    activeIgnoreRules,
+                    passthrough,
+                    directoryIgnoreCase,
+                    continueOnError,
+                    cancellationToken,
+                    depth);
+            }
+            else
+            {
+                if (!passthrough)
+                    EnumerateIndexableFilesInDirectory(dir, scanState, activeIgnoreRules, directoryIgnoreCase, cancellationToken);
 
-            // A successful file listing proves the direct children of this directory.
-            // Child subtree failures must not revoke that authority for sibling-file purge.
-            // ファイル列挙が成功した時点で、このディレクトリ直下の子要素については authoritative とみなせる。
-            // 子サブツリー失敗が sibling file purge の authority を奪ってはいけない。
-            scanState.ListedDirectories.Add(relativeDir);
-            RecordDanglingFileSystemEntries(dir, scanState, cancellationToken);
-            fullyScanned &= EnumerateSubdirectories(dir, scanState, activeIgnoreRules, passthrough, continueOnError, cancellationToken, depth);
+                // A successful file listing proves the direct children of this directory.
+                // Child subtree failures must not revoke that authority for sibling-file purge.
+                // ファイル列挙が成功した時点で、このディレクトリ直下の子要素については authoritative とみなせる。
+                // 子サブツリー失敗が sibling file purge の authority を奪ってはいけない。
+                scanState.ListedDirectories.Add(relativeDir);
+                RecordDanglingFileSystemEntries(dir, scanState, cancellationToken);
+                fullyScanned &= EnumerateSubdirectories(dir, scanState, activeIgnoreRules, passthrough, continueOnError, cancellationToken, depth);
+            }
         }
         catch (Exception ex) when (FileSystemTraversalFailure.IsExpected(ex))
         {
@@ -1852,6 +1871,88 @@ public partial class FileIndexer
         return fullyScanned;
     }
 
+    private bool EnumerateDirectoryEntries(
+        string dir,
+        string relativeDir,
+        DirectoryScanState scanState,
+        IgnoreRuleSet activeIgnoreRules,
+        bool passthrough,
+        bool directoryIgnoreCase,
+        bool continueOnError,
+        CancellationToken cancellationToken,
+        int depth)
+    {
+        var seenFilePaths = !passthrough && directoryIgnoreCase
+            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            : null;
+        var subdirectories = new List<string>();
+        var danglingCandidateLimit = _maxDanglingFileSystemEntryScanCandidates;
+        var danglingCandidateCount = 0;
+        var danglingScanTruncated = false;
+
+        foreach (var enumeratedEntry in _enumerateFileSystemEntries(dir))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var entry = LongPath.RemoveWindowsPrefix(enumeratedEntry);
+            CountDanglingCandidate(relativeDir, scanState, danglingCandidateLimit, ref danglingCandidateCount, ref danglingScanTruncated);
+
+            var probeStatus = FileSystemBoundary.TryGetAttributes(entry, out var attributes);
+            if (probeStatus != FileSystemBoundaryProbeStatus.Found)
+                continue;
+
+            if (FileSystemBoundary.IsSymlinkOrReparsePoint(attributes) && !ReparsePointTargetExists(entry))
+            {
+                RecordDanglingFileSystemEntry(entry, scanState);
+                continue;
+            }
+
+            if ((attributes & FileAttributes.Directory) != 0 || Directory.Exists(LongPath.EnsureWindowsPrefix(entry)))
+            {
+                subdirectories.Add(entry);
+                continue;
+            }
+
+            if (passthrough)
+                continue;
+
+            if (TryAcceptScannedFile(entry, scanState, activeIgnoreRules, seenFilePaths))
+                scanState.Results.Add(entry);
+        }
+
+        // A successful immediate-child listing proves this directory for sibling-file purge.
+        // Child recursion happens after that authority has been captured.
+        scanState.ListedDirectories.Add(relativeDir);
+        return ProcessSubdirectories(
+            subdirectories,
+            scanState,
+            activeIgnoreRules,
+            passthrough,
+            continueOnError,
+            cancellationToken,
+            depth);
+    }
+
+    private static void CountDanglingCandidate(
+        string relativeDir,
+        DirectoryScanState scanState,
+        int candidateLimit,
+        ref int candidateCount,
+        ref bool scanTruncated)
+    {
+        if (scanTruncated)
+            return;
+
+        candidateCount++;
+        if (candidateCount <= candidateLimit)
+            return;
+
+        scanState.Errors.Add(new ScanError(
+            relativeDir,
+            $"Dangling filesystem entry scan truncated after {candidateLimit:N0} candidate(s); additional dangling symlink diagnostics in this directory may be omitted.",
+            ScanIssueSeverity.Warning));
+        scanTruncated = true;
+    }
+
     private void EnumerateIndexableFilesInDirectory(
         string dir,
         DirectoryScanState scanState,
@@ -1859,10 +1960,11 @@ public partial class FileIndexer
         bool directoryIgnoreCase,
         CancellationToken cancellationToken)
     {
+        var enumerateFiles = _enumerateFilesForTesting ?? throw new InvalidOperationException("Test file enumeration is not configured.");
         var seenFilePaths = directoryIgnoreCase
             ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             : null;
-        foreach (var enumeratedFile in _enumerateFiles(dir))
+        foreach (var enumeratedFile in enumerateFiles(dir))
         {
             cancellationToken.ThrowIfCancellationRequested();
             // Strip any \\?\ prefix returned by EnumerateFiles when we passed a long-path
@@ -2027,6 +2129,16 @@ public partial class FileIndexer
         }
     }
 
+    private void RecordDanglingFileSystemEntry(string entry, DirectoryScanState scanState)
+    {
+        var relativeEntry = ToRelativePath(entry);
+        scanState.DanglingSymlinks.Add(relativeEntry);
+        scanState.Errors.Add(new ScanError(relativeEntry, "Skipped dangling symlink because its target could not be resolved.", ScanIssueSeverity.Warning));
+        scanState.ListedDirectories.Add(relativeEntry);
+        scanState.FullyScannedDirectories.Add(relativeEntry);
+        scanState.AttributePrunedDirectories.Add(relativeEntry);
+    }
+
     private static bool ReparsePointTargetExists(string path)
     {
         var entryPath = LongPath.EnsureWindowsPrefix(path);
@@ -2070,11 +2182,32 @@ public partial class FileIndexer
         CancellationToken cancellationToken,
         int depth)
     {
+        var subdirectories = CodeIndex.FileSystemTraversalPolicy
+            .EnumerateDirectories(LongPath.EnsureWindowsPrefix(dir))
+            .Select(LongPath.RemoveWindowsPrefix);
+        return ProcessSubdirectories(
+            subdirectories,
+            scanState,
+            activeIgnoreRules,
+            passthrough,
+            continueOnError,
+            cancellationToken,
+            depth);
+    }
+
+    private bool ProcessSubdirectories(
+        IEnumerable<string> subdirectories,
+        DirectoryScanState scanState,
+        IgnoreRuleSet activeIgnoreRules,
+        bool passthrough,
+        bool continueOnError,
+        CancellationToken cancellationToken,
+        int depth)
+    {
         var fullyScanned = true;
-        foreach (var enumeratedSubDir in CodeIndex.FileSystemTraversalPolicy.EnumerateDirectories(LongPath.EnsureWindowsPrefix(dir)))
+        foreach (var subDir in subdirectories)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var subDir = LongPath.RemoveWindowsPrefix(enumeratedSubDir);
             if (TryRecordNonRecursiveSubdirectory(subDir, scanState, passthrough))
                 continue;
 
