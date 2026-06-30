@@ -6,6 +6,8 @@ internal readonly record struct IndexedFileStatReuseResult(long FileId, long Siz
 
 internal static class IndexedFileStatReuse
 {
+    internal static Action<string>? LookupForTesting { get; set; }
+
     internal static IndexedFileStatReuseResult? TryGetUnchangedFile(
         DbWriter writer,
         string absolutePath,
@@ -16,6 +18,7 @@ internal static class IndexedFileStatReuse
         if (!allowReuse || language == null)
             return null;
 
+        LookupForTesting?.Invoke(relativePath);
         try
         {
             var info = new FileInfo(absolutePath);

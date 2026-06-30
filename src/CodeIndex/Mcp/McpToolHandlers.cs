@@ -5618,6 +5618,7 @@ public partial class McpServer
         }
         var knownReadableFileSizes = new Dictionary<string, long>(StringComparer.Ordinal);
         await EmitProgressNotificationAsync(progressToken, 0, files.Count, "Index scan complete; indexing files.").ConfigureAwait(false);
+        var csharpPrepassStatReuse = new Dictionary<string, IndexedFileStatReuseResult?>(StringComparer.Ordinal);
         bool CanReuseCSharpPrepassTargetWithoutRead(CSharpStaticInterfacePrepass.FileTarget target)
         {
             if (!symbolKindFilterMatchesPrior || !csharpSymbolNameContractMatchesCurrent)
@@ -5632,13 +5633,23 @@ public partial class McpServer
                 target.Language,
                 allowReuse: true);
             if (existingFile == null)
+            {
+                csharpPrepassStatReuse[target.IndexPath] = null;
                 return false;
+            }
 
-            return !writer.HasReusableFileBlockingIssueForFile(
+            if (writer.HasReusableFileBlockingIssueForFile(
                 existingFile.Value.FileId,
                 maxSymbolsPerFile,
                 maxReferencesPerFile,
-                indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath));
+                indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath)))
+            {
+                csharpPrepassStatReuse[target.IndexPath] = null;
+                return false;
+            }
+
+            csharpPrepassStatReuse[target.IndexPath] = existingFile.Value;
+            return true;
         }
 
         CSharpStaticInterfaceWorkspaceSymbols csharpWorkspace;
@@ -5680,12 +5691,16 @@ public partial class McpServer
                     && (target.Language != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                     && (target.Language != "sql" || sqlGraphContractMatchesCurrent)
                     && AllowReuseWithCurrentHotspotFamilyTrust(target.Language, hotspotFamilyTrustMatchesCurrent);
-                var statMatchedFile = IndexedFileStatReuse.TryGetUnchangedFile(
-                    writer,
-                    filePath,
-                    target.IndexPath,
-                    target.Language,
-                    allowStatReuse);
+                var statMatchedFile = allowStatReuse
+                    && target.Language == "csharp"
+                    && csharpPrepassStatReuse.TryGetValue(target.IndexPath, out var cachedCSharpPrepassReuse)
+                        ? cachedCSharpPrepassReuse
+                        : IndexedFileStatReuse.TryGetUnchangedFile(
+                            writer,
+                            filePath,
+                            target.IndexPath,
+                            target.Language,
+                            allowStatReuse);
                 if (statMatchedFile != null
                     && writer.HasReusableFileBlockingIssueForFile(
                         statMatchedFile.Value.FileId,

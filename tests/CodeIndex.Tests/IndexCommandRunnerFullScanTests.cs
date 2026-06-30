@@ -175,6 +175,7 @@ public partial class IndexCommandRunnerTests
         bool? parallelized = null;
         string? reason = null;
         var loadedPaths = new ConcurrentBag<string>();
+        var statLookups = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
         try
         {
             RunGit(projectRoot, "init");
@@ -200,6 +201,7 @@ public partial class IndexCommandRunnerTests
                         reason = why;
                     };
                     IndexCommandRunner.FullScanFileContentLoadForTesting = path => loadedPaths.Add(path);
+                    IndexedFileStatReuse.LookupForTesting = path => statLookups.AddOrUpdate(path, 1, static (_, count) => count + 1);
 
                     var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--json"]);
 
@@ -212,11 +214,16 @@ public partial class IndexCommandRunnerTests
                     Assert.DoesNotContain("app.cs", loadedPaths);
                     Assert.DoesNotContain("app.ts", loadedPaths);
                     Assert.Contains("feature.cs", loadedPaths);
+                    Assert.Equal(1, statLookups["app.cs"]);
+                    Assert.Equal(1, statLookups["app.ts"]);
+                    Assert.Equal(1, statLookups["feature.cs"]);
+                    Assert.All(statLookups, lookup => Assert.Equal(1, lookup.Value));
                 }
                 finally
                 {
                     IndexCommandRunner.FullScanExtractionSchedulingForTesting = null;
                     IndexCommandRunner.FullScanFileContentLoadForTesting = null;
+                    IndexedFileStatReuse.LookupForTesting = null;
                 }
             }
         }
