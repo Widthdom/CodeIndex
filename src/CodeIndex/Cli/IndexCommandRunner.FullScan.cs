@@ -1218,18 +1218,17 @@ public static partial class IndexCommandRunner
             if (target.Language != "csharp")
                 return false;
 
-            var existingId = TryGetUnchangedFileIdFromStat(
+            var existingFile = IndexedFileStatReuse.TryGetUnchangedFile(
                 writer,
                 target.FilePath,
                 target.IndexPath,
                 target.Language,
-                allowReuse: true,
-                out _);
-            if (existingId == null)
+                allowReuse: true);
+            if (existingFile == null)
                 return false;
             return !ExistingFileBlocksReuse(
                 writer,
-                existingId.Value,
+                existingFile.Value.FileId,
                 options.MaxSymbolsPerFile,
                 options.MaxReferencesPerFile,
                 indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath));
@@ -1308,18 +1307,17 @@ public static partial class IndexCommandRunner
                 && (language != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                 && (language != "sql" || sqlGraphContractMatchesCurrent)
                 && AllowReuseWithCurrentHotspotFamilyTrust(language, hotspotFamilyTrustMatchesCurrent);
-            var existingId = TryGetUnchangedFileIdFromStat(
+            var existingFile = IndexedFileStatReuse.TryGetUnchangedFile(
                 writer,
                 target.FilePath,
                 target.IndexPath,
                 language,
-                allowReuse,
-                out var statSize);
-            if (existingId == null)
+                allowReuse);
+            if (existingFile == null)
                 return false;
             if (ExistingFileBlocksReuse(
                 writer,
-                existingId.Value,
+                existingFile.Value.FileId,
                 options.MaxSymbolsPerFile,
                 options.MaxReferencesPerFile,
                 indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath)))
@@ -1329,8 +1327,7 @@ public static partial class IndexCommandRunner
 
             skipped++;
             processed++;
-            if (statSize.HasValue)
-                knownReadableFileSizes[target.FilePath] = statSize.Value;
+            knownReadableFileSizes[target.FilePath] = existingFile.Value.Size;
             if (!string.IsNullOrWhiteSpace(language))
                 skippedSymbolExtractorLanguages.Add(language);
             if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(language) && language != null)

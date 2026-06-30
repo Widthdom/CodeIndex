@@ -3099,41 +3099,6 @@ public partial class McpServer
             && matchesCurrent;
     }
 
-    private static long? TryGetUnchangedFileIdFromStat(
-        DbWriter writer,
-        string absolutePath,
-        string relativePath,
-        string? language,
-        bool allowReuse,
-        out long? size)
-    {
-        size = null;
-        if (!allowReuse || language == null)
-            return null;
-
-        try
-        {
-            var info = new FileInfo(absolutePath);
-            if (!info.Exists)
-                return null;
-
-            size = info.Length;
-            return writer.GetUnchangedFileIdByStat(
-                relativePath,
-                info.LastWriteTimeUtc,
-                info.Length,
-                language: language);
-        }
-        catch (IOException)
-        {
-            return null;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return null;
-        }
-    }
-
     private static void AddHotspotFamilySignal(JsonObject payload, HotspotFamilySignal signal)
     {
         payload["hotspot_family_ready"] = signal.Ready;
@@ -5660,18 +5625,17 @@ public partial class McpServer
             if (target.Language != "csharp")
                 return false;
 
-            var existingId = TryGetUnchangedFileIdFromStat(
+            var existingFile = IndexedFileStatReuse.TryGetUnchangedFile(
                 writer,
                 target.FilePath,
                 target.IndexPath,
                 target.Language,
-                allowReuse: true,
-                out _);
-            if (existingId == null)
+                allowReuse: true);
+            if (existingFile == null)
                 return false;
 
             return !writer.HasReusableFileBlockingIssueForFile(
-                existingId.Value,
+                existingFile.Value.FileId,
                 maxSymbolsPerFile,
                 maxReferencesPerFile,
                 indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath));
@@ -5716,28 +5680,26 @@ public partial class McpServer
                     && (target.Language != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                     && (target.Language != "sql" || sqlGraphContractMatchesCurrent)
                     && AllowReuseWithCurrentHotspotFamilyTrust(target.Language, hotspotFamilyTrustMatchesCurrent);
-                var statMatchedId = TryGetUnchangedFileIdFromStat(
+                var statMatchedFile = IndexedFileStatReuse.TryGetUnchangedFile(
                     writer,
                     filePath,
                     target.IndexPath,
                     target.Language,
-                    allowStatReuse,
-                    out var statSize);
-                if (statMatchedId != null
+                    allowStatReuse);
+                if (statMatchedFile != null
                     && writer.HasReusableFileBlockingIssueForFile(
-                        statMatchedId.Value,
+                        statMatchedFile.Value.FileId,
                         maxSymbolsPerFile,
                         maxReferencesPerFile,
                         indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath)))
                 {
-                    statMatchedId = null;
+                    statMatchedFile = null;
                 }
-                if (statMatchedId != null)
+                if (statMatchedFile != null)
                 {
                     skipped++;
                     processed++;
-                    if (statSize.HasValue)
-                        knownReadableFileSizes[filePath] = statSize.Value;
+                    knownReadableFileSizes[filePath] = statMatchedFile.Value.Size;
                     if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(target.Language) && target.Language != null)
                         reusedHotspotFamilyLanguages.Add(target.Language);
                     await EmitProgressNotificationAsync(progressToken, processed, files.Count).ConfigureAwait(false);

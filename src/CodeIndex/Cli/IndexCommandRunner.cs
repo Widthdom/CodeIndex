@@ -1181,41 +1181,6 @@ public static partial class IndexCommandRunner
             : null;
     }
 
-    private static long? TryGetUnchangedFileIdFromStat(
-        DbWriter writer,
-        string absolutePath,
-        string relativePath,
-        string? language,
-        bool allowReuse,
-        out long? size)
-    {
-        size = null;
-        if (!allowReuse || language == null)
-            return null;
-
-        try
-        {
-            var info = new FileInfo(absolutePath);
-            if (!info.Exists)
-                return null;
-
-            size = info.Length;
-            return writer.GetUnchangedFileIdByStat(
-                relativePath,
-                info.LastWriteTimeUtc,
-                info.Length,
-                language: language);
-        }
-        catch (IOException)
-        {
-            return null;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return null;
-        }
-    }
-
     private static long? TryGetUnchangedFileIdFromChecksum(
         DbWriter writer,
         string absolutePath,
