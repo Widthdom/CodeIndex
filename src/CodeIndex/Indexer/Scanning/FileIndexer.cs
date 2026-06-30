@@ -1270,12 +1270,16 @@ public partial class FileIndexer
         CancellationToken cancellationToken)
     {
         var pendingDirectories = new Stack<ProjectMarkerFingerprintDirectory>();
-        pendingDirectories.Push(new ProjectMarkerFingerprintDirectory(dir, inheritedIgnoreRules, IsProjectRoot: true));
+        pendingDirectories.Push(new ProjectMarkerFingerprintDirectory(
+            dir,
+            ToRelativePath(dir),
+            inheritedIgnoreRules,
+            IsProjectRoot: true));
         while (pendingDirectories.Count > 0)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var current = pendingDirectories.Pop();
-            if (GetDirectoryFilterKind(current.Path, current.IgnoreRules, current.IsProjectRoot) != PathFilterKind.None)
+            if (GetDirectoryFilterKind(current.Path, current.RelativePath, current.IgnoreRules, current.IsProjectRoot) != PathFilterKind.None)
                 continue;
 
             if (traversalState.DirectoriesVisited >= maxDirectories)
@@ -1325,18 +1329,19 @@ public partial class FileIndexer
                     traversalState.MarkerFilesCollected++;
                 }
 
-                var passthrough = IsSubmoduleAncestorPassthrough(currentDirectory);
+                var passthrough = IsSubmoduleAncestorPassthrough(current.RelativePath);
                 foreach (var enumeratedSubDir in EnumerateProjectMarkerDirectories(currentDirectory))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     var subDir = LongPath.RemoveWindowsPrefix(enumeratedSubDir);
                     if (HasSkippedAttributes(subDir))
                         continue;
-                    if (IsNestedGitRepository(subDir) && !IsSubmoduleOrAncestor(subDir))
+                    var subRelativePath = ToRelativePath(subDir);
+                    if (IsNestedGitRepository(subDir) && !IsSubmoduleOrAncestor(subRelativePath))
                         continue;
-                    if (passthrough && !IsSubmoduleOrAncestor(subDir))
+                    if (passthrough && !IsSubmoduleOrAncestor(subRelativePath))
                         continue;
-                    if (GetDirectoryFilterKind(subDir, activeIgnoreRules) != PathFilterKind.None)
+                    if (GetDirectoryFilterKind(subDir, subRelativePath, activeIgnoreRules) != PathFilterKind.None)
                         continue;
 
                     if (traversalState.DirectoriesVisited + pendingDirectories.Count >= maxDirectories)
@@ -1349,7 +1354,11 @@ public partial class FileIndexer
                         return;
                     }
 
-                    pendingDirectories.Push(new ProjectMarkerFingerprintDirectory(subDir, activeIgnoreRules, IsProjectRoot: false));
+                    pendingDirectories.Push(new ProjectMarkerFingerprintDirectory(
+                        subDir,
+                        subRelativePath,
+                        activeIgnoreRules,
+                        IsProjectRoot: false));
                 }
             }
             catch (Exception ex) when (FileSystemTraversalFailure.IsExpected(ex))
@@ -1572,7 +1581,11 @@ public partial class FileIndexer
         if (!preloadResult.IgnoreRulesAvailable)
             return new PathFilterResult(PathFilterKind.IgnoreRulesUnavailable, errors);
 
-        var projectRootFilterKind = GetDirectoryFilterKind(_projectRoot, activeIgnoreRules, isProjectRoot: true);
+        var projectRootFilterKind = GetDirectoryFilterKind(
+            _projectRoot,
+            string.Empty,
+            activeIgnoreRules,
+            isProjectRoot: true);
         return projectRootFilterKind != PathFilterKind.None
             ? new PathFilterResult(projectRootFilterKind, errors)
             : null;
@@ -1789,7 +1802,7 @@ public partial class FileIndexer
         if (scanState.CheckpointedDirectories.Contains(relativeDir))
             return true;
 
-        var filterKind = GetDirectoryFilterKind(dir, activeIgnoreRules, isProjectRoot);
+        var filterKind = GetDirectoryFilterKind(dir, relativeDir, activeIgnoreRules, isProjectRoot);
         if (filterKind != PathFilterKind.None)
         {
             scanState.ListedDirectories.Add(relativeDir);
@@ -1833,7 +1846,7 @@ public partial class FileIndexer
             // submodule の祖先で SkipDirs 名のディレクトリ（例: vendor/foo の vendor/）の場合は、
             // 当該ディレクトリの直下ファイルおよび submodule と無関係なサブディレクトリには
             // SkipDirs を適用しつつ、submodule 方向にだけ降りる。
-            var passthrough = IsSubmoduleAncestorPassthrough(dir);
+            var passthrough = IsSubmoduleAncestorPassthrough(relativeDir);
             var directoryIgnoreCase = DirectoryUsesIgnoreCase(dir);
             if (directoryIgnoreCase != _ignoreCase)
             {
@@ -2268,13 +2281,17 @@ public partial class FileIndexer
 
     private bool TryRecordNonRecursiveSubdirectory(string subDir, DirectoryScanState scanState, bool passthrough)
     {
-        if (IsNestedGitRepository(subDir) && !IsSubmoduleOrAncestor(subDir))
+        string? subRelative = null;
+        if (IsNestedGitRepository(subDir))
         {
-            var subRelative = ToRelativePath(subDir);
-            scanState.ListedDirectories.Add(subRelative);
-            scanState.FullyScannedDirectories.Add(subRelative);
-            scanState.NestedRepositories.Add(subRelative);
-            return true;
+            subRelative = ToRelativePath(subDir);
+            if (!IsSubmoduleOrAncestor(subRelative))
+            {
+                scanState.ListedDirectories.Add(subRelative);
+                scanState.FullyScannedDirectories.Add(subRelative);
+                scanState.NestedRepositories.Add(subRelative);
+                return true;
+            }
         }
 
         // In passthrough mode, only descend into subdirectories that are themselves
@@ -2282,12 +2299,15 @@ public partial class FileIndexer
         // would have treated them at this point.
         // passthrough 中は、submodule 自体または submodule の祖先に該当する
         // サブディレクトリのみ降りる。その他は本来 SkipDirs で止まっていた扱いに戻す。
-        if (passthrough && !IsSubmoduleOrAncestor(subDir))
+        if (passthrough)
         {
-            var subRelative = ToRelativePath(subDir);
-            scanState.ListedDirectories.Add(subRelative);
-            scanState.FullyScannedDirectories.Add(subRelative);
-            return true;
+            subRelative ??= ToRelativePath(subDir);
+            if (!IsSubmoduleOrAncestor(subRelative))
+            {
+                scanState.ListedDirectories.Add(subRelative);
+                scanState.FullyScannedDirectories.Add(subRelative);
+                return true;
+            }
         }
 
         return false;
@@ -2461,12 +2481,16 @@ public partial class FileIndexer
         => relativePath.Equals(".cdidx", StringComparison.Ordinal)
             || relativePath.StartsWith(".cdidx/", StringComparison.Ordinal);
 
-    private PathFilterKind GetDirectoryFilterKind(string dir, IgnoreRuleSet activeIgnoreRules, bool isProjectRoot = false)
+    private PathFilterKind GetDirectoryFilterKind(
+        string dir,
+        string relativeDir,
+        IgnoreRuleSet activeIgnoreRules,
+        bool isProjectRoot = false)
     {
         if (!isProjectRoot)
         {
             var dirName = Path.GetFileName(Path.TrimEndingDirectorySeparator(dir));
-            if (SkipDirs.Contains(dirName) && !IsSubmoduleOrAncestor(dir))
+            if (SkipDirs.Contains(dirName) && !IsSubmoduleOrAncestor(relativeDir))
                 return PathFilterKind.ExcludedByDefaultDirectory;
         }
 
@@ -2482,34 +2506,32 @@ public partial class FileIndexer
     // _projectRoot 配下の相対パスが .gitmodules で宣言された submodule のワークツリーまたは
     // その祖先ディレクトリに一致するときに true。vendor/ のような SkipDirs 名の祖先を
     // 通過して submodule に到達できるよう、限定的に SkipDirs を上書きする。
-    private bool IsSubmoduleOrAncestor(string dir)
+    private bool IsSubmoduleOrAncestor(string relativePath)
     {
         if (_submodulePaths.Count == 0)
             return false;
-        var relPath = ToRelativePath(dir);
-        if (relPath.Length == 0)
+        if (relativePath.Length == 0)
             return false;
-        return _submodulePaths.Contains(relPath) || _submoduleAncestorPaths.Contains(relPath);
+        return _submodulePaths.Contains(relativePath) || _submoduleAncestorPaths.Contains(relativePath);
     }
 
-    private bool IsSubmoduleAncestorPassthrough(string dir)
+    private bool IsSubmoduleAncestorPassthrough(string relativePath)
     {
         if (_submoduleAncestorPaths.Count == 0)
             return false;
-        var relPath = ToRelativePath(dir);
-        if (relPath.Length == 0)
+        if (relativePath.Length == 0)
             return false;
-        if (_submodulePaths.Contains(relPath))
+        if (_submodulePaths.Contains(relativePath))
             return false;
-        if (!_submoduleAncestorPaths.Contains(relPath))
+        if (!_submoduleAncestorPaths.Contains(relativePath))
             return false;
         // Passthrough propagates from any SkipDirs-named ancestor along the path. If no
-        // segment of relPath matches SkipDirs, this directory would have been walked
+        // segment of relativePath matches SkipDirs, this directory would have been walked
         // normally without our override, so the override is not in effect here.
-        // SkipDirs 名の祖先からは下方向に passthrough を伝播する。relPath のどの segment も
+        // SkipDirs 名の祖先からは下方向に passthrough を伝播する。relativePath のどの segment も
         // SkipDirs に該当しない場合、我々の上書き無しでも walker は通っていたはずなので
         // ここでの上書きは効いていない。
-        var remaining = relPath.AsSpan();
+        var remaining = relativePath.AsSpan();
         while (!remaining.IsEmpty)
         {
             var separatorIndex = remaining.IndexOf('/');

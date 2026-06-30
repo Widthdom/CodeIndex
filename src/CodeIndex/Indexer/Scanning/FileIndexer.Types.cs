@@ -80,7 +80,11 @@ public partial class FileIndexer
         public string TruncationReason { get; set; } = "unknown";
     }
 
-    private readonly record struct ProjectMarkerFingerprintDirectory(string Path, IgnoreRuleSet IgnoreRules, bool IsProjectRoot);
+    private readonly record struct ProjectMarkerFingerprintDirectory(
+        string Path,
+        string RelativePath,
+        IgnoreRuleSet IgnoreRules,
+        bool IsProjectRoot);
 
     internal readonly record struct ProjectMarkerFingerprintResult(string? Fingerprint, bool IsComplete)
     {
