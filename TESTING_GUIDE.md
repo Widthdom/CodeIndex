@@ -39,6 +39,7 @@ The test project mirrors the production areas closely.
 - `SymbolExtractor*Tests.cs` and `ReferenceExtractor*Tests.cs`
   Extractor coverage is split by language or feature area with partial test classes, while shared helpers remain on the root `SymbolExtractorTests` / `ReferenceExtractorTests` parts.
   When moving repeated extractor scenarios out of a giant suite, keep the new partial file grouped by a readable domain such as language, build-file format, or protocol surface, and prefer small semantic assertion helpers over repeated raw substring or predicate assertions.
+  `ReferenceExtractorTests.ExtractSymbolsAndReferences(...)` owns the common symbol-then-reference extraction setup for tests that need both lists; use it instead of repeating the two extractor calls when the fixture does not need a specialized path or workspace symbol setup.
 - `FileIndexerTests.cs`, `FileIndexerContentLoadingTests.cs`, `FileIndexerTestSupport.cs`
   File scanning, language detection, scan-result language reuse, content-sensitive header safeguards, content loading/canonicalization, checksum, Git LFS pointer detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage. Shared `FileIndexerTests` helpers live in `FileIndexerTestSupport.cs`.
 - `PathCompatibilityMatrixTests.cs`
