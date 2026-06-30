@@ -46,6 +46,27 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void StructuralLineMasker_MaskLines_CSharpReusesUnchangedLinesUntilMaskNeeded()
+    {
+        var lines = new[]
+        {
+            "class App {",
+            "    var value = \"literal\";",
+            "    Call();",
+            "}",
+        };
+
+        var masked = StructuralLineMasker.MaskLines("csharp", lines);
+
+        Assert.NotSame(lines, masked);
+        Assert.Same(lines[0], masked[0]);
+        Assert.NotSame(lines[1], masked[1]);
+        Assert.Same(lines[2], masked[2]);
+        Assert.Same(lines[3], masked[3]);
+        Assert.DoesNotContain("literal", masked[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Extract_CancelledToken_ThrowsBeforeWork()
     {
         using var cancellation = new CancellationTokenSource();

@@ -170,8 +170,17 @@ internal static class StructuralLineMasker
             if (line.Length == 0)
                 continue;
 
-            var masked = line.ToCharArray();
+            char[]? masked = null;
             var searchStart = 0;
+
+            char[] GetMaskedLine()
+                => masked ??= line.ToCharArray();
+
+            void MaskAt(int index)
+                => GetMaskedLine()[index] = ' ';
+
+            void MaskRange(int start, int length)
+                => ReplaceWithSpaces(GetMaskedLine(), start, length);
 
             while (searchStart < line.Length)
             {
@@ -181,13 +190,13 @@ internal static class StructuralLineMasker
                     {
                         if (StartsWith(line, searchStart, "*/"))
                         {
-                            ReplaceWithSpaces(masked, searchStart, 2);
+                            MaskRange(searchStart, 2);
                             searchStart += 2;
                             frames.Pop();
                             continue;
                         }
 
-                        masked[searchStart] = ' ';
+                        MaskAt(searchStart);
                         searchStart++;
                         continue;
                     }
@@ -213,7 +222,7 @@ internal static class StructuralLineMasker
                         {
                             if (StartsWith(line, searchStart, "{{") || StartsWith(line, searchStart, "}}"))
                             {
-                                ReplaceWithSpaces(masked, searchStart, 2);
+                                MaskRange(searchStart, 2);
                                 searchStart += 2;
                                 continue;
                             }
@@ -224,7 +233,7 @@ internal static class StructuralLineMasker
                             var openBraceRun = CountRun(line, searchStart, '{');
                             if (openBraceRun >= stringFrame.InterpolationBraceCount)
                             {
-                                ReplaceWithSpaces(masked, searchStart, stringFrame.InterpolationBraceCount);
+                                MaskRange(searchStart, stringFrame.InterpolationBraceCount);
                                 searchStart += stringFrame.InterpolationBraceCount;
                                 frames.Push(new InterpolationFrame { CloseBraceCount = stringFrame.InterpolationBraceCount });
                                 continue;
@@ -236,7 +245,7 @@ internal static class StructuralLineMasker
                             var closeLength = CountQuoteRun(line, searchStart);
                             if (closeLength == stringFrame.DelimiterLength)
                             {
-                                ReplaceWithSpaces(masked, searchStart, closeLength);
+                                MaskRange(searchStart, closeLength);
                                 searchStart += closeLength;
                                 frames.Pop();
                                 continue;
@@ -244,12 +253,12 @@ internal static class StructuralLineMasker
 
                             if (closeLength > 0)
                             {
-                                ReplaceWithSpaces(masked, searchStart, closeLength);
+                                MaskRange(searchStart, closeLength);
                                 searchStart += closeLength;
                                 continue;
                             }
 
-                            masked[searchStart++] = ' ';
+                            MaskAt(searchStart++);
                             continue;
                         }
 
@@ -257,12 +266,12 @@ internal static class StructuralLineMasker
                         {
                             if (line[searchStart] == '"' && searchStart + 1 < line.Length && line[searchStart + 1] == '"')
                             {
-                                ReplaceWithSpaces(masked, searchStart, 2);
+                                MaskRange(searchStart, 2);
                                 searchStart += 2;
                                 continue;
                             }
 
-                            masked[searchStart] = ' ';
+                            MaskAt(searchStart);
                             if (line[searchStart] == '"')
                                 frames.Pop();
 
@@ -270,11 +279,11 @@ internal static class StructuralLineMasker
                             continue;
                         }
 
-                        masked[searchStart] = ' ';
+                        MaskAt(searchStart);
                         if (line[searchStart] == '\\')
                         {
                             if (searchStart + 1 < line.Length)
-                                masked[searchStart + 1] = ' ';
+                                MaskAt(searchStart + 1);
 
                             searchStart += Math.Min(2, line.Length - searchStart);
                             continue;
@@ -294,7 +303,7 @@ internal static class StructuralLineMasker
 
                         if (StartsWith(line, searchStart, "/*"))
                         {
-                            ReplaceWithSpaces(masked, searchStart, 2);
+                            MaskRange(searchStart, 2);
                             frames.Push(new BlockCommentFrame());
                             searchStart += 2;
                             continue;
@@ -302,7 +311,7 @@ internal static class StructuralLineMasker
 
                         if (TryStartString(line, searchStart, out var nestedStringLength, out var nestedStringFrame))
                         {
-                            ReplaceWithSpaces(masked, searchStart, nestedStringLength);
+                            MaskRange(searchStart, nestedStringLength);
                             searchStart += nestedStringLength;
                             frames.Push(nestedStringFrame);
                             continue;
@@ -318,7 +327,7 @@ internal static class StructuralLineMasker
                         var closeBraceRun = CountRun(line, searchStart, '}');
                         if (interpolationFrame.NestedBraceDepth == 0 && closeBraceRun >= interpolationFrame.CloseBraceCount)
                         {
-                            ReplaceWithSpaces(masked, searchStart, interpolationFrame.CloseBraceCount);
+                            MaskRange(searchStart, interpolationFrame.CloseBraceCount);
                             searchStart += interpolationFrame.CloseBraceCount;
                             frames.Pop();
                             continue;
@@ -348,7 +357,7 @@ internal static class StructuralLineMasker
 
                 if (StartsWith(line, searchStart, "/*"))
                 {
-                    ReplaceWithSpaces(masked, searchStart, 2);
+                    MaskRange(searchStart, 2);
                     frames.Push(new BlockCommentFrame());
                     searchStart += 2;
                     continue;
@@ -356,7 +365,7 @@ internal static class StructuralLineMasker
 
                 if (TryStartString(line, searchStart, out var openingLength, out var openingFrame))
                 {
-                    ReplaceWithSpaces(masked, searchStart, openingLength);
+                    MaskRange(searchStart, openingLength);
                     searchStart += openingLength;
                     frames.Push(openingFrame);
                     continue;
@@ -372,7 +381,8 @@ internal static class StructuralLineMasker
                 searchStart++;
             }
 
-            lines[i] = new string(masked);
+            if (masked != null)
+                lines[i] = new string(masked);
         }
     }
 
