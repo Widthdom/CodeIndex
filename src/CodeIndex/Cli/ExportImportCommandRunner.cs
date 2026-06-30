@@ -21,11 +21,11 @@ internal static class ExportImportCommandRunner
     internal const long MaxImportDatabaseBytes = 8L * 1024 * 1024 * 1024;
     internal const long MaxImportDatabaseCompressionRatio = 1000;
     private const int ImportCopyBufferSize = 81920;
-    private const int ManifestUnknownExtensionFileLimit = DbContext.UnknownExtensionFilePathSampleLimit;
+    internal const int ManifestUnknownExtensionFileLimit = DbContext.UnknownExtensionFilePathSampleLimit;
     private const int ManifestUnknownExtensionJsonDepth = 4;
     internal const int ManifestUnknownExtensionDecodedItemLimit = ManifestUnknownExtensionFileLimit;
     internal const int ManifestUnknownExtensionPathCharLimit = 4096;
-    private const int ManifestUnknownExtensionFilesTotalCharLimit = 32 * 1024;
+    internal const int ManifestUnknownExtensionFilesTotalCharLimit = 32 * 1024;
     private static readonly DateTimeOffset DeterministicZipTimestamp = new(1980, 1, 1, 0, 0, 0, TimeSpan.Zero);
     private const string ExportCommandName = "export";
     private const string ImportCommandName = "import";
@@ -151,7 +151,7 @@ internal static class ExportImportCommandRunner
                 phase = PhaseManifest;
                 if (!TryReadManifest(manifestEntry, jsonOptions, out var manifest, out var manifestError, cancellationToken))
                     return WriteImportError(wantsJson, jsonOptions, PhaseManifest, "import_manifest_invalid", $"archive manifest is invalid: {manifestError}.", "use an archive produced by `cdidx export <archive>`.", ImportUsage);
-                if (!TryValidateManifestHeader(manifest, out var manifestHeaderError))
+                if (!ExportImportManifestCodec.TryValidateHeader(manifest, out var manifestHeaderError))
                     return WriteImportError(wantsJson, jsonOptions, PhaseManifest, "import_manifest_incompatible", $"archive manifest is invalid: {manifestHeaderError}.", "re-export from a compatible CodeIndex database.", ImportUsage);
                 importedManifest = manifest;
                 AddImportValidationPhase(validationPhases, PhaseManifest);
@@ -512,10 +512,10 @@ internal static class ExportImportCommandRunner
                         .Append(kind)
                         .Append("\tline:")
                         .Append(line.ToString(CultureInfo.InvariantCulture));
-                    AppendCtagsExtensionField(tagLine, "language", GetNullableString(reader, 4));
-                    AppendCtagsExtensionField(tagLine, "container_kind", GetNullableString(reader, 5));
-                    AppendCtagsExtensionField(tagLine, "container", GetNullableString(reader, 6));
-                    AppendCtagsExtensionField(tagLine, "visibility", GetNullableString(reader, 7));
+                    AppendCtagsExtensionField(tagLine, "language", ExportImportSqliteRow.ReadNullableString(reader, 4));
+                    AppendCtagsExtensionField(tagLine, "container_kind", ExportImportSqliteRow.ReadNullableString(reader, 5));
+                    AppendCtagsExtensionField(tagLine, "container", ExportImportSqliteRow.ReadNullableString(reader, 6));
+                    AppendCtagsExtensionField(tagLine, "visibility", ExportImportSqliteRow.ReadNullableString(reader, 7));
                     writer.WriteLine(tagLine.ToString());
                     emittedCount++;
                 }
@@ -614,9 +614,6 @@ internal static class ExportImportCommandRunner
         DbReader.AddPathFilterParameterSet(cmd, "pathPattern", filters.PathPatterns);
         DbReader.AddPathFilterParameterSet(cmd, "excludePathPattern", filters.ExcludePathPatterns);
     }
-
-    private static string? GetNullableString(SqliteDataReader reader, int ordinal)
-        => reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
 
     private static void AppendCtagsExtensionField(StringBuilder builder, string name, string? value)
     {
@@ -797,7 +794,7 @@ internal static class ExportImportCommandRunner
 
     private static bool TryReadManifest(ZipArchiveEntry manifestEntry, JsonSerializerOptions jsonOptions, out ExportManifest manifest, out string message, CancellationToken cancellationToken)
     {
-        if (!TryValidateManifestEntrySize(manifestEntry, out message))
+        if (!ExportImportManifestCodec.TryValidateEntrySize(manifestEntry, out message))
         {
             manifest = null!;
             return false;
@@ -811,27 +808,11 @@ internal static class ExportImportCommandRunner
             CopyToWithLimit(stream, manifestBytes, MaxImportManifestBytes, ManifestEntryName, cancellationToken);
             manifestBytes.Position = 0;
             cancellationToken.ThrowIfCancellationRequested();
-            if (JsonExceedsDepthLimit(manifestBytes.GetBuffer().AsSpan(0, (int)manifestBytes.Length), MaxImportManifestJsonDepth))
-            {
-                manifest = null!;
-                message = $"manifest.json exceeds the JSON depth limit of {MaxImportManifestJsonDepth}";
-                return false;
-            }
-
-            var parsedManifest = BoundedJson.Deserialize<ExportManifest>(
+            return ExportImportManifestCodec.TryDeserialize(
                 manifestBytes.GetBuffer().AsSpan(0, (int)manifestBytes.Length),
-                MaxImportManifestBytes,
-                CreateImportManifestJsonOptions(jsonOptions));
-            if (parsedManifest == null)
-            {
-                manifest = null!;
-                message = "manifest.json did not contain an object";
-                return false;
-            }
-
-            manifest = parsedManifest;
-            message = string.Empty;
-            return true;
+                jsonOptions,
+                out manifest,
+                out message);
         }
         catch (InvalidDataException ex)
         {
@@ -839,181 +820,6 @@ internal static class ExportImportCommandRunner
             message = FormatImportManifestReadException(ex);
             return false;
         }
-        catch (JsonException)
-        {
-            manifest = null!;
-            message = "manifest.json is not valid export manifest JSON";
-            return false;
-        }
-        catch (NotSupportedException)
-        {
-            manifest = null!;
-            message = "manifest.json contains unsupported export manifest JSON";
-            return false;
-        }
-    }
-
-    private static bool TryValidateManifestEntrySize(ZipArchiveEntry manifestEntry, out string message)
-    {
-        if (manifestEntry.Length < 0 || manifestEntry.CompressedLength < 0)
-        {
-            message = "archive manifest.json size metadata is invalid";
-            return false;
-        }
-
-        if (manifestEntry.Length > MaxImportManifestBytes)
-        {
-            message = $"archive manifest.json is too large: {ConsoleUi.FormatBytes(manifestEntry.Length)} uncompressed exceeds the import limit of {ConsoleUi.FormatBytes(MaxImportManifestBytes)}";
-            return false;
-        }
-
-        if (manifestEntry.CompressedLength > MaxImportManifestBytes)
-        {
-            message = $"archive manifest.json is too large: {ConsoleUi.FormatBytes(manifestEntry.CompressedLength)} compressed exceeds the import limit of {ConsoleUi.FormatBytes(MaxImportManifestBytes)}";
-            return false;
-        }
-
-        message = string.Empty;
-        return true;
-    }
-
-    private static JsonSerializerOptions CreateImportManifestJsonOptions(JsonSerializerOptions jsonOptions)
-        => new(jsonOptions) { MaxDepth = MaxImportManifestJsonDepth };
-
-    private static bool JsonExceedsDepthLimit(ReadOnlySpan<byte> json, int maxDepth)
-    {
-        var depth = 0;
-        var inString = false;
-
-        for (var i = 0; i < json.Length; i++)
-        {
-            var value = json[i];
-            if (inString)
-            {
-                if (value == (byte)'\\')
-                {
-                    i++;
-                    continue;
-                }
-
-                if (value == (byte)'"')
-                    inString = false;
-                continue;
-            }
-
-            if (value == (byte)'"')
-            {
-                inString = true;
-                continue;
-            }
-
-            if (value is (byte)'{' or (byte)'[')
-            {
-                depth++;
-                if (depth > maxDepth)
-                    return true;
-                continue;
-            }
-
-            if (value is (byte)'}' or (byte)']')
-                depth = Math.Max(0, depth - 1);
-        }
-
-        return false;
-    }
-
-    private static bool TryValidateManifestHeader(ExportManifest manifest, out string message)
-    {
-        if (!string.Equals(manifest.FormatVersion, "1", StringComparison.Ordinal))
-        {
-            message = $"unsupported format_version `{manifest.FormatVersion}`";
-            return false;
-        }
-
-        if (manifest.UserVersion < 0 || (manifest.UserVersion & ~DbContext.CurrentSchemaVersion) != 0)
-        {
-            message = $"unsupported user_version `{manifest.UserVersion}`";
-            return false;
-        }
-
-        if (!IsSha256Hex(manifest.DatabaseSha256))
-        {
-            message = "database_sha256 is missing or invalid";
-            return false;
-        }
-
-        if (!ValidateNonNegativeManifestLong(manifest.FileCount, "file_count", out message)
-            || !ValidateNonNegativeManifestLong(manifest.ChunkCount, "chunk_count", out message)
-            || !ValidateNonNegativeManifestLong(manifest.SymbolCount, "symbol_count", out message)
-            || !ValidateNonNegativeManifestLong(manifest.ReferenceCount, "reference_count", out message)
-            || !ValidateNonNegativeManifestLong(manifest.UnknownExtensionFileCount, "unknown_extension_file_count", out message))
-        {
-            return false;
-        }
-
-        if (!ValidateNonNegativeManifestInt(manifest.CodeIndexMetaSchemaVersion, "codeindex_meta_schema_version", out message)
-            || !ValidateNonNegativeManifestInt(manifest.CSharpSymbolNameContractVersion, "csharp_symbol_name_contract_version", out message)
-            || !ValidateNonNegativeManifestInt(manifest.SqlGraphContractVersion, "sql_graph_contract_version", out message)
-            || !ValidateNonNegativeManifestInt(manifest.HotspotFamilyVersion, "hotspot_family_version", out message)
-            || !ValidateNonNegativeManifestInt(manifest.UnknownExtensionFilePathLimit, "unknown_extension_file_path_limit", out message)
-            || !ValidateNonNegativeManifestInt(manifest.UnknownExtensionFileSampleCount, "unknown_extension_file_sample_count", out message)
-            || !ValidateNonNegativeManifestInt(manifest.UnknownExtensionFileSampleLimit, "unknown_extension_file_sample_limit", out message))
-        {
-            return false;
-        }
-
-        if (manifest.UnknownExtensionFileSampleCount.HasValue)
-        {
-            var sampleLength = manifest.UnknownExtensionFiles?.Length ?? 0;
-            if (manifest.UnknownExtensionFileSampleCount.Value != sampleLength)
-            {
-                message = "unknown_extension_file_sample_count must match unknown_extension_files length";
-                return false;
-            }
-        }
-
-        if (manifest.UnknownExtensionFileSampleCount.HasValue
-            && manifest.UnknownExtensionFileSampleLimit.HasValue
-            && manifest.UnknownExtensionFileSampleCount.Value > manifest.UnknownExtensionFileSampleLimit.Value)
-        {
-            message = "unknown_extension_file_sample_count exceeds unknown_extension_file_sample_limit";
-            return false;
-        }
-
-        if (manifest.UnknownExtensionFiles is { Length: > ManifestUnknownExtensionFileLimit })
-        {
-            message = $"unknown_extension_files exceeds the manifest limit of {ManifestUnknownExtensionFileLimit}";
-            return false;
-        }
-
-        if (manifest.UnknownExtensionFiles != null)
-        {
-            var totalPathChars = 0;
-            foreach (var path in manifest.UnknownExtensionFiles)
-            {
-                if (string.IsNullOrWhiteSpace(path))
-                {
-                    message = "unknown_extension_files contains an empty path";
-                    return false;
-                }
-
-                if (path.Length > ManifestUnknownExtensionPathCharLimit)
-                {
-                    message = $"unknown_extension_files contains a path longer than {ManifestUnknownExtensionPathCharLimit} characters";
-                    return false;
-                }
-
-                totalPathChars += path.Length;
-                if (totalPathChars > ManifestUnknownExtensionFilesTotalCharLimit)
-                {
-                    message = $"unknown_extension_files total path text exceeds the manifest limit of {ManifestUnknownExtensionFilesTotalCharLimit} characters";
-                    return false;
-                }
-            }
-        }
-
-        message = string.Empty;
-        return true;
     }
 
     private static bool TryValidateImportedManifest(
@@ -1083,30 +889,6 @@ internal static class ExportImportCommandRunner
         if (actual != expected.Value)
         {
             message = $"manifest {fieldName} `{expected.Value}` does not match codeindex.db {tableName} count `{actual}`";
-            return false;
-        }
-
-        message = string.Empty;
-        return true;
-    }
-
-    private static bool ValidateNonNegativeManifestLong(long? value, string fieldName, out string message)
-    {
-        if (value is < 0)
-        {
-            message = $"{fieldName} must be non-negative";
-            return false;
-        }
-
-        message = string.Empty;
-        return true;
-    }
-
-    private static bool ValidateNonNegativeManifestInt(int? value, string fieldName, out string message)
-    {
-        if (value is < 0)
-        {
-            message = $"{fieldName} must be non-negative";
             return false;
         }
 
@@ -1236,20 +1018,6 @@ internal static class ExportImportCommandRunner
         {
             return new(null, null, null, null);
         }
-    }
-
-    private static bool IsSha256Hex(string? value)
-    {
-        if (value == null || value.Length != 64)
-            return false;
-
-        foreach (var ch in value)
-        {
-            if (!char.IsAsciiHexDigit(ch))
-                return false;
-        }
-
-        return true;
     }
 
     internal static bool TryValidateDatabaseEntrySize(long uncompressedLength, long compressedLength, out string message)

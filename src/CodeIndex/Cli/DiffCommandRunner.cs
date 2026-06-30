@@ -9,7 +9,7 @@ namespace CodeIndex.Cli;
 
 public static class DiffCommandRunner
 {
-    private const int DefaultDiffLimit = 20;
+    internal const int DefaultDiffLimit = DiffCommandOptionsParser.DefaultLimit;
     internal const int MaxDiffEncodedFieldSampleLength = 1024;
     internal const int MaxDiffComparedRowsPerSide = 1_000_000;
     internal const int MaxDiffComparedRowBytes = 4 * 1024 * 1024;
@@ -33,7 +33,7 @@ public static class DiffCommandRunner
         }
 
         if (options.ParseError is not null)
-            return WriteCommandError(
+            return DiffResultWriter.WriteCommandError(
                 options.Json || options.SummaryOnly,
                 jsonOptions,
                 options.ParseError,
@@ -59,19 +59,19 @@ public static class DiffCommandRunner
             if (leftHeader.SchemaVersion != rightHeader.SchemaVersion)
             {
                 var schemaMismatch = BuildSchemaMismatchDiff(leftHeader, rightHeader, options);
-                WriteResult(schemaMismatch, options, jsonOptions);
+                DiffResultWriter.WriteResult(schemaMismatch, options, jsonOptions);
                 return SchemaMismatchExitCode;
             }
 
             var result = BuildDiff(leftHeader, rightHeader, options, cancellationToken);
 
-            WriteResult(result, options, jsonOptions);
+            DiffResultWriter.WriteResult(result, options, jsonOptions);
 
             return result.Identical ? CommandExitCodes.Success : DriftExitCode;
         }
         catch (OperationCanceledException)
         {
-            return WriteCommandError(
+            return DiffResultWriter.WriteCommandError(
                 options.Json || options.SummaryOnly,
                 jsonOptions,
                 "diff comparison cancelled before it could complete",
@@ -81,7 +81,7 @@ public static class DiffCommandRunner
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException or InvalidOperationException)
         {
-            return WriteCommandError(
+            return DiffResultWriter.WriteCommandError(
                 options.Json || options.SummaryOnly,
                 jsonOptions,
                 $"failed to compare databases: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}",
@@ -96,7 +96,7 @@ public static class DiffCommandRunner
         if (SqliteFileUri.TryValidateBounds(dbPath, out var parseError))
             return null;
 
-        return WriteCommandError(
+        return DiffResultWriter.WriteCommandError(
             json,
             jsonOptions,
             $"invalid database file URI: {SqliteFileUri.FormatParseError(parseError)}",
@@ -106,70 +106,7 @@ public static class DiffCommandRunner
     }
 
     internal static DiffCommandOptions ParseArgs(string[] args)
-    {
-        var dbs = new List<string>(2);
-        var json = false;
-        var detailed = false;
-        var summaryOnly = false;
-        var limit = DefaultDiffLimit;
-        string? parseError = null;
-
-        for (var i = 0; i < args.Length; i++)
-        {
-            var arg = args[i];
-            switch (arg)
-            {
-                case "--help" or "-h":
-                    return new DiffCommandOptions { ShowHelp = true };
-                case "--json":
-                    json = true;
-                    break;
-                case "--detailed":
-                    detailed = true;
-                    break;
-                case "--summary-only":
-                    summaryOnly = true;
-                    break;
-                case "--limit" when i + 1 < args.Length:
-                    if (!int.TryParse(args[++i], out limit) || limit < 0)
-                        parseError = "--limit requires a non-negative integer";
-                    else if (limit > MaxDiffLimit)
-                    {
-                        parseError = $"--limit must be less than or equal to {MaxDiffLimit}";
-                        limit = DefaultDiffLimit;
-                    }
-                    break;
-                case "--limit":
-                    parseError = "--limit requires a value";
-                    break;
-                default:
-                    if (arg.StartsWith('-'))
-                        parseError = $"diff does not support option: '{arg}'";
-                    else if (dbs.Count >= 2)
-                        parseError = $"diff accepts exactly two database paths; unexpected argument: '{arg}'";
-                    else
-                        dbs.Add(arg);
-                    break;
-            }
-
-            if (parseError is not null)
-                break;
-        }
-
-        if (parseError is null && dbs.Count != 2)
-            parseError = "diff requires exactly two database paths";
-
-        return new DiffCommandOptions
-        {
-            LeftDb = dbs.Count > 0 ? dbs[0] : null,
-            RightDb = dbs.Count > 1 ? dbs[1] : null,
-            Json = json,
-            Detailed = detailed,
-            SummaryOnly = summaryOnly,
-            Limit = limit,
-            ParseError = parseError,
-        };
-    }
+        => DiffCommandOptionsParser.Parse(args, MaxDiffLimit);
 
     private const string FilePathRowsSql = "SELECT path FROM files ORDER BY path";
 
@@ -878,76 +815,6 @@ public static class DiffCommandRunner
             + " sha256="
             + hash
             + "]";
-    }
-
-    private static void WriteJson(DiffJsonResult result, JsonSerializerOptions jsonOptions)
-    {
-        Console.WriteLine(JsonSerializer.Serialize(
-            result,
-            CliJsonSerializerContextFactory.Create(jsonOptions).DiffJsonResult));
-    }
-
-    private static void WriteSummaryJson(DiffJsonResult result, JsonSerializerOptions jsonOptions)
-    {
-        Console.WriteLine(JsonSerializer.Serialize(
-            new DiffSummaryOnlyJsonResult(result.Status, result.Identical, result.LeftDb, result.RightDb, result.Summary),
-            CliJsonSerializerContextFactory.Create(jsonOptions).DiffSummaryOnlyJsonResult));
-    }
-
-    private static void WriteResult(DiffJsonResult result, DiffCommandOptions options, JsonSerializerOptions jsonOptions)
-    {
-        if (options.SummaryOnly)
-            WriteSummaryJson(result, jsonOptions);
-        else if (options.Json)
-            WriteJson(result, jsonOptions);
-        else
-            WriteText(result, options);
-    }
-
-    private static void WriteText(DiffJsonResult result, DiffCommandOptions options)
-    {
-        Console.WriteLine("Index database diff");
-        Console.WriteLine($"  left   : {result.LeftDb}");
-        Console.WriteLine($"  right  : {result.RightDb}");
-        Console.WriteLine($"  status : {result.Status}");
-        Console.WriteLine($"  schema : {result.Summary.LeftSchemaVersion} -> {result.Summary.RightSchemaVersion}");
-        Console.WriteLine($"  files  : {result.Summary.LeftFileCount} -> {result.Summary.RightFileCount} ({FormatDelta(result.Summary.FileCountDelta)})");
-        Console.WriteLine($"  symbols: {result.Summary.LeftSymbolCount} -> {result.Summary.RightSymbolCount} ({FormatDelta(result.Summary.SymbolCountDelta)})");
-        Console.WriteLine($"  refs   : {result.Summary.LeftReferenceCount} -> {result.Summary.RightReferenceCount} ({FormatDelta(result.Summary.ReferenceCountDelta)})");
-
-        WriteList("files only in left", result.FilesOnlyInLeft);
-        WriteList("files only in right", result.FilesOnlyInRight);
-        if (options.Detailed)
-        {
-            WriteList("symbols only in left", result.SymbolsOnlyInLeft ?? []);
-            WriteList("symbols only in right", result.SymbolsOnlyInRight ?? []);
-        }
-    }
-
-    private static void WriteList(string label, List<string> values)
-    {
-        if (values.Count == 0)
-            return;
-        Console.WriteLine($"  {label}:");
-        foreach (var value in values)
-            Console.WriteLine($"    - {value}");
-    }
-
-    private static string FormatDelta(long delta) => delta >= 0 ? $"+{delta}" : delta.ToString(System.Globalization.CultureInfo.InvariantCulture);
-
-    private static int WriteCommandError(bool json, JsonSerializerOptions jsonOptions, string message, int exitCode, string? hint = null, string? errorCode = null)
-    {
-        if (json)
-            Console.WriteLine(JsonSerializer.Serialize(
-                new CommandErrorJsonResult("error", message, hint, errorCode),
-                CliJsonSerializerContextFactory.Create(jsonOptions).CommandErrorJsonResult));
-        else
-        {
-            CommandErrorWriter.WriteStderr($"Error [{errorCode ?? CommandErrorCodes.UsageError}]: {message}");
-            if (!string.IsNullOrWhiteSpace(hint))
-                CommandErrorWriter.WriteStderr($"Hint: {hint}");
-        }
-        return exitCode;
     }
 
     private sealed record OrderedRowsDiff(
