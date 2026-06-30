@@ -111,6 +111,32 @@ public class CiWorkflowTests
     }
 
     [Fact]
+    public void WindowsTestHostSetup_IsSharedAcrossDotnetAndReleaseWorkflows()
+    {
+        var dotnetWorkflow = RepositoryTestPaths.ReadWorkflow("dotnet.yml").ReplaceLineEndings("\n");
+        var releaseWorkflow = RepositoryTestPaths.ReadWorkflow("release.yml").ReplaceLineEndings("\n");
+        var setupScript = RepositoryTestPaths.ReadText(".github", "scripts", "configure-windows-test-host.ps1");
+        const string expectedStep =
+            "- name: Configure Windows test host\n" +
+            "        if: runner.os == 'Windows'\n" +
+            "        shell: pwsh\n" +
+            "        run: ./.github/scripts/configure-windows-test-host.ps1 -Workspace \"${{ github.workspace }}\"";
+
+        Assert.Contains(expectedStep, dotnetWorkflow);
+        Assert.Contains(expectedStep, releaseWorkflow);
+        Assert.DoesNotContain("Add-MpPreference", dotnetWorkflow);
+        Assert.DoesNotContain("Get-MpPreference", dotnetWorkflow);
+        Assert.DoesNotContain("Add-MpPreference", releaseWorkflow);
+        Assert.DoesNotContain("Get-MpPreference", releaseWorkflow);
+        Assert.Contains("\"TMP=$tempRoot\"", setupScript);
+        Assert.Contains("\"TEMP=$tempRoot\"", setupScript);
+        Assert.Contains("Add-MpPreference -ExclusionPath $entry.Path -ErrorAction Stop", setupScript);
+        Assert.Contains("Get-MpPreference", setupScript);
+        Assert.Contains("Windows Defender exclusion audit:", setupScript);
+        Assert.Contains("GitHub-hosted runner temp root used by actions and pinned TMP/TEMP.", setupScript);
+    }
+
+    [Fact]
     public void GitHubActionsWorkflows_FollowRunnerArtifactCacheAndContinueOnErrorPolicy()
     {
         var workflows = ReadWorkflowFiles();
@@ -233,6 +259,7 @@ public class CiWorkflowTests
         Assert.Contains("TestConsoleLock.Gate", guide);
         Assert.Contains("TestProjectHelper", guide);
         Assert.Contains(".github/scripts/run-dotnet-tests.ps1", guide);
+        Assert.Contains(".github/scripts/configure-windows-test-host.ps1", guide);
         Assert.Contains("共有状態と並列実行の監査", guide);
     }
 
