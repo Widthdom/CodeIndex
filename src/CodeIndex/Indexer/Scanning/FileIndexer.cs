@@ -549,8 +549,11 @@ public partial class FileIndexer
     internal static bool IsIgnoreFilePath(string path)
         => IgnoreFileNames.Contains(Path.GetFileName(path), StringComparer.OrdinalIgnoreCase);
 
-    internal LanguageDetectionResult TryDetectLanguageForIndexing(string filePath, string? content = null)
-        => TryDetectLanguage(filePath, content, _symlinkPolicy, _projectRoot);
+    internal LanguageDetectionResult TryDetectLanguageForIndexing(
+        string filePath,
+        string? content = null,
+        FileProbeStatus? knownIndexability = null)
+        => TryDetectLanguage(filePath, content, _symlinkPolicy, _projectRoot, knownIndexability);
 
     internal static string? GetReusableDetectedLanguage(
         string filePath,
@@ -591,13 +594,14 @@ public partial class FileIndexer
     }
 
     internal static LanguageDetectionResult TryDetectLanguage(string filePath, string? content = null)
-        => TryDetectLanguage(filePath, content, SymlinkPolicy.None, projectRoot: null);
+        => TryDetectLanguage(filePath, content, SymlinkPolicy.None, projectRoot: null, knownIndexability: null);
 
     internal static LanguageDetectionResult TryDetectLanguage(
         string filePath,
         string? content,
         SymlinkPolicy symlinkPolicy,
-        string? projectRoot)
+        string? projectRoot,
+        FileProbeStatus? knownIndexability = null)
     {
         // Exact filename matching beats extension lookup so manifest-style filenames like
         // `pyproject.toml` can map to a dependency category instead of the generic file type.
@@ -648,7 +652,7 @@ public partial class FileIndexer
             return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
         }
 
-        return TryDetectLanguageFromShebang(filePath, symlinkPolicy, projectRoot);
+        return TryDetectLanguageFromShebang(filePath, symlinkPolicy, projectRoot, knownIndexability);
     }
 
     private static bool TryDetectLanguageOverride(string filePath, string fileName, out string language)
@@ -992,6 +996,15 @@ public partial class FileIndexer
         if (probeStatus != FileSystemBoundaryProbeStatus.Found)
             return ToFileProbeStatus(probeStatus);
 
+        return GetFileIndexabilityForFoundAttributes(filePath, attributes, symlinkPolicy, projectRoot);
+    }
+
+    private static FileProbeStatus GetFileIndexabilityForFoundAttributes(
+        string filePath,
+        FileAttributes attributes,
+        SymlinkPolicy symlinkPolicy,
+        string? projectRoot)
+    {
         if (FileSystemBoundary.IsSymlinkOrReparsePoint(attributes))
             return GetFileSymlinkIndexability(filePath, symlinkPolicy, projectRoot);
 
@@ -1915,7 +1928,7 @@ public partial class FileIndexer
             if (passthrough)
                 continue;
 
-            if (TryAcceptScannedFile(entry, scanState, activeIgnoreRules, seenFilePaths))
+            if (TryAcceptScannedFile(entry, scanState, activeIgnoreRules, seenFilePaths, attributes))
                 scanState.Results.Add(entry);
         }
 
@@ -1984,7 +1997,8 @@ public partial class FileIndexer
         string file,
         DirectoryScanState scanState,
         IgnoreRuleSet activeIgnoreRules,
-        HashSet<string>? seenFilePaths)
+        HashSet<string>? seenFilePaths,
+        FileAttributes? knownAttributes = null)
     {
         if (!IsFilePathSyntaxIndexable(file))
         {
@@ -2017,15 +2031,21 @@ public partial class FileIndexer
         if (activeIgnoreRules.IsIgnored(file, isDirectory: false))
             return false;
 
-        return TryAcceptSupportedScannedFile(file, scanState);
+        var knownIndexability = knownAttributes.HasValue
+            ? GetFileIndexabilityForFoundAttributes(file, knownAttributes.Value, _symlinkPolicy, _projectRoot)
+            : (FileProbeStatus?)null;
+        return TryAcceptSupportedScannedFile(file, scanState, knownIndexability);
     }
 
-    private bool TryAcceptSupportedScannedFile(string file, DirectoryScanState scanState)
+    private bool TryAcceptSupportedScannedFile(
+        string file,
+        DirectoryScanState scanState,
+        FileProbeStatus? knownIndexability = null)
     {
         // Use the instance symlink policy here so full scans and update paths apply the same
         // file-link behavior.
         // full scan と update 経路で同じ file-link 挙動になるよう instance の symlink policy を使う。
-        var indexability = GetFileIndexabilityForIndexing(file);
+        var indexability = knownIndexability ?? GetFileIndexabilityForIndexing(file);
         if (indexability == FileProbeStatus.Missing)
         {
             var relativePath = ToRelativePath(file);
@@ -2054,7 +2074,7 @@ public partial class FileIndexer
         var relativeFile = ToRelativePath(file);
         // Include files with a known extension/filename or an extensionless recognized shebang
         // 既知の拡張子・既知ファイル名、または拡張子なしで shebang を認識できるファイルを含める
-        var language = TryDetectLanguageForIndexing(file);
+        var language = TryDetectLanguageForIndexing(file, knownIndexability: indexability);
         if (language.Status == FileProbeStatus.Missing)
         {
             scanState.Errors.Add(new ScanError(
@@ -4210,9 +4230,10 @@ public partial class FileIndexer
     private static LanguageDetectionResult TryDetectLanguageFromShebang(
         string filePath,
         SymlinkPolicy symlinkPolicy,
-        string? projectRoot)
+        string? projectRoot,
+        FileProbeStatus? knownIndexability)
     {
-        var indexability = GetFileIndexability(filePath, symlinkPolicy, projectRoot);
+        var indexability = knownIndexability ?? GetFileIndexability(filePath, symlinkPolicy, projectRoot);
         if (indexability == FileProbeStatus.Missing)
             return new LanguageDetectionResult(FileProbeStatus.Missing, null);
 

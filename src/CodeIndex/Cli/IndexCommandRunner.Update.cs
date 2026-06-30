@@ -508,7 +508,7 @@ public static partial class IndexCommandRunner
                     }
 
                     var indexability = indexer.GetFileIndexabilityForIndexing(absPath);
-                    var detection = indexer.TryDetectLanguageForIndexing(absPath);
+                    var detection = indexer.TryDetectLanguageForIndexing(absPath, knownIndexability: indexability);
                     if (indexability == FileIndexer.FileProbeStatus.Missing || detection.Status == FileIndexer.FileProbeStatus.Missing)
                     {
                         var message = $"{relPath}: skipped because it was deleted during indexing.";
