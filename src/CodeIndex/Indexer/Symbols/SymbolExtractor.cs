@@ -4480,13 +4480,8 @@ public static partial class SymbolExtractor
                     continue;
 
                 var lineNumber = index + 1;
-                if (symbols.Any(symbol =>
-                    symbol.StartLine == lineNumber
-                    && symbol.Kind == "property"
-                    && string.Equals(symbol.Name, name, StringComparison.Ordinal)))
-                {
+                if (HasSymbolLineIdentity(symbols, fileId, lineNumber, "property", name))
                     continue;
-                }
 
                 symbols.Add(new SymbolRecord
                 {
