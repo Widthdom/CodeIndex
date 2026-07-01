@@ -323,22 +323,6 @@ public static partial class QueryCommandRunner
     // preview 系オプションの検証はコマンド別 allowlist に寄せたため、この shim は常に null を返す。
     private static string? ValidatePreviewOptions(string commandName, string[] args, bool allowMaxLineWidth, bool allowFocusOptions) => null;
 
-    private static int ZeroResultExitCode(QueryCommandOptions options)
-        => options.StrictNotFound ? CommandExitCodes.NotFound : CommandExitCodes.Success;
-
-    private static int UnusedZeroResultExitCode(QueryCommandOptions options, UnusedDefaultSuppressionResult suppression)
-        => !options.StrictNotFound && suppression.Applied && GetUnusedSuppressedCount(suppression) > 0
-            ? CommandExitCodes.Success
-            : ZeroResultExitCode(options);
-
-    private static bool IsEmptySymbolAnalysis(SymbolAnalysisResult analysis)
-        => analysis.File == null
-           && analysis.Definitions.Count == 0
-           && analysis.NearbySymbols.Count == 0
-           && analysis.References.Count == 0
-           && analysis.Callers.Count == 0
-           && analysis.Callees.Count == 0;
-
     internal static string FormatDuration(TimeSpan duration)
     {
         if (duration < TimeSpan.Zero)
