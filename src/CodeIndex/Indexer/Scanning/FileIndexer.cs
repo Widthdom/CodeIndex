@@ -2215,9 +2215,8 @@ public partial class FileIndexer
         CancellationToken cancellationToken,
         int depth)
     {
-        var subdirectories = CodeIndex.FileSystemTraversalPolicy
-            .EnumerateDirectories(LongPath.EnsureWindowsPrefix(dir))
-            .Select(LongPath.RemoveWindowsPrefix);
+        var subdirectories = RemoveWindowsPrefixes(
+            CodeIndex.FileSystemTraversalPolicy.EnumerateDirectories(LongPath.EnsureWindowsPrefix(dir)));
         return ProcessSubdirectories(
             subdirectories,
             scanState,
@@ -2226,6 +2225,12 @@ public partial class FileIndexer
             continueOnError,
             cancellationToken,
             depth);
+    }
+
+    private static IEnumerable<string> RemoveWindowsPrefixes(IEnumerable<string> paths)
+    {
+        foreach (var path in paths)
+            yield return LongPath.RemoveWindowsPrefix(path);
     }
 
     private bool ProcessSubdirectories(
