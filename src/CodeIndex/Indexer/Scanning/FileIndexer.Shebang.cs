@@ -4,6 +4,11 @@ namespace CodeIndex.Indexer;
 
 public partial class FileIndexer
 {
+    // Extensionless shebang detection reads at most the first physical line within this
+    // byte cap. NUL bytes or a line that reaches the cap without LF/CR are treated as
+    // unsupported so binary executables and minified data are not parsed as scripts.
+    private const int ShebangProbeByteLimit = 256;
+
     /// <summary>
     /// Try to infer a language from an extensionless script shebang.
     /// This is a cheap fallback used only after extension and exact-filename checks fail.
