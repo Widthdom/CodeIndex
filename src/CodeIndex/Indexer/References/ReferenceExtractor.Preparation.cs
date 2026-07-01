@@ -96,7 +96,7 @@ public static partial class ReferenceExtractor
             referenceStructuralLines = MaskPythonFStrings(referenceStructuralLines);
 
         var preparedLines = PrepareReferenceLines(language, referenceStructuralLines);
-        var goImportBlockLines = language == "go"
+        var goImportBlockLines = language == "go" && content.Contains("import", StringComparison.Ordinal)
             ? GoReferenceExtractor.BuildImportBlockLineMap(lines)
             : null;
         var luaReferenceLines = language == "lua"
