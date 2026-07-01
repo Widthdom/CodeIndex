@@ -660,25 +660,19 @@ public static partial class IndexCommandRunner
                     }
 
                     var statReusableLanguage = GetStatReusableLanguage(absPath, detection);
-                    var statMatchedFile = IndexedFileStatReuse.TryGetUnchangedFile(
+                    var generatedExtractionSuppressed = indexer.IsGeneratedCodeExtractionSuppressed(dbPath);
+                    var statMatchedFile = IndexedFileStatReuse.TryGetReusableUnchangedFile(
                         writer,
                         absPath,
                         dbPath,
                         statReusableLanguage,
+                        options.MaxSymbolsPerFile,
+                        options.MaxReferencesPerFile,
+                        generatedExtractionSuppressed,
                         allowReuse: symbolKindFilterMatchesPrior
                             && (statReusableLanguage != "csharp" || csharpSymbolNameContractMatchesCurrent)
                             && (statReusableLanguage != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                             && (statReusableLanguage != "sql" || sqlGraphContractMatchesCurrent));
-                    if (statMatchedFile != null
-                        && ExistingFileBlocksReuse(
-                            writer,
-                            statMatchedFile.Value.FileId,
-                            options.MaxSymbolsPerFile,
-                            options.MaxReferencesPerFile,
-                            indexer.IsGeneratedCodeExtractionSuppressed(dbPath)))
-                    {
-                        statMatchedFile = null;
-                    }
                     if (statMatchedFile != null)
                     {
                         skipped++;
@@ -706,7 +700,9 @@ public static partial class IndexCommandRunner
                     var content = loaded.Content;
                     var rawBytes = loaded.RawBytes;
                     var warning = loaded.Warning;
-                    var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
+                    var generatedSuppressionIssue = generatedExtractionSuppressed
+                        ? indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path)
+                        : null;
 
                     if (warning != null && !options.Json && !options.Quiet)
                     {

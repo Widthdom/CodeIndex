@@ -1220,24 +1220,16 @@ public static partial class IndexCommandRunner
             if (target.Language != "csharp")
                 return false;
 
-            var existingFile = IndexedFileStatReuse.TryGetUnchangedFile(
+            var existingFile = IndexedFileStatReuse.TryGetReusableUnchangedFile(
                 writer,
                 target.FilePath,
                 target.IndexPath,
                 target.Language,
-                allowReuse: true);
-            if (existingFile == null)
-            {
-                csharpPrepassStatReuse[target.IndexPath] = null;
-                return false;
-            }
-
-            if (ExistingFileBlocksReuse(
-                writer,
-                existingFile.Value.FileId,
                 options.MaxSymbolsPerFile,
                 options.MaxReferencesPerFile,
-                indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath)))
+                indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath),
+                allowReuse: true);
+            if (existingFile == null)
             {
                 csharpPrepassStatReuse[target.IndexPath] = null;
                 return false;
@@ -1324,23 +1316,17 @@ public static partial class IndexCommandRunner
                 && language == "csharp"
                 && csharpPrepassStatReuse.TryGetValue(target.IndexPath, out var cachedCSharpPrepassReuse)
                     ? cachedCSharpPrepassReuse
-                    : IndexedFileStatReuse.TryGetUnchangedFile(
+                    : IndexedFileStatReuse.TryGetReusableUnchangedFile(
                         writer,
                         target.FilePath,
                         target.IndexPath,
                         language,
+                        options.MaxSymbolsPerFile,
+                        options.MaxReferencesPerFile,
+                        indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath),
                         allowReuse);
             if (existingFile == null)
                 return false;
-            if (ExistingFileBlocksReuse(
-                writer,
-                existingFile.Value.FileId,
-                options.MaxSymbolsPerFile,
-                options.MaxReferencesPerFile,
-                indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath)))
-            {
-                return false;
-            }
 
             skipped++;
             processed++;

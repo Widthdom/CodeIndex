@@ -782,6 +782,103 @@ public class DbWriter
         }
     }
 
+    public long? GetReusableUnchangedFileIdByStat(
+        string relativePath,
+        DateTime modified,
+        long size,
+        string? language,
+        int maxSymbolsPerFile,
+        int maxReferencesPerFile,
+        bool? generatedExtractionSuppressed,
+        bool allowReuse = true)
+    {
+        if (!allowReuse)
+            return null;
+        if (!SymbolExtractorVersionMatchesCurrent(language))
+            return null;
+
+        var hasIssueMetadataColumns = HasIssueMetadataColumns();
+        var isSolutionFile = string.Equals(Path.GetExtension(relativePath), ".sln", StringComparison.OrdinalIgnoreCase);
+        var staleIssuePredicate = hasIssueMetadataColumns
+            ? @"
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM file_issues stale_i
+                    WHERE stale_i.file_id = f.id
+                      AND (
+                          (stale_i.kind IN ('replacement_char', 'non_utf8_likely', 'bom', 'utf16_bom')
+                              AND (stale_i.origin IS NULL OR stale_i.severity IS NULL))
+                          OR (stale_i.kind = 'bom' AND @is_solution_file = 1)
+                      )
+                )"
+            : string.Empty;
+        var cmd = RentCommand(
+            $@"SELECT f.id
+              FROM files f
+              WHERE f.path = @path
+                AND f.modified = @modified
+                AND f.size = @size
+                {staleIssuePredicate}
+                AND (SELECT COUNT(*) FROM symbols WHERE file_id = f.id) <= @max_symbols
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM file_issues
+                    WHERE file_id = f.id
+                      AND kind = 'symbol_count_exceeded'
+                )
+                AND (SELECT COUNT(*) FROM symbol_references WHERE file_id = f.id) <= @max_references
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM file_issues
+                    WHERE file_id = f.id
+                      AND kind = 'reference_count_exceeded'
+                )
+                AND (
+                    @generated_suppressed IS NULL
+                    OR (
+                        EXISTS (
+                            SELECT 1
+                            FROM file_issues
+                            WHERE file_id = f.id
+                              AND kind = @generated_issue_kind
+                        )
+                    ) = @generated_suppressed
+                )
+              LIMIT 1",
+            c =>
+            {
+                c.Parameters.Add("@path", SqliteType.Text);
+                c.Parameters.Add("@modified", SqliteType.Text);
+                c.Parameters.Add("@size", SqliteType.Integer);
+                if (hasIssueMetadataColumns)
+                    c.Parameters.Add("@is_solution_file", SqliteType.Integer);
+                c.Parameters.Add("@max_symbols", SqliteType.Integer);
+                c.Parameters.Add("@max_references", SqliteType.Integer);
+                c.Parameters.Add("@generated_suppressed", SqliteType.Integer);
+                c.Parameters.Add("@generated_issue_kind", SqliteType.Text);
+            });
+        try
+        {
+            cmd.Parameters["@path"].Value = relativePath;
+            cmd.Parameters["@modified"].Value = modified;
+            cmd.Parameters["@size"].Value = size;
+            if (hasIssueMetadataColumns)
+                cmd.Parameters["@is_solution_file"].Value = isSolutionFile ? 1 : 0;
+            cmd.Parameters["@max_symbols"].Value = maxSymbolsPerFile;
+            cmd.Parameters["@max_references"].Value = maxReferencesPerFile;
+            cmd.Parameters["@generated_suppressed"].Value = generatedExtractionSuppressed.HasValue
+                ? (generatedExtractionSuppressed.Value ? 1 : 0)
+                : DBNull.Value;
+            cmd.Parameters["@generated_issue_kind"].Value = FileIndexer.GeneratedCodeExtractionSkippedIssueKind;
+            var raw = cmd.ExecuteScalar();
+            return raw is long id ? id : null;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
+    }
+
     private bool HasStaleIssueMetadata(string relativePath)
     {
         if (!HasIssueMetadataColumns())

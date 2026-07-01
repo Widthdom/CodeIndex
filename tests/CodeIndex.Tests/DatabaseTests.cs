@@ -1983,6 +1983,24 @@ public class DatabaseTests : IDisposable
         Assert.False(_writer.HasExtractionCapViolationForFile(fileId, maxSymbolsPerFile: 2, maxReferencesPerFile: 2));
         Assert.False(_writer.HasReusableFileBlockingIssueForFile(fileId, maxSymbolsPerFile: 2, maxReferencesPerFile: 2, generatedExtractionSuppressed: false));
         Assert.True(_writer.HasReusableFileBlockingIssueForFile(fileId, maxSymbolsPerFile: 2, maxReferencesPerFile: 2, generatedExtractionSuppressed: true));
+        Assert.Equal(
+            fileId,
+            _writer.GetReusableUnchangedFileIdByStat(
+                "src/caps.cs",
+                modified,
+                size: 20,
+                language: "csharp",
+                maxSymbolsPerFile: 2,
+                maxReferencesPerFile: 2,
+                generatedExtractionSuppressed: false));
+        Assert.Null(_writer.GetReusableUnchangedFileIdByStat(
+            "src/caps.cs",
+            modified,
+            size: 20,
+            language: "csharp",
+            maxSymbolsPerFile: 2,
+            maxReferencesPerFile: 2,
+            generatedExtractionSuppressed: true));
 
         _writer.InsertSymbols(
         [
@@ -1991,6 +2009,14 @@ public class DatabaseTests : IDisposable
         ]);
         Assert.False(_writer.HasExtractionCapViolationForFile(fileId, maxSymbolsPerFile: 2, maxReferencesPerFile: 2));
         Assert.True(_writer.HasExtractionCapViolationForFile(fileId, maxSymbolsPerFile: 1, maxReferencesPerFile: 2));
+        Assert.Null(_writer.GetReusableUnchangedFileIdByStat(
+            "src/caps.cs",
+            modified,
+            size: 20,
+            language: "csharp",
+            maxSymbolsPerFile: 1,
+            maxReferencesPerFile: 2,
+            generatedExtractionSuppressed: false));
 
         var issueFileId = _writer.UpsertFile(new FileRecord
         {
@@ -2012,6 +2038,14 @@ public class DatabaseTests : IDisposable
         ]);
 
         Assert.True(_writer.HasExtractionCapViolationForFile(issueFileId, maxSymbolsPerFile: 10, maxReferencesPerFile: 10));
+        Assert.Null(_writer.GetReusableUnchangedFileIdByStat(
+            "src/cap-issue.cs",
+            modified,
+            size: 20,
+            language: "csharp",
+            maxSymbolsPerFile: 10,
+            maxReferencesPerFile: 10,
+            generatedExtractionSuppressed: false));
 
         var generatedFileId = _writer.UpsertFile(new FileRecord
         {
@@ -2034,6 +2068,24 @@ public class DatabaseTests : IDisposable
 
         Assert.False(_writer.HasReusableFileBlockingIssueForFile(generatedFileId, maxSymbolsPerFile: 10, maxReferencesPerFile: 10, generatedExtractionSuppressed: true));
         Assert.True(_writer.HasReusableFileBlockingIssueForFile(generatedFileId, maxSymbolsPerFile: 10, maxReferencesPerFile: 10, generatedExtractionSuppressed: false));
+        Assert.Equal(
+            generatedFileId,
+            _writer.GetReusableUnchangedFileIdByStat(
+                "src/generated.g.cs",
+                modified,
+                size: 20,
+                language: "csharp",
+                maxSymbolsPerFile: 10,
+                maxReferencesPerFile: 10,
+                generatedExtractionSuppressed: true));
+        Assert.Null(_writer.GetReusableUnchangedFileIdByStat(
+            "src/generated.g.cs",
+            modified,
+            size: 20,
+            language: "csharp",
+            maxSymbolsPerFile: 10,
+            maxReferencesPerFile: 10,
+            generatedExtractionSuppressed: false));
     }
 
     [Fact]

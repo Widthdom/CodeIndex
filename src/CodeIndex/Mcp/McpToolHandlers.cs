@@ -5626,23 +5626,16 @@ public partial class McpServer
             if (target.Language != "csharp")
                 return false;
 
-            var existingFile = IndexedFileStatReuse.TryGetUnchangedFile(
+            var existingFile = IndexedFileStatReuse.TryGetReusableUnchangedFile(
                 writer,
                 target.FilePath,
                 target.IndexPath,
                 target.Language,
-                allowReuse: true);
-            if (existingFile == null)
-            {
-                csharpPrepassStatReuse[target.IndexPath] = null;
-                return false;
-            }
-
-            if (writer.HasReusableFileBlockingIssueForFile(
-                existingFile.Value.FileId,
                 maxSymbolsPerFile,
                 maxReferencesPerFile,
-                indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath)))
+                indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath),
+                allowReuse: true);
+            if (existingFile == null)
             {
                 csharpPrepassStatReuse[target.IndexPath] = null;
                 return false;
@@ -5695,21 +5688,15 @@ public partial class McpServer
                     && target.Language == "csharp"
                     && csharpPrepassStatReuse.TryGetValue(target.IndexPath, out var cachedCSharpPrepassReuse)
                         ? cachedCSharpPrepassReuse
-                        : IndexedFileStatReuse.TryGetUnchangedFile(
+                        : IndexedFileStatReuse.TryGetReusableUnchangedFile(
                             writer,
                             filePath,
                             target.IndexPath,
                             target.Language,
+                            maxSymbolsPerFile,
+                            maxReferencesPerFile,
+                            indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath),
                             allowStatReuse);
-                if (statMatchedFile != null
-                    && writer.HasReusableFileBlockingIssueForFile(
-                        statMatchedFile.Value.FileId,
-                        maxSymbolsPerFile,
-                        maxReferencesPerFile,
-                        indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath)))
-                {
-                    statMatchedFile = null;
-                }
                 if (statMatchedFile != null)
                 {
                     skipped++;
