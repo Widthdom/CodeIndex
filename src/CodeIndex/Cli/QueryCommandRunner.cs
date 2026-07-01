@@ -65,22 +65,6 @@ public static partial class QueryCommandRunner
     internal static readonly TimeSpan DefaultStaleAfter = TimeSpan.FromHours(24);
     internal static readonly TimeSpan MaxStaleAfter = TimeSpan.FromDays(30);
     internal const string MaxStaleAfterDisplay = "30d";
-    internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
-    [ThreadStatic]
-    private static DbReader? s_batchReader;
-    [ThreadStatic]
-    private static string? s_batchDbPath;
-    [ThreadStatic]
-    private static bool s_batchDbPathExplicit;
-    [ThreadStatic]
-    private static string? s_activeQueryProjectRoot;
-
-    internal const string ProjectFilterRootFallbackReasonCurrentDirectory = "project_root_unresolved_using_current_directory";
-
-    internal readonly record struct ProjectFilterRootResolution(string Root, string? FallbackReason);
-
-    private static DateTime GetUtcNow() => TimeProvider.GetUtcNow().UtcDateTime;
-
     // Cap OR-joined `symbols` names well below SQLite's 1000 expression-tree depth so oversized
     // batches fail fast with a clear usage error instead of a confusing SQLite exception.
     // OR 結合の `symbols` 名は SQLite の式木深さ上限 1000 を十分下回る値で頭打ちにし、
