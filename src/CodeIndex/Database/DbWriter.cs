@@ -1772,15 +1772,15 @@ public class DbWriter
     private Dictionary<(long FileId, int Line, string Context), long> UpsertReferenceLines(IReadOnlyList<ReferenceRecord> references, int start, int end, CancellationToken cancellationToken)
     {
         var batchCount = end - start;
-        var contextsByLine = new Dictionary<(long FileId, int Line, string Context), string>(batchCount);
+        var referenceLineKeys = new HashSet<(long FileId, int Line, string Context)>(batchCount);
         for (int i = start; i < end; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var reference = references[i];
-            contextsByLine[(reference.FileId, reference.Line, reference.Context)] = reference.Context;
+            referenceLineKeys.Add((reference.FileId, reference.Line, reference.Context));
         }
 
-        var rows = contextsByLine.ToArray();
+        var rows = referenceLineKeys.ToArray();
         int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 3);
         for (int i = 0; i < rows.Length; i += rowsPerStatement)
         {
@@ -1794,7 +1794,7 @@ public class DbWriter
                 if (j > i)
                     sql.Append(", ");
                 var suffix = j - i;
-                var ((fileId, line, _), context) = rows[j];
+                var (fileId, line, context) = rows[j];
                 sql.Append($"(@fid{suffix}, @line{suffix}, @context{suffix})");
                 cmd.Parameters.Add($"@fid{suffix}", SqliteType.Integer).Value = fileId;
                 cmd.Parameters.Add($"@line{suffix}", SqliteType.Integer).Value = line;
@@ -1820,7 +1820,7 @@ public class DbWriter
                     predicates.Append(" OR ");
 
                 var suffix = j - i;
-                var ((fileId, line, _), context) = rows[j];
+                var (fileId, line, context) = rows[j];
                 predicates.Append($"(file_id = @lookupFid{suffix} AND line = @lookupLine{suffix} AND context = @lookupContext{suffix})");
                 cmd.Parameters.Add($"@lookupFid{suffix}", SqliteType.Integer).Value = fileId;
                 cmd.Parameters.Add($"@lookupLine{suffix}", SqliteType.Integer).Value = line;
@@ -1839,7 +1839,7 @@ public class DbWriter
                 var line = reader.GetInt32(2);
                 var context = reader.GetString(3);
                 var key = (fileId, line, context);
-                if (contextsByLine.ContainsKey(key))
+                if (referenceLineKeys.Contains(key))
                     lineIds[key] = id;
             }
         }
