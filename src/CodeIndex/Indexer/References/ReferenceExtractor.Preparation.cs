@@ -143,8 +143,17 @@ public static partial class ReferenceExtractor
 
     private static bool MightContainCSharpXmlDocComment(string content)
     {
-        return content.Contains("///", StringComparison.Ordinal)
-            || content.Contains("/**", StringComparison.Ordinal);
+        for (var index = 0; index + 2 < content.Length; index++)
+        {
+            if (content[index] != '/')
+                continue;
+
+            var second = content[index + 1];
+            if ((second == '/' || second == '*') && content[index + 2] == second)
+                return true;
+        }
+
+        return false;
     }
 
     private static string[] PrepareReferenceLines(string language, string[] referenceStructuralLines)
