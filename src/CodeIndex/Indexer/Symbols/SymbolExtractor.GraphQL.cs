@@ -27,41 +27,56 @@ public static partial class SymbolExtractor
 
     private static void ExtractGraphQLMemberSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
     {
-        var content = string.Join('\n', lines);
-        var lineStarts = BuildLineStarts(content);
-        foreach (Match inputMatch in GraphQLInputBlockRegex.Matches(content))
+        var hasInputBlocks = LinesContain(lines, "input", StringComparison.Ordinal);
+        var hasUnions = LinesContain(lines, "union", StringComparison.Ordinal);
+        if (!hasInputBlocks && !hasUnions)
+            return;
+
+        if (hasInputBlocks)
         {
-            var inputName = inputMatch.Groups["name"].Value;
-            var body = inputMatch.Groups["body"];
-            foreach (Match fieldMatch in GraphQLInputFieldRegex.Matches(body.Value))
+            var content = string.Join('\n', lines);
+            var lineStarts = BuildLineStarts(content);
+            foreach (Match inputMatch in GraphQLInputBlockRegex.Matches(content))
             {
-                var fieldGroup = fieldMatch.Groups["name"];
-                var absoluteIndex = body.Index + fieldGroup.Index;
-                var lineNumber = GetLineNumberFromOffset(lineStarts, absoluteIndex);
-                AddSymbolRecord(
-                    symbols,
-                    null,
-                    lineNumber,
-                    new SymbolRecord
-                    {
-                        FileId = fileId,
-                        Kind = "property",
-                        Name = fieldGroup.Value,
-                        Line = lineNumber,
-                        StartLine = lineNumber,
-                        StartColumn = absoluteIndex - lineStarts[lineNumber - 1],
-                        EndLine = lineNumber,
-                        Signature = lines[lineNumber - 1].Trim(),
-                        ContainerKind = "class",
-                        ContainerName = inputName,
-                    },
-                    lines[lineNumber - 1]);
+                var inputName = inputMatch.Groups["name"].Value;
+                var body = inputMatch.Groups["body"];
+                foreach (Match fieldMatch in GraphQLInputFieldRegex.Matches(body.Value))
+                {
+                    var fieldGroup = fieldMatch.Groups["name"];
+                    var absoluteIndex = body.Index + fieldGroup.Index;
+                    var lineNumber = GetLineNumberFromOffset(lineStarts, absoluteIndex);
+                    AddSymbolRecord(
+                        symbols,
+                        null,
+                        lineNumber,
+                        new SymbolRecord
+                        {
+                            FileId = fileId,
+                            Kind = "property",
+                            Name = fieldGroup.Value,
+                            Line = lineNumber,
+                            StartLine = lineNumber,
+                            StartColumn = absoluteIndex - lineStarts[lineNumber - 1],
+                            EndLine = lineNumber,
+                            Signature = lines[lineNumber - 1].Trim(),
+                            ContainerKind = "class",
+                            ContainerName = inputName,
+                        },
+                        lines[lineNumber - 1]);
+                }
             }
         }
 
+        if (!hasUnions)
+            return;
+
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
-            var match = GraphQLUnionDeclarationRegex.Match(lines[lineIndex]);
+            var line = lines[lineIndex];
+            if (line.IndexOf("union", StringComparison.Ordinal) < 0)
+                continue;
+
+            var match = GraphQLUnionDeclarationRegex.Match(line);
             if (match.Success)
             {
                 var unionName = match.Groups["name"].Value;
@@ -78,7 +93,7 @@ public static partial class SymbolExtractor
                 continue;
             }
 
-            var headerMatch = GraphQLUnionHeaderRegex.Match(lines[lineIndex]);
+            var headerMatch = GraphQLUnionHeaderRegex.Match(line);
             if (!headerMatch.Success)
                 continue;
 
