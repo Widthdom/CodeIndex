@@ -1316,9 +1316,26 @@ public static partial class ReferenceExtractor
             return false;
 
         var normalizedCandidate = NormalizeCSharpIdentifier(candidate);
-        return csharpFunctionValueReceiverNames.Any(record =>
-            IsWithinCSharpScope(record, lineNumber, column)
-            && string.Equals(record.Name, normalizedCandidate, StringComparison.Ordinal));
+        return HasCSharpFunctionValueReceiverName(csharpFunctionValueReceiverNames, normalizedCandidate, lineNumber, column);
+    }
+
+    private static bool HasCSharpFunctionValueReceiverName(
+        IReadOnlyList<CSharpFunctionValueReceiverNameRecord> csharpFunctionValueReceiverNames,
+        string receiverName,
+        int lineNumber,
+        int column)
+    {
+        for (var index = 0; index < csharpFunctionValueReceiverNames.Count; index++)
+        {
+            var record = csharpFunctionValueReceiverNames[index];
+            if (IsWithinCSharpScope(record, lineNumber, column)
+                && string.Equals(record.Name, receiverName, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool IsLikelyCSharpTypeIdentifier(string token)

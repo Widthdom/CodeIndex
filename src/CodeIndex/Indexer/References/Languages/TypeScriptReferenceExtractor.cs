@@ -25,6 +25,8 @@ internal static class TypeScriptReferenceExtractor
 
     private static readonly string[] DeclarationKeywords = ["const", "let", "var"];
     private static readonly string[] TypeOperatorKeywords = ["satisfies", "instanceof"];
+    private static readonly string[] TypeAliasTargetStopKeywords = ["extends", "implements"];
+    private static readonly string[] LiteralKeywords = ["true", "false", "null", "undefined"];
     private static readonly Regex NamespaceImportExportRegex = new(
         @"^\s*(?:import|export)\s+(?:type\s+)?\*\s*as\s*(?<alias>[A-Za-z_$][\w$]*)\s+from\s*[""'](?<module>[^""']+)[""']",
         RegexOptions.Compiled);
@@ -523,7 +525,7 @@ internal static class TypeScriptReferenceExtractor
     {
         var equalsTarget = target.Trim();
         var stop = equalsTarget.Length;
-        foreach (var keyword in new[] { "extends", "implements" })
+        foreach (var keyword in TypeAliasTargetStopKeywords)
         {
             var keywordIndex = FindTopLevelKeyword(equalsTarget, keyword);
             if (keywordIndex >= 0)
@@ -1136,7 +1138,7 @@ internal static class TypeScriptReferenceExtractor
 
     private static bool TryReadLiteralKeyword(string text, int index, int endExclusive, out string keyword)
     {
-        foreach (var candidate in new[] { "true", "false", "null", "undefined" })
+        foreach (var candidate in LiteralKeywords)
         {
             if (index + candidate.Length > endExclusive
                 || string.CompareOrdinal(text, index, candidate, 0, candidate.Length) != 0)

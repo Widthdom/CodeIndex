@@ -15,6 +15,16 @@ namespace CodeIndex.Tests;
 /// </summary>
 public partial class ReferenceExtractorTests
 {
+    private static (List<SymbolRecord> Symbols, List<ReferenceRecord> References) ExtractSymbolsAndReferences(
+        string lang,
+        string content,
+        string? path = null)
+    {
+        var symbols = SymbolExtractor.Extract(1, lang, content, path);
+        var references = ReferenceExtractor.Extract(1, lang, content, symbols, path);
+        return (symbols, references);
+    }
+
     [Fact]
     public void StructuralLineMasker_MaskLines_ReturnsOriginalArrayForUnmaskedLanguage()
     {
@@ -33,6 +43,27 @@ public partial class ReferenceExtractorTests
         var masked = StructuralLineMasker.MaskLines("csharp", lines);
 
         Assert.NotSame(lines, masked);
+    }
+
+    [Fact]
+    public void StructuralLineMasker_MaskLines_CSharpReusesUnchangedLinesUntilMaskNeeded()
+    {
+        var lines = new[]
+        {
+            "class App {",
+            "    var value = \"literal\";",
+            "    Call();",
+            "}",
+        };
+
+        var masked = StructuralLineMasker.MaskLines("csharp", lines);
+
+        Assert.NotSame(lines, masked);
+        Assert.Same(lines[0], masked[0]);
+        Assert.NotSame(lines[1], masked[1]);
+        Assert.Same(lines[2], masked[2]);
+        Assert.Same(lines[3], masked[3]);
+        Assert.DoesNotContain("literal", masked[1], StringComparison.Ordinal);
     }
 
     [Fact]
@@ -5577,8 +5608,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "BaseController" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "IRequestHandler" && r.ReferenceKind == "type_reference");
@@ -5604,8 +5634,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "Customer" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Widget" && r.ReferenceKind == "type_reference");
@@ -5626,8 +5655,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "Class" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "[Class]" && r.ReferenceKind == "type_reference");
@@ -5645,8 +5673,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "Customer" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Order" && r.ReferenceKind == "type_reference");
@@ -5664,8 +5691,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "Class" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "[Class]" && r.ReferenceKind == "type_reference");
@@ -5686,8 +5712,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "Customer" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Widget" && r.ReferenceKind == "type_reference");
@@ -5705,8 +5730,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "Class" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "[Class]" && r.ReferenceKind == "type_reference");
@@ -5723,8 +5747,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "Customer" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Customer" && r.ReferenceKind == "instantiate");
@@ -5743,8 +5766,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.DoesNotContain(references, r => r.SymbolName == "CInt" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "CStr" && r.ReferenceKind == "call");
@@ -5766,8 +5788,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "Customer" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Save" && r.ReferenceKind == "type_reference");
@@ -5790,8 +5811,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (symbols, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(symbols, symbol => symbol.Kind == "import" && symbol.Name == "svg");
         Assert.Contains(references, r => r.SymbolName == "svg" && r.ReferenceKind == "type_reference");
@@ -5812,8 +5832,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "Click" && r.ReferenceKind == "subscribe");
         Assert.Contains(references, r => r.SymbolName == "HandleClick" && r.ReferenceKind == "call");
@@ -5834,8 +5853,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "Select" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "[Select]" && r.ReferenceKind == "call");
@@ -5860,8 +5878,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Single(references.Where(r => r.SymbolName == "Select" && r.ReferenceKind == "call"));
         Assert.Single(references.Where(r => r.SymbolName == "Save" && r.ReferenceKind == "call"));
@@ -5884,8 +5901,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "Save" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "Refresh" && r.ReferenceKind == "call");
@@ -5908,8 +5924,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "Refresh" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "Select" && r.ReferenceKind == "call");
@@ -5927,8 +5942,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "Save" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "CallByName" && r.ReferenceKind == "call");
@@ -5948,8 +5962,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "Click" && r.ReferenceKind == "subscribe");
         Assert.DoesNotContain(references, r => r.SymbolName == "Button" && r.ReferenceKind == "subscribe");
@@ -5969,8 +5982,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "Click" && r.ReferenceKind == "subscribe");
         Assert.DoesNotContain(references, r => r.SymbolName == "[Click]" && r.ReferenceKind == "subscribe");
@@ -5989,8 +6001,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "Changed" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "RaiseEvent" && r.ReferenceKind == "call");
@@ -6009,8 +6020,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "Event" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "[Event]" && r.ReferenceKind == "call");
@@ -6030,8 +6040,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "Click" && r.ReferenceKind == "unsubscribe");
         Assert.Contains(references, r => r.SymbolName == "HandleClick" && r.ReferenceKind == "call");
@@ -6052,8 +6061,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "Click" && r.ReferenceKind == "unsubscribe");
         Assert.DoesNotContain(references, r => r.SymbolName == "Button" && r.ReferenceKind == "unsubscribe");
@@ -6073,8 +6081,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "Click" && r.ReferenceKind == "unsubscribe");
         Assert.DoesNotContain(references, r => r.SymbolName == "[Click]" && r.ReferenceKind == "unsubscribe");
@@ -6090,8 +6097,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "Click" && r.ReferenceKind == "subscribe");
         Assert.Contains(references, r => r.SymbolName == "Opened" && r.ReferenceKind == "subscribe");
@@ -6108,8 +6114,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "Click" && r.ReferenceKind == "subscribe");
         Assert.DoesNotContain(references, r => r.SymbolName == "Button" && r.ReferenceKind == "subscribe");
@@ -6125,8 +6130,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "Click" && r.ReferenceKind == "subscribe");
         Assert.DoesNotContain(references, r => r.SymbolName == "[Click]" && r.ReferenceKind == "subscribe");
@@ -6141,8 +6145,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "IRequestHandler" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "IAuditable" && r.ReferenceKind == "type_reference");
@@ -6158,8 +6161,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "IController" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Save" && r.ReferenceKind == "type_reference");
@@ -6176,8 +6178,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "IO" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Models" && r.ReferenceKind == "type_reference");
@@ -6195,8 +6196,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "Customer" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "CustomerAlias" && r.ReferenceKind == "type_reference");
@@ -6215,8 +6215,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "Customer" && r.ReferenceKind == "instantiate");
         Assert.Contains(references, r => r.SymbolName == "Order" && r.ReferenceKind == "instantiate");
@@ -6232,8 +6231,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Customer" && r.ReferenceKind == "type_reference");
@@ -6248,8 +6246,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
     }
@@ -6262,8 +6259,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "IDisposable" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
@@ -6277,8 +6273,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "Class" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
@@ -6294,8 +6289,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "Class" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "[Class]" && r.ReferenceKind == "type_reference");
@@ -6312,8 +6306,7 @@ public partial class ReferenceExtractorTests
             End Class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "vb", content);
-        var references = ReferenceExtractor.Extract(1, "vb", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("vb", content);
 
         Assert.Contains(references, r => r.SymbolName == "Class" && r.ReferenceKind == "instantiate");
         Assert.DoesNotContain(references, r => r.SymbolName == "[Class]" && r.ReferenceKind == "instantiate");

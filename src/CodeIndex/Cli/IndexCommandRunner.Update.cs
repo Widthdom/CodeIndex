@@ -508,7 +508,7 @@ public static partial class IndexCommandRunner
                     }
 
                     var indexability = indexer.GetFileIndexabilityForIndexing(absPath);
-                    var detection = indexer.TryDetectLanguageForIndexing(absPath);
+                    var detection = indexer.TryDetectLanguageForIndexing(absPath, knownIndexability: indexability);
                     if (indexability == FileIndexer.FileProbeStatus.Missing || detection.Status == FileIndexer.FileProbeStatus.Missing)
                     {
                         var message = $"{relPath}: skipped because it was deleted during indexing.";
@@ -660,7 +660,7 @@ public static partial class IndexCommandRunner
                     }
 
                     var statReusableLanguage = GetStatReusableLanguage(absPath, detection);
-                    var statMatchedId = TryGetUnchangedFileIdFromStat(
+                    var statMatchedFile = IndexedFileStatReuse.TryGetUnchangedFile(
                         writer,
                         absPath,
                         dbPath,
@@ -668,23 +668,21 @@ public static partial class IndexCommandRunner
                         allowReuse: symbolKindFilterMatchesPrior
                             && (statReusableLanguage != "csharp" || csharpSymbolNameContractMatchesCurrent)
                             && (statReusableLanguage != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
-                            && (statReusableLanguage != "sql" || sqlGraphContractMatchesCurrent),
-                        out var statSize);
-                    if (statMatchedId != null
+                            && (statReusableLanguage != "sql" || sqlGraphContractMatchesCurrent));
+                    if (statMatchedFile != null
                         && ExistingFileBlocksReuse(
                             writer,
-                            statMatchedId.Value,
+                            statMatchedFile.Value.FileId,
                             options.MaxSymbolsPerFile,
                             options.MaxReferencesPerFile,
                             indexer.IsGeneratedCodeExtractionSuppressed(dbPath)))
                     {
-                        statMatchedId = null;
+                        statMatchedFile = null;
                     }
-                    if (statMatchedId != null)
+                    if (statMatchedFile != null)
                     {
                         skipped++;
-                        if (statSize.HasValue)
-                            knownReadableFileSizes[absPath] = statSize.Value;
+                        knownReadableFileSizes[absPath] = statMatchedFile.Value.Size;
                         if (options.Verbose && !options.Json && !options.Quiet)
                         {
                             PauseUpdateSpinnerForConsoleWrite();

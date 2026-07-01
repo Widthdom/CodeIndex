@@ -85,7 +85,7 @@ internal static class CSharpStaticInterfacePrepass
             && writer.HasCSharpStaticInterfaceContractSymbolsInPaths(pendingPaths);
         return new CSharpStaticInterfaceWorkspaceSymbols(
             symbols,
-            symbols.Any(IsCSharpStaticInterfaceContractSymbol) || hadPendingContracts);
+            HasCSharpStaticInterfaceContractSymbol(symbols) || hadPendingContracts);
     }
 
     internal static CSharpStaticInterfaceWorkspaceSymbols BuildWorkspaceSymbols(
@@ -97,15 +97,31 @@ internal static class CSharpStaticInterfacePrepass
         Action<string?>? reportCurrentFile = null,
         CancellationToken cancellationToken = default)
     {
-        var fileTargets = filePaths.Select(path => FileTarget.CreateFromPath(projectRoot, path));
         return BuildWorkspaceSymbols(
             writer,
             indexer,
-            fileTargets,
+            EnumerateFileTargets(projectRoot, filePaths),
             includeExistingSymbols,
             canReuseExistingSymbolsWithoutRead: null,
             reportCurrentFile: reportCurrentFile,
             cancellationToken: cancellationToken);
+    }
+
+    private static bool HasCSharpStaticInterfaceContractSymbol(IReadOnlyList<SymbolRecord> symbols)
+    {
+        foreach (var symbol in symbols)
+        {
+            if (IsCSharpStaticInterfaceContractSymbol(symbol))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<FileTarget> EnumerateFileTargets(string projectRoot, IEnumerable<string> filePaths)
+    {
+        foreach (var path in filePaths)
+            yield return FileTarget.CreateFromPath(projectRoot, path);
     }
 
     internal static bool MayContainCSharpStaticInterfaceContract(string content)

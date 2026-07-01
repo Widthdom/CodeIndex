@@ -267,7 +267,8 @@ public partial class FileIndexer
     private readonly IReadOnlyList<string> _ancestorIgnoreDirectories;
     private readonly bool _ignoreCase;
     private readonly Func<string, bool?> _directoryIgnoreCaseProbe;
-    private readonly Func<string, IEnumerable<string>> _enumerateFiles;
+    private readonly Func<string, IEnumerable<string>>? _enumerateFilesForTesting;
+    private readonly Func<string, IEnumerable<string>> _enumerateFileSystemEntries;
     private readonly Dictionary<string, bool> _directoryIgnoreCaseCache;
     private readonly long _maxFileSizeBytes;
     private readonly FileContentLoader _contentLoader;
@@ -293,51 +294,6 @@ public partial class FileIndexer
     internal static Func<string, IEnumerable<string>>? EnumerateProjectMarkerDirectoriesForTesting { get; set; }
     internal static Func<string, IReadOnlyList<string>>? ReadGitmodulesLinesForTesting { get; set; }
 
-    private sealed class IgnoreRuleSet
-    {
-        internal static readonly IgnoreRuleSet Empty = new(null, []);
-
-        private readonly IgnoreRuleSet? _parent;
-        private readonly IReadOnlyList<IgnoreRule> _rules;
-        private readonly string? _sourceDirectory;
-        private readonly bool _hasBasenameOnlyRule;
-
-        private IgnoreRuleSet(IgnoreRuleSet? parent, IReadOnlyList<IgnoreRule> rules)
-        {
-            _parent = parent;
-            _rules = rules;
-            _sourceDirectory = rules.Count == 0 ? null : rules[0].SourceDirectory;
-            _hasBasenameOnlyRule = rules.Any(static rule => rule.MatchesBasenameOnly);
-        }
-
-        internal static IgnoreRuleSet CreateChild(IgnoreRuleSet parent, IReadOnlyList<IgnoreRule> rules)
-            => rules.Count == 0 ? parent : new IgnoreRuleSet(parent, rules);
-
-        internal bool IsIgnored(string absolutePath, bool isDirectory)
-        {
-            var ignored = _parent?.IsIgnored(absolutePath, isDirectory) ?? false;
-            if (_sourceDirectory is null)
-                return ignored;
-
-            var relativePath = IgnoreRule.GetRelativeCandidatePath(_sourceDirectory, absolutePath);
-            if (relativePath is null)
-                return ignored;
-
-            var basename = _hasBasenameOnlyRule ? Path.GetFileName(relativePath) : null;
-            foreach (var rule in _rules)
-            {
-                if (rule.IsMatch(relativePath, basename, isDirectory))
-                    ignored = !rule.Negated;
-            }
-
-            return ignored;
-        }
-    }
-
-    private readonly record struct IgnoreRuleLoadResult(
-        IgnoreRuleSet Rules,
-        bool IgnoreRulesAvailable);
-
     private sealed record DirectoryScanState(
         List<string> Results,
         Dictionary<string, string> FileLanguages,
@@ -353,536 +309,6 @@ public partial class FileIndexer
         HashSet<string> DanglingSymlinks,
         HashSet<FileIdentity> VisitedFileIdentities,
         HashSet<string> VisitedDirectories);
-
-    private sealed class IgnoreRule
-    {
-        private readonly record struct PatternToken(char Value, bool Escaped);
-
-        private readonly string _sourceDirectory;
-        private readonly IIgnoreMatcher _matcher;
-        private readonly bool _asciiIgnoreCase;
-        private readonly bool _directoryOnly;
-        private readonly bool _matchBasenameOnly;
-
-        private IgnoreRule(
-            string sourceDirectory,
-            IIgnoreMatcher matcher,
-            bool asciiIgnoreCase,
-            bool negated,
-            bool directoryOnly,
-            bool matchBasenameOnly)
-        {
-            _sourceDirectory = sourceDirectory;
-            _matcher = matcher;
-            _asciiIgnoreCase = asciiIgnoreCase;
-            Negated = negated;
-            _directoryOnly = directoryOnly;
-            _matchBasenameOnly = matchBasenameOnly;
-        }
-
-        internal bool Negated { get; }
-
-        internal string SourceDirectory => _sourceDirectory;
-
-        internal bool MatchesBasenameOnly => _matchBasenameOnly;
-
-        internal static bool TryParse(string sourceDirectory, string rawLine, bool ignoreCase, out IgnoreRule? rule, out string? errorMessage)
-        {
-            rule = null;
-            errorMessage = null;
-            if (!TryTokenize(rawLine, out var tokens))
-                return false;
-
-            if (tokens.Count > MaxIgnorePatternLength)
-            {
-                errorMessage = $"Invalid ignore rule skipped: pattern exceeds {MaxIgnorePatternLength} characters";
-                return false;
-            }
-
-            if (tokens[0] is { Value: '#', Escaped: false })
-                return false;
-
-            var negated = false;
-            if (tokens[0] is { Value: '!', Escaped: false })
-            {
-                negated = true;
-                tokens.RemoveAt(0);
-            }
-
-            if (tokens.Count == 0)
-                return false;
-
-            var directoryOnly = tokens[^1] is { Value: '/', Escaped: false };
-            if (directoryOnly)
-                tokens.RemoveAt(tokens.Count - 1);
-
-            if (tokens.Count == 0)
-                return false;
-
-            var anchoredToSourceDirectory = tokens[0] is { Value: '/', Escaped: false };
-            if (anchoredToSourceDirectory)
-                tokens.RemoveAt(0);
-
-            if (tokens.Count == 0)
-                return false;
-
-            var matchBasenameOnly = !anchoredToSourceDirectory && !tokens.Any(token => token is { Value: '/', Escaped: false });
-            try
-            {
-                if (ignoreCase)
-                    tokens = FoldAsciiTokens(tokens);
-
-                var matcher = BuildMatcher(tokens, ignoreCase);
-                rule = new IgnoreRule(sourceDirectory, matcher, ignoreCase, negated, directoryOnly, matchBasenameOnly);
-                return true;
-            }
-            catch (ArgumentException ex)
-            {
-                errorMessage = $"Invalid ignore rule skipped: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}";
-                return false;
-            }
-        }
-
-        internal static string? GetRelativeCandidatePath(string sourceDirectory, string absolutePath)
-        {
-            var relativePath = NormalizeIgnorePath(Path.GetRelativePath(sourceDirectory, absolutePath));
-            if (relativePath.Length == 0 ||
-                relativePath == "." ||
-                relativePath.StartsWith("../", StringComparison.Ordinal))
-            {
-                return null;
-            }
-
-            return relativePath;
-        }
-
-        internal bool IsMatch(string relativePath, string? basename, bool isDirectory)
-        {
-            if (_directoryOnly && !isDirectory)
-                return false;
-
-            var candidate = _matchBasenameOnly
-                ? basename
-                : relativePath;
-
-            if (string.IsNullOrEmpty(candidate))
-                return false;
-
-            if (_asciiIgnoreCase)
-                candidate = FoldAscii(candidate);
-
-            return _matcher.IsMatch(candidate);
-        }
-
-        private static bool TryTokenize(string rawLine, out List<PatternToken> tokens)
-        {
-            tokens = [];
-            if (string.IsNullOrEmpty(rawLine))
-                return false;
-
-            var escaping = false;
-            foreach (var ch in rawLine)
-            {
-                if (escaping)
-                {
-                    tokens.Add(new PatternToken(ch, Escaped: true));
-                    escaping = false;
-                    continue;
-                }
-
-                if (ch == '\\')
-                {
-                    escaping = true;
-                    continue;
-                }
-
-                tokens.Add(new PatternToken(ch, Escaped: false));
-            }
-
-            if (escaping)
-                tokens.Add(new PatternToken('\\', Escaped: false));
-
-            while (tokens.Count > 0 && tokens[^1] is { Value: ' ' or '\t', Escaped: false })
-                tokens.RemoveAt(tokens.Count - 1);
-            while (tokens.Count > 0 && tokens[0] is { Value: ' ' or '\t', Escaped: false })
-                tokens.RemoveAt(0);
-
-            return tokens.Count > 0;
-        }
-
-        private interface IIgnoreMatcher
-        {
-            bool IsMatch(string candidate);
-        }
-
-        private sealed class LiteralIgnoreMatcher : IIgnoreMatcher
-        {
-            private readonly string _literal;
-
-            internal LiteralIgnoreMatcher(string literal)
-            {
-                _literal = literal;
-            }
-
-            public bool IsMatch(string candidate)
-                => string.Equals(candidate, _literal, StringComparison.Ordinal);
-        }
-
-        private sealed class RegexIgnoreMatcher : IIgnoreMatcher
-        {
-            private readonly Regex _regex;
-
-            internal RegexIgnoreMatcher(Regex regex)
-            {
-                _regex = regex;
-            }
-
-            public bool IsMatch(string candidate)
-                => _regex.IsMatch(candidate);
-        }
-
-        private static IIgnoreMatcher BuildMatcher(IReadOnlyList<PatternToken> pattern, bool ignoreCase)
-        {
-            if (TryBuildLiteralPattern(pattern, out var literal))
-                return new LiteralIgnoreMatcher(literal);
-
-            var builder = new StringBuilder();
-            builder.Append('^');
-
-            for (var i = 0; i < pattern.Count; i++)
-            {
-                var token = pattern[i];
-                var ch = token.Value;
-                if (token.Escaped)
-                {
-                    builder.Append(Regex.Escape(ch.ToString()));
-                    continue;
-                }
-
-                if (ch == '*')
-                {
-                    var isDoubleStar = i + 1 < pattern.Count && pattern[i + 1] is { Value: '*', Escaped: false };
-                    if (isDoubleStar)
-                    {
-                        var nextChar = i + 2 < pattern.Count ? pattern[i + 2].Value : '\0';
-                        if (nextChar == '/')
-                        {
-                            builder.Append("(?:[^/]+/)*");
-                            i += 2;
-                            continue;
-                        }
-
-                        if (i > 0 &&
-                            pattern[i - 1] is { Value: '/', Escaped: false } &&
-                            i + 2 == pattern.Count)
-                        {
-                            builder.Length -= 1;
-                            builder.Append("/.*");
-                            i++;
-                            continue;
-                        }
-
-                        builder.Append("[^/]*");
-                    }
-                    else
-                    {
-                        builder.Append("[^/]*");
-                    }
-
-                    if (isDoubleStar)
-                        i++;
-                    continue;
-                }
-
-                if (ch == '?')
-                {
-                    builder.Append("[^/]");
-                    continue;
-                }
-
-                if (ch == '[' && TryBuildCharacterClass(pattern, ref i, builder, ignoreCase))
-                    continue;
-
-                builder.Append(Regex.Escape(ch.ToString()));
-            }
-
-            builder.Append('$');
-            return new RegexIgnoreMatcher(RegexRegistry.CreateFileIgnorePatternRegex(builder.ToString()));
-        }
-
-        private static bool TryBuildLiteralPattern(IReadOnlyList<PatternToken> pattern, out string literal)
-        {
-            var builder = new StringBuilder(pattern.Count);
-            foreach (var token in pattern)
-            {
-                if (!token.Escaped && token.Value is '*' or '?' or '[')
-                {
-                    literal = string.Empty;
-                    return false;
-                }
-
-                builder.Append(token.Value);
-            }
-
-            literal = builder.ToString();
-            return true;
-        }
-
-        private static bool TryBuildCharacterClass(IReadOnlyList<PatternToken> pattern, ref int index, StringBuilder builder, bool ignoreCase)
-        {
-            var contentStart = index + 1;
-            if (contentStart >= pattern.Count)
-                throw new ArgumentException("malformed character class");
-
-            if (pattern[contentStart] is { Value: '!', Escaped: false })
-            {
-                contentStart++;
-            }
-            else if (pattern[contentStart] is { Value: '^', Escaped: false })
-            {
-                contentStart++;
-            }
-
-            if (contentStart >= pattern.Count)
-                throw new ArgumentException("malformed character class");
-
-            var allowLeadingRightBracket =
-                contentStart < pattern.Count &&
-                pattern[contentStart] is { Value: ']', Escaped: false };
-
-            var scanStart = allowLeadingRightBracket ? contentStart + 1 : contentStart;
-            var closingIndex = FindCharacterClassClosingIndex(pattern, scanStart);
-
-            if (closingIndex < scanStart)
-                throw new ArgumentException("malformed character class");
-
-            builder.Append('[');
-            if (pattern[index + 1] is { Value: '!', Escaped: false })
-            {
-                builder.Append('^');
-            }
-            else if (pattern[index + 1] is { Value: '^', Escaped: false })
-            {
-                builder.Append('^');
-            }
-
-            if (allowLeadingRightBracket)
-            {
-                builder.Append(@"\]");
-                contentStart++;
-            }
-
-            for (var i = contentStart; i < closingIndex; i++)
-            {
-                var token = pattern[i];
-                var ch = token.Value;
-                if (token.Escaped)
-                {
-                    AppendCharacterClassLiteral(builder, ch, ignoreCase);
-                    continue;
-                }
-
-                if (ch == '[' && TryAppendPosixCharacterClass(pattern, closingIndex, ref i, builder, ignoreCase))
-                    continue;
-
-                if (i + 2 < closingIndex &&
-                    pattern[i + 1] is { Value: '-', Escaped: false })
-                {
-                    var endToken = pattern[i + 2];
-                    if (!endToken.Escaped &&
-                        TryAppendCharacterClassRange(builder, ch, endToken.Value, ignoreCase))
-                    {
-                        i += 2;
-                        continue;
-                    }
-                }
-
-                if (ch is '\\' or '[' or ']')
-                {
-                    builder.Append('\\');
-                    builder.Append(ch);
-                    continue;
-                }
-
-                AppendCharacterClassLiteral(builder, ch, ignoreCase);
-            }
-
-            builder.Append(']');
-            index = closingIndex;
-            return true;
-        }
-
-        private static int FindCharacterClassClosingIndex(IReadOnlyList<PatternToken> pattern, int scanStart)
-        {
-            for (var i = scanStart; i < pattern.Count; i++)
-            {
-                if (pattern[i].Escaped)
-                    continue;
-
-                if (pattern[i].Value == '[' && TryFindPosixCharacterClassEnd(pattern, i, out var posixEnd))
-                {
-                    i = posixEnd;
-                    continue;
-                }
-
-                if (pattern[i].Value == ']')
-                    return i;
-            }
-
-            return -1;
-        }
-
-        private static bool TryAppendPosixCharacterClass(IReadOnlyList<PatternToken> pattern, int closingIndex, ref int index, StringBuilder builder, bool ignoreCase)
-        {
-            if (!TryFindPosixCharacterClassEnd(pattern, index, out var posixEnd) || posixEnd >= closingIndex)
-                return false;
-
-            var nameChars = new StringBuilder();
-            for (var i = index + 2; i < posixEnd - 1; i++)
-                nameChars.Append(pattern[i].Value);
-
-            builder.Append(GetPosixCharacterClassPattern(nameChars.ToString(), ignoreCase));
-            index = posixEnd;
-            return true;
-        }
-
-        private static bool TryFindPosixCharacterClassEnd(IReadOnlyList<PatternToken> pattern, int startIndex, out int endIndex)
-        {
-            endIndex = -1;
-            if (startIndex + 3 >= pattern.Count ||
-                pattern[startIndex] is not { Value: '[', Escaped: false } ||
-                pattern[startIndex + 1] is not { Value: ':', Escaped: false })
-            {
-                return false;
-            }
-
-            for (var i = startIndex + 2; i + 1 < pattern.Count; i++)
-            {
-                if (pattern[i] is { Value: ':', Escaped: false } &&
-                    pattern[i + 1] is { Value: ']', Escaped: false })
-                {
-                    endIndex = i + 1;
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private static string GetPosixCharacterClassPattern(string className, bool ignoreCase)
-            => className switch
-            {
-                "alnum" => "A-Za-z0-9",
-                "alpha" => "A-Za-z",
-                "blank" => " \t",
-                "cntrl" => @"\x00-\x1F\x7F",
-                "digit" => "0-9",
-                "graph" => "!-~",
-                "lower" => ignoreCase ? "A-Za-z" : "a-z",
-                "print" => " -~",
-                "punct" => @"!-/:-@\[-`\{-~",
-                "space" => " \t\r\n\v\f",
-                "upper" => ignoreCase ? "A-Za-z" : "A-Z",
-                "xdigit" => "0-9A-Fa-f",
-                _ => throw new ArgumentException($"unsupported POSIX character class '{className}'"),
-            };
-
-        private static string EscapeCharacterClassLiteral(char ch)
-            => ch switch
-            {
-                '\\' or '[' or ']' or '^' or '-' => $@"\{ch}",
-                _ => ch.ToString(),
-            };
-
-        private static void AppendCharacterClassLiteral(StringBuilder builder, char ch, bool ignoreCase)
-        {
-            if (ignoreCase && IsAsciiLetter(ch))
-            {
-                builder.Append(char.ToLowerInvariant(ch));
-                builder.Append(char.ToUpperInvariant(ch));
-                return;
-            }
-
-            builder.Append(EscapeCharacterClassLiteral(ch));
-        }
-
-        private static bool TryAppendCharacterClassRange(StringBuilder builder, char start, char end, bool ignoreCase)
-        {
-            if (start > end)
-                throw new ArgumentException("reversed character class range");
-
-            builder.Append(EscapeCharacterClassLiteral(start));
-            builder.Append('-');
-            builder.Append(EscapeCharacterClassLiteral(end));
-
-            if (!ignoreCase ||
-                !IsAsciiLetter(start) ||
-                !IsAsciiLetter(end))
-            {
-                return true;
-            }
-
-            var lowerStart = char.ToLowerInvariant(start);
-            var lowerEnd = char.ToLowerInvariant(end);
-            var upperStart = char.ToUpperInvariant(start);
-            var upperEnd = char.ToUpperInvariant(end);
-
-            if (lowerStart == start && lowerEnd == end)
-            {
-                builder.Append(char.ToUpperInvariant(start));
-                builder.Append('-');
-                builder.Append(char.ToUpperInvariant(end));
-                return true;
-            }
-
-            if (upperStart == start && upperEnd == end)
-            {
-                builder.Append(char.ToLowerInvariant(start));
-                builder.Append('-');
-                builder.Append(char.ToLowerInvariant(end));
-                return true;
-            }
-
-            return true;
-        }
-
-        private static List<PatternToken> FoldAsciiTokens(IReadOnlyList<PatternToken> tokens)
-        {
-            var foldedTokens = new List<PatternToken>(tokens.Count);
-            for (var index = 0; index < tokens.Count; index++)
-            {
-                var token = tokens[index];
-                foldedTokens.Add(new PatternToken(FoldAsciiChar(token.Value), token.Escaped));
-            }
-
-            return foldedTokens;
-        }
-
-        private static string FoldAscii(string value)
-        {
-            for (var i = 0; i < value.Length; i++)
-            {
-                if (value[i] is not (>= 'A' and <= 'Z'))
-                    continue;
-
-                var chars = value.ToCharArray();
-                chars[i] = FoldAsciiChar(chars[i]);
-                for (var j = i + 1; j < chars.Length; j++)
-                    chars[j] = FoldAsciiChar(chars[j]);
-                return new string(chars);
-            }
-
-            return value;
-        }
-
-        private static char FoldAsciiChar(char ch)
-            => ch is >= 'A' and <= 'Z'
-                ? char.ToLowerInvariant(ch)
-                : ch;
-
-        private static bool IsAsciiLetter(char ch)
-            => ch is (>= 'A' and <= 'Z') or (>= 'a' and <= 'z');
-    }
 
     public FileIndexer(string projectRoot)
         : this(projectRoot, ignoreCase: ProbeFileSystemIgnoreCase(projectRoot), ignoreRuleRoot: null)
@@ -911,6 +337,7 @@ public partial class FileIndexer
         long? maxFileSizeBytes,
         Func<string, bool?>? directoryIgnoreCaseProbe,
         Func<string, IEnumerable<string>>? enumerateFiles = null,
+        Func<string, IEnumerable<string>>? enumerateFileSystemEntries = null,
         SymlinkPolicy symlinkPolicy = SymlinkPolicy.None,
         int? maxDanglingFileSystemEntryScanCandidates = null,
         IReadOnlyList<string>? generatedCodePatterns = null)
@@ -920,7 +347,8 @@ public partial class FileIndexer
         _ancestorIgnoreDirectories = BuildAncestorIgnoreDirectories(_ignoreRuleRoot, _projectRoot);
         _ignoreCase = ignoreCase;
         _directoryIgnoreCaseProbe = directoryIgnoreCaseProbe ?? ProbeExistingDirectoryIgnoreCase;
-        _enumerateFiles = enumerateFiles ?? (dir => CodeIndex.FileSystemTraversalPolicy.EnumerateFiles(LongPath.EnsureWindowsPrefix(dir)));
+        _enumerateFilesForTesting = enumerateFiles;
+        _enumerateFileSystemEntries = enumerateFileSystemEntries ?? (dir => CodeIndex.FileSystemTraversalPolicy.EnumerateFileSystemEntries(LongPath.EnsureWindowsPrefix(dir)));
         _directoryIgnoreCaseCache = new Dictionary<string, bool>(StringComparer.Ordinal);
         _maxFileSizeBytes = ResolveMaxFileSizeBytes(maxFileSizeBytes);
         _contentLoader = new FileContentLoader(_maxFileSizeBytes);
@@ -1121,8 +549,11 @@ public partial class FileIndexer
     internal static bool IsIgnoreFilePath(string path)
         => IgnoreFileNames.Contains(Path.GetFileName(path), StringComparer.OrdinalIgnoreCase);
 
-    internal LanguageDetectionResult TryDetectLanguageForIndexing(string filePath, string? content = null)
-        => TryDetectLanguage(filePath, content, _symlinkPolicy, _projectRoot);
+    internal LanguageDetectionResult TryDetectLanguageForIndexing(
+        string filePath,
+        string? content = null,
+        FileProbeStatus? knownIndexability = null)
+        => TryDetectLanguage(filePath, content, _symlinkPolicy, _projectRoot, knownIndexability);
 
     internal static string? GetReusableDetectedLanguage(
         string filePath,
@@ -1163,13 +594,14 @@ public partial class FileIndexer
     }
 
     internal static LanguageDetectionResult TryDetectLanguage(string filePath, string? content = null)
-        => TryDetectLanguage(filePath, content, SymlinkPolicy.None, projectRoot: null);
+        => TryDetectLanguage(filePath, content, SymlinkPolicy.None, projectRoot: null, knownIndexability: null);
 
     internal static LanguageDetectionResult TryDetectLanguage(
         string filePath,
         string? content,
         SymlinkPolicy symlinkPolicy,
-        string? projectRoot)
+        string? projectRoot,
+        FileProbeStatus? knownIndexability = null)
     {
         // Exact filename matching beats extension lookup so manifest-style filenames like
         // `pyproject.toml` can map to a dependency category instead of the generic file type.
@@ -1220,7 +652,7 @@ public partial class FileIndexer
             return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
         }
 
-        return TryDetectLanguageFromShebang(filePath, symlinkPolicy, projectRoot);
+        return TryDetectLanguageFromShebang(filePath, symlinkPolicy, projectRoot, knownIndexability);
     }
 
     private static bool TryDetectLanguageOverride(string filePath, string fileName, out string language)
@@ -1564,6 +996,15 @@ public partial class FileIndexer
         if (probeStatus != FileSystemBoundaryProbeStatus.Found)
             return ToFileProbeStatus(probeStatus);
 
+        return GetFileIndexabilityForFoundAttributes(filePath, attributes, symlinkPolicy, projectRoot);
+    }
+
+    private static FileProbeStatus GetFileIndexabilityForFoundAttributes(
+        string filePath,
+        FileAttributes attributes,
+        SymlinkPolicy symlinkPolicy,
+        string? projectRoot)
+    {
         if (FileSystemBoundary.IsSymlinkOrReparsePoint(attributes))
             return GetFileSymlinkIndexability(filePath, symlinkPolicy, projectRoot);
 
@@ -1829,12 +1270,16 @@ public partial class FileIndexer
         CancellationToken cancellationToken)
     {
         var pendingDirectories = new Stack<ProjectMarkerFingerprintDirectory>();
-        pendingDirectories.Push(new ProjectMarkerFingerprintDirectory(dir, inheritedIgnoreRules, IsProjectRoot: true));
+        pendingDirectories.Push(new ProjectMarkerFingerprintDirectory(
+            dir,
+            ToRelativePath(dir),
+            inheritedIgnoreRules,
+            IsProjectRoot: true));
         while (pendingDirectories.Count > 0)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var current = pendingDirectories.Pop();
-            if (GetDirectoryFilterKind(current.Path, current.IgnoreRules, current.IsProjectRoot) != PathFilterKind.None)
+            if (GetDirectoryFilterKind(current.Path, current.RelativePath, current.IgnoreRules, current.IsProjectRoot) != PathFilterKind.None)
                 continue;
 
             if (traversalState.DirectoriesVisited >= maxDirectories)
@@ -1884,18 +1329,19 @@ public partial class FileIndexer
                     traversalState.MarkerFilesCollected++;
                 }
 
-                var passthrough = IsSubmoduleAncestorPassthrough(currentDirectory);
+                var passthrough = IsSubmoduleAncestorPassthrough(current.RelativePath);
                 foreach (var enumeratedSubDir in EnumerateProjectMarkerDirectories(currentDirectory))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     var subDir = LongPath.RemoveWindowsPrefix(enumeratedSubDir);
                     if (HasSkippedAttributes(subDir))
                         continue;
-                    if (IsNestedGitRepository(subDir) && !IsSubmoduleOrAncestor(subDir))
+                    var subRelativePath = ToRelativePath(subDir);
+                    if (IsNestedGitRepository(subDir) && !IsSubmoduleOrAncestor(subRelativePath))
                         continue;
-                    if (passthrough && !IsSubmoduleOrAncestor(subDir))
+                    if (passthrough && !IsSubmoduleOrAncestor(subRelativePath))
                         continue;
-                    if (GetDirectoryFilterKind(subDir, activeIgnoreRules) != PathFilterKind.None)
+                    if (GetDirectoryFilterKind(subDir, subRelativePath, activeIgnoreRules) != PathFilterKind.None)
                         continue;
 
                     if (traversalState.DirectoriesVisited + pendingDirectories.Count >= maxDirectories)
@@ -1908,7 +1354,11 @@ public partial class FileIndexer
                         return;
                     }
 
-                    pendingDirectories.Push(new ProjectMarkerFingerprintDirectory(subDir, activeIgnoreRules, IsProjectRoot: false));
+                    pendingDirectories.Push(new ProjectMarkerFingerprintDirectory(
+                        subDir,
+                        subRelativePath,
+                        activeIgnoreRules,
+                        IsProjectRoot: false));
                 }
             }
             catch (Exception ex) when (FileSystemTraversalFailure.IsExpected(ex))
@@ -2131,7 +1581,11 @@ public partial class FileIndexer
         if (!preloadResult.IgnoreRulesAvailable)
             return new PathFilterResult(PathFilterKind.IgnoreRulesUnavailable, errors);
 
-        var projectRootFilterKind = GetDirectoryFilterKind(_projectRoot, activeIgnoreRules, isProjectRoot: true);
+        var projectRootFilterKind = GetDirectoryFilterKind(
+            _projectRoot,
+            string.Empty,
+            activeIgnoreRules,
+            isProjectRoot: true);
         return projectRootFilterKind != PathFilterKind.None
             ? new PathFilterResult(projectRootFilterKind, errors)
             : null;
@@ -2348,7 +1802,7 @@ public partial class FileIndexer
         if (scanState.CheckpointedDirectories.Contains(relativeDir))
             return true;
 
-        var filterKind = GetDirectoryFilterKind(dir, activeIgnoreRules, isProjectRoot);
+        var filterKind = GetDirectoryFilterKind(dir, relativeDir, activeIgnoreRules, isProjectRoot);
         if (filterKind != PathFilterKind.None)
         {
             scanState.ListedDirectories.Add(relativeDir);
@@ -2392,7 +1846,7 @@ public partial class FileIndexer
             // submodule の祖先で SkipDirs 名のディレクトリ（例: vendor/foo の vendor/）の場合は、
             // 当該ディレクトリの直下ファイルおよび submodule と無関係なサブディレクトリには
             // SkipDirs を適用しつつ、submodule 方向にだけ降りる。
-            var passthrough = IsSubmoduleAncestorPassthrough(dir);
+            var passthrough = IsSubmoduleAncestorPassthrough(relativeDir);
             var directoryIgnoreCase = DirectoryUsesIgnoreCase(dir);
             if (directoryIgnoreCase != _ignoreCase)
             {
@@ -2402,16 +1856,32 @@ public partial class FileIndexer
                     ScanIssueSeverity.Warning));
             }
 
-            if (!passthrough)
-                EnumerateIndexableFilesInDirectory(dir, scanState, activeIgnoreRules, directoryIgnoreCase, cancellationToken);
+            if (_enumerateFilesForTesting is null)
+            {
+                fullyScanned &= EnumerateDirectoryEntries(
+                    dir,
+                    relativeDir,
+                    scanState,
+                    activeIgnoreRules,
+                    passthrough,
+                    directoryIgnoreCase,
+                    continueOnError,
+                    cancellationToken,
+                    depth);
+            }
+            else
+            {
+                if (!passthrough)
+                    EnumerateIndexableFilesInDirectory(dir, scanState, activeIgnoreRules, directoryIgnoreCase, cancellationToken);
 
-            // A successful file listing proves the direct children of this directory.
-            // Child subtree failures must not revoke that authority for sibling-file purge.
-            // ファイル列挙が成功した時点で、このディレクトリ直下の子要素については authoritative とみなせる。
-            // 子サブツリー失敗が sibling file purge の authority を奪ってはいけない。
-            scanState.ListedDirectories.Add(relativeDir);
-            RecordDanglingFileSystemEntries(dir, scanState, cancellationToken);
-            fullyScanned &= EnumerateSubdirectories(dir, scanState, activeIgnoreRules, passthrough, continueOnError, cancellationToken, depth);
+                // A successful file listing proves the direct children of this directory.
+                // Child subtree failures must not revoke that authority for sibling-file purge.
+                // ファイル列挙が成功した時点で、このディレクトリ直下の子要素については authoritative とみなせる。
+                // 子サブツリー失敗が sibling file purge の authority を奪ってはいけない。
+                scanState.ListedDirectories.Add(relativeDir);
+                RecordDanglingFileSystemEntries(dir, scanState, cancellationToken);
+                fullyScanned &= EnumerateSubdirectories(dir, scanState, activeIgnoreRules, passthrough, continueOnError, cancellationToken, depth);
+            }
         }
         catch (Exception ex) when (FileSystemTraversalFailure.IsExpected(ex))
         {
@@ -2427,6 +1897,88 @@ public partial class FileIndexer
         return fullyScanned;
     }
 
+    private bool EnumerateDirectoryEntries(
+        string dir,
+        string relativeDir,
+        DirectoryScanState scanState,
+        IgnoreRuleSet activeIgnoreRules,
+        bool passthrough,
+        bool directoryIgnoreCase,
+        bool continueOnError,
+        CancellationToken cancellationToken,
+        int depth)
+    {
+        var seenFilePaths = !passthrough && directoryIgnoreCase
+            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            : null;
+        var subdirectories = new List<string>();
+        var danglingCandidateLimit = _maxDanglingFileSystemEntryScanCandidates;
+        var danglingCandidateCount = 0;
+        var danglingScanTruncated = false;
+
+        foreach (var enumeratedEntry in _enumerateFileSystemEntries(dir))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var entry = LongPath.RemoveWindowsPrefix(enumeratedEntry);
+            CountDanglingCandidate(relativeDir, scanState, danglingCandidateLimit, ref danglingCandidateCount, ref danglingScanTruncated);
+
+            var probeStatus = FileSystemBoundary.TryGetAttributes(entry, out var attributes);
+            if (probeStatus != FileSystemBoundaryProbeStatus.Found)
+                continue;
+
+            if (FileSystemBoundary.IsSymlinkOrReparsePoint(attributes) && !ReparsePointTargetExists(entry))
+            {
+                RecordDanglingFileSystemEntry(entry, scanState);
+                continue;
+            }
+
+            if ((attributes & FileAttributes.Directory) != 0 || Directory.Exists(LongPath.EnsureWindowsPrefix(entry)))
+            {
+                subdirectories.Add(entry);
+                continue;
+            }
+
+            if (passthrough)
+                continue;
+
+            if (TryAcceptScannedFile(entry, scanState, activeIgnoreRules, seenFilePaths, attributes))
+                scanState.Results.Add(entry);
+        }
+
+        // A successful immediate-child listing proves this directory for sibling-file purge.
+        // Child recursion happens after that authority has been captured.
+        scanState.ListedDirectories.Add(relativeDir);
+        return ProcessSubdirectories(
+            subdirectories,
+            scanState,
+            activeIgnoreRules,
+            passthrough,
+            continueOnError,
+            cancellationToken,
+            depth);
+    }
+
+    private static void CountDanglingCandidate(
+        string relativeDir,
+        DirectoryScanState scanState,
+        int candidateLimit,
+        ref int candidateCount,
+        ref bool scanTruncated)
+    {
+        if (scanTruncated)
+            return;
+
+        candidateCount++;
+        if (candidateCount <= candidateLimit)
+            return;
+
+        scanState.Errors.Add(new ScanError(
+            relativeDir,
+            $"Dangling filesystem entry scan truncated after {candidateLimit:N0} candidate(s); additional dangling symlink diagnostics in this directory may be omitted.",
+            ScanIssueSeverity.Warning));
+        scanTruncated = true;
+    }
+
     private void EnumerateIndexableFilesInDirectory(
         string dir,
         DirectoryScanState scanState,
@@ -2434,10 +1986,11 @@ public partial class FileIndexer
         bool directoryIgnoreCase,
         CancellationToken cancellationToken)
     {
+        var enumerateFiles = _enumerateFilesForTesting ?? throw new InvalidOperationException("Test file enumeration is not configured.");
         var seenFilePaths = directoryIgnoreCase
             ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             : null;
-        foreach (var enumeratedFile in _enumerateFiles(dir))
+        foreach (var enumeratedFile in enumerateFiles(dir))
         {
             cancellationToken.ThrowIfCancellationRequested();
             // Strip any \\?\ prefix returned by EnumerateFiles when we passed a long-path
@@ -2457,7 +2010,8 @@ public partial class FileIndexer
         string file,
         DirectoryScanState scanState,
         IgnoreRuleSet activeIgnoreRules,
-        HashSet<string>? seenFilePaths)
+        HashSet<string>? seenFilePaths,
+        FileAttributes? knownAttributes = null)
     {
         if (!IsFilePathSyntaxIndexable(file))
         {
@@ -2490,15 +2044,21 @@ public partial class FileIndexer
         if (activeIgnoreRules.IsIgnored(file, isDirectory: false))
             return false;
 
-        return TryAcceptSupportedScannedFile(file, scanState);
+        var knownIndexability = knownAttributes.HasValue
+            ? GetFileIndexabilityForFoundAttributes(file, knownAttributes.Value, _symlinkPolicy, _projectRoot)
+            : (FileProbeStatus?)null;
+        return TryAcceptSupportedScannedFile(file, scanState, knownIndexability);
     }
 
-    private bool TryAcceptSupportedScannedFile(string file, DirectoryScanState scanState)
+    private bool TryAcceptSupportedScannedFile(
+        string file,
+        DirectoryScanState scanState,
+        FileProbeStatus? knownIndexability = null)
     {
         // Use the instance symlink policy here so full scans and update paths apply the same
         // file-link behavior.
         // full scan と update 経路で同じ file-link 挙動になるよう instance の symlink policy を使う。
-        var indexability = GetFileIndexabilityForIndexing(file);
+        var indexability = knownIndexability ?? GetFileIndexabilityForIndexing(file);
         if (indexability == FileProbeStatus.Missing)
         {
             var relativePath = ToRelativePath(file);
@@ -2527,7 +2087,7 @@ public partial class FileIndexer
         var relativeFile = ToRelativePath(file);
         // Include files with a known extension/filename or an extensionless recognized shebang
         // 既知の拡張子・既知ファイル名、または拡張子なしで shebang を認識できるファイルを含める
-        var language = TryDetectLanguageForIndexing(file);
+        var language = TryDetectLanguageForIndexing(file, knownIndexability: indexability);
         if (language.Status == FileProbeStatus.Missing)
         {
             scanState.Errors.Add(new ScanError(
@@ -2602,6 +2162,16 @@ public partial class FileIndexer
         }
     }
 
+    private void RecordDanglingFileSystemEntry(string entry, DirectoryScanState scanState)
+    {
+        var relativeEntry = ToRelativePath(entry);
+        scanState.DanglingSymlinks.Add(relativeEntry);
+        scanState.Errors.Add(new ScanError(relativeEntry, "Skipped dangling symlink because its target could not be resolved.", ScanIssueSeverity.Warning));
+        scanState.ListedDirectories.Add(relativeEntry);
+        scanState.FullyScannedDirectories.Add(relativeEntry);
+        scanState.AttributePrunedDirectories.Add(relativeEntry);
+    }
+
     private static bool ReparsePointTargetExists(string path)
     {
         var entryPath = LongPath.EnsureWindowsPrefix(path);
@@ -2645,11 +2215,37 @@ public partial class FileIndexer
         CancellationToken cancellationToken,
         int depth)
     {
+        var subdirectories = RemoveWindowsPrefixes(
+            CodeIndex.FileSystemTraversalPolicy.EnumerateDirectories(LongPath.EnsureWindowsPrefix(dir)));
+        return ProcessSubdirectories(
+            subdirectories,
+            scanState,
+            activeIgnoreRules,
+            passthrough,
+            continueOnError,
+            cancellationToken,
+            depth);
+    }
+
+    private static IEnumerable<string> RemoveWindowsPrefixes(IEnumerable<string> paths)
+    {
+        foreach (var path in paths)
+            yield return LongPath.RemoveWindowsPrefix(path);
+    }
+
+    private bool ProcessSubdirectories(
+        IEnumerable<string> subdirectories,
+        DirectoryScanState scanState,
+        IgnoreRuleSet activeIgnoreRules,
+        bool passthrough,
+        bool continueOnError,
+        CancellationToken cancellationToken,
+        int depth)
+    {
         var fullyScanned = true;
-        foreach (var enumeratedSubDir in CodeIndex.FileSystemTraversalPolicy.EnumerateDirectories(LongPath.EnsureWindowsPrefix(dir)))
+        foreach (var subDir in subdirectories)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var subDir = LongPath.RemoveWindowsPrefix(enumeratedSubDir);
             if (TryRecordNonRecursiveSubdirectory(subDir, scanState, passthrough))
                 continue;
 
@@ -2690,13 +2286,17 @@ public partial class FileIndexer
 
     private bool TryRecordNonRecursiveSubdirectory(string subDir, DirectoryScanState scanState, bool passthrough)
     {
-        if (IsNestedGitRepository(subDir) && !IsSubmoduleOrAncestor(subDir))
+        string? subRelative = null;
+        if (IsNestedGitRepository(subDir))
         {
-            var subRelative = ToRelativePath(subDir);
-            scanState.ListedDirectories.Add(subRelative);
-            scanState.FullyScannedDirectories.Add(subRelative);
-            scanState.NestedRepositories.Add(subRelative);
-            return true;
+            subRelative = ToRelativePath(subDir);
+            if (!IsSubmoduleOrAncestor(subRelative))
+            {
+                scanState.ListedDirectories.Add(subRelative);
+                scanState.FullyScannedDirectories.Add(subRelative);
+                scanState.NestedRepositories.Add(subRelative);
+                return true;
+            }
         }
 
         // In passthrough mode, only descend into subdirectories that are themselves
@@ -2704,12 +2304,15 @@ public partial class FileIndexer
         // would have treated them at this point.
         // passthrough 中は、submodule 自体または submodule の祖先に該当する
         // サブディレクトリのみ降りる。その他は本来 SkipDirs で止まっていた扱いに戻す。
-        if (passthrough && !IsSubmoduleOrAncestor(subDir))
+        if (passthrough)
         {
-            var subRelative = ToRelativePath(subDir);
-            scanState.ListedDirectories.Add(subRelative);
-            scanState.FullyScannedDirectories.Add(subRelative);
-            return true;
+            subRelative ??= ToRelativePath(subDir);
+            if (!IsSubmoduleOrAncestor(subRelative))
+            {
+                scanState.ListedDirectories.Add(subRelative);
+                scanState.FullyScannedDirectories.Add(subRelative);
+                return true;
+            }
         }
 
         return false;
@@ -2883,12 +2486,16 @@ public partial class FileIndexer
         => relativePath.Equals(".cdidx", StringComparison.Ordinal)
             || relativePath.StartsWith(".cdidx/", StringComparison.Ordinal);
 
-    private PathFilterKind GetDirectoryFilterKind(string dir, IgnoreRuleSet activeIgnoreRules, bool isProjectRoot = false)
+    private PathFilterKind GetDirectoryFilterKind(
+        string dir,
+        string relativeDir,
+        IgnoreRuleSet activeIgnoreRules,
+        bool isProjectRoot = false)
     {
         if (!isProjectRoot)
         {
             var dirName = Path.GetFileName(Path.TrimEndingDirectorySeparator(dir));
-            if (SkipDirs.Contains(dirName) && !IsSubmoduleOrAncestor(dir))
+            if (SkipDirs.Contains(dirName) && !IsSubmoduleOrAncestor(relativeDir))
                 return PathFilterKind.ExcludedByDefaultDirectory;
         }
 
@@ -2904,34 +2511,32 @@ public partial class FileIndexer
     // _projectRoot 配下の相対パスが .gitmodules で宣言された submodule のワークツリーまたは
     // その祖先ディレクトリに一致するときに true。vendor/ のような SkipDirs 名の祖先を
     // 通過して submodule に到達できるよう、限定的に SkipDirs を上書きする。
-    private bool IsSubmoduleOrAncestor(string dir)
+    private bool IsSubmoduleOrAncestor(string relativePath)
     {
         if (_submodulePaths.Count == 0)
             return false;
-        var relPath = ToRelativePath(dir);
-        if (relPath.Length == 0)
+        if (relativePath.Length == 0)
             return false;
-        return _submodulePaths.Contains(relPath) || _submoduleAncestorPaths.Contains(relPath);
+        return _submodulePaths.Contains(relativePath) || _submoduleAncestorPaths.Contains(relativePath);
     }
 
-    private bool IsSubmoduleAncestorPassthrough(string dir)
+    private bool IsSubmoduleAncestorPassthrough(string relativePath)
     {
         if (_submoduleAncestorPaths.Count == 0)
             return false;
-        var relPath = ToRelativePath(dir);
-        if (relPath.Length == 0)
+        if (relativePath.Length == 0)
             return false;
-        if (_submodulePaths.Contains(relPath))
+        if (_submodulePaths.Contains(relativePath))
             return false;
-        if (!_submoduleAncestorPaths.Contains(relPath))
+        if (!_submoduleAncestorPaths.Contains(relativePath))
             return false;
         // Passthrough propagates from any SkipDirs-named ancestor along the path. If no
-        // segment of relPath matches SkipDirs, this directory would have been walked
+        // segment of relativePath matches SkipDirs, this directory would have been walked
         // normally without our override, so the override is not in effect here.
-        // SkipDirs 名の祖先からは下方向に passthrough を伝播する。relPath のどの segment も
+        // SkipDirs 名の祖先からは下方向に passthrough を伝播する。relativePath のどの segment も
         // SkipDirs に該当しない場合、我々の上書き無しでも walker は通っていたはずなので
         // ここでの上書きは効いていない。
-        var remaining = relPath.AsSpan();
+        var remaining = relativePath.AsSpan();
         while (!remaining.IsEmpty)
         {
             var separatorIndex = remaining.IndexOf('/');
@@ -4652,9 +4257,10 @@ public partial class FileIndexer
     private static LanguageDetectionResult TryDetectLanguageFromShebang(
         string filePath,
         SymlinkPolicy symlinkPolicy,
-        string? projectRoot)
+        string? projectRoot,
+        FileProbeStatus? knownIndexability)
     {
-        var indexability = GetFileIndexability(filePath, symlinkPolicy, projectRoot);
+        var indexability = knownIndexability ?? GetFileIndexability(filePath, symlinkPolicy, projectRoot);
         if (indexability == FileProbeStatus.Missing)
             return new LanguageDetectionResult(FileProbeStatus.Missing, null);
 

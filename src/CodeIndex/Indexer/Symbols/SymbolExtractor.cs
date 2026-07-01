@@ -4480,13 +4480,8 @@ public static partial class SymbolExtractor
                     continue;
 
                 var lineNumber = index + 1;
-                if (symbols.Any(symbol =>
-                    symbol.StartLine == lineNumber
-                    && symbol.Kind == "property"
-                    && string.Equals(symbol.Name, name, StringComparison.Ordinal)))
-                {
+                if (HasSymbolLineIdentity(symbols, fileId, lineNumber, "property", name))
                     continue;
-                }
 
                 symbols.Add(new SymbolRecord
                 {
@@ -10461,21 +10456,48 @@ public static partial class SymbolExtractor
     private static string NormalizeVisualBasicSymbolName(string name)
     {
         var trimmed = name.Trim();
-        var segments = trimmed.Split('.');
-        if (segments.Length > 0 && segments.All(IsVisualBasicIdentifierSegment))
-            return string.Join(".", segments.Select(StripVisualBasicIdentifierEscapes));
+        if (TryValidateVisualBasicIdentifierSegments(trimmed, out var hasEscapedSegment))
+            return hasEscapedSegment
+                ? StripVisualBasicIdentifierEscapes(trimmed)
+                : trimmed;
 
         return trimmed;
     }
 
-    private static bool IsVisualBasicIdentifierSegment(string segment)
+    private static bool TryValidateVisualBasicIdentifierSegments(string name, out bool hasEscapedSegment)
+    {
+        hasEscapedSegment = false;
+        var segmentStart = 0;
+        for (var index = 0; index <= name.Length; index++)
+        {
+            if (index < name.Length && name[index] != '.')
+                continue;
+
+            var segment = name.AsSpan(segmentStart, index - segmentStart);
+            if (!IsVisualBasicIdentifierSegment(segment))
+                return false;
+
+            hasEscapedSegment |= IsVisualBasicEscapedIdentifier(segment);
+            segmentStart = index + 1;
+        }
+
+        return true;
+    }
+
+    private static bool IsVisualBasicIdentifierSegment(ReadOnlySpan<char> segment)
     {
         if (segment.Length == 0)
             return false;
-        if (segment.Length >= 2 && segment[0] == '[' && segment[^1] == ']')
+        if (IsVisualBasicEscapedIdentifier(segment))
             return true;
 
-        return segment.All(static ch => ch == '_' || char.IsLetterOrDigit(ch));
+        foreach (var ch in segment)
+        {
+            if (ch != '_' && !char.IsLetterOrDigit(ch))
+                return false;
+        }
+
+        return true;
     }
 
     private static bool IsCppTemplateSpecializationSymbol(
@@ -10664,10 +10686,30 @@ public static partial class SymbolExtractor
         return delta;
     }
 
-    private static string StripVisualBasicIdentifierEscapes(string segment) =>
-        segment.Length >= 2 && segment[0] == '[' && segment[^1] == ']'
-            ? segment[1..^1]
-            : segment;
+    private static bool IsVisualBasicEscapedIdentifier(ReadOnlySpan<char> segment)
+        => segment.Length >= 2 && segment[0] == '[' && segment[^1] == ']';
+
+    private static string StripVisualBasicIdentifierEscapes(string name)
+    {
+        var builder = new StringBuilder(name.Length);
+        var segmentStart = 0;
+        for (var index = 0; index <= name.Length; index++)
+        {
+            if (index < name.Length && name[index] != '.')
+                continue;
+
+            if (segmentStart > 0)
+                builder.Append('.');
+
+            var segment = name.AsSpan(segmentStart, index - segmentStart);
+            builder.Append(IsVisualBasicEscapedIdentifier(segment)
+                ? segment[1..^1]
+                : segment);
+            segmentStart = index + 1;
+        }
+
+        return builder.ToString();
+    }
 
     private static string NormalizeRubySymbolName(string name, string matchLine)
     {

@@ -223,13 +223,16 @@ internal static class SqlNameResolver
             return false;
         }
 
-        if (leafName.Length > 0
-            && !string.IsNullOrWhiteSpace(context)
-            && EnumerateQualifiedNames(context).Any(candidate =>
-                HasQualifier(candidate)
-                && string.Equals(GetLeafName(candidate), leafName, StringComparison.OrdinalIgnoreCase)))
+        if (leafName.Length > 0 && !string.IsNullOrWhiteSpace(context))
         {
-            return false;
+            foreach (var candidate in EnumerateQualifiedNames(context))
+            {
+                if (HasQualifier(candidate)
+                    && string.Equals(GetLeafName(candidate), leafName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+            }
         }
 
         return !IsQuotedSingleIdentifierWithDots(containerName);

@@ -6583,20 +6583,24 @@ public static partial class SymbolExtractor
             : left.OriginalIndex.CompareTo(right.OriginalIndex);
     }
 
-    private static bool IsInsideJavaScriptTypeScriptPrivateScope(Stack<JavaScriptScopeKind> scopeStack)
-    {
-        return scopeStack.Any(scopeKind => scopeKind is JavaScriptScopeKind.Function or JavaScriptScopeKind.StaticBlock);
-    }
-
     private static JavaScriptScopePrivacyFlags GetJavaScriptTypeScriptPrivacyFlags(Stack<JavaScriptScopeKind> scopeStack, bool arrowExpressionActive)
     {
         var flags = JavaScriptScopePrivacyFlags.None;
-        if (arrowExpressionActive || IsInsideJavaScriptTypeScriptPrivateScope(scopeStack))
+        if (arrowExpressionActive)
             flags |= JavaScriptScopePrivacyFlags.FunctionLike;
-        if (scopeStack.Any(scopeKind => scopeKind == JavaScriptScopeKind.Block))
-            flags |= JavaScriptScopePrivacyFlags.Block;
-        if (scopeStack.Any(scopeKind => scopeKind == JavaScriptScopeKind.Namespace))
-            flags |= JavaScriptScopePrivacyFlags.Namespace;
+
+        foreach (var scopeKind in scopeStack)
+        {
+            if (scopeKind is JavaScriptScopeKind.Function or JavaScriptScopeKind.StaticBlock)
+                flags |= JavaScriptScopePrivacyFlags.FunctionLike;
+            else if (scopeKind == JavaScriptScopeKind.Block)
+                flags |= JavaScriptScopePrivacyFlags.Block;
+            else if (scopeKind == JavaScriptScopeKind.Namespace)
+                flags |= JavaScriptScopePrivacyFlags.Namespace;
+
+            if (flags == (JavaScriptScopePrivacyFlags.FunctionLike | JavaScriptScopePrivacyFlags.Block | JavaScriptScopePrivacyFlags.Namespace))
+                break;
+        }
 
         return flags;
     }
@@ -8024,10 +8028,9 @@ public static partial class SymbolExtractor
                 && initializerBraceDepth == 0)
             {
                 var continuationInput = scanStartColumn >= sanitizedLine.Length
-                    ? string.Empty
-                    : sanitizedLine[scanStartColumn..];
-                if (continuationInput.Any(ch => !char.IsWhiteSpace(ch))
-                    && !StartsJavaScriptTypeScriptFieldInitializerContinuation(continuationInput, lang))
+                    ? ReadOnlySpan<char>.Empty
+                    : sanitizedLine.AsSpan(scanStartColumn);
+                if (!ShouldContinueJavaScriptTypeScriptFieldInitializer(continuationInput, lang))
                 {
                     inFieldInitializer = false;
                 }
@@ -8531,25 +8534,26 @@ public static partial class SymbolExtractor
         }
     }
 
-    private static bool StartsJavaScriptTypeScriptFieldInitializerContinuation(string continuationInput, string? lang)
+    private static bool ShouldContinueJavaScriptTypeScriptFieldInitializer(ReadOnlySpan<char> continuationInput, string? lang)
     {
         var firstNonWhitespace = 0;
         while (firstNonWhitespace < continuationInput.Length && char.IsWhiteSpace(continuationInput[firstNonWhitespace]))
             firstNonWhitespace++;
 
         if (firstNonWhitespace >= continuationInput.Length)
-            return false;
+            return true;
 
-        if (IsJavaScriptTypeScriptMethodCandidateStart(continuationInput, firstNonWhitespace))
+        var remainingInput = continuationInput[firstNonWhitespace..].ToString();
+        if (IsJavaScriptTypeScriptMethodCandidateStart(remainingInput, 0))
         {
             var matchCandidate = lang == "typescript"
-                ? NormalizeTypeScriptBareMethodMatchInput(continuationInput[firstNonWhitespace..])
-                : continuationInput[firstNonWhitespace..];
+                ? NormalizeTypeScriptBareMethodMatchInput(remainingInput)
+                : remainingInput;
             if (TryParseJavaScriptTypeScriptMethodHeader(matchCandidate, 0, lang, out _))
                 return false;
         }
 
-        return StartsJavaScriptTypeScriptExpressionContinuation(continuationInput);
+        return StartsJavaScriptTypeScriptExpressionContinuation(remainingInput);
     }
 
     private static bool CanStartJavaScriptTypeScriptClassFieldInitializer(string sanitizedLine, int index)

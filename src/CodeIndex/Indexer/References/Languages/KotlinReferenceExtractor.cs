@@ -32,6 +32,7 @@ internal static class KotlinReferenceExtractor
 
     private static readonly string[] DeclarationKeywords = ["val", "var"];
     private static readonly string[] TypeOperatorKeywords = ["is", "as"];
+    private static readonly string[] GenericOwnerKeywords = ["class", "interface", "typealias"];
     private static readonly HashSet<string> BuiltInInfixFunctionNames = new(StringComparer.Ordinal)
     {
         "and", "downTo", "or", "shl", "shr", "step", "to", "until", "ushr", "xor",
@@ -823,7 +824,7 @@ internal static class KotlinReferenceExtractor
                 return CollectGenericParameterNamesFromClause(preparedLine, genericOpenIndex);
         }
 
-        foreach (var keyword in new[] { "class", "interface", "typealias" })
+        foreach (var keyword in GenericOwnerKeywords)
         {
             foreach (var keywordIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, keyword))
             {

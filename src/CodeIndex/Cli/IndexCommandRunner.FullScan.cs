@@ -1211,6 +1211,8 @@ public static partial class IndexCommandRunner
             => javaScriptTypeScriptRefreshRequired
                && (IsJavaScriptTypeScriptLanguage(language) || IsJavaScriptTypeScriptConfigPath(indexPath));
 
+        var csharpPrepassStatReuse = new Dictionary<string, IndexedFileStatReuseResult?>(StringComparer.Ordinal);
+
         bool CanReuseCSharpPrepassTargetWithoutRead(CSharpStaticInterfacePrepass.FileTarget target)
         {
             if (options.Rebuild || startedWithNoIndexedFiles || !symbolKindFilterMatchesPrior || !csharpSymbolNameContractMatchesCurrent)
@@ -1218,21 +1220,31 @@ public static partial class IndexCommandRunner
             if (target.Language != "csharp")
                 return false;
 
-            var existingId = TryGetUnchangedFileIdFromStat(
+            var existingFile = IndexedFileStatReuse.TryGetUnchangedFile(
                 writer,
                 target.FilePath,
                 target.IndexPath,
                 target.Language,
-                allowReuse: true,
-                out _);
-            if (existingId == null)
+                allowReuse: true);
+            if (existingFile == null)
+            {
+                csharpPrepassStatReuse[target.IndexPath] = null;
                 return false;
-            return !ExistingFileBlocksReuse(
+            }
+
+            if (ExistingFileBlocksReuse(
                 writer,
-                existingId.Value,
+                existingFile.Value.FileId,
                 options.MaxSymbolsPerFile,
                 options.MaxReferencesPerFile,
-                indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath));
+                indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath)))
+            {
+                csharpPrepassStatReuse[target.IndexPath] = null;
+                return false;
+            }
+
+            csharpPrepassStatReuse[target.IndexPath] = existingFile.Value;
+            return true;
         }
 
         CSharpStaticInterfaceWorkspaceSymbols csharpWorkspace;
@@ -1308,18 +1320,21 @@ public static partial class IndexCommandRunner
                 && (language != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                 && (language != "sql" || sqlGraphContractMatchesCurrent)
                 && AllowReuseWithCurrentHotspotFamilyTrust(language, hotspotFamilyTrustMatchesCurrent);
-            var existingId = TryGetUnchangedFileIdFromStat(
-                writer,
-                target.FilePath,
-                target.IndexPath,
-                language,
-                allowReuse,
-                out var statSize);
-            if (existingId == null)
+            var existingFile = allowReuse
+                && language == "csharp"
+                && csharpPrepassStatReuse.TryGetValue(target.IndexPath, out var cachedCSharpPrepassReuse)
+                    ? cachedCSharpPrepassReuse
+                    : IndexedFileStatReuse.TryGetUnchangedFile(
+                        writer,
+                        target.FilePath,
+                        target.IndexPath,
+                        language,
+                        allowReuse);
+            if (existingFile == null)
                 return false;
             if (ExistingFileBlocksReuse(
                 writer,
-                existingId.Value,
+                existingFile.Value.FileId,
                 options.MaxSymbolsPerFile,
                 options.MaxReferencesPerFile,
                 indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath)))
@@ -1329,8 +1344,7 @@ public static partial class IndexCommandRunner
 
             skipped++;
             processed++;
-            if (statSize.HasValue)
-                knownReadableFileSizes[target.FilePath] = statSize.Value;
+            knownReadableFileSizes[target.FilePath] = existingFile.Value.Size;
             if (!string.IsNullOrWhiteSpace(language))
                 skippedSymbolExtractorLanguages.Add(language);
             if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(language) && language != null)

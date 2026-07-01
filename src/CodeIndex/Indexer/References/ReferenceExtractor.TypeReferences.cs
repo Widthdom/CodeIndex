@@ -8,6 +8,8 @@ namespace CodeIndex.Indexer;
 public static partial class ReferenceExtractor
 {
     private static readonly char[] CSharpReferenceLinePreparationTriggerChars = ['"', '\'', '`', '/'];
+    private static readonly string[] CSharpParameterRefModifiers = ["ref", "out", "in"];
+    private static readonly string[] CSharpLeadingParameterModifiers = ["this", "scoped"];
 
     private const string CSharpImplicitImplementationReferenceKind = "implicit_implementation";
     private sealed record CSharpStaticInterfaceMemberContract(string Name, string Kind, string? ParameterShape, string? ReturnTypeShape);
@@ -320,7 +322,7 @@ public static partial class ReferenceExtractor
             text = text.Substring(textStart, textEnd - textStart);
 
         var refKind = string.Empty;
-        foreach (var modifier in new[] { "ref", "out", "in" })
+        foreach (var modifier in CSharpParameterRefModifiers)
         {
             if (StartsWithCSharpWord(text, modifier))
             {
@@ -356,7 +358,7 @@ public static partial class ReferenceExtractor
 
     private static string StripLeadingCSharpParameterModifier(string text)
     {
-        foreach (var modifier in new[] { "this", "scoped" })
+        foreach (var modifier in CSharpLeadingParameterModifiers)
         {
             if (StartsWithCSharpWord(text, modifier))
             {

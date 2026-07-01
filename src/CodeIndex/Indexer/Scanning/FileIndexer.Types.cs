@@ -47,7 +47,19 @@ public partial class FileIndexer
         IReadOnlyList<string> NestedRepositories,
         IReadOnlyList<string> DanglingSymlinks)
     {
-        public bool HadErrors => Errors.Any(error => error.IsFatal);
+        public bool HadErrors
+        {
+            get
+            {
+                foreach (var error in Errors)
+                {
+                    if (error.IsFatal)
+                        return true;
+                }
+
+                return false;
+            }
+        }
     }
 
     internal enum PathFilterKind
@@ -80,7 +92,11 @@ public partial class FileIndexer
         public string TruncationReason { get; set; } = "unknown";
     }
 
-    private readonly record struct ProjectMarkerFingerprintDirectory(string Path, IgnoreRuleSet IgnoreRules, bool IsProjectRoot);
+    private readonly record struct ProjectMarkerFingerprintDirectory(
+        string Path,
+        string RelativePath,
+        IgnoreRuleSet IgnoreRules,
+        bool IsProjectRoot);
 
     internal readonly record struct ProjectMarkerFingerprintResult(string? Fingerprint, bool IsComplete)
     {
