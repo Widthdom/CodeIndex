@@ -24,7 +24,7 @@ affected:
 - **Reduced unchanged-file indexing database roundtrips** - CLI and MCP indexing now combine stat-based and checksum-based reuse checks with existing cap/generated-file issue checks, avoiding a second SQLite query for unchanged files that can be skipped.
 - **Batched validation issue writes during indexing** - files that produce multiple validation issues now write those rows in multi-value SQLite inserts instead of executing one insert per issue.
 - **Capped generated-header detection work** - generated-code header detection now inspects only a bounded leading header window, avoiding whole-file scans on very long first lines or minified payloads.
-- **Avoided duplicate generated-pattern checks in full scans** - full-scan targets now cache generated-code suppression matches and reuse them across C# prepass, stat reuse, and extraction scheduling.
+- **Avoided duplicate generated-pattern checks during indexing** - full-scan and MCP targets now cache generated-code suppression matches and reuse them across C# prepass, stat reuse, and extraction scheduling.
 
 ## 日本語
 
@@ -32,4 +32,4 @@ affected:
 - **未変更ファイルの indexing DB 往復を削減しました** - CLI と MCP の indexing は stat ベースおよび checksum ベースの再利用判定と既存の cap/generated-file issue 判定をまとめ、skip できる未変更ファイルごとの追加 SQLite query を避けるようになりました。
 - **indexing 中の validation issue 書き込みをバッチ化しました** - 複数の validation issue を出すファイルは、issue ごとに INSERT を実行せず、複数行の SQLite INSERT でまとめて書き込むようになりました。
 - **generated header 判定の処理量を制限しました** - generated-code header 検出は先頭の bounded header window のみを調べるようになり、非常に長い先頭行や minified payload でファイル全体を走査しないようになりました。
-- **full scan での generated-pattern 重複判定を避けました** - full-scan target は generated-code 抑制patternの一致結果を保持し、C# prepass、stat reuse、extraction scheduling で再利用するようになりました。
+- **indexing 中の generated-pattern 重複判定を避けました** - full-scan と MCP の target は generated-code 抑制patternの一致結果を保持し、C# prepass、stat reuse、extraction scheduling で再利用するようになりました。

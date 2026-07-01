@@ -5616,9 +5616,17 @@ public partial class McpServer
             if (language == "csharp")
                 csharpPrepassTargets.Add(target);
         }
+        var generatedExtractionSuppressedByIndexPath = fileTargets.ToDictionary(
+            target => target.IndexPath,
+            target => indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath),
+            StringComparer.Ordinal);
         var knownReadableFileSizes = new Dictionary<string, long>(StringComparer.Ordinal);
         await EmitProgressNotificationAsync(progressToken, 0, files.Count, "Index scan complete; indexing files.").ConfigureAwait(false);
         var csharpPrepassStatReuse = new Dictionary<string, IndexedFileStatReuseResult?>(StringComparer.Ordinal);
+        bool IsGeneratedExtractionSuppressed(CSharpStaticInterfacePrepass.FileTarget target)
+            => generatedExtractionSuppressedByIndexPath.TryGetValue(target.IndexPath, out var generatedExtractionSuppressed)
+               && generatedExtractionSuppressed;
+
         bool CanReuseCSharpPrepassTargetWithoutRead(CSharpStaticInterfacePrepass.FileTarget target)
         {
             if (!symbolKindFilterMatchesPrior || !csharpSymbolNameContractMatchesCurrent)
@@ -5633,7 +5641,7 @@ public partial class McpServer
                 target.Language,
                 maxSymbolsPerFile,
                 maxReferencesPerFile,
-                indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath),
+                IsGeneratedExtractionSuppressed(target),
                 allowReuse: true);
             if (existingFile == null)
             {
@@ -5695,7 +5703,7 @@ public partial class McpServer
                             target.Language,
                             maxSymbolsPerFile,
                             maxReferencesPerFile,
-                            indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath),
+                            IsGeneratedExtractionSuppressed(target),
                             allowStatReuse);
                 if (statMatchedFile != null)
                 {
@@ -5718,7 +5726,9 @@ public partial class McpServer
                 knownReadableFileSizes[filePath] = record.Size;
                 var content = loaded.Content;
                 var rawBytes = loaded.RawBytes;
-                var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
+                var generatedSuppressionIssue = IsGeneratedExtractionSuppressed(target)
+                    ? indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path)
+                    : null;
                 var existingId = writer.GetReusableUnchangedFileId(
                     record.Path,
                     record.Modified,
