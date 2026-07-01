@@ -151,31 +151,43 @@ internal sealed partial class FileContentLoader
                     return true;
             }
 
-            while (true)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var read = stream.Read(
-                    buffer,
-                    0,
-                    GetReadLengthWithinLimit(total, maxFileSizeBytes, buffer.Length));
-                if (read == 0)
-                    return false;
-
-                total += read;
-                if (total > maxFileSizeBytes)
-                    throw new FileIndexer.FileTooLargeSkippedException(
-                        normalizedRelativePath,
-                        total,
-                        maxFileSizeBytes,
-                        BuildFileTooLargeMessage(total, grewDuringRead: true));
-
-                if (chunkPredicate(buffer.AsSpan(0, read)))
-                    return true;
-            }
+            return RawByteGrowthChunksMayMatch(
+                stream,
+                total,
+                normalizedRelativePath,
+                buffer,
+                chunkPredicate,
+                cancellationToken);
         }
         finally
         {
             ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    private bool RawByteGrowthChunksMayMatch(
+        FileStream stream,
+        long total,
+        string normalizedRelativePath,
+        byte[] buffer,
+        RawByteChunkPredicate chunkPredicate,
+        CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var read = stream.Read(
+                buffer,
+                0,
+                GetReadLengthWithinLimit(total, maxFileSizeBytes, buffer.Length));
+            if (read == 0)
+                return false;
+
+            total += read;
+            ThrowIfReadExceedsMaxFileSize(normalizedRelativePath, total);
+
+            if (chunkPredicate(buffer.AsSpan(0, read)))
+                return true;
         }
     }
 
