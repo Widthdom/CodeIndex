@@ -323,35 +323,6 @@ public static partial class QueryCommandRunner
     // preview 系オプションの検証はコマンド別 allowlist に寄せたため、この shim は常に null を返す。
     private static string? ValidatePreviewOptions(string commandName, string[] args, bool allowMaxLineWidth, bool allowFocusOptions) => null;
 
-    internal static string FormatDuration(TimeSpan duration)
-    {
-        if (duration < TimeSpan.Zero)
-            duration = TimeSpan.Zero;
-
-        var totalDays = (int)duration.TotalDays;
-        var hours = duration.Hours;
-        var minutes = duration.Minutes;
-        var seconds = duration.Seconds;
-
-        if (totalDays > 0)
-            return hours > 0 ? $"{totalDays}d{hours}h" : $"{totalDays}d";
-        if (duration.TotalHours >= 1)
-            return minutes > 0 ? $"{(int)duration.TotalHours}h{minutes}m" : $"{(int)duration.TotalHours}h";
-        if (duration.TotalMinutes >= 1)
-            return seconds > 0 ? $"{(int)duration.TotalMinutes}m{seconds}s" : $"{(int)duration.TotalMinutes}m";
-        return $"{Math.Max(1, (int)Math.Round(duration.TotalSeconds, MidpointRounding.AwayFromZero))}s";
-    }
-
-    private static string FormatSamples(IReadOnlyList<string> samples)
-        => samples.Count == 0 ? string.Empty : $" ({string.Join(", ", samples)})";
-
-    private static string ShortSha(string? sha)
-    {
-        if (string.IsNullOrWhiteSpace(sha))
-            return "<unknown>";
-        return sha.Length <= 12 ? sha : sha[..12];
-    }
-
     // Per-flag upper bounds for numeric CLI options. Without a cap, `--limit 2147483647` or
     // `--snippet-lines 999999` previously parsed silently and either ran with the absurd value
     // (huge allocations / output) or got quietly clamped (e.g. snippet-lines down to 20 with no
