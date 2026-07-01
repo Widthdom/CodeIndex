@@ -117,7 +117,9 @@ public static partial class ReferenceExtractor
         // コンストラクタ連鎖の呼び先解決で使う外側の型候補（class/struct/record/enum。namespace は含めない）。
         // 内側優先で昇順にソート。Java の enum は `this(...)` 連鎖を持てるため `enum` も含める。
         // C# の enum はコンストラクタ自体を持てず `CSharpCtorChainRegex` が一致しないので副作用は無い。
-        var enclosingTypeCandidates = BuildEnclosingTypeCandidates(symbols, request.ReportDiagnostic);
+        var enclosingTypeCandidates = language is "csharp" or "java" or "kotlin"
+            ? BuildEnclosingTypeCandidates(symbols, request.ReportDiagnostic)
+            : [];
         var rustEnumCandidates = language == "rust"
             ? BuildRustEnumCandidates(symbols)
             : null;
