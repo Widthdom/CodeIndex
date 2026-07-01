@@ -793,6 +793,39 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void GetReusableDetectedLanguage_ExtensionFile_DoesNotReloadLanguageMapOverrides()
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_reusable");
+        LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        var openCount = 0;
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(tempDir, LanguageMapOverrides.WorkspaceFileName),
+                "entries:\n- extension: custom\n  language: ruby\n");
+            var path = Path.Combine(tempDir, "template.custom");
+            var detectedLanguages = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [path] = "ruby",
+            };
+            LanguageMapOverrides.OpenOverrideFileForTesting = overridePath =>
+            {
+                openCount++;
+                return File.OpenRead(overridePath);
+            };
+
+            Assert.Equal("ruby", FileIndexer.GetReusableDetectedLanguage(path, detectedLanguages));
+            Assert.Equal(0, openCount);
+        }
+        finally
+        {
+            LanguageMapOverrides.OpenOverrideFileForTesting = null;
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public void LanguageMapOverrides_LoadEffectiveMapReloadsWhenWorkspaceConfigChanges()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_cache_{Guid.NewGuid():N}");

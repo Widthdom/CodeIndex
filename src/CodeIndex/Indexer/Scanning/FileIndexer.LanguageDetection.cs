@@ -285,9 +285,6 @@ public partial class FileIndexer
             }
         }
 
-        if (TryDetectLanguageOverride(filePath, fileName, out var overrideLanguage))
-            return string.Equals(language, overrideLanguage, StringComparison.Ordinal);
-
         var extension = Path.GetExtension(filePath);
         return !string.IsNullOrEmpty(extension)
             && !string.Equals(extension, ".h", StringComparison.OrdinalIgnoreCase);
