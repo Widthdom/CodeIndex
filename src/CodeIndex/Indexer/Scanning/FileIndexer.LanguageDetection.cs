@@ -285,7 +285,7 @@ public partial class FileIndexer
             }
         }
 
-        var extension = Path.GetExtension(filePath);
+        var extension = Path.GetExtension(fileName);
         return !string.IsNullOrEmpty(extension)
             && !string.Equals(extension, ".h", StringComparison.OrdinalIgnoreCase);
     }
@@ -321,7 +321,7 @@ public partial class FileIndexer
             }
         }
 
-        var ext = Path.GetExtension(filePath);
+        var ext = Path.GetExtension(fileName);
         if (TryDetectLanguageOverride(filePath, fileName, out var overrideLang))
             return new LanguageDetectionResult(FileProbeStatus.Supported, overrideLang);
 
