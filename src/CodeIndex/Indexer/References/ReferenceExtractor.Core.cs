@@ -107,7 +107,9 @@ public static partial class ReferenceExtractor
         if (language == "solidity")
             return ExtractSolidityReferences(fileId, lines, preparedLines, containerResolver);
 
-        var csharpXmlDocAttachmentScopeCandidates = BuildCSharpXmlDocAttachmentScopeCandidates(language, symbols, request.ReportDiagnostic);
+        var csharpXmlDocAttachmentScopeCandidates = csharpLinesInsideMultilineStringContent != null
+            ? BuildCSharpXmlDocAttachmentScopeCandidates(language, symbols, request.ReportDiagnostic)
+            : null;
         // Enclosing-type candidates for constructor-chain rewrites (class/struct/record; namespace excluded).
         // Ordered innermost-first via ascending body range. Java enums can declare constructors and
         // chain via `this(...)` so `enum` is included; C# enums cannot declare constructors, and
