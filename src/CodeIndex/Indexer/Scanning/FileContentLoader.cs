@@ -172,7 +172,7 @@ internal sealed partial class FileContentLoader(long maxFileSizeBytes)
         var conflictMarkerLine = 0;
         var conflictScanByteCount = 0;
         var conflictScanComplete = false;
-        var requiresPrepassNormalization = RequiresPrepassNormalization(content);
+        var requiresPrepassNormalization = FindFirstPrepassNormalizationIndex(content) >= 0;
         var trackConflictMarkers = requiresPrepassNormalization || HasConflictMarkerDelimiterCandidate(content);
         if (!trackConflictMarkers && !requiresPrepassNormalization)
             return AnalyzeUnchangedContent(content);
@@ -298,11 +298,12 @@ internal sealed partial class FileContentLoader(long maxFileSizeBytes)
     {
         if (content.Length == 0)
             return content;
-        if (!RequiresPrepassNormalization(content))
+        var firstNormalizationIndex = FindFirstPrepassNormalizationIndex(content);
+        if (firstNormalizationIndex < 0)
             return content;
 
         StringBuilder? builder = null;
-        var atLineStart = true;
+        var atLineStart = firstNormalizationIndex == 0 || content[firstNormalizationIndex - 1] == '\n';
 
         StringBuilder EnsureBuilder(int sourceIndex)
         {
@@ -310,7 +311,7 @@ internal sealed partial class FileContentLoader(long maxFileSizeBytes)
             return builder;
         }
 
-        for (var i = 0; i < content.Length; i++)
+        for (var i = firstNormalizationIndex; i < content.Length; i++)
         {
             var c = content[i];
             if (IsLineLeadingInvisible(c) && atLineStart)
@@ -335,8 +336,24 @@ internal sealed partial class FileContentLoader(long maxFileSizeBytes)
         return builder?.ToString() ?? content;
     }
 
-    private static bool RequiresPrepassNormalization(string content)
-        => content.AsSpan().IndexOfAny('\r', '\uFEFF', '\u200B') >= 0;
+    private static int FindFirstPrepassNormalizationIndex(string content)
+    {
+        var searchOffset = 0;
+        while (searchOffset < content.Length)
+        {
+            var relativeIndex = content.AsSpan(searchOffset).IndexOfAny('\r', '\uFEFF', '\u200B');
+            if (relativeIndex < 0)
+                return -1;
+
+            var index = searchOffset + relativeIndex;
+            if (content[index] == '\r' || index == 0 || content[index - 1] == '\n')
+                return index;
+
+            searchOffset = index + 1;
+        }
+
+        return -1;
+    }
 
     internal static bool IsGitLfsPointer(byte[] rawBytes)
     {

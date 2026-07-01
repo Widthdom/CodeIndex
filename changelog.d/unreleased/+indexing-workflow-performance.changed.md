@@ -4,6 +4,7 @@ affected:
   - .github/workflows/dotnet.yml
   - .github/scripts/run-dotnet-tests.ps1
   - src/CodeIndex/Indexer/References/Support/StructuralLineMasker.cs
+  - src/CodeIndex/Indexer/Scanning/FileContentLoader.cs
   - src/CodeIndex/Indexer/Scanning/FileIndexer.GeneratedCode.cs
   - src/CodeIndex/Indexer/Scanning/FileContentLoader.Checksum.cs
   - src/CodeIndex/Indexer/CSharpStaticInterfacePrepass.cs
@@ -15,6 +16,7 @@ affected:
   - src/CodeIndex/Mcp/McpToolHandlers.cs
   - tests/CodeIndex.Tests/CiWorkflowTests.cs
   - tests/CodeIndex.Tests/ReferenceExtractorTests.cs
+  - tests/CodeIndex.Tests/FileIndexerContentLoadingTests.cs
   - tests/CodeIndex.Tests/FileIndexerTests.cs
   - tests/CodeIndex.Tests/DatabaseTests.cs
   - TESTING_GUIDE.md
@@ -31,6 +33,7 @@ affected:
 - **Simplified reference-line lookup work** - reference insertion now resolves batched `reference_lines` ids through a small `VALUES` lookup table instead of generating long `OR` predicate chains, and skips redundant per-row lookup-key probes after SQLite returns the joined rows.
 - **Narrowed stale stem purge scans** - extension-change cleanup now asks SQLite for same-stem path candidates instead of scanning every indexed file row after each retained file update.
 - **Short-circuited oversize checksum probes** - checksum reuse now returns immediately for seekable streams whose length already exceeds the indexing byte cap, avoiding bounded-but-unnecessary reads of huge files.
+- **Kept content normalization on the fast path for mid-line invisibles** - indexing normalization now only enters the rewrite loop for carriage returns or line-leading invisible markers, preserving the unchanged-content path when U+FEFF/U+200B appears inside ordinary text.
 
 ## 日本語
 
@@ -43,3 +46,4 @@ affected:
 - **reference-line lookup 処理を単純化しました** - reference 挿入時の batched `reference_lines` id 解決は、長い `OR` predicate chain ではなく小さな `VALUES` lookup table を使い、SQLite が joined row を返した後の行ごとの重複 lookup-key probe も避けるようになりました。
 - **stale stem purge の scan 対象を絞りました** - 拡張子変更 cleanup は retained file 更新ごとに全 indexed file 行を走査せず、同じ stem の path candidate だけを SQLite に問い合わせるようになりました。
 - **oversize checksum probe を即時終了するようにしました** - checksum reuse は seekable stream の長さが indexing byte cap を既に超えている場合、巨大ファイルを上限まで読む前に即 false を返すようになりました。
+- **行中の不可視文字では content normalization の fast path を維持します** - indexing normalization は carriage return または行頭不可視 marker がある場合だけ rewrite loop に入り、U+FEFF/U+200B が通常テキスト中に出るだけなら unchanged-content 経路を保ちます。
