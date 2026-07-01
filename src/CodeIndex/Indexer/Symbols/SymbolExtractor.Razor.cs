@@ -27,9 +27,9 @@ public static partial class SymbolExtractor
         if (string.IsNullOrWhiteSpace(filePath))
             return false;
 
-        var extension = Path.GetExtension(Path.GetFileName(filePath));
-        return string.Equals(extension, ".razor", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(extension, ".cshtml", StringComparison.OrdinalIgnoreCase);
+        var extension = Path.GetExtension(Path.GetFileName(filePath.AsSpan()));
+        return extension.Equals(".razor".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".cshtml".AsSpan(), StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsRazorLanguage(string? lang)

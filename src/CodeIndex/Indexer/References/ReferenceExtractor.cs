@@ -2165,9 +2165,9 @@ public static partial class ReferenceExtractor
         if (string.IsNullOrWhiteSpace(path))
             return false;
 
-        var extension = Path.GetExtension(Path.GetFileName(path));
-        return string.Equals(extension, ".jsx", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(extension, ".tsx", StringComparison.OrdinalIgnoreCase);
+        var extension = Path.GetExtension(Path.GetFileName(path.AsSpan()));
+        return extension.Equals(".jsx".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".tsx".AsSpan(), StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool TrySkipTypeScriptJsxTypeArguments(string preparedLine, ref int scan)
@@ -2225,9 +2225,9 @@ public static partial class ReferenceExtractor
         if (string.IsNullOrWhiteSpace(path))
             return false;
 
-        var extension = Path.GetExtension(Path.GetFileName(path));
-        return string.Equals(extension, ".razor", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(extension, ".cshtml", StringComparison.OrdinalIgnoreCase);
+        var extension = Path.GetExtension(Path.GetFileName(path.AsSpan()));
+        return extension.Equals(".razor".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".cshtml".AsSpan(), StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsObjCSelectorLiteralCall(string line, string name, int nameIndex) =>
