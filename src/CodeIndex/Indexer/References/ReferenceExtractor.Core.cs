@@ -69,7 +69,7 @@ public static partial class ReferenceExtractor
         // attributes `void M([Attr] T x)` are classified consistently with same-line `[Foo]`.
         // 行を跨いだ `[\n Foo("x")\n]` やパラメータ属性 `void M([Attr] T x)` も、同一行の `[Foo]` と
         // 同じ判定で属性として扱えるように、事前パスで C# 属性セクションの範囲を構築する。
-        var csharpAttrTables = language == "csharp"
+        var csharpAttrTables = language == "csharp" && content.Contains('[', StringComparison.Ordinal)
             ? BuildCSharpAttributeRanges(preparedLines)
             : (null, null);
         var csharpAttrRanges = csharpAttrTables.Item1;
