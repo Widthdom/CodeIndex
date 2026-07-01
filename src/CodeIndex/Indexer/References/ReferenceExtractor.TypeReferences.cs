@@ -3324,6 +3324,9 @@ public static partial class ReferenceExtractor
 
     private static string[] MaskPythonFStrings(IReadOnlyList<string> lines)
     {
+        if (lines is string[] lineArray && !MayContainPythonFString(lines))
+            return lineArray;
+
         var result = new string[lines.Count];
         for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
             result[lineIndex] = lines[lineIndex];
@@ -3368,6 +3371,17 @@ public static partial class ReferenceExtractor
         }
 
         return result;
+    }
+
+    private static bool MayContainPythonFString(IReadOnlyList<string> lines)
+    {
+        foreach (var line in lines)
+        {
+            if (line.IndexOf('f') >= 0 || line.IndexOf('F') >= 0)
+                return true;
+        }
+
+        return false;
     }
 
     private static void MaskPythonTripleQuotedFString(
