@@ -154,7 +154,7 @@ public partial class FileIndexer
     }
 
     private static bool ShouldSuppressUtf8BomIssue(string relativePath)
-        => string.Equals(Path.GetExtension(relativePath), ".sln", StringComparison.OrdinalIgnoreCase);
+        => string.Equals(Path.GetExtension(Path.GetFileName(relativePath)), ".sln", StringComparison.OrdinalIgnoreCase);
 
     private static void AddLineEndingIssues(
         List<FileIssue> issues,

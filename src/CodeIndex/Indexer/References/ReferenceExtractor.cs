@@ -2165,7 +2165,7 @@ public static partial class ReferenceExtractor
         if (string.IsNullOrWhiteSpace(path))
             return false;
 
-        var extension = Path.GetExtension(path);
+        var extension = Path.GetExtension(Path.GetFileName(path));
         return string.Equals(extension, ".jsx", StringComparison.OrdinalIgnoreCase)
             || string.Equals(extension, ".tsx", StringComparison.OrdinalIgnoreCase);
     }
@@ -2225,7 +2225,7 @@ public static partial class ReferenceExtractor
         if (string.IsNullOrWhiteSpace(path))
             return false;
 
-        var extension = Path.GetExtension(path);
+        var extension = Path.GetExtension(Path.GetFileName(path));
         return string.Equals(extension, ".razor", StringComparison.OrdinalIgnoreCase)
             || string.Equals(extension, ".cshtml", StringComparison.OrdinalIgnoreCase);
     }
