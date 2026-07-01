@@ -358,6 +358,9 @@ public partial class FileIndexer
     private static bool TryDetectLanguageOverride(string filePath, string fileName, out string language)
     {
         language = string.Empty;
+        if (!fileName.Contains('.', StringComparison.Ordinal))
+            return false;
+
         var overrides = LanguageMapOverrides.LoadEffectiveMap(filePath);
         if (overrides.Count == 0)
             return false;
