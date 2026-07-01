@@ -4674,10 +4674,10 @@ public static partial class SymbolExtractor
 
     private static void ExtractSqlCteSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
     {
-        var content = string.Join('\n', lines);
-        if (content.IndexOf("WITH", StringComparison.OrdinalIgnoreCase) < 0)
+        if (!LinesContain(lines, "WITH", StringComparison.OrdinalIgnoreCase))
             return;
 
+        var content = string.Join('\n', lines);
         var lineStarts = BuildLineStarts(content);
         foreach (Match match in SqlCteDefinitionRegex.Matches(content))
         {
@@ -4703,6 +4703,17 @@ public static partial class SymbolExtractor
                     Signature = lines[lineNumber - 1].Trim(),
                 });
         }
+    }
+
+    private static bool LinesContain(IReadOnlyList<string> lines, string value, StringComparison comparison)
+    {
+        for (var i = 0; i < lines.Count; i++)
+        {
+            if (lines[i].IndexOf(value, comparison) >= 0)
+                return true;
+        }
+
+        return false;
     }
 
     private static List<int> BuildLineStarts(string content)
@@ -4855,6 +4866,9 @@ public static partial class SymbolExtractor
     {
         for (var i = 0; i < lines.Length; i++)
         {
+            if (structuralLines[i].IndexOf("DEFINER", StringComparison.OrdinalIgnoreCase) < 0)
+                continue;
+
             if (!SqlDefinerMarkerRegex.IsMatch(structuralLines[i]))
                 continue;
 
@@ -4965,6 +4979,9 @@ public static partial class SymbolExtractor
     {
         for (var i = 0; i < lines.Length; i++)
         {
+            if (structuralLines[i].IndexOf("CREATE", StringComparison.OrdinalIgnoreCase) < 0)
+                continue;
+
             if (!SqlCreateRoutineHeaderRegex.IsMatch(structuralLines[i]))
                 continue;
 
