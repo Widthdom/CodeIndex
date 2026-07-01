@@ -203,9 +203,7 @@ internal static class BuildAutomationReferenceExtractor
     private static bool IsIgnoredCMakeDependency(string value)
         => value.Length == 0
            || CMakeIgnoredDependencyTokens.Contains(value)
-           || value.StartsWith('$')
-           || value.StartsWith("@", StringComparison.Ordinal)
-           || value.StartsWith("-", StringComparison.Ordinal);
+           || value[0] is '$' or '@' or '-';
 
     private static bool IsMsBuildTargetListAttribute(string attrName)
         => attrName.Equals("DependsOnTargets", StringComparison.OrdinalIgnoreCase)

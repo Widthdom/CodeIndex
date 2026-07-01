@@ -129,12 +129,13 @@ internal static class PowerShellReferenceExtractor
     private static List<string> ExtractHashtableKeys(string text)
     {
         var keys = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (Match match in HashtableKeyRegex.Matches(text))
         {
             var key = match.Groups["quoted"].Success
                 ? match.Groups["quoted"].Value
                 : match.Groups["bare"].Value;
-            if (!keys.Contains(key, StringComparer.OrdinalIgnoreCase))
+            if (seen.Add(key))
                 keys.Add(key);
         }
 
