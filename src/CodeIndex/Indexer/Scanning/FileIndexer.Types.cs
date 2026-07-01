@@ -47,7 +47,19 @@ public partial class FileIndexer
         IReadOnlyList<string> NestedRepositories,
         IReadOnlyList<string> DanglingSymlinks)
     {
-        public bool HadErrors => Errors.Any(error => error.IsFatal);
+        public bool HadErrors
+        {
+            get
+            {
+                foreach (var error in Errors)
+                {
+                    if (error.IsFatal)
+                        return true;
+                }
+
+                return false;
+            }
+        }
     }
 
     internal enum PathFilterKind

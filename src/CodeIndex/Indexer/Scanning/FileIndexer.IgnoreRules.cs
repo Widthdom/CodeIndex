@@ -20,11 +20,22 @@ public partial class FileIndexer
             _parent = parent;
             _rules = rules;
             _sourceDirectory = rules.Count == 0 ? null : rules[0].SourceDirectory;
-            _hasBasenameOnlyRule = rules.Any(static rule => rule.MatchesBasenameOnly);
+            _hasBasenameOnlyRule = HasBasenameOnlyRule(rules);
         }
 
         internal static IgnoreRuleSet CreateChild(IgnoreRuleSet parent, IReadOnlyList<IgnoreRule> rules)
             => rules.Count == 0 ? parent : new IgnoreRuleSet(parent, rules);
+
+        private static bool HasBasenameOnlyRule(IReadOnlyList<IgnoreRule> rules)
+        {
+            foreach (var rule in rules)
+            {
+                if (rule.MatchesBasenameOnly)
+                    return true;
+            }
+
+            return false;
+        }
 
         internal bool IsIgnored(string absolutePath, bool isDirectory)
         {
@@ -126,7 +137,7 @@ public partial class FileIndexer
             if (tokens.Count == 0)
                 return false;
 
-            var matchBasenameOnly = !anchoredToSourceDirectory && !tokens.Any(token => token is { Value: '/', Escaped: false });
+            var matchBasenameOnly = !anchoredToSourceDirectory && !ContainsUnescapedSlash(tokens);
             try
             {
                 if (ignoreCase)
@@ -172,6 +183,17 @@ public partial class FileIndexer
                 candidate = FoldAscii(candidate);
 
             return _matcher.IsMatch(candidate);
+        }
+
+        private static bool ContainsUnescapedSlash(IReadOnlyList<PatternToken> tokens)
+        {
+            foreach (var token in tokens)
+            {
+                if (token is { Value: '/', Escaped: false })
+                    return true;
+            }
+
+            return false;
         }
 
         private static bool TryTokenize(string rawLine, out List<PatternToken> tokens)
