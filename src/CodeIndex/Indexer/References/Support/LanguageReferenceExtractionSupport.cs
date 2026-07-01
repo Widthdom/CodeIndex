@@ -1112,11 +1112,12 @@ internal static partial class LanguageReferenceExtractionSupport
             var group = baseMatch.Groups["bases"];
             foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(group.Value))
             {
-                var expression = StripCppAccessPrefix(group.Value.Substring(segmentStart, segmentLength));
+                var segment = group.Value.Substring(segmentStart, segmentLength);
+                var expression = StripCppAccessPrefix(segment);
                 if (expression.Length == 0)
                     continue;
 
-                var absoluteStart = group.Index + segmentStart + group.Value.Substring(segmentStart, segmentLength).IndexOf(expression, StringComparison.Ordinal);
+                var absoluteStart = group.Index + segmentStart + segment.IndexOf(expression, StringComparison.Ordinal);
                 ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, expression, absoluteStart, context, lineNumber, resolveContainerForColumn(absoluteStart), language);
             }
         }
