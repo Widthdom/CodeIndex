@@ -5,6 +5,24 @@ namespace CodeIndex.Cli;
 
 public static partial class QueryCommandRunner
 {
+    private static bool HasOption(string[] args, string optionName)
+    {
+        foreach (var arg in args)
+        {
+            if (string.Equals(arg, optionName, StringComparison.Ordinal))
+                return true;
+            if (arg.StartsWith(optionName + "=", StringComparison.Ordinal))
+                return true;
+        }
+        return false;
+    }
+
+    // Preview option validation now lives in the command-specific unsupported-option allowlists.
+    // Keep this shim so the existing call sites stay simple while the actual fail-closed logic
+    // runs through ParseArgs() + TryWriteUnsupportedOptionError().
+    // preview 系オプションの検証はコマンド別 allowlist に寄せたため、この shim は常に null を返す。
+    private static string? ValidatePreviewOptions(string commandName, string[] args, bool allowMaxLineWidth, bool allowFocusOptions) => null;
+
     private static bool TryWriteParseError(QueryCommandOptions options, string commandName)
         => TryWriteParseError(options, commandName, jsonOptions: null);
 
