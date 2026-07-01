@@ -2657,15 +2657,7 @@ public static partial class SymbolExtractor
 
             if (lang == "dockerfile")
             {
-                AddDockerfileAdditionalEnvSymbols(fileId, line, i + 1, symbols);
-                AddDockerfileAdditionalLabelSymbols(fileId, line, i + 1, symbols);
-                AddDockerfileAdditionalExposeSymbols(fileId, line, i + 1, symbols);
-                AddDockerfileAdditionalVolumeSymbols(fileId, line, i + 1, symbols);
-                AddDockerfileNamedStageBaseImageSymbol(fileId, line, i + 1, symbols, dockerfileStageNames!);
-                AddDockerfileShellSymbol(fileId, line, i + 1, symbols);
-                AddDockerfileCopyDestinationSymbol(fileId, line, i + 1, symbols);
-                AddDockerfileAddDestinationSymbol(fileId, line, i + 1, symbols);
-                AddDockerfileRunSymbol(fileId, line, i + 1, symbols);
+                AddDockerfileAdditionalSymbols(fileId, line, i + 1, symbols, dockerfileStageNames!);
             }
 
             var structuralLine = structuralLines[i];

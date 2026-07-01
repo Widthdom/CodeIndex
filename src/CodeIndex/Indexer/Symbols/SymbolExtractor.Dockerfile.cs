@@ -16,6 +16,62 @@ public static partial class SymbolExtractor
     internal static JsonDocument ParseDockerfileJsonFormPayload(string payload)
         => BoundedJson.ParseDocument(payload, DockerfileJsonFormMaxUtf8Bytes, DockerfileJsonFormMaxDepth);
 
+    private static void AddDockerfileAdditionalSymbols(
+        long fileId,
+        string line,
+        int lineNumber,
+        List<SymbolRecord> symbols,
+        HashSet<string> stageNames)
+    {
+        var instruction = GetDockerfileInstructionName(line);
+        if (instruction.IsEmpty)
+            return;
+
+        if (instruction.Equals("ENV", StringComparison.OrdinalIgnoreCase))
+            AddDockerfileAdditionalEnvSymbols(fileId, line, lineNumber, symbols);
+        else if (instruction.Equals("LABEL", StringComparison.OrdinalIgnoreCase))
+            AddDockerfileAdditionalLabelSymbols(fileId, line, lineNumber, symbols);
+        else if (instruction.Equals("EXPOSE", StringComparison.OrdinalIgnoreCase))
+            AddDockerfileAdditionalExposeSymbols(fileId, line, lineNumber, symbols);
+        else if (instruction.Equals("VOLUME", StringComparison.OrdinalIgnoreCase))
+            AddDockerfileAdditionalVolumeSymbols(fileId, line, lineNumber, symbols);
+        else if (instruction.Equals("FROM", StringComparison.OrdinalIgnoreCase))
+            AddDockerfileNamedStageBaseImageSymbol(fileId, line, lineNumber, symbols, stageNames);
+        else if (instruction.Equals("SHELL", StringComparison.OrdinalIgnoreCase))
+            AddDockerfileShellSymbol(fileId, line, lineNumber, symbols);
+        else if (instruction.Equals("COPY", StringComparison.OrdinalIgnoreCase))
+            AddDockerfileCopyDestinationSymbol(fileId, line, lineNumber, symbols);
+        else if (instruction.Equals("ADD", StringComparison.OrdinalIgnoreCase))
+            AddDockerfileAddDestinationSymbol(fileId, line, lineNumber, symbols);
+        else if (instruction.Equals("RUN", StringComparison.OrdinalIgnoreCase))
+            AddDockerfileRunSymbol(fileId, line, lineNumber, symbols);
+    }
+
+    private static ReadOnlySpan<char> GetDockerfileInstructionName(string line)
+    {
+        var instructionStart = GetDockerfileFirstNonWhitespaceIndex(line, 0);
+        if (instructionStart >= line.Length)
+            return ReadOnlySpan<char>.Empty;
+
+        var instructionEnd = instructionStart;
+        while (instructionEnd < line.Length && !char.IsWhiteSpace(line[instructionEnd]))
+            instructionEnd++;
+
+        var instruction = line.AsSpan(instructionStart, instructionEnd - instructionStart);
+        if (!instruction.Equals("ONBUILD", StringComparison.OrdinalIgnoreCase))
+            return instruction;
+
+        var nestedInstructionStart = GetDockerfileFirstNonWhitespaceIndex(line, instructionEnd);
+        if (nestedInstructionStart >= line.Length)
+            return ReadOnlySpan<char>.Empty;
+
+        var nestedInstructionEnd = nestedInstructionStart;
+        while (nestedInstructionEnd < line.Length && !char.IsWhiteSpace(line[nestedInstructionEnd]))
+            nestedInstructionEnd++;
+
+        return line.AsSpan(nestedInstructionStart, nestedInstructionEnd - nestedInstructionStart);
+    }
+
     private static void AddDockerfileAdditionalEnvSymbols(
         long fileId,
         string line,
