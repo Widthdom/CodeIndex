@@ -2028,24 +2028,30 @@ public class DbWriter
             CheckBatchCancellationAndReportProgress("lookup_reference_lines", i, rows.Length, cancellationToken);
             int keyEnd = Math.Min(i + keysPerStatement, rows.Length);
             using var cmd = _conn.CreateCommand();
-            var predicates = CreateBatchSqlBuilder(keyEnd - i, estimatedCharsPerRow: 96);
+            var lookupRows = CreateBatchSqlBuilder(keyEnd - i, estimatedCharsPerRow: 48);
             for (int j = i; j < keyEnd; j++)
             {
                 if (j > i)
-                    predicates.Append(" OR ");
+                    lookupRows.Append(", ");
 
                 var suffix = j - i;
                 var (fileId, line, context) = rows[j];
-                predicates.Append($"(file_id = @lookupFid{suffix} AND line = @lookupLine{suffix} AND context = @lookupContext{suffix})");
+                lookupRows.Append($"(@lookupFid{suffix}, @lookupLine{suffix}, @lookupContext{suffix})");
                 cmd.Parameters.Add($"@lookupFid{suffix}", SqliteType.Integer).Value = fileId;
                 cmd.Parameters.Add($"@lookupLine{suffix}", SqliteType.Integer).Value = line;
                 cmd.Parameters.Add($"@lookupContext{suffix}", SqliteType.Text).Value = context;
             }
 
             cmd.CommandText = $@"
-                SELECT id, file_id, line, context
-                FROM reference_lines
-                WHERE {predicates}";
+                WITH lookup(file_id, line, context) AS (
+                    VALUES {lookupRows}
+                )
+                SELECT rl.id, rl.file_id, rl.line, rl.context
+                FROM reference_lines rl
+                JOIN lookup l
+                  ON l.file_id = rl.file_id
+                 AND l.line = rl.line
+                 AND l.context = rl.context";
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
