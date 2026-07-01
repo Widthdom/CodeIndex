@@ -257,19 +257,45 @@ internal static class AssemblyReferenceExtractor
 
     private static bool IsRegisterLikeName(string name)
     {
-        var normalized = name.TrimStart('%', '$');
+        var normalizedStart = 0;
+        while (normalizedStart < name.Length && name[normalizedStart] is '%' or '$')
+            normalizedStart++;
+
+        var normalized = name.AsSpan(normalizedStart);
         if (normalized.Length == 0)
             return true;
 
-        if (RegisterNames.Contains(normalized))
+        if (IsKnownRegisterName(normalized))
             return true;
 
         if (normalized.Length < 2)
             return false;
 
         if (normalized[0] is 'r' or 'x' or 'w')
-            return normalized[1..].All(char.IsDigit);
+            return AllDigits(normalized[1..]);
 
         return false;
+    }
+
+    private static bool IsKnownRegisterName(ReadOnlySpan<char> normalized)
+    {
+        foreach (var registerName in RegisterNames)
+        {
+            if (normalized.Equals(registerName.AsSpan(), StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool AllDigits(ReadOnlySpan<char> value)
+    {
+        foreach (var ch in value)
+        {
+            if (!char.IsDigit(ch))
+                return false;
+        }
+
+        return true;
     }
 }
