@@ -19,9 +19,6 @@ namespace CodeIndex.Cli;
 /// </summary>
 public static partial class QueryCommandRunner
 {
-    internal const int DefaultQueryLimit = 20;
-    internal const int DefaultMapLimit = 10;
-    internal const int DefaultCompactSectionLimit = 5;
     internal const int MapIssueDraftLineThreshold = 800;
     internal const long MapIssueDraftByteThreshold = 64 * 1024;
     private const int MaxNamedSearchQueryNameLength = 128;
@@ -44,9 +41,6 @@ public static partial class QueryCommandRunner
     private const int MaxIssueDraftEvidenceItems = 5;
     private const int MaxIssueDraftEvidenceSnippetLength = 512;
     private const string BareTokenAuthAuditHint = "Bare `token` searches are intentionally broad. For credential/auth-token review, run `cdidx search --recipe auth-token-audit`; use `cdidx search --recipe broad-token-audit` only when parser, LSP, or cancellation token domains are intentional.";
-    internal const string DefaultLimitEnvironmentVariable = "CDIDX_DEFAULT_LIMIT";
-    internal const string DefaultSnippetLinesEnvironmentVariable = "CDIDX_DEFAULT_SNIPPET_LINES";
-    internal const string DefaultMaxLineWidthEnvironmentVariable = "CDIDX_DEFAULT_MAX_LINE_WIDTH";
     // Cap OR-joined `symbols` names well below SQLite's 1000 expression-tree depth so oversized
     // batches fail fast with a clear usage error instead of a confusing SQLite exception.
     // OR 結合の `symbols` 名は SQLite の式木深さ上限 1000 を十分下回る値で頭打ちにし、
