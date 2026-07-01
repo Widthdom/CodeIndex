@@ -173,6 +173,9 @@ internal sealed partial class FileContentLoader(long maxFileSizeBytes)
         var conflictScanByteCount = 0;
         var conflictScanComplete = false;
         var trackConflictMarkers = HasConflictMarkerDelimiterCandidate(content);
+        if (!trackConflictMarkers && !RequiresPrepassNormalization(content))
+            return AnalyzeUnchangedContent(content);
+
         var previousOutputWasLineBreak = false;
         var atLineStart = true;
 
@@ -258,6 +261,30 @@ internal sealed partial class FileContentLoader(long maxFileSizeBytes)
             lineCount,
             hasOversizeLine,
             conflictMarkerLine);
+    }
+
+    private static NormalizedIndexableContent AnalyzeUnchangedContent(string content)
+    {
+        var lineCount = 1;
+        var hasOversizeLine = false;
+        var lineStart = 0;
+        while (lineStart < content.Length)
+        {
+            var newlineIndex = content.IndexOf('\n', lineStart);
+            if (newlineIndex < 0)
+                break;
+
+            if (!hasOversizeLine && newlineIndex - lineStart > ChunkSplitter.MaxLineLength)
+                hasOversizeLine = true;
+            if (newlineIndex < content.Length - 1)
+                lineCount++;
+            lineStart = newlineIndex + 1;
+        }
+
+        if (!hasOversizeLine && content.Length - lineStart > ChunkSplitter.MaxLineLength)
+            hasOversizeLine = true;
+
+        return new NormalizedIndexableContent(content, lineCount, hasOversizeLine, 0);
     }
 
     private static bool HasConflictMarkerDelimiterCandidate(string content)

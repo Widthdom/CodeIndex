@@ -26,6 +26,26 @@ public partial class FileIndexerTests
         Assert.Null(loaded.Warning);
     }
 
+    [Theory]
+    [InlineData("a", 1, false)]
+    [InlineData("a\n", 1, false)]
+    [InlineData("a\nb", 2, false)]
+    [InlineData("\n\n", 2, false)]
+    [InlineData(null, 1, true)]
+    public void FileContentLoader_NormalizeForIndexing_LfOnlyFastPathPreservesLineSemantics(
+        string? contentTemplate,
+        int expectedLineCount,
+        bool expectedOversizeLine)
+    {
+        var content = contentTemplate ?? new string('a', ChunkSplitter.MaxLineLength + 1);
+        var normalized = FileContentLoader.NormalizeForIndexing(content);
+
+        Assert.Same(content, normalized.Content);
+        Assert.Equal(expectedLineCount, normalized.LineCount);
+        Assert.Equal(expectedOversizeLine, normalized.HasOversizeLine);
+        Assert.Equal(0, normalized.ConflictMarkerLine);
+    }
+
     [Fact]
     public void FileContentLoader_Load_LfOnlyUtf8CanReuseRawChecksum()
     {
