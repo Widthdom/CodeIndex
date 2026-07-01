@@ -6583,20 +6583,24 @@ public static partial class SymbolExtractor
             : left.OriginalIndex.CompareTo(right.OriginalIndex);
     }
 
-    private static bool IsInsideJavaScriptTypeScriptPrivateScope(Stack<JavaScriptScopeKind> scopeStack)
-    {
-        return scopeStack.Any(scopeKind => scopeKind is JavaScriptScopeKind.Function or JavaScriptScopeKind.StaticBlock);
-    }
-
     private static JavaScriptScopePrivacyFlags GetJavaScriptTypeScriptPrivacyFlags(Stack<JavaScriptScopeKind> scopeStack, bool arrowExpressionActive)
     {
         var flags = JavaScriptScopePrivacyFlags.None;
-        if (arrowExpressionActive || IsInsideJavaScriptTypeScriptPrivateScope(scopeStack))
+        if (arrowExpressionActive)
             flags |= JavaScriptScopePrivacyFlags.FunctionLike;
-        if (scopeStack.Any(scopeKind => scopeKind == JavaScriptScopeKind.Block))
-            flags |= JavaScriptScopePrivacyFlags.Block;
-        if (scopeStack.Any(scopeKind => scopeKind == JavaScriptScopeKind.Namespace))
-            flags |= JavaScriptScopePrivacyFlags.Namespace;
+
+        foreach (var scopeKind in scopeStack)
+        {
+            if (scopeKind is JavaScriptScopeKind.Function or JavaScriptScopeKind.StaticBlock)
+                flags |= JavaScriptScopePrivacyFlags.FunctionLike;
+            else if (scopeKind == JavaScriptScopeKind.Block)
+                flags |= JavaScriptScopePrivacyFlags.Block;
+            else if (scopeKind == JavaScriptScopeKind.Namespace)
+                flags |= JavaScriptScopePrivacyFlags.Namespace;
+
+            if (flags == (JavaScriptScopePrivacyFlags.FunctionLike | JavaScriptScopePrivacyFlags.Block | JavaScriptScopePrivacyFlags.Namespace))
+                break;
+        }
 
         return flags;
     }
