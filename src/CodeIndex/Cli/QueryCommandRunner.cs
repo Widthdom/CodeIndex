@@ -33,8 +33,6 @@ public static partial class QueryCommandRunner
     internal const int MaxWorkspaceDependencyDatabasePairCount = MaxWorkspaceDependencyDatabaseCount * (MaxWorkspaceDependencyDatabaseCount - 1);
     internal const int FindAllCandidateFileLimit = 4096;
     internal const int FindAllLineScanLimit = 250_000;
-    internal const int MaxStatusSymbolKindEntries = 32;
-    internal const int MaxStatusSymbolKindNameLength = 64;
     private const int MaxSearchProjectionFieldsCsvLength = 256;
     private const int MaxSearchProjectionFieldsCsvEntries = 16;
     private const int MaxOutlineProjectionFieldsCsvLength = 256;
@@ -49,7 +47,6 @@ public static partial class QueryCommandRunner
     internal const string DefaultLimitEnvironmentVariable = "CDIDX_DEFAULT_LIMIT";
     internal const string DefaultSnippetLinesEnvironmentVariable = "CDIDX_DEFAULT_SNIPPET_LINES";
     internal const string DefaultMaxLineWidthEnvironmentVariable = "CDIDX_DEFAULT_MAX_LINE_WIDTH";
-    internal const string StaleAfterEnvironmentVariable = "CDIDX_STALE_AFTER";
     private const string LanguageCapabilityGraph = "graph";
     private const string LanguageCapabilityReferences = "references";
     private const string LanguageCapabilitySymbols = "symbols";
@@ -57,9 +54,6 @@ public static partial class QueryCommandRunner
     private const string LanguageCapabilityMissingReferences = "missing-references";
     private const string LanguageCapabilityMissingSymbols = "missing-symbols";
     private const string LanguageCapabilitySearchOnly = "search-only";
-    internal static readonly TimeSpan DefaultStaleAfter = TimeSpan.FromHours(24);
-    internal static readonly TimeSpan MaxStaleAfter = TimeSpan.FromDays(30);
-    internal const string MaxStaleAfterDisplay = "30d";
     // Cap OR-joined `symbols` names well below SQLite's 1000 expression-tree depth so oversized
     // batches fail fast with a clear usage error instead of a confusing SQLite exception.
     // OR 結合の `symbols` 名は SQLite の式木深さ上限 1000 を十分下回る値で頭打ちにし、
@@ -69,8 +63,6 @@ public static partial class QueryCommandRunner
     internal const int MaxMapSectionsCsvEntries = 16;
     internal const int MaxInspectFieldsCsvLength = 256;
     internal const int MaxInspectFieldsCsvEntries = 16;
-    internal const int MaxStatusCheckScopesCsvLength = 256;
-    internal const int MaxStatusCheckScopesCsvEntries = 16;
     internal const int MaxVisibilityFilterCsvLength = 256;
     internal const int MaxVisibilityFilterCsvEntries = 16;
     internal const int MaxIssueDraftLabelCount = 16;
