@@ -1609,8 +1609,7 @@ public static partial class ReferenceExtractor
         if (callContainer != null
             && (callContainer.Kind == "function" || callContainer.Kind == "property")
             && valueReceiverNamesByFunctionStartLine.TryGetValue(callContainer.StartLine, out var functionNames)
-            && functionNames.Any(record => IsWithinCSharpScope(record, lineNumber, column)
-                && string.Equals(record.Name, receiverName, StringComparison.Ordinal)))
+            && HasCSharpFunctionValueReceiverName(functionNames, receiverName, lineNumber, column))
         {
             return true;
         }
