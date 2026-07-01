@@ -169,6 +169,9 @@ internal sealed partial class FileContentLoader(long maxFileSizeBytes)
         var lineCount = 0;
         var currentLineLength = 0;
         var hasOversizeLine = false;
+        var conflictMarkerLine = 0;
+        var conflictScanByteCount = 0;
+        var conflictScanComplete = false;
         var previousOutputWasLineBreak = false;
         var atLineStart = true;
 
@@ -199,6 +202,31 @@ internal sealed partial class FileContentLoader(long maxFileSizeBytes)
             atLineStart = c == '\n';
         }
 
+        void TrackConflictMarker(char c, int sourceIndex)
+        {
+            if (conflictMarkerLine > 0 || conflictScanComplete)
+                return;
+
+            conflictScanByteCount += c <= '\u007f'
+                ? 1
+                : Encoding.UTF8.GetByteCount(content.AsSpan(sourceIndex, 1));
+            if (conflictScanByteCount > FileIndexer.ConflictMarkerScanLimitBytes)
+            {
+                conflictScanComplete = true;
+                return;
+            }
+
+            if (atLineStart && (c == '<' || c == '>')
+                && FileIndexer.IsConflictMarkerLineStart(content.AsSpan(sourceIndex)))
+            {
+                conflictMarkerLine = outputLength == 0
+                    ? 1
+                    : previousOutputWasLineBreak
+                        ? lineCount + 1
+                        : lineCount;
+            }
+        }
+
         for (var i = 0; i < content.Length; i++)
         {
             var c = content[i];
@@ -211,6 +239,7 @@ internal sealed partial class FileContentLoader(long maxFileSizeBytes)
             if (c == '\r')
             {
                 EnsureBuilder(i).Append('\n');
+                TrackConflictMarker('\n', i);
                 CountOutputChar('\n');
                 if (i + 1 < content.Length && content[i + 1] == '\n')
                     i++;
@@ -218,6 +247,7 @@ internal sealed partial class FileContentLoader(long maxFileSizeBytes)
             }
 
             builder?.Append(c);
+            TrackConflictMarker(c, i);
             CountOutputChar(c);
         }
 
@@ -226,7 +256,7 @@ internal sealed partial class FileContentLoader(long maxFileSizeBytes)
             normalized,
             lineCount,
             hasOversizeLine,
-            FileIndexer.GetConflictMarkerLine(normalized));
+            conflictMarkerLine);
     }
 
     internal static string NormalizeContentForPrepass(string content)

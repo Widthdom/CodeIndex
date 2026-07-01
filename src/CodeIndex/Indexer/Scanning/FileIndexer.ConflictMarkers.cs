@@ -6,12 +6,16 @@ public partial class FileIndexer
 {
     private const string ConflictStartMarker = "<<<<<<<";
     private const string ConflictEndMarker = ">>>>>>>";
-    private const int ConflictMarkerScanLimitBytes = 50 * 1024;
+    internal const int ConflictMarkerScanLimitBytes = 50 * 1024;
 
     public static bool HasConflictMarkers(string content) => GetConflictMarkerLine(content) > 0;
 
     internal static int GetConflictMarkerLine(string content)
         => TryGetConflictMarkerLine(content, out var line) ? line : 0;
+
+    internal static bool IsConflictMarkerLineStart(ReadOnlySpan<char> content)
+        => content.StartsWith(ConflictStartMarker, StringComparison.Ordinal)
+            || content.StartsWith(ConflictEndMarker, StringComparison.Ordinal);
 
     private static bool TryGetConflictMarkerLine(string content, out int line)
     {
