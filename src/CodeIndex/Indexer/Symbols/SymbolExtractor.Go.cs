@@ -15,6 +15,13 @@ public static partial class SymbolExtractor
         List<SymbolRecord> symbols,
         ref bool inImportBlock)
     {
+        if (!inImportBlock
+            && line.IndexOf("import", StringComparison.Ordinal) < 0
+            && line.IndexOf("//go:", StringComparison.Ordinal) < 0)
+        {
+            return false;
+        }
+
         var trimmed = line.TrimStart();
 
         if (TryAddGoDirectiveSymbol(fileId, line, lineIndex, symbols, trimmed))
@@ -196,6 +203,9 @@ public static partial class SymbolExtractor
         int lineIndex,
         List<SymbolRecord> symbols)
     {
+        if (rawLine.IndexOf(':') < 0)
+            return false;
+
         var trimmed = rawLine.TrimStart();
         if (trimmed.StartsWith("//", StringComparison.Ordinal)
             || trimmed.StartsWith("/*", StringComparison.Ordinal)
@@ -989,8 +999,19 @@ public static partial class SymbolExtractor
 
     private static void ExtractGoGroupedDeclarations(long fileId, string[] lines, List<SymbolRecord> symbols)
     {
+        var hasInterfaceMarker = LinesContain(lines, "interface", StringComparison.Ordinal);
+        if (hasInterfaceMarker)
+            ExtractGoInterfaceMethods(fileId, lines, symbols);
+
+        if (!hasInterfaceMarker
+            && !LinesContain(lines, "type", StringComparison.Ordinal)
+            && !LinesContain(lines, "const", StringComparison.Ordinal)
+            && !LinesContain(lines, "var", StringComparison.Ordinal))
+        {
+            return;
+        }
+
         string? blockKind = null;
-        ExtractGoInterfaceMethods(fileId, lines, symbols);
         var typeBodyDepth = 0;
         string? typeBodyKind = null;
         var goBlockDepth = 0;
@@ -1017,9 +1038,12 @@ public static partial class SymbolExtractor
 
             if (goBlockDepth > 0)
             {
-                goBlockDepth += CountGoCodeBraceDelta(line, ref goBlockInBlockComment, ref goBlockInRawString);
-                if (goBlockDepth < 0)
-                    goBlockDepth = 0;
+                if (goBlockInBlockComment || goBlockInRawString || MayAffectGoCodeBraceDepth(line))
+                {
+                    goBlockDepth += CountGoCodeBraceDelta(line, ref goBlockInBlockComment, ref goBlockInRawString);
+                    if (goBlockDepth < 0)
+                        goBlockDepth = 0;
+                }
                 continue;
             }
 
@@ -1094,11 +1118,20 @@ public static partial class SymbolExtractor
                 continue;
             }
 
-            goBlockDepth += CountGoCodeBraceDelta(line, ref goBlockInBlockComment, ref goBlockInRawString);
-            if (goBlockDepth < 0)
-                goBlockDepth = 0;
+            if (goBlockInBlockComment || goBlockInRawString || MayAffectGoCodeBraceDepth(line))
+            {
+                goBlockDepth += CountGoCodeBraceDelta(line, ref goBlockInBlockComment, ref goBlockInRawString);
+                if (goBlockDepth < 0)
+                    goBlockDepth = 0;
+            }
         }
     }
+
+    private static bool MayAffectGoCodeBraceDepth(string text)
+        => text.IndexOf('{') >= 0
+           || text.IndexOf('}') >= 0
+           || text.IndexOf('/') >= 0
+           || text.IndexOf('`') >= 0;
 
     private static bool GoDeclarationRemainderStartsWithOpenParen(string trimmed, int prefixLength)
     {
