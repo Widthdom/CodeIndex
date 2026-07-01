@@ -39,6 +39,7 @@ affected:
 - **Collapsed C# doc-comment probing to one pass** - reference preparation now detects `///` and `/**` XML doc comment candidates with a single scan before deciding whether to build C# line-state masks.
 - **Skipped reference-line preparation on empty lines** - all language reference preparation now returns empty lines immediately instead of running comment/string-literal trigger checks.
 - **Collapsed string-literal delimiter probes** - reference-line preparation now checks quote/backtick trigger characters with `IndexOfAny` instead of separate scans per delimiter.
+- **Hoisted reference-line preparation language flags** - per-file reference preparation now computes language comment/string handling flags once and reuses them for each line instead of repeating language switches in the hot loop.
 
 ## 日本語
 
@@ -55,3 +56,4 @@ affected:
 - **C# doc comment probe を 1 pass にまとめました** - reference preparation は C# line-state mask を作るか決める前に、`///` と `/**` の XML doc comment 候補を 1 回の scan で検出するようになりました。
 - **空行の reference-line preparation を skip します** - 全言語の reference preparation は空行に対して comment/string-literal trigger 判定を走らせず即 return するようになりました。
 - **string-literal delimiter probe をまとめました** - reference-line preparation は quote/backtick trigger character を delimiter ごとの個別 scan ではなく `IndexOfAny` で確認します。
+- **reference-line preparation の言語フラグを loop 外へ出しました** - ファイルごとの reference preparation は comment/string handling の言語フラグを一度だけ計算し、hot loop 内で language switch を繰り返さないようになりました。

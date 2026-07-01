@@ -95,7 +95,8 @@ public static partial class ReferenceExtractor
         if (language == "python")
             referenceStructuralLines = MaskPythonFStrings(referenceStructuralLines);
 
-        var preparedLines = PrepareReferenceLines(language, referenceStructuralLines);
+        var linePrepareOptions = CreateReferenceLinePrepareOptions(language);
+        var preparedLines = PrepareReferenceLines(language, referenceStructuralLines, linePrepareOptions);
         var goImportBlockLines = language == "go" && content.Contains("import", StringComparison.Ordinal)
             ? GoReferenceExtractor.BuildImportBlockLineMap(lines)
             : null;
@@ -110,7 +111,7 @@ public static partial class ReferenceExtractor
         {
             luaPreparedLines = new string[luaReferenceLines.Length];
             for (var pi = 0; pi < luaReferenceLines.Length; pi++)
-                luaPreparedLines[pi] = PrepareLine(language, luaReferenceLines[pi]);
+                luaPreparedLines[pi] = PrepareLine(luaReferenceLines[pi], linePrepareOptions);
         }
         var razorReferenceLines = isRazorFile
             ? RazorReferenceExtractor.MaskCommentLines(lines)
@@ -156,13 +157,16 @@ public static partial class ReferenceExtractor
         return false;
     }
 
-    private static string[] PrepareReferenceLines(string language, string[] referenceStructuralLines)
+    private static string[] PrepareReferenceLines(
+        string language,
+        string[] referenceStructuralLines,
+        ReferenceLinePrepareOptions linePrepareOptions)
     {
         string[]? preparedLines = null;
         for (var index = 0; index < referenceStructuralLines.Length; index++)
         {
             var structuralLine = referenceStructuralLines[index];
-            var preparedLine = PrepareLine(language, structuralLine);
+            var preparedLine = PrepareLine(structuralLine, linePrepareOptions);
             if (preparedLines == null)
             {
                 if (string.Equals(preparedLine, structuralLine, StringComparison.Ordinal))
