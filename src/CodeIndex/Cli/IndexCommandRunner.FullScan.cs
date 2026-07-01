@@ -875,12 +875,20 @@ public static partial class IndexCommandRunner
         {
             var filePath = files[i];
             var language = FileIndexer.GetReusableDetectedLanguage(filePath, scanResult.FileLanguages);
-            fileTargets[i] = FullScanFileTarget.Create(projectRoot, filePath, language);
+            var target = FullScanFileTarget.Create(projectRoot, filePath, language);
+            fileTargets[i] = target with
+            {
+                GeneratedExtractionSuppressed = indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath),
+            };
             if (language == null)
                 continue;
 
             languageCounts[language] = languageCounts.TryGetValue(language, out var count) ? count + 1 : 1;
         }
+        var generatedExtractionSuppressedByIndexPath = fileTargets.ToDictionary(
+            target => target.IndexPath,
+            target => target.GeneratedExtractionSuppressed,
+            StringComparer.Ordinal);
         var knownReadableFileSizes = new Dictionary<string, long>(StringComparer.Ordinal);
         var errorList = discovery.ErrorList;
         var warningList = discovery.WarningList;
@@ -1227,7 +1235,8 @@ public static partial class IndexCommandRunner
                 target.Language,
                 options.MaxSymbolsPerFile,
                 options.MaxReferencesPerFile,
-                indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath),
+                generatedExtractionSuppressedByIndexPath.TryGetValue(target.IndexPath, out var generatedExtractionSuppressed)
+                    && generatedExtractionSuppressed,
                 allowReuse: true);
             if (existingFile == null)
             {
@@ -1323,7 +1332,7 @@ public static partial class IndexCommandRunner
                         language,
                         options.MaxSymbolsPerFile,
                         options.MaxReferencesPerFile,
-                        indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath),
+                        target.GeneratedExtractionSuppressed,
                         allowReuse);
             if (existingFile == null)
                 return false;
@@ -1428,7 +1437,9 @@ public static partial class IndexCommandRunner
                                 IReadOnlyList<SymbolRecord>? symbols = null;
                                 IReadOnlyList<ReferenceRecord>? references = null;
                                 IReadOnlyList<FileIssue>? issues = null;
-                                var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
+                                var generatedSuppressionIssue = target.GeneratedExtractionSuppressed
+                                    ? indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path)
+                                    : null;
                                 if (parallelizeExtraction)
                                 {
                                     activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "chunking");
