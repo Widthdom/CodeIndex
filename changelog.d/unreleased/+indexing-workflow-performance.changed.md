@@ -48,6 +48,7 @@ affected:
 - **Skipped PHP supplemental regex scans on non-candidate lines** - PHP property, constructor-promotion, docblock, and trait-alias supplemental passes now check cheap marker substrings before running their regexes.
 - **Skipped SQL supplemental regex scans before marker hits** - SQL CTE extraction now checks lines for `WITH` before joining full content, and definer/routine-result passes check line markers before their regexes.
 - **Dispatched JS/TS module supplemental scans by marker** - JavaScript/TypeScript module import supplemental helpers now run only for lines containing the marker they scan for, instead of invoking every helper on every line.
+- **Skipped C++ friend-declaration scans on ordinary lines** - C++ supplemental friend declaration extraction now avoids comment/string masking and regex probes unless the line is inside a block comment or contains `friend`.
 
 ## 日本語
 
@@ -70,3 +71,4 @@ affected:
 - **候補でない行では PHP supplemental regex scan を skip します** - PHP property、constructor promotion、docblock、trait alias の supplemental pass は regex を走らせる前に軽量な marker substring を確認します。
 - **marker がない場合は SQL supplemental regex scan を skip します** - SQL CTE extraction は全文 join 前に `WITH` を行単位で確認し、definer/routine-result pass も regex 前に行 marker を確認します。
 - **JS/TS module supplemental scan を marker で振り分けます** - JavaScript/TypeScript の module import supplemental helper は全 helper を全行で呼ばず、それぞれが探す marker を含む行だけで実行します。
+- **通常行では C++ friend declaration scan を skip します** - C++ の supplemental friend declaration extraction は block comment 内の状態維持が必要な行、または `friend` を含む行以外では comment/string masking と regex probe を避けます。
