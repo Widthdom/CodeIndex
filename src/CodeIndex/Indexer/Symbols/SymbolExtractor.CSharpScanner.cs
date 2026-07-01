@@ -1179,10 +1179,16 @@ public static partial class SymbolExtractor
 
     private static bool LooksLikeCSharpDeclaratorListReturnType(string returnType)
     {
-        var withoutTrailingComma = returnType[..^1].TrimEnd();
+        var withoutTrailingComma = returnType.AsSpan(0, returnType.Length - 1).TrimEnd();
         var firstSegmentEnd = withoutTrailingComma.IndexOf(',');
         var firstSegment = (firstSegmentEnd >= 0 ? withoutTrailingComma[..firstSegmentEnd] : withoutTrailingComma).Trim();
-        return firstSegment.Any(char.IsWhiteSpace);
+        foreach (var ch in firstSegment)
+        {
+            if (char.IsWhiteSpace(ch))
+                return true;
+        }
+
+        return false;
     }
 
     private static bool IsInsidePreviouslyEmittedCSharpMemberBody(
