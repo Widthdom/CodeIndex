@@ -111,7 +111,17 @@ public static partial class SymbolExtractor
     private static List<SymbolRecord> ExtractLispSymbols(long fileId, string language, string[] lines)
     {
         var maskedLines = MaskLispCodeLines(lines);
+        var maskedLinesShareSource = ReferenceEquals(maskedLines, lines);
         var symbols = new List<SymbolRecord>();
+
+        void EnsureMutableMaskedLines()
+        {
+            if (!maskedLinesShareSource)
+                return;
+
+            maskedLines = (string[])maskedLines.Clone();
+            maskedLinesShareSource = false;
+        }
 
         for (var lineIndex = 0; lineIndex < maskedLines.Length; lineIndex++)
         {
@@ -125,6 +135,7 @@ public static partial class SymbolExtractor
                     continue;
                 if (LispNonDefinitionHeads.Contains(head))
                 {
+                    EnsureMutableMaskedLines();
                     MaskLispForm(maskedLines, lineIndex, cursor);
                     maskedLine = maskedLines[lineIndex];
                     continue;

@@ -117,6 +117,20 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void FileContentLoader_NormalizeForIndexing_DetectsConflictMarkerWithinNormalizedScanBudget()
+    {
+        var blankLineCount = FileIndexer.ConflictMarkerScanLimitBytes - 10;
+        var content = new StringBuilder((blankLineCount * 2) + 32);
+        for (var i = 0; i < blankLineCount; i++)
+            content.Append("\r\n");
+        content.Append("<<<<<<< HEAD\r\n");
+
+        var normalized = FileContentLoader.NormalizeForIndexing(content.ToString());
+
+        Assert.Equal(blankLineCount + 1, normalized.ConflictMarkerLine);
+    }
+
+    [Fact]
     public void FileContentLoader_IsGitLfsPointer_AcceptsAsciiPointerWithMixedLineEndings()
     {
         var pointer = GitLfsPointerText(new string('a', 64));

@@ -172,8 +172,9 @@ internal sealed partial class FileContentLoader(long maxFileSizeBytes)
         var conflictMarkerLine = 0;
         var conflictScanByteCount = 0;
         var conflictScanComplete = false;
-        var trackConflictMarkers = HasConflictMarkerDelimiterCandidate(content);
-        if (!trackConflictMarkers && !RequiresPrepassNormalization(content))
+        var requiresPrepassNormalization = RequiresPrepassNormalization(content);
+        var trackConflictMarkers = requiresPrepassNormalization || HasConflictMarkerDelimiterCandidate(content);
+        if (!trackConflictMarkers && !requiresPrepassNormalization)
             return AnalyzeUnchangedContent(content);
 
         var previousOutputWasLineBreak = false;

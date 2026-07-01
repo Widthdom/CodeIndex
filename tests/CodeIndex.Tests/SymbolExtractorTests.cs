@@ -10921,6 +10921,20 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CommonLisp_PreservesSignaturesAfterMaskingIgnoredForms()
+    {
+        var content = """
+            (quote (defun ignored () nil))
+            (defun real-function () nil)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "commonlisp", content);
+
+        var symbol = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "real-function"));
+        Assert.Equal("(defun real-function () nil)", symbol.Signature);
+    }
+
+    [Fact]
     public void Extract_CommonLisp_PreservesDefinitionsInsideEvalWhen()
     {
         var content = """
