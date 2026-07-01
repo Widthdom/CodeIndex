@@ -78,6 +78,8 @@ internal static class StructuralLineMasker
         jsTaggedTemplateHits = null;
         if (!RequiresStructuralMasking(lang))
             return originalLines;
+        if (!MayContainStructuralMaskingDelimiter(lang, originalLines))
+            return originalLines;
 
         var maskedLines = (string[])originalLines.Clone();
 
@@ -124,6 +126,31 @@ internal static class StructuralLineMasker
         or "swift"
         or "scala"
         or "perl";
+
+    private static bool MayContainStructuralMaskingDelimiter(string? lang, string[] lines)
+    {
+        foreach (var line in lines)
+        {
+            if (line.Length == 0)
+                continue;
+
+            if (lang == "perl")
+            {
+                var trimmed = line.AsSpan().TrimStart();
+                if (!trimmed.IsEmpty && trimmed[0] == '=')
+                    return true;
+                continue;
+            }
+
+            var span = line.AsSpan();
+            if (span.IndexOfAny('"', '\'', '/') >= 0)
+                return true;
+            if (lang is ("javascript" or "typescript") && span.IndexOf('`') >= 0)
+                return true;
+        }
+
+        return false;
+    }
 
     private static void MaskPerlPodSections(string[] lines)
     {

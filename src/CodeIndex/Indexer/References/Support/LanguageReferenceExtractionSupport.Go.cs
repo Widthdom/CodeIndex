@@ -47,9 +47,9 @@ internal static partial class LanguageReferenceExtractionSupport
         @"\b(?:goto|break|continue)\s+(?<name>[A-Za-z_]\w*)\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    public static bool[] BuildGoImportBlockLineMap(IReadOnlyList<string> originalLines)
+    public static bool[]? BuildGoImportBlockLineMap(IReadOnlyList<string> originalLines)
     {
-        var result = new bool[originalLines.Count];
+        bool[]? result = null;
         var inImportBlock = false;
         var inBlockComment = false;
 
@@ -71,7 +71,11 @@ internal static partial class LanguageReferenceExtractionSupport
                 continue;
             }
 
-            result[i] = GoImportBlockEntryRegex.IsMatch(codeLine);
+            if (GoImportBlockEntryRegex.IsMatch(codeLine))
+            {
+                result ??= new bool[originalLines.Count];
+                result[i] = true;
+            }
             if (trimmed.Contains(')'))
                 inImportBlock = false;
         }

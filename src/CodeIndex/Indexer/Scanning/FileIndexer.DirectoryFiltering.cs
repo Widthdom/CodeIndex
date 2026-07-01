@@ -6,7 +6,7 @@ public partial class FileIndexer
 {
     private static bool HasUnknownExtension(string filePath)
     {
-        var extension = Path.GetExtension(filePath);
+        var extension = Path.GetExtension(Path.GetFileName(filePath));
         return !string.IsNullOrEmpty(extension)
             && !LangMap.ContainsKey(extension)
             && !ExtractorPluginRegistry.LanguageExtensions.ContainsKey(extension);

@@ -96,7 +96,7 @@ public static partial class ReferenceExtractor
             referenceStructuralLines = MaskPythonFStrings(referenceStructuralLines);
 
         var preparedLines = PrepareReferenceLines(language, referenceStructuralLines);
-        var goImportBlockLines = language == "go"
+        var goImportBlockLines = language == "go" && content.Contains("import", StringComparison.Ordinal)
             ? GoReferenceExtractor.BuildImportBlockLineMap(lines)
             : null;
         var luaReferenceLines = language == "lua"
@@ -143,16 +143,8 @@ public static partial class ReferenceExtractor
 
     private static bool MightContainCSharpXmlDocComment(string content)
     {
-        var index = content.IndexOf('/');
-        while (index >= 0 && index + 2 < content.Length)
-        {
-            var next = content[index + 1];
-            if ((next == '/' || next == '*') && content[index + 2] == next)
-                return true;
-            index = content.IndexOf('/', index + 1);
-        }
-
-        return false;
+        return content.Contains("///", StringComparison.Ordinal)
+            || content.Contains("/**", StringComparison.Ordinal);
     }
 
     private static string[] PrepareReferenceLines(string language, string[] referenceStructuralLines)

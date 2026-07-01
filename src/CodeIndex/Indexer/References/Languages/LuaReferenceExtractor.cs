@@ -18,6 +18,9 @@ internal static class LuaReferenceExtractor
 
     public static string[] MaskLongCommentAndStringLines(IReadOnlyList<string> originalLines)
     {
+        if (!MayContainLongBracket(originalLines))
+            return originalLines as string[] ?? originalLines.ToArray();
+
         var result = new string[originalLines.Count];
         var longTextEqualsCount = -1;
 
@@ -73,6 +76,17 @@ internal static class LuaReferenceExtractor
         }
 
         return result;
+    }
+
+    private static bool MayContainLongBracket(IReadOnlyList<string> originalLines)
+    {
+        foreach (var line in originalLines)
+        {
+            if (line.Contains('[', StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
     }
 
     public static void EmitTypePositionReferences(

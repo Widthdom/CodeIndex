@@ -6,12 +6,16 @@ public partial class FileIndexer
 {
     private const string ConflictStartMarker = "<<<<<<<";
     private const string ConflictEndMarker = ">>>>>>>";
-    private const int ConflictMarkerScanLimitBytes = 50 * 1024;
+    internal const int ConflictMarkerScanLimitBytes = 50 * 1024;
 
     public static bool HasConflictMarkers(string content) => GetConflictMarkerLine(content) > 0;
 
     internal static int GetConflictMarkerLine(string content)
         => TryGetConflictMarkerLine(content, out var line) ? line : 0;
+
+    internal static bool IsConflictMarkerLineStart(ReadOnlySpan<char> content)
+        => content.StartsWith(ConflictStartMarker, StringComparison.Ordinal)
+            || content.StartsWith(ConflictEndMarker, StringComparison.Ordinal);
 
     private static bool TryGetConflictMarkerLine(string content, out int line)
     {
@@ -56,10 +60,13 @@ public partial class FileIndexer
 
     private static bool ContainsConflictMarkerCandidate(string content)
     {
+        var scanLength = Math.Min(
+            content.Length,
+            ConflictMarkerScanLimitBytes + Math.Max(ConflictStartMarker.Length, ConflictEndMarker.Length));
         var searchStart = 0;
-        while (searchStart < content.Length)
+        while (searchStart < scanLength)
         {
-            var relativeIndex = content.AsSpan(searchStart).IndexOfAny('<', '>');
+            var relativeIndex = content.AsSpan(searchStart, scanLength - searchStart).IndexOfAny('<', '>');
             if (relativeIndex < 0)
                 return false;
 

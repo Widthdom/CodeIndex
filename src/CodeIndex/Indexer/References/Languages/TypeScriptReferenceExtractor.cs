@@ -59,6 +59,9 @@ internal static class TypeScriptReferenceExtractor
         IReadOnlyList<string> originalLines,
         IReadOnlyList<string> preparedLines)
     {
+        if (!MayContainNamespaceAliasCandidate(originalLines))
+            return Array.Empty<NamespaceAliasBinding>();
+
         var bindings = new List<NamespaceAliasBinding>();
         var braceDepths = BuildBraceDepthsBeforeLine(preparedLines);
         for (var index = 0; index < originalLines.Count; index++)
@@ -108,6 +111,20 @@ internal static class TypeScriptReferenceExtractor
         }
 
         return bindings;
+    }
+
+    private static bool MayContainNamespaceAliasCandidate(IReadOnlyList<string> originalLines)
+    {
+        foreach (var line in originalLines)
+        {
+            if (line.Contains('*', StringComparison.Ordinal)
+                || line.Contains("import", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static void AddNamespaceAliasBinding(
@@ -262,6 +279,9 @@ internal static class TypeScriptReferenceExtractor
 
     public static IReadOnlyList<TypeAliasBinding> BuildTypeAliasTargets(IReadOnlyList<string> preparedLines)
     {
+        if (!MayContainTypeAliasDeclaration(preparedLines))
+            return Array.Empty<TypeAliasBinding>();
+
         var aliases = new List<TypeAliasBinding>();
         var braceDepths = BuildBraceDepthsBeforeLine(preparedLines);
         for (var index = 0; index < preparedLines.Count; index++)
@@ -284,6 +304,17 @@ internal static class TypeScriptReferenceExtractor
         }
 
         return aliases;
+    }
+
+    private static bool MayContainTypeAliasDeclaration(IReadOnlyList<string> preparedLines)
+    {
+        foreach (var line in preparedLines)
+        {
+            if (line.Contains("type", StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
     }
 
     public static void EmitAliasTargetReferences(

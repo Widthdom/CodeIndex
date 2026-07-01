@@ -26,6 +26,26 @@ public partial class FileIndexerTests
         Assert.Null(loaded.Warning);
     }
 
+    [Theory]
+    [InlineData("a", 1, false)]
+    [InlineData("a\n", 1, false)]
+    [InlineData("a\nb", 2, false)]
+    [InlineData("\n\n", 2, false)]
+    [InlineData(null, 1, true)]
+    public void FileContentLoader_NormalizeForIndexing_LfOnlyFastPathPreservesLineSemantics(
+        string? contentTemplate,
+        int expectedLineCount,
+        bool expectedOversizeLine)
+    {
+        var content = contentTemplate ?? new string('a', ChunkSplitter.MaxLineLength + 1);
+        var normalized = FileContentLoader.NormalizeForIndexing(content);
+
+        Assert.Same(content, normalized.Content);
+        Assert.Equal(expectedLineCount, normalized.LineCount);
+        Assert.Equal(expectedOversizeLine, normalized.HasOversizeLine);
+        Assert.Equal(0, normalized.ConflictMarkerLine);
+    }
+
     [Fact]
     public void FileContentLoader_Load_LfOnlyUtf8CanReuseRawChecksum()
     {
@@ -85,6 +105,29 @@ public partial class FileIndexerTests
 
         Assert.Equal("a\n<<<<<<< HEAD\nb\n", loaded.Content);
         Assert.Equal(2, loaded.ConflictMarkerLine);
+    }
+
+    [Fact]
+    public void FileContentLoader_Load_CarriesConflictMarkerLineAfterLeadingInvisibleStripping()
+    {
+        var loaded = LoadFileContentForTest(Encoding.UTF8.GetBytes("a\n\uFEFF<<<<<<< HEAD\nb\n"));
+
+        Assert.Equal("a\n<<<<<<< HEAD\nb\n", loaded.Content);
+        Assert.Equal(2, loaded.ConflictMarkerLine);
+    }
+
+    [Fact]
+    public void FileContentLoader_NormalizeForIndexing_DetectsConflictMarkerWithinNormalizedScanBudget()
+    {
+        var blankLineCount = FileIndexer.ConflictMarkerScanLimitBytes - 10;
+        var content = new StringBuilder((blankLineCount * 2) + 32);
+        for (var i = 0; i < blankLineCount; i++)
+            content.Append("\r\n");
+        content.Append("<<<<<<< HEAD\r\n");
+
+        var normalized = FileContentLoader.NormalizeForIndexing(content.ToString());
+
+        Assert.Equal(blankLineCount + 1, normalized.ConflictMarkerLine);
     }
 
     [Fact]

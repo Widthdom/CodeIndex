@@ -285,10 +285,7 @@ public partial class FileIndexer
             }
         }
 
-        if (TryDetectLanguageOverride(filePath, fileName, out var overrideLanguage))
-            return string.Equals(language, overrideLanguage, StringComparison.Ordinal);
-
-        var extension = Path.GetExtension(filePath);
+        var extension = Path.GetExtension(fileName);
         return !string.IsNullOrEmpty(extension)
             && !string.Equals(extension, ".h", StringComparison.OrdinalIgnoreCase);
     }
@@ -324,7 +321,7 @@ public partial class FileIndexer
             }
         }
 
-        var ext = Path.GetExtension(filePath);
+        var ext = Path.GetExtension(fileName);
         if (TryDetectLanguageOverride(filePath, fileName, out var overrideLang))
             return new LanguageDetectionResult(FileProbeStatus.Supported, overrideLang);
 
@@ -358,7 +355,11 @@ public partial class FileIndexer
     private static bool TryDetectLanguageOverride(string filePath, string fileName, out string language)
     {
         language = string.Empty;
-        var overrides = LanguageMapOverrides.LoadEffectiveMap(filePath);
+        if (!fileName.Contains('.', StringComparison.Ordinal))
+            return false;
+
+        var startDirectory = Path.GetDirectoryName(Path.GetFullPath(filePath));
+        var overrides = LanguageMapOverrides.LoadEffectiveMapFromDirectory(startDirectory);
         if (overrides.Count == 0)
             return false;
 

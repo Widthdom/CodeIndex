@@ -15,6 +15,9 @@ public static partial class SymbolExtractor
 
     internal static string[] MaskLispCodeLines(IReadOnlyList<string> lines)
     {
+        if (lines is string[] lineArray && !MayContainLispMaskingTrigger(lines))
+            return lineArray;
+
         var maskedLines = new string[lines.Count];
         var blockCommentDepth = 0;
         var inString = false;
@@ -90,10 +93,35 @@ public static partial class SymbolExtractor
         return maskedLines;
     }
 
+    private static bool MayContainLispMaskingTrigger(IReadOnlyList<string> lines)
+    {
+        foreach (var line in lines)
+        {
+            if (line.Contains(';') ||
+                line.Contains('"') ||
+                line.Contains("#|", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static List<SymbolRecord> ExtractLispSymbols(long fileId, string language, string[] lines)
     {
         var maskedLines = MaskLispCodeLines(lines);
+        var maskedLinesShareSource = ReferenceEquals(maskedLines, lines);
         var symbols = new List<SymbolRecord>();
+
+        void EnsureMutableMaskedLines()
+        {
+            if (!maskedLinesShareSource)
+                return;
+
+            maskedLines = (string[])maskedLines.Clone();
+            maskedLinesShareSource = false;
+        }
 
         for (var lineIndex = 0; lineIndex < maskedLines.Length; lineIndex++)
         {
@@ -107,6 +135,7 @@ public static partial class SymbolExtractor
                     continue;
                 if (LispNonDefinitionHeads.Contains(head))
                 {
+                    EnsureMutableMaskedLines();
                     MaskLispForm(maskedLines, lineIndex, cursor);
                     maskedLine = maskedLines[lineIndex];
                     continue;

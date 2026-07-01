@@ -39,6 +39,9 @@ public partial class FileIndexer
 
     private static bool HasGeneratedCodeHeader(string content)
     {
+        if (!MayContainGeneratedCodeHeader(content))
+            return false;
+
         var remaining = content.AsSpan();
         for (var lineNumber = 0; lineNumber < 20 && !remaining.IsEmpty; lineNumber++)
         {
@@ -54,6 +57,28 @@ public partial class FileIndexer
         }
 
         return false;
+    }
+
+    private static bool MayContainGeneratedCodeHeader(string content)
+    {
+        var remaining = content.AsSpan();
+        var scannedLength = 0;
+        for (var lineNumber = 0; lineNumber < 20 && !remaining.IsEmpty; lineNumber++)
+        {
+            var newlineIndex = remaining.IndexOf('\n');
+            if (newlineIndex < 0)
+            {
+                scannedLength += remaining.Length;
+                break;
+            }
+
+            scannedLength += newlineIndex + 1;
+            remaining = remaining[(newlineIndex + 1)..];
+        }
+
+        var header = content.AsSpan(0, scannedLength);
+        return header.Contains("generated".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || header.Contains("DO NOT EDIT".AsSpan(), StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool GeneratedHeaderLineContainsMarker(ReadOnlySpan<char> line)

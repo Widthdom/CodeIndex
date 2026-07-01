@@ -2766,6 +2766,9 @@ public static partial class ReferenceExtractor
 
     private static string[] MaskPascalBlockCommentLines(IReadOnlyList<string> lines)
     {
+        if (lines is string[] lineArray && !MayContainPascalBlockComment(lines))
+            return lineArray;
+
         var result = new string[lines.Count];
         var inBraceComment = false;
         var inParenStarComment = false;
@@ -2846,11 +2849,25 @@ public static partial class ReferenceExtractor
         return result;
     }
 
+    private static bool MayContainPascalBlockComment(IReadOnlyList<string> lines)
+    {
+        foreach (var line in lines)
+        {
+            if (line.Contains('{') || line.Contains("(*", StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
     private static bool UsesCStyleBlockComments(string language) =>
         language is "c" or "cpp" or "go" or "objc" or "dart";
 
     private static string[] MaskCStyleBlockCommentLines(string language, IReadOnlyList<string> lines)
     {
+        if (lines is string[] lineArray && !MayContainCStyleMaskingTrigger(language, lines))
+            return lineArray;
+
         var result = new string[lines.Count];
         var inBlockComment = false;
         var inGoRawString = false;
@@ -2984,6 +3001,28 @@ public static partial class ReferenceExtractor
         return result;
     }
 
+    private static bool MayContainCStyleMaskingTrigger(string language, IReadOnlyList<string> lines)
+    {
+        foreach (var line in lines)
+        {
+            if (line.Contains('/'))
+                return true;
+            if (language == "go" && line.Contains('`'))
+                return true;
+            if (language == "dart" &&
+                (line.Contains("\"\"\"", StringComparison.Ordinal) ||
+                 line.Contains("'''", StringComparison.Ordinal)))
+            {
+                return true;
+            }
+
+            if (language == "cpp" && line.Contains("R\"", StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
     private static bool TryGetDartTripleStringStart(string line, int start, out char quote, out int openingLength)
     {
         quote = '\0';
@@ -3050,6 +3089,9 @@ public static partial class ReferenceExtractor
 
     private static string[] MaskHaskellBlockCommentLines(IReadOnlyList<string> lines)
     {
+        if (lines is string[] lineArray && !MayContainHaskellBlockComment(lines))
+            return lineArray;
+
         var result = new string[lines.Count];
         var blockDepth = 0;
 
@@ -3110,6 +3152,17 @@ public static partial class ReferenceExtractor
         }
 
         return result;
+    }
+
+    private static bool MayContainHaskellBlockComment(IReadOnlyList<string> lines)
+    {
+        foreach (var line in lines)
+        {
+            if (line.Contains("{-", StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
     }
 
     private static int SkipCStyleQuotedLiteral(string line, int start)
@@ -3271,6 +3324,9 @@ public static partial class ReferenceExtractor
 
     private static string[] MaskPythonFStrings(IReadOnlyList<string> lines)
     {
+        if (lines is string[] lineArray && !MayContainPythonFString(lines))
+            return lineArray;
+
         var result = new string[lines.Count];
         for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
             result[lineIndex] = lines[lineIndex];
@@ -3315,6 +3371,17 @@ public static partial class ReferenceExtractor
         }
 
         return result;
+    }
+
+    private static bool MayContainPythonFString(IReadOnlyList<string> lines)
+    {
+        foreach (var line in lines)
+        {
+            if (line.IndexOf('f') >= 0 || line.IndexOf('F') >= 0)
+                return true;
+        }
+
+        return false;
     }
 
     private static void MaskPythonTripleQuotedFString(

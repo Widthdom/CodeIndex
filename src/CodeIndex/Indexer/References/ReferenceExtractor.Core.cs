@@ -69,7 +69,7 @@ public static partial class ReferenceExtractor
         // attributes `void M([Attr] T x)` are classified consistently with same-line `[Foo]`.
         // 行を跨いだ `[\n Foo("x")\n]` やパラメータ属性 `void M([Attr] T x)` も、同一行の `[Foo]` と
         // 同じ判定で属性として扱えるように、事前パスで C# 属性セクションの範囲を構築する。
-        var csharpAttrTables = language == "csharp"
+        var csharpAttrTables = language == "csharp" && content.Contains('[', StringComparison.Ordinal)
             ? BuildCSharpAttributeRanges(preparedLines)
             : (null, null);
         var csharpAttrRanges = csharpAttrTables.Item1;
@@ -107,7 +107,9 @@ public static partial class ReferenceExtractor
         if (language == "solidity")
             return ExtractSolidityReferences(fileId, lines, preparedLines, containerResolver);
 
-        var csharpXmlDocAttachmentScopeCandidates = BuildCSharpXmlDocAttachmentScopeCandidates(language, symbols, request.ReportDiagnostic);
+        var csharpXmlDocAttachmentScopeCandidates = csharpLinesInsideMultilineStringContent != null
+            ? BuildCSharpXmlDocAttachmentScopeCandidates(language, symbols, request.ReportDiagnostic)
+            : null;
         // Enclosing-type candidates for constructor-chain rewrites (class/struct/record; namespace excluded).
         // Ordered innermost-first via ascending body range. Java enums can declare constructors and
         // chain via `this(...)` so `enum` is included; C# enums cannot declare constructors, and
@@ -115,7 +117,9 @@ public static partial class ReferenceExtractor
         // コンストラクタ連鎖の呼び先解決で使う外側の型候補（class/struct/record/enum。namespace は含めない）。
         // 内側優先で昇順にソート。Java の enum は `this(...)` 連鎖を持てるため `enum` も含める。
         // C# の enum はコンストラクタ自体を持てず `CSharpCtorChainRegex` が一致しないので副作用は無い。
-        var enclosingTypeCandidates = BuildEnclosingTypeCandidates(symbols, request.ReportDiagnostic);
+        var enclosingTypeCandidates = language is "csharp" or "java" or "kotlin"
+            ? BuildEnclosingTypeCandidates(symbols, request.ReportDiagnostic)
+            : [];
         var rustEnumCandidates = language == "rust"
             ? BuildRustEnumCandidates(symbols)
             : null;
