@@ -8028,10 +8028,9 @@ public static partial class SymbolExtractor
                 && initializerBraceDepth == 0)
             {
                 var continuationInput = scanStartColumn >= sanitizedLine.Length
-                    ? string.Empty
-                    : sanitizedLine[scanStartColumn..];
-                if (continuationInput.Any(ch => !char.IsWhiteSpace(ch))
-                    && !StartsJavaScriptTypeScriptFieldInitializerContinuation(continuationInput, lang))
+                    ? ReadOnlySpan<char>.Empty
+                    : sanitizedLine.AsSpan(scanStartColumn);
+                if (!ShouldContinueJavaScriptTypeScriptFieldInitializer(continuationInput, lang))
                 {
                     inFieldInitializer = false;
                 }
@@ -8535,25 +8534,26 @@ public static partial class SymbolExtractor
         }
     }
 
-    private static bool StartsJavaScriptTypeScriptFieldInitializerContinuation(string continuationInput, string? lang)
+    private static bool ShouldContinueJavaScriptTypeScriptFieldInitializer(ReadOnlySpan<char> continuationInput, string? lang)
     {
         var firstNonWhitespace = 0;
         while (firstNonWhitespace < continuationInput.Length && char.IsWhiteSpace(continuationInput[firstNonWhitespace]))
             firstNonWhitespace++;
 
         if (firstNonWhitespace >= continuationInput.Length)
-            return false;
+            return true;
 
-        if (IsJavaScriptTypeScriptMethodCandidateStart(continuationInput, firstNonWhitespace))
+        var remainingInput = continuationInput[firstNonWhitespace..].ToString();
+        if (IsJavaScriptTypeScriptMethodCandidateStart(remainingInput, 0))
         {
             var matchCandidate = lang == "typescript"
-                ? NormalizeTypeScriptBareMethodMatchInput(continuationInput[firstNonWhitespace..])
-                : continuationInput[firstNonWhitespace..];
+                ? NormalizeTypeScriptBareMethodMatchInput(remainingInput)
+                : remainingInput;
             if (TryParseJavaScriptTypeScriptMethodHeader(matchCandidate, 0, lang, out _))
                 return false;
         }
 
-        return StartsJavaScriptTypeScriptExpressionContinuation(continuationInput);
+        return StartsJavaScriptTypeScriptExpressionContinuation(remainingInput);
     }
 
     private static bool CanStartJavaScriptTypeScriptClassFieldInitializer(string sanitizedLine, int index)
