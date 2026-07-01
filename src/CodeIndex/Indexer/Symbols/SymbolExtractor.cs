@@ -2755,6 +2755,9 @@ public static partial class SymbolExtractor
             if (lang == "batch" && IsBatchCommentLine(line))
                 continue;
 
+            if (string.IsNullOrWhiteSpace(matchLine))
+                continue;
+
             var patternStartOffset = lang is "javascript" or "typescript"
                 ? FindNextJavaScriptTypeScriptStatementStart(matchLine, 0)
                 : 0;
