@@ -19,6 +19,9 @@ public static partial class SymbolExtractor
         {
             for (var i = 0; i < lines.Length; i++)
             {
+                if (lines[i].IndexOf("#region", StringComparison.Ordinal) < 0)
+                    continue;
+
                 var match = CSharpRegionRegex.Match(lines[i]);
                 if (!match.Success)
                     continue;
@@ -32,8 +35,14 @@ public static partial class SymbolExtractor
         }
         else
         {
+            if (!LinesContain(lines, "@module", StringComparison.Ordinal))
+                return;
+
             for (var i = 0; i < lines.Length; i++)
             {
+                if (lines[i].IndexOf("@module", StringComparison.Ordinal) < 0)
+                    continue;
+
                 var match = JavaScriptTypeScriptModuleDocRegex.Match(lines[i]);
                 if (!match.Success)
                     continue;
