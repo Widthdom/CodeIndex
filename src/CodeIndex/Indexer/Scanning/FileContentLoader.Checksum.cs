@@ -8,7 +8,7 @@ internal sealed partial class FileContentLoader
 {
     internal static string ComputeChecksum(byte[] bytes)
     {
-        if (Array.IndexOf(bytes, (byte)0x0D) < 0)
+        if (bytes.AsSpan().IndexOf((byte)0x0D) < 0)
             return ComputeRawChecksum(bytes);
 
         using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
