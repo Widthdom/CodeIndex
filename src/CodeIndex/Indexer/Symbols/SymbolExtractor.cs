@@ -5551,10 +5551,17 @@ public static partial class SymbolExtractor
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
-            if (!inBlockComment && line.IndexOf("friend", StringComparison.Ordinal) < 0)
+            if (!inBlockComment
+                && line.IndexOf("friend", StringComparison.Ordinal) < 0
+                && line.IndexOf('/') < 0)
+            {
                 continue;
+            }
 
             var matchLine = MaskCppFriendDeclarationLine(line, ref inBlockComment);
+            if (matchLine.IndexOf("friend", StringComparison.Ordinal) < 0)
+                continue;
+
             var lineNumber = i + 1;
 
             foreach (Match match in CppFriendTypeDeclarationRegex.Matches(matchLine))

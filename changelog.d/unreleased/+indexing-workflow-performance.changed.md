@@ -28,6 +28,7 @@ affected:
   - src/CodeIndex/Mcp/McpToolHandlers.cs
   - tests/CodeIndex.Tests/CiWorkflowTests.cs
   - tests/CodeIndex.Tests/ReferenceExtractorTests.cs
+  - tests/CodeIndex.Tests/SymbolExtractorTests.cs
   - tests/CodeIndex.Tests/FileIndexerContentLoadingTests.cs
   - tests/CodeIndex.Tests/FileIndexerTests.cs
   - tests/CodeIndex.Tests/DatabaseTests.cs
@@ -55,7 +56,7 @@ affected:
 - **Skipped PHP supplemental regex scans on non-candidate lines** - PHP property, constructor-promotion, docblock, and trait-alias supplemental passes now check cheap marker substrings before running their regexes.
 - **Skipped SQL supplemental regex scans before marker hits** - SQL CTE extraction now checks lines for `WITH` before joining full content, and definer/routine-result passes check line markers before their regexes.
 - **Dispatched JS/TS module supplemental scans by marker** - JavaScript/TypeScript module import supplemental helpers now run only for lines containing the marker they scan for, instead of invoking every helper on every line.
-- **Skipped C++ friend-declaration scans on ordinary lines** - C++ supplemental friend declaration extraction now avoids comment/string masking and regex probes unless the line is inside a block comment or contains `friend`.
+- **Skipped C++ friend-declaration scans on ordinary lines** - C++ supplemental friend declaration extraction now avoids regex probes unless the masked line still contains `friend`, while preserving block-comment state on comment-affecting lines.
 - **Skipped Perl hash-constant collection on non-candidate lines** - Perl supplemental constant extraction now checks for `constant` before attempting the `use constant { ... }` body collector on each line.
 - **Skipped Rust supplemental collectors before marker hits** - Rust `use`, multiline `impl`, and associated-type-default supplemental extraction now checks cheap file/line markers before running statement collectors or trait-body scans.
 - **Gated Go supplemental declaration scans by markers** - Go import/directive/label and grouped declaration helpers now skip ordinary lines before trimming, regex checks, or brace-depth scans when the required markers are absent.
@@ -86,7 +87,7 @@ affected:
 - **候補でない行では PHP supplemental regex scan を skip します** - PHP property、constructor promotion、docblock、trait alias の supplemental pass は regex を走らせる前に軽量な marker substring を確認します。
 - **marker がない場合は SQL supplemental regex scan を skip します** - SQL CTE extraction は全文 join 前に `WITH` を行単位で確認し、definer/routine-result pass も regex 前に行 marker を確認します。
 - **JS/TS module supplemental scan を marker で振り分けます** - JavaScript/TypeScript の module import supplemental helper は全 helper を全行で呼ばず、それぞれが探す marker を含む行だけで実行します。
-- **通常行では C++ friend declaration scan を skip します** - C++ の supplemental friend declaration extraction は block comment 内の状態維持が必要な行、または `friend` を含む行以外では comment/string masking と regex probe を避けます。
+- **通常行では C++ friend declaration scan を skip します** - C++ の supplemental friend declaration extraction は mask 後の行にまだ `friend` がある場合だけ regex probe を行い、comment に影響する行では block-comment state を維持します。
 - **候補でない行では Perl hash constant collection を skip します** - Perl の supplemental constant extraction は各行で `use constant { ... }` body collector を試す前に `constant` の有無を確認します。
 - **marker がない場合は Rust supplemental collector を skip します** - Rust の `use`、multiline `impl`、associated-type-default supplemental extraction は statement collector や trait-body scan の前に軽量な file/line marker を確認します。
 - **Go supplemental declaration scan を marker で gate します** - Go の import/directive/label と grouped declaration helper は必須 marker がない通常行では trim、regex check、brace-depth scan の前に skip します。
