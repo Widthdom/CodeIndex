@@ -172,6 +172,7 @@ internal sealed partial class FileContentLoader(long maxFileSizeBytes)
         var conflictMarkerLine = 0;
         var conflictScanByteCount = 0;
         var conflictScanComplete = false;
+        var trackConflictMarkers = HasConflictMarkerDelimiterCandidate(content);
         var previousOutputWasLineBreak = false;
         var atLineStart = true;
 
@@ -204,7 +205,7 @@ internal sealed partial class FileContentLoader(long maxFileSizeBytes)
 
         void TrackConflictMarker(char c, int sourceIndex)
         {
-            if (conflictMarkerLine > 0 || conflictScanComplete)
+            if (!trackConflictMarkers || conflictMarkerLine > 0 || conflictScanComplete)
                 return;
 
             conflictScanByteCount += c <= '\u007f'
@@ -257,6 +258,12 @@ internal sealed partial class FileContentLoader(long maxFileSizeBytes)
             lineCount,
             hasOversizeLine,
             conflictMarkerLine);
+    }
+
+    private static bool HasConflictMarkerDelimiterCandidate(string content)
+    {
+        var scanCharLimit = Math.Min(content.Length, FileIndexer.ConflictMarkerScanLimitBytes + 1);
+        return content.AsSpan(0, scanCharLimit).IndexOfAny('<', '>') >= 0;
     }
 
     internal static string NormalizeContentForPrepass(string content)
