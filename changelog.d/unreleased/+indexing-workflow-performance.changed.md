@@ -5,6 +5,7 @@ affected:
   - .github/scripts/run-dotnet-tests.ps1
   - src/CodeIndex/Indexer/References/Support/StructuralLineMasker.cs
   - src/CodeIndex/Indexer/Scanning/FileIndexer.GeneratedCode.cs
+  - src/CodeIndex/Indexer/Scanning/FileContentLoader.Checksum.cs
   - src/CodeIndex/Indexer/CSharpStaticInterfacePrepass.cs
   - src/CodeIndex/Database/DbWriter.cs
   - src/CodeIndex/Cli/IndexCommandRunner.cs
@@ -29,6 +30,7 @@ affected:
 - **Reused generated-pattern matches inside the C# prepass** - C# static-interface prepass callers can pass cached generated-code suppression results instead of re-running project pattern matching.
 - **Simplified reference-line lookup work** - reference insertion now resolves batched `reference_lines` ids through a small `VALUES` lookup table instead of generating long `OR` predicate chains, and skips redundant per-row lookup-key probes after SQLite returns the joined rows.
 - **Narrowed stale stem purge scans** - extension-change cleanup now asks SQLite for same-stem path candidates instead of scanning every indexed file row after each retained file update.
+- **Short-circuited oversize checksum probes** - checksum reuse now returns immediately for seekable streams whose length already exceeds the indexing byte cap, avoiding bounded-but-unnecessary reads of huge files.
 
 ## 日本語
 
@@ -40,3 +42,4 @@ affected:
 - **C# prepass 内でも generated-pattern 判定結果を再利用しました** - C# static-interface prepass の呼び出し元は cached generated-code 抑制結果を渡せるようになり、project pattern matching の再実行を避けます。
 - **reference-line lookup 処理を単純化しました** - reference 挿入時の batched `reference_lines` id 解決は、長い `OR` predicate chain ではなく小さな `VALUES` lookup table を使い、SQLite が joined row を返した後の行ごとの重複 lookup-key probe も避けるようになりました。
 - **stale stem purge の scan 対象を絞りました** - 拡張子変更 cleanup は retained file 更新ごとに全 indexed file 行を走査せず、同じ stem の path candidate だけを SQLite に問い合わせるようになりました。
+- **oversize checksum probe を即時終了するようにしました** - checksum reuse は seekable stream の長さが indexing byte cap を既に超えている場合、巨大ファイルを上限まで読む前に即 false を返すようになりました。

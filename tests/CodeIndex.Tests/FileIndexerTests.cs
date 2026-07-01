@@ -6479,6 +6479,18 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void TryComputeChecksum_SeekableOversizeStream_ReturnsFalseWithoutReading()
+    {
+        using var stream = new MemoryStream(new byte[32]);
+
+        var computed = FileContentLoader.TryComputeChecksum(stream, maxBytes: 8, out var checksum);
+
+        Assert.False(computed);
+        Assert.Equal(string.Empty, checksum);
+        Assert.Equal(0, stream.Position);
+    }
+
+    [Fact]
     public void TryComputeChecksum_FilePathAllowsConcurrentWriterShare_Issue4078()
     {
         var tempDir = TestProjectHelper.CreateTempProject("codeindex_checksum_share");

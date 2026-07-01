@@ -70,6 +70,9 @@ internal sealed partial class FileContentLoader
             throw new ArgumentOutOfRangeException(nameof(maxBytes), maxBytes, "Maximum byte count must be non-negative.");
 
         checksum = string.Empty;
+        if (stream.CanSeek && stream.Length > maxBytes)
+            return false;
+
         using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         var buffer = ArrayPool<byte>.Shared.Rent(StreamBufferSize);
         try
