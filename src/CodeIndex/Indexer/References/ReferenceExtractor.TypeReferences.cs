@@ -2634,6 +2634,9 @@ public static partial class ReferenceExtractor
 
     private static string PrepareLine(string lang, string line)
     {
+        if (line.Length == 0)
+            return line;
+
         if (lang == "csharp" && line.IndexOfAny(CSharpReferenceLinePreparationTriggerChars) < 0)
             return line;
 
