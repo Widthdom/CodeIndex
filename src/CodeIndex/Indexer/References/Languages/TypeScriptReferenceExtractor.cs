@@ -262,6 +262,9 @@ internal static class TypeScriptReferenceExtractor
 
     public static IReadOnlyList<TypeAliasBinding> BuildTypeAliasTargets(IReadOnlyList<string> preparedLines)
     {
+        if (!MayContainTypeAliasDeclaration(preparedLines))
+            return Array.Empty<TypeAliasBinding>();
+
         var aliases = new List<TypeAliasBinding>();
         var braceDepths = BuildBraceDepthsBeforeLine(preparedLines);
         for (var index = 0; index < preparedLines.Count; index++)
@@ -284,6 +287,17 @@ internal static class TypeScriptReferenceExtractor
         }
 
         return aliases;
+    }
+
+    private static bool MayContainTypeAliasDeclaration(IReadOnlyList<string> preparedLines)
+    {
+        foreach (var line in preparedLines)
+        {
+            if (line.Contains("type", StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
     }
 
     public static void EmitAliasTargetReferences(
