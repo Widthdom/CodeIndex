@@ -31,6 +31,10 @@ internal static class AssemblyReferenceExtractor
         "bhi", "bls", "bge", "blt", "bgt", "ble", "bal", "bnv",
         "beqz", "bnez", "blez", "bgez", "bltz", "bgtz", "bltu", "bgeu",
     };
+    private static readonly string[] RelocationSuffixes =
+    [
+        "@PLT", "@GOT", "@GOTPCREL", "@GOTOFF", "@TLSGD", "@TPOFF", "@PAGE", "@PAGEOFF",
+    ];
 
     public static void EmitInstructionTargetReferences(
         string originalLine,
@@ -238,12 +242,7 @@ internal static class AssemblyReferenceExtractor
 
     private static string NormalizeAssemblyReferenceName(string name)
     {
-        string[] relocationSuffixes =
-        [
-            "@PLT", "@GOT", "@GOTPCREL", "@GOTOFF", "@TLSGD", "@TPOFF", "@PAGE", "@PAGEOFF",
-        ];
-
-        foreach (var suffix in relocationSuffixes)
+        foreach (var suffix in RelocationSuffixes)
         {
             if (name.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
                 return name[..^suffix.Length];

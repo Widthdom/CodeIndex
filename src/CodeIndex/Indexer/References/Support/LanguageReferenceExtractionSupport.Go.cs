@@ -24,6 +24,7 @@ internal static partial class LanguageReferenceExtractionSupport
     private static readonly Regex GoTypeAliasRegex = new(
         @"^\s*type\s+[A-Za-z_]\w*(?:\[[^\]]+\])?\s+=?\s*(?<type>[\*\[\]\w.]+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex[] GoTypeReferenceRegexes = [GoVarTypeRegex, GoFieldTypeRegex, GoTypeAliasRegex];
     private static readonly Regex GoFuncRegex = new(
         @"^\s*func\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -196,7 +197,7 @@ internal static partial class LanguageReferenceExtractionSupport
         EmitGoGenericInstantiationTypeArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoGenericCallTypeArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
 
-        foreach (var regex in new[] { GoVarTypeRegex, GoFieldTypeRegex, GoTypeAliasRegex })
+        foreach (var regex in GoTypeReferenceRegexes)
         {
             foreach (Match match in BoundedRegex.EnumerateMatches(regex, preparedLine))
             {

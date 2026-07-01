@@ -23,6 +23,14 @@ internal static partial class LanguageReferenceExtractionSupport
         "@finally",
         "@do"
     };
+    private static readonly string[] RazorCodeDirectives = ["@code", "@functions"];
+    private static readonly string[] RazorBareControlContinuationKeywords = ["else", "catch", "finally"];
+    private static readonly string[] CTypeSpecifierKeywords = ["struct", "enum", "union"];
+    private static readonly string[] PascalDeclarationKeywords =
+    [
+        "var", "const", "type", "property", "procedure", "function", "constructor", "destructor",
+    ];
+    private static readonly string[] CppAccessPrefixes = ["public ", "private ", "protected ", "virtual "];
 
     private static readonly Regex CppIncludeRegex = new(
         @"^(?:\s*#\s*(?:include(?:_next)?|import)\s*(?:<(?<name>[^>\r\n]+)>|""(?<name>[^""\r\n]+)""|(?<name>[^\s]+))|\s*(?:export\s+)?import\s+(?:<(?<name>[^>\r\n]+)>|""(?<name>[^""\r\n]+)""|(?<name>:?[A-Za-z_]\w*(?:[.:][A-Za-z_]\w*)*))\s*;)",
@@ -816,7 +824,7 @@ internal static partial class LanguageReferenceExtractionSupport
     private static int IndexOfRazorCodeDirective(char[] chars)
     {
         var line = new string(chars);
-        foreach (var directive in new[] { "@code", "@functions" })
+        foreach (var directive in RazorCodeDirectives)
         {
             var index = line.IndexOf(directive, StringComparison.Ordinal);
             if (index < 0)
@@ -838,7 +846,7 @@ internal static partial class LanguageReferenceExtractionSupport
             return -1;
 
         var line = new string(chars);
-        foreach (var keyword in new[] { "else", "catch", "finally" })
+        foreach (var keyword in RazorBareControlContinuationKeywords)
         {
             if (line.AsSpan(index).StartsWith(keyword, StringComparison.Ordinal)
                 && (index + keyword.Length == line.Length || !IsSimpleIdentifierPart(line[index + keyword.Length])))
@@ -1646,7 +1654,7 @@ internal static partial class LanguageReferenceExtractionSupport
         if (cursor >= expression.Length)
             return false;
 
-        foreach (var keyword in new[] { "struct", "enum", "union" })
+        foreach (var keyword in CTypeSpecifierKeywords)
         {
             if (StartsWithKeyword(expression, cursor, keyword))
             {
@@ -2545,7 +2553,7 @@ internal static partial class LanguageReferenceExtractionSupport
 
     private static bool StartsWithPascalDeclarationKeyword(string trimmedLine)
     {
-        foreach (var keyword in new[] { "var", "const", "type", "property", "procedure", "function", "constructor", "destructor" })
+        foreach (var keyword in PascalDeclarationKeywords)
         {
             if (trimmedLine.StartsWith(keyword, StringComparison.OrdinalIgnoreCase)
                 && (trimmedLine.Length == keyword.Length || !IsSimpleIdentifierPart(trimmedLine[keyword.Length])))
@@ -2942,7 +2950,7 @@ internal static partial class LanguageReferenceExtractionSupport
         do
         {
             removed = false;
-            foreach (var prefix in new[] { "public ", "private ", "protected ", "virtual " })
+            foreach (var prefix in CppAccessPrefixes)
             {
                 if (text.StartsWith(prefix, StringComparison.Ordinal))
                 {
