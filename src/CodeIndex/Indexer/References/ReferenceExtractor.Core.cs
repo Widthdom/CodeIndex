@@ -170,7 +170,6 @@ public static partial class ReferenceExtractor
         // read path 側で判定させる。
         bool HasActiveSameFileCSharpTypeCandidate(string typeExpression, int lineNumber)
         {
-            _ = lineNumber;
             var normalized = NormalizeCSharpAliasTargetForTypeLookup(typeExpression);
             if (string.IsNullOrWhiteSpace(normalized))
                 return false;
@@ -180,12 +179,20 @@ public static partial class ReferenceExtractor
                 return true;
 
             var shortName = GetLastQualifiedSegment(normalized);
-            return csharpUsingAliases.Any(alias =>
-                alias.TargetsType
-                && alias.Line <= lineNumber
-                && lineNumber >= alias.ScopeStartLine
-                && lineNumber <= alias.ScopeEndLine
-                && string.Equals(alias.AliasName, shortName, StringComparison.Ordinal));
+            for (var aliasIndex = csharpUsingAliases.Count - 1; aliasIndex >= 0; aliasIndex--)
+            {
+                var alias = csharpUsingAliases[aliasIndex];
+                if (alias.TargetsType
+                    && alias.Line <= lineNumber
+                    && lineNumber >= alias.ScopeStartLine
+                    && lineNumber <= alias.ScopeEndLine
+                    && string.Equals(alias.AliasName, shortName, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         string ResolveCSharpUsingAliasReferenceName(string referenceName, int lineNumber)
@@ -292,11 +299,21 @@ public static partial class ReferenceExtractor
         bool HasActiveCSharpUsingNamespace(string targetQualifiedName, int lineNumber)
         {
             var normalizedTarget = NormalizeCSharpBclRegexQualifiedName(targetQualifiedName);
-            return csharpUsingNamespaces.Any(import =>
-                import.Line <= lineNumber
-                && lineNumber >= import.ScopeStartLine
-                && lineNumber <= import.ScopeEndLine
-                && string.Equals(NormalizeCSharpBclRegexQualifiedName(import.TargetQualifiedName), normalizedTarget, StringComparison.Ordinal));
+            for (var importIndex = csharpUsingNamespaces.Count - 1; importIndex >= 0; importIndex--)
+            {
+                var import = csharpUsingNamespaces[importIndex];
+                if (import.Line > lineNumber
+                    || lineNumber < import.ScopeStartLine
+                    || lineNumber > import.ScopeEndLine)
+                {
+                    continue;
+                }
+
+                if (string.Equals(NormalizeCSharpBclRegexQualifiedName(import.TargetQualifiedName), normalizedTarget, StringComparison.Ordinal))
+                    return true;
+            }
+
+            return false;
         }
 
         CSharpUsingAliasRecord? FindActiveCSharpUsingAlias(string aliasName, int lineNumber)
