@@ -5666,6 +5666,7 @@ public partial class McpServer
                 indexer,
                 csharpPrepassTargets,
                 canReuseExistingSymbolsWithoutRead: CanReuseCSharpPrepassTargetWithoutRead,
+                isGeneratedCodeExtractionSuppressed: IsGeneratedExtractionSuppressed,
                 cancellationToken: requestToken);
         }
         if (purged > 0 && hadCSharpStaticInterfaceContractsBeforePurge)

@@ -16,6 +16,7 @@ internal static class CSharpStaticInterfacePrepass
         IEnumerable<FileTarget> fileTargets,
         bool includeExistingSymbols = true,
         Func<FileTarget, bool>? canReuseExistingSymbolsWithoutRead = null,
+        Func<FileTarget, bool>? isGeneratedCodeExtractionSuppressed = null,
         Action<string?>? reportCurrentFile = null,
         CancellationToken cancellationToken = default)
     {
@@ -48,7 +49,9 @@ internal static class CSharpStaticInterfacePrepass
                     continue;
 
                 reportCurrentFile?.Invoke(relativePath);
-                if (indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath))
+                var generatedExtractionSuppressed = isGeneratedCodeExtractionSuppressed?.Invoke(target)
+                    ?? indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath);
+                if (generatedExtractionSuppressed)
                     continue;
 
                 if (!indexer.RawFileMayContainCSharpStaticInterfaceContract(
@@ -103,6 +106,7 @@ internal static class CSharpStaticInterfacePrepass
             EnumerateFileTargets(projectRoot, filePaths),
             includeExistingSymbols,
             canReuseExistingSymbolsWithoutRead: null,
+            isGeneratedCodeExtractionSuppressed: null,
             reportCurrentFile: reportCurrentFile,
             cancellationToken: cancellationToken);
     }

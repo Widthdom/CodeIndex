@@ -5,6 +5,7 @@ affected:
   - .github/scripts/run-dotnet-tests.ps1
   - src/CodeIndex/Indexer/References/Support/StructuralLineMasker.cs
   - src/CodeIndex/Indexer/Scanning/FileIndexer.GeneratedCode.cs
+  - src/CodeIndex/Indexer/CSharpStaticInterfacePrepass.cs
   - src/CodeIndex/Database/DbWriter.cs
   - src/CodeIndex/Cli/IndexCommandRunner.cs
   - src/CodeIndex/Indexer/Scanning/IndexedFileStatReuse.cs
@@ -25,6 +26,7 @@ affected:
 - **Batched validation issue writes during indexing** - files that produce multiple validation issues now write those rows in multi-value SQLite inserts instead of executing one insert per issue.
 - **Capped generated-header detection work** - generated-code header detection now inspects only a bounded leading header window, avoiding whole-file scans on very long first lines or minified payloads.
 - **Avoided duplicate generated-pattern checks during indexing** - full-scan and MCP targets now cache generated-code suppression matches and reuse them across C# prepass, stat reuse, and extraction scheduling.
+- **Reused generated-pattern matches inside the C# prepass** - C# static-interface prepass callers can pass cached generated-code suppression results instead of re-running project pattern matching.
 
 ## 日本語
 
@@ -33,3 +35,4 @@ affected:
 - **indexing 中の validation issue 書き込みをバッチ化しました** - 複数の validation issue を出すファイルは、issue ごとに INSERT を実行せず、複数行の SQLite INSERT でまとめて書き込むようになりました。
 - **generated header 判定の処理量を制限しました** - generated-code header 検出は先頭の bounded header window のみを調べるようになり、非常に長い先頭行や minified payload でファイル全体を走査しないようになりました。
 - **indexing 中の generated-pattern 重複判定を避けました** - full-scan と MCP の target は generated-code 抑制patternの一致結果を保持し、C# prepass、stat reuse、extraction scheduling で再利用するようになりました。
+- **C# prepass 内でも generated-pattern 判定結果を再利用しました** - C# static-interface prepass の呼び出し元は cached generated-code 抑制結果を渡せるようになり、project pattern matching の再実行を避けます。

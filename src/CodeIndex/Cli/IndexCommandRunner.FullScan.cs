@@ -1291,6 +1291,9 @@ public static partial class IndexCommandRunner
                         csharpPrepassTargets,
                         includeExistingSymbols: !options.Rebuild && !startedWithNoIndexedFiles,
                         canReuseExistingSymbolsWithoutRead: CanReuseCSharpPrepassTargetWithoutRead,
+                        isGeneratedCodeExtractionSuppressed: target =>
+                            generatedExtractionSuppressedByIndexPath.TryGetValue(target.IndexPath, out var generatedExtractionSuppressed)
+                            && generatedExtractionSuppressed,
                         reportCurrentFile: path => currentCSharpWorkspaceFile = path,
                         cancellationToken: cancellationToken);
                 }
