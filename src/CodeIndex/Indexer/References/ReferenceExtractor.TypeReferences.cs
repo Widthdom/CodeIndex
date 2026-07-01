@@ -2766,6 +2766,9 @@ public static partial class ReferenceExtractor
 
     private static string[] MaskPascalBlockCommentLines(IReadOnlyList<string> lines)
     {
+        if (lines is string[] lineArray && !MayContainPascalBlockComment(lines))
+            return lineArray;
+
         var result = new string[lines.Count];
         var inBraceComment = false;
         var inParenStarComment = false;
@@ -2844,6 +2847,17 @@ public static partial class ReferenceExtractor
         }
 
         return result;
+    }
+
+    private static bool MayContainPascalBlockComment(IReadOnlyList<string> lines)
+    {
+        foreach (var line in lines)
+        {
+            if (line.Contains('{') || line.Contains("(*", StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
     }
 
     private static bool UsesCStyleBlockComments(string language) =>
@@ -3075,6 +3089,9 @@ public static partial class ReferenceExtractor
 
     private static string[] MaskHaskellBlockCommentLines(IReadOnlyList<string> lines)
     {
+        if (lines is string[] lineArray && !MayContainHaskellBlockComment(lines))
+            return lineArray;
+
         var result = new string[lines.Count];
         var blockDepth = 0;
 
@@ -3135,6 +3152,17 @@ public static partial class ReferenceExtractor
         }
 
         return result;
+    }
+
+    private static bool MayContainHaskellBlockComment(IReadOnlyList<string> lines)
+    {
+        foreach (var line in lines)
+        {
+            if (line.Contains("{-", StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
     }
 
     private static int SkipCStyleQuotedLiteral(string line, int start)
