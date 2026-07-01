@@ -2706,9 +2706,9 @@ public static partial class ReferenceExtractor
     }
 
     private static bool MayContainStringLiteralDelimiter(string lang, string line)
-        => line.IndexOf('"') >= 0
-            || line.IndexOf('\'') >= 0
-            || (lang is not ("kotlin" or "r") && line.IndexOf('`') >= 0);
+        => lang is "kotlin" or "r"
+            ? line.AsSpan().IndexOfAny('"', '\'') >= 0
+            : line.AsSpan().IndexOfAny('"', '\'', '`') >= 0;
 
     private static int FindRHashCommentStart(string line)
     {
