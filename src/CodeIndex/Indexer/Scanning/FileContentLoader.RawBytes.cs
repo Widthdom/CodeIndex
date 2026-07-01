@@ -151,31 +151,43 @@ internal sealed partial class FileContentLoader
                     return true;
             }
 
-            while (true)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var read = stream.Read(
-                    buffer,
-                    0,
-                    GetReadLengthWithinLimit(total, maxFileSizeBytes, buffer.Length));
-                if (read == 0)
-                    return false;
-
-                total += read;
-                if (total > maxFileSizeBytes)
-                    throw new FileIndexer.FileTooLargeSkippedException(
-                        normalizedRelativePath,
-                        total,
-                        maxFileSizeBytes,
-                        BuildFileTooLargeMessage(total, grewDuringRead: true));
-
-                if (chunkPredicate(buffer.AsSpan(0, read)))
-                    return true;
-            }
+            return RawByteGrowthChunksMayMatch(
+                stream,
+                total,
+                normalizedRelativePath,
+                buffer,
+                chunkPredicate,
+                cancellationToken);
         }
         finally
         {
             ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    private bool RawByteGrowthChunksMayMatch(
+        FileStream stream,
+        long total,
+        string normalizedRelativePath,
+        byte[] buffer,
+        RawByteChunkPredicate chunkPredicate,
+        CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var read = stream.Read(
+                buffer,
+                0,
+                GetReadLengthWithinLimit(total, maxFileSizeBytes, buffer.Length));
+            if (read == 0)
+                return false;
+
+            total += read;
+            ThrowIfReadExceedsMaxFileSize(normalizedRelativePath, total);
+
+            if (chunkPredicate(buffer.AsSpan(0, read)))
+                return true;
         }
     }
 
@@ -188,21 +200,42 @@ internal sealed partial class FileContentLoader
         CancellationToken cancellationToken)
     {
         var total = (long)prefixLength + 1;
-        if (total > maxFileSizeBytes)
-            throw new FileIndexer.FileTooLargeSkippedException(
-                normalizedRelativePath,
-                total,
-                maxFileSizeBytes,
-                BuildFileTooLargeMessage(total, grewDuringRead: true));
+        ThrowIfReadExceedsMaxFileSize(normalizedRelativePath, total);
+        using var accumulator = CreateGrowthAccumulator(prefix, prefixLength, firstExtraByte, total);
 
+        total = AppendRemainingStreamBytesWithinLimit(
+            stream,
+            accumulator,
+            total,
+            normalizedRelativePath,
+            cancellationToken);
+
+        return (accumulator.ToArray(), total);
+    }
+
+    private MemoryStream CreateGrowthAccumulator(
+        byte[] prefix,
+        int prefixLength,
+        byte firstExtraByte,
+        long total)
+    {
         var initialCapacity = (int)Math.Min(
             maxFileSizeBytes,
             Math.Max(total, prefixLength + (long)StreamBufferSize));
-        using var accumulator = new MemoryStream(initialCapacity);
+        var accumulator = new MemoryStream(initialCapacity);
         if (prefixLength > 0)
             accumulator.Write(prefix, 0, prefixLength);
         accumulator.WriteByte(firstExtraByte);
+        return accumulator;
+    }
 
+    private long AppendRemainingStreamBytesWithinLimit(
+        FileStream stream,
+        MemoryStream accumulator,
+        long total,
+        string normalizedRelativePath,
+        CancellationToken cancellationToken)
+    {
         var buffer = ArrayPool<byte>.Shared.Rent(StreamBufferSize);
         try
         {
@@ -214,21 +247,28 @@ internal sealed partial class FileContentLoader
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 total += read;
-                if (total > maxFileSizeBytes)
-                    throw new FileIndexer.FileTooLargeSkippedException(
-                        normalizedRelativePath,
-                        total,
-                        maxFileSizeBytes,
-                        BuildFileTooLargeMessage(total, grewDuringRead: true));
+                ThrowIfReadExceedsMaxFileSize(normalizedRelativePath, total);
                 accumulator.Write(buffer, 0, read);
             }
+
+            return total;
         }
         finally
         {
             ArrayPool<byte>.Shared.Return(buffer);
         }
+    }
 
-        return (accumulator.ToArray(), total);
+    private void ThrowIfReadExceedsMaxFileSize(string normalizedRelativePath, long total)
+    {
+        if (total <= maxFileSizeBytes)
+            return;
+
+        throw new FileIndexer.FileTooLargeSkippedException(
+            normalizedRelativePath,
+            total,
+            maxFileSizeBytes,
+            BuildFileTooLargeMessage(total, grewDuringRead: true));
     }
 
     private static int GetReadLengthWithinLimit(long total, long maxBytes, int bufferLength)

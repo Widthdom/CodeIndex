@@ -7565,14 +7565,6 @@ jobs:
     [Fact]
     public void RunSearch_ExactSubstringJsonDeduplicatesOverlappingChunkFileLineHits_Issue2812()
     {
-        static string BuildChunkContent(int startLine, int endLine)
-        {
-            return string.Join('\n', Enumerable.Range(startLine, (endLine - startLine) + 1)
-                .Select(line => line == 75
-                    ? "var CommandText = $\"SELECT 1\";"
-                    : $"// filler {line}"));
-        }
-
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_dedup_2812");
         try
         {
@@ -7597,7 +7589,7 @@ jobs:
                         ChunkIndex = 0,
                         StartLine = 1,
                         EndLine = 80,
-                        Content = BuildChunkContent(1, 80),
+                        Content = BuildOverlappingChunkContent(1, 80, "var CommandText = $\"SELECT 1\";"),
                     },
                     new ChunkRecord
                     {
@@ -7605,7 +7597,7 @@ jobs:
                         ChunkIndex = 1,
                         StartLine = 71,
                         EndLine = 120,
-                        Content = BuildChunkContent(71, 120),
+                        Content = BuildOverlappingChunkContent(71, 120, "var CommandText = $\"SELECT 1\";"),
                     },
                 ]);
             }
@@ -7641,14 +7633,6 @@ jobs:
     [Fact]
     public void RunSearch_FtsJsonDeduplicatesOverlappingChunkFileLineHits_Issue2997()
     {
-        static string BuildChunkContent(int startLine, int endLine)
-        {
-            return string.Join('\n', Enumerable.Range(startLine, (endLine - startLine) + 1)
-                .Select(line => line == 75
-                    ? "var value = JsonDocument.Parse(payload);"
-                    : $"// filler {line}"));
-        }
-
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_fts_dedup_2997");
         try
         {
@@ -7673,7 +7657,7 @@ jobs:
                         ChunkIndex = 0,
                         StartLine = 1,
                         EndLine = 80,
-                        Content = BuildChunkContent(1, 80),
+                        Content = BuildOverlappingChunkContent(1, 80, "var value = JsonDocument.Parse(payload);"),
                     },
                     new ChunkRecord
                     {
@@ -7681,7 +7665,7 @@ jobs:
                         ChunkIndex = 1,
                         StartLine = 71,
                         EndLine = 120,
-                        Content = BuildChunkContent(71, 120),
+                        Content = BuildOverlappingChunkContent(71, 120, "var value = JsonDocument.Parse(payload);"),
                     },
                 ]);
             }
@@ -10293,6 +10277,12 @@ jobs:
         if (arg.Length > 0 && arg.All(c => char.IsLetterOrDigit(c) || c is '_' or '-' or '.' or '/' or ':' or '='))
             return arg;
         return "'" + arg.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
+    }
+
+    private static string BuildOverlappingChunkContent(int startLine, int endLine, string targetLine)
+    {
+        return string.Join('\n', Enumerable.Range(startLine, (endLine - startLine) + 1)
+            .Select(line => line == 75 ? targetLine : $"// filler {line}"));
     }
 
     private sealed class IssueDraftRepositoryLabelsHandler : HttpMessageHandler
