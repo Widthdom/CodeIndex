@@ -35,6 +35,21 @@ public partial class ReferenceExtractorTests
         Assert.Same(lines, masked);
     }
 
+    [Theory]
+    [InlineData("csharp")]
+    [InlineData("javascript")]
+    [InlineData("python")]
+    [InlineData("rust")]
+    [InlineData("perl")]
+    public void StructuralLineMasker_MaskLines_ReturnsOriginalArrayForMaskedLanguageWithoutDelimiters(string language)
+    {
+        var lines = new[] { "class App {", "    Call(Name);", "}" };
+
+        var masked = StructuralLineMasker.MaskLines(language, lines);
+
+        Assert.Same(lines, masked);
+    }
+
     [Fact]
     public void StructuralLineMasker_MaskLines_ClonesForMaskedLanguage()
     {
