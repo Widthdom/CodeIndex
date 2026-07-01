@@ -13,6 +13,9 @@ public static partial class SymbolExtractor
         var symbolLineIdentities = BuildSymbolLineIdentities(symbols);
         for (var i = 0; i < lines.Length; i++)
         {
+            if (lines[i].IndexOf("use", StringComparison.Ordinal) < 0)
+                continue;
+
             if (!TryReadRustUseStatement(lines, i, out var statement, out var lineStarts, out var endLineIndex))
                 continue;
 
@@ -77,6 +80,9 @@ public static partial class SymbolExtractor
         var symbolLineIdentities = BuildSymbolLineIdentities(symbols);
         for (var i = 0; i < lines.Length; i++)
         {
+            if (lines[i].IndexOf("impl", StringComparison.Ordinal) < 0)
+                continue;
+
             if (!TryReadRustImplStatement(lines, i, out var statement, out var lineStarts, out var endLineIndex))
                 continue;
 

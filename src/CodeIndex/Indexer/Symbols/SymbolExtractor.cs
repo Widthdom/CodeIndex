@@ -9213,7 +9213,12 @@ public static partial class SymbolExtractor
 
     private static void ExtractRustAssociatedTypeDefaultSymbols(long fileId, string[] lines, string[] structuralLines, List<SymbolRecord> symbols)
     {
+        if (!LinesContain(lines, "type", StringComparison.Ordinal))
+            return;
+
         var traits = BuildRustAssociatedTypeContainerSnapshot(symbols);
+        if (traits.Count == 0)
+            return;
 
         foreach (var trait in traits)
         {
