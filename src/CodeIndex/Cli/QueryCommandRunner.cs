@@ -411,18 +411,6 @@ public static partial class QueryCommandRunner
             Console.WriteLine($"  {row}");
     }
 
-    private static bool IsSqlGraphContractSignal(ExactQuerySignal signal)
-        => !signal.ExactIndexAvailable
-           && !signal.HasMissingIndex
-           && !signal.HasMissingTable
-           && signal.DegradedReason?.Contains(DegradationReasonCodes.SqlGraphContractNotReady, StringComparison.OrdinalIgnoreCase) == true;
-
-    private static bool IsCSharpCanonicalNameSignal(ExactQuerySignal signal)
-        => !signal.ExactIndexAvailable
-           && !signal.HasMissingIndex
-           && !signal.HasMissingTable
-           && signal.DegradedReason?.Contains(DegradationReasonCodes.CSharpSymbolNameNotReady, StringComparison.OrdinalIgnoreCase) == true;
-
     internal static string FormatDuration(TimeSpan duration)
     {
         if (duration < TimeSpan.Zero)
@@ -450,32 +438,6 @@ public static partial class QueryCommandRunner
         if (string.IsNullOrWhiteSpace(sha))
             return "<unknown>";
         return sha.Length <= 12 ? sha : sha[..12];
-    }
-
-    private static void WriteExactSymbolWarningIfNeeded(bool exact, bool json, ExactQuerySignal signal, DbReader reader, QueryCommandOptions options)
-    {
-        if (!exact || json || signal.ExactIndexAvailable || signal.DegradedReason == null)
-            return;
-
-        if (signal.HasMissingIndex)
-        {
-            CommandErrorWriter.WriteStderr($"WARN: --exact symbol query ran without the supporting index ({signal.DegradedReason}). Results are correct but may be slow.");
-            CommandErrorWriter.WriteStderr("Hint: re-index with `cdidx index <projectPath>` to upgrade the DB layout.");
-            return;
-        }
-
-        if (IsCSharpCanonicalNameSignal(signal))
-        {
-            CommandErrorWriter.WriteStderr($"WARN: --exact symbol query may return false negatives ({signal.DegradedReason}).");
-            CommandErrorWriter.WriteStderr($"Hint: run `{BuildCSharpCanonicalNameRepairCommand(reader, options)}` to refresh canonical C# symbol names.");
-            return;
-        }
-
-        if (IsSqlGraphContractSignal(signal))
-        {
-            CommandErrorWriter.WriteStderr($"WARN: --exact symbol query may return false negatives ({signal.DegradedReason}).");
-            CommandErrorWriter.WriteStderr($"Hint: run `{BuildSqlGraphContractRepairCommand(reader, options)}` to refresh SQL graph rows.");
-        }
     }
 
     /// <summary>
