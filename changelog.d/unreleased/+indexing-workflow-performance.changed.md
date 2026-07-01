@@ -55,6 +55,7 @@ affected:
 - **Skipped Perl hash-constant collection on non-candidate lines** - Perl supplemental constant extraction now checks for `constant` before attempting the `use constant { ... }` body collector on each line.
 - **Skipped Rust supplemental collectors before marker hits** - Rust `use`, multiline `impl`, and associated-type-default supplemental extraction now checks cheap file/line markers before running statement collectors or trait-body scans.
 - **Gated Go supplemental declaration scans by markers** - Go import/directive/label and grouped declaration helpers now skip ordinary lines before trimming, regex checks, or brace-depth scans when the required markers are absent.
+- **Skipped Swift property supplemental regex work on stored properties** - Swift wrapped/computed property enrichment now skips property lines without wrapper or body markers and only runs accessor regexes on accessor-marker lines.
 
 ## 日本語
 
@@ -81,3 +82,4 @@ affected:
 - **候補でない行では Perl hash constant collection を skip します** - Perl の supplemental constant extraction は各行で `use constant { ... }` body collector を試す前に `constant` の有無を確認します。
 - **marker がない場合は Rust supplemental collector を skip します** - Rust の `use`、multiline `impl`、associated-type-default supplemental extraction は statement collector や trait-body scan の前に軽量な file/line marker を確認します。
 - **Go supplemental declaration scan を marker で gate します** - Go の import/directive/label と grouped declaration helper は必須 marker がない通常行では trim、regex check、brace-depth scan の前に skip します。
+- **stored property では Swift property supplemental regex work を skip します** - Swift の wrapped/computed property enrichment は wrapper/body marker のない property 行を skip し、accessor regex も accessor marker のある行だけで実行します。

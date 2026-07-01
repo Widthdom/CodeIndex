@@ -5348,6 +5348,13 @@ public static partial class SymbolExtractor
         {
             var lineIndex = property.Line - 1;
             var propertyLine = lines[lineIndex];
+            var propertyStructuralLine = structuralLines[lineIndex];
+            if (propertyLine.IndexOf('@', StringComparison.Ordinal) < 0
+                && propertyStructuralLine.IndexOf('{') < 0)
+            {
+                continue;
+            }
+
             var declarationMatch = SwiftPropertyDeclarationRegex.Match(propertyLine);
             if (!declarationMatch.Success)
                 continue;
@@ -5371,7 +5378,11 @@ public static partial class SymbolExtractor
             var sawAccessor = false;
             for (var accessorLine = openBraceLine; accessorLine <= closeBraceLine; accessorLine++)
             {
-                foreach (Match accessorMatch in SwiftAccessorDeclarationRegex.Matches(structuralLines[accessorLine]))
+                var accessorStructuralLine = structuralLines[accessorLine];
+                if (!MayContainSwiftAccessorDeclaration(accessorStructuralLine))
+                    continue;
+
+                foreach (Match accessorMatch in SwiftAccessorDeclarationRegex.Matches(accessorStructuralLine))
                 {
                     if (!IsSwiftTopLevelAccessor(structuralLines, openBraceLine, openBraceColumn, accessorLine, accessorMatch.Index))
                         continue;
@@ -5409,6 +5420,12 @@ public static partial class SymbolExtractor
             }
         }
     }
+
+    private static bool MayContainSwiftAccessorDeclaration(string line)
+        => line.IndexOf("get", StringComparison.Ordinal) >= 0
+           || line.IndexOf("set", StringComparison.Ordinal) >= 0
+           || line.IndexOf("willSet", StringComparison.Ordinal) >= 0
+           || line.IndexOf("didSet", StringComparison.Ordinal) >= 0;
 
     private static void AddSwiftProjectedValueSymbol(
         long fileId,
