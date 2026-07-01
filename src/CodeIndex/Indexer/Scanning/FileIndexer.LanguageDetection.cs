@@ -358,7 +358,8 @@ public partial class FileIndexer
         if (!fileName.Contains('.', StringComparison.Ordinal))
             return false;
 
-        var overrides = LanguageMapOverrides.LoadEffectiveMap(filePath);
+        var startDirectory = Path.GetDirectoryName(Path.GetFullPath(filePath));
+        var overrides = LanguageMapOverrides.LoadEffectiveMapFromDirectory(startDirectory);
         if (overrides.Count == 0)
             return false;
 

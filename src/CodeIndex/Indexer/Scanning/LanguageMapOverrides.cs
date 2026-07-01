@@ -34,7 +34,14 @@ internal static class LanguageMapOverrides
 
     internal static IReadOnlyDictionary<string, string> LoadEffectiveMap(string? startPath = null)
     {
-        var startDirectory = ResolveStartDirectory(startPath);
+        return LoadEffectiveMapFromDirectory(ResolveStartDirectory(startPath));
+    }
+
+    internal static IReadOnlyDictionary<string, string> LoadEffectiveMapFromDirectory(string? startDirectory)
+    {
+        startDirectory = string.IsNullOrWhiteSpace(startDirectory)
+            ? Environment.CurrentDirectory
+            : Path.GetFullPath(startDirectory);
         EffectiveMapCacheEntry? cached;
 
         lock (EffectiveMapCacheLock)
