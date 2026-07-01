@@ -611,6 +611,9 @@ public static partial class SymbolExtractor
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
+            if (!line.Contains(":=", StringComparison.Ordinal))
+                continue;
+
             foreach (Match match in PythonWalrusAssignmentRegex.Matches(line))
             {
                 var name = match.Groups["name"].Value;

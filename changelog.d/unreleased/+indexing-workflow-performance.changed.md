@@ -4,6 +4,7 @@ affected:
   - .github/workflows/dotnet.yml
   - .github/scripts/run-dotnet-tests.ps1
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Python.cs
   - src/CodeIndex/Indexer/References/Support/StructuralLineMasker.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.Preparation.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.TypeReferences.cs
@@ -42,6 +43,7 @@ affected:
 - **Collapsed string-literal delimiter probes** - reference-line preparation now checks quote/backtick trigger characters with `IndexOfAny` instead of separate scans per delimiter.
 - **Hoisted reference-line preparation language flags** - per-file reference preparation now computes language comment/string handling flags once and reuses them for each line instead of repeating language switches in the hot loop.
 - **Skipped symbol pattern scans on whitespace-only lines** - symbol extraction now bypasses the regex pattern loop when the effective match line is blank after language-specific masking.
+- **Skipped Python walrus regex scans on ordinary lines** - supplemental Python symbol extraction now checks for `:=` before running the walrus assignment regex.
 
 ## 日本語
 
@@ -60,3 +62,4 @@ affected:
 - **string-literal delimiter probe をまとめました** - reference-line preparation は quote/backtick trigger character を delimiter ごとの個別 scan ではなく `IndexOfAny` で確認します。
 - **reference-line preparation の言語フラグを loop 外へ出しました** - ファイルごとの reference preparation は comment/string handling の言語フラグを一度だけ計算し、hot loop 内で language switch を繰り返さないようになりました。
 - **whitespace-only 行の symbol pattern scan を skip します** - symbol extraction は言語別 masking 後の実効 match line が空白だけの場合、regex pattern loop に入らないようになりました。
+- **通常行では Python walrus regex scan を skip します** - supplemental Python symbol extraction は walrus assignment regex を走らせる前に `:=` の有無を確認します。
