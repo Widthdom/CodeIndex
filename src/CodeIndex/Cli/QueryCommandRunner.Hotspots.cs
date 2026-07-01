@@ -551,6 +551,26 @@ public static partial class QueryCommandRunner
             "hotspots",
             "Use --summary-only, reduce --limit, or increase --max-json-bytes.");
 
+    private static void AddHotspotFamilyJsonFields(JsonObject payload, HotspotFamilySignal signal)
+    {
+        payload["hotspot_family_ready"] = signal.Ready;
+        if (!signal.Ready)
+        {
+            payload["degraded"] = true;
+            if (signal.DegradedReason != null)
+                payload["hotspot_family_degraded_reason"] = signal.DegradedReason;
+        }
+    }
+
+    private static void WriteHotspotFamilyWarningIfNeeded(bool json, HotspotFamilySignal signal)
+    {
+        if (json || signal.Ready || signal.DegradedReason == null)
+            return;
+
+        CommandErrorWriter.WriteStderr($"WARN: {signal.DegradedReason}");
+        CommandErrorWriter.WriteStderr("Hint: rerun `cdidx index <projectPath>` to restore authoritative cross-file hotspot families.");
+    }
+
     private static string FormatHotspotScore(double score) => score.ToString("0.#", CultureInfo.InvariantCulture);
 
     internal static void AddHotspotsGroupingContractJsonFields(JsonObject payload, string groupBy, QueryCommandOptions? queryOptions, JsonSerializerOptions jsonOptions, bool countOnly)
