@@ -2851,6 +2851,9 @@ public static partial class ReferenceExtractor
 
     private static string[] MaskCStyleBlockCommentLines(string language, IReadOnlyList<string> lines)
     {
+        if (lines is string[] lineArray && !MayContainCStyleMaskingTrigger(language, lines))
+            return lineArray;
+
         var result = new string[lines.Count];
         var inBlockComment = false;
         var inGoRawString = false;
@@ -2982,6 +2985,28 @@ public static partial class ReferenceExtractor
         }
 
         return result;
+    }
+
+    private static bool MayContainCStyleMaskingTrigger(string language, IReadOnlyList<string> lines)
+    {
+        foreach (var line in lines)
+        {
+            if (line.Contains('/'))
+                return true;
+            if (language == "go" && line.Contains('`'))
+                return true;
+            if (language == "dart" &&
+                (line.Contains("\"\"\"", StringComparison.Ordinal) ||
+                 line.Contains("'''", StringComparison.Ordinal)))
+            {
+                return true;
+            }
+
+            if (language == "cpp" && line.Contains("R\"", StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
     }
 
     private static bool TryGetDartTripleStringStart(string line, int start, out char quote, out int openingLength)
