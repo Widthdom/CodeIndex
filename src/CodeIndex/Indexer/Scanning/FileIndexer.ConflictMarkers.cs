@@ -60,10 +60,13 @@ public partial class FileIndexer
 
     private static bool ContainsConflictMarkerCandidate(string content)
     {
+        var scanLength = Math.Min(
+            content.Length,
+            ConflictMarkerScanLimitBytes + Math.Max(ConflictStartMarker.Length, ConflictEndMarker.Length));
         var searchStart = 0;
-        while (searchStart < content.Length)
+        while (searchStart < scanLength)
         {
-            var relativeIndex = content.AsSpan(searchStart).IndexOfAny('<', '>');
+            var relativeIndex = content.AsSpan(searchStart, scanLength - searchStart).IndexOfAny('<', '>');
             if (relativeIndex < 0)
                 return false;
 
