@@ -2093,8 +2093,7 @@ public class DbWriter
                 var line = reader.GetInt32(2);
                 var context = reader.GetString(3);
                 var key = (fileId, line, context);
-                if (referenceLineKeys.Contains(key))
-                    lineIds[key] = id;
+                lineIds[key] = id;
             }
         }
 

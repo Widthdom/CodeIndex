@@ -27,7 +27,7 @@ affected:
 - **Capped generated-header detection work** - generated-code header detection now inspects only a bounded leading header window, avoiding whole-file scans on very long first lines or minified payloads.
 - **Avoided duplicate generated-pattern checks during indexing** - full-scan and MCP targets now cache generated-code suppression matches and reuse them across C# prepass, stat reuse, and extraction scheduling.
 - **Reused generated-pattern matches inside the C# prepass** - C# static-interface prepass callers can pass cached generated-code suppression results instead of re-running project pattern matching.
-- **Simplified reference-line lookup SQL** - reference insertion now resolves batched `reference_lines` ids through a small `VALUES` lookup table instead of generating long `OR` predicate chains.
+- **Simplified reference-line lookup work** - reference insertion now resolves batched `reference_lines` ids through a small `VALUES` lookup table instead of generating long `OR` predicate chains, and skips redundant per-row lookup-key probes after SQLite returns the joined rows.
 - **Narrowed stale stem purge scans** - extension-change cleanup now asks SQLite for same-stem path candidates instead of scanning every indexed file row after each retained file update.
 
 ## 日本語
@@ -38,5 +38,5 @@ affected:
 - **generated header 判定の処理量を制限しました** - generated-code header 検出は先頭の bounded header window のみを調べるようになり、非常に長い先頭行や minified payload でファイル全体を走査しないようになりました。
 - **indexing 中の generated-pattern 重複判定を避けました** - full-scan と MCP の target は generated-code 抑制patternの一致結果を保持し、C# prepass、stat reuse、extraction scheduling で再利用するようになりました。
 - **C# prepass 内でも generated-pattern 判定結果を再利用しました** - C# static-interface prepass の呼び出し元は cached generated-code 抑制結果を渡せるようになり、project pattern matching の再実行を避けます。
-- **reference-line lookup SQL を単純化しました** - reference 挿入時の batched `reference_lines` id 解決は、長い `OR` predicate chain ではなく小さな `VALUES` lookup table を使うようになりました。
+- **reference-line lookup 処理を単純化しました** - reference 挿入時の batched `reference_lines` id 解決は、長い `OR` predicate chain ではなく小さな `VALUES` lookup table を使い、SQLite が joined row を返した後の行ごとの重複 lookup-key probe も避けるようになりました。
 - **stale stem purge の scan 対象を絞りました** - 拡張子変更 cleanup は retained file 更新ごとに全 indexed file 行を走査せず、同じ stem の path candidate だけを SQLite に問い合わせるようになりました。
