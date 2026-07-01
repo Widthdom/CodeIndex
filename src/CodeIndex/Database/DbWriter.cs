@@ -2333,7 +2333,22 @@ public class DbWriter
         }
 
         if (issues.Count == 0) return;
+        if (issues.Count == 1)
+        {
+            InsertSingleIssue(fileId, issues[0]);
+            return;
+        }
 
+        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 6);
+        for (int i = 0; i < issues.Count; i += rowsPerStatement)
+        {
+            int end = Math.Min(i + rowsPerStatement, issues.Count);
+            InsertIssueBatch(fileId, issues, i, end);
+        }
+    }
+
+    private void InsertSingleIssue(long fileId, CodeIndex.Models.FileIssue issue)
+    {
         var cmd = RentCommand(
             "INSERT INTO file_issues (file_id, kind, line, message, origin, severity) VALUES (@fid, @kind, @line, @message, @origin, @severity)",
             static c =>
@@ -2354,21 +2369,43 @@ public class DbWriter
             var pOrigin = cmd.Parameters["@origin"];
             var pSeverity = cmd.Parameters["@severity"];
 
-            foreach (var issue in issues)
-            {
-                pFid.Value = fileId;
-                pKind.Value = issue.Kind;
-                pLine.Value = issue.Line;
-                pMessage.Value = issue.Message;
-                pOrigin.Value = issue.Origin ?? (object)DBNull.Value;
-                pSeverity.Value = issue.Severity ?? (object)DBNull.Value;
-                cmd.ExecuteNonQuery();
-            }
+            pFid.Value = fileId;
+            pKind.Value = issue.Kind;
+            pLine.Value = issue.Line;
+            pMessage.Value = issue.Message;
+            pOrigin.Value = issue.Origin ?? (object)DBNull.Value;
+            pSeverity.Value = issue.Severity ?? (object)DBNull.Value;
+            cmd.ExecuteNonQuery();
         }
         finally
         {
             ReleaseCommand(cmd);
         }
+    }
+
+    private void InsertIssueBatch(long fileId, IReadOnlyList<CodeIndex.Models.FileIssue> issues, int start, int end)
+    {
+        using var cmd = _conn.CreateCommand();
+        var sql = CreateBatchSqlBuilder(end - start, estimatedCharsPerRow: 96);
+        sql.Append("INSERT INTO file_issues (file_id, kind, line, message, origin, severity) VALUES ");
+        for (int j = start; j < end; j++)
+        {
+            if (j > start)
+                sql.Append(", ");
+
+            var issue = issues[j];
+            var suffix = j - start;
+            sql.Append($"(@fid{suffix}, @kind{suffix}, @line{suffix}, @message{suffix}, @origin{suffix}, @severity{suffix})");
+            cmd.Parameters.Add($"@fid{suffix}", SqliteType.Integer).Value = fileId;
+            cmd.Parameters.Add($"@kind{suffix}", SqliteType.Text).Value = issue.Kind;
+            cmd.Parameters.Add($"@line{suffix}", SqliteType.Integer).Value = issue.Line;
+            cmd.Parameters.Add($"@message{suffix}", SqliteType.Text).Value = issue.Message;
+            cmd.Parameters.Add($"@origin{suffix}", SqliteType.Text).Value = issue.Origin ?? (object)DBNull.Value;
+            cmd.Parameters.Add($"@severity{suffix}", SqliteType.Text).Value = issue.Severity ?? (object)DBNull.Value;
+        }
+
+        cmd.CommandText = sql.ToString();
+        cmd.ExecuteNonQuery();
     }
 
     /// <summary>

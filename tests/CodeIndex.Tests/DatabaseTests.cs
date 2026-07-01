@@ -1793,6 +1793,59 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void InsertIssues_BatchesMultipleRowsAndClearsPreviousIssues()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/issues.py",
+            Lang = "python",
+            Size = 20,
+            Lines = 3,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        _writer.InsertIssues(fileId,
+        [
+            new FileIssue
+            {
+                Path = "src/issues.py",
+                Kind = "replacement_char",
+                Line = 1,
+                Message = "replacement char",
+                Origin = FileIssue.OriginSourceLiteral,
+                Severity = FileIssue.SeverityInfo,
+            },
+            new FileIssue
+            {
+                Path = "src/issues.py",
+                Kind = "non_utf8_likely",
+                Line = 2,
+                Message = "non UTF-8",
+                Origin = FileIssue.OriginDecodeReplacement,
+                Severity = FileIssue.SeverityWarning,
+            },
+            new FileIssue
+            {
+                Path = "src/issues.py",
+                Kind = "bom",
+                Line = 0,
+                Message = "BOM marker",
+                Origin = FileIssue.OriginByteOrderMark,
+                Severity = FileIssue.SeverityWarning,
+            },
+        ]);
+
+        using var countCmd = _db.Connection.CreateCommand();
+        countCmd.CommandText = "SELECT COUNT(*) FROM file_issues WHERE file_id = @file_id";
+        countCmd.Parameters.AddWithValue("@file_id", fileId);
+        Assert.Equal(3L, countCmd.ExecuteScalar());
+
+        _writer.InsertIssues(fileId, []);
+
+        Assert.Equal(0L, countCmd.ExecuteScalar());
+    }
+
+    [Fact]
     public void GetUnchangedFileId_WithNullChecksumUsesModifiedAndSize()
     {
         var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
