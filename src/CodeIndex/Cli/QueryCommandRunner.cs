@@ -399,48 +399,6 @@ public static partial class QueryCommandRunner
             Console.WriteLine($"{indent}  {startLine + i,4}: {lines[i]}");
     }
 
-    // Human-readable reference_kind label for a grouped caller/callee row. Counts
-    // keep high-volume relationships visible without requiring JSON re-querying.
-    // grouped caller/callee 行の人間向け reference_kind ラベル。count を併記して、
-    // JSON で再取得しなくても高頻度の関係が見えるようにする。
-    private static string FormatReferenceKindLabel(string primary, IReadOnlyList<string> kinds, bool hasMixed, IReadOnlyDictionary<string, int>? counts)
-    {
-        if (counts == null || counts.Count == 0)
-        {
-            if (!hasMixed || kinds == null || kinds.Count <= 1)
-                return primary ?? string.Empty;
-            return string.Join("+", kinds);
-        }
-
-        var orderedKinds = kinds is { Count: > 0 } && kinds.Any(kind => counts.TryGetValue(kind, out var count) && count > 0)
-            ? kinds
-            : counts.Keys.Where(kind => counts[kind] > 0).OrderBy(kind => kind, StringComparer.Ordinal).ToArray();
-        return string.Join(", ", orderedKinds
-            .Where(kind => counts.TryGetValue(kind, out var count) && count > 0)
-            .Select(kind => counts[kind] == 1 ? kind : $"{kind} x{counts[kind]}"));
-    }
-
-    // Pick a column width that fits every label in the current batch so mixed-kind
-    // labels like `call+subscribe` do not overrun the neighbouring column. The
-    // minimum matches the historic single-kind width (`instantiate` = 11) with a
-    // small buffer so short-label batches still align consistently (issue #501).
-    // 現在のバッチ内の全ラベルが収まる列幅を選び、`call+subscribe` のような
-    // mixed ラベルが隣接列を押し出さないようにする。最小幅は従来の単一 kind
-    // （`instantiate` = 11）と整合するよう余裕付きで設定する（issue #501）。
-    private const int ReferenceKindColumnMinWidth = 12;
-
-    private static int ComputeReferenceKindColumnWidth<T>(IEnumerable<T> rows, Func<T, string> labelSelector)
-    {
-        var max = ReferenceKindColumnMinWidth;
-        foreach (var row in rows)
-        {
-            var label = labelSelector(row);
-            if (label != null && label.Length > max)
-                max = label.Length;
-        }
-        return max;
-    }
-
     private static void WriteRepoMapSection(string title, IEnumerable<string> rows)
     {
         var materialized = rows.ToList();
