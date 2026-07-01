@@ -701,6 +701,9 @@ internal static partial class LanguageReferenceExtractionSupport
 
     public static IReadOnlyList<string> ExtractRazorImplementedTypeNames(IReadOnlyList<string> originalLines)
     {
+        if (!MayContainRazorImplementsDirective(originalLines))
+            return Array.Empty<string>();
+
         List<string>? result = null;
         foreach (var line in originalLines)
         {
@@ -713,6 +716,17 @@ internal static partial class LanguageReferenceExtractionSupport
         }
 
         return result ?? (IReadOnlyList<string>)Array.Empty<string>();
+    }
+
+    private static bool MayContainRazorImplementsDirective(IReadOnlyList<string> originalLines)
+    {
+        foreach (var line in originalLines)
+        {
+            if (line.Contains("@implements", StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
     }
 
     public static string[] MaskRazorCommentLines(IReadOnlyList<string> originalLines)
