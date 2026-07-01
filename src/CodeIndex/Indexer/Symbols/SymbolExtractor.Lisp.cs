@@ -15,6 +15,9 @@ public static partial class SymbolExtractor
 
     internal static string[] MaskLispCodeLines(IReadOnlyList<string> lines)
     {
+        if (lines is string[] lineArray && !MayContainLispMaskingTrigger(lines))
+            return lineArray;
+
         var maskedLines = new string[lines.Count];
         var blockCommentDepth = 0;
         var inString = false;
@@ -88,6 +91,21 @@ public static partial class SymbolExtractor
         }
 
         return maskedLines;
+    }
+
+    private static bool MayContainLispMaskingTrigger(IReadOnlyList<string> lines)
+    {
+        foreach (var line in lines)
+        {
+            if (line.Contains(';') ||
+                line.Contains('"') ||
+                line.Contains("#|", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static List<SymbolRecord> ExtractLispSymbols(long fileId, string language, string[] lines)
