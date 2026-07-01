@@ -6,6 +6,7 @@ affected:
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Python.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Php.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Perl.cs
   - src/CodeIndex/Indexer/References/Support/StructuralLineMasker.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.Preparation.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.TypeReferences.cs
@@ -49,6 +50,7 @@ affected:
 - **Skipped SQL supplemental regex scans before marker hits** - SQL CTE extraction now checks lines for `WITH` before joining full content, and definer/routine-result passes check line markers before their regexes.
 - **Dispatched JS/TS module supplemental scans by marker** - JavaScript/TypeScript module import supplemental helpers now run only for lines containing the marker they scan for, instead of invoking every helper on every line.
 - **Skipped C++ friend-declaration scans on ordinary lines** - C++ supplemental friend declaration extraction now avoids comment/string masking and regex probes unless the line is inside a block comment or contains `friend`.
+- **Skipped Perl hash-constant collection on non-candidate lines** - Perl supplemental constant extraction now checks for `constant` before attempting the `use constant { ... }` body collector on each line.
 
 ## 日本語
 
@@ -72,3 +74,4 @@ affected:
 - **marker がない場合は SQL supplemental regex scan を skip します** - SQL CTE extraction は全文 join 前に `WITH` を行単位で確認し、definer/routine-result pass も regex 前に行 marker を確認します。
 - **JS/TS module supplemental scan を marker で振り分けます** - JavaScript/TypeScript の module import supplemental helper は全 helper を全行で呼ばず、それぞれが探す marker を含む行だけで実行します。
 - **通常行では C++ friend declaration scan を skip します** - C++ の supplemental friend declaration extraction は block comment 内の状態維持が必要な行、または `friend` を含む行以外では comment/string masking と regex probe を避けます。
+- **候補でない行では Perl hash constant collection を skip します** - Perl の supplemental constant extraction は各行で `use constant { ... }` body collector を試す前に `constant` の有無を確認します。
