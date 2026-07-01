@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Database;
@@ -549,6 +550,8 @@ public static partial class QueryCommandRunner
             "hotspots",
             "hotspots",
             "Use --summary-only, reduce --limit, or increase --max-json-bytes.");
+
+    private static string FormatHotspotScore(double score) => score.ToString("0.#", CultureInfo.InvariantCulture);
 
     internal static void AddHotspotsGroupingContractJsonFields(JsonObject payload, string groupBy, QueryCommandOptions? queryOptions, JsonSerializerOptions jsonOptions, bool countOnly)
     {

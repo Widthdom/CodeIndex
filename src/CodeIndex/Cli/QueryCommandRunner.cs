@@ -893,8 +893,6 @@ public static partial class QueryCommandRunner
         return $"{Math.Max(1, (int)Math.Round(duration.TotalSeconds, MidpointRounding.AwayFromZero))}s";
     }
 
-    private static string FormatHotspotScore(double score) => score.ToString("0.#", CultureInfo.InvariantCulture);
-
     private static string FormatSamples(IReadOnlyList<string> samples)
         => samples.Count == 0 ? string.Empty : $" ({string.Join(", ", samples)})";
 
