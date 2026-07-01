@@ -5719,7 +5719,7 @@ public partial class McpServer
                 var content = loaded.Content;
                 var rawBytes = loaded.RawBytes;
                 var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
-                var existingId = writer.GetUnchangedFileId(
+                var existingId = writer.GetReusableUnchangedFileId(
                     record.Path,
                     record.Modified,
                     record.Checksum,
@@ -5727,20 +5727,14 @@ public partial class McpServer
                     lines: record.Lines,
                     language: record.Lang,
                     generated: record.Generated,
+                    maxSymbolsPerFile: maxSymbolsPerFile,
+                    maxReferencesPerFile: maxReferencesPerFile,
+                    generatedExtractionSuppressed: generatedSuppressionIssue != null,
                     allowReuse: symbolKindFilterMatchesPrior
                         && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                         && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                         && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)
                         && AllowReuseWithCurrentHotspotFamilyTrust(record.Lang, hotspotFamilyTrustMatchesCurrent));
-                if (existingId != null
-                    && writer.HasReusableFileBlockingIssueForFile(
-                        existingId.Value,
-                        maxSymbolsPerFile,
-                        maxReferencesPerFile,
-                        generatedSuppressionIssue != null))
-                {
-                    existingId = null;
-                }
                 if (existingId != null)
                 {
                     skipped++;

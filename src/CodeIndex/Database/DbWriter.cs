@@ -737,6 +737,124 @@ public class DbWriter
         }
     }
 
+    public long? GetReusableUnchangedFileId(
+        string relativePath,
+        DateTime modified,
+        string? checksum,
+        long? size,
+        int? lines,
+        string? language,
+        bool? generated,
+        int maxSymbolsPerFile,
+        int maxReferencesPerFile,
+        bool? generatedExtractionSuppressed,
+        bool allowReuse = true)
+    {
+        if (!allowReuse)
+            return null;
+        if (!SymbolExtractorVersionMatchesCurrent(language))
+            return null;
+
+        var hasIssueMetadataColumns = HasIssueMetadataColumns();
+        var isSolutionFile = string.Equals(Path.GetExtension(relativePath), ".sln", StringComparison.OrdinalIgnoreCase);
+        var staleIssuePredicate = hasIssueMetadataColumns
+            ? @"
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM file_issues stale_i
+                    WHERE stale_i.file_id = files.id
+                      AND (
+                          (stale_i.kind IN ('replacement_char', 'non_utf8_likely', 'bom', 'utf16_bom')
+                              AND (stale_i.origin IS NULL OR stale_i.severity IS NULL))
+                          OR (stale_i.kind = 'bom' AND @is_solution_file = 1)
+                      )
+                )"
+            : string.Empty;
+        var cmd = RentCommand(
+            $@"UPDATE files
+              SET modified = CASE
+                  WHEN modified <> @modified
+                       AND @checksum IS NOT NULL
+                       AND checksum = @checksum
+                  THEN @modified
+                  ELSE modified
+              END,
+                  generated = CASE
+                  WHEN @generated IS NOT NULL THEN @generated
+                  ELSE generated
+              END
+              WHERE path = @path
+                AND (
+                    (@checksum IS NOT NULL AND checksum = @checksum AND (@lines IS NULL OR lines = @lines))
+                    OR (@checksum IS NULL AND modified = @modified AND (@size IS NULL OR size = @size) AND (@lines IS NULL OR lines = @lines))
+                )
+                {staleIssuePredicate}
+                AND (SELECT COUNT(*) FROM symbols WHERE file_id = files.id) <= @max_symbols
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM file_issues
+                    WHERE file_id = files.id
+                      AND kind = 'symbol_count_exceeded'
+                )
+                AND (SELECT COUNT(*) FROM symbol_references WHERE file_id = files.id) <= @max_references
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM file_issues
+                    WHERE file_id = files.id
+                      AND kind = 'reference_count_exceeded'
+                )
+                AND (
+                    @generated_suppressed IS NULL
+                    OR (
+                        EXISTS (
+                            SELECT 1
+                            FROM file_issues
+                            WHERE file_id = files.id
+                              AND kind = @generated_issue_kind
+                        )
+                    ) = @generated_suppressed
+                )
+              RETURNING id",
+            c =>
+            {
+                c.Parameters.Add("@path", SqliteType.Text);
+                c.Parameters.Add("@modified", SqliteType.Text);
+                c.Parameters.Add("@checksum", SqliteType.Text);
+                c.Parameters.Add("@size", SqliteType.Integer);
+                c.Parameters.Add("@lines", SqliteType.Integer);
+                c.Parameters.Add("@generated", SqliteType.Integer);
+                if (hasIssueMetadataColumns)
+                    c.Parameters.Add("@is_solution_file", SqliteType.Integer);
+                c.Parameters.Add("@max_symbols", SqliteType.Integer);
+                c.Parameters.Add("@max_references", SqliteType.Integer);
+                c.Parameters.Add("@generated_suppressed", SqliteType.Integer);
+                c.Parameters.Add("@generated_issue_kind", SqliteType.Text);
+            });
+        try
+        {
+            cmd.Parameters["@path"].Value = relativePath;
+            cmd.Parameters["@modified"].Value = modified;
+            cmd.Parameters["@checksum"].Value = checksum is null ? DBNull.Value : checksum;
+            cmd.Parameters["@size"].Value = size.HasValue ? size.Value : DBNull.Value;
+            cmd.Parameters["@lines"].Value = lines.HasValue ? lines.Value : DBNull.Value;
+            cmd.Parameters["@generated"].Value = generated.HasValue ? (generated.Value ? 1 : 0) : DBNull.Value;
+            if (hasIssueMetadataColumns)
+                cmd.Parameters["@is_solution_file"].Value = isSolutionFile ? 1 : 0;
+            cmd.Parameters["@max_symbols"].Value = maxSymbolsPerFile;
+            cmd.Parameters["@max_references"].Value = maxReferencesPerFile;
+            cmd.Parameters["@generated_suppressed"].Value = generatedExtractionSuppressed.HasValue
+                ? (generatedExtractionSuppressed.Value ? 1 : 0)
+                : DBNull.Value;
+            cmd.Parameters["@generated_issue_kind"].Value = FileIndexer.GeneratedCodeExtractionSkippedIssueKind;
+            var raw = cmd.ExecuteScalar();
+            return raw is long id ? id : null;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
+    }
+
     /// <summary>
     /// Read-only unchanged lookup for callers that have only filesystem stat data.
     /// filesystem stat だけを持つ呼び出し元向けの read-only 変更なし判定。

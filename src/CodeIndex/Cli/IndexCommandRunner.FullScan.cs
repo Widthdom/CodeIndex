@@ -1697,7 +1697,7 @@ public static partial class IndexCommandRunner
                         if (!options.Rebuild && !startedWithNoIndexedFiles && !options.SymbolsOnly)
                         {
                             var targetRequiresRefresh = TargetRequiresJavaScriptTypeScriptRefresh(record.Lang, record.Path);
-                            existingId = writer.GetUnchangedFileId(
+                            existingId = writer.GetReusableUnchangedFileId(
                                 record.Path,
                                 record.Modified,
                                 record.Checksum,
@@ -1705,6 +1705,9 @@ public static partial class IndexCommandRunner
                                 lines: record.Lines,
                                 language: record.Lang,
                                 generated: record.Generated,
+                                maxSymbolsPerFile: options.MaxSymbolsPerFile,
+                                maxReferencesPerFile: options.MaxReferencesPerFile,
+                                generatedExtractionSuppressed: generatedSuppressionIssue != null,
                                 allowReuse: symbolKindFilterMatchesPrior
                                     && !targetRequiresRefresh
                                     && !priorSymbolsOnlyGraphOmitted
@@ -1712,16 +1715,6 @@ public static partial class IndexCommandRunner
                                     && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                                     && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)
                                     && AllowReuseWithCurrentHotspotFamilyTrust(record.Lang, hotspotFamilyTrustMatchesCurrent));
-                        }
-                        if (existingId != null
-                            && ExistingFileBlocksReuse(
-                                writer,
-                                existingId.Value,
-                                options.MaxSymbolsPerFile,
-                                options.MaxReferencesPerFile,
-                                generatedSuppressionIssue))
-                        {
-                            existingId = null;
                         }
                         if (existingId != null)
                         {

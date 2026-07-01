@@ -711,7 +711,7 @@ public static partial class IndexCommandRunner
                         ResumeUpdateSpinnerAfterConsoleWrite();
                     }
 
-                    var existingId = writer.GetUnchangedFileId(
+                    var existingId = writer.GetReusableUnchangedFileId(
                         record.Path,
                         record.Modified,
                         record.Checksum,
@@ -719,20 +719,13 @@ public static partial class IndexCommandRunner
                         lines: record.Lines,
                         language: record.Lang,
                         generated: record.Generated,
+                        maxSymbolsPerFile: options.MaxSymbolsPerFile,
+                        maxReferencesPerFile: options.MaxReferencesPerFile,
+                        generatedExtractionSuppressed: generatedExtractionSuppressed,
                         allowReuse: symbolKindFilterMatchesPrior
                             && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                             && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                             && (record.Lang != "sql" || sqlGraphContractMatchesCurrent));
-                    if (existingId != null
-                        && ExistingFileBlocksReuse(
-                            writer,
-                            existingId.Value,
-                            options.MaxSymbolsPerFile,
-                            options.MaxReferencesPerFile,
-                            generatedSuppressionIssue))
-                    {
-                        existingId = null;
-                    }
                     if (existingId != null)
                     {
                         using var purgeTxn = writer.BeginTransaction(cancellationToken, "update purge unchanged stale paths");

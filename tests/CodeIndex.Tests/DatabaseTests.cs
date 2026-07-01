@@ -1978,6 +1978,7 @@ public class DatabaseTests : IDisposable
             Size = 20,
             Lines = 2,
             Modified = modified,
+            Checksum = "caps_checksum",
         });
 
         Assert.False(_writer.HasExtractionCapViolationForFile(fileId, maxSymbolsPerFile: 2, maxReferencesPerFile: 2));
@@ -1990,6 +1991,19 @@ public class DatabaseTests : IDisposable
                 modified,
                 size: 20,
                 language: "csharp",
+                maxSymbolsPerFile: 2,
+                maxReferencesPerFile: 2,
+                generatedExtractionSuppressed: false));
+        Assert.Equal(
+            fileId,
+            _writer.GetReusableUnchangedFileId(
+                "src/caps.cs",
+                modified.AddMinutes(1),
+                checksum: "caps_checksum",
+                size: 20,
+                lines: 2,
+                language: "csharp",
+                generated: false,
                 maxSymbolsPerFile: 2,
                 maxReferencesPerFile: 2,
                 generatedExtractionSuppressed: false));
@@ -2011,9 +2025,20 @@ public class DatabaseTests : IDisposable
         Assert.True(_writer.HasExtractionCapViolationForFile(fileId, maxSymbolsPerFile: 1, maxReferencesPerFile: 2));
         Assert.Null(_writer.GetReusableUnchangedFileIdByStat(
             "src/caps.cs",
-            modified,
+            modified.AddMinutes(1),
             size: 20,
             language: "csharp",
+            maxSymbolsPerFile: 1,
+            maxReferencesPerFile: 2,
+            generatedExtractionSuppressed: false));
+        Assert.Null(_writer.GetReusableUnchangedFileId(
+            "src/caps.cs",
+            modified.AddMinutes(1),
+            checksum: "caps_checksum",
+            size: 20,
+            lines: 2,
+            language: "csharp",
+            generated: false,
             maxSymbolsPerFile: 1,
             maxReferencesPerFile: 2,
             generatedExtractionSuppressed: false));
@@ -2025,6 +2050,7 @@ public class DatabaseTests : IDisposable
             Size = 20,
             Lines = 2,
             Modified = modified,
+            Checksum = "cap_issue_checksum",
         });
         _writer.InsertIssues(issueFileId,
         [
@@ -2046,6 +2072,17 @@ public class DatabaseTests : IDisposable
             maxSymbolsPerFile: 10,
             maxReferencesPerFile: 10,
             generatedExtractionSuppressed: false));
+        Assert.Null(_writer.GetReusableUnchangedFileId(
+            "src/cap-issue.cs",
+            modified,
+            checksum: "cap_issue_checksum",
+            size: 20,
+            lines: 2,
+            language: "csharp",
+            generated: false,
+            maxSymbolsPerFile: 10,
+            maxReferencesPerFile: 10,
+            generatedExtractionSuppressed: false));
 
         var generatedFileId = _writer.UpsertFile(new FileRecord
         {
@@ -2054,6 +2091,7 @@ public class DatabaseTests : IDisposable
             Size = 20,
             Lines = 2,
             Modified = modified,
+            Checksum = "generated_checksum",
         });
         _writer.InsertIssues(generatedFileId,
         [
@@ -2078,11 +2116,35 @@ public class DatabaseTests : IDisposable
                 maxSymbolsPerFile: 10,
                 maxReferencesPerFile: 10,
                 generatedExtractionSuppressed: true));
+        Assert.Equal(
+            generatedFileId,
+            _writer.GetReusableUnchangedFileId(
+                "src/generated.g.cs",
+                modified,
+                checksum: "generated_checksum",
+                size: 20,
+                lines: 2,
+                language: "csharp",
+                generated: true,
+                maxSymbolsPerFile: 10,
+                maxReferencesPerFile: 10,
+                generatedExtractionSuppressed: true));
         Assert.Null(_writer.GetReusableUnchangedFileIdByStat(
             "src/generated.g.cs",
             modified,
             size: 20,
             language: "csharp",
+            maxSymbolsPerFile: 10,
+            maxReferencesPerFile: 10,
+            generatedExtractionSuppressed: false));
+        Assert.Null(_writer.GetReusableUnchangedFileId(
+            "src/generated.g.cs",
+            modified,
+            checksum: "generated_checksum",
+            size: 20,
+            lines: 2,
+            language: "csharp",
+            generated: true,
             maxSymbolsPerFile: 10,
             maxReferencesPerFile: 10,
             generatedExtractionSuppressed: false));
