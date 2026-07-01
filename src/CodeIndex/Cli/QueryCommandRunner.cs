@@ -358,59 +358,6 @@ public static partial class QueryCommandRunner
             payload["output_byte_limit"] = options.MaxJsonBytes.Value;
     }
 
-    private static JsonArray BuildRepoMapNextCommands(QueryCommandOptions options)
-    {
-        var commands = new JsonArray
-        {
-            BuildRepoMapReplayCommand(options, ["--summary-only"]),
-        };
-
-        if (options.MapSections == null)
-        {
-            commands.Add(BuildRepoMapReplayCommand(options, ["--sections", "tree", "--limit", GetCompactSectionLimit(options).ToString(CultureInfo.InvariantCulture)]));
-            commands.Add(BuildRepoMapReplayCommand(options, ["--sections", "hotspots", "--limit", GetCompactSectionLimit(options).ToString(CultureInfo.InvariantCulture)]));
-        }
-        else
-        {
-            commands.Add(BuildRepoMapReplayCommand(options, ["--sections", string.Join(',', options.MapSections), "--limit", GetCompactSectionLimit(options).ToString(CultureInfo.InvariantCulture)]));
-        }
-
-        return commands;
-    }
-
-    private static string BuildRepoMapReplayCommand(QueryCommandOptions options, string[] mapArgs)
-    {
-        var args = new List<string>
-        {
-            "cdidx",
-            "map",
-            options.Compact ? "--compact" : "--json",
-        };
-        args.AddRange(mapArgs);
-        AddRepoMapReplayOptions(args, options);
-        return string.Join(" ", args.Select(QuoteReplayShellArg));
-    }
-
-    private static void AddRepoMapReplayOptions(List<string> args, QueryCommandOptions options)
-    {
-        if (options.DbPathExplicit)
-            AddReplayValueOption(args, "--db", options.DbPath);
-        if (!string.IsNullOrWhiteSpace(options.Lang))
-            AddReplayValueOption(args, "--lang", options.Lang);
-        foreach (var pathPattern in options.PathPatterns)
-            AddReplayValueOption(args, "--path", pathPattern);
-        foreach (var excludePath in options.ExcludePaths)
-            AddReplayValueOption(args, "--exclude-path", excludePath);
-        if (options.ExcludeTests)
-            args.Add("--exclude-tests");
-        if (options.ContextAfterExplicit)
-            AddReplayValueOption(args, "--depth", options.ContextAfter.ToString(CultureInfo.InvariantCulture));
-        if (options.MinEntrypointConfidence > 0)
-            AddReplayValueOption(args, "--min-entrypoint-confidence", options.MinEntrypointConfidence.ToString("0.###", CultureInfo.InvariantCulture));
-        if (options.MaxJsonBytes.HasValue)
-            AddReplayValueOption(args, "--max-json-bytes", options.MaxJsonBytes.Value.ToString(CultureInfo.InvariantCulture));
-    }
-
     private static void ApplyInspectFieldSelection(JsonObject payload, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
     {
         if (options.InspectFields == null)
