@@ -115,7 +115,7 @@ public partial class FileIndexer
                 continue;
             }
 
-            if ((attributes & FileAttributes.Directory) != 0 || Directory.Exists(LongPath.EnsureWindowsPrefix(entry)))
+            if ((attributes & FileAttributes.Directory) != 0)
             {
                 subdirectories.Add(entry);
                 continue;
