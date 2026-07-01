@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using CodeIndex.Database;
 
 namespace CodeIndex.Cli;
 
@@ -185,4 +186,84 @@ public static partial class QueryCommandRunner
 
     private static bool TryParsePositiveLine(string value, out int line)
         => int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out line) && line > 0;
+
+    private static List<ExcerptSemanticToken> BuildExcerptSemanticTokens(FileExcerptResult excerpt)
+    {
+        var tokens = new List<ExcerptSemanticToken>();
+        var lines = excerpt.Content.Replace("\r\n", "\n").Split('\n');
+        var spans = excerpt.ContentLineSpans.Count == 0
+            ? BuildIdentityExcerptContentLineSpans(excerpt, lines)
+            : excerpt.ContentLineSpans;
+        foreach (var span in spans)
+        {
+            if (span.ContentLine <= 0 || span.ContentLine > lines.Length)
+                continue;
+
+            var line = lines[span.ContentLine - 1];
+            var startColumn = Math.Clamp(span.ContentStartColumn - 1, 0, line.Length);
+            var endColumn = Math.Clamp(span.ContentEndColumn - 1, startColumn, line.Length);
+            var column = startColumn;
+            while (column < endColumn)
+            {
+                if (!IsSemanticTokenStart(line[column]))
+                {
+                    column++;
+                    continue;
+                }
+
+                var start = column;
+                column++;
+                while (column < endColumn && IsSemanticTokenPart(line[column]))
+                    column++;
+
+                var tokenText = line[start..column];
+                var sourceStartColumn = span.SourceStartColumn + ((start + 1) - span.ContentStartColumn);
+                var sourceEndColumn = span.SourceStartColumn + ((column + 1) - span.ContentStartColumn);
+                tokens.Add(new ExcerptSemanticToken
+                {
+                    StartLine = span.SourceLine,
+                    StartColumn = sourceStartColumn,
+                    EndLine = span.SourceLine,
+                    EndColumn = sourceEndColumn,
+                    Type = ClassifySemanticToken(tokenText),
+                });
+            }
+        }
+
+        return tokens;
+    }
+
+    private static List<ExcerptContentLineSpan> BuildIdentityExcerptContentLineSpans(FileExcerptResult excerpt, string[] lines)
+    {
+        var spans = new List<ExcerptContentLineSpan>(lines.Length);
+        for (var i = 0; i < lines.Length; i++)
+        {
+            spans.Add(new ExcerptContentLineSpan
+            {
+                ContentLine = i + 1,
+                SourceLine = excerpt.StartLine + i,
+                ContentStartColumn = 1,
+                ContentEndColumn = lines[i].Length + 1,
+                SourceStartColumn = 1,
+                SourceEndColumn = lines[i].Length + 1,
+            });
+        }
+
+        return spans;
+    }
+
+    private static bool IsSemanticTokenStart(char value) =>
+        char.IsLetter(value) || value == '_' || char.IsDigit(value);
+
+    private static bool IsSemanticTokenPart(char value) =>
+        char.IsLetterOrDigit(value) || value == '_';
+
+    private static string ClassifySemanticToken(string token)
+    {
+        if (token.All(char.IsDigit))
+            return "number";
+        if (char.IsUpper(token[0]))
+            return "type";
+        return "variable";
+    }
 }
