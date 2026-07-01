@@ -178,6 +178,9 @@ public static partial class SymbolExtractor
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
             var line = lines[lineIndex];
+            if (line.IndexOf('$') < 0)
+                continue;
+
             var match = PhpPropertyDeclarationHeadRegex.Match(line);
             if (!match.Success)
                 continue;
@@ -215,6 +218,9 @@ public static partial class SymbolExtractor
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
             var line = lines[lineIndex];
+            if (!line.Contains("@method", StringComparison.OrdinalIgnoreCase))
+                continue;
+
             var match = PhpDocblockMethodRegex.Match(line);
             if (!match.Success)
                 continue;
@@ -251,6 +257,13 @@ public static partial class SymbolExtractor
             var line = lines[lineIndex];
             if (line.IndexOf("/**", StringComparison.Ordinal) >= 0)
                 seenDocblockPropertyNames = new HashSet<string>(StringComparer.Ordinal);
+
+            if (line.IndexOf("property", StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                if (seenDocblockPropertyNames != null && line.IndexOf("*/", StringComparison.Ordinal) >= 0)
+                    seenDocblockPropertyNames = null;
+                continue;
+            }
 
             var match = PhpDocblockPropertyRegex.Match(line);
             if (match.Success)
@@ -289,6 +302,9 @@ public static partial class SymbolExtractor
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
             var line = lines[lineIndex];
+            if (line.IndexOf("as", StringComparison.OrdinalIgnoreCase) < 0)
+                continue;
+
             var match = PhpTraitAliasRegex.Match(line);
             if (!match.Success)
                 continue;
@@ -319,6 +335,9 @@ public static partial class SymbolExtractor
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
             var line = lines[lineIndex];
+            if (line.IndexOf("type", StringComparison.OrdinalIgnoreCase) < 0)
+                continue;
+
             var match = PhpDocblockTypeAliasRegex.Match(line);
             if (!match.Success)
                 continue;
@@ -350,6 +369,9 @@ public static partial class SymbolExtractor
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
             var line = lines[lineIndex];
+            if (line.IndexOf("import-type", StringComparison.OrdinalIgnoreCase) < 0)
+                continue;
+
             var match = PhpDocblockImportTypeRegex.Match(line);
             if (!match.Success)
                 continue;
@@ -454,6 +476,9 @@ public static partial class SymbolExtractor
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
             var line = lines[lineIndex];
+            if (line.IndexOf("__construct", StringComparison.OrdinalIgnoreCase) < 0)
+                continue;
+
             var constructorMatch = PhpSameLineConstructorRegex.Match(line);
             var constructorStart = PhpConstructorStartRegex.IsMatch(line);
             if (!constructorMatch.Success && !constructorStart)
