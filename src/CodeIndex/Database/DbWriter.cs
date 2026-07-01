@@ -1276,13 +1276,32 @@ public class DbWriter
         if (retainedStem.Length == 0)
             return 0;
 
+        var basePath = retainedDirectory.Length == 0
+            ? retainedStem
+            : $"{retainedDirectory}/{retainedStem}";
+        var baseDotPattern = EscapeLikePattern(basePath + ".") + "%";
         var staleIds = new List<long>();
         var cmd = RentCommand(
-            "SELECT id, path FROM files WHERE path <> @path",
-            static c => c.Parameters.Add("@path", SqliteType.Text));
+            """
+            SELECT id, path
+            FROM files
+            WHERE path <> @path
+              AND (
+                  path = @base_path
+                  OR path LIKE @base_dot_pattern ESCAPE '\'
+              )
+            """,
+            static c =>
+            {
+                c.Parameters.Add("@path", SqliteType.Text);
+                c.Parameters.Add("@base_path", SqliteType.Text);
+                c.Parameters.Add("@base_dot_pattern", SqliteType.Text);
+            });
         try
         {
             cmd.Parameters["@path"].Value = retainedRelativePath;
+            cmd.Parameters["@base_path"].Value = basePath;
+            cmd.Parameters["@base_dot_pattern"].Value = baseDotPattern;
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
@@ -1385,6 +1404,20 @@ public class DbWriter
         var fileName = slashIndex < 0 ? normalized : normalized[(slashIndex + 1)..];
         var dotIndex = fileName.LastIndexOf('.');
         return dotIndex <= 0 ? fileName : fileName[..dotIndex];
+    }
+
+    private static string EscapeLikePattern(string value)
+    {
+        var builder = new StringBuilder(value.Length);
+        foreach (var ch in value)
+        {
+            if (ch is '\\' or '%' or '_')
+                builder.Append('\\');
+
+            builder.Append(ch);
+        }
+
+        return builder.ToString();
     }
 
     /// <summary>

@@ -333,6 +333,41 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void PurgeStaleFilesSharingDirectoryAndStem_HandlesLikeWildcardCharacters()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("purge-stale-stem-wildcards");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "target_%100.py"), "# retained rename target");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "targetA%100.cs"), "# similar live file");
+
+            var retainedId = UpsertTestFile("src/target_%100.py", checksum: "retained");
+            var staleId = UpsertTestFile("src/target_%100.cs", checksum: "stale");
+            var similarId = UpsertTestFile("src/targetA%100.cs", checksum: "similar");
+            _writer.InsertChunks([
+                new() { FileId = retainedId, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = "retained" },
+                new() { FileId = staleId, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = "stale" },
+                new() { FileId = similarId, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = "similar" },
+            ]);
+
+            var purged = _writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, "src/target_%100.py");
+
+            Assert.Equal(1, purged);
+            Assert.True(_writer.HasFileAtPath("src/target_%100.py"));
+            Assert.False(_writer.HasFileAtPath("src/target_%100.cs"));
+            Assert.True(_writer.HasFileAtPath("src/targetA%100.cs"));
+            using var cmd = _db.Connection.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM chunks";
+            Assert.Equal(2L, (long)cmd.ExecuteScalar()!);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void InsertSymbols_UnknownKind_ThrowsBeforePersisting()
     {
         var ex = Assert.Throws<ArgumentException>(() => _writer.InsertSymbols(
