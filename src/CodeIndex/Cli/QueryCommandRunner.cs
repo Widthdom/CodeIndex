@@ -47,13 +47,6 @@ public static partial class QueryCommandRunner
     internal const string DefaultLimitEnvironmentVariable = "CDIDX_DEFAULT_LIMIT";
     internal const string DefaultSnippetLinesEnvironmentVariable = "CDIDX_DEFAULT_SNIPPET_LINES";
     internal const string DefaultMaxLineWidthEnvironmentVariable = "CDIDX_DEFAULT_MAX_LINE_WIDTH";
-    private const string LanguageCapabilityGraph = "graph";
-    private const string LanguageCapabilityReferences = "references";
-    private const string LanguageCapabilitySymbols = "symbols";
-    private const string LanguageCapabilityMissingGraph = "missing-graph";
-    private const string LanguageCapabilityMissingReferences = "missing-references";
-    private const string LanguageCapabilityMissingSymbols = "missing-symbols";
-    private const string LanguageCapabilitySearchOnly = "search-only";
     // Cap OR-joined `symbols` names well below SQLite's 1000 expression-tree depth so oversized
     // batches fail fast with a clear usage error instead of a confusing SQLite exception.
     // OR 結合の `symbols` 名は SQLite の式木深さ上限 1000 を十分下回る値で頭打ちにし、
