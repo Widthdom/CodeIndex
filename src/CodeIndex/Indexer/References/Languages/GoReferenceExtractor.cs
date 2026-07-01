@@ -18,7 +18,7 @@ internal static class GoReferenceExtractor
         @"(?<!<)<-\s*(?<name>[A-Za-z_]\w*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    public static bool[] BuildImportBlockLineMap(IReadOnlyList<string> originalLines)
+    public static bool[]? BuildImportBlockLineMap(IReadOnlyList<string> originalLines)
         => LanguageReferenceExtractionSupport.BuildGoImportBlockLineMap(originalLines);
 
     public static void EmitConcurrencyReferences(
