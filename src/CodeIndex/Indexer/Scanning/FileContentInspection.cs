@@ -58,6 +58,18 @@ internal readonly record struct RawByteContentInspection(
             && rawBytes[0] == 0xEF
             && rawBytes[1] == 0xBB
             && rawBytes[2] == 0xBF;
+        var rawSpan = rawBytes.AsSpan();
+        if (rawSpan.IndexOfAny((byte)0, (byte)0x0D) < 0)
+        {
+            return new RawByteContentInspection(
+                HasUtf8Bom: hasUtf8Bom,
+                HasNullByte: false,
+                NullByteOffset: -1,
+                HasCrlf: false,
+                HasLfOnly: rawSpan.IndexOf((byte)0x0A) >= 0,
+                HasCrOnly: false);
+        }
+
         var hasCrlf = false;
         var hasLfOnly = false;
         var hasCrOnly = false;
