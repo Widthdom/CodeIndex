@@ -78,6 +78,7 @@ affected:
 - **Gated wrapped XAML attribute scans by attribute name** - wrapped XAML attribute extraction now skips full-text walks for `x:Name`, `x:Key`, and event attributes whose names are absent.
 - **Gated XAML Binding ElementName scans by marker** - XAML/XML extraction now skips Binding markup, object element, and property element ElementName scans when their markers are absent.
 - **Gated XAML Binding Path scans by marker** - XAML/XML extraction now skips Binding object-element and property-element Path scans when their markers are absent.
+- **Gated XAML type element regex scans by marker** - XAML/XML extraction now checks for `x:Type`/`TypeName` markers before running type object/property element regexes.
 
 ## 日本語
 
@@ -120,3 +121,4 @@ affected:
 - **wrapped XAML attribute scan を attribute name で gate します** - wrapped XAML attribute extraction は `x:Name`、`x:Key`、event attribute の名前がない場合に full-text walk を skip します。
 - **XAML Binding ElementName scan を marker で gate します** - XAML/XML extraction は marker がない場合に Binding markup、object element、property element の ElementName scan を skip します。
 - **XAML Binding Path scan を marker で gate します** - XAML/XML extraction は marker がない場合に Binding object-element と property-element の Path scan を skip します。
+- **XAML type element regex scan を marker で gate します** - XAML/XML extraction は type object/property element regex を実行する前に `x:Type` / `TypeName` marker を確認します。

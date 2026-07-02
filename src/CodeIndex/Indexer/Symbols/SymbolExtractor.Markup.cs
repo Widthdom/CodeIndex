@@ -1484,6 +1484,12 @@ public static partial class SymbolExtractor
         int[] lineStarts,
         List<SymbolRecord> symbols)
     {
+        if (!rawText.Contains("x:Type", StringComparison.Ordinal)
+            || !rawText.Contains("TypeName", StringComparison.Ordinal))
+        {
+            return;
+        }
+
         foreach (Match typeMatch in XamlTypeObjectElementRegex.Matches(rawText))
         {
             var value = NormalizeXamlKeyValue(typeMatch.Groups["value"].Value);
@@ -1512,6 +1518,9 @@ public static partial class SymbolExtractor
         int[] lineStarts,
         List<SymbolRecord> symbols)
     {
+        if (!rawText.Contains(".TypeName", StringComparison.Ordinal))
+            return;
+
         foreach (Match typeMatch in XamlTypePropertyElementRegex.Matches(rawText))
         {
             var value = NormalizeXamlKeyValue(typeMatch.Groups["value"].Value);
