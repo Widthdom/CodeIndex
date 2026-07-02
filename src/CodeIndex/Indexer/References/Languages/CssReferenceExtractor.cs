@@ -73,12 +73,9 @@ internal static class CssReferenceExtractor
         new(CssCustomPropertyReferenceRegex, "reference"),
     ];
 
-    private static readonly ReferencePattern[] ScssReferencePatterns =
-    [
-        new(ScssVariableReferenceRegex, "call", SkipVariableDeclarations: true),
-        new(ScssExtendReferenceRegex, "call"),
-        new(ScssIncludeReferenceRegex, "call"),
-    ];
+    private static readonly ReferencePattern ScssVariableReferencePattern = new(ScssVariableReferenceRegex, "call", SkipVariableDeclarations: true);
+    private static readonly ReferencePattern ScssExtendReferencePattern = new(ScssExtendReferenceRegex, "call");
+    private static readonly ReferencePattern ScssIncludeReferencePattern = new(ScssIncludeReferenceRegex, "call");
 
     private static readonly HashSet<string> CssAnimationShorthandIgnoredTokens = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -191,8 +188,14 @@ internal static class CssReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        foreach (var pattern in ScssReferencePatterns)
-            EmitMatches(pattern, preparedLine, context, lineNumber, references, seen, fileId, definitionNames: null, container);
+        if (preparedLine.IndexOf('$') >= 0)
+            EmitMatches(ScssVariableReferencePattern, preparedLine, context, lineNumber, references, seen, fileId, definitionNames: null, container);
+
+        if (preparedLine.IndexOf("@extend", StringComparison.Ordinal) >= 0)
+            EmitMatches(ScssExtendReferencePattern, preparedLine, context, lineNumber, references, seen, fileId, definitionNames: null, container);
+
+        if (preparedLine.IndexOf("@include", StringComparison.Ordinal) >= 0)
+            EmitMatches(ScssIncludeReferencePattern, preparedLine, context, lineNumber, references, seen, fileId, definitionNames: null, container);
     }
 
     public static void EmitSass(
