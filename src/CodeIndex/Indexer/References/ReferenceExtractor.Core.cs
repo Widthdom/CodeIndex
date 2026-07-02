@@ -125,12 +125,11 @@ public static partial class ReferenceExtractor
         var rustEnumCandidates = language == "rust"
             ? BuildRustEnumCandidates(symbols)
             : null;
-        var pythonDefinitionContainersByLineAndKind = language == "python"
-            ? BuildPythonDefinitionContainersByLineAndKind(symbols)
-            : null;
-        var pythonHeaderSymbolsByLine = language == "python"
-            ? BuildPythonHeaderSymbolsByLine(symbols)
-            : null;
+        var pythonSymbolLookups = language == "python"
+            ? BuildPythonSymbolLookups(symbols)
+            : default;
+        var pythonDefinitionContainersByLineAndKind = pythonSymbolLookups.DefinitionContainersByLineAndKind;
+        var pythonHeaderSymbolsByLine = pythonSymbolLookups.HeaderSymbolsByLine;
         var swiftPropertyDefinitionsByLine = BuildSwiftPropertyDefinitionsByLine(language, symbols, request.ReportDiagnostic);
 
         // Synthetic function-kind container for C# primary-ctor declarations with a base

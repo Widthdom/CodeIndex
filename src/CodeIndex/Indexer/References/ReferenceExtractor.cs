@@ -2155,35 +2155,25 @@ public static partial class ReferenceExtractor
         }
     }
 
-    private static Dictionary<(int Line, string Kind), SymbolRecord> BuildPythonDefinitionContainersByLineAndKind(IReadOnlyList<SymbolRecord> symbols)
+    private static (
+        Dictionary<(int Line, string Kind), SymbolRecord>? DefinitionContainersByLineAndKind,
+        Dictionary<int, SymbolRecord>? HeaderSymbolsByLine) BuildPythonSymbolLookups(IReadOnlyList<SymbolRecord> symbols)
     {
         var containers = new Dictionary<(int Line, string Kind), SymbolRecord>();
-        foreach (var symbol in symbols)
-        {
-            if (symbol.Kind is not ("class" or "function"))
-                continue;
-
-            containers.TryAdd((symbol.Line, symbol.Kind), symbol);
-        }
-
-        return containers;
-    }
-
-    private static Dictionary<int, SymbolRecord> BuildPythonHeaderSymbolsByLine(IReadOnlyList<SymbolRecord> symbols)
-    {
         var symbolsByLine = new Dictionary<int, SymbolRecord>();
         foreach (var symbol in symbols)
         {
+            if (symbol.Kind is "class" or "function")
+                containers.TryAdd((symbol.Line, symbol.Kind), symbol);
+
             if (symbol.Signature == null
                 || symbol.Kind is not ("function" or "class" or "property" or "class_hook"))
-            {
                 continue;
-            }
 
             symbolsByLine.TryAdd(symbol.Line, symbol);
         }
 
-        return symbolsByLine;
+        return (containers, symbolsByLine);
     }
 
     private static bool IsJsxFilePath(string? path)
