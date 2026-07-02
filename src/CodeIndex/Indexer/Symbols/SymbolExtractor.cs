@@ -5028,14 +5028,19 @@ public static partial class SymbolExtractor
             var ownerBodyEnd = owner?.BodyEndLine;
             var lineNumber = i + 1;
 
-            foreach (Match match in SqlReturnsTableRegex.Matches(header))
+            if (header.Contains("RETURNS", StringComparison.OrdinalIgnoreCase)
+                && header.Contains("TABLE", StringComparison.OrdinalIgnoreCase))
             {
-                foreach (var column in EnumerateSqlColumnDefinitions(match.Groups["columns"].Value))
-                    AddSqlRoutineFieldSymbol(fileId, lines, symbols, lineNumber, column.Name, column.Type, ownerName, ownerBodyStart, ownerBodyEnd);
+                foreach (Match match in SqlReturnsTableRegex.Matches(header))
+                {
+                    foreach (var column in EnumerateSqlColumnDefinitions(match.Groups["columns"].Value))
+                        AddSqlRoutineFieldSymbol(fileId, lines, symbols, lineNumber, column.Name, column.Type, ownerName, ownerBodyStart, ownerBodyEnd);
+                }
             }
 
             var parameterList = ExtractSqlRoutineParameterList(header);
-            if (parameterList != null)
+            if (parameterList != null
+                && parameterList.Contains("OUT", StringComparison.OrdinalIgnoreCase))
             {
                 foreach (Match match in SqlOutParameterRegex.Matches(parameterList))
                 {
