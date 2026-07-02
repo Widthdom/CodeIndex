@@ -2296,6 +2296,9 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf("->", StringComparison.Ordinal) < 0)
+            return;
+
         var genericCloseIndex = FindRustGenericClose(preparedLine, genericOpenIndex);
         if (genericCloseIndex <= genericOpenIndex)
             return;
@@ -2321,6 +2324,9 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf("->", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (var whereIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "where"))
         {
             var clauseStart = whereIndex + "where".Length;
@@ -2350,6 +2356,12 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (clause.IndexOf("->", StringComparison.Ordinal) < 0
+            || clause.IndexOf(':') < 0)
+        {
+            return;
+        }
+
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(clause))
         {
             var fragment = clause.Substring(segmentStart, segmentLength);
@@ -2390,6 +2402,9 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (expression.IndexOf("->", StringComparison.Ordinal) < 0)
+            return;
+
         var arrowIndex = TypedLanguageReferenceExtractor.FindTopLevelSequence(expression, "->");
         if (arrowIndex < 0)
             return;

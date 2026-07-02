@@ -119,6 +119,7 @@ affected:
 - **Gated Rust impl and trait header type scans by marker** - Rust reference extraction now checks `impl`, `trait`, and trait-bound markers before scanning implementation and trait header types.
 - **Gated Rust generic and where-bound scans by marker** - Rust reference extraction now checks generic-angle and `where` markers before scanning generic bounds, defaults, const generic usages, and where clauses.
 - **Gated Rust const generic segment scans by marker** - Rust reference extraction now checks `const` and annotation markers before splitting generic and where-clause segments for const generic references.
+- **Gated Rust function-trait return type scans by marker** - Rust reference extraction now checks return-arrow and bound markers before scanning function-trait return types in generic, where, and trait expressions.
 - **Gated CSS preprocessor import scans by marker** - CSS, Sass, and Stylus reference extraction now checks import/use/forward/require markers before stripping comments and running import regex probes.
 - **Gated CSS animation reference scans by marker** - CSS reference extraction now checks the animation marker before running animation-name and shorthand value regex probes.
 - **Gated CSS custom-property reference scans by marker** - CSS reference extraction now checks `var` and custom-property markers before running custom-property reference regex probes.
@@ -276,6 +277,7 @@ affected:
 - **Rust impl / trait header type scan を marker で gate します** - Rust reference extraction は implementation と trait header type を走査する前に `impl`、`trait`、trait-bound marker を確認します。
 - **Rust generic / where-bound scan を marker で gate します** - Rust reference extraction は generic bound、default、const generic usage、where clause を走査する前に generic-angle と `where` marker を確認します。
 - **Rust const generic segment scan を marker で gate します** - Rust reference extraction は generic / where-clause segment を分割して const generic reference を探す前に `const` と annotation marker を確認します。
+- **Rust function-trait return type scan を marker で gate します** - Rust reference extraction は generic、where、trait expression 内の function-trait return type を走査する前に return-arrow と bound marker を確認します。
 - **CSS preprocessor import scan を marker で gate します** - CSS、Sass、Stylus reference extraction は comment strip と import regex probe の前に import/use/forward/require marker を確認します。
 - **CSS animation reference scan を marker で gate します** - CSS reference extraction は animation-name と shorthand value regex probe を実行する前に animation marker を確認します。
 - **CSS custom-property reference scan を marker で gate します** - CSS reference extraction は custom-property reference regex probe を実行する前に `var` と custom-property marker を確認します。
