@@ -337,12 +337,18 @@ internal static class RustReferenceExtractor
 
     public static void EmitAdditionalCallReferences(string preparedLine, Action<string, int> addCallLikeReference)
     {
-        foreach (Match match in RawIdentifierCallRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("r#", StringComparison.Ordinal) >= 0)
         {
-            var name = match.Groups["name"].Value;
-            var callIndex = match.Groups["name"].Index;
-            addCallLikeReference(name, callIndex);
+            foreach (Match match in RawIdentifierCallRegex.Matches(preparedLine))
+            {
+                var name = match.Groups["name"].Value;
+                var callIndex = match.Groups["name"].Index;
+                addCallLikeReference(name, callIndex);
+            }
         }
+
+        if (preparedLine.IndexOf('!') < 0)
+            return;
 
         foreach (Match match in MacroCallRegex.Matches(preparedLine))
         {
