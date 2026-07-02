@@ -3398,8 +3398,6 @@ public static partial class ReferenceExtractor
             if (line.IndexOf('f') < 0 && line.IndexOf('F') < 0)
                 continue;
 
-            var chars = line.ToCharArray();
-            var changed = false;
             for (var column = 0; column < line.Length; column++)
             {
                 if (!TryOpenPythonString(line, column, out var prefixLength, out var quoteChar, out var isRaw, out var isFString, out var isTripleQuoted))
@@ -3414,21 +3412,14 @@ public static partial class ReferenceExtractor
                 if (!isTripleQuoted)
                 {
                     result[lineIndex] = MaskPythonSingleLineFStrings(line);
-                    chars = result[lineIndex].ToCharArray();
-                    changed = true;
                     break;
                 }
 
                 MaskPythonTripleQuotedFString(result, lineIndex, column, prefixLength, quoteChar, isRaw, out var endLineIndex, out var endColumn);
                 lineIndex = endLineIndex;
                 line = result[lineIndex];
-                chars = line.ToCharArray();
                 column = endColumn;
-                changed = true;
             }
-
-            if (changed)
-                result[lineIndex] = new string(chars);
         }
 
         return result;
