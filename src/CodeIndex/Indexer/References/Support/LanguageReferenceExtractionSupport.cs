@@ -1591,10 +1591,17 @@ internal static partial class LanguageReferenceExtractionSupport
                 EmitCVaArgTypeOperandReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, language);
         }
 
-        foreach (Match match in CppTypeOperandOperatorRegex.Matches(preparedLine))
+        var hasCppParen = preparedLine.IndexOf('(') >= 0;
+        var hasCppTypeOperandOperatorMarker = hasCppParen
+            && (preparedLine.IndexOf("sizeof", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("alignof", StringComparison.Ordinal) >= 0);
+        if (hasCppTypeOperandOperatorMarker)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            foreach (Match match in CppTypeOperandOperatorRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
         }
 
         foreach (Match match in CppTypeIdRegex.Matches(preparedLine))

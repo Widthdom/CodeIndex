@@ -254,6 +254,7 @@ affected:
 - **Gated C pointer-array declaration type scans by marker** - C reference extraction now checks function-pointer and array delimiters plus typedef/tag markers before running pointer-array declaration type regex probes.
 - **Gated C offsetof type scans by marker** - C reference extraction now checks `offsetof` call and comma markers plus typedef/tag markers before running offsetof type regex probes.
 - **Gated C va_arg type scans by marker** - C reference extraction now checks `va_arg` call and comma markers before running va_arg regex and operand scanners.
+- **Gated C++ type operand scans by marker** - C/C++ reference extraction now checks `sizeof` or `alignof` call markers before running C++ type operand regex probes.
 
 ## 日本語
 
@@ -442,3 +443,4 @@ affected:
 - **C pointer-array declaration type scan を marker で gate します** - C reference extraction は pointer-array declaration type regex probe の前に function-pointer / array delimiter marker と typedef/tag marker を確認します。
 - **C offsetof type scan を marker で gate します** - C reference extraction は offsetof type regex probe の前に `offsetof` call marker / comma marker と typedef/tag marker を確認します。
 - **C va_arg type scan を marker で gate します** - C reference extraction は va_arg regex / operand scanner の前に `va_arg` call marker と comma marker を確認します。
+- **C++ type operand scan を marker で gate します** - C/C++ reference extraction は C++ type operand regex probe の前に `sizeof` / `alignof` call marker を確認します。
