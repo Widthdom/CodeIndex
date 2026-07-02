@@ -520,8 +520,11 @@ public static partial class SymbolExtractor
             if (inFence)
                 continue;
 
-            foreach (Match match in MarkdownReferenceDefinitionRegex.Matches(line))
-                targets[match.Groups["label"].Value.Trim()] = match.Groups["target"].Value.Trim();
+            if (line.Contains("]:", StringComparison.Ordinal))
+            {
+                foreach (Match match in MarkdownReferenceDefinitionRegex.Matches(line))
+                    targets[match.Groups["label"].Value.Trim()] = match.Groups["target"].Value.Trim();
+            }
         }
 
         return targets;
@@ -529,11 +532,20 @@ public static partial class SymbolExtractor
 
     private static void AddMarkdownReferenceSymbols(long fileId, string line, int lineNumber, List<SymbolRecord> symbols, IReadOnlyDictionary<string, string> referenceTargets)
     {
-        foreach (Match match in MarkdownLocalAnchorLinkRegex.Matches(line))
-            AddMarkdownReferenceSymbol(fileId, match.Groups["target"].Value, line, lineNumber, symbols);
+        if (line.Contains("](", StringComparison.Ordinal))
+        {
+            foreach (Match match in MarkdownLocalAnchorLinkRegex.Matches(line))
+                AddMarkdownReferenceSymbol(fileId, match.Groups["target"].Value, line, lineNumber, symbols);
+        }
 
-        foreach (Match match in MarkdownLocalAnchorReferenceRegex.Matches(line))
-            AddMarkdownReferenceSymbol(fileId, match.Groups["target"].Value, line, lineNumber, symbols);
+        if (line.Contains("]:", StringComparison.Ordinal))
+        {
+            foreach (Match match in MarkdownLocalAnchorReferenceRegex.Matches(line))
+                AddMarkdownReferenceSymbol(fileId, match.Groups["target"].Value, line, lineNumber, symbols);
+        }
+
+        if (!line.Contains("][", StringComparison.Ordinal))
+            return;
 
         foreach (Match match in MarkdownReferenceLinkRegex.Matches(line))
         {
