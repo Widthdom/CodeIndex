@@ -165,6 +165,7 @@ affected:
 - **Gated Go generic helper function scans by marker** - Go generic call and instantiation helpers now skip function-line regex checks when the line lacks the `func` marker.
 - **Skipped GraphQL member extraction when input/union markers are absent** - GraphQL supplemental member extraction now avoids full-content joins for files without `input` blocks and runs union regexes only on lines containing `union`.
 - **Dispatched Razor directive scans by marker** - Razor directive supplemental extraction now skips lines without `@` and invokes only the directive regex matching the line marker.
+- **Gated Razor reference scans by marker** - Razor reference extraction now checks component-tag, directive, attribute, inject, and event-binding markers before running the matching regex probes.
 - **Dispatched Dockerfile supplemental scans by instruction** - Dockerfile extra symbol extraction now reads the leading instruction once per line and invokes only the matching ENV/LABEL/EXPOSE/VOLUME/FROM/SHELL/COPY/ADD/RUN helper.
 - **Gated Dockerfile named-stage fallback scans by marker** - Dockerfile extraction now skips named-stage base-image regex checks on `FROM` lines without an `AS` marker.
 - **Gated Java enum fallback scans by name start** - Java enum recovery now skips the line-fallback regex unless the line shape can match an uppercase enum member.
@@ -337,6 +338,7 @@ affected:
 - **Go generic helper function scan を marker で gate します** - Go generic call / instantiation helper は line に `func` marker がない場合 function-line regex check を skip します。
 - **input/union marker がない場合は GraphQL member extraction を skip します** - GraphQL の supplemental member extraction は `input` block がない file では full-content join を避け、union regex も `union` を含む行だけで実行します。
 - **Razor directive scan を marker で振り分けます** - Razor の directive supplemental extraction は `@` のない行を skip し、行 marker に対応する directive regex だけを実行します。
+- **Razor reference scan を marker で gate します** - Razor reference extraction は component-tag、directive、attribute、inject、event-binding marker を確認してから対応 regex probe を実行します。
 - **Dockerfile supplemental scan を instruction で振り分けます** - Dockerfile の追加 symbol extraction は各行の先頭 instruction を一度だけ読み、対応する ENV/LABEL/EXPOSE/VOLUME/FROM/SHELL/COPY/ADD/RUN helper だけを実行します。
 - **Dockerfile named-stage fallback scan を marker で gate します** - Dockerfile extraction は `AS` marker がない `FROM` 行で named-stage base-image regex check を skip します。
 - **Java enum fallback scan を name start で gate します** - Java enum recovery は uppercase enum member に一致し得る行形状の場合だけ line-fallback regex を実行します。

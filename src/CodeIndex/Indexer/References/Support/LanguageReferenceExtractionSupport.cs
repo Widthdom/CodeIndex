@@ -617,30 +617,100 @@ internal static partial class LanguageReferenceExtractionSupport
         IReadOnlySet<string>? fileDefinitionNames,
         IReadOnlyList<string>? implementedTypeNames)
     {
-        foreach (Match match in RazorComponentTagRegex.Matches(originalLine))
+        if (originalLine.IndexOf('<') >= 0)
         {
-            var group = match.Groups["name"];
-            var rawName = group.Value;
-            var name = rawName;
-            if (definitionNames?.Contains(name) == true)
-                continue;
-            var nameIndex = group.Index;
+            foreach (Match match in RazorComponentTagRegex.Matches(originalLine))
+            {
+                var group = match.Groups["name"];
+                var rawName = group.Value;
+                var name = rawName;
+                if (definitionNames?.Contains(name) == true)
+                    continue;
+                var nameIndex = group.Index;
 
-            ReferenceExtractor.AddReference(
-                references,
-                seen,
-                fileId,
-                name,
-                nameIndex,
-                "call",
-                context,
-                lineNumber,
-                resolveContainerForColumn(nameIndex));
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    name,
+                    nameIndex,
+                    "call",
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn(nameIndex));
+            }
         }
 
-        foreach (var match in EnumerateMatches(RazorDirectiveTypeRegex, originalLine)
-                     .Concat(EnumerateMatches(RazorAttributeTypeRegex, originalLine))
-                     .Concat(EnumerateMatches(RazorInjectRegex, originalLine)))
+        if (originalLine.IndexOf('@') >= 0)
+        {
+            if (originalLine.IndexOf("inherits", StringComparison.Ordinal) >= 0
+                || originalLine.IndexOf("implements", StringComparison.Ordinal) >= 0
+                || originalLine.IndexOf("model", StringComparison.Ordinal) >= 0)
+            {
+                foreach (var match in EnumerateMatches(RazorDirectiveTypeRegex, originalLine))
+                    EmitRazorTypeReference(match);
+            }
+
+            if (originalLine.IndexOf("@attribute", StringComparison.Ordinal) >= 0 && originalLine.IndexOf('[') >= 0)
+            {
+                foreach (var match in EnumerateMatches(RazorAttributeTypeRegex, originalLine))
+                    EmitRazorTypeReference(match);
+            }
+
+            if (originalLine.IndexOf("@inject", StringComparison.Ordinal) >= 0)
+            {
+                foreach (var match in EnumerateMatches(RazorInjectRegex, originalLine))
+                    EmitRazorTypeReference(match);
+            }
+        }
+
+        if (originalLine.IndexOf("@on", StringComparison.Ordinal) >= 0 && originalLine.IndexOf('=') >= 0)
+        {
+            foreach (Match match in RazorEventHandlerRegex.Matches(originalLine))
+            {
+                var name = match.Groups["name"].Value;
+                var nameIndex = match.Groups["name"].Index;
+                var container = resolveContainerForColumn(nameIndex);
+                var kind = "razor_event_binding";
+
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    name,
+                    nameIndex,
+                    kind,
+                    context,
+                    lineNumber,
+                    container);
+
+                if (fileDefinitionNames?.Contains(name) == true || implementedTypeNames is not { Count: > 0 })
+                    continue;
+
+                foreach (var implementedTypeName in implementedTypeNames)
+                {
+                    ReferenceExtractor.AddReference(
+                        references,
+                        seen,
+                        fileId,
+                        name,
+                        nameIndex,
+                        "implicit_implementation",
+                        context,
+                        lineNumber,
+                        new SymbolRecord
+                        {
+                            Kind = "interface",
+                            Name = LastQualifiedSegment(implementedTypeName),
+                            Line = lineNumber,
+                            StartLine = lineNumber,
+                            EndLine = lineNumber
+                        });
+                }
+            }
+        }
+
+        void EmitRazorTypeReference(Match match)
         {
             var group = match.Groups["type"];
             ReferenceExtractor.AddTypeExpressionSegments(
@@ -653,49 +723,6 @@ internal static partial class LanguageReferenceExtractionSupport
                 lineNumber,
                 resolveContainerForColumn(group.Index),
                 "csharp");
-        }
-
-        foreach (Match match in RazorEventHandlerRegex.Matches(originalLine))
-        {
-            var name = match.Groups["name"].Value;
-            var nameIndex = match.Groups["name"].Index;
-            var container = resolveContainerForColumn(nameIndex);
-            var kind = "razor_event_binding";
-
-            ReferenceExtractor.AddReference(
-                references,
-                seen,
-                fileId,
-                name,
-                nameIndex,
-                kind,
-                context,
-                lineNumber,
-                container);
-
-            if (fileDefinitionNames?.Contains(name) == true || implementedTypeNames is not { Count: > 0 })
-                continue;
-
-            foreach (var implementedTypeName in implementedTypeNames)
-            {
-                ReferenceExtractor.AddReference(
-                    references,
-                    seen,
-                    fileId,
-                    name,
-                    nameIndex,
-                    "implicit_implementation",
-                    context,
-                    lineNumber,
-                    new SymbolRecord
-                    {
-                        Kind = "interface",
-                        Name = LastQualifiedSegment(implementedTypeName),
-                        Line = lineNumber,
-                        StartLine = lineNumber,
-                        EndLine = lineNumber
-                    });
-            }
         }
     }
 
