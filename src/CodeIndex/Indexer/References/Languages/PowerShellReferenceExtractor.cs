@@ -43,7 +43,7 @@ internal static class PowerShellReferenceExtractor
 
     public static Dictionary<string, List<SplatAssignment>> BuildSplatAssignments(string[] preparedLines)
     {
-        var assignments = new Dictionary<string, List<SplatAssignment>>(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, List<SplatAssignment>>? assignments = null;
         for (var index = 0; index < preparedLines.Length; index++)
         {
             var line = preparedLines[index];
@@ -57,7 +57,7 @@ internal static class PowerShellReferenceExtractor
             foreach (Match match in SplatAssignmentStartRegex.Matches(line))
             {
                 var start = match.Index + match.Length;
-                var builder = new System.Text.StringBuilder();
+                var builder = new System.Text.StringBuilder(Math.Max(0, line.Length - start));
                 var endLine = index;
                 var depth = 1;
                 var firstFragment = true;
@@ -95,6 +95,7 @@ internal static class PowerShellReferenceExtractor
                     continue;
 
                 var name = match.Groups["name"].Value;
+                assignments ??= new Dictionary<string, List<SplatAssignment>>(StringComparer.OrdinalIgnoreCase);
                 if (!assignments.TryGetValue(name, out var namedAssignments))
                 {
                     namedAssignments = [];
@@ -105,7 +106,7 @@ internal static class PowerShellReferenceExtractor
             }
         }
 
-        return assignments;
+        return assignments ?? [];
     }
 
     public static void EmitSplatParameterReferences(
