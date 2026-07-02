@@ -277,6 +277,7 @@ affected:
 - **Gated C++ dynamic exception spec scans by marker** - C/C++ reference extraction now checks `throw` and parenthesis markers before running dynamic exception specification regex probes.
 - **Gated C++ declaration type scans by marker** - C/C++ reference extraction now checks declaration terminators and lightweight type markers before running declaration type regex probes.
 - **Gated Dart variable type scans by marker** - Dart reference extraction now checks declaration terminators and uppercase type markers before running variable type regex probes.
+- **Gated Dart function signature scans by marker** - Dart reference extraction now checks parenthesis and uppercase type markers before running function signature and parameter type regex probes.
 
 ## 日本語
 
@@ -488,3 +489,4 @@ affected:
 - **C++ dynamic exception spec scan を marker で gate します** - C/C++ reference extraction は dynamic exception specification regex probe の前に `throw` と parenthesis marker を確認します。
 - **C++ declaration type scan を marker で gate します** - C/C++ reference extraction は declaration type regex probe の前に declaration terminator と軽量 type marker を確認します。
 - **Dart variable type scan を marker で gate します** - Dart reference extraction は variable type regex probe の前に declaration terminator と uppercase type marker を確認します。
+- **Dart function signature scan を marker で gate します** - Dart reference extraction は function signature / parameter type regex probe の前に parenthesis と uppercase type marker を確認します。

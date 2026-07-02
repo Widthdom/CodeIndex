@@ -2113,7 +2113,10 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        var signatureMatch = DartFunctionSignatureRegex.Match(preparedLine);
+        var hasDartParen = preparedLine.IndexOf('(') >= 0;
+        var signatureMatch = hasDartParen && hasDartUppercaseTypeMarker
+            ? DartFunctionSignatureRegex.Match(preparedLine)
+            : Match.Empty;
         if (signatureMatch.Success)
         {
             var returnGroup = signatureMatch.Groups["return"];
