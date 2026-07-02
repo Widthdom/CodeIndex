@@ -142,9 +142,10 @@ public static partial class ReferenceExtractor
         var csharpTypeNameSets = BuildCSharpTypeNameSets(language, symbols);
         var csharpKnownTypeNames = csharpTypeNameSets.KnownTypeNames;
         var csharpNonEnumTypeNames = csharpTypeNameSets.NonEnumTypeNames;
-        var csharpQualifiedEnumMemberLookup = BuildCSharpQualifiedEnumMemberLookup(language, symbols, csharpNonEnumTypeNames);
-        var csharpQualifiedConstantPatternMemberLookup = BuildCSharpQualifiedConstantPatternMemberLookup(language, symbols, csharpNonEnumTypeNames);
-        var csharpQualifiedTypePatternLookup = BuildCSharpQualifiedTypePatternLookup(language, symbols);
+        var csharpQualifiedPatternLookups = BuildCSharpQualifiedPatternLookups(language, symbols, csharpNonEnumTypeNames);
+        var csharpQualifiedEnumMemberLookup = csharpQualifiedPatternLookups.EnumMemberLookup;
+        var csharpQualifiedConstantPatternMemberLookup = csharpQualifiedPatternLookups.ConstantPatternMemberLookup;
+        var csharpQualifiedTypePatternLookup = csharpQualifiedPatternLookups.TypePatternLookup;
         var kotlinNameSets = KotlinReferenceExtractor.BuildNameSets(language, symbols);
         var kotlinConstructorTypeNames = kotlinNameSets.ConstructorTypeNames;
         var kotlinInfixFunctionNames = kotlinNameSets.InfixFunctionNames;

@@ -547,143 +547,115 @@ public static partial class ReferenceExtractor
         return lookup;
     }
 
-    private static Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> BuildCSharpQualifiedEnumMemberLookup(
+    private static (
+        Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> EnumMemberLookup,
+        Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> ConstantPatternMemberLookup,
+        Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> TypePatternLookup) BuildCSharpQualifiedPatternLookups(
         string language,
         IReadOnlyList<SymbolRecord> symbols,
         IReadOnlySet<string> conflictingNonEnumTypeNames)
     {
-        var lookup = new Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
+        var enumMemberLookup = new Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
+        var constantPatternMemberLookup = new Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
+        var typePatternLookup = new Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
         if (language != "csharp")
-            return lookup;
+            return (enumMemberLookup, constantPatternMemberLookup, typePatternLookup);
 
         foreach (var symbol in symbols)
         {
-            if (symbol.Kind != "enum" || symbol.ContainerKind != "enum")
-                continue;
+            if (symbol.Kind is "class" or "struct" or "interface" or "enum" or "delegate"
+                && !string.IsNullOrWhiteSpace(symbol.Name)
+                && !string.IsNullOrWhiteSpace(symbol.ContainerName))
+            {
+                AddCSharpQualifiedPatternTarget(
+                    typePatternLookup,
+                    symbol.Name,
+                    symbol.ContainerName!,
+                    symbol.ContainerQualifiedName,
+                    allowShortNameFallback: true);
+            }
+
             if (string.IsNullOrWhiteSpace(symbol.Name) || string.IsNullOrWhiteSpace(symbol.ContainerName))
                 continue;
 
-            if (!lookup.TryGetValue(symbol.Name, out var targets))
+            if (symbol.Kind == "enum" && symbol.ContainerKind == "enum")
             {
-                targets = [];
-                lookup[symbol.Name] = targets;
-            }
-
-            bool exists = false;
-            foreach (var target in targets)
-            {
-                if (string.Equals(target.EnumName, symbol.ContainerName, StringComparison.Ordinal)
-                    && string.Equals(target.QualifiedEnumName, symbol.ContainerQualifiedName, StringComparison.Ordinal))
-                {
-                    exists = true;
-                    break;
-                }
-            }
-
-            if (!exists)
-                targets.Add((
+                var allowShortNameFallback = !conflictingNonEnumTypeNames.Contains(symbol.ContainerName!);
+                AddCSharpQualifiedEnumMemberTarget(
+                    enumMemberLookup,
+                    symbol.Name,
                     symbol.ContainerName!,
                     symbol.ContainerQualifiedName,
-                    AllowShortNameFallback: !conflictingNonEnumTypeNames.Contains(symbol.ContainerName!)));
-        }
-
-        return lookup;
-    }
-
-    private static Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> BuildCSharpQualifiedConstantPatternMemberLookup(
-        string language,
-        IReadOnlyList<SymbolRecord> symbols,
-        IReadOnlySet<string> conflictingNonEnumTypeNames)
-    {
-        var lookup = new Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
-        if (language != "csharp")
-            return lookup;
-
-        foreach (var symbol in symbols)
-        {
-            if (string.IsNullOrWhiteSpace(symbol.Name) || string.IsNullOrWhiteSpace(symbol.ContainerName))
-                continue;
-
-            var target = symbol switch
-            {
-                { Kind: "enum", ContainerKind: "enum" } => (
-                    Included: true,
-                    AllowShortNameFallback: !conflictingNonEnumTypeNames.Contains(symbol.ContainerName!)),
-                _ when IsCSharpConstMemberSymbol(symbol) => (
-                    Included: true,
-                    AllowShortNameFallback: true),
-                _ => (Included: false, AllowShortNameFallback: false)
-            };
-
-            if (!target.Included)
-                continue;
-
-            if (!lookup.TryGetValue(symbol.Name, out var targets))
-            {
-                targets = [];
-                lookup[symbol.Name] = targets;
-            }
-
-            bool exists = false;
-            foreach (var existing in targets)
-            {
-                if (string.Equals(existing.ContainerName, symbol.ContainerName, StringComparison.Ordinal)
-                    && string.Equals(existing.QualifiedContainerName, symbol.ContainerQualifiedName, StringComparison.Ordinal))
-                {
-                    exists = true;
-                    break;
-                }
-            }
-
-            if (!exists)
-                targets.Add((
+                    allowShortNameFallback);
+                AddCSharpQualifiedPatternTarget(
+                    constantPatternMemberLookup,
+                    symbol.Name,
                     symbol.ContainerName!,
                     symbol.ContainerQualifiedName,
-                    target.AllowShortNameFallback));
-        }
-
-        return lookup;
-    }
-
-    private static Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> BuildCSharpQualifiedTypePatternLookup(
-        string language,
-        IReadOnlyList<SymbolRecord> symbols)
-    {
-        var lookup = new Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
-        if (language != "csharp")
-            return lookup;
-
-        foreach (var symbol in symbols)
-        {
-            if (symbol.Kind is not ("class" or "struct" or "interface" or "enum" or "delegate")
-                || string.IsNullOrWhiteSpace(symbol.Name)
-                || string.IsNullOrWhiteSpace(symbol.ContainerName))
-            {
+                    allowShortNameFallback);
                 continue;
             }
 
-            if (!lookup.TryGetValue(symbol.Name, out var targets))
-            {
-                targets = [];
-                lookup[symbol.Name] = targets;
-            }
-
-            bool exists = false;
-            foreach (var existing in targets)
-            {
-                if (string.Equals(existing.ContainerName, symbol.ContainerName, StringComparison.Ordinal)
-                    && string.Equals(existing.QualifiedContainerName, symbol.ContainerQualifiedName, StringComparison.Ordinal))
-                {
-                    exists = true;
-                    break;
-                }
-            }
-
-            if (!exists)
-                targets.Add((symbol.ContainerName!, symbol.ContainerQualifiedName, AllowShortNameFallback: true));
+            if (IsCSharpConstMemberSymbol(symbol))
+                AddCSharpQualifiedPatternTarget(
+                    constantPatternMemberLookup,
+                    symbol.Name,
+                    symbol.ContainerName!,
+                    symbol.ContainerQualifiedName,
+                    allowShortNameFallback: true);
         }
 
-        return lookup;
+        return (enumMemberLookup, constantPatternMemberLookup, typePatternLookup);
+    }
+
+    private static void AddCSharpQualifiedEnumMemberTarget(
+        Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> lookup,
+        string name,
+        string enumName,
+        string? qualifiedEnumName,
+        bool allowShortNameFallback)
+    {
+        if (!lookup.TryGetValue(name, out var targets))
+        {
+            targets = [];
+            lookup[name] = targets;
+        }
+
+        foreach (var target in targets)
+        {
+            if (string.Equals(target.EnumName, enumName, StringComparison.Ordinal)
+                && string.Equals(target.QualifiedEnumName, qualifiedEnumName, StringComparison.Ordinal))
+            {
+                return;
+            }
+        }
+
+        targets.Add((enumName, qualifiedEnumName, allowShortNameFallback));
+    }
+
+    private static void AddCSharpQualifiedPatternTarget(
+        Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> lookup,
+        string name,
+        string containerName,
+        string? qualifiedContainerName,
+        bool allowShortNameFallback)
+    {
+        if (!lookup.TryGetValue(name, out var targets))
+        {
+            targets = [];
+            lookup[name] = targets;
+        }
+
+        foreach (var existing in targets)
+        {
+            if (string.Equals(existing.ContainerName, containerName, StringComparison.Ordinal)
+                && string.Equals(existing.QualifiedContainerName, qualifiedContainerName, StringComparison.Ordinal))
+            {
+                return;
+            }
+        }
+
+        targets.Add((containerName, qualifiedContainerName, allowShortNameFallback));
     }
 
     private static bool IsCSharpConstMemberSymbol(SymbolRecord symbol)
