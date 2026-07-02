@@ -3131,7 +3131,7 @@ internal static partial class LanguageReferenceExtractionSupport
         Func<int, SymbolRecord?> resolveContainerForColumn,
         SymbolRecord? container)
     {
-        if (preparedLine.IndexOf("uses", StringComparison.OrdinalIgnoreCase) >= 0)
+        if (StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "uses"))
         {
             var usesMatch = PascalUsesRegex.Match(preparedLine);
             if (usesMatch.Success)
