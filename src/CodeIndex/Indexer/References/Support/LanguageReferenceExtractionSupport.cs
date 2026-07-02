@@ -2897,7 +2897,7 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        if (preparedLine.IndexOf("final", StringComparison.OrdinalIgnoreCase) >= 0)
+        if (StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "final"))
         {
             var finalizerMatch = FortranFinalizerRegex.Match(preparedLine);
             if (finalizerMatch.Success)

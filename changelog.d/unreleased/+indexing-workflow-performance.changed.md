@@ -318,6 +318,7 @@ affected:
 - **Tightened Fortran external scans to leading keyword gates** - Fortran reference extraction now requires leading `external` before running external-list regex probes.
 - **Tightened Fortran intrinsic scans to leading keyword gates** - Fortran reference extraction now requires leading `intrinsic` before running intrinsic-list regex probes.
 - **Tightened Fortran access-list scans to leading keyword gates** - Fortran reference extraction now requires leading `public` or `private` before running access-list regex probes.
+- **Tightened Fortran finalizer scans to leading keyword gates** - Fortran reference extraction now requires leading `final` before running finalizer-list regex probes.
 
 ## 日本語
 
@@ -570,3 +571,4 @@ affected:
 - **Fortran external scan を leading keyword gate に強化します** - Fortran reference extraction は external-list regex probe の前に leading `external` を要求します。
 - **Fortran intrinsic scan を leading keyword gate に強化します** - Fortran reference extraction は intrinsic-list regex probe の前に leading `intrinsic` を要求します。
 - **Fortran access-list scan を leading keyword gate に強化します** - Fortran reference extraction は access-list regex probe の前に leading `public` または `private` を要求します。
+- **Fortran finalizer scan を leading keyword gate に強化します** - Fortran reference extraction は finalizer-list regex probe の前に leading `final` を要求します。
