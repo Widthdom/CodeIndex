@@ -14,6 +14,7 @@ public partial class FileIndexer
         if (projectMarkerPatterns != null)
         {
             var primaryProjectMarkerPatterns = GetPrimaryProjectMarkerPatterns(lang) ?? projectMarkerPatterns;
+            var primaryPatternsCoverAllMarkers = ProjectMarkerPatternListsEqual(primaryProjectMarkerPatterns, projectMarkerPatterns);
             var currentDir = Path.GetDirectoryName(fullPath);
             while (!string.IsNullOrEmpty(currentDir))
             {
@@ -22,7 +23,7 @@ public partial class FileIndexer
                     return NormalizeScopeKey(ToRelativePath(currentDir));
                 if (markerCount > 1)
                     return DeriveAmbiguousProjectScopeKey(fullPath, currentDir);
-                if (CountProjectMarkerFiles(currentDir, projectMarkerPatterns) > 0)
+                if (!primaryPatternsCoverAllMarkers && CountProjectMarkerFiles(currentDir, projectMarkerPatterns) > 0)
                     return NormalizeScopeKey(ToRelativePath(currentDir));
 
                 if (PathsEqual(currentDir, _projectRoot))
@@ -161,6 +162,20 @@ public partial class FileIndexer
 
     private static string GetProjectMarkerScopeFullPath(string path) =>
         Path.IsPathFullyQualified(path) ? path : Path.GetFullPath(path);
+
+    private static bool ProjectMarkerPatternListsEqual(IReadOnlyList<string> left, IReadOnlyList<string> right)
+    {
+        if (left.Count != right.Count)
+            return false;
+
+        for (var i = 0; i < left.Count; i++)
+        {
+            if (!string.Equals(left[i], right[i], StringComparison.Ordinal))
+                return false;
+        }
+
+        return true;
+    }
 
     private int CountProjectMarkerFiles(string dir, IReadOnlyList<string> patterns)
     {
