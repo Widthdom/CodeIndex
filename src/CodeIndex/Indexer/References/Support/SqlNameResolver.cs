@@ -317,8 +317,8 @@ internal static class SqlNameResolver
             return new SqlNameParts(string.Empty, string.Empty, 0, [], []);
 
         var trimmed = qualifiedName.Trim();
-        if (IsSimpleUnquotedSqlIdentifier(trimmed))
-            return new SqlNameParts(trimmed, trimmed, 1, [trimmed], SingleCaseInsensitiveSegment);
+        if (TryParseSimpleUnquotedSqlName(trimmed, out var simpleParts))
+            return simpleParts;
 
         var segments = new List<string>();
         var caseSensitiveSegments = new List<bool>();
@@ -656,23 +656,66 @@ internal static class SqlNameResolver
         => ch is '[' or '"' or '`' or '_' or '$' or '#'
            || char.IsLetter(ch);
 
+    private static bool IsUnquotedSqlIdentifierStartChar(char ch)
+        => ch is '_' or '$' or '#'
+           || char.IsLetter(ch);
+
     private static bool IsSqlIdentifierChar(char ch)
         => ch is '_' or '$' or '#'
            || char.IsLetterOrDigit(ch);
 
-    private static bool IsSimpleUnquotedSqlIdentifier(string value)
+    private static bool TryParseSimpleUnquotedSqlName(string value, out SqlNameParts parts)
     {
+        parts = default;
         if (value.Length == 0
-            || value[0] is '[' or '"' or '`'
-            || !IsSqlIdentifierStartChar(value[0]))
+            || !IsUnquotedSqlIdentifierStartChar(value[0]))
             return false;
 
+        var segmentCount = 1;
+        var segmentStart = 0;
+        var leafStart = 0;
         for (var i = 1; i < value.Length; i++)
         {
-            if (!IsSqlIdentifierChar(value[i]))
+            var ch = value[i];
+            if (ch == '.')
+            {
+                if (i == segmentStart
+                    || i + 1 >= value.Length
+                    || !IsUnquotedSqlIdentifierStartChar(value[i + 1]))
+                {
+                    return false;
+                }
+
+                segmentCount++;
+                segmentStart = i + 1;
+                leafStart = segmentStart;
+                continue;
+            }
+
+            if (!IsSqlIdentifierChar(ch))
                 return false;
         }
 
+        if (segmentCount == 1)
+        {
+            parts = new SqlNameParts(value, value, 1, [value], SingleCaseInsensitiveSegment);
+            return true;
+        }
+
+        var segments = new List<string>(segmentCount);
+        var caseSensitiveSegments = new List<bool>(segmentCount);
+        segmentStart = 0;
+        for (var i = 0; i <= value.Length; i++)
+        {
+            if (i < value.Length && value[i] != '.')
+                continue;
+
+            segments.Add(value[segmentStart..i]);
+            caseSensitiveSegments.Add(false);
+            segmentStart = i + 1;
+        }
+
+        parts = new SqlNameParts(value, value[leafStart..], segmentCount, segments, caseSensitiveSegments);
         return true;
     }
 
