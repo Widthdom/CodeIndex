@@ -275,6 +275,7 @@ affected:
 - **Gated C++ compound requirement concept scans by marker** - C/C++ reference extraction now checks arrow and template delimiter markers before running compound requirement concept regex probes.
 - **Gated C++ friend type scans by marker** - C/C++ reference extraction now checks `friend`, type-kind, and statement markers before running friend type regex probes.
 - **Gated C++ dynamic exception spec scans by marker** - C/C++ reference extraction now checks `throw` and parenthesis markers before running dynamic exception specification regex probes.
+- **Gated C++ declaration type scans by marker** - C/C++ reference extraction now checks declaration terminators and lightweight type markers before running declaration type regex probes.
 
 ## 日本語
 
@@ -484,3 +485,4 @@ affected:
 - **C++ compound requirement concept scan を marker で gate します** - C/C++ reference extraction は compound requirement concept regex probe の前に arrow と template delimiter marker を確認します。
 - **C++ friend type scan を marker で gate します** - C/C++ reference extraction は friend type regex probe の前に `friend` / type-kind / statement marker を確認します。
 - **C++ dynamic exception spec scan を marker で gate します** - C/C++ reference extraction は dynamic exception specification regex probe の前に `throw` と parenthesis marker を確認します。
+- **C++ declaration type scan を marker で gate します** - C/C++ reference extraction は declaration type regex probe の前に declaration terminator と軽量 type marker を確認します。

@@ -1880,15 +1880,35 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        foreach (Match match in CppDeclarationTypeRegex.Matches(preparedLine))
+        var hasCppDeclarationTerminator = preparedLine.IndexOf(',') >= 0
+            || preparedLine.IndexOf(';') >= 0
+            || preparedLine.IndexOf(')') >= 0
+            || preparedLine.IndexOf('=') >= 0;
+        var hasCppDeclarationTypeMarker = hasCppDeclarationTerminator
+            && (ContainsAsciiUppercase(preparedLine)
+                || hasCppScopeSeparator
+                || hasCppTemplateOpen
+                || preparedLine.IndexOf("const", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("volatile", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("static", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("inline", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("constexpr", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("typename", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("class", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("struct", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("enum", StringComparison.Ordinal) >= 0);
+        if (hasCppDeclarationTypeMarker)
         {
-            var group = match.Groups["type"];
-            var expression = StripCppAccessPrefix(group.Value);
-            if (expression.Length == 0)
-                continue;
+            foreach (Match match in CppDeclarationTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                var expression = StripCppAccessPrefix(group.Value);
+                if (expression.Length == 0)
+                    continue;
 
-            var start = group.Index + group.Value.IndexOf(expression, StringComparison.Ordinal);
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, expression, start, context, lineNumber, resolveContainerForColumn(start), language);
+                var start = group.Index + group.Value.IndexOf(expression, StringComparison.Ordinal);
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, expression, start, context, lineNumber, resolveContainerForColumn(start), language);
+            }
         }
     }
 
@@ -3482,6 +3502,18 @@ internal static partial class LanguageReferenceExtractionSupport
             text = text[..genericIndex].TrimEnd();
         var separator = text.LastIndexOf("::", StringComparison.Ordinal);
         return separator >= 0 ? text[(separator + 2)..].Trim() : text;
+    }
+
+    private static bool ContainsAsciiUppercase(string value)
+    {
+        for (var i = 0; i < value.Length; i++)
+        {
+            var c = value[i];
+            if (c is >= 'A' and <= 'Z')
+                return true;
+        }
+
+        return false;
     }
 
     private static bool IsCppTemplateDeclarationOrSpecializationLine(string line, int matchIndex)
