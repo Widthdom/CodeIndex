@@ -2741,7 +2741,7 @@ internal static partial class LanguageReferenceExtractionSupport
                 EmitCommaSeparatedNames(importMatch.Groups["list"].Value, importMatch.Groups["list"].Index, "fortran", references, seen, fileId, context, lineNumber, container);
         }
 
-        if (originalLine.IndexOf("include", StringComparison.OrdinalIgnoreCase) >= 0
+        if (StartsWithKeywordIgnoringLeadingWhitespace(originalLine, "include")
             && (originalLine.IndexOf('\'') >= 0 || originalLine.IndexOf('"') >= 0))
         {
             foreach (Match match in FortranIncludeRegex.Matches(originalLine))

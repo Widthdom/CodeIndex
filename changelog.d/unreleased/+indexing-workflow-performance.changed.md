@@ -308,6 +308,7 @@ affected:
 - **Gated Fortran call scans by leading keyword** - Fortran reference extraction now checks for a leading `call` keyword before running call regex probes.
 - **Tightened Fortran use scans to leading keyword gates** - Fortran reference extraction now requires leading `use` before running use-clause regex probes.
 - **Tightened Fortran import scans to leading keyword gates** - Fortran reference extraction now requires leading `import` before running import list regex probes.
+- **Tightened Fortran include scans to leading keyword gates** - Fortran reference extraction now requires leading `include` before running include filename regex probes.
 
 ## 日本語
 
@@ -550,3 +551,4 @@ affected:
 - **Fortran call scan を leading keyword で gate します** - Fortran reference extraction は call regex probe の前に leading `call` keyword を確認します。
 - **Fortran use scan を leading keyword gate に強化します** - Fortran reference extraction は use-clause regex probe の前に leading `use` を要求します。
 - **Fortran import scan を leading keyword gate に強化します** - Fortran reference extraction は import list regex probe の前に leading `import` を要求します。
+- **Fortran include scan を leading keyword gate に強化します** - Fortran reference extraction は include filename regex probe の前に leading `include` を要求します。
