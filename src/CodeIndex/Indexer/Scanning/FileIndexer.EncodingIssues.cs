@@ -5,6 +5,12 @@ namespace CodeIndex.Indexer;
 
 public partial class FileIndexer
 {
+    private static readonly UTF8Encoding StrictReplacementOriginUtf8Encoding = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+    private static readonly UnicodeEncoding StrictReplacementOriginUtf16LeBomEncoding = new(bigEndian: false, byteOrderMark: true, throwOnInvalidBytes: true);
+    private static readonly UnicodeEncoding StrictReplacementOriginUtf16LeNoBomEncoding = new(bigEndian: false, byteOrderMark: false, throwOnInvalidBytes: true);
+    private static readonly UnicodeEncoding StrictReplacementOriginUtf16BeBomEncoding = new(bigEndian: true, byteOrderMark: true, throwOnInvalidBytes: true);
+    private static readonly UnicodeEncoding StrictReplacementOriginUtf16BeNoBomEncoding = new(bigEndian: true, byteOrderMark: false, throwOnInvalidBytes: true);
+
     private static void AddUtf16BomIssue(List<FileIssue> issues, string relativePath, bool utf16BigEndian)
     {
         issues.Add(new FileIssue
@@ -228,13 +234,11 @@ public partial class FileIndexer
         {
             if (isUtf16)
             {
-                _ = new UnicodeEncoding(utf16BigEndian, byteOrderMark: hasUtf16Bom, throwOnInvalidBytes: true)
-                    .GetString(rawBytes);
+                _ = GetStrictReplacementOriginUtf16Encoding(utf16BigEndian, hasUtf16Bom).GetString(rawBytes);
             }
             else
             {
-                _ = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true)
-                    .GetString(rawBytes);
+                _ = StrictReplacementOriginUtf8Encoding.GetString(rawBytes);
             }
 
             return FileIssue.OriginSourceLiteral;
@@ -243,5 +247,12 @@ public partial class FileIndexer
         {
             return FileIssue.OriginDecodeReplacement;
         }
+    }
+
+    private static UnicodeEncoding GetStrictReplacementOriginUtf16Encoding(bool bigEndian, bool hasBom)
+    {
+        return bigEndian
+            ? hasBom ? StrictReplacementOriginUtf16BeBomEncoding : StrictReplacementOriginUtf16BeNoBomEncoding
+            : hasBom ? StrictReplacementOriginUtf16LeBomEncoding : StrictReplacementOriginUtf16LeNoBomEncoding;
     }
 }
