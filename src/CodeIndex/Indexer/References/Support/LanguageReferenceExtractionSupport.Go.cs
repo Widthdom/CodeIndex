@@ -60,8 +60,12 @@ internal static partial class LanguageReferenceExtractionSupport
             var trimmed = codeLine.Trim();
             if (!inImportBlock)
             {
-                if (GoImportBlockStartRegex.IsMatch(codeLine))
+                if (codeLine.IndexOf("import", StringComparison.Ordinal) >= 0
+                    && codeLine.IndexOf('(') >= 0
+                    && GoImportBlockStartRegex.IsMatch(codeLine))
+                {
                     inImportBlock = !trimmed.Contains(')');
+                }
                 continue;
             }
 
@@ -71,7 +75,7 @@ internal static partial class LanguageReferenceExtractionSupport
                 continue;
             }
 
-            if (GoImportBlockEntryRegex.IsMatch(codeLine))
+            if (codeLine.IndexOf('"') >= 0 && GoImportBlockEntryRegex.IsMatch(codeLine))
             {
                 result ??= new bool[originalLines.Count];
                 result[i] = true;

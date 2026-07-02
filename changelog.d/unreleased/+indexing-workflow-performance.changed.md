@@ -29,6 +29,7 @@ affected:
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Markup.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.Preparation.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.TypeReferences.cs
+  - src/CodeIndex/Indexer/References/Support/LanguageReferenceExtractionSupport.Go.cs
   - src/CodeIndex/Indexer/Scanning/FileContentLoader.cs
   - src/CodeIndex/Indexer/Scanning/FileIndexer.GeneratedCode.cs
   - src/CodeIndex/Indexer/Scanning/FileContentLoader.Checksum.cs
@@ -68,6 +69,7 @@ affected:
 - **Skipped Perl hash-constant collection on non-candidate lines** - Perl supplemental constant extraction now checks for `constant` before attempting the `use constant { ... }` body collector on each line.
 - **Skipped Rust supplemental collectors before marker hits** - Rust `use`, multiline `impl`, and associated-type-default supplemental extraction now checks cheap file/line markers before running statement collectors or trait-body scans.
 - **Gated Go supplemental declaration scans by markers** - Go import/directive/label and grouped declaration helpers now skip ordinary lines before trimming, regex checks, or brace-depth scans when the required markers are absent.
+- **Gated Go import-block reference scans by marker** - Go reference preparation now skips import-block regex checks on lines without the required `import`, parenthesis, or quoted-path markers.
 - **Skipped GraphQL member extraction when input/union markers are absent** - GraphQL supplemental member extraction now avoids full-content joins for files without `input` blocks and runs union regexes only on lines containing `union`.
 - **Dispatched Razor directive scans by marker** - Razor directive supplemental extraction now skips lines without `@` and invokes only the directive regex matching the line marker.
 - **Dispatched Dockerfile supplemental scans by instruction** - Dockerfile extra symbol extraction now reads the leading instruction once per line and invokes only the matching ENV/LABEL/EXPOSE/VOLUME/FROM/SHELL/COPY/ADD/RUN helper.
@@ -154,6 +156,7 @@ affected:
 - **候補でない行では Perl hash constant collection を skip します** - Perl の supplemental constant extraction は各行で `use constant { ... }` body collector を試す前に `constant` の有無を確認します。
 - **marker がない場合は Rust supplemental collector を skip します** - Rust の `use`、multiline `impl`、associated-type-default supplemental extraction は statement collector や trait-body scan の前に軽量な file/line marker を確認します。
 - **Go supplemental declaration scan を marker で gate します** - Go の import/directive/label と grouped declaration helper は必須 marker がない通常行では trim、regex check、brace-depth scan の前に skip します。
+- **Go import-block reference scan を marker で gate します** - Go reference preparation は必須の `import`、parenthesis、quoted-path marker がない行で import-block regex check を skip します。
 - **input/union marker がない場合は GraphQL member extraction を skip します** - GraphQL の supplemental member extraction は `input` block がない file では full-content join を避け、union regex も `union` を含む行だけで実行します。
 - **Razor directive scan を marker で振り分けます** - Razor の directive supplemental extraction は `@` のない行を skip し、行 marker に対応する directive regex だけを実行します。
 - **Dockerfile supplemental scan を instruction で振り分けます** - Dockerfile の追加 symbol extraction は各行の先頭 instruction を一度だけ読み、対応する ENV/LABEL/EXPOSE/VOLUME/FROM/SHELL/COPY/ADD/RUN helper だけを実行します。
