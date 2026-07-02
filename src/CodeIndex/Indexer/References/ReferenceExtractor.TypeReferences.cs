@@ -102,11 +102,12 @@ public static partial class ReferenceExtractor
         List<ReferenceRecord> references,
         HashSet<string> seen)
     {
-        var interfaceMembersByType = BuildCSharpStaticInterfaceMemberContractsByType(workspaceSymbols);
+        var staticInterfaceMemberLookups = BuildCSharpStaticInterfaceMemberLookups(workspaceSymbols);
+        var interfaceMembersByType = staticInterfaceMemberLookups.ContractsByType;
         if (interfaceMembersByType.Count == 0)
             return;
 
-        var interfaceGenericParameters = BuildCSharpInterfaceGenericParameterLookup(workspaceSymbols);
+        var interfaceGenericParameters = staticInterfaceMemberLookups.InterfaceGenericParameters;
         var staticMembersByContainer = BuildCSharpStaticMembersByContainer(symbols);
 
         foreach (var typeSymbol in symbols)
@@ -160,12 +161,38 @@ public static partial class ReferenceExtractor
         }
     }
 
-    private static Dictionary<string, List<CSharpStaticInterfaceMemberContract>> BuildCSharpStaticInterfaceMemberContractsByType(
+    private static (
+        Dictionary<string, List<CSharpStaticInterfaceMemberContract>> ContractsByType,
+        Dictionary<string, List<string>> InterfaceGenericParameters) BuildCSharpStaticInterfaceMemberLookups(
         IReadOnlyList<SymbolRecord> workspaceSymbols)
     {
         var contractsByType = new Dictionary<string, List<CSharpStaticInterfaceMemberContract>>(StringComparer.Ordinal);
+        var interfaceGenericParameters = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var symbol in workspaceSymbols)
         {
+            if (symbol.Kind == "interface"
+                && !string.IsNullOrWhiteSpace(symbol.Name)
+                && !string.IsNullOrWhiteSpace(symbol.Signature))
+            {
+                var parameters = ExtractCSharpGenericArgumentList(symbol.Signature!, symbol.Name);
+                var parameterCount = 0;
+                for (var index = 0; index < parameters.Count; index++)
+                {
+                    var name = ExtractCSharpGenericParameterName(parameters[index]);
+                    if (string.IsNullOrWhiteSpace(name))
+                        continue;
+
+                    parameters[parameterCount] = name;
+                    parameterCount++;
+                }
+
+                if (parameterCount < parameters.Count)
+                    parameters.RemoveRange(parameterCount, parameters.Count - parameterCount);
+
+                if (parameters.Count > 0)
+                    interfaceGenericParameters[symbol.Name] = parameters;
+            }
+
             if (!IsCSharpStaticInterfaceMemberContract(symbol))
                 continue;
 
@@ -183,7 +210,7 @@ public static partial class ReferenceExtractor
                 NormalizeCSharpTypeArgumentShape(symbol.ReturnType ?? string.Empty)));
         }
 
-        return contractsByType;
+        return (contractsByType, interfaceGenericParameters);
     }
 
     private static Dictionary<string, List<SymbolRecord>> BuildCSharpStaticMembersByContainer(IReadOnlyList<SymbolRecord> symbols)
@@ -446,40 +473,6 @@ public static partial class ReferenceExtractor
             return false;
 
         return text.Length == word.Length || !IsCSharpIdentifierPart(text[word.Length]);
-    }
-
-    private static Dictionary<string, List<string>> BuildCSharpInterfaceGenericParameterLookup(IReadOnlyList<SymbolRecord> symbols)
-    {
-        var lookup = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        foreach (var symbol in symbols)
-        {
-            if (symbol.Kind != "interface"
-                || string.IsNullOrWhiteSpace(symbol.Name)
-                || string.IsNullOrWhiteSpace(symbol.Signature))
-            {
-                continue;
-            }
-
-            var parameters = ExtractCSharpGenericArgumentList(symbol.Signature!, symbol.Name);
-            var parameterCount = 0;
-            for (var index = 0; index < parameters.Count; index++)
-            {
-                var name = ExtractCSharpGenericParameterName(parameters[index]);
-                if (string.IsNullOrWhiteSpace(name))
-                    continue;
-
-                parameters[parameterCount] = name;
-                parameterCount++;
-            }
-
-            if (parameterCount < parameters.Count)
-                parameters.RemoveRange(parameterCount, parameters.Count - parameterCount);
-
-            if (parameters.Count > 0)
-                lookup[symbol.Name] = parameters;
-        }
-
-        return lookup;
     }
 
     private static List<CSharpImplementedInterface> ExtractCSharpImplementedInterfaces(
