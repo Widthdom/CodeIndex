@@ -1705,13 +1705,20 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        foreach (Match match in CppExplicitTemplateInstantiationRegex.Matches(preparedLine))
+        var hasCppExplicitTemplateInstantiationMarker = preparedLine.IndexOf("template", StringComparison.Ordinal) >= 0
+            && preparedLine.IndexOf(';') >= 0
+            && (preparedLine.IndexOf("class", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("struct", StringComparison.Ordinal) >= 0);
+        if (hasCppExplicitTemplateInstantiationMarker)
         {
-            var group = match.Groups["type"];
-            var typeName = LastCppQualifiedSegment(group.Value);
-            var typeStart = group.Index + group.Value.LastIndexOf(typeName, StringComparison.Ordinal);
-            ReferenceExtractor.AddReference(references, seen, fileId, typeName, typeStart, "instantiate", context, lineNumber, resolveContainerForColumn(typeStart));
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            foreach (Match match in CppExplicitTemplateInstantiationRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                var typeName = LastCppQualifiedSegment(group.Value);
+                var typeStart = group.Index + group.Value.LastIndexOf(typeName, StringComparison.Ordinal);
+                ReferenceExtractor.AddReference(references, seen, fileId, typeName, typeStart, "instantiate", context, lineNumber, resolveContainerForColumn(typeStart));
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
         }
 
         foreach (Match match in CppTemplateIdDeclarationRegex.Matches(preparedLine))
