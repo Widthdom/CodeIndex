@@ -2480,6 +2480,12 @@ internal static partial class LanguageReferenceExtractionSupport
         return boundary >= value.Length || !IsSimpleIdentifierPart(value[boundary]);
     }
 
+    private static bool StartsWithCharIgnoringLeadingWhitespace(string value, char marker)
+    {
+        var start = FirstNonWhitespaceIndex(value);
+        return start >= 0 && value[start] == marker;
+    }
+
     private static bool ContainsKeywordIgnoringCase(string value, string keyword)
     {
         var searchStart = 0;

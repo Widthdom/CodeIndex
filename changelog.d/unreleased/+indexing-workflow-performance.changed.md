@@ -333,6 +333,7 @@ affected:
 - **Tightened Pascal class base markers to keyword boundaries** - Pascal reference extraction now treats `class` as a boundary-aware keyword before running base-list regex probes.
 - **Tightened Pascal interface base markers to keyword boundaries** - Pascal reference extraction now treats `interface` as a boundary-aware keyword before running base-list regex probes.
 - **Tightened Pascal object base markers to keyword boundaries** - Pascal reference extraction now treats `object` as a boundary-aware keyword before running base-list regex probes.
+- **Added shared leading character gates** - Reference extraction now has a leading-character helper for anchored syntax markers that are not identifier keywords.
 
 ## 日本語
 
@@ -600,3 +601,4 @@ affected:
 - **Pascal class base marker を keyword boundary に強化します** - Pascal reference extraction は base-list regex probe の前に `class` を boundary-aware keyword として扱います。
 - **Pascal interface base marker を keyword boundary に強化します** - Pascal reference extraction は base-list regex probe の前に `interface` を boundary-aware keyword として扱います。
 - **Pascal object base marker を keyword boundary に強化します** - Pascal reference extraction は base-list regex probe の前に `object` を boundary-aware keyword として扱います。
+- **共通 leading character gate を追加します** - Reference extraction は identifier keyword ではない anchored syntax marker 用の leading-character helper を持つようになります。
