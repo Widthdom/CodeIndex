@@ -269,6 +269,7 @@ affected:
 - **Gated C++ qualified member receiver scans by marker** - C/C++ reference extraction now checks scope markers before running qualified member receiver regex probes.
 - **Gated C++ pointer-to-member type scans by marker** - C/C++ reference extraction now checks scope and pointer markers before running pointer-to-member type regex probes.
 - **Gated C++ trailing return type scans by marker** - C/C++ reference extraction now checks close-parenthesis and arrow markers before running trailing return type regex probes.
+- **Gated C++ requires concept type scans by marker** - C/C++ reference extraction now checks `requires` and template markers before running requires concept type regex probes.
 
 ## 日本語
 
@@ -472,3 +473,4 @@ affected:
 - **C++ qualified member receiver scan を marker で gate します** - C/C++ reference extraction は qualified member receiver regex probe の前に scope marker を確認します。
 - **C++ pointer-to-member type scan を marker で gate します** - C/C++ reference extraction は pointer-to-member type regex probe の前に scope と pointer marker を確認します。
 - **C++ trailing return type scan を marker で gate します** - C/C++ reference extraction は trailing return type regex probe の前に close-parenthesis と arrow marker を確認します。
+- **C++ requires concept type scan を marker で gate します** - C/C++ reference extraction は requires concept type regex probe の前に `requires` と template marker を確認します。

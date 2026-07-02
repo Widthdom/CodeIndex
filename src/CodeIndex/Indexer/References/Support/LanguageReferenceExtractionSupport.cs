@@ -1790,16 +1790,24 @@ internal static partial class LanguageReferenceExtractionSupport
 
         if (preparedLine.Contains("requires", StringComparison.Ordinal) || preparedLine.Contains("concept", StringComparison.Ordinal))
         {
-            foreach (Match match in CppRequiresConceptTypeRegex.Matches(preparedLine))
+            var hasCppRequiresConceptTypeMarker = hasCppTemplateOpen
+                && preparedLine.IndexOf("requires", StringComparison.Ordinal) >= 0;
+            if (hasCppRequiresConceptTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CppRequiresConceptTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CppParenthesizedRequiresConceptTypeRegex.Matches(preparedLine))
+            if (hasCppRequiresConceptTypeMarker && hasCppParen)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CppParenthesizedRequiresConceptTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
             foreach (Match match in CppQualifiedRequiresConceptConstraintRegex.Matches(preparedLine))
