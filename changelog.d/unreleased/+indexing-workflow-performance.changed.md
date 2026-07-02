@@ -256,6 +256,7 @@ affected:
 - **Gated C va_arg type scans by marker** - C reference extraction now checks `va_arg` call and comma markers before running va_arg regex and operand scanners.
 - **Gated C++ type operand scans by marker** - C/C++ reference extraction now checks `sizeof` or `alignof` call markers before running C++ type operand regex probes.
 - **Gated C++ typeid scans by marker** - C/C++ reference extraction now checks `typeid` call markers before running C++ typeid regex probes.
+- **Gated C++ decltype brace construction scans by marker** - C/C++ reference extraction now checks `decltype`, parenthesis, and brace markers before running decltype construction regex probes.
 
 ## 日本語
 
@@ -446,3 +447,4 @@ affected:
 - **C va_arg type scan を marker で gate します** - C reference extraction は va_arg regex / operand scanner の前に `va_arg` call marker と comma marker を確認します。
 - **C++ type operand scan を marker で gate します** - C/C++ reference extraction は C++ type operand regex probe の前に `sizeof` / `alignof` call marker を確認します。
 - **C++ typeid scan を marker で gate します** - C/C++ reference extraction は C++ typeid regex probe の前に `typeid` call marker を確認します。
+- **C++ decltype brace construction scan を marker で gate します** - C/C++ reference extraction は decltype construction regex probe の前に `decltype` / parenthesis / brace marker を確認します。
