@@ -336,6 +336,7 @@ affected:
 - **Added shared leading character gates** - Reference extraction now has a leading-character helper for anchored syntax markers that are not identifier keywords.
 - **Tightened Objective-C interface base scans to leading marker gates** - Objective-C reference extraction now requires leading `@` before running interface/implementation base regex probes.
 - **Added Haskell signature separator gates** - Haskell reference extraction now checks for `::` before running type-signature regex probes.
+- **Added Haskell space-call whitespace gates** - Haskell reference extraction now skips space-call regex probes on lines without whitespace.
 
 ## 日本語
 
@@ -606,3 +607,4 @@ affected:
 - **共通 leading character gate を追加します** - Reference extraction は identifier keyword ではない anchored syntax marker 用の leading-character helper を持つようになります。
 - **Objective-C interface base scan を leading marker gate に強化します** - Objective-C reference extraction は interface/implementation base regex probe の前に leading `@` を要求します。
 - **Haskell signature separator gate を追加します** - Haskell reference extraction は type-signature regex probe の前に `::` を確認します。
+- **Haskell space-call whitespace gate を追加します** - Haskell reference extraction は whitespace がない行では space-call regex probe を省略します。

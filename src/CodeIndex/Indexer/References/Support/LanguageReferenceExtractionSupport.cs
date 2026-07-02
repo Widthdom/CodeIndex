@@ -3409,6 +3409,9 @@ internal static partial class LanguageReferenceExtractionSupport
 
     private static void EmitHaskellSpaceCallReferences(string preparedLine, Action<string, int> addCallLikeReference, IReadOnlySet<string>? definitionNames)
     {
+        if (!ContainsWhitespace(preparedLine))
+            return;
+
         string? definitionName = null;
         var scanStart = 0;
         var scanText = preparedLine;
