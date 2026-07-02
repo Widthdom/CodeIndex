@@ -3357,7 +3357,7 @@ internal static partial class LanguageReferenceExtractionSupport
                 ReferenceExtractor.AddReference(references, seen, fileId, match, "type_reference", context, lineNumber, container);
         }
 
-        var hasBehaviourMarker = preparedLine.IndexOf('@') >= 0
+        var hasBehaviourMarker = StartsWithCharIgnoringLeadingWhitespace(preparedLine, '@')
             && (preparedLine.IndexOf("behaviour", StringComparison.Ordinal) >= 0
                 || preparedLine.IndexOf("impl", StringComparison.Ordinal) >= 0);
         if (hasBehaviourMarker)

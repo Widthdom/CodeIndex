@@ -343,6 +343,7 @@ affected:
 - **Tightened Elixir require scans to leading keyword gates** - Elixir reference extraction now requires leading `require` before running import-family regex probes.
 - **Tightened Elixir use scans to leading keyword gates** - Elixir reference extraction now requires leading `use` before running import-family regex probes.
 - **Added shared ordinal containment gates** - Reference extraction now has a boundary-aware case-sensitive keyword helper for lowercase marker hot paths.
+- **Tightened Elixir behaviour attribute scans to leading marker gates** - Elixir reference extraction now requires a leading `@` before running behaviour/impl regex probes.
 
 ## 日本語
 
@@ -620,3 +621,4 @@ affected:
 - **Elixir require scan を leading keyword gate に強化します** - Elixir reference extraction は import-family regex probe の前に leading `require` を要求します。
 - **Elixir use scan を leading keyword gate に強化します** - Elixir reference extraction は import-family regex probe の前に leading `use` を要求します。
 - **共通 ordinal containment gate を追加します** - Reference extraction は lowercase marker hot path 向けの boundary-aware case-sensitive keyword helper を持つようになります。
+- **Elixir behaviour attribute scan を leading marker gate に強化します** - Elixir reference extraction は behaviour/impl regex probe の前に leading `@` を要求します。
