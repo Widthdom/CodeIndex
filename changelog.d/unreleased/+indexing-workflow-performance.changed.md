@@ -109,6 +109,7 @@ affected:
 - **Gated Fortran routine-start scans by keyword** - Fortran range extraction now skips routine-start regex checks when a line contains neither `subroutine` nor `function`.
 - **Gated Fortran include and group reference scans by marker** - Fortran reference extraction now skips include/common/namelist regex checks unless the line has the required keyword and delimiter markers.
 - **Gated Fortran statement reference scans by keyword** - Fortran reference extraction now runs data, save, submodule, external, intrinsic, access, finalizer, and equivalence regex checks only on matching statement candidates.
+- **Gated Fortran allocation and type reference scans by marker** - Fortran reference extraction now checks procedure, pointer, associate, type-expression, allocation, deallocation, and kind markers before running their regex passes.
 - **Gated Smalltalk range-boundary scans by marker** - Smalltalk range extraction now skips method/class boundary regex checks when the line lacks `>>`, `subclass:`, or `named:`.
 - **Gated Rust use-start scans by keyword** - Rust use-statement collection now skips the start regex when the first line lacks the `use` keyword marker.
 - **Gated Kotlin class subkind scans by keyword** - Kotlin class enrichment now skips value/inline class regex checks when metadata lacks the corresponding keyword marker.
@@ -198,6 +199,7 @@ affected:
 - **Fortran routine-start scan を keyword で gate します** - Fortran range extraction は line に `subroutine` と `function` のどちらもない場合 routine-start regex check を skip します。
 - **Fortran include / group reference scan を marker で gate します** - Fortran reference extraction は必須の keyword と delimiter marker がない行で include/common/namelist regex check を skip します。
 - **Fortran statement reference scan を keyword で gate します** - Fortran reference extraction は data、save、submodule、external、intrinsic、access、finalizer、equivalence regex check を対応 statement candidate だけで実行します。
+- **Fortran allocation / type reference scan を marker で gate します** - Fortran reference extraction は procedure、pointer、associate、type-expression、allocation、deallocation、kind marker を確認してから対応 regex pass を実行します。
 - **Smalltalk range-boundary scan を marker で gate します** - Smalltalk range extraction は line に `>>`、`subclass:`、`named:` がない場合 method/class boundary regex check を skip します。
 - **Rust use-start scan を keyword で gate します** - Rust use-statement collection は first line に `use` keyword marker がない場合 start regex を skip します。
 - **Kotlin class subkind scan を keyword で gate します** - Kotlin class enrichment は metadata に対応する keyword marker がない場合 value/inline class regex check を skip します。
