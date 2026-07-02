@@ -163,51 +163,62 @@ public partial class FileIndexer
         var inSubmoduleSection = false;
         foreach (var rawLine in lines)
         {
-            var line = rawLine.Trim();
-            if (line.Length == 0)
-                continue;
-            if (line[0] == '#' || line[0] == ';')
-                continue;
-
-            if (line[0] == '[')
-            {
-                var endBracket = line.IndexOf(']');
-                if (endBracket < 0)
-                {
-                    inSubmoduleSection = false;
-                    continue;
-                }
-
-                var sectionHeader = line.Substring(1, endBracket - 1).Trim();
-                inSubmoduleSection = sectionHeader.StartsWith("submodule", StringComparison.OrdinalIgnoreCase)
-                    && sectionHeader.Length > "submodule".Length
-                    && char.IsWhiteSpace(sectionHeader["submodule".Length]);
-                continue;
-            }
-
-            if (!inSubmoduleSection)
-                continue;
-
-            var equalsIndex = line.IndexOf('=');
-            if (equalsIndex < 0)
-                continue;
-            var key = line.Substring(0, equalsIndex).Trim();
-            if (!string.Equals(key, "path", StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            var value = StripGitmodulesInlineComment(line[(equalsIndex + 1)..]);
-            if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
-                value = value[1..^1];
-            if (value.Length == 0)
-                continue;
-            if (Path.IsPathRooted(value))
-                continue;
-
-            yield return value;
+            if (TryParseSubmodulePathFromGitmodulesLine(rawLine, ref inSubmoduleSection, out var value))
+                yield return value;
         }
     }
 
-    private static string StripGitmodulesInlineComment(string value)
+    private static bool TryParseSubmodulePathFromGitmodulesLine(
+        string rawLine,
+        ref bool inSubmoduleSection,
+        out string value)
+    {
+        value = string.Empty;
+        var line = rawLine.AsSpan().Trim();
+        if (line.Length == 0)
+            return false;
+        if (line[0] == '#' || line[0] == ';')
+            return false;
+
+        if (line[0] == '[')
+        {
+            var endBracket = line.IndexOf(']');
+            if (endBracket < 0)
+            {
+                inSubmoduleSection = false;
+                return false;
+            }
+
+            var sectionHeader = line[1..endBracket].Trim();
+            inSubmoduleSection = sectionHeader.StartsWith("submodule".AsSpan(), StringComparison.OrdinalIgnoreCase)
+                && sectionHeader.Length > "submodule".Length
+                && char.IsWhiteSpace(sectionHeader["submodule".Length]);
+            return false;
+        }
+
+        if (!inSubmoduleSection)
+            return false;
+
+        var equalsIndex = line.IndexOf('=');
+        if (equalsIndex < 0)
+            return false;
+        var key = line[..equalsIndex].Trim();
+        if (!key.Equals("path".AsSpan(), StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var valueSpan = StripGitmodulesInlineComment(line[(equalsIndex + 1)..]);
+        if (valueSpan.Length >= 2 && valueSpan[0] == '"' && valueSpan[^1] == '"')
+            valueSpan = valueSpan[1..^1];
+        if (valueSpan.Length == 0)
+            return false;
+        if (Path.IsPathRooted(valueSpan))
+            return false;
+
+        value = valueSpan.ToString();
+        return true;
+    }
+
+    private static ReadOnlySpan<char> StripGitmodulesInlineComment(ReadOnlySpan<char> value)
     {
         var inQuotes = false;
         var escaping = false;
