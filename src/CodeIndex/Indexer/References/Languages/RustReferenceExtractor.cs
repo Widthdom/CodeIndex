@@ -1762,8 +1762,12 @@ internal static class RustReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForColumn,
         SymbolRecord? enumContainer)
     {
-        if (enumContainer != null || IsRustTypeDeclarationLine(preparedLine))
+        if (enumContainer != null
+            || preparedLine.IndexOf('{') < 0
+            || IsRustTypeDeclarationLine(preparedLine))
+        {
             return;
+        }
 
         foreach (Match match in StructLiteralRegex.Matches(preparedLine))
         {
