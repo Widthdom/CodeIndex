@@ -160,8 +160,12 @@ internal static partial class LanguageReferenceExtractionSupport
     {
         var importMatch = !string.IsNullOrWhiteSpace(preparedLine)
             ? isImportBlockLine
-                ? GoImportBlockEntryRegex.Match(originalLine)
-                : GoImportRegex.Match(originalLine)
+                ? originalLine.IndexOf('"') >= 0
+                    ? GoImportBlockEntryRegex.Match(originalLine)
+                    : Match.Empty
+                : originalLine.IndexOf("import", StringComparison.Ordinal) >= 0 && originalLine.IndexOf('"') >= 0
+                    ? GoImportRegex.Match(originalLine)
+                    : Match.Empty
             : Match.Empty;
         if (importMatch.Success)
         {
@@ -214,18 +218,26 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        if (GoFuncRegex.IsMatch(preparedLine))
-            EmitGoFunctionSignatureTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-        else
-            EmitGoInterfaceMethodSignatureTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-
-        foreach (Match match in GoCompositeLiteralRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("func", StringComparison.Ordinal) >= 0
+            && GoFuncRegex.IsMatch(preparedLine))
         {
-            var group = match.Groups["name"];
-            if (!IsGoCompositeLiteralContext(preparedLine, group.Index, group.Value.Length))
-                continue;
+            EmitGoFunctionSignatureTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        }
+        else
+        {
+            EmitGoInterfaceMethodSignatureTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        }
 
-            ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "instantiate", context, lineNumber, resolveContainerForColumn(group.Index));
+        if (preparedLine.IndexOf('{') >= 0 && ContainsGoUppercaseAscii(preparedLine))
+        {
+            foreach (Match match in GoCompositeLiteralRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["name"];
+                if (!IsGoCompositeLiteralContext(preparedLine, group.Index, group.Value.Length))
+                    continue;
+
+                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "instantiate", context, lineNumber, resolveContainerForColumn(group.Index));
+            }
         }
     }
 
@@ -1748,6 +1760,17 @@ internal static partial class LanguageReferenceExtractionSupport
                 i++;
 
             if (char.IsUpper(expression[start]))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool ContainsGoUppercaseAscii(string line)
+    {
+        foreach (var ch in line)
+        {
+            if (ch is >= 'A' and <= 'Z')
                 return true;
         }
 
