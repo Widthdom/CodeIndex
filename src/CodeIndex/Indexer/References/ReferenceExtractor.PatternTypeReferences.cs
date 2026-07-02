@@ -2570,6 +2570,52 @@ public static partial class ReferenceExtractor
         return spans;
     }
 
+    internal static (int Start, int Length) GetFirstTopLevelCommaSpan(string text)
+    {
+        if (text.IndexOf(',') < 0)
+            return (0, text.Length);
+
+        int angleDepth = 0;
+        int parenDepth = 0;
+        int squareDepth = 0;
+        int braceDepth = 0;
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            switch (text[i])
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0) angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0) parenDepth--;
+                    break;
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0) squareDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0) braceDepth--;
+                    break;
+                case ',' when angleDepth == 0 && parenDepth == 0 && squareDepth == 0 && braceDepth == 0:
+                    return (0, i);
+            }
+        }
+
+        return (0, text.Length);
+    }
+
     internal static List<(int Start, int Length)> SplitTopLevelAmpersandSpans(string text)
     {
         if (text.IndexOf('&') < 0)

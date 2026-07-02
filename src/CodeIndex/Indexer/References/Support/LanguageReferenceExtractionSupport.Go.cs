@@ -704,7 +704,7 @@ internal static partial class LanguageReferenceExtractionSupport
                 continue;
 
             var argumentList = line[(open + 1)..close];
-            var firstArgument = ReferenceExtractor.SplitTopLevelCommaSpans(argumentList).FirstOrDefault();
+            var firstArgument = ReferenceExtractor.GetFirstTopLevelCommaSpan(argumentList);
             if (firstArgument.Length <= 0)
                 continue;
 
