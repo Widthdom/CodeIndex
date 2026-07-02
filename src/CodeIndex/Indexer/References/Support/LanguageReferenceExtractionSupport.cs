@@ -2534,6 +2534,10 @@ internal static partial class LanguageReferenceExtractionSupport
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        var firstNonWhitespace = FirstNonWhitespaceIndex(preparedLine);
+        if (firstNonWhitespace < 0 || preparedLine[firstNonWhitespace] != '.')
+            return;
+
         var match = VbBareMemberCallRegex.Match(preparedLine);
         if (!match.Success)
             return;

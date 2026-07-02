@@ -296,6 +296,7 @@ affected:
 - **Gated VB escaped call scans by marker** - Visual Basic reference extraction now checks escaped identifier and parenthesis markers before running escaped call regex probes.
 - **Gated VB bare call scans by leading token** - Visual Basic reference extraction now checks the first non-whitespace token before running bare call regex probes.
 - **Gated VB CallByName scans by marker** - Visual Basic reference extraction now checks `CallByName`, parenthesis, comma, and quote markers before running `CallByName` regex probes.
+- **Gated VB bare member call scans by leading token** - Visual Basic reference extraction now checks for leading member access before running bare member call regex probes.
 
 ## 日本語
 
@@ -526,3 +527,4 @@ affected:
 - **VB escaped call scan を marker で gate します** - Visual Basic reference extraction は escaped call regex probe の前に escaped identifier と parenthesis marker を確認します。
 - **VB bare call scan を leading token で gate します** - Visual Basic reference extraction は bare call regex probe の前に最初の非空白tokenを確認します。
 - **VB CallByName scan を marker で gate します** - Visual Basic reference extraction は `CallByName` regex probe の前に `CallByName` / parenthesis / comma / quote marker を確認します。
+- **VB bare member call scan を leading token で gate します** - Visual Basic reference extraction は bare member call regex probe の前に leading member access を確認します。
