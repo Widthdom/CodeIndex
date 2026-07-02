@@ -276,6 +276,12 @@ internal static class PhpReferenceExtractor
         SymbolRecord? container,
         HashSet<string>? seenDocblockPropertyNames = null)
     {
+        if (originalLine.IndexOf('@') < 0
+            || originalLine.IndexOf("property", StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            return;
+        }
+
         var match = DocblockPropertyTypeRegex.Match(originalLine);
         if (!match.Success)
             return;
@@ -326,6 +332,9 @@ internal static class PhpReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (originalLine.IndexOf("@method", StringComparison.OrdinalIgnoreCase) < 0)
+            return;
+
         var match = DocblockMethodParameterListRegex.Match(originalLine);
         if (!match.Success)
             return;
@@ -410,6 +419,9 @@ internal static class PhpReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (originalLine.IndexOf('@') < 0)
+            return;
+
         var match = tagRegex.Match(originalLine);
         if (!match.Success)
             return;
