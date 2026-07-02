@@ -569,6 +569,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("cast", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in QualifiedCastTypeRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -616,6 +619,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("assert_type", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in QualifiedAssertTypeRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
