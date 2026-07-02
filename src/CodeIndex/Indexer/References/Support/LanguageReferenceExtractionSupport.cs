@@ -2400,6 +2400,10 @@ internal static partial class LanguageReferenceExtractionSupport
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        var firstNonWhitespace = FirstNonWhitespaceIndex(preparedLine);
+        if (firstNonWhitespace < 0 || !CanStartVisualBasicIdentifierPattern(preparedLine[firstNonWhitespace]))
+            return;
+
         var match = VbBareCallRegex.Match(preparedLine);
         if (!match.Success)
             return;
@@ -2457,6 +2461,23 @@ internal static partial class LanguageReferenceExtractionSupport
 
         return true;
     }
+
+    private static int FirstNonWhitespaceIndex(string value)
+    {
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (!char.IsWhiteSpace(value[i]))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static bool CanStartVisualBasicIdentifierPattern(char value) =>
+        value == '['
+        || value == '_'
+        || value is >= 'A' and <= 'Z'
+        || value is >= 'a' and <= 'z';
 
     private static bool ShouldSkipVisualBasicBareCall(string rawName, string tail)
     {
