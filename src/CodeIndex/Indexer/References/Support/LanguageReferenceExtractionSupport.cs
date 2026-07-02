@@ -2715,9 +2715,12 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        var importMatch = FortranImportRegex.Match(preparedLine);
-        if (importMatch.Success)
-            EmitCommaSeparatedNames(importMatch.Groups["list"].Value, importMatch.Groups["list"].Index, "fortran", references, seen, fileId, context, lineNumber, container);
+        if (preparedLine.IndexOf("import", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            var importMatch = FortranImportRegex.Match(preparedLine);
+            if (importMatch.Success)
+                EmitCommaSeparatedNames(importMatch.Groups["list"].Value, importMatch.Groups["list"].Index, "fortran", references, seen, fileId, context, lineNumber, container);
+        }
 
         if (originalLine.IndexOf("include", StringComparison.OrdinalIgnoreCase) >= 0
             && (originalLine.IndexOf('\'') >= 0 || originalLine.IndexOf('"') >= 0))

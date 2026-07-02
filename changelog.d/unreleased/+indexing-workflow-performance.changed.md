@@ -298,6 +298,7 @@ affected:
 - **Gated VB CallByName scans by marker** - Visual Basic reference extraction now checks `CallByName`, parenthesis, comma, and quote markers before running `CallByName` regex probes.
 - **Gated VB bare member call scans by leading token** - Visual Basic reference extraction now checks for leading member access before running bare member call regex probes.
 - **Gated Fortran use scans by marker** - Fortran reference extraction now checks `use` markers before running use, only-list, and rename-list regex probes.
+- **Gated Fortran import scans by marker** - Fortran reference extraction now checks `import` markers before running import list regex probes.
 
 ## 日本語
 
@@ -530,3 +531,4 @@ affected:
 - **VB CallByName scan を marker で gate します** - Visual Basic reference extraction は `CallByName` regex probe の前に `CallByName` / parenthesis / comma / quote marker を確認します。
 - **VB bare member call scan を leading token で gate します** - Visual Basic reference extraction は bare member call regex probe の前に leading member access を確認します。
 - **Fortran use scan を marker で gate します** - Fortran reference extraction は use / only-list / rename-list regex probe の前に `use` marker を確認します。
+- **Fortran import scan を marker で gate します** - Fortran reference extraction は import list regex probe の前に `import` marker を確認します。
