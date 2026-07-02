@@ -2748,8 +2748,7 @@ internal static partial class LanguageReferenceExtractionSupport
                 ReferenceExtractor.AddReference(references, seen, fileId, match, "reference", context, lineNumber, container);
         }
 
-        var isFortranCommonLine = preparedLine.IndexOf("common", StringComparison.OrdinalIgnoreCase) >= 0
-            && FortranCommonLineRegex.IsMatch(preparedLine);
+        var isFortranCommonLine = StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "common");
         var isFortranNamelistLine = preparedLine.IndexOf("namelist", StringComparison.OrdinalIgnoreCase) >= 0
             && FortranNamelistLineRegex.IsMatch(preparedLine);
         if (isFortranCommonLine || isFortranNamelistLine)
