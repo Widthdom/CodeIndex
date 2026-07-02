@@ -2287,7 +2287,9 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        if (FortranEquivalenceLineRegex.IsMatch(preparedLine))
+        if (preparedLine.IndexOf("equivalence", StringComparison.OrdinalIgnoreCase) >= 0
+            && preparedLine.IndexOf('(') >= 0
+            && FortranEquivalenceLineRegex.IsMatch(preparedLine))
         {
             foreach (Match listMatch in FortranParenthesizedNameListRegex.Matches(preparedLine))
             {
@@ -2300,87 +2302,110 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        var dataLineMatch = FortranDataLineRegex.Match(preparedLine);
-        if (dataLineMatch.Success)
+        if (preparedLine.IndexOf("data", StringComparison.OrdinalIgnoreCase) >= 0)
         {
-            var tail = dataLineMatch.Groups["tail"];
-            foreach (Match groupMatch in FortranDataObjectGroupRegex.Matches(tail.Value))
+            var dataLineMatch = FortranDataLineRegex.Match(preparedLine);
+            if (dataLineMatch.Success)
             {
-                var list = groupMatch.Groups["list"];
-                foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+                var tail = dataLineMatch.Groups["tail"];
+                foreach (Match groupMatch in FortranDataObjectGroupRegex.Matches(tail.Value))
                 {
-                    var group = match.Groups["name"];
-                    ReferenceExtractor.AddReference(references, seen, fileId, group.Value, tail.Index + list.Index + group.Index, "reference", context, lineNumber, container);
+                    var list = groupMatch.Groups["list"];
+                    foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+                    {
+                        var group = match.Groups["name"];
+                        ReferenceExtractor.AddReference(references, seen, fileId, group.Value, tail.Index + list.Index + group.Index, "reference", context, lineNumber, container);
+                    }
                 }
             }
         }
 
-        var saveMatch = FortranSaveRegex.Match(preparedLine);
-        if (saveMatch.Success)
+        if (preparedLine.IndexOf("save", StringComparison.OrdinalIgnoreCase) >= 0)
         {
-            var list = saveMatch.Groups["list"];
-            foreach (Match match in FortranSlashGroupNameRegex.Matches(list.Value))
-                ReferenceExtractor.AddReference(references, seen, fileId, match.Groups["name"].Value, list.Index + match.Groups["name"].Index, "reference", context, lineNumber, container);
-
-            foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+            var saveMatch = FortranSaveRegex.Match(preparedLine);
+            if (saveMatch.Success)
             {
-                var group = match.Groups["name"];
-                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+                var list = saveMatch.Groups["list"];
+                foreach (Match match in FortranSlashGroupNameRegex.Matches(list.Value))
+                    ReferenceExtractor.AddReference(references, seen, fileId, match.Groups["name"].Value, list.Index + match.Groups["name"].Index, "reference", context, lineNumber, container);
+
+                foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+                {
+                    var group = match.Groups["name"];
+                    ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+                }
             }
         }
 
-        var submoduleMatch = FortranSubmoduleParentRegex.Match(preparedLine);
-        if (submoduleMatch.Success)
+        if (preparedLine.IndexOf("submodule", StringComparison.OrdinalIgnoreCase) >= 0
+            && preparedLine.IndexOf('(') >= 0)
         {
-            var parent = submoduleMatch.Groups["parent"];
-            ReferenceExtractor.AddReference(references, seen, fileId, parent.Value, parent.Index, "type_reference", context, lineNumber, container);
-
-            var ancestor = submoduleMatch.Groups["ancestor"];
-            if (ancestor.Success)
-                ReferenceExtractor.AddReference(references, seen, fileId, ancestor.Value, ancestor.Index, "type_reference", context, lineNumber, container);
-        }
-
-        var externalMatch = FortranExternalRegex.Match(preparedLine);
-        if (externalMatch.Success)
-        {
-            var list = externalMatch.Groups["list"];
-            foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+            var submoduleMatch = FortranSubmoduleParentRegex.Match(preparedLine);
+            if (submoduleMatch.Success)
             {
-                var group = match.Groups["name"];
-                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+                var parent = submoduleMatch.Groups["parent"];
+                ReferenceExtractor.AddReference(references, seen, fileId, parent.Value, parent.Index, "type_reference", context, lineNumber, container);
+
+                var ancestor = submoduleMatch.Groups["ancestor"];
+                if (ancestor.Success)
+                    ReferenceExtractor.AddReference(references, seen, fileId, ancestor.Value, ancestor.Index, "type_reference", context, lineNumber, container);
             }
         }
 
-        var intrinsicProcedureMatch = FortranIntrinsicProcedureRegex.Match(preparedLine);
-        if (intrinsicProcedureMatch.Success)
+        if (preparedLine.IndexOf("external", StringComparison.OrdinalIgnoreCase) >= 0)
         {
-            var list = intrinsicProcedureMatch.Groups["list"];
-            foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+            var externalMatch = FortranExternalRegex.Match(preparedLine);
+            if (externalMatch.Success)
             {
-                var group = match.Groups["name"];
-                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+                var list = externalMatch.Groups["list"];
+                foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+                {
+                    var group = match.Groups["name"];
+                    ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+                }
             }
         }
 
-        var accessListMatch = FortranAccessListRegex.Match(preparedLine);
-        if (accessListMatch.Success)
+        if (preparedLine.IndexOf("intrinsic", StringComparison.OrdinalIgnoreCase) >= 0)
         {
-            var list = accessListMatch.Groups["list"];
-            foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+            var intrinsicProcedureMatch = FortranIntrinsicProcedureRegex.Match(preparedLine);
+            if (intrinsicProcedureMatch.Success)
             {
-                var group = match.Groups["name"];
-                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+                var list = intrinsicProcedureMatch.Groups["list"];
+                foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+                {
+                    var group = match.Groups["name"];
+                    ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+                }
             }
         }
 
-        var finalizerMatch = FortranFinalizerRegex.Match(preparedLine);
-        if (finalizerMatch.Success)
+        if (preparedLine.IndexOf("public", StringComparison.OrdinalIgnoreCase) >= 0
+            || preparedLine.IndexOf("private", StringComparison.OrdinalIgnoreCase) >= 0)
         {
-            var list = finalizerMatch.Groups["list"];
-            foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+            var accessListMatch = FortranAccessListRegex.Match(preparedLine);
+            if (accessListMatch.Success)
             {
-                var group = match.Groups["name"];
-                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+                var list = accessListMatch.Groups["list"];
+                foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+                {
+                    var group = match.Groups["name"];
+                    ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+                }
+            }
+        }
+
+        if (preparedLine.IndexOf("final", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            var finalizerMatch = FortranFinalizerRegex.Match(preparedLine);
+            if (finalizerMatch.Success)
+            {
+                var list = finalizerMatch.Groups["list"];
+                foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+                {
+                    var group = match.Groups["name"];
+                    ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+                }
             }
         }
 
