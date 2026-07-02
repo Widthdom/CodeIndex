@@ -2437,11 +2437,17 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf('=') < 0)
+            return;
+
         var genericCloseIndex = FindRustGenericClose(preparedLine, genericOpenIndex);
         if (genericCloseIndex <= genericOpenIndex)
             return;
 
         var clause = preparedLine.Substring(genericOpenIndex + 1, genericCloseIndex - genericOpenIndex - 1);
+        if (clause.IndexOf('=') < 0)
+            return;
+
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(clause))
         {
             var fragment = clause.Substring(segmentStart, segmentLength);
