@@ -375,6 +375,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("raise", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in BareRaiseTypeRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -404,6 +407,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("except", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in ExceptTupleTypeRegex.Matches(preparedLine))
         {
             var typesGroup = match.Groups["types"];

@@ -96,6 +96,7 @@ affected:
 - **Gated Lua call and table-field scans by marker** - Lua reference extraction now checks whitespace, colon, and dot markers before running command-call, method-call, and table-field regex probes.
 - **Gated Rust raw-identifier and macro call scans by marker** - Rust reference extraction now checks `r#` and `!` markers before running raw-identifier and macro-call regex probes.
 - **Gated Python decorator reference scans by marker** - Python reference extraction now skips decorator-call and bare-decorator regex probes on lines without an `@` marker.
+- **Gated Python raise/except type scans by marker** - Python reference extraction now checks `raise` and `except` markers before running exception type regex probes.
 - **Skipped reference-line preparation on empty lines** - all language reference preparation now returns empty lines immediately instead of running comment/string-literal trigger checks.
 - **Collapsed string-literal delimiter probes** - reference-line preparation now checks quote/backtick trigger characters with `IndexOfAny` instead of separate scans per delimiter.
 - **Hoisted reference-line preparation language flags** - per-file reference preparation now computes language comment/string handling flags once and reuses them for each line instead of repeating language switches in the hot loop.
@@ -211,6 +212,7 @@ affected:
 - **Lua call / table-field scan を marker で gate します** - Lua reference extraction は command-call、method-call、table-field regex probe を実行する前に whitespace、colon、dot marker を確認します。
 - **Rust raw-identifier / macro call scan を marker で gate します** - Rust reference extraction は raw-identifier と macro-call regex probe を実行する前に `r#` と `!` marker を確認します。
 - **Python decorator reference scan を marker で gate します** - Python reference extraction は `@` marker がない行では decorator-call と bare-decorator regex probe を skip します。
+- **Python raise/except type scan を marker で gate します** - Python reference extraction は exception type regex probe を実行する前に `raise` と `except` marker を確認します。
 - **空行の reference-line preparation を skip します** - 全言語の reference preparation は空行に対して comment/string-literal trigger 判定を走らせず即 return するようになりました。
 - **string-literal delimiter probe をまとめました** - reference-line preparation は quote/backtick trigger character を delimiter ごとの個別 scan ではなく `IndexOfAny` で確認します。
 - **reference-line preparation の言語フラグを loop 外へ出しました** - ファイルごとの reference preparation は comment/string handling の言語フラグを一度だけ計算し、hot loop 内で language switch を繰り返さないようになりました。
