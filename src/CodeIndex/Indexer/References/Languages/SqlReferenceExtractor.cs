@@ -3528,11 +3528,37 @@ internal static partial class SqlReferenceExtractor
         string statement,
         HashSet<string> names)
     {
-        CollectTempObjectNamesFromTargetMatches(TargetReferenceRegex.Matches(statement), statement, names);
-        CollectTempObjectNamesFromMatches(TruncateTargetRegex.Matches(statement), statement, names);
-        CollectTempObjectNamesFromMatches(SelectIntoTargetStatementRegex.Matches(statement), statement, names);
-        CollectTempObjectNamesFromMatches(CreateTempTableRegex.Matches(statement), statement, names);
-        CollectTempObjectNamesFromMatches(CreateTempRoutineRegex.Matches(statement), statement, names);
+        if (statement.IndexOf('#') < 0)
+            return;
+
+        var mayContainTargetStatement = statement.IndexOf("INSERT", StringComparison.OrdinalIgnoreCase) >= 0
+            || statement.IndexOf("UPDATE", StringComparison.OrdinalIgnoreCase) >= 0
+            || statement.IndexOf("MERGE", StringComparison.OrdinalIgnoreCase) >= 0
+            || statement.IndexOf("DELETE", StringComparison.OrdinalIgnoreCase) >= 0
+            || statement.IndexOf("ALTER", StringComparison.OrdinalIgnoreCase) >= 0
+            || statement.IndexOf("BULK", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (mayContainTargetStatement)
+            CollectTempObjectNamesFromTargetMatches(TargetReferenceRegex.Matches(statement), statement, names);
+
+        if (statement.IndexOf("TRUNCATE", StringComparison.OrdinalIgnoreCase) >= 0)
+            CollectTempObjectNamesFromMatches(TruncateTargetRegex.Matches(statement), statement, names);
+
+        if (statement.IndexOf("SELECT", StringComparison.OrdinalIgnoreCase) >= 0
+            && statement.IndexOf("INTO", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            CollectTempObjectNamesFromMatches(SelectIntoTargetStatementRegex.Matches(statement), statement, names);
+        }
+
+        if (statement.IndexOf("CREATE", StringComparison.OrdinalIgnoreCase) < 0)
+            return;
+
+        if (statement.IndexOf("TABLE", StringComparison.OrdinalIgnoreCase) >= 0)
+            CollectTempObjectNamesFromMatches(CreateTempTableRegex.Matches(statement), statement, names);
+        if (statement.IndexOf("PROC", StringComparison.OrdinalIgnoreCase) >= 0
+            || statement.IndexOf("FUNCTION", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            CollectTempObjectNamesFromMatches(CreateTempRoutineRegex.Matches(statement), statement, names);
+        }
     }
 
     private static void CollectTempObjectNamesFromTargetMatches(MatchCollection matches, string statement, HashSet<string> names)
