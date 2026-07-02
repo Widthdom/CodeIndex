@@ -128,6 +128,9 @@ public static partial class ReferenceExtractor
         var pythonDefinitionContainersByLineAndKind = language == "python"
             ? BuildPythonDefinitionContainersByLineAndKind(symbols)
             : null;
+        var pythonHeaderSymbolsByLine = language == "python"
+            ? BuildPythonHeaderSymbolsByLine(symbols)
+            : null;
         var swiftPropertyDefinitionsByLine = BuildSwiftPropertyDefinitionsByLine(language, symbols, request.ReportDiagnostic);
 
         // Synthetic function-kind container for C# primary-ctor declarations with a base
@@ -2605,10 +2608,7 @@ public static partial class ReferenceExtractor
             {
                 var pythonPreparedLine = preparedLine;
                 var pythonHeaderMap = default(PythonLogicalHeaderReferenceLine?);
-                var pythonHeaderSymbol = symbols.FirstOrDefault(symbol =>
-                    symbol.Line == lineNumber
-                    && symbol.Signature != null
-                    && symbol.Kind is "function" or "class" or "property" or "class_hook");
+                pythonHeaderSymbolsByLine!.TryGetValue(lineNumber, out var pythonHeaderSymbol);
                 if (pythonHeaderSymbol?.Signature != null
                     && TryBuildPythonLogicalHeaderReferenceLine(lines, i, pythonHeaderSymbol.StartColumn ?? 0, out var builtPythonHeaderMap))
                 {

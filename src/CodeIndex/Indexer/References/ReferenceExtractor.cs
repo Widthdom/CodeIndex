@@ -2169,6 +2169,23 @@ public static partial class ReferenceExtractor
         return containers;
     }
 
+    private static Dictionary<int, SymbolRecord> BuildPythonHeaderSymbolsByLine(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var symbolsByLine = new Dictionary<int, SymbolRecord>();
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Signature == null
+                || symbol.Kind is not ("function" or "class" or "property" or "class_hook"))
+            {
+                continue;
+            }
+
+            symbolsByLine.TryAdd(symbol.Line, symbol);
+        }
+
+        return symbolsByLine;
+    }
+
     private static bool IsJsxFilePath(string? path)
     {
         if (string.IsNullOrWhiteSpace(path))
