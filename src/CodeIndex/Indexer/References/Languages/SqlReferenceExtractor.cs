@@ -187,6 +187,18 @@ internal static partial class SqlReferenceExtractor
         Func<string, bool> shouldIgnoreName,
         Func<string, int, bool> shouldSuppressDefinitionCall)
     {
+        var hasCallKeyword = statement.IndexOf("EXEC", StringComparison.OrdinalIgnoreCase) >= 0
+            || statement.IndexOf("CALL", StringComparison.OrdinalIgnoreCase) >= 0;
+        var hasFromKeyword = statement.IndexOf("FROM", StringComparison.OrdinalIgnoreCase) >= 0;
+        var hasJoinKeyword = statement.IndexOf("JOIN", StringComparison.OrdinalIgnoreCase) >= 0;
+        var hasApplyKeyword = statement.IndexOf("APPLY", StringComparison.OrdinalIgnoreCase) >= 0;
+        var hasDeleteKeyword = statement.IndexOf("DELETE", StringComparison.OrdinalIgnoreCase) >= 0;
+        var hasIntoKeyword = statement.IndexOf("INTO", StringComparison.OrdinalIgnoreCase) >= 0;
+        var hasMergeKeyword = statement.IndexOf("MERGE", StringComparison.OrdinalIgnoreCase) >= 0;
+        var hasOutputKeyword = statement.IndexOf("OUTPUT", StringComparison.OrdinalIgnoreCase) >= 0;
+        var hasSelectKeyword = statement.IndexOf("SELECT", StringComparison.OrdinalIgnoreCase) >= 0;
+        var hasUsingKeyword = statement.IndexOf("USING", StringComparison.OrdinalIgnoreCase) >= 0;
+
         var cteBodySpans = PrepareStatementReferenceState(
             statement,
             statementStart,
@@ -208,32 +220,38 @@ internal static partial class SqlReferenceExtractor
             resolveContainerForCall,
             shouldIgnoreName);
 
-        EmitProcedureCalls(
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            establishedTempObjectNames,
-            resolveContainerForCall,
-            shouldIgnoreName,
-            shouldSuppressDefinitionCall);
+        if (hasCallKeyword)
+        {
+            EmitProcedureCalls(
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                establishedTempObjectNames,
+                resolveContainerForCall,
+                shouldIgnoreName,
+                shouldSuppressDefinitionCall);
+        }
 
-        EmitSystemVariableReferences(
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall);
+        if (statement.IndexOf("@@", StringComparison.Ordinal) >= 0)
+        {
+            EmitSystemVariableReferences(
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall);
+        }
 
         EmitGeneratedColumnDependencyReferences(
             statement,
@@ -248,112 +266,133 @@ internal static partial class SqlReferenceExtractor
             resolveContainerForCall,
             shouldIgnoreName);
 
-        EmitSourceCaptureReferences(
-            FromSourceListRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            establishedTempObjectNames,
-            suppressedCallIndices,
-            resolveContainerForCall,
-            shouldIgnoreName,
-            cteBodySpans);
+        if (hasFromKeyword)
+        {
+            EmitSourceCaptureReferences(
+                FromSourceListRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                establishedTempObjectNames,
+                suppressedCallIndices,
+                resolveContainerForCall,
+                shouldIgnoreName,
+                cteBodySpans);
+        }
 
-        EmitSourceCaptureReferences(
-            SourceReferenceRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            establishedTempObjectNames,
-            suppressedCallIndices,
-            resolveContainerForCall,
-            shouldIgnoreName,
-            cteBodySpans);
+        if (hasJoinKeyword || hasApplyKeyword)
+        {
+            EmitSourceCaptureReferences(
+                SourceReferenceRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                establishedTempObjectNames,
+                suppressedCallIndices,
+                resolveContainerForCall,
+                shouldIgnoreName,
+                cteBodySpans);
+        }
 
-        EmitMergeUsingReferences(
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            establishedTempObjectNames,
-            suppressedCallIndices,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (hasMergeKeyword)
+        {
+            EmitMergeUsingReferences(
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                establishedTempObjectNames,
+                suppressedCallIndices,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
 
-        EmitSourceCaptureReferences(
-            DeleteUsingSourceRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            establishedTempObjectNames,
-            suppressedCallIndices,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (hasDeleteKeyword)
+        {
+            if (hasUsingKeyword)
+            {
+                EmitSourceCaptureReferences(
+                    DeleteUsingSourceRegex.Matches(statement),
+                    statement,
+                    statementStart,
+                    statementLineOffset,
+                    lineOffset,
+                    context,
+                    lineNumber,
+                    references,
+                    seen,
+                    fileId,
+                    establishedTempObjectNames,
+                    suppressedCallIndices,
+                    resolveContainerForCall,
+                    shouldIgnoreName);
+            }
 
-        EmitMultiTargetReferences(
-            DeleteTargetWithoutFromRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+            EmitMultiTargetReferences(
+                DeleteTargetWithoutFromRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
 
-        EmitMultiTargetReferences(
-            OutputIntoTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName,
-            suppressedCallIndices);
+        if (hasOutputKeyword && hasIntoKeyword)
+        {
+            EmitMultiTargetReferences(
+                OutputIntoTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName,
+                suppressedCallIndices);
+        }
 
-        EmitSelectIntoTargetReferences(
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (hasSelectKeyword && hasIntoKeyword)
+        {
+            EmitSelectIntoTargetReferences(
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
 
         EmitIndexTargetReferences(
             statement,
@@ -405,53 +444,70 @@ internal static partial class SqlReferenceExtractor
         int lineOffset,
         HashSet<int> suppressedCallIndices)
     {
+        var hasDeleteKeyword = statement.IndexOf("DELETE", StringComparison.OrdinalIgnoreCase) >= 0;
+        var hasMergeKeyword = statement.IndexOf("MERGE", StringComparison.OrdinalIgnoreCase) >= 0;
+        var hasUsingKeyword = statement.IndexOf("USING", StringComparison.OrdinalIgnoreCase) >= 0;
         var cteBodySpans = FindCteBodySpans(statement);
         HashSet<int>? usingSourceIndices = null;
-        foreach (Match match in MergeUsingSourceRegex.Matches(statement))
+        if (hasMergeKeyword && hasUsingKeyword)
         {
-            if (IsInsideDoubleQuotedRegion(statement, match.Index))
-                continue;
-            var nameGroup = match.Groups["name"];
-            if (nameGroup.Index < statementLineOffset)
-                continue;
-
-            (usingSourceIndices ??= []).Add(nameGroup.Index);
-        }
-
-        foreach (Match match in DeleteUsingSourceRegex.Matches(statement))
-        {
-            if (IsInsideDoubleQuotedRegion(statement, match.Index))
-                continue;
-
-            foreach (Capture capture in match.Groups["name"].Captures)
+            foreach (Match match in MergeUsingSourceRegex.Matches(statement))
             {
-                if (capture.Index < statementLineOffset)
+                if (IsInsideDoubleQuotedRegion(statement, match.Index))
+                    continue;
+                var nameGroup = match.Groups["name"];
+                if (nameGroup.Index < statementLineOffset)
                     continue;
 
-                (usingSourceIndices ??= []).Add(capture.Index);
+                (usingSourceIndices ??= []).Add(nameGroup.Index);
             }
         }
 
-        foreach (Match match in TopCallSuppressionRegex.Matches(statement))
+        if (hasDeleteKeyword && hasUsingKeyword)
         {
-            var nameGroup = match.Groups["name"];
-            if (nameGroup.Index < statementLineOffset)
-                continue;
+            foreach (Match match in DeleteUsingSourceRegex.Matches(statement))
+            {
+                if (IsInsideDoubleQuotedRegion(statement, match.Index))
+                    continue;
 
-            suppressedCallIndices.Add(nameGroup.Index + statementStart - lineOffset);
+                foreach (Capture capture in match.Groups["name"].Captures)
+                {
+                    if (capture.Index < statementLineOffset)
+                        continue;
+
+                    (usingSourceIndices ??= []).Add(capture.Index);
+                }
+            }
         }
 
-        foreach (Match match in AccessMethodCallSuppressionRegex.Matches(statement))
+        if (statement.IndexOf("TOP", StringComparison.OrdinalIgnoreCase) >= 0)
         {
-            if (IsInsideDoubleQuotedRegion(statement, match.Index))
-                continue;
-            var nameGroup = match.Groups["name"];
-            if (nameGroup.Index < statementLineOffset)
-                continue;
-            if (usingSourceIndices != null && usingSourceIndices.Contains(nameGroup.Index))
-                continue;
+            foreach (Match match in TopCallSuppressionRegex.Matches(statement))
+            {
+                var nameGroup = match.Groups["name"];
+                if (nameGroup.Index < statementLineOffset)
+                    continue;
 
-            suppressedCallIndices.Add(nameGroup.Index + statementStart - lineOffset);
+                suppressedCallIndices.Add(nameGroup.Index + statementStart - lineOffset);
+            }
+        }
+
+        if (statement.IndexOf("CREATE", StringComparison.OrdinalIgnoreCase) >= 0
+            && statement.IndexOf("INDEX", StringComparison.OrdinalIgnoreCase) >= 0
+            && hasUsingKeyword)
+        {
+            foreach (Match match in AccessMethodCallSuppressionRegex.Matches(statement))
+            {
+                if (IsInsideDoubleQuotedRegion(statement, match.Index))
+                    continue;
+                var nameGroup = match.Groups["name"];
+                if (nameGroup.Index < statementLineOffset)
+                    continue;
+                if (usingSourceIndices != null && usingSourceIndices.Contains(nameGroup.Index))
+                    continue;
+
+                suppressedCallIndices.Add(nameGroup.Index + statementStart - lineOffset);
+            }
         }
 
         return cteBodySpans;
