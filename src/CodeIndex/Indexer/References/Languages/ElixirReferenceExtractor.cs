@@ -111,11 +111,14 @@ internal static class ElixirReferenceExtractor
         Action<string, int> addCallLikeReference,
         IReadOnlySet<string>? definitionNames)
     {
-        foreach (Match match in PipeCallRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("|>", StringComparison.Ordinal) >= 0)
         {
-            var name = match.Groups["name"].Value;
-            if (!IgnoredPipeCallNames.Contains(name))
-                addCallLikeReference(name, match.Groups["name"].Index);
+            foreach (Match match in PipeCallRegex.Matches(preparedLine))
+            {
+                var name = match.Groups["name"].Value;
+                if (!IgnoredPipeCallNames.Contains(name))
+                    addCallLikeReference(name, match.Groups["name"].Index);
+            }
         }
 
         LanguageReferenceExtractionSupport.EmitAdditionalCallReferences(
