@@ -165,6 +165,9 @@ public partial class FileIndexer
 
     private static bool ProjectMarkerPatternListsEqual(IReadOnlyList<string> left, IReadOnlyList<string> right)
     {
+        if (ReferenceEquals(left, right))
+            return true;
+
         if (left.Count != right.Count)
             return false;
 
@@ -393,21 +396,27 @@ public partial class FileIndexer
             ScanIssueSeverity.Warning));
     }
 
+    private static readonly string[] CSharpProjectMarkerPatterns = ["*.csproj"];
+    private static readonly string[] VisualBasicProjectMarkerPatterns = ["*.vbproj"];
+    private static readonly string[] FSharpProjectMarkerPatterns = ["*.fsproj"];
+    private static readonly string[] MsbuildProjectMarkerPatterns = ["*.csproj", "*.fsproj", "*.vbproj", "*.props", "*.targets"];
+    private static readonly string[] MsbuildPrimaryProjectMarkerPatterns = ["*.csproj", "*.fsproj", "*.vbproj"];
+
     private static IReadOnlyList<string>? GetProjectMarkerPatterns(string? lang) => lang switch
     {
-        "csharp" => ["*.csproj"],
-        "vb" => ["*.vbproj"],
-        "fsharp" => ["*.fsproj"],
-        "msbuild" => ["*.csproj", "*.fsproj", "*.vbproj", "*.props", "*.targets"],
+        "csharp" => CSharpProjectMarkerPatterns,
+        "vb" => VisualBasicProjectMarkerPatterns,
+        "fsharp" => FSharpProjectMarkerPatterns,
+        "msbuild" => MsbuildProjectMarkerPatterns,
         _ => null,
     };
 
     private static IReadOnlyList<string>? GetPrimaryProjectMarkerPatterns(string? lang) => lang switch
     {
-        "csharp" => ["*.csproj"],
-        "vb" => ["*.vbproj"],
-        "fsharp" => ["*.fsproj"],
-        "msbuild" => ["*.csproj", "*.fsproj", "*.vbproj"],
+        "csharp" => CSharpProjectMarkerPatterns,
+        "vb" => VisualBasicProjectMarkerPatterns,
+        "fsharp" => FSharpProjectMarkerPatterns,
+        "msbuild" => MsbuildPrimaryProjectMarkerPatterns,
         _ => null,
     };
 }
