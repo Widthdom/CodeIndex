@@ -1810,13 +1810,18 @@ internal static partial class LanguageReferenceExtractionSupport
                 }
             }
 
-            foreach (Match match in CppQualifiedRequiresConceptConstraintRegex.Matches(preparedLine))
+            var hasCppQualifiedRequiresConceptMarker = hasCppRequiresConceptTypeMarker
+                && hasCppScopeSeparator;
+            if (hasCppQualifiedRequiresConceptMarker)
             {
-                var conceptGroup = match.Groups["concept"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, conceptGroup.Value, conceptGroup.Index, context, lineNumber, resolveContainerForColumn(conceptGroup.Index), language);
+                foreach (Match match in CppQualifiedRequiresConceptConstraintRegex.Matches(preparedLine))
+                {
+                    var conceptGroup = match.Groups["concept"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, conceptGroup.Value, conceptGroup.Index, context, lineNumber, resolveContainerForColumn(conceptGroup.Index), language);
 
-                var argsGroup = match.Groups["args"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, argsGroup.Value, argsGroup.Index, context, lineNumber, resolveContainerForColumn(argsGroup.Index), language);
+                    var argsGroup = match.Groups["args"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, argsGroup.Value, argsGroup.Index, context, lineNumber, resolveContainerForColumn(argsGroup.Index), language);
+                }
             }
 
             foreach (Match match in CppConceptExpressionTypeRegex.Matches(preparedLine))
