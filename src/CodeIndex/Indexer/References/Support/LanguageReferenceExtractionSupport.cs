@@ -1146,7 +1146,11 @@ internal static partial class LanguageReferenceExtractionSupport
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        var includeMatch = !string.IsNullOrWhiteSpace(preparedLine)
+        var hasCppIncludeMarker = !string.IsNullOrWhiteSpace(preparedLine)
+            && (originalLine.IndexOf('#') >= 0
+                || originalLine.IndexOf("import", StringComparison.Ordinal) >= 0
+                || originalLine.IndexOf("include", StringComparison.Ordinal) >= 0);
+        var includeMatch = hasCppIncludeMarker
             ? CppIncludeRegex.Match(originalLine)
             : Match.Empty;
         if (includeMatch.Success)
@@ -1155,7 +1159,11 @@ internal static partial class LanguageReferenceExtractionSupport
             ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "type_reference", context, lineNumber, resolveContainerForColumn(group.Index));
         }
 
-        var baseMatch = CppBaseListRegex.Match(preparedLine);
+        var baseMatch = preparedLine.IndexOf(':') >= 0
+            && (preparedLine.IndexOf("class", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("struct", StringComparison.Ordinal) >= 0)
+            ? CppBaseListRegex.Match(preparedLine)
+            : Match.Empty;
         if (baseMatch.Success)
         {
             var group = baseMatch.Groups["bases"];
@@ -1171,25 +1179,34 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        foreach (Match match in CppNewTypeRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("new", StringComparison.Ordinal) >= 0)
         {
-            var group = match.Groups["type"];
-            var typeName = LastCppQualifiedSegment(group.Value);
-            var typeStart = group.Index + group.Value.LastIndexOf(typeName, StringComparison.Ordinal);
-            ReferenceExtractor.AddReference(references, seen, fileId, typeName, typeStart, "instantiate", context, lineNumber, resolveContainerForColumn(typeStart));
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            foreach (Match match in CppNewTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                var typeName = LastCppQualifiedSegment(group.Value);
+                var typeStart = group.Index + group.Value.LastIndexOf(typeName, StringComparison.Ordinal);
+                ReferenceExtractor.AddReference(references, seen, fileId, typeName, typeStart, "instantiate", context, lineNumber, resolveContainerForColumn(typeStart));
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
         }
 
-        foreach (Match match in CppNamedCastTypeRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("_cast", StringComparison.Ordinal) >= 0)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            foreach (Match match in CppNamedCastTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
         }
 
-        foreach (Match match in CppCStyleCastTypeRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf('(') >= 0)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            foreach (Match match in CppCStyleCastTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
         }
 
         if (language == "c")
