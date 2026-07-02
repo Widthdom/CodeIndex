@@ -147,21 +147,34 @@ internal static class PowerShellReferenceExtractor
             return [];
 
         List<string>? keys = null;
-        HashSet<string>? seen = null;
         foreach (Match match in HashtableKeyRegex.Matches(text))
         {
             var key = match.Groups["quoted"].Success
                 ? match.Groups["quoted"].Value
                 : match.Groups["bare"].Value;
-            seen ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            if (seen.Add(key))
+
+            if (keys == null)
             {
-                keys ??= [];
+                keys = [key];
+            }
+            else if (!ContainsPowerShellHashtableKey(keys, key))
+            {
                 keys.Add(key);
             }
         }
 
         return keys ?? [];
+    }
+
+    private static bool ContainsPowerShellHashtableKey(List<string> keys, string key)
+    {
+        foreach (var existing in keys)
+        {
+            if (string.Equals(existing, key, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
     }
 
     private static bool HasCallStartCandidate(string line)
