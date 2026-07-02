@@ -124,7 +124,13 @@ public partial class FileIndexer
             if (passthrough)
                 continue;
 
-            if (TryAcceptScannedFile(entry, scanState, activeIgnoreRules, seenFilePaths, attributes))
+            if (TryAcceptScannedFile(
+                    entry,
+                    scanState,
+                    activeIgnoreRules,
+                    seenFilePaths,
+                    knownAttributes: attributes,
+                    filePathCameFromDirectoryEnumeration: true))
                 scanState.Results.Add(entry);
         }
 

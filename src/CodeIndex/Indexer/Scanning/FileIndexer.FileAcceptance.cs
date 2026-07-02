@@ -9,7 +9,8 @@ public partial class FileIndexer
         DirectoryScanState scanState,
         IgnoreRuleSet activeIgnoreRules,
         HashSet<string>? seenFilePaths,
-        FileAttributes? knownAttributes = null)
+        FileAttributes? knownAttributes = null,
+        bool filePathCameFromDirectoryEnumeration = false)
     {
         if (!IsFilePathSyntaxIndexable(file))
         {
@@ -22,15 +23,19 @@ public partial class FileIndexer
             return false;
         }
 
-        if (seenFilePaths is not null && !seenFilePaths.Add(Path.GetFullPath(file)))
+        if (seenFilePaths is not null)
         {
-            var relativePath = ToRelativePath(file);
-            scanState.Errors.Add(new ScanError(
-                relativePath,
-                "Skipped duplicate file path that differs only by case on a case-insensitive directory.",
-                ScanIssueSeverity.Warning));
-            scanState.NonIndexablePaths.Add(relativePath);
-            return false;
+            var seenFilePathKey = GetSeenFilePathKey(file, filePathCameFromDirectoryEnumeration);
+            if (!seenFilePaths.Add(seenFilePathKey))
+            {
+                var relativePath = ToRelativePath(file);
+                scanState.Errors.Add(new ScanError(
+                    relativePath,
+                    "Skipped duplicate file path that differs only by case on a case-insensitive directory.",
+                    ScanIssueSeverity.Warning));
+                scanState.NonIndexablePaths.Add(relativePath);
+                return false;
+            }
         }
 
         var fileName = Path.GetFileName(file.AsSpan());
@@ -47,6 +52,9 @@ public partial class FileIndexer
             : (FileProbeStatus?)null;
         return TryAcceptSupportedScannedFile(file, scanState, knownIndexability);
     }
+
+    private static string GetSeenFilePathKey(string file, bool filePathCameFromDirectoryEnumeration)
+        => filePathCameFromDirectoryEnumeration ? file : Path.GetFullPath(file);
 
     private bool TryAcceptSupportedScannedFile(
         string file,
