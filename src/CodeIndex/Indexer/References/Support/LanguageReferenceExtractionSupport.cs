@@ -1604,10 +1604,15 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        foreach (Match match in CppTypeIdRegex.Matches(preparedLine))
+        var hasCppTypeIdMarker = hasCppParen
+            && preparedLine.IndexOf("typeid", StringComparison.Ordinal) >= 0;
+        if (hasCppTypeIdMarker)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            foreach (Match match in CppTypeIdRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
         }
 
         foreach (Match match in CppDecltypeBraceConstructionRegex.Matches(preparedLine))
