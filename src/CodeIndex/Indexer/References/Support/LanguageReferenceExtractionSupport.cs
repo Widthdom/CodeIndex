@@ -3358,7 +3358,7 @@ internal static partial class LanguageReferenceExtractionSupport
         }
 
         var hasBehaviourMarker = StartsWithCharIgnoringLeadingWhitespace(preparedLine, '@')
-            && (preparedLine.IndexOf("behaviour", StringComparison.Ordinal) >= 0
+            && (ContainsOrdinalKeyword(preparedLine, "behaviour")
                 || preparedLine.IndexOf("impl", StringComparison.Ordinal) >= 0);
         if (hasBehaviourMarker)
         {
