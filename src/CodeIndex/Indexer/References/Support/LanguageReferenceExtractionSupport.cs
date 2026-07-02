@@ -2481,7 +2481,13 @@ internal static partial class LanguageReferenceExtractionSupport
 
     private static bool CanStartVisualBasicIdentifierPattern(char value) =>
         value == '['
-        || value == '_'
+        || CanStartAsciiIdentifierPattern(value);
+
+    private static bool CanStartFortranIdentifierPattern(char value) =>
+        CanStartAsciiIdentifierPattern(value);
+
+    private static bool CanStartAsciiIdentifierPattern(char value) =>
+        value == '_'
         || value is >= 'A' and <= 'Z'
         || value is >= 'a' and <= 'z';
 
@@ -2914,12 +2920,16 @@ internal static partial class LanguageReferenceExtractionSupport
 
         if (preparedLine.IndexOf("=>", StringComparison.Ordinal) >= 0)
         {
-            var pointerAssignmentMatch = FortranPointerAssignmentRegex.Match(preparedLine);
-            if (pointerAssignmentMatch.Success)
+            var firstNonWhitespace = FirstNonWhitespaceIndex(preparedLine);
+            if (firstNonWhitespace >= 0 && CanStartFortranIdentifierPattern(preparedLine[firstNonWhitespace]))
             {
-                var group = pointerAssignmentMatch.Groups["name"];
-                if (!group.Value.Equals("null", StringComparison.OrdinalIgnoreCase))
-                    ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "reference", context, lineNumber, container);
+                var pointerAssignmentMatch = FortranPointerAssignmentRegex.Match(preparedLine);
+                if (pointerAssignmentMatch.Success)
+                {
+                    var group = pointerAssignmentMatch.Groups["name"];
+                    if (!group.Value.Equals("null", StringComparison.OrdinalIgnoreCase))
+                        ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "reference", context, lineNumber, container);
+                }
             }
         }
 

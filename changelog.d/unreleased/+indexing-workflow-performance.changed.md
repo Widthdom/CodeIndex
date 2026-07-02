@@ -303,6 +303,7 @@ affected:
 - **Gated Fortran save slash group scans by marker** - Fortran reference extraction now checks save-list slash markers before running saved common block regex probes.
 - **Gated Fortran allocate source scans by marker** - Fortran reference extraction now checks `source` and `mold` markers before running allocate source keyword regex probes.
 - **Gated Fortran allocation status scans by marker** - Fortran reference extraction now checks `stat` and `errmsg` markers before running allocate/deallocate status keyword regex probes.
+- **Gated Fortran pointer assignment scans by leading token** - Fortran reference extraction now checks the leading identifier token before running pointer assignment regex probes.
 
 ## 日本語
 
@@ -540,3 +541,4 @@ affected:
 - **Fortran save slash group scan を marker で gate します** - Fortran reference extraction は saved common block regex probe の前に save-list slash marker を確認します。
 - **Fortran allocate source scan を marker で gate します** - Fortran reference extraction は allocate source keyword regex probe の前に `source` と `mold` marker を確認します。
 - **Fortran allocation status scan を marker で gate します** - Fortran reference extraction は allocate/deallocate status keyword regex probe の前に `stat` と `errmsg` marker を確認します。
+- **Fortran pointer assignment scan を leading token で gate します** - Fortran reference extraction は pointer assignment regex probe の前に leading identifier token を確認します。
