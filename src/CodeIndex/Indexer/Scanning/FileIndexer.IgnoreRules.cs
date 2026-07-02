@@ -275,7 +275,7 @@ public partial class FileIndexer
             if (TryBuildLiteralPattern(pattern, out var literal))
                 return new LiteralIgnoreMatcher(literal);
 
-            var builder = new StringBuilder();
+            var builder = new StringBuilder(Math.Max(16, pattern.Count * 2 + 2));
             builder.Append('^');
 
             for (var i = 0; i < pattern.Count; i++)
@@ -485,7 +485,7 @@ public partial class FileIndexer
             if (!TryFindPosixCharacterClassEnd(pattern, index, out var posixEnd) || posixEnd >= closingIndex)
                 return false;
 
-            var nameChars = new StringBuilder();
+            var nameChars = new StringBuilder(Math.Max(0, posixEnd - index - 3));
             for (var i = index + 2; i < posixEnd - 1; i++)
                 nameChars.Append(pattern[i].Value);
 
