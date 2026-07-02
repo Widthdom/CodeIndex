@@ -1853,10 +1853,20 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        foreach (Match match in CppFriendTypeRegex.Matches(preparedLine))
+        var hasCppFriendTypeMarker = preparedLine.IndexOf("friend", StringComparison.Ordinal) >= 0
+            && preparedLine.IndexOf(';') >= 0
+            && (preparedLine.IndexOf("class", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("struct", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("union", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("typename", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("enum", StringComparison.Ordinal) >= 0);
+        if (hasCppFriendTypeMarker)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            foreach (Match match in CppFriendTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
         }
 
         foreach (Match match in CppDynamicExceptionSpecRegex.Matches(preparedLine))
