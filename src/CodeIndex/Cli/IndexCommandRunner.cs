@@ -884,13 +884,13 @@ public static partial class IndexCommandRunner
 
     private static bool IsJavaScriptTypeScriptConfigPath(string path)
     {
-        var fileName = Path.GetFileName(path);
-        return string.Equals(fileName, "jsconfig.json", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(fileName, "tsconfig.json", StringComparison.OrdinalIgnoreCase)
-            || (fileName.StartsWith("jsconfig.", StringComparison.OrdinalIgnoreCase)
-                && fileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
-            || (fileName.StartsWith("tsconfig.", StringComparison.OrdinalIgnoreCase)
-                && fileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase));
+        var fileName = Path.GetFileName(path.AsSpan());
+        return fileName.Equals("jsconfig.json".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals("tsconfig.json".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || (fileName.StartsWith("jsconfig.".AsSpan(), StringComparison.OrdinalIgnoreCase)
+                && fileName.EndsWith(".json".AsSpan(), StringComparison.OrdinalIgnoreCase))
+            || (fileName.StartsWith("tsconfig.".AsSpan(), StringComparison.OrdinalIgnoreCase)
+                && fileName.EndsWith(".json".AsSpan(), StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool ContainsRelevantIgnoreFileUpdate(string projectRoot, IEnumerable<string> updateFiles)

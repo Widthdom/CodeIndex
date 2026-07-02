@@ -249,7 +249,11 @@ public partial class FileIndexer
         => TryDetectLanguage(filePath).Language;
 
     internal static bool IsIgnoreFilePath(string path)
-        => IgnoreFileNames.Contains(Path.GetFileName(path), StringComparer.OrdinalIgnoreCase);
+    {
+        var fileName = Path.GetFileName(path.AsSpan());
+        return fileName.Equals(".gitignore".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals(".cdidxignore".AsSpan(), StringComparison.OrdinalIgnoreCase);
+    }
 
     internal LanguageDetectionResult TryDetectLanguageForIndexing(
         string filePath,
