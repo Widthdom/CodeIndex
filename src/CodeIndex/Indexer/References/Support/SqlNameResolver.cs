@@ -322,7 +322,7 @@ internal static class SqlNameResolver
 
         var segments = new List<string>();
         var caseSensitiveSegments = new List<bool>();
-        var current = new StringBuilder();
+        var current = new StringBuilder(trimmed.Length);
         char quote = '\0';
         var currentHasCaseSensitiveQuote = false;
 
@@ -528,7 +528,7 @@ internal static class SqlNameResolver
         var quote = text[index];
         if (quote is '[' or '"' or '`')
         {
-            var current = new StringBuilder();
+            var current = new StringBuilder(Math.Min(64, text.Length - index));
             hasCaseSensitiveQuote = quote == '"';
             index++;
             while (index < text.Length)

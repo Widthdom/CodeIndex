@@ -3680,7 +3680,7 @@ internal static partial class SqlReferenceExtractor
             return trimmed.Length == 0 ? [] : [trimmed];
 
         var segments = new List<string>();
-        var current = new StringBuilder();
+        var current = new StringBuilder(trimmed.Length);
         char quote = '\0';
 
         for (var i = 0; i < trimmed.Length; i++)
