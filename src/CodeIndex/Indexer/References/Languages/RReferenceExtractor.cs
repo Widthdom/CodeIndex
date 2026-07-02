@@ -131,6 +131,9 @@ internal static class RReferenceExtractor
         SymbolRecord? container,
         HashSet<string>? definitionNames)
     {
+        if (preparedLine.IndexOf("::", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in NamespaceReferenceRegex.Matches(preparedLine))
         {
             var package = match.Groups["package"].Value;
@@ -598,6 +601,9 @@ internal static class RReferenceExtractor
         SymbolRecord? container,
         HashSet<string>? definitionNames)
     {
+        if (preparedLine.IndexOf('`') < 0 || preparedLine.IndexOf('(') < 0)
+            return;
+
         foreach (Match match in BacktickCallRegex.Matches(preparedLine))
         {
             var nameGroup = match.Groups["name"];
@@ -628,6 +634,9 @@ internal static class RReferenceExtractor
         SymbolRecord? container,
         HashSet<string>? definitionNames)
     {
+        if (preparedLine.IndexOf('%') < 0)
+            return;
+
         foreach (Match match in InfixOperatorCallRegex.Matches(preparedLine))
         {
             var nameGroup = match.Groups["name"];
@@ -1051,6 +1060,9 @@ internal static class RReferenceExtractor
         SymbolRecord? container,
         HashSet<string>? definitionNames)
     {
+        if (preparedLine.IndexOf('$') < 0)
+            return;
+
         foreach (Match match in DollarMemberReferenceRegex.Matches(preparedLine))
         {
             var backtickReceiverGroup = match.Groups["backtickReceiver"];
@@ -1147,6 +1159,9 @@ internal static class RReferenceExtractor
         SymbolRecord? container,
         HashSet<string>? definitionNames)
     {
+        if (preparedLine.IndexOf('@') < 0)
+            return;
+
         foreach (Match match in SlotMemberReferenceRegex.Matches(preparedLine))
         {
             var backtickReceiverGroup = match.Groups["backtickReceiver"];
