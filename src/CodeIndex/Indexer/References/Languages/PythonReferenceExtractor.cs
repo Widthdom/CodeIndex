@@ -257,6 +257,9 @@ internal static class PythonReferenceExtractor
         HashSet<string>? definitionNames,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf('@') < 0)
+            return;
+
         foreach (Match match in DecoratorCallRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
