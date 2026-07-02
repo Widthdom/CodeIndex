@@ -82,8 +82,14 @@ internal static class LuaReferenceExtractor
     {
         foreach (var line in originalLines)
         {
-            if (line.Contains('[', StringComparison.Ordinal))
-                return true;
+            var index = line.IndexOf('[', StringComparison.Ordinal);
+            while (index >= 0 && index + 1 < line.Length)
+            {
+                if (line[index + 1] is '[' or '=')
+                    return true;
+
+                index = line.IndexOf('[', index + 1);
+            }
         }
 
         return false;
