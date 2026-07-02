@@ -824,6 +824,9 @@ public static partial class SymbolExtractor
     private static List<PythonExportSymbolEntry>? TryExpandPythonAllExportSymbols(string[] lines, int lineIndex)
     {
         var line = lines[lineIndex];
+        if (line.IndexOf("__all__", StringComparison.Ordinal) < 0)
+            return null;
+
         var appendMatch = PythonAllAppendRegex.Match(line);
         if (appendMatch.Success)
         {
