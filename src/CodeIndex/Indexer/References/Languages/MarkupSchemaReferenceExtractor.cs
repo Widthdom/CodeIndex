@@ -691,6 +691,9 @@ internal static class MarkupSchemaReferenceExtractor
 
     private static string StripMarkdownInlineCode(string line)
     {
+        if (line.IndexOf('`') < 0)
+            return line;
+
         var chars = line.ToCharArray();
         var inCode = false;
         for (var i = 0; i < chars.Length; i++)
