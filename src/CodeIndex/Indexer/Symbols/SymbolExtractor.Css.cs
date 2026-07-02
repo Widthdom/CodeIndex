@@ -369,8 +369,8 @@ public static partial class SymbolExtractor
         if (!CssBlockContains(lines, startIndex, blockLineCount, "font-family", StringComparison.OrdinalIgnoreCase))
             return false;
 
-        var blockLines = lines.Skip(startIndex).Take(blockLineCount).ToArray();
-        var maskedBlockText = string.Join('\n', MaskCssScannerLines(blockLines));
+        var maskedBlockLines = MaskCssScannerLines(lines, startIndex, blockLineCount);
+        var maskedBlockText = JoinCssLineRange(maskedBlockLines, 0, maskedBlockLines.Length);
         var match = CssFontFaceDeclarationRegex.Match(maskedBlockText);
         if (!match.Success)
             return false;
@@ -395,7 +395,7 @@ public static partial class SymbolExtractor
         if (valueEnd == valueStart)
             return false;
 
-        var rawBlockText = string.Join('\n', blockLines);
+        var rawBlockText = JoinCssLineRange(lines, startIndex, blockLineCount);
         var rawName = valueEnd <= rawBlockText.Length
             ? rawBlockText[valueStart..valueEnd]
             : rawBlockText[valueStart..];
@@ -411,6 +411,32 @@ public static partial class SymbolExtractor
 
         fontFamily = rawName;
         return true;
+    }
+
+    private static string JoinCssLineRange(IReadOnlyList<string> lines, int startIndex, int lineCount)
+    {
+        var start = Math.Max(0, startIndex);
+        var end = Math.Min(lines.Count, start + Math.Max(0, lineCount));
+        var count = end - start;
+        if (count <= 0)
+            return string.Empty;
+
+        if (count == 1)
+            return lines[start];
+
+        var capacity = count - 1;
+        for (var index = start; index < end; index++)
+            capacity += lines[index].Length;
+
+        var builder = new StringBuilder(capacity);
+        builder.Append(lines[start]);
+        for (var index = start + 1; index < end; index++)
+        {
+            builder.Append('\n');
+            builder.Append(lines[index]);
+        }
+
+        return builder.ToString();
     }
 
     private static bool CssBlockContains(

@@ -57,15 +57,20 @@ public static partial class SymbolExtractor
     }
 
     private static string[] MaskCssScannerLines(string[] originalLines)
+        => MaskCssScannerLines(originalLines, 0, originalLines.Length);
+
+    private static string[] MaskCssScannerLines(IReadOnlyList<string> originalLines, int startIndex, int lineCount)
     {
-        var maskedLines = new string[originalLines.Length];
+        var start = Math.Max(0, startIndex);
+        var end = Math.Min(originalLines.Count, start + Math.Max(0, lineCount));
+        var maskedLines = new string[end - start];
         var inBlockComment = false;
         var inSingleQuote = false;
         var inDoubleQuote = false;
         var inUrlToken = false;
         var urlParenDepth = 0;
 
-        for (int lineIndex = 0; lineIndex < originalLines.Length; lineIndex++)
+        for (int lineIndex = start; lineIndex < end; lineIndex++)
         {
             var line = originalLines[lineIndex];
             var chars = line.ToCharArray();
@@ -187,7 +192,7 @@ public static partial class SymbolExtractor
                     chars[i] = ' ';
             }
 
-            maskedLines[lineIndex] = new string(chars);
+            maskedLines[lineIndex - start] = new string(chars);
         }
 
         return maskedLines;
