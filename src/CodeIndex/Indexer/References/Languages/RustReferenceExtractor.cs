@@ -1933,48 +1933,59 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        var implIndex = ReferenceExtractor.FindTopLevelKeyword(preparedLine, "impl");
-        if (implIndex >= 0)
+        var hasImplMarker = preparedLine.IndexOf("impl", StringComparison.Ordinal) >= 0;
+        var hasTraitMarker = preparedLine.IndexOf("trait", StringComparison.Ordinal) >= 0;
+        if (!hasImplMarker && !hasTraitMarker)
+            return;
+
+        if (hasImplMarker)
         {
-            var typeListStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, implIndex + "impl".Length);
-            var forIndex = ReferenceExtractor.FindTopLevelKeyword(preparedLine, "for");
-            var typeListEnd = forIndex >= 0
-                ? forIndex
-                : TypedLanguageReferenceExtractor.FindTypeExpressionEnd(preparedLine, typeListStart);
-
-            if (typeListEnd > typeListStart)
+            var implIndex = ReferenceExtractor.FindTopLevelKeyword(preparedLine, "impl");
+            if (implIndex >= 0)
             {
-                TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
-                    preparedLine.Substring(typeListStart, typeListEnd - typeListStart),
-                    typeListStart,
-                    "rust",
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    resolveContainerForColumn(typeListStart));
-            }
+                var typeListStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, implIndex + "impl".Length);
+                var forIndex = ReferenceExtractor.FindTopLevelKeyword(preparedLine, "for");
+                var typeListEnd = forIndex >= 0
+                    ? forIndex
+                    : TypedLanguageReferenceExtractor.FindTypeExpressionEnd(preparedLine, typeListStart);
 
-            if (forIndex >= 0)
-            {
-                var targetStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, forIndex + "for".Length);
-                var targetEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(preparedLine, targetStart);
-                if (targetEnd > targetStart)
+                if (typeListEnd > typeListStart)
                 {
                     TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
-                        preparedLine.Substring(targetStart, targetEnd - targetStart),
-                        targetStart,
+                        preparedLine.Substring(typeListStart, typeListEnd - typeListStart),
+                        typeListStart,
                         "rust",
                         references,
                         seen,
                         fileId,
                         context,
                         lineNumber,
-                        resolveContainerForColumn(targetStart));
+                        resolveContainerForColumn(typeListStart));
+                }
+
+                if (forIndex >= 0)
+                {
+                    var targetStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, forIndex + "for".Length);
+                    var targetEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(preparedLine, targetStart);
+                    if (targetEnd > targetStart)
+                    {
+                        TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                            preparedLine.Substring(targetStart, targetEnd - targetStart),
+                            targetStart,
+                            "rust",
+                            references,
+                            seen,
+                            fileId,
+                            context,
+                            lineNumber,
+                            resolveContainerForColumn(targetStart));
+                    }
                 }
             }
         }
+
+        if (!hasTraitMarker || preparedLine.IndexOf(':') < 0)
+            return;
 
         var traitIndex = ReferenceExtractor.FindTopLevelKeyword(preparedLine, "trait");
         if (traitIndex < 0)
