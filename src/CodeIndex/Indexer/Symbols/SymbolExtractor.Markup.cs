@@ -1549,8 +1549,10 @@ public static partial class SymbolExtractor
         int[] lineStarts,
         List<SymbolRecord> symbols)
     {
-        AddXamlMarkupExtensionTypeSymbols(fileId, rawText, lines, lineStarts, symbols, "{x:TypeExtension", false);
-        AddXamlMarkupExtensionTypeSymbols(fileId, rawText, lines, lineStarts, symbols, "{x:Type", true);
+        if (rawText.Contains("{x:TypeExtension", StringComparison.Ordinal))
+            AddXamlMarkupExtensionTypeSymbols(fileId, rawText, lines, lineStarts, symbols, "{x:TypeExtension", false);
+        if (rawText.Contains("{x:Type", StringComparison.Ordinal))
+            AddXamlMarkupExtensionTypeSymbols(fileId, rawText, lines, lineStarts, symbols, "{x:Type", true);
     }
 
     private static void AddXamlMarkupExtensionTypeSymbols(

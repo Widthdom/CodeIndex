@@ -79,6 +79,7 @@ affected:
 - **Gated XAML Binding ElementName scans by marker** - XAML/XML extraction now skips Binding markup, object element, and property element ElementName scans when their markers are absent.
 - **Gated XAML Binding Path scans by marker** - XAML/XML extraction now skips Binding object-element and property-element Path scans when their markers are absent.
 - **Gated XAML type element regex scans by marker** - XAML/XML extraction now checks for `x:Type`/`TypeName` markers before running type object/property element regexes.
+- **Gated XAML type markup scans by prefix** - XAML/XML extraction now invokes `{x:Type}` and `{x:TypeExtension}` markup-extension scans only when the matching prefix is present.
 
 ## 日本語
 
@@ -122,3 +123,4 @@ affected:
 - **XAML Binding ElementName scan を marker で gate します** - XAML/XML extraction は marker がない場合に Binding markup、object element、property element の ElementName scan を skip します。
 - **XAML Binding Path scan を marker で gate します** - XAML/XML extraction は marker がない場合に Binding object-element と property-element の Path scan を skip します。
 - **XAML type element regex scan を marker で gate します** - XAML/XML extraction は type object/property element regex を実行する前に `x:Type` / `TypeName` marker を確認します。
+- **XAML type markup scan を prefix で gate します** - XAML/XML extraction は `{x:Type}` と `{x:TypeExtension}` の markup-extension scan を対応 prefix がある場合だけ呼び出します。
