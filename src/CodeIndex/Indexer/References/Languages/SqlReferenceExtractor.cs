@@ -50,6 +50,19 @@ internal static partial class SqlReferenceExtractor
         if (lines.Length == 0)
             return suppressed;
 
+        var hasWindowClauseKeyword = false;
+        foreach (var line in lines)
+        {
+            if (line.IndexOf("OVER", StringComparison.OrdinalIgnoreCase) < 0)
+                continue;
+
+            hasWindowClauseKeyword = true;
+            break;
+        }
+
+        if (!hasWindowClauseKeyword)
+            return suppressed;
+
         var lineStarts = new int[lines.Length];
         var textBuilder = new StringBuilder();
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
@@ -61,9 +74,6 @@ internal static partial class SqlReferenceExtractor
         }
 
         var text = textBuilder.ToString();
-        if (text.IndexOf("OVER", StringComparison.OrdinalIgnoreCase) < 0)
-            return suppressed;
-
         var searchStart = 0;
         while (TryFindNextWindowClause(
             text,
