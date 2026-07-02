@@ -2944,7 +2944,7 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        if (preparedLine.IndexOf("associate", StringComparison.OrdinalIgnoreCase) >= 0
+        if (StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "associate")
             && preparedLine.IndexOf("=>", StringComparison.Ordinal) >= 0)
         {
             var associateMatch = FortranAssociateLineRegex.Match(preparedLine);
