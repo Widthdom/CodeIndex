@@ -2214,11 +2214,15 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        var importsMatch = VbImportsListRegex.Match(preparedLine);
-        if (importsMatch.Success)
+        var hasVbImportsMarker = preparedLine.IndexOf("Imports", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (hasVbImportsMarker)
         {
-            var group = importsMatch.Groups["list"];
-            EmitCommaSeparatedNames(group.Value, group.Index, "vb", references, seen, fileId, context, lineNumber, resolveContainerForColumn(group.Index));
+            var importsMatch = VbImportsListRegex.Match(preparedLine);
+            if (importsMatch.Success)
+            {
+                var group = importsMatch.Groups["list"];
+                EmitCommaSeparatedNames(group.Value, group.Index, "vb", references, seen, fileId, context, lineNumber, resolveContainerForColumn(group.Index));
+            }
         }
 
         foreach (Match match in VbCastTypeRegex.Matches(preparedLine))
