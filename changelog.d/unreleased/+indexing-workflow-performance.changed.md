@@ -16,6 +16,7 @@ affected:
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.SectionHeadings.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Svelte.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Smalltalk.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Solidity.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Markup.cs
   - src/CodeIndex/Indexer/References/Support/StructuralLineMasker.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.Preparation.cs
@@ -107,6 +108,7 @@ affected:
 - **Gated Rust use-start scans by keyword** - Rust use-statement collection now skips the start regex when the first line lacks the `use` keyword marker.
 - **Gated Kotlin class subkind scans by keyword** - Kotlin class enrichment now skips value/inline class regex checks when metadata lacks the corresponding keyword marker.
 - **Gated Kotlin inline-function scans by keyword** - Kotlin function enrichment now skips inline/reified regex checks when signatures lack the matching keyword markers.
+- **Dispatched Solidity type declaration scans by keyword** - Solidity extraction now runs contract/interface/library, struct, and enum declaration regexes only when their keyword marker is present.
 
 ## 日本語
 
@@ -176,3 +178,4 @@ affected:
 - **Rust use-start scan を keyword で gate します** - Rust use-statement collection は first line に `use` keyword marker がない場合 start regex を skip します。
 - **Kotlin class subkind scan を keyword で gate します** - Kotlin class enrichment は metadata に対応する keyword marker がない場合 value/inline class regex check を skip します。
 - **Kotlin inline-function scan を keyword で gate します** - Kotlin function enrichment は signature に対応する keyword marker がない場合 inline/reified regex check を skip します。
+- **Solidity type declaration scan を keyword で振り分けます** - Solidity extraction は contract/interface/library、struct、enum の declaration regex を対応 keyword marker がある場合だけ実行します。
