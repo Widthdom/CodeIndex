@@ -89,15 +89,26 @@ internal static partial class LanguageReferenceExtractionSupport
 
     private static string StripGoComments(string line, ref bool inBlockComment)
     {
-        var chars = line.ToCharArray();
+        char[]? chars = null;
+
+        void MaskAt(int index) =>
+            (chars ??= line.ToCharArray())[index] = ' ';
+
+        void MaskRange(int start)
+        {
+            var masked = chars ??= line.ToCharArray();
+            for (var index = start; index < line.Length; index++)
+                masked[index] = ' ';
+        }
+
         for (var i = 0; i < line.Length; i++)
         {
             if (inBlockComment)
             {
-                chars[i] = ' ';
+                MaskAt(i);
                 if (line[i] == '*' && i + 1 < line.Length && line[i + 1] == '/')
                 {
-                    chars[++i] = ' ';
+                    MaskAt(++i);
                     inBlockComment = false;
                 }
                 continue;
@@ -111,20 +122,19 @@ internal static partial class LanguageReferenceExtractionSupport
 
             if (line[i] == '/' && i + 1 < line.Length && line[i + 1] == '/')
             {
-                for (; i < chars.Length; i++)
-                    chars[i] = ' ';
+                MaskRange(i);
                 break;
             }
 
             if (line[i] == '/' && i + 1 < line.Length && line[i + 1] == '*')
             {
-                chars[i++] = ' ';
-                chars[i] = ' ';
+                MaskAt(i++);
+                MaskAt(i);
                 inBlockComment = true;
             }
         }
 
-        return new string(chars);
+        return chars is null ? line : new string(chars);
     }
 
     private static int SkipGoStringLiteral(string line, int start)

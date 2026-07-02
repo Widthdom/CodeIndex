@@ -106,15 +106,26 @@ public static partial class SymbolExtractor
         ref bool inUrlToken,
         ref int urlParenDepth)
     {
-        var chars = line.ToCharArray();
-        for (int i = 0; i < chars.Length; i++)
+        char[]? chars = null;
+
+        void MaskAt(int index) =>
+            (chars ??= line.ToCharArray())[index] = ' ';
+
+        void MaskRange(int start)
+        {
+            var masked = chars ??= line.ToCharArray();
+            for (int index = start; index < line.Length; index++)
+                masked[index] = ' ';
+        }
+
+        for (int i = 0; i < line.Length; i++)
         {
             if (inBlockComment)
             {
-                chars[i] = ' ';
-                if (i + 1 < chars.Length && line[i] == '*' && line[i + 1] == '/')
+                MaskAt(i);
+                if (i + 1 < line.Length && line[i] == '*' && line[i + 1] == '/')
                 {
-                    chars[i + 1] = ' ';
+                    MaskAt(i + 1);
                     inBlockComment = false;
                     i++;
                 }
@@ -122,10 +133,10 @@ public static partial class SymbolExtractor
                 continue;
             }
 
-            if (!inSingleQuote && !inDoubleQuote && i + 1 < chars.Length && line[i] == '/' && line[i + 1] == '*')
+            if (!inSingleQuote && !inDoubleQuote && i + 1 < line.Length && line[i] == '/' && line[i + 1] == '*')
             {
-                chars[i] = ' ';
-                chars[i + 1] = ' ';
+                MaskAt(i);
+                MaskAt(i + 1);
                 inBlockComment = true;
                 i++;
                 continue;
@@ -133,7 +144,7 @@ public static partial class SymbolExtractor
 
             if (inUrlToken)
             {
-                chars[i] = ' ';
+                MaskAt(i);
 
                 if (line[i] == '"' && !inSingleQuote)
                 {
@@ -147,9 +158,9 @@ public static partial class SymbolExtractor
                     continue;
                 }
 
-                if ((inSingleQuote || inDoubleQuote) && line[i] == '\\' && i + 1 < chars.Length)
+                if ((inSingleQuote || inDoubleQuote) && line[i] == '\\' && i + 1 < line.Length)
                 {
-                    chars[i + 1] = ' ';
+                    MaskAt(i + 1);
                     i++;
                     continue;
                 }
@@ -175,56 +186,54 @@ public static partial class SymbolExtractor
             if (!inSingleQuote
                 && !inDoubleQuote
                 && !inUrlToken
-                && i + 3 < chars.Length
+                && i + 3 < line.Length
                 && (line[i] == 'u' || line[i] == 'U')
                 && (line[i + 1] == 'r' || line[i + 1] == 'R')
                 && (line[i + 2] == 'l' || line[i + 2] == 'L')
                 && line[i + 3] == '(')
             {
-                chars[i] = ' ';
-                chars[i + 1] = ' ';
-                chars[i + 2] = ' ';
-                chars[i + 3] = ' ';
+                MaskAt(i);
+                MaskAt(i + 1);
+                MaskAt(i + 2);
+                MaskAt(i + 3);
                 inUrlToken = true;
                 urlParenDepth = 1;
                 i += 3;
                 continue;
             }
 
-            if (!inSingleQuote && !inDoubleQuote && !inUrlToken && i + 1 < chars.Length && line[i] == '/' && line[i + 1] == '/')
+            if (!inSingleQuote && !inDoubleQuote && !inUrlToken && i + 1 < line.Length && line[i] == '/' && line[i + 1] == '/')
             {
-                for (int j = i; j < chars.Length; j++)
-                    chars[j] = ' ';
-
+                MaskRange(i);
                 break;
             }
 
-            if ((inSingleQuote || inDoubleQuote) && line[i] == '\\' && i + 1 < chars.Length)
+            if ((inSingleQuote || inDoubleQuote) && line[i] == '\\' && i + 1 < line.Length)
             {
-                chars[i] = ' ';
-                chars[i + 1] = ' ';
+                MaskAt(i);
+                MaskAt(i + 1);
                 i++;
                 continue;
             }
 
             if (line[i] == '"' && !inSingleQuote)
             {
-                chars[i] = ' ';
+                MaskAt(i);
                 inDoubleQuote = !inDoubleQuote;
                 continue;
             }
 
             if (line[i] == '\'' && !inDoubleQuote)
             {
-                chars[i] = ' ';
+                MaskAt(i);
                 inSingleQuote = !inDoubleQuote;
                 continue;
             }
 
             if (inSingleQuote || inDoubleQuote)
-                chars[i] = ' ';
+                MaskAt(i);
         }
 
-        return new string(chars);
+        return chars is null ? line : new string(chars);
     }
 }

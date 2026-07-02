@@ -506,7 +506,11 @@ internal static class CssReferenceExtractor
 
     internal static string MaskSassStylusBlockCommentLine(string line, ref bool inBlockComment)
     {
-        var chars = line.ToCharArray();
+        char[]? chars = null;
+
+        void MaskAt(int index) =>
+            (chars ??= line.ToCharArray())[index] = ' ';
+
         var quote = '\0';
 
         for (var i = 0; i < line.Length; i++)
@@ -515,10 +519,10 @@ internal static class CssReferenceExtractor
 
             if (inBlockComment)
             {
-                chars[i] = ' ';
+                MaskAt(i);
                 if (ch == '*' && i + 1 < line.Length && line[i + 1] == '/')
                 {
-                    chars[i + 1] = ' ';
+                    MaskAt(i + 1);
                     inBlockComment = false;
                     i++;
                 }
@@ -547,14 +551,14 @@ internal static class CssReferenceExtractor
 
             if (ch == '/' && i + 1 < line.Length && line[i + 1] == '*')
             {
-                chars[i] = ' ';
-                chars[i + 1] = ' ';
+                MaskAt(i);
+                MaskAt(i + 1);
                 inBlockComment = true;
                 i++;
             }
         }
 
-        return new string(chars);
+        return chars is null ? line : new string(chars);
     }
 
     private static int CountLeadingWhitespace(string line)
