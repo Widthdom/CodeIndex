@@ -1155,10 +1155,10 @@ public static partial class SymbolExtractor
 
     private static bool HasInvalidCSharpReturnTypeSuffix(string? returnType)
     {
-        if (string.IsNullOrWhiteSpace(returnType))
+        if (string.IsNullOrEmpty(returnType))
             return true;
 
-        var trimmed = returnType.TrimEnd();
+        var trimmed = returnType.AsSpan().TrimEnd();
         if (trimmed.Length == 0)
             return true;
 
@@ -1184,12 +1184,16 @@ public static partial class SymbolExtractor
         }
 
         var lastToken = trimmed[tokenStart..];
-        return lastToken is "as" or "is" or "return" or "throw" or "new";
+        return lastToken.SequenceEqual("as")
+            || lastToken.SequenceEqual("is")
+            || lastToken.SequenceEqual("return")
+            || lastToken.SequenceEqual("throw")
+            || lastToken.SequenceEqual("new");
     }
 
-    private static bool LooksLikeCSharpDeclaratorListReturnType(string returnType)
+    private static bool LooksLikeCSharpDeclaratorListReturnType(ReadOnlySpan<char> returnType)
     {
-        var withoutTrailingComma = returnType.AsSpan(0, returnType.Length - 1).TrimEnd();
+        var withoutTrailingComma = returnType[..^1].TrimEnd();
         var firstSegmentEnd = withoutTrailingComma.IndexOf(',');
         var firstSegment = (firstSegmentEnd >= 0 ? withoutTrailingComma[..firstSegmentEnd] : withoutTrailingComma).Trim();
         foreach (var ch in firstSegment)
@@ -2568,23 +2572,40 @@ public static partial class SymbolExtractor
         int? signatureLastLineExclusiveEndColumn = null)
     {
         var builder = new StringBuilder(lines[startLineIndex].Length);
-        builder.Append(lines[startLineIndex][startColumn..].TrimEnd());
+        AppendTrimmedCSharpSignatureSlice(builder, lines[startLineIndex], startColumn, lines[startLineIndex].Length);
 
         for (int i = startLineIndex + 1; i <= signatureLastLineIndex && i < lines.Length; i++)
         {
-            var slice = i == signatureLastLineIndex && signatureLastLineExclusiveEndColumn.HasValue
-                ? lines[i][..Math.Min(signatureLastLineExclusiveEndColumn.Value, lines[i].Length)]
-                : lines[i];
-            var trimmed = slice.Trim();
-            if (trimmed.Length == 0)
-                continue;
-
-            if (builder.Length > 0)
-                builder.Append(' ');
-            builder.Append(trimmed);
+            var endExclusive = i == signatureLastLineIndex && signatureLastLineExclusiveEndColumn.HasValue
+                ? signatureLastLineExclusiveEndColumn.Value
+                : lines[i].Length;
+            AppendTrimmedCSharpSignatureSlice(builder, lines[i], 0, endExclusive);
         }
 
-        return builder.ToString().Trim();
+        return builder.ToString();
+    }
+
+    private static void AppendTrimmedCSharpSignatureSlice(
+        StringBuilder builder,
+        string line,
+        int start,
+        int endExclusive)
+    {
+        start = Math.Clamp(start, 0, line.Length);
+        endExclusive = Math.Clamp(endExclusive, start, line.Length);
+
+        while (start < endExclusive && char.IsWhiteSpace(line[start]))
+            start++;
+
+        while (endExclusive > start && char.IsWhiteSpace(line[endExclusive - 1]))
+            endExclusive--;
+
+        if (endExclusive <= start)
+            return;
+
+        if (builder.Length > 0)
+            builder.Append(' ');
+        builder.Append(line, start, endExclusive - start);
     }
 
     private static bool TryFindCSharpBraceBodyHeaderExtent(

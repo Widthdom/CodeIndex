@@ -175,6 +175,14 @@ internal static class CSharpSymbolNameNormalizer
         return index == 0 || !IsIdentifierChar(value[index - 1]);
     }
 
+    internal static bool IsVerbatimIdentifierPrefix(ReadOnlySpan<char> value, int index)
+    {
+        if (value[index] != '@' || index + 1 >= value.Length || !IsIdentifierStart(value[index + 1]))
+            return false;
+
+        return index == 0 || !IsIdentifierChar(value[index - 1]);
+    }
+
     internal static bool IsIdentifierStart(char ch) =>
         ch == '_' || char.IsLetter(ch);
 
