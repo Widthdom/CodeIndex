@@ -131,7 +131,7 @@ public static partial class SymbolExtractor
         endIndex = startIndex;
 
         var firstLine = lines[startIndex];
-        if (!RustUseStartRegex.IsMatch(firstLine))
+        if (firstLine.IndexOf("use", StringComparison.Ordinal) < 0 || !RustUseStartRegex.IsMatch(firstLine))
             return false;
 
         var builder = new StringBuilder(firstLine.Length + 32);
