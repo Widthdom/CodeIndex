@@ -268,6 +268,7 @@ affected:
 - **Gated C++ template parameter default scans by marker** - C/C++ reference extraction now checks `typename`/`class` and assignment markers before running template parameter default regex probes.
 - **Gated C++ qualified member receiver scans by marker** - C/C++ reference extraction now checks scope markers before running qualified member receiver regex probes.
 - **Gated C++ pointer-to-member type scans by marker** - C/C++ reference extraction now checks scope and pointer markers before running pointer-to-member type regex probes.
+- **Gated C++ trailing return type scans by marker** - C/C++ reference extraction now checks close-parenthesis and arrow markers before running trailing return type regex probes.
 
 ## 日本語
 
@@ -470,3 +471,4 @@ affected:
 - **C++ template parameter default scan を marker で gate します** - C/C++ reference extraction は template parameter default regex probe の前に `typename` / `class` と assignment marker を確認します。
 - **C++ qualified member receiver scan を marker で gate します** - C/C++ reference extraction は qualified member receiver regex probe の前に scope marker を確認します。
 - **C++ pointer-to-member type scan を marker で gate します** - C/C++ reference extraction は pointer-to-member type regex probe の前に scope と pointer marker を確認します。
+- **C++ trailing return type scan を marker で gate します** - C/C++ reference extraction は trailing return type regex probe の前に close-parenthesis と arrow marker を確認します。

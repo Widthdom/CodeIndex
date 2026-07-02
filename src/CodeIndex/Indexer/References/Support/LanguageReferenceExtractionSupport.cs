@@ -1777,10 +1777,15 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        foreach (Match match in CppTrailingReturnTypeRegex.Matches(preparedLine))
+        var hasCppTrailingReturnMarker = preparedLine.IndexOf(')') >= 0
+            && preparedLine.IndexOf("->", StringComparison.Ordinal) >= 0;
+        if (hasCppTrailingReturnMarker)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            foreach (Match match in CppTrailingReturnTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
         }
 
         if (preparedLine.Contains("requires", StringComparison.Ordinal) || preparedLine.Contains("concept", StringComparison.Ordinal))
