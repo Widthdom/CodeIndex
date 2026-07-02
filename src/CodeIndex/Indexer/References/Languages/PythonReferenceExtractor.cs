@@ -775,6 +775,12 @@ internal static class PythonReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForReference,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("def", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf("->", StringComparison.Ordinal) < 0)
+        {
+            return;
+        }
+
         foreach (Match match in FunctionReturnAnnotationExpressionRegex.Matches(preparedLine))
         {
             var typeGroup = match.Groups["type"];
@@ -821,6 +827,13 @@ internal static class PythonReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForReference,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("def", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf('(') < 0
+            || preparedLine.IndexOf(')') < 0)
+        {
+            return;
+        }
+
         foreach (Match functionMatch in FunctionParameterListRegex.Matches(preparedLine))
         {
             var paramsGroup = functionMatch.Groups["params"];

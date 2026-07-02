@@ -100,6 +100,7 @@ affected:
 - **Gated Python runtime type-check scans by marker** - Python reference extraction now checks `isinstance` and `issubclass` markers before running runtime type-check regex probes.
 - **Gated Python typing helper scans by marker** - Python reference extraction now checks `cast` and `assert_type` markers before running typing helper regex probes.
 - **Gated Python class-base scans by marker** - Python reference extraction now checks `class` and parenthesis markers before running class base/metaclass regex probes.
+- **Gated Python function annotation scans by marker** - Python reference extraction now checks function declaration, return-arrow, and parenthesis markers before running return and parameter annotation regex probes.
 - **Skipped reference-line preparation on empty lines** - all language reference preparation now returns empty lines immediately instead of running comment/string-literal trigger checks.
 - **Collapsed string-literal delimiter probes** - reference-line preparation now checks quote/backtick trigger characters with `IndexOfAny` instead of separate scans per delimiter.
 - **Hoisted reference-line preparation language flags** - per-file reference preparation now computes language comment/string handling flags once and reuses them for each line instead of repeating language switches in the hot loop.
@@ -219,6 +220,7 @@ affected:
 - **Python runtime type-check scan を marker で gate します** - Python reference extraction は runtime type-check regex probe を実行する前に `isinstance` と `issubclass` marker を確認します。
 - **Python typing helper scan を marker で gate します** - Python reference extraction は typing helper regex probe を実行する前に `cast` と `assert_type` marker を確認します。
 - **Python class-base scan を marker で gate します** - Python reference extraction は class base/metaclass regex probe を実行する前に `class` と parenthesis marker を確認します。
+- **Python function annotation scan を marker で gate します** - Python reference extraction は return/parameter annotation regex probe を実行する前に function declaration、return-arrow、parenthesis marker を確認します。
 - **空行の reference-line preparation を skip します** - 全言語の reference preparation は空行に対して comment/string-literal trigger 判定を走らせず即 return するようになりました。
 - **string-literal delimiter probe をまとめました** - reference-line preparation は quote/backtick trigger character を delimiter ごとの個別 scan ではなく `IndexOfAny` で確認します。
 - **reference-line preparation の言語フラグを loop 外へ出しました** - ファイルごとの reference preparation は comment/string handling の言語フラグを一度だけ計算し、hot loop 内で language switch を繰り返さないようになりました。
