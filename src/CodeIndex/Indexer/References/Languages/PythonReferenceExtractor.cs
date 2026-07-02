@@ -1063,6 +1063,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("get_type_hints", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in QualifiedGetTypeHintsTargetRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -1110,6 +1113,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("fields", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in DataclassesFieldsTargetRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -1140,6 +1146,8 @@ internal static class PythonReferenceExtractor
         Func<string, bool> isIgnoredName)
     {
         var preparedLine = preparedLines[lineIndex];
+        if (preparedLine.IndexOf("field", StringComparison.Ordinal) < 0)
+            return;
         if (!DataclassFieldCallRegex.IsMatch(preparedLine))
             return;
 
@@ -1226,6 +1234,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("default_factory", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in DataclassFieldDefaultFactoryRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -1255,6 +1266,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (originalLines[lineIndex].IndexOf("metadata", StringComparison.Ordinal) < 0)
+            return;
+
         var metadataMatch = DataclassFieldMetadataRegex.Match(originalLines[lineIndex]);
         if (!metadataMatch.Success)
             return;
