@@ -285,6 +285,7 @@ affected:
 - **Gated VB implements list scans by marker** - Visual Basic reference extraction now checks `Implements` markers before running implements list regex probes.
 - **Gated VB imports list scans by marker** - Visual Basic reference extraction now checks `Imports` markers before running imports list regex probes.
 - **Gated VB cast type scans by marker** - Visual Basic reference extraction now checks cast, parenthesis, and comma markers before running cast type regex probes.
+- **Gated VB GetType scans by marker** - Visual Basic reference extraction now checks `GetType` and parenthesis markers before running `GetType` regex probes.
 
 ## 日本語
 
@@ -504,3 +505,4 @@ affected:
 - **VB implements list scan を marker で gate します** - Visual Basic reference extraction は implements list regex probe の前に `Implements` marker を確認します。
 - **VB imports list scan を marker で gate します** - Visual Basic reference extraction は imports list regex probe の前に `Imports` marker を確認します。
 - **VB cast type scan を marker で gate します** - Visual Basic reference extraction は cast / parenthesis / comma marker を確認してから cast type regex probe を実行します。
+- **VB GetType scan を marker で gate します** - Visual Basic reference extraction は `GetType` regex probe の前に `GetType` と parenthesis marker を確認します。

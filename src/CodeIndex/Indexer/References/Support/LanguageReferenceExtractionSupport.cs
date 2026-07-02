@@ -2238,10 +2238,15 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        foreach (Match match in VbGetTypeRegex.Matches(preparedLine))
+        var hasVbGetTypeMarker = preparedLine.Contains('(')
+            && preparedLine.IndexOf("GetType", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (hasVbGetTypeMarker)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "vb");
+            foreach (Match match in VbGetTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "vb");
+            }
         }
 
         foreach (Match match in VbTypeOfRegex.Matches(preparedLine))
