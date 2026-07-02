@@ -670,6 +670,12 @@ internal static class PythonReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForReference,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("class", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf('(') < 0)
+        {
+            return;
+        }
+
         foreach (Match match in ClassMetaclassTypeRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
