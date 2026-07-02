@@ -87,7 +87,7 @@ public static partial class SymbolExtractor
                 for (var continuationIndex = lineIndex + 1; continuationIndex < lines.Length; continuationIndex++)
                 {
                     var continuation = lines[continuationIndex];
-                    if (string.IsNullOrWhiteSpace(continuation) || GraphQLDeclarationStartRegex.IsMatch(continuation))
+                    if (string.IsNullOrWhiteSpace(continuation) || IsGraphQLDeclarationStartLine(continuation))
                         break;
 
                     AddGraphQLUnionVariantSymbols(fileId, lines, continuationIndex, continuation, 0, unionName, symbols);
@@ -104,7 +104,7 @@ public static partial class SymbolExtractor
             for (var continuationIndex = lineIndex + 1; continuationIndex < lines.Length; continuationIndex++)
             {
                 var continuation = lines[continuationIndex];
-                if (string.IsNullOrWhiteSpace(continuation) || GraphQLDeclarationStartRegex.IsMatch(continuation))
+                if (string.IsNullOrWhiteSpace(continuation) || IsGraphQLDeclarationStartLine(continuation))
                     break;
 
                 var equalsIndex = continuation.IndexOf('=', StringComparison.Ordinal);
@@ -114,7 +114,7 @@ public static partial class SymbolExtractor
                     for (var variantIndex = continuationIndex + 1; variantIndex < lines.Length; variantIndex++)
                     {
                         var variantContinuation = lines[variantIndex];
-                        if (string.IsNullOrWhiteSpace(variantContinuation) || GraphQLDeclarationStartRegex.IsMatch(variantContinuation))
+                        if (string.IsNullOrWhiteSpace(variantContinuation) || IsGraphQLDeclarationStartLine(variantContinuation))
                             break;
 
                         AddGraphQLUnionVariantSymbols(fileId, lines, variantIndex, variantContinuation, 0, headerUnionName, symbols);
@@ -182,6 +182,24 @@ public static partial class SymbolExtractor
 
         return text;
     }
+
+    private static bool IsGraphQLDeclarationStartLine(string line) =>
+        MayContainGraphQLDeclarationKeyword(line)
+        && GraphQLDeclarationStartRegex.IsMatch(line);
+
+    private static bool MayContainGraphQLDeclarationKeyword(string line) =>
+        line.Contains("type", StringComparison.Ordinal)
+        || line.Contains("interface", StringComparison.Ordinal)
+        || line.Contains("input", StringComparison.Ordinal)
+        || line.Contains("enum", StringComparison.Ordinal)
+        || line.Contains("union", StringComparison.Ordinal)
+        || line.Contains("scalar", StringComparison.Ordinal)
+        || line.Contains("schema", StringComparison.Ordinal)
+        || line.Contains("query", StringComparison.Ordinal)
+        || line.Contains("mutation", StringComparison.Ordinal)
+        || line.Contains("subscription", StringComparison.Ordinal)
+        || line.Contains("fragment", StringComparison.Ordinal)
+        || line.Contains("directive", StringComparison.Ordinal);
 
     private static bool MayContainGraphQLNameStart(string text)
     {
