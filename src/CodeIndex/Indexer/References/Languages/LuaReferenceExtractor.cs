@@ -27,52 +27,58 @@ internal static class LuaReferenceExtractor
         for (var lineIndex = 0; lineIndex < originalLines.Count; lineIndex++)
         {
             var line = originalLines[lineIndex];
-            var chars = line.ToCharArray();
-            for (var cursor = 0; cursor < chars.Length; cursor++)
+            char[]? chars = null;
+
+            char CharAt(int index) => chars == null ? line[index] : chars[index];
+
+            char[] EnsureChars() => chars ??= line.ToCharArray();
+
+            for (var cursor = 0; cursor < line.Length; cursor++)
             {
                 if (longTextEqualsCount >= 0)
                 {
                     if (TryGetLuaLongBracketClose(line, cursor, longTextEqualsCount, out var closeLength))
                     {
-                        MaskRange(chars, cursor, cursor + closeLength);
+                        MaskRange(EnsureChars(), cursor, cursor + closeLength);
                         cursor += closeLength - 1;
                         longTextEqualsCount = -1;
                         continue;
                     }
 
-                    chars[cursor] = ' ';
+                    EnsureChars()[cursor] = ' ';
                     continue;
                 }
 
-                if (chars[cursor] is '"' or '\'')
+                var ch = CharAt(cursor);
+                if (ch is '"' or '\'')
                 {
                     cursor = SkipQuotedLiteral(line, cursor);
                     continue;
                 }
 
-                if (chars[cursor] == '-'
-                    && cursor + 2 < chars.Length
-                    && chars[cursor + 1] == '-'
+                if (ch == '-'
+                    && cursor + 2 < line.Length
+                    && CharAt(cursor + 1) == '-'
                     && TryGetLuaLongBracketOpen(line, cursor + 2, out var commentEqualsCount, out var commentOpenLength))
                 {
-                    MaskRange(chars, cursor, cursor + 2 + commentOpenLength);
+                    MaskRange(EnsureChars(), cursor, cursor + 2 + commentOpenLength);
                     cursor += 1 + commentOpenLength;
                     longTextEqualsCount = commentEqualsCount;
                     continue;
                 }
 
-                if (chars[cursor] == '-' && cursor + 1 < chars.Length && chars[cursor + 1] == '-')
+                if (ch == '-' && cursor + 1 < line.Length && CharAt(cursor + 1) == '-')
                     break;
 
                 if (TryGetLuaLongBracketOpen(line, cursor, out var stringEqualsCount, out var stringOpenLength))
                 {
-                    MaskRange(chars, cursor, cursor + stringOpenLength);
+                    MaskRange(EnsureChars(), cursor, cursor + stringOpenLength);
                     cursor += stringOpenLength - 1;
                     longTextEqualsCount = stringEqualsCount;
                 }
             }
 
-            result[lineIndex] = new string(chars);
+            result[lineIndex] = chars == null ? line : new string(chars);
         }
 
         return result;
