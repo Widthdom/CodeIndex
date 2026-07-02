@@ -10,7 +10,7 @@ public partial class FileIndexer
         var displayPath = absolutePath;
         try
         {
-            displayPath = Path.GetRelativePath(_projectRoot, absolutePath);
+            displayPath = GetRelativePathFromProjectRoot(_projectRoot, absolutePath);
         }
         catch (ArgumentException)
         {

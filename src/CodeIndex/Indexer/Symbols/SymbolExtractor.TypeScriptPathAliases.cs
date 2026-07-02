@@ -581,7 +581,7 @@ public static partial class SymbolExtractor
 
     private static string NormalizeTypeScriptResolvedModulePath(string projectDirectory, string resolvedPath)
     {
-        var relativePath = Path.GetRelativePath(projectDirectory, Path.GetFullPath(resolvedPath));
+        var relativePath = FileIndexer.GetRelativePathFromDirectory(projectDirectory, Path.GetFullPath(resolvedPath));
         return relativePath.Replace(Path.DirectorySeparatorChar, '/').Replace(Path.AltDirectorySeparatorChar, '/');
     }
 }

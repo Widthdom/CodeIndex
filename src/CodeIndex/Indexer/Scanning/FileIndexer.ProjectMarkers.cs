@@ -141,7 +141,7 @@ public partial class FileIndexer
     private string DeriveAmbiguousProjectScopeKey(string absolutePath, string anchorDir)
     {
         var anchorScope = NormalizeScopeKey(ToRelativePath(anchorDir));
-        var relativeFromAnchor = NormalizeScopeKey(Path.GetRelativePath(anchorDir, absolutePath));
+        var relativeFromAnchor = NormalizeScopeKey(GetRelativePathFromDirectory(anchorDir, absolutePath));
         if (relativeFromAnchor == ".")
             return anchorScope;
 

@@ -191,7 +191,7 @@ internal static class IndexFreshnessChecker
     {
         public static WorkspaceFileTarget Create(string projectRoot, string absolutePath)
         {
-            var relativePath = Path.GetRelativePath(projectRoot, absolutePath);
+            var relativePath = FileIndexer.GetRelativePathFromProjectRoot(projectRoot, absolutePath);
             return new WorkspaceFileTarget(
                 absolutePath,
                 relativePath,
