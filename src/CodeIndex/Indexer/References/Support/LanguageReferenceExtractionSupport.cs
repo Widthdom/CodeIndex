@@ -3329,7 +3329,7 @@ internal static partial class LanguageReferenceExtractionSupport
     {
         var hasImportMarker = StartsWithOrdinalKeywordIgnoringLeadingWhitespace(preparedLine, "alias")
             || StartsWithOrdinalKeywordIgnoringLeadingWhitespace(preparedLine, "import")
-            || preparedLine.IndexOf("require", StringComparison.Ordinal) >= 0
+            || StartsWithOrdinalKeywordIgnoringLeadingWhitespace(preparedLine, "require")
             || preparedLine.IndexOf("use", StringComparison.Ordinal) >= 0;
         if (hasImportMarker)
         {
