@@ -358,6 +358,7 @@ affected:
 - **Tightened C++ explicit-template markers to keyword boundaries** - C++ reference extraction now treats `template` as a boundary-aware keyword before running explicit instantiation regex probes.
 - **Tightened C++ explicit-template class markers to keyword boundaries** - C++ reference extraction now treats `class` as a boundary-aware keyword before explicit instantiation regex probes.
 - **Tightened C++ explicit-template struct markers to keyword boundaries** - C++ reference extraction now treats `struct` as a boundary-aware keyword before explicit instantiation regex probes.
+- **Tightened C struct type markers to keyword boundaries** - C reference extraction now treats `struct` as a boundary-aware keyword before running tagged-type regex probes.
 
 ## 日本語
 
@@ -650,3 +651,4 @@ affected:
 - **C++ explicit-template marker を keyword boundary に強化します** - C++ reference extraction は explicit instantiation regex probe の前に `template` を boundary-aware keyword として扱います。
 - **C++ explicit-template class marker を keyword boundary に強化します** - C++ reference extraction は explicit instantiation regex probe の前に `class` を boundary-aware keyword として扱います。
 - **C++ explicit-template struct marker を keyword boundary に強化します** - C++ reference extraction は explicit instantiation regex probe の前に `struct` を boundary-aware keyword として扱います。
+- **C struct type marker を keyword boundary に強化します** - C reference extraction は tagged-type regex probe の前に `struct` を boundary-aware keyword として扱います。

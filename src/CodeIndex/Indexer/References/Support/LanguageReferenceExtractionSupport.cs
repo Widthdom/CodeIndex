@@ -1201,7 +1201,7 @@ internal static partial class LanguageReferenceExtractionSupport
         {
             var hasCParen = preparedLine.IndexOf('(') >= 0;
             var hasCTypedefTypeMarker = preparedLine.IndexOf("_t", StringComparison.Ordinal) >= 0;
-            var hasCTaggedTypeMarker = preparedLine.IndexOf("struct", StringComparison.Ordinal) >= 0
+            var hasCTaggedTypeMarker = ContainsOrdinalKeyword(preparedLine, "struct")
                 || preparedLine.IndexOf("enum", StringComparison.Ordinal) >= 0
                 || preparedLine.IndexOf("union", StringComparison.Ordinal) >= 0;
             if (hasCParen && hasCTypedefTypeMarker)
