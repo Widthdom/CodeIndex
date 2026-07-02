@@ -2830,20 +2830,26 @@ internal static partial class LanguageReferenceExtractionSupport
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        foreach (Match match in ObjCMessageRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf('[') >= 0)
         {
-            var receiver = match.Groups["receiver"];
-            var selector = match.Groups["name"];
-            if (char.IsUpper(receiver.Value[0]) && selector.Value is "alloc" or "new")
+            foreach (Match match in ObjCMessageRegex.Matches(preparedLine))
             {
-                ReferenceExtractor.AddReference(references, seen, fileId, receiver.Value, receiver.Index, "instantiate", context, lineNumber, resolveContainerForColumn(receiver.Index));
-            }
+                var receiver = match.Groups["receiver"];
+                var selector = match.Groups["name"];
+                if (char.IsUpper(receiver.Value[0]) && selector.Value is "alloc" or "new")
+                {
+                    ReferenceExtractor.AddReference(references, seen, fileId, receiver.Value, receiver.Index, "instantiate", context, lineNumber, resolveContainerForColumn(receiver.Index));
+                }
 
-            addCallLikeReference(selector.Value, selector.Index);
+                addCallLikeReference(selector.Value, selector.Index);
+            }
         }
 
-        foreach (Match match in ObjCSelectorRegex.Matches(preparedLine))
-            addCallLikeReference(match.Groups["name"].Value.TrimEnd(':'), match.Groups["name"].Index);
+        if (preparedLine.IndexOf("@selector", StringComparison.Ordinal) >= 0)
+        {
+            foreach (Match match in ObjCSelectorRegex.Matches(preparedLine))
+                addCallLikeReference(match.Groups["name"].Value.TrimEnd(':'), match.Groups["name"].Index);
+        }
     }
 
     private static void EmitHaskellSpaceCallReferences(string preparedLine, Action<string, int> addCallLikeReference, IReadOnlySet<string>? definitionNames)

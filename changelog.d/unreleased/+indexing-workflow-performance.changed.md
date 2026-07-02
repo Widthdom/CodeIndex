@@ -202,6 +202,7 @@ affected:
 - **Gated Fortran statement reference scans by keyword** - Fortran reference extraction now runs data, save, submodule, external, intrinsic, access, finalizer, and equivalence regex checks only on matching statement candidates.
 - **Gated Fortran allocation and type reference scans by marker** - Fortran reference extraction now checks procedure, pointer, associate, type-expression, allocation, deallocation, and kind markers before running their regex passes.
 - **Gated Objective-C type reference scans by marker** - Objective-C reference extraction now checks interface-base, protocol-list, and pointer-declaration markers before running the matching type regex probes.
+- **Gated Objective-C message call scans by marker** - Objective-C reference extraction now checks message-send and selector markers before running message and `@selector` regex probes.
 - **Gated Pascal type reference scans by marker** - Pascal reference extraction now checks `uses`, base-declaration, and colon markers before running the matching type regex probes.
 - **Gated Pascal bare-call scans by marker** - Pascal reference extraction now checks the semicolon statement marker before running the bare-call regex probe.
 - **Gated Smalltalk range-boundary scans by marker** - Smalltalk range extraction now skips method/class boundary regex checks when the line lacks `>>`, `subclass:`, or `named:`.
@@ -366,6 +367,7 @@ affected:
 - **Fortran statement reference scan を keyword で gate します** - Fortran reference extraction は data、save、submodule、external、intrinsic、access、finalizer、equivalence regex check を対応 statement candidate だけで実行します。
 - **Fortran allocation / type reference scan を marker で gate します** - Fortran reference extraction は procedure、pointer、associate、type-expression、allocation、deallocation、kind marker を確認してから対応 regex pass を実行します。
 - **Objective-C type reference scan を marker で gate します** - Objective-C reference extraction は対応する type regex probe の前に interface-base、protocol-list、pointer-declaration marker を確認します。
+- **Objective-C message call scan を marker で gate します** - Objective-C reference extraction は message と `@selector` regex probe の前に message-send と selector marker を確認します。
 - **Pascal type reference scan を marker で gate します** - Pascal reference extraction は対応する type regex probe の前に `uses`、base-declaration、colon marker を確認します。
 - **Pascal bare-call scan を marker で gate します** - Pascal reference extraction は bare-call regex probe の前に semicolon statement marker を確認します。
 - **Smalltalk range-boundary scan を marker で gate します** - Smalltalk range extraction は line に `>>`、`subclass:`、`named:` がない場合 method/class boundary regex check を skip します。
