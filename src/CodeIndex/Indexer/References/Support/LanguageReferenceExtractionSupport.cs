@@ -2672,42 +2672,46 @@ internal static partial class LanguageReferenceExtractionSupport
         Func<int, SymbolRecord?> resolveContainerForColumn,
         SymbolRecord? container)
     {
-        foreach (Match match in FortranUseRegex.Matches(preparedLine))
-            ReferenceExtractor.AddReference(references, seen, fileId, match, "type_reference", context, lineNumber, container);
-
-        var useOnlyMatch = FortranUseOnlyRegex.Match(preparedLine);
-        if (useOnlyMatch.Success)
+        var hasFortranUseMarker = preparedLine.IndexOf("use", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (hasFortranUseMarker)
         {
-            EmitCommaSeparatedNames(useOnlyMatch.Groups["list"].Value, useOnlyMatch.Groups["list"].Index, "fortran", references, seen, fileId, context, lineNumber, container);
+            foreach (Match match in FortranUseRegex.Matches(preparedLine))
+                ReferenceExtractor.AddReference(references, seen, fileId, match, "type_reference", context, lineNumber, container);
 
-            var list = useOnlyMatch.Groups["list"];
-            foreach (Match match in FortranUseAliasRegex.Matches(list.Value))
+            var useOnlyMatch = FortranUseOnlyRegex.Match(preparedLine);
+            if (useOnlyMatch.Success)
             {
-                var group = match.Groups["alias"];
-                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "type_reference", context, lineNumber, container);
+                EmitCommaSeparatedNames(useOnlyMatch.Groups["list"].Value, useOnlyMatch.Groups["list"].Index, "fortran", references, seen, fileId, context, lineNumber, container);
+
+                var list = useOnlyMatch.Groups["list"];
+                foreach (Match match in FortranUseAliasRegex.Matches(list.Value))
+                {
+                    var group = match.Groups["alias"];
+                    ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "type_reference", context, lineNumber, container);
+                }
+
+                foreach (Match match in FortranUseAliasTargetRegex.Matches(list.Value))
+                {
+                    var group = match.Groups["target"];
+                    ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "type_reference", context, lineNumber, container);
+                }
             }
 
-            foreach (Match match in FortranUseAliasTargetRegex.Matches(list.Value))
+            var useRenameMatch = FortranUseRenameListRegex.Match(preparedLine);
+            if (useRenameMatch.Success)
             {
-                var group = match.Groups["target"];
-                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "type_reference", context, lineNumber, container);
-            }
-        }
+                var list = useRenameMatch.Groups["list"];
+                foreach (Match match in FortranUseAliasRegex.Matches(list.Value))
+                {
+                    var group = match.Groups["alias"];
+                    ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "type_reference", context, lineNumber, container);
+                }
 
-        var useRenameMatch = FortranUseRenameListRegex.Match(preparedLine);
-        if (useRenameMatch.Success)
-        {
-            var list = useRenameMatch.Groups["list"];
-            foreach (Match match in FortranUseAliasRegex.Matches(list.Value))
-            {
-                var group = match.Groups["alias"];
-                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "type_reference", context, lineNumber, container);
-            }
-
-            foreach (Match match in FortranUseAliasTargetRegex.Matches(list.Value))
-            {
-                var group = match.Groups["target"];
-                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "type_reference", context, lineNumber, container);
+                foreach (Match match in FortranUseAliasTargetRegex.Matches(list.Value))
+                {
+                    var group = match.Groups["target"];
+                    ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "type_reference", context, lineNumber, container);
+                }
             }
         }
 
