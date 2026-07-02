@@ -1644,6 +1644,9 @@ public static partial class SymbolExtractor
         int[] lineStarts,
         List<SymbolRecord> symbols)
     {
+        if (!rawText.Contains("{x:Static", StringComparison.Ordinal))
+            return;
+
         var cursor = 0;
         while (cursor < rawText.Length)
         {
