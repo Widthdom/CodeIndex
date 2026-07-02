@@ -108,17 +108,11 @@ public static partial class ReferenceExtractor
             return;
 
         var interfaceGenericParameters = staticInterfaceMemberLookups.InterfaceGenericParameters;
-        var staticMembersByContainer = BuildCSharpStaticMembersByContainer(symbols);
+        var implementationLookups = BuildCSharpStaticInterfaceImplementationLookups(symbols);
+        var staticMembersByContainer = implementationLookups.StaticMembersByContainer;
 
-        foreach (var typeSymbol in symbols)
+        foreach (var typeSymbol in implementationLookups.TypeSymbols)
         {
-            if (typeSymbol.Kind is not ("class" or "struct")
-                || typeSymbol.BodyStartLine == null
-                || typeSymbol.BodyEndLine == null)
-            {
-                continue;
-            }
-
             var implementedInterfaces = ExtractCSharpImplementedInterfaces(
                 CollectCSharpRecordHeader(structuralLines, typeSymbol.StartLine).Text,
                 interfaceGenericParameters);
@@ -213,11 +207,21 @@ public static partial class ReferenceExtractor
         return (contractsByType, interfaceGenericParameters);
     }
 
-    private static Dictionary<string, List<SymbolRecord>> BuildCSharpStaticMembersByContainer(IReadOnlyList<SymbolRecord> symbols)
+    private static (
+        List<SymbolRecord> TypeSymbols,
+        Dictionary<string, List<SymbolRecord>> StaticMembersByContainer) BuildCSharpStaticInterfaceImplementationLookups(IReadOnlyList<SymbolRecord> symbols)
     {
+        var typeSymbols = new List<SymbolRecord>();
         var staticMembersByContainer = new Dictionary<string, List<SymbolRecord>>(StringComparer.Ordinal);
         foreach (var symbol in symbols)
         {
+            if (symbol.Kind is ("class" or "struct")
+                && symbol.BodyStartLine != null
+                && symbol.BodyEndLine != null)
+            {
+                typeSymbols.Add(symbol);
+            }
+
             if (symbol.Kind is not ("function" or "operator" or "property")
                 || string.IsNullOrWhiteSpace(symbol.ContainerName)
                 || string.IsNullOrWhiteSpace(symbol.Signature)
@@ -236,7 +240,7 @@ public static partial class ReferenceExtractor
             staticMembers.Add(symbol);
         }
 
-        return staticMembersByContainer;
+        return (typeSymbols, staticMembersByContainer);
     }
 
     private static bool AnyCSharpStaticInterfaceMemberContractMatches(
