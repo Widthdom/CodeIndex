@@ -48,6 +48,11 @@ internal static class CppReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf("friend", StringComparison.Ordinal) < 0)
+        {
+            return;
+        }
+
         foreach (Match match in FriendTypeRegex.Matches(preparedLine))
             AddFriendReference(match.Groups["name"]);
 
