@@ -108,6 +108,7 @@ affected:
 - **Dispatched Solidity callable declaration scans by keyword** - Solidity extraction now runs function, constructor, fallback/receive, and modifier declaration regexes only for lines with the corresponding marker.
 - **Dispatched Solidity event/error declaration scans by keyword** - Solidity extraction now runs event and error declaration regexes only on lines with the matching keyword marker.
 - **Skipped duplicate PHP constructor-start regex checks** - PHP promoted-property extraction now avoids the constructor-start regex once the same-line constructor regex has already matched.
+- **Dispatched PHP import scans by marker** - PHP import extraction now checks `use`, grouped-use braces, and require/include markers before running the corresponding regexes.
 - **Collapsed duplicate F# type-declaration regex scans** - F# type-member extraction now reuses the declaration match instead of running `IsMatch` and `Match` on the same line.
 - **Gated F# record-field scans by colon** - F# record-field extraction now skips record-field regex checks for candidates that cannot contain a typed field separator.
 - **Gated F# active/operator scans by marker** - F# extraction now skips active-pattern and operator-definition regex checks when lines lack their required markers.
@@ -183,6 +184,7 @@ affected:
 - **Solidity callable declaration scan を keyword で振り分けます** - Solidity extraction は function、constructor、fallback/receive、modifier の declaration regex を対応 marker がある行だけで実行します。
 - **Solidity event/error declaration scan を keyword で振り分けます** - Solidity extraction は event と error の declaration regex を対応 keyword marker がある行だけで実行します。
 - **PHP constructor-start regex の重複 check を skip します** - PHP promoted-property extraction は same-line constructor regex が既に match した場合 constructor-start regex を実行しないようになりました。
+- **PHP import scan を marker で振り分けます** - PHP import extraction は `use`、grouped-use の brace、require/include marker を確認してから対応 regex を実行します。
 - **F# type-declaration regex の重複 scan をまとめます** - F# type-member extraction は同じ行に `IsMatch` と `Match` を重ねず、declaration match を再利用します。
 - **F# record-field scan を colon で gate します** - F# record-field extraction は typed field separator を含めない candidate で record-field regex check を skip します。
 - **F# active/operator scan を marker で gate します** - F# extraction は line に必要 marker がない場合 active-pattern と operator-definition regex check を skip します。
