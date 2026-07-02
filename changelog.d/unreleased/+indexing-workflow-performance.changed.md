@@ -331,6 +331,7 @@ affected:
 - **Added Pascal class-base closing-paren gates** - Pascal reference extraction now checks for `)` before running class/interface/object base-list regex probes.
 - **Added shared keyword containment gates** - Reference extraction now has a boundary-aware case-insensitive keyword helper for replacing broad substring probes in language hot paths.
 - **Tightened Pascal class base markers to keyword boundaries** - Pascal reference extraction now treats `class` as a boundary-aware keyword before running base-list regex probes.
+- **Tightened Pascal interface base markers to keyword boundaries** - Pascal reference extraction now treats `interface` as a boundary-aware keyword before running base-list regex probes.
 
 ## 日本語
 
@@ -596,3 +597,4 @@ affected:
 - **Pascal class-base closing-paren gate を追加します** - Pascal reference extraction は class/interface/object base-list regex probe の前に `)` を確認します。
 - **共通 keyword containment gate を追加します** - Reference extraction は language hot path の broad substring probe を置き換える boundary-aware case-insensitive keyword helper を持つようになります。
 - **Pascal class base marker を keyword boundary に強化します** - Pascal reference extraction は base-list regex probe の前に `class` を boundary-aware keyword として扱います。
+- **Pascal interface base marker を keyword boundary に強化します** - Pascal reference extraction は base-list regex probe の前に `interface` を boundary-aware keyword として扱います。
