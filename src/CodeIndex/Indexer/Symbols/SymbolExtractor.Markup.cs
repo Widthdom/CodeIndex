@@ -1695,10 +1695,22 @@ public static partial class SymbolExtractor
         List<SymbolRecord> symbols)
     {
         foreach (var prefix in XamlReferenceMarkupPrefixes)
-            AddXamlReferenceMarkupSymbols(fileId, rawText, lines, lineStarts, symbols, prefix);
+        {
+            if (rawText.Contains(prefix, StringComparison.Ordinal))
+                AddXamlReferenceMarkupSymbols(fileId, rawText, lines, lineStarts, symbols, prefix);
+        }
 
         foreach (var prefix in XamlReferenceObjectElementPrefixes)
-            AddXamlReferenceObjectElementSymbols(fileId, rawText, lines, lineStarts, symbols, prefix);
+        {
+            if (rawText.Contains(prefix, StringComparison.Ordinal))
+                AddXamlReferenceObjectElementSymbols(fileId, rawText, lines, lineStarts, symbols, prefix);
+        }
+
+        if (!rawText.Contains("x:Reference", StringComparison.Ordinal)
+            || !rawText.Contains(".Name", StringComparison.Ordinal))
+        {
+            return;
+        }
 
         foreach (Match nameMatch in XamlReferenceNamePropertyElementRegex.Matches(rawText))
         {
