@@ -5664,15 +5664,26 @@ public static partial class SymbolExtractor
 
     private static string MaskCppFriendDeclarationLine(string line, ref bool inBlockComment)
     {
-        var chars = line.ToCharArray();
-        for (var cursor = 0; cursor < chars.Length; cursor++)
+        char[]? chars = null;
+
+        void MaskAt(int index) =>
+            (chars ??= line.ToCharArray())[index] = ' ';
+
+        void MaskToEnd(int start)
+        {
+            var masked = chars ??= line.ToCharArray();
+            for (var index = start; index < line.Length; index++)
+                masked[index] = ' ';
+        }
+
+        for (var cursor = 0; cursor < line.Length; cursor++)
         {
             if (inBlockComment)
             {
-                chars[cursor] = ' ';
+                MaskAt(cursor);
                 if (cursor + 1 < line.Length && line[cursor] == '*' && line[cursor + 1] == '/')
                 {
-                    chars[++cursor] = ' ';
+                    MaskAt(++cursor);
                     inBlockComment = false;
                 }
 
@@ -5681,15 +5692,14 @@ public static partial class SymbolExtractor
 
             if (cursor + 1 < line.Length && line[cursor] == '/' && line[cursor + 1] == '/')
             {
-                while (cursor < chars.Length)
-                    chars[cursor++] = ' ';
+                MaskToEnd(cursor);
                 break;
             }
 
             if (cursor + 1 < line.Length && line[cursor] == '/' && line[cursor + 1] == '*')
             {
-                chars[cursor++] = ' ';
-                chars[cursor] = ' ';
+                MaskAt(cursor++);
+                MaskAt(cursor);
                 inBlockComment = true;
                 continue;
             }
@@ -5697,19 +5707,19 @@ public static partial class SymbolExtractor
             if (line[cursor] is '"' or '\'')
             {
                 var quote = line[cursor];
-                chars[cursor++] = ' ';
-                while (cursor < chars.Length)
+                MaskAt(cursor++);
+                while (cursor < line.Length)
                 {
                     if (line[cursor] == '\\' && cursor + 1 < line.Length)
                     {
-                        chars[cursor++] = ' ';
-                        chars[cursor] = ' ';
+                        MaskAt(cursor++);
+                        MaskAt(cursor);
                         cursor++;
                         continue;
                     }
 
                     var closes = line[cursor] == quote;
-                    chars[cursor++] = ' ';
+                    MaskAt(cursor++);
                     if (closes)
                         break;
                 }
@@ -5718,7 +5728,7 @@ public static partial class SymbolExtractor
             }
         }
 
-        return new string(chars);
+        return chars is null ? line : new string(chars);
     }
 
     private static bool IsCSharpTestMethod(string[] lines, int declarationLineIndex)
