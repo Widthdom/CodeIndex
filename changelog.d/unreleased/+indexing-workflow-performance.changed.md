@@ -68,6 +68,7 @@ affected:
 - **Gated C# reference regex probes by marker** - C# reference extraction now checks using-alias, `where`, and reflection member-name markers before running their regex probes.
 - **Gated TypeScript and Swift alias regex probes by marker** - type-alias reference extraction now checks per-line declaration keywords and assignment markers before running alias regexes.
 - **Gated SQL maintenance target scans by keyword** - SQL reference extraction now checks permission, authorization, statistics, drop-table, truncate, and revoke markers before running those target regex passes.
+- **Gated SQL temp-object establishment scans by statement marker** - SQL statement-prefix carryover now checks target, truncate, select-into, and create markers before running temp-object regex probes.
 - **Skipped reference-line preparation on empty lines** - all language reference preparation now returns empty lines immediately instead of running comment/string-literal trigger checks.
 - **Collapsed string-literal delimiter probes** - reference-line preparation now checks quote/backtick trigger characters with `IndexOfAny` instead of separate scans per delimiter.
 - **Hoisted reference-line preparation language flags** - per-file reference preparation now computes language comment/string handling flags once and reuses them for each line instead of repeating language switches in the hot loop.
@@ -163,6 +164,7 @@ affected:
 - **C# reference regex probe を marker で gate します** - C# reference extraction は using alias、`where`、reflection member-name marker を確認してから対応 regex probe を実行します。
 - **TypeScript / Swift alias regex probe を marker で gate します** - type-alias reference extraction は行ごとの declaration keyword と assignment marker を確認してから alias regex を実行します。
 - **SQL maintenance target scan を keyword で gate します** - SQL reference extraction は permission、authorization、statistics、drop-table、truncate、revoke marker を確認してから対応 target regex pass を実行します。
+- **SQL temp-object establishment scan を statement marker で gate します** - SQL statement-prefix carryover は target、truncate、select-into、create marker を確認してから temp-object regex probe を実行します。
 - **空行の reference-line preparation を skip します** - 全言語の reference preparation は空行に対して comment/string-literal trigger 判定を走らせず即 return するようになりました。
 - **string-literal delimiter probe をまとめました** - reference-line preparation は quote/backtick trigger character を delimiter ごとの個別 scan ではなく `IndexOfAny` で確認します。
 - **reference-line preparation の言語フラグを loop 外へ出しました** - ファイルごとの reference preparation は comment/string handling の言語フラグを一度だけ計算し、hot loop 内で language switch を繰り返さないようになりました。

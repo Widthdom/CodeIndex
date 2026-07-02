@@ -3007,11 +3007,36 @@ internal static partial class SqlReferenceExtractor
         if (statement.IndexOf('#') < 0)
             return false;
 
-        return TargetReferenceRegex.IsMatch(statement)
-            || TruncateTargetRegex.IsMatch(statement)
-            || SelectIntoTargetStatementRegex.IsMatch(statement)
-            || CreateTempTableRegex.IsMatch(statement)
-            || CreateTempRoutineRegex.IsMatch(statement);
+        var mayContainTargetStatement = statement.IndexOf("INSERT", StringComparison.OrdinalIgnoreCase) >= 0
+            || statement.IndexOf("UPDATE", StringComparison.OrdinalIgnoreCase) >= 0
+            || statement.IndexOf("MERGE", StringComparison.OrdinalIgnoreCase) >= 0
+            || statement.IndexOf("DELETE", StringComparison.OrdinalIgnoreCase) >= 0
+            || statement.IndexOf("ALTER", StringComparison.OrdinalIgnoreCase) >= 0
+            || statement.IndexOf("BULK", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (mayContainTargetStatement && TargetReferenceRegex.IsMatch(statement))
+            return true;
+
+        if (statement.IndexOf("TRUNCATE", StringComparison.OrdinalIgnoreCase) >= 0
+            && TruncateTargetRegex.IsMatch(statement))
+        {
+            return true;
+        }
+
+        if (statement.IndexOf("SELECT", StringComparison.OrdinalIgnoreCase) >= 0
+            && statement.IndexOf("INTO", StringComparison.OrdinalIgnoreCase) >= 0
+            && SelectIntoTargetStatementRegex.IsMatch(statement))
+        {
+            return true;
+        }
+
+        if (statement.IndexOf("CREATE", StringComparison.OrdinalIgnoreCase) < 0)
+            return false;
+
+        return (statement.IndexOf("TABLE", StringComparison.OrdinalIgnoreCase) >= 0
+                && CreateTempTableRegex.IsMatch(statement))
+            || ((statement.IndexOf("PROC", StringComparison.OrdinalIgnoreCase) >= 0
+                    || statement.IndexOf("FUNCTION", StringComparison.OrdinalIgnoreCase) >= 0)
+                && CreateTempRoutineRegex.IsMatch(statement));
     }
 
     private static bool CanStatementRequireLineCommentCarry(string statement)
