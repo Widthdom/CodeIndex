@@ -58,12 +58,14 @@ internal static class CSharpStaticInterfacePrepass
                 if (!indexer.RawFileMayContainCSharpStaticInterfaceContract(
                     absolutePath,
                     target.RelativePath,
+                    FileIndexer.FileProbeStatus.Supported,
                     cancellationToken))
                     continue;
 
                 var content = indexer.LoadNormalizedContentForPrepass(
                     absolutePath,
                     target.RelativePath,
+                    FileIndexer.FileProbeStatus.Supported,
                     cancellationToken);
                 if (!MayContainCSharpStaticInterfaceContract(content))
                     continue;
