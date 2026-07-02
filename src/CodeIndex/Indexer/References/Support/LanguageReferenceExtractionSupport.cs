@@ -2434,6 +2434,12 @@ internal static partial class LanguageReferenceExtractionSupport
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (!originalLine.Contains('(')
+            || !originalLine.Contains(',')
+            || !originalLine.Contains('"')
+            || originalLine.IndexOf("CallByName", StringComparison.OrdinalIgnoreCase) < 0)
+            return;
+
         foreach (Match match in VbCallByNameRegex.Matches(originalLine))
         {
             if (match.Index >= preparedLine.Length || char.IsWhiteSpace(preparedLine[match.Index]))
