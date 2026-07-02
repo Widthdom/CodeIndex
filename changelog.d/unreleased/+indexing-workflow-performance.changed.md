@@ -305,6 +305,7 @@ affected:
 - **Gated Fortran allocation status scans by marker** - Fortran reference extraction now checks `stat` and `errmsg` markers before running allocate/deallocate status keyword regex probes.
 - **Gated Fortran pointer assignment scans by leading token** - Fortran reference extraction now checks the leading identifier token before running pointer assignment regex probes.
 - **Gated Fortran allocate type-spec scans by marker** - Fortran reference extraction now checks `::` markers before running allocate type-spec regex probes.
+- **Gated Fortran call scans by leading keyword** - Fortran reference extraction now checks for a leading `call` keyword before running call regex probes.
 
 ## 日本語
 
@@ -544,3 +545,4 @@ affected:
 - **Fortran allocation status scan を marker で gate します** - Fortran reference extraction は allocate/deallocate status keyword regex probe の前に `stat` と `errmsg` marker を確認します。
 - **Fortran pointer assignment scan を leading token で gate します** - Fortran reference extraction は pointer assignment regex probe の前に leading identifier token を確認します。
 - **Fortran allocate type-spec scan を marker で gate します** - Fortran reference extraction は allocate type-spec regex probe の前に `::` marker を確認します。
+- **Fortran call scan を leading keyword で gate します** - Fortran reference extraction は call regex probe の前に leading `call` keyword を確認します。

@@ -2479,6 +2479,19 @@ internal static partial class LanguageReferenceExtractionSupport
         return -1;
     }
 
+    private static bool StartsWithKeywordIgnoringLeadingWhitespace(string value, string keyword)
+    {
+        var start = FirstNonWhitespaceIndex(value);
+        if (start < 0 || value.Length - start < keyword.Length)
+            return false;
+
+        if (!value.AsSpan(start, keyword.Length).Equals(keyword, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var boundary = start + keyword.Length;
+        return boundary >= value.Length || !IsSimpleIdentifierPart(value[boundary]);
+    }
+
     private static bool CanStartVisualBasicIdentifierPattern(char value) =>
         value == '['
         || CanStartAsciiIdentifierPattern(value);
@@ -3323,7 +3336,7 @@ internal static partial class LanguageReferenceExtractionSupport
 
     private static void EmitFortranCallReferences(string preparedLine, Action<string, int> addCallLikeReference)
     {
-        if (preparedLine.IndexOf("call", StringComparison.OrdinalIgnoreCase) < 0)
+        if (!StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "call"))
             return;
 
         foreach (Match match in FortranCallRegex.Matches(preparedLine))
