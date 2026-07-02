@@ -1116,14 +1116,23 @@ public static partial class SymbolExtractor
         int[] lineStarts,
         List<SymbolRecord> symbols)
     {
-        foreach (var occurrence in EnumerateWrappedXamlAttributeValues(rawText, lineStarts, "x:Name"))
-            AddXamlAttributeSymbol(fileId, lines, lineStarts, symbols, occurrence.AttributeIndex, "property", occurrence.Value.Trim());
+        if (rawText.Contains("x:Name", StringComparison.Ordinal))
+        {
+            foreach (var occurrence in EnumerateWrappedXamlAttributeValues(rawText, lineStarts, "x:Name"))
+                AddXamlAttributeSymbol(fileId, lines, lineStarts, symbols, occurrence.AttributeIndex, "property", occurrence.Value.Trim());
+        }
 
-        foreach (var occurrence in EnumerateWrappedXamlAttributeValues(rawText, lineStarts, "x:Key"))
-            AddXamlAttributeSymbol(fileId, lines, lineStarts, symbols, occurrence.AttributeIndex, "property", NormalizeXamlKeyValue(occurrence.Value));
+        if (rawText.Contains("x:Key", StringComparison.Ordinal))
+        {
+            foreach (var occurrence in EnumerateWrappedXamlAttributeValues(rawText, lineStarts, "x:Key"))
+                AddXamlAttributeSymbol(fileId, lines, lineStarts, symbols, occurrence.AttributeIndex, "property", NormalizeXamlKeyValue(occurrence.Value));
+        }
 
         foreach (var attributeName in XamlEventAttributeNames)
         {
+            if (!rawText.Contains(attributeName, StringComparison.Ordinal))
+                continue;
+
             foreach (var occurrence in EnumerateWrappedXamlAttributeValues(rawText, lineStarts, attributeName))
                 AddXamlAttributeSymbol(fileId, lines, lineStarts, symbols, occurrence.AttributeIndex, "function", occurrence.Value.Trim());
         }
