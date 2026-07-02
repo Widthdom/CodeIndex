@@ -1695,7 +1695,7 @@ internal static partial class LanguageReferenceExtractionSupport
 
         var hasCppExplicitTemplateInstantiationMarker = ContainsOrdinalKeyword(preparedLine, "template")
             && preparedLine.IndexOf(';') >= 0
-            && (preparedLine.IndexOf("class", StringComparison.Ordinal) >= 0
+            && (ContainsOrdinalKeyword(preparedLine, "class")
                 || preparedLine.IndexOf("struct", StringComparison.Ordinal) >= 0);
         if (hasCppExplicitTemplateInstantiationMarker)
         {

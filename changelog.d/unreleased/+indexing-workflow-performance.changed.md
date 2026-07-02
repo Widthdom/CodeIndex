@@ -356,6 +356,7 @@ affected:
 - **Tightened C function-pointer typedef markers to keyword boundaries** - C reference extraction now treats `typedef` as a boundary-aware keyword before running function-pointer alias regex probes.
 - **Tightened C++ typedef alias markers to keyword boundaries** - C++ reference extraction now treats `typedef` as a boundary-aware keyword before running alias-target regex probes.
 - **Tightened C++ explicit-template markers to keyword boundaries** - C++ reference extraction now treats `template` as a boundary-aware keyword before running explicit instantiation regex probes.
+- **Tightened C++ explicit-template class markers to keyword boundaries** - C++ reference extraction now treats `class` as a boundary-aware keyword before explicit instantiation regex probes.
 
 ## 日本語
 
@@ -646,3 +647,4 @@ affected:
 - **C function-pointer typedef marker を keyword boundary に強化します** - C reference extraction は function-pointer alias regex probe の前に `typedef` を boundary-aware keyword として扱います。
 - **C++ typedef alias marker を keyword boundary に強化します** - C++ reference extraction は alias-target regex probe の前に `typedef` を boundary-aware keyword として扱います。
 - **C++ explicit-template marker を keyword boundary に強化します** - C++ reference extraction は explicit instantiation regex probe の前に `template` を boundary-aware keyword として扱います。
+- **C++ explicit-template class marker を keyword boundary に強化します** - C++ reference extraction は explicit instantiation regex probe の前に `class` を boundary-aware keyword として扱います。
