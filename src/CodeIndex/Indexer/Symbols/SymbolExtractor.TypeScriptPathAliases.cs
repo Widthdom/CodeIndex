@@ -236,7 +236,9 @@ public static partial class SymbolExtractor
 
             var baseDirectory = inherited?.BaseDirectory ?? configDirectory;
             var hasBaseUrl = inherited?.HasBaseUrl ?? false;
-            var rules = inherited?.Rules.ToList() ?? [];
+            var rules = inherited == null
+                ? []
+                : new List<TypeScriptPathAliasRule>(inherited.Rules);
             if (document.RootElement.TryGetProperty("compilerOptions", out var compilerOptions)
                 && compilerOptions.ValueKind == JsonValueKind.Object)
             {
@@ -283,7 +285,9 @@ public static partial class SymbolExtractor
                             continue;
                         }
 
-                        var targets = new List<string>();
+                        var targets = new List<string>(Math.Min(
+                            property.Value.GetArrayLength(),
+                            MaxTypeScriptPathAliasTargetsPerRule));
                         foreach (var item in property.Value.EnumerateArray())
                         {
                             if (targets.Count >= MaxTypeScriptPathAliasTargetsPerRule
