@@ -100,6 +100,7 @@ affected:
 - **Gated SQL definer scans by host marker** - SQL extraction now skips detailed `DEFINER` regex matching when the structural line lacks the required `@` marker.
 - **Gated SQL generated-column scans by DDL branch markers** - SQL extraction now skips ALTER/CREATE generated-column regex scans when the corresponding DDL keywords are absent.
 - **Gated COBOL paragraph scans by required markers** - COBOL extraction now skips program, entry, section, and paragraph regex checks when the line lacks the required marker.
+- **Gated Fortran routine-start scans by keyword** - Fortran range extraction now skips routine-start regex checks when a line contains neither `subroutine` nor `function`.
 
 ## 日本語
 
@@ -164,3 +165,4 @@ affected:
 - **SQL definer scan を host marker で gate します** - SQL extraction は structural line に必須の `@` marker がない場合 detailed `DEFINER` regex matching を skip します。
 - **SQL generated-column scan を DDL branch marker で gate します** - SQL extraction は対応する DDL keyword がない場合 ALTER/CREATE generated-column regex scan を skip します。
 - **COBOL paragraph scan を required marker で gate します** - COBOL extraction は line に必須 marker がない場合 program/entry/section/paragraph regex check を skip します。
+- **Fortran routine-start scan を keyword で gate します** - Fortran range extraction は line に `subroutine` と `function` のどちらもない場合 routine-start regex check を skip します。
