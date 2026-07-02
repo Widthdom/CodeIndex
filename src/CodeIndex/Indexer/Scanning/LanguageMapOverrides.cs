@@ -40,9 +40,7 @@ internal static class LanguageMapOverrides
 
     internal static IReadOnlyDictionary<string, string> LoadEffectiveMapFromDirectory(string? startDirectory)
     {
-        startDirectory = string.IsNullOrWhiteSpace(startDirectory)
-            ? Environment.CurrentDirectory
-            : Path.GetFullPath(startDirectory);
+        startDirectory = NormalizeStartDirectory(startDirectory);
         EffectiveMapCacheEntry? cached;
 
         lock (EffectiveMapCacheLock)
@@ -69,6 +67,15 @@ internal static class LanguageMapOverrides
         }
 
         return map;
+    }
+
+    internal static string NormalizeStartDirectory(string? startDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(startDirectory))
+            return Environment.CurrentDirectory;
+        return Path.IsPathFullyQualified(startDirectory)
+            ? startDirectory
+            : Path.GetFullPath(startDirectory);
     }
 
     internal static void ClearEffectiveMapCacheForTesting()

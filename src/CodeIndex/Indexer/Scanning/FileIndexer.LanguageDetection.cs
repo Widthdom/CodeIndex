@@ -265,9 +265,7 @@ public partial class FileIndexer
 
     private IReadOnlyDictionary<string, string> LoadLanguageMapOverridesForIndexing(string? startDirectory)
     {
-        startDirectory = string.IsNullOrWhiteSpace(startDirectory)
-            ? Environment.CurrentDirectory
-            : Path.GetFullPath(startDirectory);
+        startDirectory = LanguageMapOverrides.NormalizeStartDirectory(startDirectory);
 
         lock (_languageMapOverrideCache)
         {
@@ -421,7 +419,7 @@ public partial class FileIndexer
         if (!fileName.Contains('.', StringComparison.Ordinal))
             return false;
 
-        var startDirectory = Path.GetDirectoryName(Path.GetFullPath(filePath));
+        var startDirectory = Path.GetDirectoryName(filePath);
         var overrides = languageMapOverrideResolver == null
             ? LanguageMapOverrides.LoadEffectiveMapFromDirectory(startDirectory)
             : languageMapOverrideResolver(startDirectory);
