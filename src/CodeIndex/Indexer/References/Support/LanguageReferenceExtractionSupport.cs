@@ -1543,16 +1543,26 @@ internal static partial class LanguageReferenceExtractionSupport
                 }
             }
 
-            foreach (Match match in CTypedefOffsetofTypeRegex.Matches(preparedLine))
+            var hasCOffsetofMarker = hasCParen
+                && preparedLine.IndexOf(',') >= 0
+                && (preparedLine.IndexOf("offsetof", StringComparison.Ordinal) >= 0
+                    || preparedLine.IndexOf("__builtin_offsetof", StringComparison.Ordinal) >= 0);
+            if (hasCOffsetofMarker && hasCTypedefTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTypedefOffsetofTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTaggedOffsetofTypeRegex.Matches(preparedLine))
+            if (hasCOffsetofMarker && hasCTaggedTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTaggedOffsetofTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
             foreach (Match match in CTypedefVaArgTypeRegex.Matches(preparedLine))
