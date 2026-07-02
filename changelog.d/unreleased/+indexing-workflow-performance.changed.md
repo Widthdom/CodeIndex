@@ -249,6 +249,7 @@ affected:
 - **Gated C typeof type scans by marker** - C reference extraction now checks `typeof` plus typedef/tag markers before running typeof and typeof_unqual type regex probes.
 - **Gated C builtin type-compatibility scans by marker** - C reference extraction now checks the `__builtin_types_compatible_p` marker plus typedef/tag markers before running builtin type comparison regex probes.
 - **Gated C generic association type scans by marker** - C reference extraction now checks `_Generic` or continuation delimiters plus typedef/tag markers before running generic association type regex probes.
+- **Gated C atomic and alignas type scans by marker** - C reference extraction now checks `_Atomic` and alignas markers plus typedef/tag markers before running atomic and alignas type regex probes.
 
 ## 日本語
 
@@ -432,3 +433,4 @@ affected:
 - **C typeof type scan を marker で gate します** - C reference extraction は typeof / typeof_unqual type regex probe の前に `typeof` と typedef/tag marker を確認します。
 - **C builtin type-compatibility scan を marker で gate します** - C reference extraction は builtin type comparison regex probe の前に `__builtin_types_compatible_p` と typedef/tag marker を確認します。
 - **C generic association type scan を marker で gate します** - C reference extraction は generic association type regex probe の前に `_Generic` または continuation delimiter と typedef/tag marker を確認します。
+- **C atomic / alignas type scan を marker で gate します** - C reference extraction は atomic / alignas type regex probe の前に `_Atomic` や alignas marker と typedef/tag marker を確認します。
