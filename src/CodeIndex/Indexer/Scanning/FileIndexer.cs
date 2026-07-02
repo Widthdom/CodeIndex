@@ -39,6 +39,7 @@ public partial class FileIndexer
     // multi-MB の単一 byte[] を確保しない。
     public const long DefaultMaxFileSizeBytes = 4 * 1024 * 1024;
     private readonly string _projectRoot;
+    private readonly string _projectRootRelativePrefix;
     private readonly string _ignoreRuleRoot;
     private readonly IReadOnlyList<string> _ancestorIgnoreDirectories;
     private readonly bool _ignoreCase;
@@ -120,6 +121,7 @@ public partial class FileIndexer
         IReadOnlyList<string>? generatedCodePatterns = null)
     {
         _projectRoot = Path.GetFullPath(projectRoot);
+        _projectRootRelativePrefix = CreateProjectRootRelativePrefix(_projectRoot);
         _ignoreRuleRoot = NormalizeIgnoreRuleRoot(ignoreRuleRoot);
         _ancestorIgnoreDirectories = BuildAncestorIgnoreDirectories(_ignoreRuleRoot, _projectRoot);
         _ignoreCase = ignoreCase;

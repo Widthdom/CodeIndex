@@ -72,7 +72,34 @@ public partial class FileIndexer
 
     private string ToRelativePath(string absolutePath)
     {
+        if (TryGetRelativePathFromProjectRootPrefix(absolutePath, out var fastRelativePath))
+            return fastRelativePath;
+
         var relativePath = NormalizePathSeparators(Path.GetRelativePath(_projectRoot, absolutePath));
         return relativePath == "." ? string.Empty : relativePath;
+    }
+
+    private static string CreateProjectRootRelativePrefix(string projectRoot)
+        => Path.EndsInDirectorySeparator(projectRoot)
+            ? projectRoot
+            : projectRoot + Path.DirectorySeparatorChar;
+
+    private bool TryGetRelativePathFromProjectRootPrefix(string absolutePath, out string relativePath)
+    {
+        var comparison = _ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (string.Equals(absolutePath, _projectRoot, comparison))
+        {
+            relativePath = string.Empty;
+            return true;
+        }
+
+        if (absolutePath.StartsWith(_projectRootRelativePrefix, comparison))
+        {
+            relativePath = NormalizePathSeparators(absolutePath[_projectRootRelativePrefix.Length..]);
+            return true;
+        }
+
+        relativePath = string.Empty;
+        return false;
     }
 }
