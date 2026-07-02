@@ -133,8 +133,11 @@ internal static class SwiftReferenceExtractor
     {
         foreach (var line in preparedLines)
         {
-            if (line.Contains("typealias", StringComparison.Ordinal))
+            if (line.Contains("typealias", StringComparison.Ordinal)
+                && line.IndexOf('=') >= 0)
+            {
                 return true;
+            }
         }
 
         return false;

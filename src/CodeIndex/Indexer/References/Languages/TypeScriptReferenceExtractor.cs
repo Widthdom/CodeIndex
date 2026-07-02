@@ -316,8 +316,11 @@ internal static class TypeScriptReferenceExtractor
     {
         foreach (var line in preparedLines)
         {
-            if (line.Contains("type", StringComparison.Ordinal))
+            if (line.Contains("type", StringComparison.Ordinal)
+                && line.IndexOf('=') >= 0)
+            {
                 return true;
+            }
         }
 
         return false;
