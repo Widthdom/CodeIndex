@@ -1080,90 +1080,101 @@ internal static partial class SqlReferenceExtractor
         Func<string, bool> shouldIgnoreName,
         HashSet<int> suppressedCallIndices)
     {
-        EmitMultiTargetReferences(
-            ObjectPermissionTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (statement.IndexOf("GRANT", StringComparison.OrdinalIgnoreCase) >= 0
+            || statement.IndexOf("DENY", StringComparison.OrdinalIgnoreCase) >= 0
+            || statement.IndexOf("REVOKE", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                ObjectPermissionTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
 
-        EmitMultiTargetReferences(
-            AlterAuthorizationObjectTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (statement.IndexOf("AUTHORIZATION", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                AlterAuthorizationObjectTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
 
-        EmitMultiTargetReferences(
-            AlterAuthorizationBareTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+            EmitMultiTargetReferences(
+                AlterAuthorizationBareTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
 
-        EmitMultiTargetReferences(
-            UpdateStatisticsTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (statement.IndexOf("STATISTICS", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                UpdateStatisticsTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
 
-        EmitMultiTargetReferences(
-            CreateStatisticsOnTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName,
-            suppressedCallIndices);
+            EmitMultiTargetReferences(
+                CreateStatisticsOnTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName,
+                suppressedCallIndices);
 
-        EmitMultiTargetReferences(
-            DropStatisticsTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+            EmitMultiTargetReferences(
+                DropStatisticsTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
 
         EmitTargetReferences(
             statement,
@@ -1179,33 +1190,40 @@ internal static partial class SqlReferenceExtractor
             resolveContainerForCall,
             shouldIgnoreName);
 
-        EmitMultiTargetReferences(
-            DropTableTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (statement.IndexOf("DROP", StringComparison.OrdinalIgnoreCase) >= 0
+            && statement.IndexOf("TABLE", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                DropTableTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
 
-        EmitMultiTargetReferences(
-            TruncateTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (statement.IndexOf("TRUNCATE", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                TruncateTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
     }
 
     private static void EmitAlterObjectTargetReferences(
@@ -1788,8 +1806,11 @@ internal static partial class SqlReferenceExtractor
         Func<string, bool> shouldIgnoreName,
         IReadOnlyList<CteBodySpan>? cteBodySpans = null)
     {
-        if (RevokePermissionStatementRegex.IsMatch(statement))
+        if (statement.IndexOf("REVOKE", StringComparison.OrdinalIgnoreCase) >= 0
+            && RevokePermissionStatementRegex.IsMatch(statement))
+        {
             return;
+        }
 
         foreach (Match match in matches)
         {
