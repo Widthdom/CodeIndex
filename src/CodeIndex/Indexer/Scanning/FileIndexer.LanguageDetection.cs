@@ -332,14 +332,8 @@ public partial class FileIndexer
         if (FileNameMap.TryGetValue(fileName, out var nameLanguage))
             return string.Equals(language, nameLanguage, StringComparison.Ordinal);
 
-        foreach (var (prefix, prefixLanguage) in FileNamePrefixMap)
-        {
-            if (fileName.Length > prefix.Length &&
-                fileName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            {
-                return string.Equals(language, prefixLanguage, StringComparison.Ordinal);
-            }
-        }
+        if (TryGetFileNamePrefixLanguage(fileName, out var prefixLanguage))
+            return string.Equals(language, prefixLanguage, StringComparison.Ordinal);
 
         var extension = Path.GetExtension(fileName);
         return !string.IsNullOrEmpty(extension)
@@ -369,14 +363,8 @@ public partial class FileIndexer
         // The suffix must be non-empty so a bare `Dockerfile.` with trailing dot does not match.
         // Dockerfile.dev や Makefile.am のようなサフィックス付き変種を検出する。
         // `Dockerfile.` のような末尾ドットだけの形には一致させないため、サフィックスは1文字以上必須。
-        foreach (var (prefix, prefixLang) in FileNamePrefixMap)
-        {
-            if (fileName.Length > prefix.Length &&
-                fileName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            {
-                return new LanguageDetectionResult(FileProbeStatus.Supported, prefixLang);
-            }
-        }
+        if (TryGetFileNamePrefixLanguage(fileName, out var prefixLang))
+            return new LanguageDetectionResult(FileProbeStatus.Supported, prefixLang);
 
         var ext = Path.GetExtension(fileName);
         if (TryDetectLanguageOverride(filePath, fileName, languageMapOverrideResolver, out var overrideLang))
@@ -407,6 +395,33 @@ public partial class FileIndexer
         }
 
         return TryDetectLanguageFromShebang(filePath, symlinkPolicy, projectRoot, knownIndexability);
+    }
+
+    private static bool TryGetFileNamePrefixLanguage(string fileName, out string language)
+    {
+        language = string.Empty;
+        if (!CouldMatchFileNamePrefix(fileName))
+            return false;
+
+        foreach (var (prefix, prefixLanguage) in FileNamePrefixMap)
+        {
+            if (fileName.Length > prefix.Length &&
+                fileName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                language = prefixLanguage;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool CouldMatchFileNamePrefix(string fileName)
+    {
+        if (fileName.Length <= "Makefile.".Length)
+            return false;
+
+        return fileName[0] is 'D' or 'd' or 'C' or 'c' or 'M' or 'm' or 'G' or 'g';
     }
 
     private static bool TryDetectLanguageOverride(
