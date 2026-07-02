@@ -167,13 +167,14 @@ public static partial class ReferenceExtractor
         var csharpUsingAliases = csharpUsingImports.Aliases;
         var csharpUsingNamespaces = csharpUsingImports.Namespaces;
         var csharpUsingStatics = csharpUsingImports.Statics;
-        var csharpValueReceiverNames = BuildCSharpValueReceiverNamesByContainingType(language, symbols);
-        var csharpFunctionValueReceiverNames = BuildCSharpValueReceiverNamesByFunctionStartLine(
+        var csharpValueReceiverLookups = BuildCSharpValueReceiverNameLookups(
             language,
             symbols,
             structuralLines,
             csharpKnownTypeNames,
             csharpUsingAliases);
+        var csharpValueReceiverNames = csharpValueReceiverLookups.ByContainingType;
+        var csharpFunctionValueReceiverNames = csharpValueReceiverLookups.ByFunctionStartLine;
         var powershellSplatAssignments = language == "powershell"
             ? PowerShellReferenceExtractor.BuildSplatAssignments(preparedLines)
             : null;

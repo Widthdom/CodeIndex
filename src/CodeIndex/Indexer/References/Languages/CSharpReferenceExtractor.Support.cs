@@ -313,51 +313,24 @@ public static partial class ReferenceExtractor
         return normalized;
     }
 
-    private static Dictionary<string, CSharpContainingTypeValueReceiverNames> BuildCSharpValueReceiverNamesByContainingType(string language, IReadOnlyList<SymbolRecord> symbols)
-    {
-        var lookup = new Dictionary<string, CSharpContainingTypeValueReceiverNames>(StringComparer.Ordinal);
-        if (language != "csharp")
-            return lookup;
-
-        foreach (var symbol in symbols)
-        {
-            if (symbol.Kind != "property" || string.IsNullOrWhiteSpace(symbol.Name))
-                continue;
-
-            var containingType = GetContainingTypeQualifiedName(symbol);
-            if (string.IsNullOrWhiteSpace(containingType))
-                continue;
-
-            if (!lookup.TryGetValue(containingType!, out var names))
-            {
-                names = new CSharpContainingTypeValueReceiverNames(
-                    new HashSet<string>(StringComparer.Ordinal),
-                    new HashSet<string>(StringComparer.Ordinal));
-                lookup[containingType!] = names;
-            }
-
-            if (IsStaticCSharpSymbol(symbol))
-                names.StaticNames.Add(symbol.Name);
-            else
-                names.InstanceNames.Add(symbol.Name);
-        }
-
-        return lookup;
-    }
-
-    private static Dictionary<int, List<CSharpFunctionValueReceiverNameRecord>> BuildCSharpValueReceiverNamesByFunctionStartLine(
+    private static (
+        Dictionary<string, CSharpContainingTypeValueReceiverNames> ByContainingType,
+        Dictionary<int, List<CSharpFunctionValueReceiverNameRecord>> ByFunctionStartLine) BuildCSharpValueReceiverNameLookups(
         string language,
         IReadOnlyList<SymbolRecord> symbols,
         IReadOnlyList<string> structuralLines,
         IReadOnlySet<string> csharpKnownTypeNames,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
     {
-        var lookup = new Dictionary<int, List<CSharpFunctionValueReceiverNameRecord>>();
+        var byContainingType = new Dictionary<string, CSharpContainingTypeValueReceiverNames>(StringComparer.Ordinal);
+        var byFunctionStartLine = new Dictionary<int, List<CSharpFunctionValueReceiverNameRecord>>();
         if (language != "csharp")
-            return lookup;
+            return (byContainingType, byFunctionStartLine);
 
         foreach (var symbol in symbols)
         {
+            AddCSharpContainingTypeValueReceiverName(byContainingType, symbol);
+
             if (symbol.Kind is not ("function" or "property") || symbol.StartLine <= 0)
                 continue;
 
@@ -491,10 +464,35 @@ public static partial class ReferenceExtractor
             }
 
             if (names.Count > 0)
-                lookup[symbol.StartLine] = names;
+                byFunctionStartLine[symbol.StartLine] = names;
         }
 
-        return lookup;
+        return (byContainingType, byFunctionStartLine);
+    }
+
+    private static void AddCSharpContainingTypeValueReceiverName(
+        Dictionary<string, CSharpContainingTypeValueReceiverNames> lookup,
+        SymbolRecord symbol)
+    {
+        if (symbol.Kind != "property" || string.IsNullOrWhiteSpace(symbol.Name))
+            return;
+
+        var containingType = GetContainingTypeQualifiedName(symbol);
+        if (string.IsNullOrWhiteSpace(containingType))
+            return;
+
+        if (!lookup.TryGetValue(containingType!, out var names))
+        {
+            names = new CSharpContainingTypeValueReceiverNames(
+                new HashSet<string>(StringComparer.Ordinal),
+                new HashSet<string>(StringComparer.Ordinal));
+            lookup[containingType!] = names;
+        }
+
+        if (IsStaticCSharpSymbol(symbol))
+            names.StaticNames.Add(symbol.Name);
+        else
+            names.InstanceNames.Add(symbol.Name);
     }
 
     private static (
