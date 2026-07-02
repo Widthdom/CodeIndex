@@ -92,6 +92,7 @@ affected:
 - **Gated GraphQL declaration boundary scans by keyword** - GraphQL union continuation scanning now skips declaration-start regex checks when no declaration keyword is present.
 - **Gated Elixir first-line block scans by marker** - Elixir range extraction now avoids shorthand and opener regex checks when the masked first line lacks the required markers.
 - **Gated XAML line-level attribute scans by assignment marker** - XAML extraction now skips class, type, name, and key attribute regex scans on lines without `=`.
+- **Gated wrapped XAML type-argument scans by attribute marker** - XAML extraction now skips multiline `x:TypeArguments` scanning when the attribute marker is absent from the document.
 
 ## 日本語
 
@@ -148,3 +149,4 @@ affected:
 - **GraphQL declaration boundary scan を keyword で gate します** - GraphQL union continuation scanning は declaration keyword がない場合 declaration-start regex check を skip します。
 - **Elixir first-line block scan を marker で gate します** - Elixir range extraction は masked first line に必要 marker がない場合 shorthand と opener regex check を skip します。
 - **XAML line-level attribute scan を assignment marker で gate します** - XAML extraction は `=` がない行で class/type/name/key 属性 regex scan を skip します。
+- **wrapped XAML type-argument scan を attribute marker で gate します** - XAML extraction は document に `x:TypeArguments` marker がない場合 multiline scan を skip します。

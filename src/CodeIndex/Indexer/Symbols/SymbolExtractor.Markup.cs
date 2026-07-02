@@ -882,8 +882,11 @@ public static partial class SymbolExtractor
             }
         }
 
-        if (symbols.Count < StructuredDataMaxSymbols)
+        if (symbols.Count < StructuredDataMaxSymbols
+            && rawText.Contains("x:TypeArguments", StringComparison.Ordinal))
+        {
             AddWrappedXamlTypeArgumentSymbols(fileId, rawText, lines, lineStarts, symbols);
+        }
         if (symbols.Count < StructuredDataMaxSymbols)
             AddWrappedXamlTypeBearingAttributeSymbols(fileId, rawText, lines, lineStarts, symbols);
         if (symbols.Count < StructuredDataMaxSymbols)
