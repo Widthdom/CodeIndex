@@ -261,6 +261,7 @@ affected:
 - **Gated C++ type-trait template argument scans by marker** - C/C++ reference extraction now checks `is_` and template markers before running type-trait template argument regex probes.
 - **Gated C++ brace construction scans by marker** - C/C++ reference extraction now checks brace and construction lead-in markers before running brace construction regex probes.
 - **Gated C++ qualified template brace construction scans by marker** - C/C++ reference extraction now checks brace, template, and scope markers before running qualified template brace construction regex probes.
+- **Gated C++ using-alias target scans by marker** - C/C++ reference extraction now checks `using`, assignment, and statement markers before running using-alias target regex probes.
 
 ## 日本語
 
@@ -456,3 +457,4 @@ affected:
 - **C++ type-trait template argument scan を marker で gate します** - C/C++ reference extraction は type-trait template argument regex probe の前に `is_` と template marker を確認します。
 - **C++ brace construction scan を marker で gate します** - C/C++ reference extraction は brace construction regex probe の前に brace と construction lead-in marker を確認します。
 - **C++ qualified template brace construction scan を marker で gate します** - C/C++ reference extraction は qualified template brace construction regex probe の前に brace / template / scope marker を確認します。
+- **C++ using-alias target scan を marker で gate します** - C/C++ reference extraction は using-alias target regex probe の前に `using` / assignment / statement marker を確認します。
