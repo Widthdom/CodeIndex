@@ -396,11 +396,8 @@ public partial class FileIndexer
 
     private void AddProjectMarkerTraversalWarning(List<ScanError> errors, string directory, string exceptionType)
     {
-        if (errors.Count(static error => error.Message.StartsWith("Project marker discovery skipped", StringComparison.Ordinal))
-            >= MaxProjectMarkerTraversalWarnings)
-        {
+        if (HasReachedProjectMarkerWarningLimit(errors, "Project marker discovery skipped"))
             return;
-        }
 
         var relativePath = NormalizeIgnorePath(ToRelativePath(directory));
         if (string.IsNullOrEmpty(relativePath))
@@ -414,11 +411,8 @@ public partial class FileIndexer
 
     private void AddProjectMarkerBudgetWarning(List<ScanError> errors, string directory, string reason)
     {
-        if (errors.Count(static error => error.Message.StartsWith("Project marker discovery truncated", StringComparison.Ordinal))
-            >= MaxProjectMarkerTraversalWarnings)
-        {
+        if (HasReachedProjectMarkerWarningLimit(errors, "Project marker discovery truncated"))
             return;
-        }
 
         var relativePath = NormalizeIgnorePath(ToRelativePath(directory));
         if (string.IsNullOrEmpty(relativePath))
@@ -428,6 +422,22 @@ public partial class FileIndexer
             relativePath,
             $"Project marker discovery truncated because {reason}.",
             ScanIssueSeverity.Warning));
+    }
+
+    private static bool HasReachedProjectMarkerWarningLimit(List<ScanError> errors, string messagePrefix)
+    {
+        var matchingWarningCount = 0;
+        foreach (var error in errors)
+        {
+            if (!error.Message.StartsWith(messagePrefix, StringComparison.Ordinal))
+                continue;
+
+            matchingWarningCount++;
+            if (matchingWarningCount >= MaxProjectMarkerTraversalWarnings)
+                return true;
+        }
+
+        return false;
     }
 
     private static readonly string[] CSharpProjectMarkerPatterns = ["*.csproj"];
