@@ -1213,6 +1213,9 @@ internal static partial class LanguageReferenceExtractionSupport
         {
             var hasCParen = preparedLine.IndexOf('(') >= 0;
             var hasCTypedefTypeMarker = preparedLine.IndexOf("_t", StringComparison.Ordinal) >= 0;
+            var hasCTaggedTypeMarker = preparedLine.IndexOf("struct", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("enum", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("union", StringComparison.Ordinal) >= 0;
             if (hasCParen && hasCTypedefTypeMarker)
             {
                 foreach (Match match in CTypedefCastTypeRegex.Matches(preparedLine))
@@ -1222,28 +1225,46 @@ internal static partial class LanguageReferenceExtractionSupport
                 }
             }
 
-            foreach (Match match in CTypedefSizeofTypeRegex.Matches(preparedLine))
+            var hasCSizeofMarker = hasCParen
+                && preparedLine.IndexOf("sizeof", StringComparison.Ordinal) >= 0;
+            if (hasCSizeofMarker && hasCTypedefTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTypedefSizeofTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTaggedSizeofTypeRegex.Matches(preparedLine))
+            if (hasCSizeofMarker && hasCTaggedTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTaggedSizeofTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTypedefAlignofTypeRegex.Matches(preparedLine))
+            var hasCAlignofMarker = hasCParen
+                && (preparedLine.IndexOf("alignof", StringComparison.Ordinal) >= 0
+                    || preparedLine.IndexOf("_Alignof", StringComparison.Ordinal) >= 0
+                    || preparedLine.IndexOf("__alignof", StringComparison.Ordinal) >= 0);
+            if (hasCAlignofMarker && hasCTypedefTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTypedefAlignofTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTaggedAlignofTypeRegex.Matches(preparedLine))
+            if (hasCAlignofMarker && hasCTaggedTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTaggedAlignofTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
             foreach (Match match in CTypedefDeclarationTypeRegex.Matches(preparedLine))
