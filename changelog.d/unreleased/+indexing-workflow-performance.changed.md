@@ -18,6 +18,7 @@ affected:
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Svelte.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Smalltalk.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Solidity.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.StructuredData.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Markup.cs
   - src/CodeIndex/Indexer/References/Support/StructuralLineMasker.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.Preparation.cs
@@ -116,6 +117,7 @@ affected:
 - **Collapsed duplicate F# type-declaration regex scans** - F# type-member extraction now reuses the declaration match instead of running `IsMatch` and `Match` on the same line.
 - **Gated F# record-field scans by colon** - F# record-field extraction now skips record-field regex checks for candidates that cannot contain a typed field separator.
 - **Gated F# active/operator scans by marker** - F# extraction now skips active-pattern and operator-definition regex checks when lines lack their required markers.
+- **Gated YAML mapping-key scans by colon** - YAML structured-data extraction now skips mapping-key regex checks on lines that cannot contain a mapping separator.
 
 ## 日本語
 
@@ -192,3 +194,4 @@ affected:
 - **F# type-declaration regex の重複 scan をまとめます** - F# type-member extraction は同じ行に `IsMatch` と `Match` を重ねず、declaration match を再利用します。
 - **F# record-field scan を colon で gate します** - F# record-field extraction は typed field separator を含めない candidate で record-field regex check を skip します。
 - **F# active/operator scan を marker で gate します** - F# extraction は line に必要 marker がない場合 active-pattern と operator-definition regex check を skip します。
+- **YAML mapping-key scan を colon で gate します** - YAML structured-data extraction は mapping separator を含めない行で mapping-key regex check を skip します。

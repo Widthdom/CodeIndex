@@ -228,6 +228,9 @@ public static partial class SymbolExtractor
             if (trimmed.StartsWith('#') || trimmed is "---" or "...")
                 continue;
 
+            if (line.IndexOf(':') < 0)
+                continue;
+
             var match = YamlMappingKeyRegex.Match(line);
             if (!match.Success)
                 continue;
