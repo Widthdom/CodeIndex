@@ -107,6 +107,7 @@ affected:
 - **Dispatched Solidity type declaration scans by keyword** - Solidity extraction now runs contract/interface/library, struct, and enum declaration regexes only when their keyword marker is present.
 - **Dispatched Solidity callable declaration scans by keyword** - Solidity extraction now runs function, constructor, fallback/receive, and modifier declaration regexes only for lines with the corresponding marker.
 - **Dispatched Solidity event/error declaration scans by keyword** - Solidity extraction now runs event and error declaration regexes only on lines with the matching keyword marker.
+- **Gated Solidity parenthesized declaration scans by marker** - Solidity extraction now skips function, constructor, fallback/receive, event, and error regexes when the line lacks `(`.
 - **Skipped duplicate PHP constructor-start regex checks** - PHP promoted-property extraction now avoids the constructor-start regex once the same-line constructor regex has already matched.
 - **Dispatched PHP import scans by marker** - PHP import extraction now checks `use`, grouped-use braces, and require/include markers before running the corresponding regexes.
 - **Gated PHP grouped-use alias scans by marker** - PHP grouped-use import extraction now skips per-item alias regex checks unless the item contains an `as` marker.
@@ -185,6 +186,7 @@ affected:
 - **Solidity type declaration scan を keyword で振り分けます** - Solidity extraction は contract/interface/library、struct、enum の declaration regex を対応 keyword marker がある場合だけ実行します。
 - **Solidity callable declaration scan を keyword で振り分けます** - Solidity extraction は function、constructor、fallback/receive、modifier の declaration regex を対応 marker がある行だけで実行します。
 - **Solidity event/error declaration scan を keyword で振り分けます** - Solidity extraction は event と error の declaration regex を対応 keyword marker がある行だけで実行します。
+- **Solidity parenthesized declaration scan を marker で gate します** - Solidity extraction は line に `(` がない場合、function、constructor、fallback/receive、event、error regex を skip します。
 - **PHP constructor-start regex の重複 check を skip します** - PHP promoted-property extraction は same-line constructor regex が既に match した場合 constructor-start regex を実行しないようになりました。
 - **PHP import scan を marker で振り分けます** - PHP import extraction は `use`、grouped-use の brace、require/include marker を確認してから対応 regex を実行します。
 - **PHP grouped-use alias scan を marker で gate します** - PHP grouped-use import extraction は item に `as` marker がある場合だけ item alias regex を実行します。

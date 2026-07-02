@@ -54,7 +54,7 @@ public static partial class SymbolExtractor
                 }
             }
 
-            if (line.Contains("function", StringComparison.Ordinal))
+            if (line.Contains("function", StringComparison.Ordinal) && line.IndexOf('(') >= 0)
             {
                 var functionMatch = SolidityFunctionDeclarationRegex.Match(line);
                 if (functionMatch.Success)
@@ -64,7 +64,7 @@ public static partial class SymbolExtractor
                 }
             }
 
-            if (line.Contains("constructor", StringComparison.Ordinal))
+            if (line.Contains("constructor", StringComparison.Ordinal) && line.IndexOf('(') >= 0)
             {
                 var constructorMatch = SolidityConstructorDeclarationRegex.Match(line);
                 if (constructorMatch.Success)
@@ -74,7 +74,8 @@ public static partial class SymbolExtractor
                 }
             }
 
-            if (line.Contains("fallback", StringComparison.Ordinal) || line.Contains("receive", StringComparison.Ordinal))
+            if ((line.Contains("fallback", StringComparison.Ordinal) || line.Contains("receive", StringComparison.Ordinal))
+                && line.IndexOf('(') >= 0)
             {
                 var fallbackReceiveMatch = SolidityFallbackReceiveDeclarationRegex.Match(line);
                 if (fallbackReceiveMatch.Success)
@@ -84,7 +85,7 @@ public static partial class SymbolExtractor
                 }
             }
 
-            if (line.Contains("event", StringComparison.Ordinal))
+            if (line.Contains("event", StringComparison.Ordinal) && line.IndexOf('(') >= 0)
             {
                 var eventMatch = SolidityEventDeclarationRegex.Match(line);
                 if (eventMatch.Success)
@@ -94,7 +95,7 @@ public static partial class SymbolExtractor
                 }
             }
 
-            if (line.Contains("error", StringComparison.Ordinal))
+            if (line.Contains("error", StringComparison.Ordinal) && line.IndexOf('(') >= 0)
             {
                 var errorMatch = SolidityErrorDeclarationRegex.Match(line);
                 if (errorMatch.Success)
