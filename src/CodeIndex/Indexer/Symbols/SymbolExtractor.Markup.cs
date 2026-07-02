@@ -887,8 +887,11 @@ public static partial class SymbolExtractor
         {
             AddWrappedXamlTypeArgumentSymbols(fileId, rawText, lines, lineStarts, symbols);
         }
-        if (symbols.Count < StructuredDataMaxSymbols)
+        if (symbols.Count < StructuredDataMaxSymbols
+            && MayContainWrappedXamlTypeBearingAttribute(rawText))
+        {
             AddWrappedXamlTypeBearingAttributeSymbols(fileId, rawText, lines, lineStarts, symbols);
+        }
         if (symbols.Count < StructuredDataMaxSymbols)
             AddWrappedXamlSearchAttributeSymbols(fileId, rawText, lines, lineStarts, symbols);
         if (symbols.Count < StructuredDataMaxSymbols)
@@ -957,6 +960,11 @@ public static partial class SymbolExtractor
         || rawText.Contains("{TemplateBinding", StringComparison.Ordinal)
         || rawText.Contains("{CompiledBinding", StringComparison.Ordinal)
         || rawText.Contains("{ReflectionBinding", StringComparison.Ordinal);
+
+    private static bool MayContainWrappedXamlTypeBearingAttribute(string rawText) =>
+        rawText.Contains("x:Class", StringComparison.Ordinal)
+        || rawText.Contains("x:DataType", StringComparison.Ordinal)
+        || rawText.Contains("TargetType", StringComparison.Ordinal);
 
     private static void AddWrappedXamlTypeArgumentSymbols(
         long fileId,

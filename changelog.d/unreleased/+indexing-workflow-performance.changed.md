@@ -93,6 +93,7 @@ affected:
 - **Gated Elixir first-line block scans by marker** - Elixir range extraction now avoids shorthand and opener regex checks when the masked first line lacks the required markers.
 - **Gated XAML line-level attribute scans by assignment marker** - XAML extraction now skips class, type, name, and key attribute regex scans on lines without `=`.
 - **Gated wrapped XAML type-argument scans by attribute marker** - XAML extraction now skips multiline `x:TypeArguments` scanning when the attribute marker is absent from the document.
+- **Gated wrapped XAML type-bearing scans by attribute markers** - XAML extraction now skips multiline class/type attribute scanning when `x:Class`, `x:DataType`, and `TargetType` are all absent.
 
 ## 日本語
 
@@ -150,3 +151,4 @@ affected:
 - **Elixir first-line block scan を marker で gate します** - Elixir range extraction は masked first line に必要 marker がない場合 shorthand と opener regex check を skip します。
 - **XAML line-level attribute scan を assignment marker で gate します** - XAML extraction は `=` がない行で class/type/name/key 属性 regex scan を skip します。
 - **wrapped XAML type-argument scan を attribute marker で gate します** - XAML extraction は document に `x:TypeArguments` marker がない場合 multiline scan を skip します。
+- **wrapped XAML type-bearing scan を attribute marker で gate します** - XAML extraction は `x:Class`、`x:DataType`、`TargetType` がすべてない場合 multiline class/type attribute scan を skip します。
