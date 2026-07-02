@@ -1,8 +1,6 @@
 ---
 category: changed
 affected:
-  - .github/workflows/dotnet.yml
-  - .github/scripts/run-dotnet-tests.ps1
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Python.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Php.cs
@@ -15,12 +13,18 @@ affected:
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Razor.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Dockerfile.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.SectionHeadings.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Css.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Svelte.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Cobol.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Elixir.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Fortran.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Pascal.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Ruby.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.ShellHeredoc.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Smalltalk.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Solidity.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.StructuredData.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Markup.cs
-  - src/CodeIndex/Indexer/References/Support/StructuralLineMasker.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.Preparation.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.TypeReferences.cs
   - src/CodeIndex/Indexer/Scanning/FileContentLoader.cs
@@ -33,18 +37,14 @@ affected:
   - src/CodeIndex/Cli/IndexCommandRunner.FullScan.cs
   - src/CodeIndex/Cli/IndexCommandRunner.Update.cs
   - src/CodeIndex/Mcp/McpToolHandlers.cs
-  - tests/CodeIndex.Tests/CiWorkflowTests.cs
-  - tests/CodeIndex.Tests/ReferenceExtractorTests.cs
   - tests/CodeIndex.Tests/SymbolExtractorTests.cs
   - tests/CodeIndex.Tests/FileIndexerContentLoadingTests.cs
   - tests/CodeIndex.Tests/FileIndexerTests.cs
   - tests/CodeIndex.Tests/DatabaseTests.cs
-  - TESTING_GUIDE.md
 ---
 
 ## English
 
-- **Reduced CI test-runner duplication and large C# indexing allocation pressure** - the `dotnet.yml` matrix test step now delegates test argument construction, failure-log capture, timeout handling, and flaky retry classification to a dedicated PowerShell helper, while C# structural masking reuses unchanged lines instead of allocating a new string for every line during symbol/reference extraction.
 - **Reduced unchanged-file indexing database roundtrips** - CLI and MCP indexing now combine stat-based and checksum-based reuse checks with existing cap/generated-file issue checks, avoiding a second SQLite query for unchanged files that can be skipped.
 - **Batched validation issue writes during indexing** - files that produce multiple validation issues now write those rows in multi-value SQLite inserts instead of executing one insert per issue.
 - **Capped generated-header detection work** - generated-code header detection now inspects only a bounded leading header window, avoiding whole-file scans on very long first lines or minified payloads.
@@ -61,13 +61,11 @@ affected:
 - **Skipped symbol pattern scans on whitespace-only lines** - symbol extraction now bypasses the regex pattern loop when the effective match line is blank after language-specific masking.
 - **Skipped Python walrus regex scans on ordinary lines** - supplemental Python symbol extraction now checks for `:=` before running the walrus assignment regex.
 - **Skipped PHP supplemental regex scans on non-candidate lines** - PHP property, constructor-promotion, docblock, and trait-alias supplemental passes now check cheap marker substrings before running their regexes.
-- **Skipped SQL supplemental regex scans before marker hits** - SQL CTE and generated-column extraction now check lines for required markers before joining full content, and definer/routine-result passes check line markers before their regexes.
 - **Dispatched JS/TS module supplemental scans by marker** - JavaScript/TypeScript module import supplemental helpers now run only for lines containing the marker they scan for, instead of invoking every helper on every line.
 - **Skipped C++ friend-declaration scans on ordinary lines** - C++ supplemental friend declaration extraction now avoids regex probes unless the masked line still contains `friend`, while preserving block-comment state on comment-affecting lines.
 - **Skipped Perl hash-constant collection on non-candidate lines** - Perl supplemental constant extraction now checks for `constant` before attempting the `use constant { ... }` body collector on each line.
 - **Skipped Rust supplemental collectors before marker hits** - Rust `use`, multiline `impl`, and associated-type-default supplemental extraction now checks cheap file/line markers before running statement collectors or trait-body scans.
 - **Gated Go supplemental declaration scans by markers** - Go import/directive/label and grouped declaration helpers now skip ordinary lines before trimming, regex checks, or brace-depth scans when the required markers are absent.
-- **Skipped Swift property supplemental regex work on stored properties** - Swift wrapped/computed property enrichment now skips property lines without wrapper or body markers and only runs accessor regexes on accessor-marker lines.
 - **Skipped GraphQL member extraction when input/union markers are absent** - GraphQL supplemental member extraction now avoids full-content joins for files without `input` blocks and runs union regexes only on lines containing `union`.
 - **Dispatched Razor directive scans by marker** - Razor directive supplemental extraction now skips lines without `@` and invokes only the directive regex matching the line marker.
 - **Dispatched Dockerfile supplemental scans by instruction** - Dockerfile extra symbol extraction now reads the leading instruction once per line and invokes only the matching ENV/LABEL/EXPOSE/VOLUME/FROM/SHELL/COPY/ADD/RUN helper.
@@ -100,10 +98,6 @@ affected:
 - **Gated wrapped XAML type-argument scans by attribute marker** - XAML extraction now skips multiline `x:TypeArguments` scanning when the attribute marker is absent from the document.
 - **Gated wrapped XAML type-bearing scans by attribute markers** - XAML extraction now skips multiline class/type attribute scanning when `x:Class`, `x:DataType`, and `TargetType` are all absent.
 - **Gated wrapped XAML search-attribute scans by markers** - XAML extraction now skips multiline name/key/event attribute scanning when none of those markers appear in the document.
-- **Gated Swift property-wrapper scans by attribute marker** - Swift extraction now skips property-wrapper attribute regex scans when a declaration captured no `@` attributes.
-- **Gated SQL routine result scans by routine markers** - SQL extraction now skips `RETURNS TABLE` and `OUT` parameter regex scans when routine headers lack the required markers.
-- **Gated SQL definer scans by host marker** - SQL extraction now skips detailed `DEFINER` regex matching when the structural line lacks the required `@` marker.
-- **Gated SQL generated-column scans by DDL branch markers** - SQL extraction now skips ALTER/CREATE generated-column regex scans when the corresponding DDL keywords are absent.
 - **Gated COBOL paragraph scans by required markers** - COBOL extraction now skips program, entry, section, and paragraph regex checks when the line lacks the required marker.
 - **Gated Fortran routine-start scans by keyword** - Fortran range extraction now skips routine-start regex checks when a line contains neither `subroutine` nor `function`.
 - **Gated Smalltalk range-boundary scans by marker** - Smalltalk range extraction now skips method/class boundary regex checks when the line lacks `>>`, `subclass:`, or `named:`.
@@ -124,7 +118,6 @@ affected:
 
 ## 日本語
 
-- **CI test runner の重複と巨大 C# indexing 時の allocation 負荷を減らしました** - `dotnet.yml` の matrix test step は test argument 構築、failure log capture、timeout handling、flaky retry classification を専用 PowerShell helper に委譲し、C# structural masking は symbol/reference extraction 中に全行へ新しい string を割り当てず、変更のない行を再利用するようになりました。
 - **未変更ファイルの indexing DB 往復を削減しました** - CLI と MCP の indexing は stat ベースおよび checksum ベースの再利用判定と既存の cap/generated-file issue 判定をまとめ、skip できる未変更ファイルごとの追加 SQLite query を避けるようになりました。
 - **indexing 中の validation issue 書き込みをバッチ化しました** - 複数の validation issue を出すファイルは、issue ごとに INSERT を実行せず、複数行の SQLite INSERT でまとめて書き込むようになりました。
 - **generated header 判定の処理量を制限しました** - generated-code header 検出は先頭の bounded header window のみを調べるようになり、非常に長い先頭行や minified payload でファイル全体を走査しないようになりました。
@@ -141,13 +134,11 @@ affected:
 - **whitespace-only 行の symbol pattern scan を skip します** - symbol extraction は言語別 masking 後の実効 match line が空白だけの場合、regex pattern loop に入らないようになりました。
 - **通常行では Python walrus regex scan を skip します** - supplemental Python symbol extraction は walrus assignment regex を走らせる前に `:=` の有無を確認します。
 - **候補でない行では PHP supplemental regex scan を skip します** - PHP property、constructor promotion、docblock、trait alias の supplemental pass は regex を走らせる前に軽量な marker substring を確認します。
-- **marker がない場合は SQL supplemental regex scan を skip します** - SQL CTE と generated-column extraction は全文 join 前に必須 marker を行単位で確認し、definer/routine-result pass も regex 前に行 marker を確認します。
 - **JS/TS module supplemental scan を marker で振り分けます** - JavaScript/TypeScript の module import supplemental helper は全 helper を全行で呼ばず、それぞれが探す marker を含む行だけで実行します。
 - **通常行では C++ friend declaration scan を skip します** - C++ の supplemental friend declaration extraction は mask 後の行にまだ `friend` がある場合だけ regex probe を行い、comment に影響する行では block-comment state を維持します。
 - **候補でない行では Perl hash constant collection を skip します** - Perl の supplemental constant extraction は各行で `use constant { ... }` body collector を試す前に `constant` の有無を確認します。
 - **marker がない場合は Rust supplemental collector を skip します** - Rust の `use`、multiline `impl`、associated-type-default supplemental extraction は statement collector や trait-body scan の前に軽量な file/line marker を確認します。
 - **Go supplemental declaration scan を marker で gate します** - Go の import/directive/label と grouped declaration helper は必須 marker がない通常行では trim、regex check、brace-depth scan の前に skip します。
-- **stored property では Swift property supplemental regex work を skip します** - Swift の wrapped/computed property enrichment は wrapper/body marker のない property 行を skip し、accessor regex も accessor marker のある行だけで実行します。
 - **input/union marker がない場合は GraphQL member extraction を skip します** - GraphQL の supplemental member extraction は `input` block がない file では full-content join を避け、union regex も `union` を含む行だけで実行します。
 - **Razor directive scan を marker で振り分けます** - Razor の directive supplemental extraction は `@` のない行を skip し、行 marker に対応する directive regex だけを実行します。
 - **Dockerfile supplemental scan を instruction で振り分けます** - Dockerfile の追加 symbol extraction は各行の先頭 instruction を一度だけ読み、対応する ENV/LABEL/EXPOSE/VOLUME/FROM/SHELL/COPY/ADD/RUN helper だけを実行します。
@@ -180,10 +171,6 @@ affected:
 - **wrapped XAML type-argument scan を attribute marker で gate します** - XAML extraction は document に `x:TypeArguments` marker がない場合 multiline scan を skip します。
 - **wrapped XAML type-bearing scan を attribute marker で gate します** - XAML extraction は `x:Class`、`x:DataType`、`TargetType` がすべてない場合 multiline class/type attribute scan を skip します。
 - **wrapped XAML search-attribute scan を marker で gate します** - XAML extraction は name/key/event attribute marker がすべてない場合 multiline scan を skip します。
-- **Swift property-wrapper scan を attribute marker で gate します** - Swift extraction は declaration が `@` attribute を持たない場合 property-wrapper attribute regex scan を skip します。
-- **SQL routine result scan を routine marker で gate します** - SQL extraction は routine header に必要 marker がない場合 `RETURNS TABLE` と `OUT` parameter regex scan を skip します。
-- **SQL definer scan を host marker で gate します** - SQL extraction は structural line に必須の `@` marker がない場合 detailed `DEFINER` regex matching を skip します。
-- **SQL generated-column scan を DDL branch marker で gate します** - SQL extraction は対応する DDL keyword がない場合 ALTER/CREATE generated-column regex scan を skip します。
 - **COBOL paragraph scan を required marker で gate します** - COBOL extraction は line に必須 marker がない場合 program/entry/section/paragraph regex check を skip します。
 - **Fortran routine-start scan を keyword で gate します** - Fortran range extraction は line に `subroutine` と `function` のどちらもない場合 routine-start regex check を skip します。
 - **Smalltalk range-boundary scan を marker で gate します** - Smalltalk range extraction は line に `>>`、`subclass:`、`named:` がない場合 method/class boundary regex check を skip します。
