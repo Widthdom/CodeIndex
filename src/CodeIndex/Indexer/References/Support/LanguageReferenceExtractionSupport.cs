@@ -2131,10 +2131,17 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        foreach (Match match in DartCtorRegex.Matches(preparedLine))
+        var hasDartCtorMarker = hasDartParen
+            && hasDartUppercaseTypeMarker
+            && (preparedLine.IndexOf("new", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("const", StringComparison.Ordinal) >= 0);
+        if (hasDartCtorMarker)
         {
-            var group = match.Groups["name"];
-            ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "instantiate", context, lineNumber, resolveContainerForColumn(group.Index));
+            foreach (Match match in DartCtorRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["name"];
+                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "instantiate", context, lineNumber, resolveContainerForColumn(group.Index));
+            }
         }
     }
 

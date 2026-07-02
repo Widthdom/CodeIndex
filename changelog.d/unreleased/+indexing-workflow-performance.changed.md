@@ -278,6 +278,7 @@ affected:
 - **Gated C++ declaration type scans by marker** - C/C++ reference extraction now checks declaration terminators and lightweight type markers before running declaration type regex probes.
 - **Gated Dart variable type scans by marker** - Dart reference extraction now checks declaration terminators and uppercase type markers before running variable type regex probes.
 - **Gated Dart function signature scans by marker** - Dart reference extraction now checks parenthesis and uppercase type markers before running function signature and parameter type regex probes.
+- **Gated Dart constructor call scans by marker** - Dart reference extraction now checks `new`/`const`, parenthesis, and uppercase type markers before running constructor call regex probes.
 
 ## 日本語
 
@@ -490,3 +491,4 @@ affected:
 - **C++ declaration type scan を marker で gate します** - C/C++ reference extraction は declaration type regex probe の前に declaration terminator と軽量 type marker を確認します。
 - **Dart variable type scan を marker で gate します** - Dart reference extraction は variable type regex probe の前に declaration terminator と uppercase type marker を確認します。
 - **Dart function signature scan を marker で gate します** - Dart reference extraction は function signature / parameter type regex probe の前に parenthesis と uppercase type marker を確認します。
+- **Dart constructor call scan を marker で gate します** - Dart reference extraction は constructor call regex probe の前に `new` / `const`、parenthesis、uppercase type marker を確認します。
