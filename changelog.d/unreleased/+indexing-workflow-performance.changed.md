@@ -8,6 +8,7 @@ affected:
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Php.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Perl.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Rust.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.KotlinScala.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Go.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.GraphQL.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Razor.cs
@@ -104,6 +105,7 @@ affected:
 - **Gated Fortran routine-start scans by keyword** - Fortran range extraction now skips routine-start regex checks when a line contains neither `subroutine` nor `function`.
 - **Gated Smalltalk range-boundary scans by marker** - Smalltalk range extraction now skips method/class boundary regex checks when the line lacks `>>`, `subclass:`, or `named:`.
 - **Gated Rust use-start scans by keyword** - Rust use-statement collection now skips the start regex when the first line lacks the `use` keyword marker.
+- **Gated Kotlin class subkind scans by keyword** - Kotlin class enrichment now skips value/inline class regex checks when metadata lacks the corresponding keyword marker.
 
 ## 日本語
 
@@ -171,3 +173,4 @@ affected:
 - **Fortran routine-start scan を keyword で gate します** - Fortran range extraction は line に `subroutine` と `function` のどちらもない場合 routine-start regex check を skip します。
 - **Smalltalk range-boundary scan を marker で gate します** - Smalltalk range extraction は line に `>>`、`subclass:`、`named:` がない場合 method/class boundary regex check を skip します。
 - **Rust use-start scan を keyword で gate します** - Rust use-statement collection は first line に `use` keyword marker がない場合 start regex を skip します。
+- **Kotlin class subkind scan を keyword で gate します** - Kotlin class enrichment は metadata に対応する keyword marker がない場合 value/inline class regex check を skip します。

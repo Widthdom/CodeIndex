@@ -29,10 +29,17 @@ public static partial class SymbolExtractor
         var metadataSource = signature + "\n" + matchLine;
         if (kind == "class")
         {
-            if (KotlinValueClassSignatureRegex.IsMatch(metadataSource))
+            if (metadataSource.Contains("value", StringComparison.Ordinal)
+                && KotlinValueClassSignatureRegex.IsMatch(metadataSource))
+            {
                 return "kotlin_value_class";
-            if (KotlinInlineClassSignatureRegex.IsMatch(metadataSource))
+            }
+
+            if (metadataSource.Contains("inline", StringComparison.Ordinal)
+                && KotlinInlineClassSignatureRegex.IsMatch(metadataSource))
+            {
                 return "kotlin_inline_class";
+            }
         }
 
         if (kind == "function" && KotlinInlineFunctionSignatureRegex.IsMatch(signature))
