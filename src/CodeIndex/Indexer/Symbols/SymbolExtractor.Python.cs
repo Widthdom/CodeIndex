@@ -784,9 +784,13 @@ public static partial class SymbolExtractor
         while (currentLineIndex < lines.Length)
         {
             var currentLine = lines[currentLineIndex];
-            var metadataMatch = PythonDataclassFieldMetadataRegex.Match(currentLine);
-            if (metadataMatch.Success)
-                return TryExpandPythonStringDictionaryKeys(lines, currentLineIndex, metadataMatch.Groups["values"].Index);
+            if (currentLine.Contains("metadata", StringComparison.Ordinal)
+                && currentLine.IndexOf('{') >= 0)
+            {
+                var metadataMatch = PythonDataclassFieldMetadataRegex.Match(currentLine);
+                if (metadataMatch.Success)
+                    return TryExpandPythonStringDictionaryKeys(lines, currentLineIndex, metadataMatch.Groups["values"].Index);
+            }
 
             for (; currentColumn < currentLine.Length; currentColumn++)
             {

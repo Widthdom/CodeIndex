@@ -128,6 +128,7 @@ affected:
 - **Gated Python `__all__` export scans by marker** - Python export expansion now skips append/extend/assignment regex checks on lines without the `__all__` marker.
 - **Gated Python class attribute scans by marker** - Python class-body extraction now checks special attributes, dataclass fields, annotations, and assignments with cheap markers before running the corresponding regexes.
 - **Dispatched Python `__all__` operation scans by marker** - Python export expansion now runs append, extend, and assignment regexes only when the line contains the matching operation marker.
+- **Gated Python dataclass metadata scans by marker** - Python dataclass field expansion now skips metadata regex checks on field-call lines that lack the `metadata` and dictionary markers.
 
 ## 日本語
 
@@ -212,3 +213,4 @@ affected:
 - **Python `__all__` export scan を marker で gate します** - Python export expansion は `__all__` marker のない行で append/extend/assignment regex check を skip します。
 - **Python class attribute scan を marker で gate します** - Python class-body extraction は special attribute、dataclass field、annotation、assignment を対応する軽量 marker で確認してから regex を実行します。
 - **Python `__all__` operation scan を marker で振り分けます** - Python export expansion は append、extend、assignment の各 regex を、対応する operation marker がある行だけで実行します。
+- **Python dataclass metadata scan を marker で gate します** - Python dataclass field expansion は `metadata` と dictionary marker がない field-call 行で metadata regex check を skip します。
