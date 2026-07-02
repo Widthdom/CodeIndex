@@ -2260,15 +2260,20 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        foreach (Match match in VbNameOfRegex.Matches(preparedLine))
+        var hasVbNameOfMarker = preparedLine.Contains('(')
+            && preparedLine.IndexOf("NameOf", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (hasVbNameOfMarker)
         {
-            var group = match.Groups["name"];
-            var rawName = LastQualifiedSegment(group.Value);
-            var name = NormalizeVbIdentifierSegment(rawName);
-            var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
-            var rawNameIndex = group.Index + Math.Max(0, nameOffset);
-            var nameIndex = rawName.StartsWith('[') ? rawNameIndex + 1 : rawNameIndex;
-            ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "type_reference", context, lineNumber, resolveContainerForColumn(nameIndex));
+            foreach (Match match in VbNameOfRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["name"];
+                var rawName = LastQualifiedSegment(group.Value);
+                var name = NormalizeVbIdentifierSegment(rawName);
+                var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
+                var rawNameIndex = group.Index + Math.Max(0, nameOffset);
+                var nameIndex = rawName.StartsWith('[') ? rawNameIndex + 1 : rawNameIndex;
+                ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "type_reference", context, lineNumber, resolveContainerForColumn(nameIndex));
+            }
         }
 
         foreach (Match match in VbGetXmlNamespaceRegex.Matches(preparedLine))

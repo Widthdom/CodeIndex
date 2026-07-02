@@ -287,6 +287,7 @@ affected:
 - **Gated VB cast type scans by marker** - Visual Basic reference extraction now checks cast, parenthesis, and comma markers before running cast type regex probes.
 - **Gated VB GetType scans by marker** - Visual Basic reference extraction now checks `GetType` and parenthesis markers before running `GetType` regex probes.
 - **Gated VB TypeOf scans by marker** - Visual Basic reference extraction now checks `TypeOf` and `Is` markers before running `TypeOf` regex probes.
+- **Gated VB NameOf scans by marker** - Visual Basic reference extraction now checks `NameOf` and parenthesis markers before running `NameOf` regex probes.
 
 ## 日本語
 
@@ -508,3 +509,4 @@ affected:
 - **VB cast type scan を marker で gate します** - Visual Basic reference extraction は cast / parenthesis / comma marker を確認してから cast type regex probe を実行します。
 - **VB GetType scan を marker で gate します** - Visual Basic reference extraction は `GetType` regex probe の前に `GetType` と parenthesis marker を確認します。
 - **VB TypeOf scan を marker で gate します** - Visual Basic reference extraction は `TypeOf` regex probe の前に `TypeOf` と `Is` marker を確認します。
+- **VB NameOf scan を marker で gate します** - Visual Basic reference extraction は `NameOf` regex probe の前に `NameOf` と parenthesis marker を確認します。
