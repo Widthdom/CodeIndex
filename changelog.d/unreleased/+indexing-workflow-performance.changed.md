@@ -14,6 +14,7 @@ affected:
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Dockerfile.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.SectionHeadings.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Svelte.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Smalltalk.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Markup.cs
   - src/CodeIndex/Indexer/References/Support/StructuralLineMasker.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.Preparation.cs
@@ -101,6 +102,7 @@ affected:
 - **Gated SQL generated-column scans by DDL branch markers** - SQL extraction now skips ALTER/CREATE generated-column regex scans when the corresponding DDL keywords are absent.
 - **Gated COBOL paragraph scans by required markers** - COBOL extraction now skips program, entry, section, and paragraph regex checks when the line lacks the required marker.
 - **Gated Fortran routine-start scans by keyword** - Fortran range extraction now skips routine-start regex checks when a line contains neither `subroutine` nor `function`.
+- **Gated Smalltalk range-boundary scans by marker** - Smalltalk range extraction now skips method/class boundary regex checks when the line lacks `>>`, `subclass:`, or `named:`.
 
 ## 日本語
 
@@ -166,3 +168,4 @@ affected:
 - **SQL generated-column scan を DDL branch marker で gate します** - SQL extraction は対応する DDL keyword がない場合 ALTER/CREATE generated-column regex scan を skip します。
 - **COBOL paragraph scan を required marker で gate します** - COBOL extraction は line に必須 marker がない場合 program/entry/section/paragraph regex check を skip します。
 - **Fortran routine-start scan を keyword で gate します** - Fortran range extraction は line に `subroutine` と `function` のどちらもない場合 routine-start regex check を skip します。
+- **Smalltalk range-boundary scan を marker で gate します** - Smalltalk range extraction は line に `>>`、`subclass:`、`named:` がない場合 method/class boundary regex check を skip します。
