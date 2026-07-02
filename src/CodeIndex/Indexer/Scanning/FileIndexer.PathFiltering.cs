@@ -7,13 +7,24 @@ public partial class FileIndexer
     internal PathFilterResult EvaluatePathFilter(string absolutePath, bool isDirectory = false)
     {
         var errors = new List<ScanError>();
+        return EvaluatePathFilterCore(absolutePath, isDirectory, errors);
+    }
+
+    internal bool ShouldSkipPath(string absolutePath, bool isDirectory = false) =>
+        EvaluatePathFilterCore(absolutePath, isDirectory, errors: null).ShouldSkip;
+
+    private PathFilterResult EvaluatePathFilterCore(
+        string absolutePath,
+        bool isDirectory,
+        List<ScanError>? errors)
+    {
         if (TryEvaluatePathFilterPrefix(absolutePath, errors, out var fullPath, out var relativePath) is { } prefixResult)
             return prefixResult;
         if (TryLoadRootPathFilterRules(errors, isDirectory, out var activeIgnoreRules) is { } rootResult)
             return rootResult;
 
         if (relativePath.Length == 0 || relativePath == ".")
-            return new PathFilterResult(PathFilterKind.None, errors);
+            return CreatePathFilterResult(PathFilterKind.None, errors);
 
         var directoryResult = EvaluatePathFilterDirectorySegments(
             relativePath,
@@ -26,14 +37,14 @@ public partial class FileIndexer
             return directoryResult.Value;
 
         if (isDirectory)
-            return new PathFilterResult(PathFilterKind.None, errors);
+            return CreatePathFilterResult(PathFilterKind.None, errors);
 
         return EvaluatePathFilterLeafFile(fullPath, errors, leafIgnoreRules, inSubmodulePassthrough);
     }
 
     private PathFilterResult? TryEvaluatePathFilterPrefix(
         string absolutePath,
-        List<ScanError> errors,
+        List<ScanError>? errors,
         out string fullPath,
         out string relativePath)
     {
@@ -41,26 +52,26 @@ public partial class FileIndexer
         relativePath = string.Empty;
         if (!IsFilePathSyntaxIndexable(absolutePath))
         {
-            errors.Add(new ScanError(
+            errors?.Add(new ScanError(
                 FormatPathForScanIssue(absolutePath),
                 "Skipped file because its path contains NUL or control characters.",
                 ScanIssueSeverity.Warning));
-            return new PathFilterResult(PathFilterKind.ExcludedByDefaultFile, errors);
+            return CreatePathFilterResult(PathFilterKind.ExcludedByDefaultFile, errors);
         }
 
         fullPath = Path.GetFullPath(absolutePath);
         if (!IsPathEqualOrParent(_projectRoot, fullPath))
-            return new PathFilterResult(PathFilterKind.OutsideProjectRoot, errors);
+            return CreatePathFilterResult(PathFilterKind.OutsideProjectRoot, errors);
 
         relativePath = NormalizeIgnorePath(GetRelativePathFromProjectRoot(_projectRoot, fullPath));
         if (relativePath.StartsWith("../", StringComparison.Ordinal))
-            return new PathFilterResult(PathFilterKind.None, errors);
+            return CreatePathFilterResult(PathFilterKind.None, errors);
 
         return null;
     }
 
     private PathFilterResult? TryLoadRootPathFilterRules(
-        List<ScanError> errors,
+        List<ScanError>? errors,
         bool isDirectory,
         out IgnoreRuleSet activeIgnoreRules)
     {
@@ -68,7 +79,7 @@ public partial class FileIndexer
         var preloadResult = LoadAncestorIgnoreRules(errors, ref fullyScanned);
         activeIgnoreRules = preloadResult.Rules;
         if (!preloadResult.IgnoreRulesAvailable)
-            return new PathFilterResult(PathFilterKind.IgnoreRulesUnavailable, errors);
+            return CreatePathFilterResult(PathFilterKind.IgnoreRulesUnavailable, errors);
 
         var projectRootFilterKind = GetDirectoryFilterKind(
             _projectRoot,
@@ -76,14 +87,14 @@ public partial class FileIndexer
             activeIgnoreRules,
             isProjectRoot: true);
         return projectRootFilterKind != PathFilterKind.None
-            ? new PathFilterResult(projectRootFilterKind, errors)
+            ? CreatePathFilterResult(projectRootFilterKind, errors)
             : null;
     }
 
     private PathFilterResult? EvaluatePathFilterDirectorySegments(
         string relativePath,
         bool isDirectory,
-        List<ScanError> errors,
+        List<ScanError>? errors,
         IgnoreRuleSet activeIgnoreRules,
         out IgnoreRuleSet leafIgnoreRules,
         out bool inSubmodulePassthrough)
@@ -94,7 +105,7 @@ public partial class FileIndexer
         leafIgnoreRules = loadResult.Rules;
         inSubmodulePassthrough = false;
         if (!loadResult.IgnoreRulesAvailable)
-            return new PathFilterResult(PathFilterKind.IgnoreRulesUnavailable, errors);
+            return CreatePathFilterResult(PathFilterKind.IgnoreRulesUnavailable, errors);
 
         // Mirror EnumerateDirectory's passthrough behavior so update-mode filters (--files /
         // --commits) match a fresh full scan: when SkipDirs is overridden because we're
@@ -128,16 +139,16 @@ public partial class FileIndexer
             var isSubmoduleAncestor = _submoduleAncestorPaths.Contains(cumulativeRelPath);
 
             if (IsNestedGitRepository(childDirectory) && !isSubmodule && !isSubmoduleAncestor)
-                return new PathFilterResult(PathFilterKind.ExcludedByDefaultDirectory, errors);
+                return CreatePathFilterResult(PathFilterKind.ExcludedByDefaultDirectory, errors);
 
             if (SkipDirs.Contains(directoryName))
             {
                 if (!isSubmodule && !isSubmoduleAncestor)
-                    return new PathFilterResult(PathFilterKind.ExcludedByDefaultDirectory, errors);
+                    return CreatePathFilterResult(PathFilterKind.ExcludedByDefaultDirectory, errors);
             }
             else if (inSubmodulePassthrough && !isSubmodule && !isSubmoduleAncestor)
             {
-                return new PathFilterResult(PathFilterKind.ExcludedByDefaultDirectory, errors);
+                return CreatePathFilterResult(PathFilterKind.ExcludedByDefaultDirectory, errors);
             }
 
             if (isSubmodule)
@@ -146,14 +157,14 @@ public partial class FileIndexer
                 inSubmodulePassthrough = true;
 
             if (leafIgnoreRules.IsIgnored(childDirectory, isDirectory: true))
-                return new PathFilterResult(PathFilterKind.IgnoredByRules, errors);
+                return CreatePathFilterResult(PathFilterKind.IgnoredByRules, errors);
 
             currentDirectory = childDirectory;
             fullyScanned = true;
             loadResult = LoadIgnoreRulesForDirectory(currentDirectory, leafIgnoreRules, errors, ref fullyScanned);
             leafIgnoreRules = loadResult.Rules;
             if (!loadResult.IgnoreRulesAvailable)
-                return new PathFilterResult(PathFilterKind.IgnoreRulesUnavailable, errors);
+                return CreatePathFilterResult(PathFilterKind.IgnoreRulesUnavailable, errors);
 
             segmentStart = segmentEnd + 1;
         }
@@ -163,7 +174,7 @@ public partial class FileIndexer
 
     private PathFilterResult EvaluatePathFilterLeafFile(
         string fullPath,
-        List<ScanError> errors,
+        List<ScanError>? errors,
         IgnoreRuleSet activeIgnoreRules,
         bool inSubmodulePassthrough)
     {
@@ -172,14 +183,17 @@ public partial class FileIndexer
         // submodule 祖先（passthrough）に直接置かれているファイルは walker も索引しないため
         // ここでも除外する。
         if (inSubmodulePassthrough)
-            return new PathFilterResult(PathFilterKind.ExcludedByDefaultDirectory, errors);
+            return CreatePathFilterResult(PathFilterKind.ExcludedByDefaultDirectory, errors);
 
         var fileName = Path.GetFileName(fullPath.AsSpan());
         if (IsDefaultExcludedFileName(fileName))
-            return new PathFilterResult(PathFilterKind.ExcludedByDefaultFile, errors);
+            return CreatePathFilterResult(PathFilterKind.ExcludedByDefaultFile, errors);
 
         return activeIgnoreRules.IsIgnored(fullPath, isDirectory: false)
-            ? new PathFilterResult(PathFilterKind.IgnoredByRules, errors)
-            : new PathFilterResult(PathFilterKind.None, errors);
+            ? CreatePathFilterResult(PathFilterKind.IgnoredByRules, errors)
+            : CreatePathFilterResult(PathFilterKind.None, errors);
     }
+
+    private static PathFilterResult CreatePathFilterResult(PathFilterKind filterKind, List<ScanError>? errors) =>
+        new(filterKind, errors is null ? Array.Empty<ScanError>() : errors);
 }

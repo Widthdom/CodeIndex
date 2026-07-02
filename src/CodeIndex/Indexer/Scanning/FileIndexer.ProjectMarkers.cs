@@ -247,7 +247,7 @@ public partial class FileIndexer
             return false;
 
         return activeIgnoreRules is null
-            ? !EvaluatePathFilter(markerFile).ShouldSkip
+            ? !ShouldSkipPath(markerFile)
             : !activeIgnoreRules.IsIgnored(markerFile, isDirectory: false);
     }
 
