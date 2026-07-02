@@ -3140,6 +3140,7 @@ internal static partial class LanguageReferenceExtractionSupport
 
         var hasPascalBaseMarker = preparedLine.IndexOf('=') >= 0
             && preparedLine.IndexOf('(') >= 0
+            && preparedLine.IndexOf(')') >= 0
             && (preparedLine.IndexOf("class", StringComparison.OrdinalIgnoreCase) >= 0
                 || preparedLine.IndexOf("interface", StringComparison.OrdinalIgnoreCase) >= 0
                 || preparedLine.IndexOf("object", StringComparison.OrdinalIgnoreCase) >= 0);

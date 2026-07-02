@@ -328,6 +328,7 @@ affected:
 - **Removed redundant Fortran equivalence line regex gates** - Fortran reference extraction now relies on direct leading keyword checks before scanning equivalence name lists.
 - **Removed redundant Fortran procedure binding line regex gates** - Fortran reference extraction now uses direct leading keyword checks before scanning binding targets.
 - **Tightened Pascal uses scans to leading keyword gates** - Pascal reference extraction now requires leading `uses` before running unit-list regex probes.
+- **Added Pascal class-base closing-paren gates** - Pascal reference extraction now checks for `)` before running class/interface/object base-list regex probes.
 
 ## 日本語
 
@@ -590,3 +591,4 @@ affected:
 - **冗長な Fortran equivalence line regex gate を削除します** - Fortran reference extraction は equivalence name list を scan する前に direct leading keyword check を利用します。
 - **冗長な Fortran procedure binding line regex gate を削除します** - Fortran reference extraction は binding target を scan する前に direct leading keyword check を利用します。
 - **Pascal uses scan を leading keyword gate に強化します** - Pascal reference extraction は unit-list regex probe の前に leading `uses` を要求します。
+- **Pascal class-base closing-paren gate を追加します** - Pascal reference extraction は class/interface/object base-list regex probe の前に `)` を確認します。
