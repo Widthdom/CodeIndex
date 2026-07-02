@@ -59,6 +59,9 @@ internal static partial class SqlReferenceExtractor
         }
 
         var text = textBuilder.ToString();
+        if (text.IndexOf("OVER", StringComparison.OrdinalIgnoreCase) < 0)
+            return suppressed;
+
         var searchStart = 0;
         while (TryFindNextWindowClause(
             text,
@@ -206,19 +209,22 @@ internal static partial class SqlReferenceExtractor
             lineOffset,
             suppressedCallIndices);
 
-        EmitWindowClauseReferences(
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            suppressedCallIndices,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (statement.IndexOf("OVER", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitWindowClauseReferences(
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                suppressedCallIndices,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
 
         if (hasCallKeyword)
         {

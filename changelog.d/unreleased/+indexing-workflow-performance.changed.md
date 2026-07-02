@@ -74,6 +74,7 @@ affected:
 - **Gated SQL lifecycle target scans by statement marker** - SQL reference extraction now checks trigger, security policy, references, synonym, and drop-object markers before running lifecycle target regex groups.
 - **Gated SQL alter-object target scans by statement marker** - SQL reference extraction now checks ALTER object-type markers before running view, procedure, function, trigger, sequence, policy, catalog, partition, XML schema, assembly, schema-transfer, and table-history regex groups.
 - **Gated SQL generic target scans by statement marker** - SQL reference extraction now runs the generic INSERT/UPDATE/MERGE/DELETE/ALTER TABLE target regex only for statements containing those target-capable markers.
+- **Gated SQL window clause scans by marker** - SQL reference extraction now skips window-clause discovery and suppression scans when the file or statement lacks an `OVER` marker.
 - **Skipped reference-line preparation on empty lines** - all language reference preparation now returns empty lines immediately instead of running comment/string-literal trigger checks.
 - **Collapsed string-literal delimiter probes** - reference-line preparation now checks quote/backtick trigger characters with `IndexOfAny` instead of separate scans per delimiter.
 - **Hoisted reference-line preparation language flags** - per-file reference preparation now computes language comment/string handling flags once and reuses them for each line instead of repeating language switches in the hot loop.
@@ -175,6 +176,7 @@ affected:
 - **SQL lifecycle target scan を statement marker で gate します** - SQL reference extraction は trigger、security policy、references、synonym、drop-object marker を確認してから lifecycle target regex group を実行します。
 - **SQL alter-object target scan を statement marker で gate します** - SQL reference extraction は ALTER object-type marker を確認してから view、procedure、function、trigger、sequence、policy、catalog、partition、XML schema、assembly、schema-transfer、table-history regex group を実行します。
 - **SQL generic target scan を statement marker で gate します** - SQL reference extraction は generic INSERT/UPDATE/MERGE/DELETE/ALTER TABLE target regex を、それらの target-capable marker がある statement だけで実行します。
+- **SQL window clause scan を marker で gate します** - SQL reference extraction は file または statement に `OVER` marker がない場合、window-clause discovery と suppression scan を skip します。
 - **空行の reference-line preparation を skip します** - 全言語の reference preparation は空行に対して comment/string-literal trigger 判定を走らせず即 return するようになりました。
 - **string-literal delimiter probe をまとめました** - reference-line preparation は quote/backtick trigger character を delimiter ごとの個別 scan ではなく `IndexOfAny` で確認します。
 - **reference-line preparation の言語フラグを loop 外へ出しました** - ファイルごとの reference preparation は comment/string handling の言語フラグを一度だけ計算し、hot loop 内で language switch を繰り返さないようになりました。
