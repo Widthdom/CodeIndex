@@ -2895,6 +2895,9 @@ internal static partial class LanguageReferenceExtractionSupport
 
     private static void EmitElixirParenlessCallReferences(string preparedLine, Action<string, int> addCallLikeReference, IReadOnlySet<string>? definitionNames)
     {
+        if (!ContainsWhitespace(preparedLine))
+            return;
+
         foreach (Match match in ElixirParenlessCallRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
