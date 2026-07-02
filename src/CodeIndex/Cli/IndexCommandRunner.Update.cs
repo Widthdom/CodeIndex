@@ -307,7 +307,12 @@ public static partial class IndexCommandRunner
                     language = detection.Language;
                 }
 
-                targets.Add(CSharpStaticInterfacePrepass.FileTarget.Create(projectRoot, absPath, language));
+                var target = CSharpStaticInterfacePrepass.FileTarget.Create(projectRoot, absPath, language);
+                targets.Add(target with
+                {
+                    GeneratedExtractionSuppressed = indexer.HasGeneratedCodeExtractionSuppressionPatterns
+                        && indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath)
+                });
             }
 
             return targets;

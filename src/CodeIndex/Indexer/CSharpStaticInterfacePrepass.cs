@@ -50,6 +50,7 @@ internal static class CSharpStaticInterfacePrepass
 
                 reportCurrentFile?.Invoke(relativePath);
                 var generatedExtractionSuppressed = isGeneratedCodeExtractionSuppressed?.Invoke(target)
+                    ?? target.GeneratedExtractionSuppressed
                     ?? indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath);
                 if (generatedExtractionSuppressed)
                     continue;
@@ -620,7 +621,8 @@ internal static class CSharpStaticInterfacePrepass
         string RelativePath,
         string DisplayRelativePath,
         string IndexPath,
-        string? Language)
+        string? Language,
+        bool? GeneratedExtractionSuppressed = null)
     {
         public static FileTarget CreateFromPath(string projectRoot, string path)
         {

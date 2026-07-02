@@ -1213,7 +1213,6 @@ public static partial class IndexCommandRunner
                && (IsJavaScriptTypeScriptLanguage(language) || IsJavaScriptTypeScriptConfigPath(indexPath));
 
         var csharpPrepassStatReuse = new Dictionary<string, IndexedFileStatReuseResult?>(StringComparer.Ordinal);
-        Dictionary<string, bool>? csharpGeneratedExtractionSuppressedByIndexPath = null;
 
         bool CanReuseCSharpPrepassTargetWithoutRead(CSharpStaticInterfacePrepass.FileTarget target)
         {
@@ -1229,9 +1228,7 @@ public static partial class IndexCommandRunner
                 target.Language,
                 options.MaxSymbolsPerFile,
                 options.MaxReferencesPerFile,
-                csharpGeneratedExtractionSuppressedByIndexPath != null
-                && csharpGeneratedExtractionSuppressedByIndexPath.TryGetValue(target.IndexPath, out var generatedExtractionSuppressed)
-                    && generatedExtractionSuppressed,
+                target.GeneratedExtractionSuppressed,
                 allowReuse: true);
             if (existingFile == null)
             {
@@ -1260,9 +1257,6 @@ public static partial class IndexCommandRunner
             {
                 var csharpPrepassCapacity = languageCounts.TryGetValue("csharp", out var csharpFileCount) ? csharpFileCount : 0;
                 var csharpPrepassTargets = new List<CSharpStaticInterfacePrepass.FileTarget>(csharpPrepassCapacity);
-                csharpGeneratedExtractionSuppressedByIndexPath = hasGeneratedCodeExtractionSuppressionPatterns
-                    ? new Dictionary<string, bool>(csharpPrepassCapacity, StringComparer.Ordinal)
-                    : null;
                 foreach (var target in fileTargets)
                 {
                     if (target.Language != "csharp")
@@ -1273,8 +1267,8 @@ public static partial class IndexCommandRunner
                         target.RelativePath,
                         target.DisplayRelativePath,
                         target.IndexPath,
-                        target.Language));
-                    csharpGeneratedExtractionSuppressedByIndexPath?.Add(target.IndexPath, target.GeneratedExtractionSuppressed);
+                        target.Language,
+                        target.GeneratedExtractionSuppressed));
                 }
 
                 if (csharpPrepassTargets.Count == 0)
@@ -1290,10 +1284,6 @@ public static partial class IndexCommandRunner
                         csharpPrepassTargets,
                         includeExistingSymbols: !options.Rebuild && !startedWithNoIndexedFiles,
                         canReuseExistingSymbolsWithoutRead: CanReuseCSharpPrepassTargetWithoutRead,
-                        isGeneratedCodeExtractionSuppressed: target =>
-                            csharpGeneratedExtractionSuppressedByIndexPath != null
-                            && csharpGeneratedExtractionSuppressedByIndexPath.TryGetValue(target.IndexPath, out var generatedExtractionSuppressed)
-                            && generatedExtractionSuppressed,
                         reportCurrentFile: path => currentCSharpWorkspaceFile = path,
                         cancellationToken: cancellationToken);
                 }
