@@ -361,7 +361,16 @@ internal static class CssReferenceExtractor
 
         foreach (var line in lines)
         {
+            var mayAffectBlockComment = inBlockComment
+                || line.IndexOf("/*", StringComparison.Ordinal) >= 0
+                || line.IndexOf("*/", StringComparison.Ordinal) >= 0;
+            if (!mayAffectBlockComment && line.IndexOf('=') < 0)
+                continue;
+
             var blockMaskedLine = MaskSassStylusBlockCommentLine(line, ref inBlockComment);
+            if (blockMaskedLine.IndexOf('=') < 0)
+                continue;
+
             var referenceLine = PrepareSassStylusReferenceLine(blockMaskedLine);
             var match = StylusVariableDefinitionRegex.Match(referenceLine);
             if (match.Success)
