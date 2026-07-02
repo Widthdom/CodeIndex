@@ -39,6 +39,8 @@ internal sealed class FileSystemTraversalBudgetExceededException : Exception
 
 internal static class FileSystemTraversalPolicy
 {
+    private static readonly EnumerationOptions TopDirectoryOnlyOptions = CreateTopDirectoryOnlyOptions();
+
     internal static EnumerationOptions CreateTopDirectoryOnlyOptions() => new()
     {
         RecurseSubdirectories = false,
@@ -58,7 +60,7 @@ internal static class FileSystemTraversalPolicy
         string searchPattern,
         FileSystemTraversalOptions options)
         => EnumerateWithPolicy(
-            () => Directory.EnumerateFiles(directory, searchPattern, CreateTopDirectoryOnlyOptions()),
+            () => Directory.EnumerateFiles(directory, searchPattern, TopDirectoryOnlyOptions),
             options);
 
     internal static IEnumerable<string> EnumerateDirectories(string directory, string searchPattern = "*")
@@ -72,7 +74,7 @@ internal static class FileSystemTraversalPolicy
         string searchPattern,
         FileSystemTraversalOptions options)
         => EnumerateWithPolicy(
-            () => Directory.EnumerateDirectories(directory, searchPattern, CreateTopDirectoryOnlyOptions()),
+            () => Directory.EnumerateDirectories(directory, searchPattern, TopDirectoryOnlyOptions),
             options);
 
     internal static IEnumerable<string> EnumerateFileSystemEntries(string directory, string searchPattern = "*")
@@ -86,7 +88,7 @@ internal static class FileSystemTraversalPolicy
         string searchPattern,
         FileSystemTraversalOptions options)
         => EnumerateWithPolicy(
-            () => Directory.EnumerateFileSystemEntries(directory, searchPattern, CreateTopDirectoryOnlyOptions()),
+            () => Directory.EnumerateFileSystemEntries(directory, searchPattern, TopDirectoryOnlyOptions),
             options);
 
     internal static bool HasAnyFileSystemEntry(string directory)
