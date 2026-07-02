@@ -3433,7 +3433,8 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        if (preparedLine.IndexOf("@selector", StringComparison.Ordinal) >= 0)
+        if (preparedLine.IndexOf("@selector", StringComparison.Ordinal) >= 0
+            && preparedLine.IndexOf('(') >= 0)
         {
             foreach (Match match in ObjCSelectorRegex.Matches(preparedLine))
                 addCallLikeReference(match.Groups["name"].Value.TrimEnd(':'), match.Groups["name"].Index);

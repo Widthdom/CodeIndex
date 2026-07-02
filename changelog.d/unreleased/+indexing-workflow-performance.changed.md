@@ -349,6 +349,7 @@ affected:
 - **Gated Smalltalk method-definition skips by marker** - Smalltalk message extraction now checks for `>>` before running method-definition regex probes.
 - **Gated Smalltalk class-declaration skips by literal marker** - Smalltalk message extraction now checks for `#` before running class-declaration regex probes.
 - **Gated Smalltalk class-declaration skips by keyword marker** - Smalltalk message extraction now checks class-declaration keywords before running class-declaration regex probes.
+- **Gated Objective-C selector scans by parenthesis marker** - Objective-C message extraction now checks for `(` before running `@selector(...)` regex probes.
 
 ## 日本語
 
@@ -632,3 +633,4 @@ affected:
 - **Smalltalk method-definition skip を marker gate します** - Smalltalk message extraction は method-definition regex probe の前に `>>` を確認します。
 - **Smalltalk class-declaration skip を literal marker gate します** - Smalltalk message extraction は class-declaration regex probe の前に `#` を確認します。
 - **Smalltalk class-declaration skip を keyword marker gate します** - Smalltalk message extraction は class-declaration regex probe の前に class-declaration keyword を確認します。
+- **Objective-C selector scan を parenthesis marker gate します** - Objective-C message extraction は `@selector(...)` regex probe の前に `(` を確認します。
