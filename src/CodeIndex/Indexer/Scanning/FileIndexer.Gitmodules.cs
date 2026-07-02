@@ -22,7 +22,7 @@ public partial class FileIndexer
         var prefixedGitmodulesPath = LongPath.EnsureWindowsPrefix(gitmodulesPath);
         if (!File.Exists(prefixedGitmodulesPath))
             return (submodulePaths, ancestorPaths, warnings);
-        var gitmodulesRelativePath = NormalizeIgnorePath(Path.GetRelativePath(projectRoot, gitmodulesPath));
+        var gitmodulesRelativePath = NormalizeIgnorePath(GetRelativePathFromProjectRoot(projectRoot, gitmodulesPath));
 
         try
         {
@@ -62,7 +62,7 @@ public partial class FileIndexer
                     continue;
                 }
 
-                var relativeToProject = NormalizeIgnorePath(Path.GetRelativePath(projectRoot, absolute));
+                var relativeToProject = NormalizeIgnorePath(GetRelativePathFromProjectRoot(projectRoot, absolute));
                 if (relativeToProject.Length == 0
                     || relativeToProject == "."
                     || relativeToProject.StartsWith("../", StringComparison.Ordinal))

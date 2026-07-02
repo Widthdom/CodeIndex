@@ -280,7 +280,7 @@ public static partial class IndexCommandRunner
 
         string ToUpdateRelativePath(string path)
             => Path.IsPathRooted(path)
-                ? Path.GetRelativePath(projectRoot, path)
+                ? FileIndexer.GetRelativePathFromProjectRoot(projectRoot, path)
                 : path;
 
         List<CSharpStaticInterfacePrepass.FileTarget> BuildCSharpPrepassTargets(
