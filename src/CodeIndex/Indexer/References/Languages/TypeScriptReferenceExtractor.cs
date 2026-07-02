@@ -129,8 +129,11 @@ internal static class TypeScriptReferenceExtractor
     {
         foreach (var line in originalLines)
         {
-            if (line.Contains('*', StringComparison.Ordinal)
-                || line.Contains("import", StringComparison.Ordinal))
+            if (line.Contains('*', StringComparison.Ordinal))
+                return true;
+
+            if (line.Contains("import", StringComparison.Ordinal)
+                && (line.Contains("from", StringComparison.Ordinal) || line.Contains('(')))
             {
                 return true;
             }
