@@ -69,6 +69,7 @@ affected:
 - **Skipped GraphQL member extraction when input/union markers are absent** - GraphQL supplemental member extraction now avoids full-content joins for files without `input` blocks and runs union regexes only on lines containing `union`.
 - **Dispatched Razor directive scans by marker** - Razor directive supplemental extraction now skips lines without `@` and invokes only the directive regex matching the line marker.
 - **Dispatched Dockerfile supplemental scans by instruction** - Dockerfile extra symbol extraction now reads the leading instruction once per line and invokes only the matching ENV/LABEL/EXPOSE/VOLUME/FROM/SHELL/COPY/ADD/RUN helper.
+- **Gated Dockerfile named-stage fallback scans by marker** - Dockerfile extraction now skips named-stage base-image regex checks on `FROM` lines without an `AS` marker.
 - **Gated section-heading regex scans by marker** - C# `#region` and JavaScript/TypeScript `@module` heading extraction now checks required marker substrings before running heading regexes.
 - **Skipped CSS custom-property regex scans on ordinary lines** - CSS inline custom-property extraction now checks for the required `--` marker before running its regex.
 - **Skipped CSS font-face block joins without family markers** - CSS `@font-face` family-name resolution now checks the block for `font-family` before masking and joining block text.
@@ -148,6 +149,7 @@ affected:
 - **input/union marker がない場合は GraphQL member extraction を skip します** - GraphQL の supplemental member extraction は `input` block がない file では full-content join を避け、union regex も `union` を含む行だけで実行します。
 - **Razor directive scan を marker で振り分けます** - Razor の directive supplemental extraction は `@` のない行を skip し、行 marker に対応する directive regex だけを実行します。
 - **Dockerfile supplemental scan を instruction で振り分けます** - Dockerfile の追加 symbol extraction は各行の先頭 instruction を一度だけ読み、対応する ENV/LABEL/EXPOSE/VOLUME/FROM/SHELL/COPY/ADD/RUN helper だけを実行します。
+- **Dockerfile named-stage fallback scan を marker で gate します** - Dockerfile extraction は `AS` marker がない `FROM` 行で named-stage base-image regex check を skip します。
 - **section-heading regex scan を marker で gate します** - C# `#region` と JavaScript/TypeScript `@module` heading extraction は heading regex を走らせる前に必須 marker substring を確認します。
 - **通常行では CSS custom-property regex scan を skip します** - CSS inline custom-property extraction は regex を走らせる前に必須の `--` marker を確認します。
 - **family marker のない CSS font-face block join を skip します** - CSS `@font-face` の family name 解決は block text を mask/join する前に `font-family` の有無を確認します。

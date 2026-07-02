@@ -481,6 +481,9 @@ public static partial class SymbolExtractor
         List<SymbolRecord> symbols,
         HashSet<string> stageNames)
     {
+        if (line.IndexOf("as", StringComparison.OrdinalIgnoreCase) < 0)
+            return;
+
         var match = DockerfileNamedFromImageRegex.Match(line);
         if (!match.Success)
             return;
