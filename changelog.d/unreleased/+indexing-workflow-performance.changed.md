@@ -307,6 +307,7 @@ affected:
 - **Gated Fortran allocate type-spec scans by marker** - Fortran reference extraction now checks `::` markers before running allocate type-spec regex probes.
 - **Gated Fortran call scans by leading keyword** - Fortran reference extraction now checks for a leading `call` keyword before running call regex probes.
 - **Tightened Fortran use scans to leading keyword gates** - Fortran reference extraction now requires leading `use` before running use-clause regex probes.
+- **Tightened Fortran import scans to leading keyword gates** - Fortran reference extraction now requires leading `import` before running import list regex probes.
 
 ## 日本語
 
@@ -548,3 +549,4 @@ affected:
 - **Fortran allocate type-spec scan を marker で gate します** - Fortran reference extraction は allocate type-spec regex probe の前に `::` marker を確認します。
 - **Fortran call scan を leading keyword で gate します** - Fortran reference extraction は call regex probe の前に leading `call` keyword を確認します。
 - **Fortran use scan を leading keyword gate に強化します** - Fortran reference extraction は use-clause regex probe の前に leading `use` を要求します。
+- **Fortran import scan を leading keyword gate に強化します** - Fortran reference extraction は import list regex probe の前に leading `import` を要求します。

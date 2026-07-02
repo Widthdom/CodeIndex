@@ -2734,7 +2734,7 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        if (preparedLine.IndexOf("import", StringComparison.OrdinalIgnoreCase) >= 0)
+        if (StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "import"))
         {
             var importMatch = FortranImportRegex.Match(preparedLine);
             if (importMatch.Success)
