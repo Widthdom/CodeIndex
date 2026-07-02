@@ -111,10 +111,33 @@ public partial class FileIndexer
             Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload))).ToLowerInvariant(),
             !traversalState.Truncated)
         {
-            Warnings = errors
-                .Where(static error => !error.IsFatal)
-                .ToArray(),
+            Warnings = GetNonFatalScanErrors(errors),
         };
+    }
+
+    private static ScanError[] GetNonFatalScanErrors(List<ScanError> errors)
+    {
+        var warningCount = 0;
+        foreach (var error in errors)
+        {
+            if (!error.IsFatal)
+                warningCount++;
+        }
+
+        if (warningCount == 0)
+            return [];
+        if (warningCount == errors.Count)
+            return errors.ToArray();
+
+        var warnings = new ScanError[warningCount];
+        var index = 0;
+        foreach (var error in errors)
+        {
+            if (!error.IsFatal)
+                warnings[index++] = error;
+        }
+
+        return warnings;
     }
 
     public static string DeriveFallbackFamilyScopeKey(string relativePath)
