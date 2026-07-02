@@ -40,6 +40,9 @@ public static partial class SymbolExtractor
             {
                 var inputName = inputMatch.Groups["name"].Value;
                 var body = inputMatch.Groups["body"];
+                if (body.Value.IndexOf(':', StringComparison.Ordinal) < 0)
+                    continue;
+
                 foreach (Match fieldMatch in GraphQLInputFieldRegex.Matches(body.Value))
                 {
                     var fieldGroup = fieldMatch.Groups["name"];

@@ -87,6 +87,7 @@ affected:
 - **Gated Ruby and Elixir block token scans by keyword** - Ruby and Elixir range extraction now skips block-token regex scans on masked text without any matching token marker.
 - **Gated shell heredoc scans by redirect marker** - Shell extraction now skips heredoc masking and redirect regex scans on lines without `<<`.
 - **Gated Perl hash-constant key scans by pair marker** - Perl extraction now skips `use constant` hash key regex scans when the collected body lacks `=>`.
+- **Gated GraphQL input field scans by colon** - GraphQL extraction now skips input-field regex scans for input bodies that cannot contain field declarations.
 
 ## 日本語
 
@@ -138,3 +139,4 @@ affected:
 - **Ruby/Elixir block token scan を keyword で gate します** - Ruby と Elixir の range extraction は token marker がない masked text で block-token regex scan を skip します。
 - **shell heredoc scan を redirect marker で gate します** - Shell extraction は `<<` がない行で heredoc masking と redirect regex scan を skip します。
 - **Perl hash-constant key scan を pair marker で gate します** - Perl extraction は collected body に `=>` がない `use constant` hash で key regex scan を skip します。
+- **GraphQL input field scan を colon で gate します** - GraphQL extraction は field declaration を含めない input body で input-field regex scan を skip します。
