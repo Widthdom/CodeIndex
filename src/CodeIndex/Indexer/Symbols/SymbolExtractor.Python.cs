@@ -312,21 +312,27 @@ public static partial class SymbolExtractor
         if (entries.Count > 0)
             return entries;
 
-        var directImportMatch = PythonDirectImportRegex.Match(statement);
-        if (directImportMatch.Success)
+        if (StartsWithPythonImportKeyword(statement, "import"))
         {
-            var directImportSpecs = directImportMatch.Groups["imports"].Value;
-            AddPythonImportSpecEntries(
-                line,
-                absoluteStartColumn,
-                modulePart: null,
-                directImportSpecs,
-                entries,
-                seenNames,
-                treatAsFromImport: false,
-                pythonModulePrefix);
-            return entries.Count > 0 ? entries : null;
+            var directImportMatch = PythonDirectImportRegex.Match(statement);
+            if (directImportMatch.Success)
+            {
+                var directImportSpecs = directImportMatch.Groups["imports"].Value;
+                AddPythonImportSpecEntries(
+                    line,
+                    absoluteStartColumn,
+                    modulePart: null,
+                    directImportSpecs,
+                    entries,
+                    seenNames,
+                    treatAsFromImport: false,
+                    pythonModulePrefix);
+                return entries.Count > 0 ? entries : null;
+            }
         }
+
+        if (!StartsWithPythonImportKeyword(statement, "from"))
+            return null;
 
         var fromImportMatch = PythonFromImportRegex.Match(statement);
         if (!fromImportMatch.Success)
@@ -359,6 +365,11 @@ public static partial class SymbolExtractor
             pythonModulePrefix);
         return entries.Count > 0 ? entries : null;
     }
+
+    private static bool StartsWithPythonImportKeyword(string value, string keyword) =>
+        value.Length > keyword.Length
+        && value.StartsWith(keyword, StringComparison.Ordinal)
+        && char.IsWhiteSpace(value[keyword.Length]);
 
     private static void ExtractPythonAllExportSymbols(
         long fileId,
