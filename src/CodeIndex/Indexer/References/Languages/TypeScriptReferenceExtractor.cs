@@ -63,7 +63,7 @@ internal static class TypeScriptReferenceExtractor
             return Array.Empty<NamespaceAliasBinding>();
 
         var bindings = new List<NamespaceAliasBinding>();
-        var braceDepths = BuildBraceDepthsBeforeLine(preparedLines);
+        int[]? braceDepths = null;
         for (var index = 0; index < originalLines.Count; index++)
         {
             var line = originalLines[index];
@@ -76,7 +76,8 @@ internal static class TypeScriptReferenceExtractor
                     match.Groups["alias"].Value,
                     match.Groups["module"].Value,
                     index + 1,
-                    endLine: null);
+                    null,
+                    braceDepths ??= BuildBraceDepthsBeforeLine(preparedLines));
                 continue;
             }
 
@@ -84,13 +85,15 @@ internal static class TypeScriptReferenceExtractor
             if (match.Success)
             {
                 var bindingLine = index + 1;
+                var sharedBraceDepths = braceDepths ??= BuildBraceDepthsBeforeLine(preparedLines);
                 AddNamespaceAliasBinding(
                     bindings,
                     preparedLines,
                     match.Groups["alias"].Value,
                     match.Groups["module"].Value,
                     bindingLine,
-                    FindDynamicImportAliasEndLine(preparedLines, braceDepths, index));
+                    FindDynamicImportAliasEndLine(preparedLines, sharedBraceDepths, index),
+                    sharedBraceDepths);
                 continue;
             }
 
@@ -106,7 +109,8 @@ internal static class TypeScriptReferenceExtractor
                     alias,
                     match.Groups["module"].Value,
                     index + 1,
-                    endLine: null);
+                    null,
+                    braceDepths ??= BuildBraceDepthsBeforeLine(preparedLines));
             }
         }
 
@@ -133,13 +137,14 @@ internal static class TypeScriptReferenceExtractor
         string alias,
         string module,
         int bindingLine,
-        int? endLine)
+        int? endLine,
+        int[] braceDepths)
     {
         if (string.IsNullOrWhiteSpace(alias) || string.IsNullOrWhiteSpace(module))
             return;
 
         var shadowLine = FindShadowLine(preparedLines, alias, bindingLine);
-        var scopedShadowRanges = BuildParameterShadowRanges(preparedLines, alias);
+        var scopedShadowRanges = BuildParameterShadowRanges(preparedLines, braceDepths, alias);
         bindings.Add(new NamespaceAliasBinding(alias, module, bindingLine, shadowLine, endLine, scopedShadowRanges));
     }
 
@@ -1356,10 +1361,12 @@ internal static class TypeScriptReferenceExtractor
         return preparedLines.Count;
     }
 
-    private static IReadOnlyList<LineRange> BuildParameterShadowRanges(IReadOnlyList<string> preparedLines, string alias)
+    private static IReadOnlyList<LineRange> BuildParameterShadowRanges(
+        IReadOnlyList<string> preparedLines,
+        int[] braceDepths,
+        string alias)
     {
         var ranges = new List<LineRange>();
-        var braceDepths = BuildBraceDepthsBeforeLine(preparedLines);
         for (var index = 0; index < preparedLines.Count; index++)
         {
             if (!TryGetSingleLineCallableParameters(preparedLines[index], out var parameters)
