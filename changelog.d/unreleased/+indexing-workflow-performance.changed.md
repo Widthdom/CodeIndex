@@ -74,6 +74,7 @@ affected:
 - **Gated XAML type-bearing attribute regex scans** - XAML/XML extraction now checks for `x:Class`, `x:DataType`, `x:TypeArguments`, and `TargetType` before running the matching attribute regex.
 - **Gated XAML identity/resource attribute regex scans** - XAML/XML extraction now checks for `x:Name` and `x:Key` before running the matching property attribute regexes.
 - **Gated XAML event-handler regex scans by event name** - XAML/XML extraction now checks for configured event attribute names before running the event-handler regex.
+- **Gated XAML binding markup regex scans** - XAML/XML extraction now checks for binding markup prefixes before running the full-document binding regex.
 
 ## 日本語
 
@@ -112,3 +113,4 @@ affected:
 - **XAML type-bearing attribute regex scan を gate します** - XAML/XML extraction は `x:Class`、`x:DataType`、`x:TypeArguments`、`TargetType` の有無を確認してから対応する attribute regex を実行します。
 - **XAML identity/resource attribute regex scan を gate します** - XAML/XML extraction は `x:Name` と `x:Key` の有無を確認してから対応する property attribute regex を実行します。
 - **XAML event-handler regex scan を event name で gate します** - XAML/XML extraction は configured event attribute name を確認してから event-handler regex を実行します。
+- **XAML binding markup regex scan を gate します** - XAML/XML extraction は full-document binding regex を実行する前に binding markup prefix の有無を確認します。

@@ -904,27 +904,30 @@ public static partial class SymbolExtractor
         if (symbols.Count < StructuredDataMaxSymbols)
             AddXamlBindingObjectElementSymbols(fileId, rawText, lines, lineStarts, symbols);
 
-        foreach (Match bindingMatch in XamlBindingRegex.Matches(rawText))
+        if (MayContainXamlBindingMarkup(rawText))
         {
-            if (symbols.Count >= StructuredDataMaxSymbols)
-                break;
-
-            var value = NormalizeXamlBindingValue(bindingMatch.Groups["kind"].Value, bindingMatch.Groups["content"].Value);
-            if (value.Length == 0)
-                continue;
-
-            var startLine = FindHtmlLineNumber(lineStarts, bindingMatch.Index);
-            var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
-            symbols.Add(new SymbolRecord
+            foreach (Match bindingMatch in XamlBindingRegex.Matches(rawText))
             {
-                FileId = fileId,
-                Kind = "property",
-                Name = value,
-                Line = startLine,
-                StartLine = startLine,
-                EndLine = startLine,
-                Signature = lines[signatureIndex].Trim(),
-            });
+                if (symbols.Count >= StructuredDataMaxSymbols)
+                    break;
+
+                var value = NormalizeXamlBindingValue(bindingMatch.Groups["kind"].Value, bindingMatch.Groups["content"].Value);
+                if (value.Length == 0)
+                    continue;
+
+                var startLine = FindHtmlLineNumber(lineStarts, bindingMatch.Index);
+                var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "property",
+                    Name = value,
+                    Line = startLine,
+                    StartLine = startLine,
+                    EndLine = startLine,
+                    Signature = lines[signatureIndex].Trim(),
+                });
+            }
         }
 
         return TrimStructuredDataSymbols(symbols, fileId, "structured_data_xml_symbol_budget_exceeded", lines);
@@ -943,6 +946,13 @@ public static partial class SymbolExtractor
 
         return false;
     }
+
+    private static bool MayContainXamlBindingMarkup(string rawText)
+        => rawText.Contains("{Binding", StringComparison.Ordinal)
+        || rawText.Contains("{x:Bind", StringComparison.Ordinal)
+        || rawText.Contains("{TemplateBinding", StringComparison.Ordinal)
+        || rawText.Contains("{CompiledBinding", StringComparison.Ordinal)
+        || rawText.Contains("{ReflectionBinding", StringComparison.Ordinal);
 
     private static void AddWrappedXamlTypeArgumentSymbols(
         long fileId,
