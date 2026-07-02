@@ -162,29 +162,14 @@ public static partial class ReferenceExtractor
     {
         var contractsByType = new Dictionary<string, List<CSharpStaticInterfaceMemberContract>>(StringComparer.Ordinal);
         var interfaceGenericParameters = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var interfaceGenericParameterCandidates = new List<(string Name, string Signature)>();
         foreach (var symbol in workspaceSymbols)
         {
             if (symbol.Kind == "interface"
                 && !string.IsNullOrWhiteSpace(symbol.Name)
                 && !string.IsNullOrWhiteSpace(symbol.Signature))
             {
-                var parameters = ExtractCSharpGenericArgumentList(symbol.Signature!, symbol.Name);
-                var parameterCount = 0;
-                for (var index = 0; index < parameters.Count; index++)
-                {
-                    var name = ExtractCSharpGenericParameterName(parameters[index]);
-                    if (string.IsNullOrWhiteSpace(name))
-                        continue;
-
-                    parameters[parameterCount] = name;
-                    parameterCount++;
-                }
-
-                if (parameterCount < parameters.Count)
-                    parameters.RemoveRange(parameterCount, parameters.Count - parameterCount);
-
-                if (parameters.Count > 0)
-                    interfaceGenericParameters[symbol.Name] = parameters;
+                interfaceGenericParameterCandidates.Add((symbol.Name, symbol.Signature!));
             }
 
             if (!IsCSharpStaticInterfaceMemberContract(symbol))
@@ -204,7 +189,37 @@ public static partial class ReferenceExtractor
                 NormalizeCSharpTypeArgumentShape(symbol.ReturnType ?? string.Empty)));
         }
 
+        if (contractsByType.Count > 0)
+        {
+            foreach (var candidate in interfaceGenericParameterCandidates)
+                AddCSharpInterfaceGenericParameters(interfaceGenericParameters, candidate.Name, candidate.Signature);
+        }
+
         return (contractsByType, interfaceGenericParameters);
+    }
+
+    private static void AddCSharpInterfaceGenericParameters(
+        Dictionary<string, List<string>> lookup,
+        string interfaceName,
+        string signature)
+    {
+        var parameters = ExtractCSharpGenericArgumentList(signature, interfaceName);
+        var parameterCount = 0;
+        for (var index = 0; index < parameters.Count; index++)
+        {
+            var name = ExtractCSharpGenericParameterName(parameters[index]);
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            parameters[parameterCount] = name;
+            parameterCount++;
+        }
+
+        if (parameterCount < parameters.Count)
+            parameters.RemoveRange(parameterCount, parameters.Count - parameterCount);
+
+        if (parameters.Count > 0)
+            lookup[interfaceName] = parameters;
     }
 
     private static (
