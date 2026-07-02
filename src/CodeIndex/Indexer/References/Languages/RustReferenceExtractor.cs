@@ -1589,6 +1589,9 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf("as", StringComparison.Ordinal) < 0)
+            return;
+
         var trimmed = preparedLine.TrimStart();
         if (trimmed.StartsWith("use ", StringComparison.Ordinal)
             || trimmed.StartsWith("pub use ", StringComparison.Ordinal)
