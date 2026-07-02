@@ -5,6 +5,8 @@ namespace CodeIndex.Indexer;
 
 internal static class SqlNameResolver
 {
+    private static readonly IReadOnlyList<bool> SingleCaseInsensitiveSegment = new[] { false };
+
     private readonly record struct SqlNameParts(
         string NormalizedName,
         string LeafName,
@@ -315,6 +317,9 @@ internal static class SqlNameResolver
             return new SqlNameParts(string.Empty, string.Empty, 0, [], []);
 
         var trimmed = qualifiedName.Trim();
+        if (IsSimpleUnquotedSqlIdentifier(trimmed))
+            return new SqlNameParts(trimmed, trimmed, 1, [trimmed], SingleCaseInsensitiveSegment);
+
         var segments = new List<string>();
         var caseSensitiveSegments = new List<bool>();
         var current = new StringBuilder();
@@ -520,10 +525,10 @@ internal static class SqlNameResolver
         if (index >= text.Length)
             return false;
 
-        var current = new StringBuilder();
         var quote = text[index];
         if (quote is '[' or '"' or '`')
         {
+            var current = new StringBuilder();
             hasCaseSensitiveQuote = quote == '"';
             index++;
             while (index < text.Length)
@@ -570,12 +575,12 @@ internal static class SqlNameResolver
         if (!IsSqlIdentifierStartChar(text[index]))
             return false;
 
-        current.Append(text[index++]);
+        var segmentStart = index++;
         while (index < text.Length && IsSqlIdentifierChar(text[index]))
-            current.Append(text[index++]);
+            index++;
 
-        segment = current.ToString().Trim();
-        return segment.Length > 0;
+        segment = text[segmentStart..index];
+        return true;
     }
 
     private static bool TryReadQualifiedNamePrefixAtColumn(
@@ -654,6 +659,22 @@ internal static class SqlNameResolver
     private static bool IsSqlIdentifierChar(char ch)
         => ch is '_' or '$' or '#'
            || char.IsLetterOrDigit(ch);
+
+    private static bool IsSimpleUnquotedSqlIdentifier(string value)
+    {
+        if (value.Length == 0
+            || value[0] is '[' or '"' or '`'
+            || !IsSqlIdentifierStartChar(value[0]))
+            return false;
+
+        for (var i = 1; i < value.Length; i++)
+        {
+            if (!IsSqlIdentifierChar(value[i]))
+                return false;
+        }
+
+        return true;
+    }
 
     private static bool LeafNamesEqual(
         IReadOnlyList<string> leftSegments,
