@@ -35,6 +35,7 @@ affected:
   - src/CodeIndex/Indexer/References/Languages/RustReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/Languages/ScalaReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/Languages/LuaReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/PhpReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/Languages/PowerShellReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/Languages/PythonReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/Languages/ShellReferenceExtractor.cs
@@ -105,6 +106,7 @@ affected:
 - **Gated Python type-factory scans by marker** - Python reference extraction now checks `NewType`, `TypeVar`, `ParamSpec`, and `bound` markers before running type factory regex probes.
 - **Gated Python dataclass and type-hints scans by marker** - Python reference extraction now checks `get_type_hints`, `fields`, `field`, `default_factory`, and `metadata` markers before running dataclass/type-hints regex probes.
 - **Gated Python framework and dynamic-import scans by marker** - Python reference extraction now checks attrs, pydantic, pytest, contextlib, importlib, and `__import__` markers before running those API regex probes.
+- **Gated PHP use import scans by marker** - PHP reference extraction now checks `use`, `function`, and `const` markers before running type, function, and const import regex probes.
 - **Skipped reference-line preparation on empty lines** - all language reference preparation now returns empty lines immediately instead of running comment/string-literal trigger checks.
 - **Collapsed string-literal delimiter probes** - reference-line preparation now checks quote/backtick trigger characters with `IndexOfAny` instead of separate scans per delimiter.
 - **Hoisted reference-line preparation language flags** - per-file reference preparation now computes language comment/string handling flags once and reuses them for each line instead of repeating language switches in the hot loop.
@@ -229,6 +231,7 @@ affected:
 - **Python type-factory scan を marker で gate します** - Python reference extraction は type factory regex probe を実行する前に `NewType`、`TypeVar`、`ParamSpec`、`bound` marker を確認します。
 - **Python dataclass / type-hints scan を marker で gate します** - Python reference extraction は dataclass/type-hints regex probe を実行する前に `get_type_hints`、`fields`、`field`、`default_factory`、`metadata` marker を確認します。
 - **Python framework / dynamic-import scan を marker で gate します** - Python reference extraction は attrs、pydantic、pytest、contextlib、importlib、`__import__` API regex probe を実行する前に対応 marker を確認します。
+- **PHP use import scan を marker で gate します** - PHP reference extraction は type/function/const import regex probe を実行する前に `use`、`function`、`const` marker を確認します。
 - **空行の reference-line preparation を skip します** - 全言語の reference preparation は空行に対して comment/string-literal trigger 判定を走らせず即 return するようになりました。
 - **string-literal delimiter probe をまとめました** - reference-line preparation は quote/backtick trigger character を delimiter ごとの個別 scan ではなく `IndexOfAny` で確認します。
 - **reference-line preparation の言語フラグを loop 外へ出しました** - ファイルごとの reference preparation は comment/string handling の言語フラグを一度だけ計算し、hot loop 内で language switch を繰り返さないようになりました。

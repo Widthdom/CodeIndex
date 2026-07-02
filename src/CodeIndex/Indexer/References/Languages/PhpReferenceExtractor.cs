@@ -751,6 +751,9 @@ internal static class PhpReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("use", StringComparison.OrdinalIgnoreCase) < 0)
+            return;
+
         var groupMatch = GroupUseTypeRegex.Match(preparedLine);
         if (groupMatch.Success)
         {
@@ -784,6 +787,12 @@ internal static class PhpReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("use", StringComparison.OrdinalIgnoreCase) < 0
+            || preparedLine.IndexOf("function", StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            return;
+        }
+
         var groupFunctionMatch = GroupUseFunctionRegex.Match(preparedLine);
         if (groupFunctionMatch.Success)
         {
@@ -828,6 +837,12 @@ internal static class PhpReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("use", StringComparison.OrdinalIgnoreCase) < 0
+            || preparedLine.IndexOf("const", StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            return;
+        }
+
         var groupConstMatch = GroupUseConstRegex.Match(preparedLine);
         if (groupConstMatch.Success)
         {
