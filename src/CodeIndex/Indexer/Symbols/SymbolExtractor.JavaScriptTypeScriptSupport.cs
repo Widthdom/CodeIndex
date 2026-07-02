@@ -2987,12 +2987,11 @@ public static partial class SymbolExtractor
                     if (braceDepth == 0)
                     {
                         var rawSliceEnd = Math.Min(rawLine.Length, column + 1);
-                        if (rawSliceEnd > signatureSliceStart)
-                        {
-                            if (signatureBuilder.Length > 0)
-                                signatureBuilder.Append(' ');
-                            signatureBuilder.Append(rawLine[signatureSliceStart..rawSliceEnd].Trim());
-                        }
+                        AppendTrimmedJavaScriptTypeScriptSignatureSlice(
+                            signatureBuilder,
+                            rawLine,
+                            signatureSliceStart,
+                            rawSliceEnd);
 
                         if (!HasJavaScriptTypeScriptDestructuredExportInitializer(
                                 sanitizedLines,
@@ -3006,7 +3005,7 @@ public static partial class SymbolExtractor
                         endLineIndex = lineIndex;
                         closeBraceColumn = column;
                         pattern = patternBuilder.ToString();
-                        signature = signatureBuilder.ToString().Trim();
+                        signature = signatureBuilder.ToString();
                         return true;
                     }
 
@@ -3024,16 +3023,37 @@ public static partial class SymbolExtractor
             if (braceDepth > 0)
                 patternBuilder.Append('\n');
 
-            var rawSlice = rawLine[signatureSliceStart..].Trim();
-            if (rawSlice.Length > 0)
-            {
-                if (signatureBuilder.Length > 0)
-                    signatureBuilder.Append(' ');
-                signatureBuilder.Append(rawSlice);
-            }
+            AppendTrimmedJavaScriptTypeScriptSignatureSlice(
+                signatureBuilder,
+                rawLine,
+                signatureSliceStart,
+                rawLine.Length);
         }
 
         return false;
+    }
+
+    private static void AppendTrimmedJavaScriptTypeScriptSignatureSlice(
+        StringBuilder builder,
+        string line,
+        int start,
+        int endExclusive)
+    {
+        start = Math.Clamp(start, 0, line.Length);
+        endExclusive = Math.Clamp(endExclusive, start, line.Length);
+
+        while (start < endExclusive && char.IsWhiteSpace(line[start]))
+            start++;
+
+        while (endExclusive > start && char.IsWhiteSpace(line[endExclusive - 1]))
+            endExclusive--;
+
+        if (endExclusive <= start)
+            return;
+
+        if (builder.Length > 0)
+            builder.Append(' ');
+        builder.Append(line, start, endExclusive - start);
     }
 
     private static bool HasJavaScriptTypeScriptDestructuredExportInitializer(
