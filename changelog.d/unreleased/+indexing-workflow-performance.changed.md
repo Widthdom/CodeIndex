@@ -97,6 +97,7 @@ affected:
 - **Gated wrapped XAML search-attribute scans by markers** - XAML extraction now skips multiline name/key/event attribute scanning when none of those markers appear in the document.
 - **Gated Swift property-wrapper scans by attribute marker** - Swift extraction now skips property-wrapper attribute regex scans when a declaration captured no `@` attributes.
 - **Gated SQL routine result scans by routine markers** - SQL extraction now skips `RETURNS TABLE` and `OUT` parameter regex scans when routine headers lack the required markers.
+- **Gated SQL definer scans by host marker** - SQL extraction now skips detailed `DEFINER` regex matching when the structural line lacks the required `@` marker.
 
 ## 日本語
 
@@ -158,3 +159,4 @@ affected:
 - **wrapped XAML search-attribute scan を marker で gate します** - XAML extraction は name/key/event attribute marker がすべてない場合 multiline scan を skip します。
 - **Swift property-wrapper scan を attribute marker で gate します** - Swift extraction は declaration が `@` attribute を持たない場合 property-wrapper attribute regex scan を skip します。
 - **SQL routine result scan を routine marker で gate します** - SQL extraction は routine header に必要 marker がない場合 `RETURNS TABLE` と `OUT` parameter regex scan を skip します。
+- **SQL definer scan を host marker で gate します** - SQL extraction は structural line に必須の `@` marker がない場合 detailed `DEFINER` regex matching を skip します。

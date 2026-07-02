@@ -4907,6 +4907,9 @@ public static partial class SymbolExtractor
             if (!SqlDefinerMarkerRegex.IsMatch(structuralLines[i]))
                 continue;
 
+            if (structuralLines[i].IndexOf('@') < 0)
+                continue;
+
             var match = SqlDefinerRegex.Match(lines[i]);
             if (!match.Success)
                 continue;
