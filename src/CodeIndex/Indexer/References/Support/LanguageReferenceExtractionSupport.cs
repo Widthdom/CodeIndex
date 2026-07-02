@@ -2808,8 +2808,11 @@ internal static partial class LanguageReferenceExtractionSupport
             if (saveMatch.Success)
             {
                 var list = saveMatch.Groups["list"];
-                foreach (Match match in FortranSlashGroupNameRegex.Matches(list.Value))
-                    ReferenceExtractor.AddReference(references, seen, fileId, match.Groups["name"].Value, list.Index + match.Groups["name"].Index, "reference", context, lineNumber, container);
+                if (list.Value.IndexOf('/') >= 0)
+                {
+                    foreach (Match match in FortranSlashGroupNameRegex.Matches(list.Value))
+                        ReferenceExtractor.AddReference(references, seen, fileId, match.Groups["name"].Value, list.Index + match.Groups["name"].Index, "reference", context, lineNumber, container);
+                }
 
                 foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
                 {

@@ -300,6 +300,7 @@ affected:
 - **Gated Fortran use scans by marker** - Fortran reference extraction now checks `use` markers before running use, only-list, and rename-list regex probes.
 - **Gated Fortran import scans by marker** - Fortran reference extraction now checks `import` markers before running import list regex probes.
 - **Gated Fortran data group scans by slash marker** - Fortran reference extraction now checks data statement slash markers before running data object group regex probes.
+- **Gated Fortran save slash group scans by marker** - Fortran reference extraction now checks save-list slash markers before running saved common block regex probes.
 
 ## 日本語
 
@@ -534,3 +535,4 @@ affected:
 - **Fortran use scan を marker で gate します** - Fortran reference extraction は use / only-list / rename-list regex probe の前に `use` marker を確認します。
 - **Fortran import scan を marker で gate します** - Fortran reference extraction は import list regex probe の前に `import` marker を確認します。
 - **Fortran data group scan を slash marker で gate します** - Fortran reference extraction は data object group regex probe の前に data statement slash marker を確認します。
+- **Fortran save slash group scan を marker で gate します** - Fortran reference extraction は saved common block regex probe の前に save-list slash marker を確認します。
