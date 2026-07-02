@@ -634,7 +634,8 @@ internal static class CSharpStaticInterfacePrepass
 
         public static FileTarget Create(string projectRoot, string filePath, string? language = null)
         {
-            var relativePath = Path.GetRelativePath(projectRoot, filePath);
+            var relativePath = TryGetRootPrefixedRelativePath(projectRoot, filePath)
+                ?? Path.GetRelativePath(projectRoot, filePath);
             return new FileTarget(
                 filePath,
                 relativePath,
@@ -642,6 +643,30 @@ internal static class CSharpStaticInterfacePrepass
                 FileIndexer.NormalizeIndexPath(relativePath),
                 language);
         }
+
+        private static string? TryGetRootPrefixedRelativePath(string projectRoot, string filePath)
+        {
+            var root = Path.TrimEndingDirectorySeparator(projectRoot);
+            if (root.Length == 0)
+                return null;
+
+            var comparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            if (filePath.Length == root.Length)
+                return filePath.AsSpan().Equals(root.AsSpan(), comparison) ? "." : null;
+            if (filePath.Length <= root.Length
+                || !filePath.AsSpan(0, root.Length).Equals(root.AsSpan(), comparison)
+                || !IsDirectorySeparator(filePath[root.Length]))
+            {
+                return null;
+            }
+
+            return filePath[(root.Length + 1)..];
+        }
+
+        private static bool IsDirectorySeparator(char value) =>
+            value == Path.DirectorySeparatorChar || value == Path.AltDirectorySeparatorChar;
     }
 
     private static bool IsOutsideProjectRoot(string relativePath)

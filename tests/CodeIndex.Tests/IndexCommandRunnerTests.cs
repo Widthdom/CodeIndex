@@ -2846,6 +2846,23 @@ public sealed class Caller
         Assert.False(CSharpStaticInterfacePrepass.MayContainCSharpStaticInterfaceContract(content));
     }
 
+    [Fact]
+    public void CSharpPrepassFileTargetCreate_TrailingRootSeparatorKeepsRelativePaths()
+    {
+        var projectRoot = Path.Combine(Path.GetTempPath(), "cdidx_prepass_target");
+        var filePath = Path.Combine(projectRoot, "src", "Api.cs");
+        var rootWithSeparator = Path.EndsInDirectorySeparator(projectRoot)
+            ? projectRoot
+            : projectRoot + Path.DirectorySeparatorChar;
+
+        var target = CSharpStaticInterfacePrepass.FileTarget.Create(rootWithSeparator, filePath, "csharp");
+
+        Assert.Equal(Path.Combine("src", "Api.cs"), target.RelativePath);
+        Assert.Equal("src/Api.cs", target.DisplayRelativePath);
+        Assert.Equal("src/Api.cs", target.IndexPath);
+        Assert.Equal("csharp", target.Language);
+    }
+
     [Theory]
     [InlineData("utf8")]
     [InlineData("utf8-bom")]
