@@ -1474,7 +1474,7 @@ internal static partial class LanguageReferenceExtractionSupport
             var hasCFunctionPointerMarker = hasCParen
                 && preparedLine.IndexOf('*') >= 0;
             var hasCFunctionPointerAliasMarker = hasCFunctionPointerMarker
-                && preparedLine.IndexOf("typedef", StringComparison.Ordinal) >= 0;
+                && ContainsOrdinalKeyword(preparedLine, "typedef");
             if (hasCFunctionPointerAliasMarker && hasCTypedefTypeMarker)
             {
                 foreach (Match match in CTypedefFunctionPointerAliasTypeRegex.Matches(preparedLine))

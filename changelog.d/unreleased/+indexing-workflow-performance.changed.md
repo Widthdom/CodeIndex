@@ -353,6 +353,7 @@ affected:
 - **Tightened C++ class base-list markers to keyword boundaries** - C++ reference extraction now treats `class` as a boundary-aware keyword before running base-list regex probes.
 - **Tightened C++ struct base-list markers to keyword boundaries** - C++ reference extraction now treats `struct` as a boundary-aware keyword before running base-list regex probes.
 - **Tightened C++ new type markers to keyword boundaries** - C++ reference extraction now treats `new` as a boundary-aware keyword before running allocation type regex probes.
+- **Tightened C function-pointer typedef markers to keyword boundaries** - C reference extraction now treats `typedef` as a boundary-aware keyword before running function-pointer alias regex probes.
 
 ## 日本語
 
@@ -640,3 +641,4 @@ affected:
 - **C++ class base-list marker を keyword boundary に強化します** - C++ reference extraction は base-list regex probe の前に `class` を boundary-aware keyword として扱います。
 - **C++ struct base-list marker を keyword boundary に強化します** - C++ reference extraction は base-list regex probe の前に `struct` を boundary-aware keyword として扱います。
 - **C++ new type marker を keyword boundary に強化します** - C++ reference extraction は allocation type regex probe の前に `new` を boundary-aware keyword として扱います。
+- **C function-pointer typedef marker を keyword boundary に強化します** - C reference extraction は function-pointer alias regex probe の前に `typedef` を boundary-aware keyword として扱います。
