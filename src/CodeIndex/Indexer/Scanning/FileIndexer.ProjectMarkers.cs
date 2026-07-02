@@ -224,33 +224,21 @@ public partial class FileIndexer
     private int CountProjectMarkerFiles(string dir, IReadOnlyList<string> patterns)
     {
         var count = 0;
-        foreach (var markerFile in EnumerateProjectMarkerFiles(dir, patterns))
-        {
-            if (!IsProjectMarkerVisible(markerFile, activeIgnoreRules: null))
-                continue;
-
-            count++;
-            if (count > 1)
-                return count;
-        }
-
-        return count;
-    }
-
-    private IEnumerable<string> EnumerateProjectMarkerFiles(
-        string dir,
-        IReadOnlyList<string> patterns,
-        CancellationToken cancellationToken = default)
-    {
         var prefixedDir = LongPath.EnsureWindowsPrefix(dir);
         foreach (var pattern in patterns)
         {
-            foreach (var file in CodeIndex.FileSystemTraversalPolicy.EnumerateFiles(prefixedDir, pattern))
+            foreach (var markerFile in CodeIndex.FileSystemTraversalPolicy.EnumerateFiles(prefixedDir, pattern))
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                yield return LongPath.RemoveWindowsPrefix(file);
+                if (!IsProjectMarkerVisible(LongPath.RemoveWindowsPrefix(markerFile), activeIgnoreRules: null))
+                    continue;
+
+                count++;
+                if (count > 1)
+                    return count;
             }
         }
+
+        return count;
     }
 
     private bool IsProjectMarkerVisible(string markerFile, IgnoreRuleSet? activeIgnoreRules)
@@ -314,24 +302,29 @@ public partial class FileIndexer
                 }
 
                 var activeIgnoreRules = loadResult.Rules;
-                foreach (var markerFile in EnumerateProjectMarkerFiles(currentDirectory, patterns, cancellationToken))
+                var prefixedCurrentDirectory = LongPath.EnsureWindowsPrefix(currentDirectory);
+                foreach (var pattern in patterns)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    if (!IsProjectMarkerVisible(markerFile, activeIgnoreRules))
-                        continue;
-
-                    if (traversalState.MarkerFilesCollected >= maxMarkerFiles)
+                    foreach (var enumeratedMarkerFile in CodeIndex.FileSystemTraversalPolicy.EnumerateFiles(prefixedCurrentDirectory, pattern))
                     {
-                        TruncateProjectMarkerTraversal(
-                            traversalState,
-                            errors,
-                            currentDirectory,
-                            $"marker file budget {maxMarkerFiles:N0} exhausted after collecting {traversalState.MarkerFilesCollected:N0} marker files");
-                        return;
-                    }
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var markerFile = LongPath.RemoveWindowsPrefix(enumeratedMarkerFile);
+                        if (!IsProjectMarkerVisible(markerFile, activeIgnoreRules))
+                            continue;
 
-                    projectMarkers.Add(NormalizeScopeKey(ToRelativePath(markerFile)));
-                    traversalState.MarkerFilesCollected++;
+                        if (traversalState.MarkerFilesCollected >= maxMarkerFiles)
+                        {
+                            TruncateProjectMarkerTraversal(
+                                traversalState,
+                                errors,
+                                currentDirectory,
+                                $"marker file budget {maxMarkerFiles:N0} exhausted after collecting {traversalState.MarkerFilesCollected:N0} marker files");
+                            return;
+                        }
+
+                        projectMarkers.Add(NormalizeScopeKey(ToRelativePath(markerFile)));
+                        traversalState.MarkerFilesCollected++;
+                    }
                 }
 
                 var passthrough = IsSubmoduleAncestorPassthrough(current.RelativePath);
