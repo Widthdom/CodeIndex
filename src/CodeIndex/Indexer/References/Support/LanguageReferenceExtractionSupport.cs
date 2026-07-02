@@ -2249,10 +2249,15 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        foreach (Match match in VbTypeOfRegex.Matches(preparedLine))
+        var hasVbTypeOfMarker = preparedLine.IndexOf("TypeOf", StringComparison.OrdinalIgnoreCase) >= 0
+            && preparedLine.IndexOf("Is", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (hasVbTypeOfMarker)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "vb");
+            foreach (Match match in VbTypeOfRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "vb");
+            }
         }
 
         foreach (Match match in VbNameOfRegex.Matches(preparedLine))
