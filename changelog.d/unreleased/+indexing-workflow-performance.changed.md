@@ -324,6 +324,7 @@ affected:
 - **Tightened Fortran allocate scans to leading keyword gates** - Fortran reference extraction now requires leading `allocate` before running allocation type and object regex probes.
 - **Tightened Fortran deallocate scans to leading keyword gates** - Fortran reference extraction now requires leading `deallocate` before running deallocation object regex probes.
 - **Added Fortran keyword-kind assignment gates** - Fortran reference extraction now checks for `=` before running intrinsic `kind =` regex probes.
+- **Removed unused Fortran common and namelist gate regexes** - Fortran reference extraction now avoids carrying redundant line-gate regex definitions after direct keyword gates replaced them.
 
 ## 日本語
 
@@ -582,3 +583,4 @@ affected:
 - **Fortran allocate scan を leading keyword gate に強化します** - Fortran reference extraction は allocation type/object regex probe の前に leading `allocate` を要求します。
 - **Fortran deallocate scan を leading keyword gate に強化します** - Fortran reference extraction は deallocation object regex probe の前に leading `deallocate` を要求します。
 - **Fortran keyword-kind assignment gate を追加します** - Fortran reference extraction は intrinsic `kind =` regex probe の前に `=` を確認します。
+- **未使用の Fortran common / namelist gate regex を削除します** - Fortran reference extraction は direct keyword gate への置換後に不要となった line-gate regex 定義を保持しません。

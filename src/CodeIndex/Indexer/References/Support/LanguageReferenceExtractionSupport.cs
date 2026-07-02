@@ -333,14 +333,8 @@ internal static partial class LanguageReferenceExtractionSupport
     private static readonly Regex FortranIncludeRegex = new(
         @"^\s*include\s*['""](?<name>[^'""]+)['""]",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex FortranCommonLineRegex = new(
-        @"^\s*common\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex FortranBlankCommonMemberListRegex = new(
         @"^\s*common\s+(?<list>[^/].*)$",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex FortranNamelistLineRegex = new(
-        @"^\s*namelist\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex FortranEquivalenceLineRegex = new(
         @"^\s*equivalence\b",
