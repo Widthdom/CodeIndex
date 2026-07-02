@@ -2870,17 +2870,21 @@ internal static partial class LanguageReferenceExtractionSupport
 
     private static void EmitHaskellSpaceCallReferences(string preparedLine, Action<string, int> addCallLikeReference, IReadOnlySet<string>? definitionNames)
     {
-        var definitionMatch = HaskellDefinitionRegex.Match(preparedLine);
-        var definitionName = definitionMatch.Success ? definitionMatch.Groups["name"].Value : null;
+        string? definitionName = null;
         var scanStart = 0;
         var scanText = preparedLine;
-        if (definitionMatch.Success)
+        if (preparedLine.IndexOf('=') >= 0)
         {
-            var equalsIndex = preparedLine.IndexOf('=');
-            if (equalsIndex >= 0)
+            var definitionMatch = HaskellDefinitionRegex.Match(preparedLine);
+            if (definitionMatch.Success)
             {
-                scanStart = equalsIndex + 1;
-                scanText = preparedLine[scanStart..];
+                definitionName = definitionMatch.Groups["name"].Value;
+                var equalsIndex = preparedLine.IndexOf('=');
+                if (equalsIndex >= 0)
+                {
+                    scanStart = equalsIndex + 1;
+                    scanText = preparedLine[scanStart..];
+                }
             }
         }
 

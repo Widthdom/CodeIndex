@@ -125,6 +125,7 @@ affected:
 - **Gated Rust generic default type scans by marker** - Rust reference extraction now checks assignment markers before locating generic defaults or splitting generic clauses for default type references.
 - **Gated Gradle DSL call scans by marker** - Gradle reference extraction now checks block braces and whitespace before running block-call and command-call DSL regex probes.
 - **Gated Haskell signature and space-call scans by marker** - Haskell reference extraction now checks type-signature and whitespace markers before invoking shared signature and space-call regex probes.
+- **Gated Haskell definition suppression scans by marker** - Haskell reference extraction now checks assignment markers before running definition-suppression regex probes for space calls.
 - **Gated CSS preprocessor import scans by marker** - CSS, Sass, and Stylus reference extraction now checks import/use/forward/require markers before stripping comments and running import regex probes.
 - **Gated CSS animation reference scans by marker** - CSS reference extraction now checks the animation marker before running animation-name and shorthand value regex probes.
 - **Gated CSS custom-property reference scans by marker** - CSS reference extraction now checks `var` and custom-property markers before running custom-property reference regex probes.
@@ -295,6 +296,7 @@ affected:
 - **Rust generic default type scan を marker で gate します** - Rust reference extraction は generic default や default type reference のために generic clause を分割する前に assignment marker を確認します。
 - **Gradle DSL call scan を marker で gate します** - Gradle reference extraction は block-call と command-call DSL regex probe の前に block brace と whitespace marker を確認します。
 - **Haskell signature / space-call scan を marker で gate します** - Haskell reference extraction は shared signature / space-call regex probe の前に type-signature と whitespace marker を確認します。
+- **Haskell definition suppression scan を marker で gate します** - Haskell reference extraction は space call の definition-suppression regex probe の前に assignment marker を確認します。
 - **CSS preprocessor import scan を marker で gate します** - CSS、Sass、Stylus reference extraction は comment strip と import regex probe の前に import/use/forward/require marker を確認します。
 - **CSS animation reference scan を marker で gate します** - CSS reference extraction は animation-name と shorthand value regex probe を実行する前に animation marker を確認します。
 - **CSS custom-property reference scan を marker で gate します** - CSS reference extraction は custom-property reference regex probe を実行する前に `var` と custom-property marker を確認します。
