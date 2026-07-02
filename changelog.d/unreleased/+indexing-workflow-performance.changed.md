@@ -262,6 +262,7 @@ affected:
 - **Gated C++ brace construction scans by marker** - C/C++ reference extraction now checks brace and construction lead-in markers before running brace construction regex probes.
 - **Gated C++ qualified template brace construction scans by marker** - C/C++ reference extraction now checks brace, template, and scope markers before running qualified template brace construction regex probes.
 - **Gated C++ using-alias target scans by marker** - C/C++ reference extraction now checks `using`, assignment, and statement markers before running using-alias target regex probes.
+- **Gated C++ typedef-alias target scans by marker** - C/C++ reference extraction now checks `typedef`, statement, and no-parenthesis markers before running typedef-alias target regex probes.
 
 ## 日本語
 
@@ -458,3 +459,4 @@ affected:
 - **C++ brace construction scan を marker で gate します** - C/C++ reference extraction は brace construction regex probe の前に brace と construction lead-in marker を確認します。
 - **C++ qualified template brace construction scan を marker で gate します** - C/C++ reference extraction は qualified template brace construction regex probe の前に brace / template / scope marker を確認します。
 - **C++ using-alias target scan を marker で gate します** - C/C++ reference extraction は using-alias target regex probe の前に `using` / assignment / statement marker を確認します。
+- **C++ typedef-alias target scan を marker で gate します** - C/C++ reference extraction は typedef-alias target regex probe の前に `typedef` / statement / no-parenthesis marker を確認します。

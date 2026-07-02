@@ -1693,10 +1693,16 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        foreach (Match match in CppTypedefAliasTargetRegex.Matches(preparedLine))
+        var hasCppTypedefAliasMarker = !hasCppParen
+            && preparedLine.IndexOf("typedef", StringComparison.Ordinal) >= 0
+            && preparedLine.IndexOf(';') >= 0;
+        if (hasCppTypedefAliasMarker)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            foreach (Match match in CppTypedefAliasTargetRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
         }
 
         foreach (Match match in CppExplicitTemplateInstantiationRegex.Matches(preparedLine))
