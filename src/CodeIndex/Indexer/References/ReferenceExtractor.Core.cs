@@ -24,10 +24,12 @@ public static partial class ReferenceExtractor
             fileId,
             language,
             content,
+            symbols,
             path,
             request.ContentIsNormalized,
             request.HasOversizeLine,
             request.ConflictMarkerLine,
+            request.MaxReferenceCount,
             request.CancellationToken,
             out var structuralMetadataReferences))
             return structuralMetadataReferences;

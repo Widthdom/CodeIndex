@@ -1,4 +1,5 @@
 using CodeIndex.Indexer;
+using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
 
@@ -181,5 +182,59 @@ public class DependencyPackageExtractorTests
         Assert.Contains(references, reference =>
             reference.SymbolName == "Serilog"
             && reference.ReferenceKind == "dependency");
+    }
+
+    [Fact]
+    public void Extract_DependencyLock_ReferencesReusePackageSymbolsWithoutReparsing()
+    {
+        var content = """
+            {
+              "packages": {
+                "node_modules/left-pad": {
+            """;
+        var symbols = new[]
+        {
+            new SymbolRecord
+            {
+                FileId = 11,
+                Kind = "package",
+                Name = "left-pad",
+                Line = 3,
+                StartLine = 3,
+                StartColumn = 5,
+                EndLine = 3,
+                ContainerKind = "project",
+                ContainerName = "npm",
+            },
+            new SymbolRecord
+            {
+                FileId = 11,
+                Kind = "package",
+                Name = "unused",
+                Line = 4,
+                StartLine = 4,
+                StartColumn = 9,
+                EndLine = 4,
+                ContainerKind = "project",
+                ContainerName = "npm",
+            },
+        };
+
+        var references = ReferenceExtractor.Extract(
+            11,
+            "dependency_lock",
+            content,
+            symbols,
+            path: "package-lock.json",
+            maxReferenceCount: 1);
+
+        var reference = Assert.Single(references);
+        Assert.Equal("left-pad", reference.SymbolName);
+        Assert.Equal("dependency", reference.ReferenceKind);
+        Assert.Equal(3, reference.Line);
+        Assert.Equal(6, reference.Column);
+        Assert.Equal("\"node_modules/left-pad\": {", reference.Context);
+        Assert.Equal("project", reference.ContainerKind);
+        Assert.Equal("npm", reference.ContainerName);
     }
 }

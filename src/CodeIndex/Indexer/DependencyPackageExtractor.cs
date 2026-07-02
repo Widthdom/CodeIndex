@@ -79,20 +79,82 @@ internal static class DependencyPackageExtractor
     public static List<ReferenceRecord> ExtractReferences(long fileId, string content, string[] lines, string? path, string language)
     {
         var packages = ExtractPackages(content, lines, path, language);
-        var references = new List<ReferenceRecord>(packages.Count);
+        return CreateReferencesFromPackages(fileId, lines, packages, maxReferenceCount: null);
+    }
+
+    private static List<ReferenceRecord> CreateReferencesFromPackages(
+        long fileId,
+        string[] lines,
+        IReadOnlyList<DependencyPackageInfo> packages,
+        int? maxReferenceCount)
+    {
+        var references = maxReferenceCount is > 0
+            ? ReferenceExtractor.CreateReferenceList(maxReferenceCount)
+            : new List<ReferenceRecord>(packages.Count);
         foreach (var package in packages)
         {
-            references.Add(new ReferenceRecord
-            {
-                FileId = fileId,
-                SymbolName = package.Name,
-                ReferenceKind = "dependency",
-                Line = package.Line,
-                Column = package.Column,
-                Context = GetContext(lines, package.Line),
-                ContainerKind = package.Scope == null ? null : "project",
-                ContainerName = package.Scope,
-            });
+            if (!ReferenceExtractor.TryAddReference(
+                    references,
+                    new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = package.Name,
+                        ReferenceKind = "dependency",
+                        Line = package.Line,
+                        Column = package.Column,
+                        Context = GetContext(lines, package.Line),
+                        ContainerKind = package.Scope == null ? null : "project",
+                        ContainerName = package.Scope,
+                    }))
+                break;
+        }
+
+        return references;
+    }
+
+    public static List<ReferenceRecord> ExtractReferences(
+        long fileId,
+        string content,
+        string[] lines,
+        IReadOnlyList<SymbolRecord> symbols,
+        string? path,
+        string language,
+        int? maxReferenceCount)
+    {
+        var references = ExtractReferencesFromPackageSymbols(fileId, lines, symbols, maxReferenceCount);
+        if (references.Count > 0)
+            return references;
+
+        var packages = ExtractPackages(content, lines, path, language);
+        return CreateReferencesFromPackages(fileId, lines, packages, maxReferenceCount);
+    }
+
+    private static List<ReferenceRecord> ExtractReferencesFromPackageSymbols(
+        long fileId,
+        string[] lines,
+        IReadOnlyList<SymbolRecord> symbols,
+        int? maxReferenceCount)
+    {
+        var references = ReferenceExtractor.CreateReferenceList(maxReferenceCount);
+        foreach (var symbol in symbols)
+        {
+            if (!string.Equals(symbol.Kind, "package", StringComparison.Ordinal))
+                continue;
+
+            if (!ReferenceExtractor.TryAddReference(
+                    references,
+                    new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = symbol.Name,
+                        ReferenceKind = "dependency",
+                        Line = Math.Max(1, symbol.Line),
+                        Column = Math.Max(1, (symbol.StartColumn ?? 0) + 1),
+                        Context = GetContext(lines, symbol.Line),
+                        ContainerKind = symbol.ContainerKind,
+                        ContainerName = symbol.ContainerName,
+                    }))
+                break;
         }
 
         return references;
