@@ -336,9 +336,6 @@ internal static partial class LanguageReferenceExtractionSupport
     private static readonly Regex FortranBlankCommonMemberListRegex = new(
         @"^\s*common\s+(?<list>[^/].*)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex FortranEquivalenceLineRegex = new(
-        @"^\s*equivalence\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex FortranParenthesizedNameListRegex = new(
         @"\((?<list>[^()]*)\)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -2778,8 +2775,7 @@ internal static partial class LanguageReferenceExtractionSupport
         }
 
         if (StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "equivalence")
-            && preparedLine.IndexOf('(') >= 0
-            && FortranEquivalenceLineRegex.IsMatch(preparedLine))
+            && preparedLine.IndexOf('(') >= 0)
         {
             foreach (Match listMatch in FortranParenthesizedNameListRegex.Matches(preparedLine))
             {
