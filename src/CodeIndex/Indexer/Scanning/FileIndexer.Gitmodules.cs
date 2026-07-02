@@ -50,8 +50,12 @@ public partial class FileIndexer
             }
 
             var submodulePathCount = 0;
-            foreach (var rawSubmodulePath in ParseSubmodulePathsFromGitmodules(lines))
+            var inSubmoduleSection = false;
+            foreach (var rawLine in lines)
             {
+                if (!TryParseSubmodulePathFromGitmodulesLine(rawLine, ref inSubmoduleSection, out var rawSubmodulePath))
+                    continue;
+
                 string absolute;
                 try
                 {
@@ -151,23 +155,13 @@ public partial class FileIndexer
         return success;
     }
 
-    // Tolerant .gitmodules reader: yields each declared submodule's "path = ..." value.
+    // Tolerant .gitmodules parser: reads each declared submodule's "path = ..." value.
     // Supports comments (# / ;), inline comments, surrounding double quotes, and
     // ignores absolute or empty values. Quoted-string escapes are not expanded since
     // submodule paths in practice are plain relative filesystem paths.
-    // .gitmodules を寛容に読み、各 submodule の "path = ..." 値を返す。コメント(# / ;)、
+    // .gitmodules を寛容に解析し、各 submodule の "path = ..." 値を読む。コメント(# / ;)、
     // インラインコメント、両端のダブルクオート、絶対パス・空値の除外をサポート。実用上の
     // submodule パスは通常のファイル名なのでクォート内のエスケープは展開しない。
-    private static IEnumerable<string> ParseSubmodulePathsFromGitmodules(IEnumerable<string> lines)
-    {
-        var inSubmoduleSection = false;
-        foreach (var rawLine in lines)
-        {
-            if (TryParseSubmodulePathFromGitmodulesLine(rawLine, ref inSubmoduleSection, out var value))
-                yield return value;
-        }
-    }
-
     private static bool TryParseSubmodulePathFromGitmodulesLine(
         string rawLine,
         ref bool inSubmoduleSection,
