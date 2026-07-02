@@ -84,6 +84,7 @@ affected:
 - **Gated XAML reference scans by prefix** - XAML/XML extraction now skips `x:Reference` markup, object element, and property element scans when their prefixes are absent.
 - **Gated XAML resource reference scans by prefix** - XAML/XML extraction now skips static/dynamic resource markup scans when their prefixes are absent.
 - **Gated Pascal range token scans by keyword** - Pascal extraction now skips begin/end/case/try regex counting on lines that cannot contain the corresponding token.
+- **Gated Ruby and Elixir block token scans by keyword** - Ruby and Elixir range extraction now skips block-token regex scans on masked text without any matching token marker.
 
 ## 日本語
 
@@ -132,3 +133,4 @@ affected:
 - **XAML reference scan を prefix で gate します** - XAML/XML extraction は `x:Reference` の markup、object element、property element scan を対応 prefix がない場合に skip します。
 - **XAML resource reference scan を prefix で gate します** - XAML/XML extraction は static/dynamic resource markup scan を対応 prefix がない場合に skip します。
 - **Pascal range token scan を keyword で gate します** - Pascal extraction は begin/end/case/try token を含めない行で対応 regex counting を skip します。
+- **Ruby/Elixir block token scan を keyword で gate します** - Ruby と Elixir の range extraction は token marker がない masked text で block-token regex scan を skip します。
