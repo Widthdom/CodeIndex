@@ -208,47 +208,62 @@ internal static class CssReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        EmitPreprocessorImportReferences(SassImportReferenceRegex, originalLine, references, seen, fileId, context, lineNumber, container);
+
+        if (originalLine.IndexOf('$') < 0
+            && originalLine.IndexOf('@') < 0
+            && originalLine.IndexOf('+') < 0
+            && originalLine.IndexOf('(') < 0)
+        {
+            return;
+        }
+
         var sassReferenceLine = PrepareSassStylusReferenceLine(originalLine);
         if (ShouldSkipSassIndentedDeclarationReferences(sassReferenceLine))
             sassReferenceLine = "";
 
         EmitScss(sassReferenceLine, references, seen, fileId, context, lineNumber, container);
-        EmitPreprocessorImportReferences(SassImportReferenceRegex, originalLine, references, seen, fileId, context, lineNumber, container);
 
         var sassMixinReferenceLine = ShouldSkipSassIndentedDeclarationReferences(sassReferenceLine)
             ? ""
             : sassReferenceLine;
 
-        foreach (Match match in BoundedRegex.EnumerateMatches(SassIndentedMixinReferenceRegex, sassMixinReferenceLine))
+        if (sassMixinReferenceLine.IndexOf('+') >= 0)
         {
-            ReferenceExtractor.AddReference(
-                references,
-                seen,
-                fileId,
-                match,
-                "call",
-                context,
-                lineNumber,
-                container);
+            foreach (Match match in BoundedRegex.EnumerateMatches(SassIndentedMixinReferenceRegex, sassMixinReferenceLine))
+            {
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    match,
+                    "call",
+                    context,
+                    lineNumber,
+                    container);
+            }
         }
 
-        foreach (Match match in BoundedRegex.EnumerateMatches(SassBareFunctionReferenceRegex, sassReferenceLine))
+        if (sassReferenceLine.IndexOf('(') >= 0)
         {
-            var name = match.Groups["name"].Value;
-            if (CssBuiltInFunctionNames.Contains(name))
-                continue;
-            if (ShouldSkipSassBareFunctionReference(sassReferenceLine, match.Groups["name"].Index))
-                continue;
+            foreach (Match match in BoundedRegex.EnumerateMatches(SassBareFunctionReferenceRegex, sassReferenceLine))
+            {
+                var name = match.Groups["name"].Value;
+                if (CssBuiltInFunctionNames.Contains(name))
+                    continue;
+                if (ShouldSkipSassBareFunctionReference(sassReferenceLine, match.Groups["name"].Index))
+                    continue;
 
-            ReferenceExtractor.AddReference(
-                references,
-                seen,
-                fileId,
-                match,
-                "call",
-                context,
-                lineNumber,
-                container);
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    match,
+                    "call",
+                    context,
+                    lineNumber,
+                    container);
+            }
         }
     }
 
