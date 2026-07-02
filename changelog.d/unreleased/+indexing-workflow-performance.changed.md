@@ -112,6 +112,7 @@ affected:
 - **Gated Rust lifetime and ranked-bound scans by marker** - Rust reference extraction now checks lifetime apostrophe and higher-ranked `for<...>` markers before scanning those reference forms.
 - **Gated CSS preprocessor import scans by marker** - CSS, Sass, and Stylus reference extraction now checks import/use/forward/require markers before stripping comments and running import regex probes.
 - **Gated CSS animation reference scans by marker** - CSS reference extraction now checks the animation marker before running animation-name and shorthand value regex probes.
+- **Gated CSS custom-property reference scans by marker** - CSS reference extraction now checks `var` and custom-property markers before running custom-property reference regex probes.
 - **Gated Python decorator reference scans by marker** - Python reference extraction now skips decorator-call and bare-decorator regex probes on lines without an `@` marker.
 - **Gated Python raise/except type scans by marker** - Python reference extraction now checks `raise` and `except` markers before running exception type regex probes.
 - **Gated Python runtime type-check scans by marker** - Python reference extraction now checks `isinstance` and `issubclass` markers before running runtime type-check regex probes.
@@ -255,6 +256,7 @@ affected:
 - **Rust lifetime / ranked-bound scan を marker で gate します** - Rust reference extraction は lifetime apostrophe と higher-ranked `for<...>` marker を確認してから対応する reference form を走査します。
 - **CSS preprocessor import scan を marker で gate します** - CSS、Sass、Stylus reference extraction は comment strip と import regex probe の前に import/use/forward/require marker を確認します。
 - **CSS animation reference scan を marker で gate します** - CSS reference extraction は animation-name と shorthand value regex probe を実行する前に animation marker を確認します。
+- **CSS custom-property reference scan を marker で gate します** - CSS reference extraction は custom-property reference regex probe を実行する前に `var` と custom-property marker を確認します。
 - **Python decorator reference scan を marker で gate します** - Python reference extraction は `@` marker がない行では decorator-call と bare-decorator regex probe を skip します。
 - **Python raise/except type scan を marker で gate します** - Python reference extraction は exception type regex probe を実行する前に `raise` と `except` marker を確認します。
 - **Python runtime type-check scan を marker で gate します** - Python reference extraction は runtime type-check regex probe を実行する前に `isinstance` と `issubclass` marker を確認します。

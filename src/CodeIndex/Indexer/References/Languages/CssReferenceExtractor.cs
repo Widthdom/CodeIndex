@@ -105,8 +105,12 @@ internal static class CssReferenceExtractor
         HashSet<string>? definitionNames,
         SymbolRecord? container)
     {
-        foreach (var pattern in CssReferencePatterns)
-            EmitMatches(pattern, preparedLine, context, lineNumber, references, seen, fileId, definitionNames, container);
+        if (preparedLine.IndexOf("var", StringComparison.OrdinalIgnoreCase) >= 0
+            && preparedLine.IndexOf("--", StringComparison.Ordinal) >= 0)
+        {
+            foreach (var pattern in CssReferencePatterns)
+                EmitMatches(pattern, preparedLine, context, lineNumber, references, seen, fileId, definitionNames, container);
+        }
 
         if (preparedLine.IndexOf("animation", StringComparison.OrdinalIgnoreCase) >= 0)
         {
