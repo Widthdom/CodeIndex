@@ -2890,6 +2890,9 @@ internal static partial class LanguageReferenceExtractionSupport
 
     private static void EmitSmalltalkMessageReferences(string preparedLine, Action<string, int> addCallLikeReference, IReadOnlySet<string>? definitionNames)
     {
+        if (!ContainsWhitespace(preparedLine))
+            return;
+
         var definitionMatch = SmalltalkMethodDefinitionRegex.Match(preparedLine);
         if (definitionMatch.Success || SmalltalkClassDeclarationRegex.IsMatch(preparedLine))
             return;
@@ -2907,6 +2910,17 @@ internal static partial class LanguageReferenceExtractionSupport
                 continue;
             addCallLikeReference(name, selectorGroup.Index);
         }
+    }
+
+    private static bool ContainsWhitespace(string value)
+    {
+        foreach (var ch in value)
+        {
+            if (char.IsWhiteSpace(ch))
+                return true;
+        }
+
+        return false;
     }
 
     private static string ReadSmalltalkSelector(string line, int selectorIndex, out int endIndex)

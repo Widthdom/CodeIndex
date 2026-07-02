@@ -205,6 +205,7 @@ affected:
 - **Gated Objective-C message call scans by marker** - Objective-C reference extraction now checks message-send and selector markers before running message and `@selector` regex probes.
 - **Gated Pascal type reference scans by marker** - Pascal reference extraction now checks `uses`, base-declaration, and colon markers before running the matching type regex probes.
 - **Gated Pascal bare-call scans by marker** - Pascal reference extraction now checks the semicolon statement marker before running the bare-call regex probe.
+- **Gated Smalltalk message reference scans by marker** - Smalltalk reference extraction now checks whitespace markers before running method-definition, class-declaration, and message-send regex probes.
 - **Gated Smalltalk range-boundary scans by marker** - Smalltalk range extraction now skips method/class boundary regex checks when the line lacks `>>`, `subclass:`, or `named:`.
 - **Gated Rust use-start scans by keyword** - Rust use-statement collection now skips the start regex when the first line lacks the `use` keyword marker.
 - **Gated Kotlin class subkind scans by keyword** - Kotlin class enrichment now skips value/inline class regex checks when metadata lacks the corresponding keyword marker.
@@ -370,6 +371,7 @@ affected:
 - **Objective-C message call scan を marker で gate します** - Objective-C reference extraction は message と `@selector` regex probe の前に message-send と selector marker を確認します。
 - **Pascal type reference scan を marker で gate します** - Pascal reference extraction は対応する type regex probe の前に `uses`、base-declaration、colon marker を確認します。
 - **Pascal bare-call scan を marker で gate します** - Pascal reference extraction は bare-call regex probe の前に semicolon statement marker を確認します。
+- **Smalltalk message reference scan を marker で gate します** - Smalltalk reference extraction は method-definition、class-declaration、message-send regex probe の前に whitespace marker を確認します。
 - **Smalltalk range-boundary scan を marker で gate します** - Smalltalk range extraction は line に `>>`、`subclass:`、`named:` がない場合 method/class boundary regex check を skip します。
 - **Rust use-start scan を keyword で gate します** - Rust use-statement collection は first line に `use` keyword marker がない場合 start regex を skip します。
 - **Kotlin class subkind scan を keyword で gate します** - Kotlin class enrichment は metadata に対応する keyword marker がない場合 value/inline class regex check を skip します。
