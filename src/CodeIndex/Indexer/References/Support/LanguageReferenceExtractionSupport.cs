@@ -2101,10 +2101,16 @@ internal static partial class LanguageReferenceExtractionSupport
         TypedLanguageReferenceExtractor.EmitColonParameterTypeReferences(preparedLine, 0, preparedLine.Length, "dart", references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         TypedLanguageReferenceExtractor.EmitColonVariableTypeReferences(preparedLine, ["final", "var", "late", "const"], "dart", references, seen, fileId, context, lineNumber, resolveContainerForColumn);
 
-        foreach (Match match in DartVariableTypeRegex.Matches(preparedLine))
+        var hasDartDeclarationTerminator = preparedLine.IndexOf('=') >= 0
+            || preparedLine.IndexOf(';') >= 0;
+        var hasDartUppercaseTypeMarker = ContainsAsciiUppercase(preparedLine);
+        if (hasDartDeclarationTerminator && hasDartUppercaseTypeMarker)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "dart");
+            foreach (Match match in DartVariableTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "dart");
+            }
         }
 
         var signatureMatch = DartFunctionSignatureRegex.Match(preparedLine);
