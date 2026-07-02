@@ -66,6 +66,9 @@ internal static class ElixirReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("defimpl", StringComparison.Ordinal) < 0)
+            return;
+
         var match = DefimplRegex.Match(preparedLine);
         if (!match.Success)
             return;
