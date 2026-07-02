@@ -3024,10 +3024,14 @@ internal static partial class LanguageReferenceExtractionSupport
 
                 if (list.Value.IndexOf('=') >= 0)
                 {
-                    foreach (Match match in FortranAllocateSourceKeywordRegex.Matches(list.Value))
+                    if (list.Value.IndexOf("source", StringComparison.OrdinalIgnoreCase) >= 0
+                        || list.Value.IndexOf("mold", StringComparison.OrdinalIgnoreCase) >= 0)
                     {
-                        var group = match.Groups["name"];
-                        ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+                        foreach (Match match in FortranAllocateSourceKeywordRegex.Matches(list.Value))
+                        {
+                            var group = match.Groups["name"];
+                            ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+                        }
                     }
 
                     foreach (Match match in FortranAllocationStatusKeywordRegex.Matches(list.Value))
