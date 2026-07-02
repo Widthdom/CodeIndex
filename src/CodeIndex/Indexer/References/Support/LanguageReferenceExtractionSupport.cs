@@ -2798,7 +2798,7 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        if (preparedLine.IndexOf("data", StringComparison.OrdinalIgnoreCase) >= 0)
+        if (StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "data"))
         {
             var dataLineMatch = FortranDataLineRegex.Match(preparedLine);
             if (dataLineMatch.Success)
