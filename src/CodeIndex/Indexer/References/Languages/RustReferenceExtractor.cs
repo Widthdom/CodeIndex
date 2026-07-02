@@ -1306,6 +1306,12 @@ internal static class RustReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForColumn,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("struct", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf('(') < 0)
+        {
+            return;
+        }
+
         var structIndex = ReferenceExtractor.FindTopLevelKeyword(preparedLine, "struct");
         if (structIndex < 0)
             return;
@@ -1451,6 +1457,11 @@ internal static class RustReferenceExtractor
     {
         if (enumContainer?.Kind != "enum")
             return;
+        if (preparedLine.IndexOf('(') < 0
+            && preparedLine.IndexOf('{') < 0)
+        {
+            return;
+        }
 
         var variantStart = FirstNonWhitespaceIndex(preparedLine);
         if (variantStart >= preparedLine.Length
