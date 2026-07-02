@@ -2839,7 +2839,7 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        if (preparedLine.IndexOf("submodule", StringComparison.OrdinalIgnoreCase) >= 0
+        if (StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "submodule")
             && preparedLine.IndexOf('(') >= 0)
         {
             var submoduleMatch = FortranSubmoduleParentRegex.Match(preparedLine);
