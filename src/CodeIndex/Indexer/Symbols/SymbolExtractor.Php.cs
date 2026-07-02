@@ -546,6 +546,12 @@ public static partial class SymbolExtractor
         int baseColumn,
         string parameterText)
     {
+        if (parameterText.IndexOf('$') < 0
+            || !MayContainPhpVisibility(parameterText))
+        {
+            return;
+        }
+
         var match = PhpPromotedPropertyParameterRegex.Match(parameterText);
         if (!match.Success)
             return;
@@ -572,6 +578,11 @@ public static partial class SymbolExtractor
             },
             line);
     }
+
+    private static bool MayContainPhpVisibility(string text) =>
+        text.IndexOf("public", StringComparison.OrdinalIgnoreCase) >= 0
+        || text.IndexOf("private", StringComparison.OrdinalIgnoreCase) >= 0
+        || text.IndexOf("protected", StringComparison.OrdinalIgnoreCase) >= 0;
 
     private static IEnumerable<(string Text, int StartColumn)> EnumeratePhpTopLevelCommaSegments(string text)
     {
