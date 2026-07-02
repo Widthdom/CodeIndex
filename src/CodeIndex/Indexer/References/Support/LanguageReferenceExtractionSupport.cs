@@ -2480,6 +2480,26 @@ internal static partial class LanguageReferenceExtractionSupport
         return boundary >= value.Length || !IsSimpleIdentifierPart(value[boundary]);
     }
 
+    private static bool ContainsKeywordIgnoringCase(string value, string keyword)
+    {
+        var searchStart = 0;
+        while (searchStart < value.Length)
+        {
+            var matchIndex = value.IndexOf(keyword, searchStart, StringComparison.OrdinalIgnoreCase);
+            if (matchIndex < 0)
+                return false;
+
+            var beforeBoundary = matchIndex == 0 || !IsSimpleIdentifierPart(value[matchIndex - 1]);
+            var afterIndex = matchIndex + keyword.Length;
+            if (beforeBoundary && (afterIndex >= value.Length || !IsSimpleIdentifierPart(value[afterIndex])))
+                return true;
+
+            searchStart = matchIndex + 1;
+        }
+
+        return false;
+    }
+
     private static bool CanStartVisualBasicIdentifierPattern(char value) =>
         value == '['
         || CanStartAsciiIdentifierPattern(value);
