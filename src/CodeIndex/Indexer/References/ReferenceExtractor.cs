@@ -1903,7 +1903,12 @@ public static partial class ReferenceExtractor
 
     private const int MaxPythonLogicalReferenceLineLength = 32_768;
 
-    private readonly record struct PythonLogicalHeaderReferenceLine(string Text, int[] PhysicalLines, int[] PhysicalColumns);
+    private readonly record struct PythonLogicalHeaderReferenceLine(
+        string Text,
+        int SinglePhysicalLine,
+        int SinglePhysicalColumn,
+        int[]? PhysicalLines,
+        int[]? PhysicalColumns);
 
     private static bool TryBuildPythonLogicalHeaderReferenceLine(
         string[] lines,
@@ -1912,8 +1917,10 @@ public static partial class ReferenceExtractor
         out PythonLogicalHeaderReferenceLine header)
     {
         var builder = new StringBuilder();
-        var physicalLines = new List<int>();
-        var physicalColumns = new List<int>();
+        List<int>? physicalLines = null;
+        List<int>? physicalColumns = null;
+        var singlePhysicalLine = -1;
+        var singlePhysicalColumn = 0;
         var parenDepth = 0;
         var bracketDepth = 0;
         var inString = false;
@@ -1928,7 +1935,7 @@ public static partial class ReferenceExtractor
             {
                 if (builder.Length > 0)
                 {
-                    if (!TryAppendPythonLogicalReferenceChar(builder, physicalLines, physicalColumns, ' ', lineIndex, column, out header))
+                    if (!TryAppendPythonLogicalReferenceChar(builder, ref singlePhysicalLine, ref singlePhysicalColumn, ref physicalLines, ref physicalColumns, ' ', lineIndex, column, out header))
                         return false;
                 }
 
@@ -1938,7 +1945,7 @@ public static partial class ReferenceExtractor
                     if (fragmentChar == '\\' && fragmentColumn == fragmentEndColumn - 1)
                         break;
 
-                    if (!TryAppendPythonLogicalReferenceChar(builder, physicalLines, physicalColumns, fragmentChar, lineIndex, fragmentColumn, out header))
+                    if (!TryAppendPythonLogicalReferenceChar(builder, ref singlePhysicalLine, ref singlePhysicalColumn, ref physicalLines, ref physicalColumns, fragmentChar, lineIndex, fragmentColumn, out header))
                         return false;
                 }
             }
@@ -1978,7 +1985,7 @@ public static partial class ReferenceExtractor
                     bracketDepth--;
                 else if (ch == ':' && parenDepth == 0 && bracketDepth == 0)
                 {
-                    header = new PythonLogicalHeaderReferenceLine(builder.ToString(), physicalLines.ToArray(), physicalColumns.ToArray());
+                    header = CreatePythonLogicalHeaderReferenceLine(builder, singlePhysicalLine, singlePhysicalColumn, physicalLines, physicalColumns);
                     return header.Text.Length > 0;
                 }
             }
@@ -1987,7 +1994,7 @@ public static partial class ReferenceExtractor
                 break;
         }
 
-        header = new PythonLogicalHeaderReferenceLine(builder.ToString(), physicalLines.ToArray(), physicalColumns.ToArray());
+        header = CreatePythonLogicalHeaderReferenceLine(builder, singlePhysicalLine, singlePhysicalColumn, physicalLines, physicalColumns);
         return header.Text.Length > 0;
     }
 
@@ -1998,8 +2005,10 @@ public static partial class ReferenceExtractor
         out PythonLogicalHeaderReferenceLine header)
     {
         var builder = new StringBuilder();
-        var physicalLines = new List<int>();
-        var physicalColumns = new List<int>();
+        List<int>? physicalLines = null;
+        List<int>? physicalColumns = null;
+        var singlePhysicalLine = -1;
+        var singlePhysicalColumn = 0;
         var parenDepth = 0;
         var bracketDepth = 0;
         var inString = false;
@@ -2014,7 +2023,7 @@ public static partial class ReferenceExtractor
             {
                 if (builder.Length > 0)
                 {
-                    if (!TryAppendPythonLogicalReferenceChar(builder, physicalLines, physicalColumns, ' ', lineIndex, column, out header))
+                    if (!TryAppendPythonLogicalReferenceChar(builder, ref singlePhysicalLine, ref singlePhysicalColumn, ref physicalLines, ref physicalColumns, ' ', lineIndex, column, out header))
                         return false;
                 }
 
@@ -2024,7 +2033,7 @@ public static partial class ReferenceExtractor
                     if (fragmentChar == '\\' && fragmentColumn == fragmentEndColumn - 1)
                         break;
 
-                    if (!TryAppendPythonLogicalReferenceChar(builder, physicalLines, physicalColumns, fragmentChar, lineIndex, fragmentColumn, out header))
+                    if (!TryAppendPythonLogicalReferenceChar(builder, ref singlePhysicalLine, ref singlePhysicalColumn, ref physicalLines, ref physicalColumns, fragmentChar, lineIndex, fragmentColumn, out header))
                         return false;
                 }
             }
@@ -2068,14 +2077,34 @@ public static partial class ReferenceExtractor
                 break;
         }
 
-        header = new PythonLogicalHeaderReferenceLine(builder.ToString(), physicalLines.ToArray(), physicalColumns.ToArray());
+        header = CreatePythonLogicalHeaderReferenceLine(builder, singlePhysicalLine, singlePhysicalColumn, physicalLines, physicalColumns);
         return header.Text.Length > 0;
+    }
+
+    private static PythonLogicalHeaderReferenceLine CreatePythonLogicalHeaderReferenceLine(
+        StringBuilder builder,
+        int singlePhysicalLine,
+        int singlePhysicalColumn,
+        List<int>? physicalLines,
+        List<int>? physicalColumns)
+    {
+        if (physicalLines == null || physicalColumns == null)
+            return new PythonLogicalHeaderReferenceLine(builder.ToString(), singlePhysicalLine, singlePhysicalColumn, null, null);
+
+        return new PythonLogicalHeaderReferenceLine(
+            builder.ToString(),
+            singlePhysicalLine,
+            singlePhysicalColumn,
+            physicalLines.ToArray(),
+            physicalColumns.ToArray());
     }
 
     private static bool TryAppendPythonLogicalReferenceChar(
         StringBuilder builder,
-        List<int> physicalLines,
-        List<int> physicalColumns,
+        ref int singlePhysicalLine,
+        ref int singlePhysicalColumn,
+        ref List<int>? physicalLines,
+        ref List<int>? physicalColumns,
         char value,
         int physicalLine,
         int physicalColumn,
@@ -2087,9 +2116,31 @@ public static partial class ReferenceExtractor
             return false;
         }
 
+        if (builder.Length == 0)
+        {
+            singlePhysicalLine = physicalLine;
+            singlePhysicalColumn = physicalColumn;
+        }
+        else if (physicalLines == null
+            && (physicalLine != singlePhysicalLine
+                || physicalColumn != singlePhysicalColumn + builder.Length))
+        {
+            physicalLines = new List<int>(builder.Length + 1);
+            physicalColumns = new List<int>(builder.Length + 1);
+            for (var index = 0; index < builder.Length; index++)
+            {
+                physicalLines.Add(singlePhysicalLine);
+                physicalColumns.Add(singlePhysicalColumn + index);
+            }
+        }
+
         builder.Append(value);
-        physicalLines.Add(physicalLine);
-        physicalColumns.Add(physicalColumn);
+        if (physicalLines != null)
+        {
+            physicalLines.Add(physicalLine);
+            physicalColumns!.Add(physicalColumn);
+        }
+
         header = default;
         return true;
     }
@@ -2145,12 +2196,23 @@ public static partial class ReferenceExtractor
         for (var i = startIndex; i < references.Count; i++)
         {
             var logicalIndex = references[i].Column - 1;
-            if (logicalIndex < 0 || logicalIndex >= header.PhysicalLines.Length)
+            var logicalLength = header.PhysicalLines?.Length ?? header.Text.Length;
+            if (logicalIndex < 0 || logicalIndex >= logicalLength)
                 continue;
 
-            var physicalLineIndex = header.PhysicalLines[logicalIndex];
+            var physicalLineIndex = header.SinglePhysicalLine;
+            var physicalColumn = header.SinglePhysicalColumn + logicalIndex;
+            if (header.PhysicalLines is { } physicalLines && header.PhysicalColumns is { } physicalColumns)
+            {
+                physicalLineIndex = physicalLines[logicalIndex];
+                physicalColumn = physicalColumns[logicalIndex];
+            }
+
+            if (physicalLineIndex < 0)
+                continue;
+
             references[i].Line = physicalLineIndex + 1;
-            references[i].Column = header.PhysicalColumns[logicalIndex] + 1;
+            references[i].Column = physicalColumn + 1;
             references[i].Context = lines[physicalLineIndex].Trim();
         }
     }
