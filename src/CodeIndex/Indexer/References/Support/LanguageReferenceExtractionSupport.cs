@@ -2816,6 +2816,9 @@ internal static partial class LanguageReferenceExtractionSupport
 
     private static void EmitFortranCallReferences(string preparedLine, Action<string, int> addCallLikeReference)
     {
+        if (preparedLine.IndexOf("call", StringComparison.OrdinalIgnoreCase) < 0)
+            return;
+
         foreach (Match match in FortranCallRegex.Matches(preparedLine))
             addCallLikeReference(match.Groups["name"].Value, match.Groups["name"].Index);
     }
