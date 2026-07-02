@@ -18,11 +18,11 @@ public partial class FileIndexer
             {
                 var markerCount = CountProjectMarkerFiles(currentDir, primaryProjectMarkerPatterns);
                 if (markerCount == 1)
-                    return NormalizeScopeKey(Path.GetRelativePath(_projectRoot, currentDir));
+                    return NormalizeScopeKey(ToRelativePath(currentDir));
                 if (markerCount > 1)
                     return DeriveAmbiguousProjectScopeKey(Path.GetFullPath(absolutePath), currentDir);
                 if (CountProjectMarkerFiles(currentDir, projectMarkerPatterns) > 0)
-                    return NormalizeScopeKey(Path.GetRelativePath(_projectRoot, currentDir));
+                    return NormalizeScopeKey(ToRelativePath(currentDir));
 
                 if (PathsEqual(currentDir, _projectRoot))
                     break;
@@ -31,7 +31,7 @@ public partial class FileIndexer
             }
         }
 
-        var relativePath = Path.GetRelativePath(_projectRoot, absolutePath);
+        var relativePath = ToRelativePath(absolutePath);
         return DeriveFallbackFamilyScopeKey(relativePath);
     }
 
@@ -138,7 +138,7 @@ public partial class FileIndexer
 
     private string DeriveAmbiguousProjectScopeKey(string absolutePath, string anchorDir)
     {
-        var anchorScope = NormalizeScopeKey(Path.GetRelativePath(_projectRoot, anchorDir));
+        var anchorScope = NormalizeScopeKey(ToRelativePath(anchorDir));
         var relativeFromAnchor = NormalizeScopeKey(Path.GetRelativePath(anchorDir, absolutePath));
         if (relativeFromAnchor == ".")
             return anchorScope;
@@ -267,7 +267,7 @@ public partial class FileIndexer
                         return;
                     }
 
-                    projectMarkers.Add(NormalizeScopeKey(Path.GetRelativePath(_projectRoot, markerFile)));
+                    projectMarkers.Add(NormalizeScopeKey(ToRelativePath(markerFile)));
                     traversalState.MarkerFilesCollected++;
                 }
 
@@ -346,7 +346,7 @@ public partial class FileIndexer
             return;
         }
 
-        var relativePath = NormalizeIgnorePath(Path.GetRelativePath(_projectRoot, directory));
+        var relativePath = NormalizeIgnorePath(ToRelativePath(directory));
         if (string.IsNullOrEmpty(relativePath))
             relativePath = ".";
 
@@ -364,7 +364,7 @@ public partial class FileIndexer
             return;
         }
 
-        var relativePath = NormalizeIgnorePath(Path.GetRelativePath(_projectRoot, directory));
+        var relativePath = NormalizeIgnorePath(ToRelativePath(directory));
         if (string.IsNullOrEmpty(relativePath))
             relativePath = ".";
 

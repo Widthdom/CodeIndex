@@ -76,8 +76,8 @@ public partial class FileIndexer
         if (!IsPathEqualOrParent(_projectRoot, targetPath))
             return "<outside project root>";
 
-        var relative = NormalizePathSeparators(Path.GetRelativePath(_projectRoot, targetPath));
-        return relative == "." ? "<project root>" : relative;
+        var relative = ToRelativePath(targetPath);
+        return relative.Length == 0 ? "<project root>" : relative;
     }
 
     internal bool ShouldSkipDirectoryTraversal(string directory)
