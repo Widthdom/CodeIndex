@@ -367,6 +367,11 @@ internal static class RustReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf('#') < 0)
+        {
+            return;
+        }
+
         foreach (Match match in DeriveAttributeRegex.Matches(preparedLine))
         {
             EmitDeriveTypeList(match.Groups["types"], references, seen, fileId, context, lineNumber, container);
