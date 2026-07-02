@@ -60,13 +60,14 @@ internal static class XamlReferenceExtractor
 
     public static string StripXmlComments(string line, ref bool inComment)
     {
-        var builder = new StringBuilder(line.Length);
+        StringBuilder? builder = null;
         var index = 0;
 
         while (index < line.Length)
         {
             if (inComment)
             {
+                builder ??= new StringBuilder(line.Length);
                 var commentEnd = line.IndexOf("-->", index, StringComparison.Ordinal);
                 if (commentEnd < 0)
                 {
@@ -83,10 +84,14 @@ internal static class XamlReferenceExtractor
             var commentStart = line.IndexOf("<!--", index, StringComparison.Ordinal);
             if (commentStart < 0)
             {
+                if (builder == null)
+                    return line;
+
                 builder.Append(line, index, line.Length - index);
                 return builder.ToString();
             }
 
+            builder ??= new StringBuilder(line.Length);
             if (commentStart > index)
                 builder.Append(line, index, commentStart - index);
 
@@ -102,7 +107,7 @@ internal static class XamlReferenceExtractor
             index = sameLineCommentEnd + 3;
         }
 
-        return builder.ToString();
+        return builder?.ToString() ?? line;
     }
 
     public static void Emit(
