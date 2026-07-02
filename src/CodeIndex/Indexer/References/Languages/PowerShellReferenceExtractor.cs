@@ -26,6 +26,11 @@ internal static class PowerShellReferenceExtractor
 
     public static void EmitCallReferences(string preparedLine, Action<string, int> addCallLikeReference)
     {
+        if (!HasCallStartCandidate(preparedLine))
+        {
+            return;
+        }
+
         foreach (Match match in CallRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -153,6 +158,30 @@ internal static class PowerShellReferenceExtractor
 
         return keys;
     }
+
+    private static bool HasCallStartCandidate(string line)
+    {
+        var expectCommand = true;
+        for (var index = 0; index < line.Length; index++)
+        {
+            var ch = line[index];
+            if (char.IsWhiteSpace(ch) && expectCommand)
+            {
+                continue;
+            }
+
+            if (expectCommand && IsCallNameStart(ch))
+            {
+                return true;
+            }
+
+            expectCommand = ch is '|' or ';' or '&' or '{' or '=';
+        }
+
+        return false;
+    }
+
+    private static bool IsCallNameStart(char ch) => ch is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or '_';
 
     private static bool IsAssignmentKey(string line, int cursor)
     {

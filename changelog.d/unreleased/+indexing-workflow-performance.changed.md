@@ -90,6 +90,7 @@ affected:
 - **Gated R operator and member reference scans by marker** - R reference extraction now checks `::`, backtick-call, infix-operator, `$`, and slot markers before running the corresponding operator/member regex passes.
 - **Gated R directive reference scans by marker** - R reference extraction now checks namespace, roxygen, and S4 directive markers before running directive-start regexes or sequential directive match probes.
 - **Gated PowerShell splat reference scans by marker** - PowerShell reference extraction now checks splat assignment, splat usage, and hashtable key markers before running the corresponding regex scans.
+- **Gated PowerShell call reference scans by marker** - PowerShell reference extraction now checks statement and pipeline call-start markers before running cmdlet/function call regex probes.
 - **Gated Shell call and source reference scans by marker** - Shell reference extraction now skips command-call regexes when no callable names exist and checks substitution, source, and global-alias markers before running those scans.
 - **Gated C# using namespace/static scans by marker** - C# reference extraction now checks `using`, `static`, and alias markers before running using-namespace and using-static regex probes.
 - **Gated SQL temp-object collection scans by marker** - SQL temp object carry-forward now skips collection without `#` markers and runs target, truncate, select-into, and create probes only when their statement keywords are present.
@@ -220,6 +221,7 @@ affected:
 - **R operator / member reference scan を marker で gate します** - R reference extraction は `::`、backtick-call、infix-operator、`$`、slot marker を確認してから対応する operator/member regex pass を実行します。
 - **R directive reference scan を marker で gate します** - R reference extraction は namespace、roxygen、S4 directive marker を確認してから directive-start regex や sequential directive match probe を実行します。
 - **PowerShell splat reference scan を marker で gate します** - PowerShell reference extraction は splat assignment、splat usage、hashtable key marker を確認してから対応する regex scan を実行します。
+- **PowerShell call reference scan を marker で gate します** - PowerShell reference extraction は cmdlet/function call regex probe を実行する前に statement と pipeline の call-start marker を確認します。
 - **Shell call / source reference scan を marker で gate します** - Shell reference extraction は callable name がない場合に command-call regex を skip し、substitution、source、global-alias marker を確認してから対応 scan を実行します。
 - **C# using namespace/static scan を marker で gate します** - C# reference extraction は using-namespace と using-static regex probe を実行する前に `using`、`static`、alias marker を確認します。
 - **SQL temp-object collection scan を marker で gate します** - SQL temp object carry-forward は `#` marker がない場合の collection を skip し、target、truncate、select-into、create probe は対応する statement keyword がある場合だけ実行します。
