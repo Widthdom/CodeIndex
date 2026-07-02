@@ -109,6 +109,7 @@ affected:
 - **Gated Kotlin class subkind scans by keyword** - Kotlin class enrichment now skips value/inline class regex checks when metadata lacks the corresponding keyword marker.
 - **Gated Kotlin inline-function scans by keyword** - Kotlin function enrichment now skips inline/reified regex checks when signatures lack the matching keyword markers.
 - **Dispatched Solidity type declaration scans by keyword** - Solidity extraction now runs contract/interface/library, struct, and enum declaration regexes only when their keyword marker is present.
+- **Dispatched Solidity callable declaration scans by keyword** - Solidity extraction now runs function, constructor, fallback/receive, and modifier declaration regexes only for lines with the corresponding marker.
 
 ## 日本語
 
@@ -179,3 +180,4 @@ affected:
 - **Kotlin class subkind scan を keyword で gate します** - Kotlin class enrichment は metadata に対応する keyword marker がない場合 value/inline class regex check を skip します。
 - **Kotlin inline-function scan を keyword で gate します** - Kotlin function enrichment は signature に対応する keyword marker がない場合 inline/reified regex check を skip します。
 - **Solidity type declaration scan を keyword で振り分けます** - Solidity extraction は contract/interface/library、struct、enum の declaration regex を対応 keyword marker がある場合だけ実行します。
+- **Solidity callable declaration scan を keyword で振り分けます** - Solidity extraction は function、constructor、fallback/receive、modifier の declaration regex を対応 marker がある行だけで実行します。

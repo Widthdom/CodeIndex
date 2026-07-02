@@ -54,25 +54,34 @@ public static partial class SymbolExtractor
                 }
             }
 
-            var functionMatch = SolidityFunctionDeclarationRegex.Match(line);
-            if (functionMatch.Success)
+            if (line.Contains("function", StringComparison.Ordinal))
             {
-                AddSoliditySymbol(symbols, fileId, "function", "function", functionMatch, lines[i], matchLines, i, BodyStyle.Brace);
-                continue;
+                var functionMatch = SolidityFunctionDeclarationRegex.Match(line);
+                if (functionMatch.Success)
+                {
+                    AddSoliditySymbol(symbols, fileId, "function", "function", functionMatch, lines[i], matchLines, i, BodyStyle.Brace);
+                    continue;
+                }
             }
 
-            var constructorMatch = SolidityConstructorDeclarationRegex.Match(line);
-            if (constructorMatch.Success)
+            if (line.Contains("constructor", StringComparison.Ordinal))
             {
-                AddSoliditySymbol(symbols, fileId, "function", "constructor", constructorMatch, lines[i], matchLines, i, BodyStyle.Brace);
-                continue;
+                var constructorMatch = SolidityConstructorDeclarationRegex.Match(line);
+                if (constructorMatch.Success)
+                {
+                    AddSoliditySymbol(symbols, fileId, "function", "constructor", constructorMatch, lines[i], matchLines, i, BodyStyle.Brace);
+                    continue;
+                }
             }
 
-            var fallbackReceiveMatch = SolidityFallbackReceiveDeclarationRegex.Match(line);
-            if (fallbackReceiveMatch.Success)
+            if (line.Contains("fallback", StringComparison.Ordinal) || line.Contains("receive", StringComparison.Ordinal))
             {
-                AddSoliditySymbol(symbols, fileId, "function", fallbackReceiveMatch.Groups["name"].Value, fallbackReceiveMatch, lines[i], matchLines, i, BodyStyle.Brace);
-                continue;
+                var fallbackReceiveMatch = SolidityFallbackReceiveDeclarationRegex.Match(line);
+                if (fallbackReceiveMatch.Success)
+                {
+                    AddSoliditySymbol(symbols, fileId, "function", fallbackReceiveMatch.Groups["name"].Value, fallbackReceiveMatch, lines[i], matchLines, i, BodyStyle.Brace);
+                    continue;
+                }
             }
 
             var eventMatch = SolidityEventDeclarationRegex.Match(line);
@@ -109,9 +118,12 @@ public static partial class SymbolExtractor
                 }
             }
 
-            var modifierMatch = SolidityModifierDeclarationRegex.Match(line);
-            if (modifierMatch.Success)
-                AddSoliditySymbol(symbols, fileId, "function", "modifier", modifierMatch, lines[i], matchLines, i, BodyStyle.Brace);
+            if (line.Contains("modifier", StringComparison.Ordinal))
+            {
+                var modifierMatch = SolidityModifierDeclarationRegex.Match(line);
+                if (modifierMatch.Success)
+                    AddSoliditySymbol(symbols, fileId, "function", "modifier", modifierMatch, lines[i], matchLines, i, BodyStyle.Brace);
+            }
         }
 
         AssignContainers(symbols, lines, null);
