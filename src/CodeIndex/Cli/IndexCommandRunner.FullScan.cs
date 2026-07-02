@@ -871,24 +871,26 @@ public static partial class IndexCommandRunner
         var files = discovery.Files;
         var fileTargets = new FullScanFileTarget[files.Count];
         var languageCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var hasGeneratedCodeExtractionSuppressionPatterns = indexer.HasGeneratedCodeExtractionSuppressionPatterns;
         for (var i = 0; i < files.Count; i++)
         {
             var filePath = files[i];
             var language = FileIndexer.GetReusableDetectedLanguage(filePath, scanResult.FileLanguages);
             var target = FullScanFileTarget.Create(projectRoot, filePath, language);
-            fileTargets[i] = target with
-            {
-                GeneratedExtractionSuppressed = indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath),
-            };
+            fileTargets[i] = hasGeneratedCodeExtractionSuppressionPatterns
+                ? target with { GeneratedExtractionSuppressed = indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath) }
+                : target;
             if (language == null)
                 continue;
 
             languageCounts[language] = languageCounts.TryGetValue(language, out var count) ? count + 1 : 1;
         }
-        var generatedExtractionSuppressedByIndexPath = fileTargets.ToDictionary(
-            target => target.IndexPath,
-            target => target.GeneratedExtractionSuppressed,
-            StringComparer.Ordinal);
+        var generatedExtractionSuppressedByIndexPath = hasGeneratedCodeExtractionSuppressionPatterns
+            ? fileTargets.ToDictionary(
+                target => target.IndexPath,
+                target => target.GeneratedExtractionSuppressed,
+                StringComparer.Ordinal)
+            : null;
         var knownReadableFileSizes = new Dictionary<string, long>(StringComparer.Ordinal);
         var errorList = discovery.ErrorList;
         var warningList = discovery.WarningList;
@@ -1232,7 +1234,8 @@ public static partial class IndexCommandRunner
                 target.Language,
                 options.MaxSymbolsPerFile,
                 options.MaxReferencesPerFile,
-                generatedExtractionSuppressedByIndexPath.TryGetValue(target.IndexPath, out var generatedExtractionSuppressed)
+                generatedExtractionSuppressedByIndexPath != null
+                && generatedExtractionSuppressedByIndexPath.TryGetValue(target.IndexPath, out var generatedExtractionSuppressed)
                     && generatedExtractionSuppressed,
                 allowReuse: true);
             if (existingFile == null)
@@ -1289,7 +1292,8 @@ public static partial class IndexCommandRunner
                         includeExistingSymbols: !options.Rebuild && !startedWithNoIndexedFiles,
                         canReuseExistingSymbolsWithoutRead: CanReuseCSharpPrepassTargetWithoutRead,
                         isGeneratedCodeExtractionSuppressed: target =>
-                            generatedExtractionSuppressedByIndexPath.TryGetValue(target.IndexPath, out var generatedExtractionSuppressed)
+                            generatedExtractionSuppressedByIndexPath != null
+                            && generatedExtractionSuppressedByIndexPath.TryGetValue(target.IndexPath, out var generatedExtractionSuppressed)
                             && generatedExtractionSuppressed,
                         reportCurrentFile: path => currentCSharpWorkspaceFile = path,
                         cancellationToken: cancellationToken);

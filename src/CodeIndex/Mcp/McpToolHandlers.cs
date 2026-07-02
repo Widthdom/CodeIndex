@@ -5607,6 +5607,7 @@ public partial class McpServer
         var files = scanResult.Files;
         var fileTargets = new CSharpStaticInterfacePrepass.FileTarget[files.Count];
         var csharpPrepassTargets = new List<CSharpStaticInterfacePrepass.FileTarget>();
+        var hasGeneratedCodeExtractionSuppressionPatterns = indexer.HasGeneratedCodeExtractionSuppressionPatterns;
         for (var i = 0; i < files.Count; i++)
         {
             var filePath = files[i];
@@ -5616,15 +5617,18 @@ public partial class McpServer
             if (language == "csharp")
                 csharpPrepassTargets.Add(target);
         }
-        var generatedExtractionSuppressedByIndexPath = fileTargets.ToDictionary(
-            target => target.IndexPath,
-            target => indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath),
-            StringComparer.Ordinal);
+        var generatedExtractionSuppressedByIndexPath = hasGeneratedCodeExtractionSuppressionPatterns
+            ? fileTargets.ToDictionary(
+                target => target.IndexPath,
+                target => indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath),
+                StringComparer.Ordinal)
+            : null;
         var knownReadableFileSizes = new Dictionary<string, long>(StringComparer.Ordinal);
         await EmitProgressNotificationAsync(progressToken, 0, files.Count, "Index scan complete; indexing files.").ConfigureAwait(false);
         var csharpPrepassStatReuse = new Dictionary<string, IndexedFileStatReuseResult?>(StringComparer.Ordinal);
         bool IsGeneratedExtractionSuppressed(CSharpStaticInterfacePrepass.FileTarget target)
-            => generatedExtractionSuppressedByIndexPath.TryGetValue(target.IndexPath, out var generatedExtractionSuppressed)
+            => generatedExtractionSuppressedByIndexPath != null
+               && generatedExtractionSuppressedByIndexPath.TryGetValue(target.IndexPath, out var generatedExtractionSuppressed)
                && generatedExtractionSuppressed;
 
         bool CanReuseCSharpPrepassTargetWithoutRead(CSharpStaticInterfacePrepass.FileTarget target)
