@@ -1812,7 +1812,10 @@ public static partial class SymbolExtractor
         List<SymbolRecord> symbols)
     {
         foreach (var prefix in XamlResourceReferenceMarkupPrefixes)
-            AddXamlResourceReferenceSymbols(fileId, rawText, lines, lineStarts, symbols, prefix);
+        {
+            if (rawText.Contains(prefix, StringComparison.Ordinal))
+                AddXamlResourceReferenceSymbols(fileId, rawText, lines, lineStarts, symbols, prefix);
+        }
     }
 
     private static void AddXamlResourceReferenceSymbols(
