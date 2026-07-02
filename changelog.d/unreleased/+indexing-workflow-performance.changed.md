@@ -291,6 +291,7 @@ affected:
 - **Gated VB XML namespace scans by marker** - Visual Basic reference extraction now checks `GetXmlNamespace` and parenthesis markers before running XML namespace regex probes.
 - **Gated VB AddressOf scans by marker** - Visual Basic reference extraction now checks `AddressOf` markers before running delegate target regex probes.
 - **Gated VB AddHandler scans by marker** - Visual Basic reference extraction now checks `AddHandler` markers before running event subscription regex probes.
+- **Gated VB RemoveHandler scans by marker** - Visual Basic reference extraction now checks `RemoveHandler` markers before running event unsubscription regex probes.
 
 ## 日本語
 
@@ -516,3 +517,4 @@ affected:
 - **VB XML namespace scan を marker で gate します** - Visual Basic reference extraction は XML namespace regex probe の前に `GetXmlNamespace` と parenthesis marker を確認します。
 - **VB AddressOf scan を marker で gate します** - Visual Basic reference extraction は delegate target regex probe の前に `AddressOf` marker を確認します。
 - **VB AddHandler scan を marker で gate します** - Visual Basic reference extraction は event subscription regex probe の前に `AddHandler` marker を確認します。
+- **VB RemoveHandler scan を marker で gate します** - Visual Basic reference extraction は event unsubscription regex probe の前に `RemoveHandler` marker を確認します。

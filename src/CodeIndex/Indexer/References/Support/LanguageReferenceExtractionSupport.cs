@@ -2330,14 +2330,18 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        foreach (Match match in VbRemoveHandlerRegex.Matches(preparedLine))
+        var hasVbRemoveHandlerMarker = preparedLine.IndexOf("RemoveHandler", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (hasVbRemoveHandlerMarker)
         {
-            var group = match.Groups["name"];
-            var rawName = LastQualifiedSegment(group.Value);
-            var name = NormalizeVbIdentifierSegment(rawName);
-            var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
-            var nameIndex = group.Index + Math.Max(0, nameOffset);
-            ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "unsubscribe", context, lineNumber, resolveContainerForColumn(nameIndex));
+            foreach (Match match in VbRemoveHandlerRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["name"];
+                var rawName = LastQualifiedSegment(group.Value);
+                var name = NormalizeVbIdentifierSegment(rawName);
+                var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
+                var nameIndex = group.Index + Math.Max(0, nameOffset);
+                ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "unsubscribe", context, lineNumber, resolveContainerForColumn(nameIndex));
+            }
         }
 
         foreach (Match match in VbRaiseEventRegex.Matches(preparedLine))
