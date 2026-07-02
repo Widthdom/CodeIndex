@@ -4,6 +4,8 @@ namespace CodeIndex.Indexer;
 
 public partial class FileIndexer
 {
+    private readonly record struct ScannedSubdirectory(string Path, FileAttributes? KnownAttributes);
+
     private bool EnumerateSubdirectories(
         string dir,
         DirectoryScanState scanState,
@@ -13,7 +15,7 @@ public partial class FileIndexer
         CancellationToken cancellationToken,
         int depth)
     {
-        var subdirectories = RemoveWindowsPrefixes(
+        var subdirectories = CreateSubdirectoryCandidates(
             CodeIndex.FileSystemTraversalPolicy.EnumerateDirectories(LongPath.EnsureWindowsPrefix(dir)));
         return ProcessSubdirectories(
             subdirectories,
@@ -25,14 +27,18 @@ public partial class FileIndexer
             depth);
     }
 
-    private static IEnumerable<string> RemoveWindowsPrefixes(IEnumerable<string> paths)
+    private static IEnumerable<ScannedSubdirectory> CreateSubdirectoryCandidates(IEnumerable<string> paths)
     {
         foreach (var path in paths)
-            yield return LongPath.RemoveWindowsPrefix(path);
+        {
+            yield return new ScannedSubdirectory(
+                LongPath.RemoveWindowsPrefix(path),
+                KnownAttributes: null);
+        }
     }
 
     private bool ProcessSubdirectories(
-        IEnumerable<string> subdirectories,
+        IEnumerable<ScannedSubdirectory> subdirectories,
         DirectoryScanState scanState,
         IgnoreRuleSet activeIgnoreRules,
         bool passthrough,
@@ -41,9 +47,11 @@ public partial class FileIndexer
         int depth)
     {
         var fullyScanned = true;
-        foreach (var subDir in subdirectories)
+        foreach (var subdirectory in subdirectories)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var subDir = subdirectory.Path;
+            var knownAttributes = subdirectory.KnownAttributes;
             if (TryRecordNonRecursiveSubdirectory(subDir, scanState, passthrough))
                 continue;
 
@@ -58,13 +66,13 @@ public partial class FileIndexer
             // drive root 走査で OS 管理 cache に降りないよう Hidden/System ディレクトリもスキップする。
             // skip したディレクトリ自身を listed 扱い（immediate parent purge 用）かつ prune prefix として
             // 記録することで、以前の実行でできた深い子孫エントリも purge walker が確実に削除できる。
-            if (ShouldSkipDirectoryLink(subDir, scanState.Errors, scanState.DanglingSymlinks))
+            if (ShouldSkipDirectoryLink(subDir, scanState.Errors, scanState.DanglingSymlinks, knownAttributes))
             {
                 RecordPrunedDirectory(subDir, scanState);
                 continue;
             }
 
-            var resolvedSubDir = NormalizePathForComparison(GetDirectoryTraversalIdentity(subDir));
+            var resolvedSubDir = NormalizePathForComparison(GetDirectoryTraversalIdentity(subDir, knownAttributes));
             if (!scanState.VisitedDirectories.Add(resolvedSubDir))
             {
                 var subRelative = ToRelativePath(subDir);

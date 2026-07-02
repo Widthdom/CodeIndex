@@ -5,10 +5,21 @@ namespace CodeIndex.Indexer;
 
 public partial class FileIndexer
 {
-    private bool ShouldSkipDirectoryLink(string subDir, List<ScanError> errors, HashSet<string> danglingSymlinks)
+    private bool ShouldSkipDirectoryLink(
+        string subDir,
+        List<ScanError> errors,
+        HashSet<string> danglingSymlinks,
+        FileAttributes? knownAttributes = null)
     {
-        if (!IsReparsePoint(subDir))
-            return HasSkippedAttributes(subDir);
+        var isReparsePoint = knownAttributes.HasValue
+            ? FileSystemBoundary.IsSymlinkOrReparsePoint(knownAttributes.Value)
+            : IsReparsePoint(subDir);
+        if (!isReparsePoint)
+        {
+            return knownAttributes.HasValue
+                ? HasSkippedAttributes(knownAttributes.Value)
+                : HasSkippedAttributes(subDir);
+        }
 
         var relative = ToRelativePath(subDir);
         DirectoryInfo info = new(LongPath.EnsureWindowsPrefix(subDir));
@@ -75,10 +86,17 @@ public partial class FileIndexer
             errors: new List<ScanError>(),
             danglingSymlinks: new HashSet<string>(StringComparer.Ordinal));
 
-    private static string GetDirectoryTraversalIdentity(string directory)
+    private static string GetDirectoryTraversalIdentity(string directory, FileAttributes? knownAttributes = null)
     {
-        if (!IsReparsePoint(directory))
+        if (knownAttributes.HasValue)
+        {
+            if (!FileSystemBoundary.IsSymlinkOrReparsePoint(knownAttributes.Value))
+                return directory;
+        }
+        else if (!IsReparsePoint(directory))
+        {
             return directory;
+        }
 
         try
         {

@@ -94,7 +94,7 @@ public partial class FileIndexer
         var seenFilePaths = !passthrough && directoryIgnoreCase
             ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             : null;
-        List<string>? subdirectories = null;
+        List<ScannedSubdirectory>? subdirectories = null;
         var danglingCandidateLimit = _maxDanglingFileSystemEntryScanCandidates;
         var danglingCandidateCount = 0;
         var danglingScanTruncated = false;
@@ -117,7 +117,8 @@ public partial class FileIndexer
 
             if ((attributes & FileAttributes.Directory) != 0)
             {
-                (subdirectories ??= new List<string>()).Add(entry);
+                (subdirectories ??= new List<ScannedSubdirectory>())
+                    .Add(new ScannedSubdirectory(entry, attributes));
                 continue;
             }
 
