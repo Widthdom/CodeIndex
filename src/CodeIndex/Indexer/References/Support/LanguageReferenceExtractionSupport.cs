@@ -3068,7 +3068,7 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        if (hasFortranParen && preparedLine.IndexOf("deallocate", StringComparison.OrdinalIgnoreCase) >= 0)
+        if (hasFortranParen && StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "deallocate"))
         {
             var deallocateListMatch = FortranDeallocateListRegex.Match(preparedLine);
             if (deallocateListMatch.Success)
