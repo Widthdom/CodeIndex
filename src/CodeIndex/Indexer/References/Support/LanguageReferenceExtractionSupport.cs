@@ -1211,10 +1211,15 @@ internal static partial class LanguageReferenceExtractionSupport
 
         if (language == "c")
         {
-            foreach (Match match in CTypedefCastTypeRegex.Matches(preparedLine))
+            var hasCParen = preparedLine.IndexOf('(') >= 0;
+            var hasCTypedefTypeMarker = preparedLine.IndexOf("_t", StringComparison.Ordinal) >= 0;
+            if (hasCParen && hasCTypedefTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTypedefCastTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
             foreach (Match match in CTypedefSizeofTypeRegex.Matches(preparedLine))

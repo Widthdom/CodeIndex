@@ -240,6 +240,7 @@ affected:
 - **Dispatched Python `__all__` operation scans by marker** - Python export expansion now runs append, extend, and assignment regexes only when the line contains the matching operation marker.
 - **Gated Python dataclass metadata scans by marker** - Python dataclass field expansion now skips metadata regex checks on field-call lines that lack the `metadata` and dictionary markers.
 - **Gated C/C++ include, base, constructor, and cast scans by marker** - C/C++ reference extraction now checks include/import, inheritance, allocation, named-cast, and parenthesized-cast markers before running the matching type regex probes.
+- **Gated C typedef cast scans by marker** - C reference extraction now checks `*_t` and parenthesis markers before running typedef cast type regex probes.
 
 ## 日本語
 
@@ -414,3 +415,4 @@ affected:
 - **Python `__all__` operation scan を marker で振り分けます** - Python export expansion は append、extend、assignment の各 regex を、対応する operation marker がある行だけで実行します。
 - **Python dataclass metadata scan を marker で gate します** - Python dataclass field expansion は `metadata` と dictionary marker がない field-call 行で metadata regex check を skip します。
 - **C/C++ include/base/constructor/cast scan を marker で gate します** - C/C++ reference extraction は include/import、継承、allocation、named cast、parenthesized cast の marker を確認してから対応する type regex probe を実行します。
+- **C typedef cast scan を marker で gate します** - C reference extraction は typedef cast type regex probe の前に `*_t` と parenthesis marker を確認します。
