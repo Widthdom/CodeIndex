@@ -156,7 +156,7 @@ public partial class FileIndexer
 
         internal static string? GetRelativeCandidatePath(string sourceDirectory, string absolutePath)
         {
-            var relativePath = NormalizeIgnorePath(Path.GetRelativePath(sourceDirectory, absolutePath));
+            var relativePath = NormalizeIgnorePath(GetRelativePathFromDirectory(sourceDirectory, absolutePath));
             if (relativePath.Length == 0 ||
                 relativePath == "." ||
                 relativePath.StartsWith("../", StringComparison.Ordinal))

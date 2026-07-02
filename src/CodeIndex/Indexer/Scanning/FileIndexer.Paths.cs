@@ -31,11 +31,17 @@ public partial class FileIndexer
         => Path.DirectorySeparatorChar == '/' ? path : path.Replace('/', Path.DirectorySeparatorChar);
 
     internal static string GetRelativePathFromProjectRoot(string projectRoot, string path) =>
-        TryGetRelativePathFromProjectRootPrefix(projectRoot, path) ?? Path.GetRelativePath(projectRoot, path);
+        GetRelativePathFromDirectory(projectRoot, path);
 
     internal static string? TryGetRelativePathFromProjectRootPrefix(string projectRoot, string path)
+        => TryGetRelativePathFromDirectoryPrefix(projectRoot, path);
+
+    internal static string GetRelativePathFromDirectory(string directory, string path) =>
+        TryGetRelativePathFromDirectoryPrefix(directory, path) ?? Path.GetRelativePath(directory, path);
+
+    internal static string? TryGetRelativePathFromDirectoryPrefix(string directory, string path)
     {
-        var root = Path.TrimEndingDirectorySeparator(projectRoot);
+        var root = Path.TrimEndingDirectorySeparator(directory);
         if (root.Length == 0)
             return null;
 

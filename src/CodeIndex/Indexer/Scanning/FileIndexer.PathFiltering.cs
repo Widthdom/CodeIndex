@@ -52,7 +52,7 @@ public partial class FileIndexer
         if (!IsPathEqualOrParent(_projectRoot, fullPath))
             return new PathFilterResult(PathFilterKind.OutsideProjectRoot, errors);
 
-        relativePath = NormalizeIgnorePath(Path.GetRelativePath(_projectRoot, fullPath));
+        relativePath = NormalizeIgnorePath(GetRelativePathFromProjectRoot(_projectRoot, fullPath));
         if (relativePath.StartsWith("../", StringComparison.Ordinal))
             return new PathFilterResult(PathFilterKind.None, errors);
 
