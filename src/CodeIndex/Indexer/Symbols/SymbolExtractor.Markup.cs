@@ -1354,41 +1354,48 @@ public static partial class SymbolExtractor
         int[] lineStarts,
         List<SymbolRecord> symbols)
     {
-        var cursor = 0;
-        while (cursor < rawText.Length)
+        if (rawText.Contains("<Binding", StringComparison.Ordinal)
+            && rawText.Contains("Path", StringComparison.Ordinal))
         {
-            var tagIndex = rawText.IndexOf("<Binding", cursor, StringComparison.Ordinal);
-            if (tagIndex < 0)
-                break;
-
-            var nameEnd = tagIndex + "<Binding".Length;
-            if (nameEnd < rawText.Length && IsXamlAttributeNameChar(rawText[nameEnd]))
+            var cursor = 0;
+            while (cursor < rawText.Length)
             {
-                cursor = nameEnd;
-                continue;
+                var tagIndex = rawText.IndexOf("<Binding", cursor, StringComparison.Ordinal);
+                if (tagIndex < 0)
+                    break;
+
+                var nameEnd = tagIndex + "<Binding".Length;
+                if (nameEnd < rawText.Length && IsXamlAttributeNameChar(rawText[nameEnd]))
+                {
+                    cursor = nameEnd;
+                    continue;
+                }
+
+                var tagEnd = FindXamlTagEnd(rawText, nameEnd);
+                if (tagEnd < 0)
+                    break;
+
+                var pathAttributeIndex = IndexOfXamlAttributeInRange(rawText, "Path", nameEnd, tagEnd);
+                if (pathAttributeIndex >= 0
+                    && TryReadXamlAttributeValue(rawText, "Path", pathAttributeIndex, out var valueStart, out var valueEnd)
+                    && valueEnd <= tagEnd)
+                {
+                    AddXamlAttributeSymbol(
+                        fileId,
+                        lines,
+                        lineStarts,
+                        symbols,
+                        pathAttributeIndex,
+                        "property",
+                        NormalizeXamlBindingPathValue(rawText[valueStart..valueEnd]));
+                }
+
+                cursor = tagEnd + 1;
             }
-
-            var tagEnd = FindXamlTagEnd(rawText, nameEnd);
-            if (tagEnd < 0)
-                break;
-
-            var pathAttributeIndex = IndexOfXamlAttributeInRange(rawText, "Path", nameEnd, tagEnd);
-            if (pathAttributeIndex >= 0
-                && TryReadXamlAttributeValue(rawText, "Path", pathAttributeIndex, out var valueStart, out var valueEnd)
-                && valueEnd <= tagEnd)
-            {
-                AddXamlAttributeSymbol(
-                    fileId,
-                    lines,
-                    lineStarts,
-                    symbols,
-                    pathAttributeIndex,
-                    "property",
-                    NormalizeXamlBindingPathValue(rawText[valueStart..valueEnd]));
-            }
-
-            cursor = tagEnd + 1;
         }
+
+        if (!rawText.Contains("Binding.Path", StringComparison.Ordinal))
+            return;
 
         foreach (Match pathMatch in XamlBindingPathPropertyElementRegex.Matches(rawText))
         {
