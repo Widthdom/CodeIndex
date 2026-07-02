@@ -4457,6 +4457,40 @@ public partial class FileIndexerTests
         }
     }
 
+    [Theory]
+    [InlineData(".pnpm-store", "pkg.js")]
+    [InlineData(".turbo", "trace.json")]
+    [InlineData(".parcel-cache", "bundle.js")]
+    [InlineData(".mypy_cache", "module.meta.json")]
+    [InlineData(".ruff_cache", "cache.bin")]
+    [InlineData("bazel-out", "generated.cc")]
+    [InlineData("CMakeFiles", "compiler_depend.ts")]
+    [InlineData(".swiftpm", "workspace-state.json")]
+    [InlineData(".dart_tool", "package_config.json")]
+    [InlineData(".stack-work", "build.log")]
+    public void ScanFiles_SkipsCommonGeneratedCacheDirectories(string directoryName, string fileName)
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        try
+        {
+            File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('hello')");
+
+            var cacheDir = Path.Combine(tempDir, directoryName);
+            Directory.CreateDirectory(cacheDir);
+            File.WriteAllText(Path.Combine(cacheDir, fileName), "generated");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles();
+
+            Assert.Single(files);
+            Assert.Contains("app.py", files[0]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
     [Fact]
     public void ScanFilesDetailed_FileDeletedAfterEnumeration_RecordsWarning()
     {
@@ -5058,6 +5092,33 @@ public partial class FileIndexerTests
             var indexer = new FileIndexer(tempDir);
             Assert.Equal(FileIndexer.PathFilterKind.None, indexer.EvaluatePathFilter(libPath).FilterKind);
             Assert.Equal(FileIndexer.PathFilterKind.ExcludedByDefaultDirectory, indexer.EvaluatePathFilter(unrelatedPath).FilterKind);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Theory]
+    [InlineData(".turbo", "run.json")]
+    [InlineData(".ruff_cache", "cache.bin")]
+    [InlineData("bazel-testlogs", "test.log")]
+    [InlineData(".dart_tool", "package_config.json")]
+    public void EvaluatePathFilter_SkipsCommonGeneratedCacheDirectories(string directoryName, string fileName)
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        try
+        {
+            var cacheDir = Path.Combine(tempDir, directoryName);
+            Directory.CreateDirectory(cacheDir);
+            var path = Path.Combine(cacheDir, fileName);
+            File.WriteAllText(path, "generated");
+
+            var indexer = new FileIndexer(tempDir);
+
+            Assert.Equal(
+                FileIndexer.PathFilterKind.ExcludedByDefaultDirectory,
+                indexer.EvaluatePathFilter(path).FilterKind);
         }
         finally
         {

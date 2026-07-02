@@ -6,18 +6,27 @@ public partial class FileIndexer
     private static readonly string[] SkipDirNames =
     [
         ".git", ".svn", ".hg",
-        "node_modules", "__pycache__", ".pytest_cache",
+        "node_modules", ".pnpm-store", ".yarn", ".turbo", ".parcel-cache", ".svelte-kit", ".nx",
+        "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".nox", ".eggs", "htmlcov",
         "venv", ".venv", "env",
         "dist", "build", ".build", "out",
+        ".cache", "TestResults",
         "bin", "obj",                   // .NET build outputs / .NETビルド出力
         "target",                       // Rust/Java/Maven build output / Rust/Java/Mavenビルド出力
         ".gradle",                      // Gradle cache / Gradleキャッシュ
         ".next", ".nuxt",
+        ".cmake", "CMakeFiles",
+        "bazel-bin", "bazel-out", "bazel-testlogs", "buck-out", ".pants.d",
+        ".bloop", ".metals",
         ".idea", ".vscode",
         "coverage", "vendor",
         ".terraform",                   // Terraform state/plugin cache / Terraformステート・プラグインキャッシュ
         ".cargo",                       // Cargo registry cache / Cargoレジストリキャッシュ
         ".pub-cache",                   // Dart pub cache / Dart pubキャッシュ
+        ".dart_tool",                   // Dart/Flutter tool cache / Dart/Flutterツールキャッシュ
+        ".swiftpm", "DerivedData",       // SwiftPM/Xcode cache / SwiftPM/Xcodeキャッシュ
+        ".stack-work",                  // Haskell Stack build output / Haskell Stackビルド出力
+        ".bundle",                      // Ruby Bundler local state / Ruby Bundlerローカル状態
         "_build",                       // Elixir/Mix build output / Elixir/Mixビルド出力
     ];
 
