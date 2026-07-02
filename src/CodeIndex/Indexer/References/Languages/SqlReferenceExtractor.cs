@@ -3765,7 +3765,7 @@ internal static partial class SqlReferenceExtractor
             return line;
         }
 
-        var sanitized = line.ToCharArray();
+        char[]? sanitized = null;
         bool inBlockComment = state.InBlockComment;
         string? dollarQuoteDelimiter = state.DollarQuoteDelimiter;
         bool inSingleQuotedString = state.InSingleQuotedString;
@@ -3773,7 +3773,8 @@ internal static partial class SqlReferenceExtractor
         void BlankRange(int start, int endExclusive)
         {
             start = Math.Max(0, start);
-            endExclusive = Math.Min(sanitized.Length, endExclusive);
+            endExclusive = Math.Min(line.Length, endExclusive);
+            sanitized ??= line.ToCharArray();
             for (int blankIndex = start; blankIndex < endExclusive; blankIndex++)
                 sanitized[blankIndex] = ' ';
         }
@@ -3910,7 +3911,7 @@ internal static partial class SqlReferenceExtractor
         }
 
         nextState = new IdentifierScanState(inBlockComment, dollarQuoteDelimiter, inSingleQuotedString);
-        return new string(sanitized);
+        return sanitized is null ? line : new string(sanitized);
     }
 
     private static bool ShouldTreatHashAsComment(string line, int hashIndex, string? statementPrefix)

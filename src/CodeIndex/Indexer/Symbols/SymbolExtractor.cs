@@ -4984,66 +4984,76 @@ public static partial class SymbolExtractor
 
     private static string MaskSqlSyntheticSymbolLine(string line, ref bool inBlockComment)
     {
-        var chars = line.ToCharArray();
+        char[]? chars = null;
+
+        void MaskAt(int index) =>
+            (chars ??= line.ToCharArray())[index] = ' ';
+
+        void MaskToEnd(int start)
+        {
+            var masked = chars ??= line.ToCharArray();
+            for (var index = start; index < line.Length; index++)
+                masked[index] = ' ';
+        }
+
         var inSingleQuote = false;
-        for (var i = 0; i < chars.Length; i++)
+        for (var i = 0; i < line.Length; i++)
         {
             if (inBlockComment)
             {
-                if (chars[i] == '*' && i + 1 < chars.Length && chars[i + 1] == '/')
+                if (line[i] == '*' && i + 1 < line.Length && line[i + 1] == '/')
                 {
-                    chars[i] = ' ';
-                    chars[i + 1] = ' ';
+                    MaskAt(i);
+                    MaskAt(i + 1);
                     i++;
                     inBlockComment = false;
                 }
                 else
                 {
-                    chars[i] = ' ';
+                    MaskAt(i);
                 }
                 continue;
             }
 
             if (inSingleQuote)
             {
-                if (chars[i] == '\'' && i + 1 < chars.Length && chars[i + 1] == '\'')
+                if (line[i] == '\'' && i + 1 < line.Length && line[i + 1] == '\'')
                 {
-                    chars[i] = ' ';
-                    chars[i + 1] = ' ';
+                    MaskAt(i);
+                    MaskAt(i + 1);
                     i++;
                     continue;
                 }
 
-                if (chars[i] == '\'')
+                if (line[i] == '\'')
                     inSingleQuote = false;
-                chars[i] = ' ';
+                MaskAt(i);
                 continue;
             }
 
-            if (chars[i] == '-' && i + 1 < chars.Length && chars[i + 1] == '-')
+            if (line[i] == '-' && i + 1 < line.Length && line[i + 1] == '-')
             {
-                for (; i < chars.Length; i++)
-                    chars[i] = ' ';
+                MaskToEnd(i);
                 break;
             }
 
-            if (chars[i] == '/' && i + 1 < chars.Length && chars[i + 1] == '*')
+            if (line[i] == '/' && i + 1 < line.Length && line[i + 1] == '*')
             {
-                chars[i] = ' ';
-                chars[i + 1] = ' ';
+                MaskAt(i);
+                MaskAt(i + 1);
                 i++;
                 inBlockComment = true;
                 continue;
             }
 
-            if (chars[i] == '\'')
+            if (line[i] == '\'')
             {
-                chars[i] = ' ';
+                MaskAt(i);
                 inSingleQuote = true;
             }
         }
 
-        return new string(chars);
+        return chars is null ? line : new string(chars);
     }
 
     private static void ExtractSqlRoutineResultColumnSymbols(long fileId, string[] lines, string[] structuralLines, List<SymbolRecord> symbols)
