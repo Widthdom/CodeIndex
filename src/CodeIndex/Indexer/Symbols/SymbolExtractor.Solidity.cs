@@ -84,18 +84,24 @@ public static partial class SymbolExtractor
                 }
             }
 
-            var eventMatch = SolidityEventDeclarationRegex.Match(line);
-            if (eventMatch.Success)
+            if (line.Contains("event", StringComparison.Ordinal))
             {
-                AddSoliditySymbol(symbols, fileId, "event", "event", eventMatch, lines[i], matchLines, i, BodyStyle.None);
-                continue;
+                var eventMatch = SolidityEventDeclarationRegex.Match(line);
+                if (eventMatch.Success)
+                {
+                    AddSoliditySymbol(symbols, fileId, "event", "event", eventMatch, lines[i], matchLines, i, BodyStyle.None);
+                    continue;
+                }
             }
 
-            var errorMatch = SolidityErrorDeclarationRegex.Match(line);
-            if (errorMatch.Success)
+            if (line.Contains("error", StringComparison.Ordinal))
             {
-                AddSoliditySymbol(symbols, fileId, "type", "error", errorMatch, lines[i], matchLines, i, BodyStyle.None);
-                continue;
+                var errorMatch = SolidityErrorDeclarationRegex.Match(line);
+                if (errorMatch.Success)
+                {
+                    AddSoliditySymbol(symbols, fileId, "type", "error", errorMatch, lines[i], matchLines, i, BodyStyle.None);
+                    continue;
+                }
             }
 
             if (line.Contains("struct", StringComparison.Ordinal))
