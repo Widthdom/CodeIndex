@@ -785,103 +785,146 @@ internal static partial class SqlReferenceExtractor
         Func<string, bool> shouldIgnoreName,
         HashSet<int> suppressedCallIndices)
     {
-        EmitMultiTargetReferences(
-            CreateTriggerOnTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        var hasCreateKeyword = statement.IndexOf("CREATE", StringComparison.OrdinalIgnoreCase) >= 0;
+        var hasAlterKeyword = statement.IndexOf("ALTER", StringComparison.OrdinalIgnoreCase) >= 0;
+        var hasDropKeyword = statement.IndexOf("DROP", StringComparison.OrdinalIgnoreCase) >= 0;
+        var hasOnKeyword = statement.IndexOf("ON", StringComparison.OrdinalIgnoreCase) >= 0;
+        var hasTriggerKeyword = statement.IndexOf("TRIGGER", StringComparison.OrdinalIgnoreCase) >= 0;
+        var hasSecurityKeyword = statement.IndexOf("SECURITY", StringComparison.OrdinalIgnoreCase) >= 0;
+        var hasPolicyKeyword = statement.IndexOf("POLICY", StringComparison.OrdinalIgnoreCase) >= 0;
+        var hasPredicateKeyword = statement.IndexOf("PREDICATE", StringComparison.OrdinalIgnoreCase) >= 0;
 
-        EmitMultiTargetReferences(
-            CreateSecurityPolicyPredicateTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (hasCreateKeyword && hasTriggerKeyword && hasOnKeyword)
+        {
+            EmitMultiTargetReferences(
+                CreateTriggerOnTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
 
-        EmitMultiTargetReferences(
-            AlterSecurityPolicyPredicateTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (hasCreateKeyword
+            && hasSecurityKeyword
+            && hasPolicyKeyword
+            && hasPredicateKeyword
+            && hasOnKeyword)
+        {
+            EmitMultiTargetReferences(
+                CreateSecurityPolicyPredicateTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
 
-        EmitMultiTargetReferences(
-            ToggleTriggerOnTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (hasAlterKeyword
+            && hasSecurityKeyword
+            && hasPolicyKeyword
+            && hasPredicateKeyword
+            && hasOnKeyword)
+        {
+            EmitMultiTargetReferences(
+                AlterSecurityPolicyPredicateTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
 
-        EmitMultiTargetReferences(
-            ForeignKeyReferencesTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName,
-            suppressedCallIndices);
+        if ((statement.IndexOf("ENABLE", StringComparison.OrdinalIgnoreCase) >= 0
+                || statement.IndexOf("DISABLE", StringComparison.OrdinalIgnoreCase) >= 0)
+            && hasTriggerKeyword
+            && hasOnKeyword)
+        {
+            EmitMultiTargetReferences(
+                ToggleTriggerOnTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
 
-        EmitMultiTargetReferences(
-            CreateSynonymForTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (statement.IndexOf("REFERENCES", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                ForeignKeyReferencesTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName,
+                suppressedCallIndices);
+        }
 
-        EmitDropObjectTargetReferences(
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (hasCreateKeyword
+            && statement.IndexOf("SYNONYM", StringComparison.OrdinalIgnoreCase) >= 0
+            && statement.IndexOf("FOR", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                CreateSynonymForTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
+
+        if (hasDropKeyword)
+        {
+            EmitDropObjectTargetReferences(
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
     }
 
     private static void EmitDropObjectTargetReferences(
@@ -897,229 +940,284 @@ internal static partial class SqlReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForCall,
         Func<string, bool> shouldIgnoreName)
     {
-        EmitMultiTargetReferences(
-            DropSynonymTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (statement.IndexOf("SYNONYM", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                DropSynonymTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
 
-        EmitMultiTargetReferences(
-            DropViewTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (statement.IndexOf("VIEW", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                DropViewTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
 
-        EmitMultiTargetReferences(
-            DropProcedureTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (statement.IndexOf("PROCEDURE", StringComparison.OrdinalIgnoreCase) >= 0
+            || statement.IndexOf("PROC", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                DropProcedureTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
 
-        EmitMultiTargetReferences(
-            DropFunctionTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (statement.IndexOf("FUNCTION", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                DropFunctionTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
 
-        EmitMultiTargetReferences(
-            DropTriggerTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (statement.IndexOf("TRIGGER", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                DropTriggerTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
 
-        EmitMultiTargetReferences(
-            DropSequenceTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (statement.IndexOf("SEQUENCE", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                DropSequenceTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
 
-        EmitMultiTargetReferences(
-            DropTypeTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (statement.IndexOf("TYPE", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                DropTypeTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
 
-        EmitMultiTargetReferences(
-            DropRuleTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (statement.IndexOf("RULE", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                DropRuleTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
 
-        EmitMultiTargetReferences(
-            DropDefaultTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (statement.IndexOf("DEFAULT", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                DropDefaultTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
 
-        EmitMultiTargetReferences(
-            DropAggregateTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (statement.IndexOf("AGGREGATE", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                DropAggregateTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
 
-        EmitMultiTargetReferences(
-            DropSecurityPolicyTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (statement.IndexOf("SECURITY", StringComparison.OrdinalIgnoreCase) >= 0
+            && statement.IndexOf("POLICY", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                DropSecurityPolicyTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
 
-        EmitMultiTargetReferences(
-            DropFullTextCatalogTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (statement.IndexOf("FULLTEXT", StringComparison.OrdinalIgnoreCase) >= 0
+            && statement.IndexOf("CATALOG", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                DropFullTextCatalogTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
 
-        EmitMultiTargetReferences(
-            DropPartitionSchemeTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (statement.IndexOf("PARTITION", StringComparison.OrdinalIgnoreCase) >= 0
+            && statement.IndexOf("SCHEME", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                DropPartitionSchemeTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
 
-        EmitMultiTargetReferences(
-            DropPartitionFunctionTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (statement.IndexOf("PARTITION", StringComparison.OrdinalIgnoreCase) >= 0
+            && statement.IndexOf("FUNCTION", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                DropPartitionFunctionTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
 
-        EmitMultiTargetReferences(
-            DropXmlSchemaCollectionTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (statement.IndexOf("XML", StringComparison.OrdinalIgnoreCase) >= 0
+            && statement.IndexOf("SCHEMA", StringComparison.OrdinalIgnoreCase) >= 0
+            && statement.IndexOf("COLLECTION", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                DropXmlSchemaCollectionTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
 
-        EmitMultiTargetReferences(
-            DropAssemblyTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (statement.IndexOf("ASSEMBLY", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                DropAssemblyTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
     }
 
     private static void EmitAlterAndMaintenanceTargetReferences(

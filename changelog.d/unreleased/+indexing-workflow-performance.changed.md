@@ -71,6 +71,7 @@ affected:
 - **Gated SQL temp-object establishment scans by statement marker** - SQL statement-prefix carryover now checks target, truncate, select-into, and create markers before running temp-object regex probes.
 - **Gated SQL source and call scans by statement marker** - SQL reference extraction now checks call, source, merge, delete-using, output, and select-into markers before running their statement-level regex passes.
 - **Gated SQL index target scans by statement marker** - SQL reference extraction now skips index target regex groups on non-index statements and dispatches create, alter, drop, XML, columnstore, hash, and fulltext variants by marker.
+- **Gated SQL lifecycle target scans by statement marker** - SQL reference extraction now checks trigger, security policy, references, synonym, and drop-object markers before running lifecycle target regex groups.
 - **Skipped reference-line preparation on empty lines** - all language reference preparation now returns empty lines immediately instead of running comment/string-literal trigger checks.
 - **Collapsed string-literal delimiter probes** - reference-line preparation now checks quote/backtick trigger characters with `IndexOfAny` instead of separate scans per delimiter.
 - **Hoisted reference-line preparation language flags** - per-file reference preparation now computes language comment/string handling flags once and reuses them for each line instead of repeating language switches in the hot loop.
@@ -169,6 +170,7 @@ affected:
 - **SQL temp-object establishment scan を statement marker で gate します** - SQL statement-prefix carryover は target、truncate、select-into、create marker を確認してから temp-object regex probe を実行します。
 - **SQL source / call scan を statement marker で gate します** - SQL reference extraction は call、source、merge、delete-using、output、select-into marker を確認してから statement-level regex pass を実行します。
 - **SQL index target scan を statement marker で gate します** - SQL reference extraction は index でない statement の index target regex group を skip し、create、alter、drop、XML、columnstore、hash、fulltext variant を marker で振り分けます。
+- **SQL lifecycle target scan を statement marker で gate します** - SQL reference extraction は trigger、security policy、references、synonym、drop-object marker を確認してから lifecycle target regex group を実行します。
 - **空行の reference-line preparation を skip します** - 全言語の reference preparation は空行に対して comment/string-literal trigger 判定を走らせず即 return するようになりました。
 - **string-literal delimiter probe をまとめました** - reference-line preparation は quote/backtick trigger character を delimiter ごとの個別 scan ではなく `IndexOfAny` で確認します。
 - **reference-line preparation の言語フラグを loop 外へ出しました** - ファイルごとの reference preparation は comment/string handling の言語フラグを一度だけ計算し、hot loop 内で language switch を繰り返さないようになりました。
