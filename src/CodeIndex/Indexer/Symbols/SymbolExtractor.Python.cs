@@ -467,10 +467,12 @@ public static partial class SymbolExtractor
                     continue;
                 }
 
-                var slotsMatch = PythonClassSlotsAssignmentRegex.Match(line);
-                if (!slotsMatch.Success)
+                Match? slotsMatch = null;
+                if (line.IndexOf("__slots__", StringComparison.Ordinal) >= 0)
+                    slotsMatch = PythonClassSlotsAssignmentRegex.Match(line);
+                else if (line.IndexOf("__match_args__", StringComparison.Ordinal) >= 0)
                     slotsMatch = PythonClassMatchArgsAssignmentRegex.Match(line);
-                if (slotsMatch.Success)
+                if (slotsMatch is { Success: true })
                 {
                     var slots = TryExpandPythonAllExportSymbolsFromValues(lines, i, slotsMatch.Groups["values"].Index);
                     if (slots != null)
@@ -490,59 +492,72 @@ public static partial class SymbolExtractor
                     continue;
                 }
 
-                var annotationsMatch = PythonClassAnnotationsAssignmentRegex.Match(line);
-                if (annotationsMatch.Success)
+                if (line.IndexOf("__annotations__", StringComparison.Ordinal) >= 0)
                 {
-                    var annotationKeys = TryExpandPythonStringDictionaryKeys(lines, i, annotationsMatch.Groups["values"].Index);
-                    if (annotationKeys != null)
+                    var annotationsMatch = PythonClassAnnotationsAssignmentRegex.Match(line);
+                    if (annotationsMatch.Success)
                     {
-                        foreach (var key in annotationKeys)
+                        var annotationKeys = TryExpandPythonStringDictionaryKeys(lines, i, annotationsMatch.Groups["values"].Index);
+                        if (annotationKeys != null)
                         {
-                            AddPythonClassPropertySymbol(
-                                fileId,
-                                lines,
-                                symbols,
-                                key.Name,
-                                key.LineIndex,
-                                key.StartColumn);
+                            foreach (var key in annotationKeys)
+                            {
+                                AddPythonClassPropertySymbol(
+                                    fileId,
+                                    lines,
+                                    symbols,
+                                    key.Name,
+                                    key.LineIndex,
+                                    key.StartColumn);
+                            }
                         }
-                    }
 
-                    continue;
+                        continue;
+                    }
                 }
 
-                var fieldMatch = PythonDataclassFieldAttributeRegex.Match(line);
-                if (fieldMatch.Success)
-                {
-                    AddPythonClassPropertySymbol(
-                        fileId,
-                        lines,
-                        symbols,
-                        fieldMatch.Groups["name"].Value,
-                        i,
-                        fieldMatch.Groups["name"].Index,
-                        subKind: "dataclass_field");
-
-                    var metadataKeys = TryExpandPythonDataclassFieldMetadataKeys(lines, i, fieldMatch.Groups["name"].Index);
-                    if (metadataKeys != null)
-                    {
-                        foreach (var key in metadataKeys)
-                        {
-                            AddPythonDataclassFieldMetadataSymbol(
-                                fileId,
-                                lines,
-                                symbols,
-                                key.Name,
-                                key.LineIndex,
-                                key.StartColumn);
-                        }
-                    }
-
+                var hasAssignment = line.IndexOf('=') >= 0;
+                var hasAnnotation = line.IndexOf(':') >= 0;
+                if (!hasAssignment && !hasAnnotation)
                     continue;
+
+                if (hasAssignment && line.IndexOf("field", StringComparison.Ordinal) >= 0)
+                {
+                    var fieldMatch = PythonDataclassFieldAttributeRegex.Match(line);
+                    if (fieldMatch.Success)
+                    {
+                        AddPythonClassPropertySymbol(
+                            fileId,
+                            lines,
+                            symbols,
+                            fieldMatch.Groups["name"].Value,
+                            i,
+                            fieldMatch.Groups["name"].Index,
+                            subKind: "dataclass_field");
+
+                        var metadataKeys = TryExpandPythonDataclassFieldMetadataKeys(lines, i, fieldMatch.Groups["name"].Index);
+                        if (metadataKeys != null)
+                        {
+                            foreach (var key in metadataKeys)
+                            {
+                                AddPythonDataclassFieldMetadataSymbol(
+                                    fileId,
+                                    lines,
+                                    symbols,
+                                    key.Name,
+                                    key.LineIndex,
+                                    key.StartColumn);
+                            }
+                        }
+
+                        continue;
+                    }
                 }
 
-                var match = PythonClassAnnotatedAttributeRegex.Match(line);
-                if (!match.Success)
+                var match = hasAnnotation
+                    ? PythonClassAnnotatedAttributeRegex.Match(line)
+                    : PythonClassAssignedAttributeRegex.Match(line);
+                if (!match.Success && hasAnnotation && hasAssignment)
                     match = PythonClassAssignedAttributeRegex.Match(line);
                 if (!match.Success)
                     continue;

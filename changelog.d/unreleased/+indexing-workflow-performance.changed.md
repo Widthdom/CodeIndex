@@ -115,6 +115,7 @@ affected:
 - **Gated Python dynamic-import scans by marker** - Python import expansion now skips dynamic import literal regex enumeration when statements lack `importlib` and `__import__` markers.
 - **Dispatched Python direct/from import scans by prefix** - Python import expansion now runs direct and from-import regexes only for statements beginning with the matching import keyword.
 - **Gated Python `__all__` export scans by marker** - Python export expansion now skips append/extend/assignment regex checks on lines without the `__all__` marker.
+- **Gated Python class attribute scans by marker** - Python class-body extraction now checks special attributes, dataclass fields, annotations, and assignments with cheap markers before running the corresponding regexes.
 
 ## 日本語
 
@@ -188,3 +189,4 @@ affected:
 - **Python dynamic-import scan を marker で gate します** - Python import expansion は statement に `importlib` と `__import__` marker がない場合 dynamic import literal regex enumeration を skip します。
 - **Python direct/from import scan を prefix で振り分けます** - Python import expansion は matching import keyword で始まる statement にだけ direct/from-import regex を実行します。
 - **Python `__all__` export scan を marker で gate します** - Python export expansion は `__all__` marker のない行で append/extend/assignment regex check を skip します。
+- **Python class attribute scan を marker で gate します** - Python class-body extraction は special attribute、dataclass field、annotation、assignment を対応する軽量 marker で確認してから regex を実行します。
