@@ -33,6 +33,7 @@ affected:
   - src/CodeIndex/Indexer/References/Languages/SqlReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/Languages/RReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/Languages/ScalaReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/LuaReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/Languages/PowerShellReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/Languages/ShellReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/Languages/TypeScriptReferenceExtractor.cs
@@ -90,6 +91,7 @@ affected:
 - **Gated SQL temp-object collection scans by marker** - SQL temp object carry-forward now skips collection without `#` markers and runs target, truncate, select-into, and create probes only when their statement keywords are present.
 - **Gated Go concurrency reference scans by marker** - Go reference extraction now checks `go` and channel-arrow markers before running goroutine and channel send/receive regex probes.
 - **Gated Scala block and type-context scans by marker** - Scala reference extraction now checks block, generator, implicit, given, and using markers before running those regex probes.
+- **Gated Lua call and table-field scans by marker** - Lua reference extraction now checks whitespace, colon, and dot markers before running command-call, method-call, and table-field regex probes.
 - **Skipped reference-line preparation on empty lines** - all language reference preparation now returns empty lines immediately instead of running comment/string-literal trigger checks.
 - **Collapsed string-literal delimiter probes** - reference-line preparation now checks quote/backtick trigger characters with `IndexOfAny` instead of separate scans per delimiter.
 - **Hoisted reference-line preparation language flags** - per-file reference preparation now computes language comment/string handling flags once and reuses them for each line instead of repeating language switches in the hot loop.
@@ -202,6 +204,7 @@ affected:
 - **SQL temp-object collection scan を marker で gate します** - SQL temp object carry-forward は `#` marker がない場合の collection を skip し、target、truncate、select-into、create probe は対応する statement keyword がある場合だけ実行します。
 - **Go concurrency reference scan を marker で gate します** - Go reference extraction は goroutine と channel send/receive regex probe を実行する前に `go` と channel-arrow marker を確認します。
 - **Scala block / type-context scan を marker で gate します** - Scala reference extraction は block、generator、implicit、given、using marker を確認してから対応する regex probe を実行します。
+- **Lua call / table-field scan を marker で gate します** - Lua reference extraction は command-call、method-call、table-field regex probe を実行する前に whitespace、colon、dot marker を確認します。
 - **空行の reference-line preparation を skip します** - 全言語の reference preparation は空行に対して comment/string-literal trigger 判定を走らせず即 return するようになりました。
 - **string-literal delimiter probe をまとめました** - reference-line preparation は quote/backtick trigger character を delimiter ごとの個別 scan ではなく `IndexOfAny` で確認します。
 - **reference-line preparation の言語フラグを loop 外へ出しました** - ファイルごとの reference preparation は comment/string handling の言語フラグを一度だけ計算し、hot loop 内で language switch を繰り返さないようになりました。

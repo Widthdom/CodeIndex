@@ -113,21 +113,30 @@ internal static class LuaReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForColumn,
         IReadOnlySet<string>? definitionNames)
     {
-        var match = LuaCommandCallRegex.Match(preparedLine);
-        if (match.Success)
+        if (preparedLine.IndexOf(' ') >= 0 || preparedLine.IndexOf('\t') >= 0)
         {
-            var name = LastQualifiedSegment(match.Groups["name"].Value);
-            if (definitionNames?.Contains(name) != true)
-                addCallLikeReference(name, match.Groups["name"].Index + match.Groups["name"].Value.LastIndexOf(name, StringComparison.Ordinal));
+            var match = LuaCommandCallRegex.Match(preparedLine);
+            if (match.Success)
+            {
+                var name = LastQualifiedSegment(match.Groups["name"].Value);
+                if (definitionNames?.Contains(name) != true)
+                    addCallLikeReference(name, match.Groups["name"].Index + match.Groups["name"].Value.LastIndexOf(name, StringComparison.Ordinal));
+            }
         }
 
-        foreach (Match colonMatch in LuaColonCallRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf(':') >= 0)
         {
-            var name = colonMatch.Groups["name"].Value;
-            if (definitionNames?.Contains(name) == true)
-                continue;
-            addCallLikeReference(name, colonMatch.Groups["name"].Index);
+            foreach (Match colonMatch in LuaColonCallRegex.Matches(preparedLine))
+            {
+                var name = colonMatch.Groups["name"].Value;
+                if (definitionNames?.Contains(name) == true)
+                    continue;
+                addCallLikeReference(name, colonMatch.Groups["name"].Index);
+            }
         }
+
+        if (preparedLine.IndexOf('.') < 0)
+            return;
 
         foreach (Match fieldMatch in LuaTableFieldReferenceRegex.Matches(preparedLine))
         {
