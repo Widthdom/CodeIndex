@@ -24,6 +24,7 @@ affected:
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Smalltalk.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Solidity.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.StructuredData.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.VisualBasic.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Markup.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.Preparation.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.TypeReferences.cs
@@ -117,6 +118,7 @@ affected:
 - **Gated F# record-field scans by colon** - F# record-field extraction now skips record-field regex checks for candidates that cannot contain a typed field separator.
 - **Gated F# active/operator scans by marker** - F# extraction now skips active-pattern and operator-definition regex checks when lines lack their required markers.
 - **Gated YAML mapping-key scans by colon** - YAML structured-data extraction now skips mapping-key regex checks on lines that cannot contain a mapping separator.
+- **Gated Visual Basic enum-member scans by name start** - Visual Basic enum extraction now skips enum-member regex checks when the trimmed line cannot start a member name.
 - **Gated Python dynamic-import scans by marker** - Python import expansion now skips dynamic import literal regex enumeration when statements lack `importlib` and `__import__` markers.
 - **Dispatched Python direct/from import scans by prefix** - Python import expansion now runs direct and from-import regexes only for statements beginning with the matching import keyword.
 - **Gated Python `__all__` export scans by marker** - Python export expansion now skips append/extend/assignment regex checks on lines without the `__all__` marker.
@@ -197,6 +199,7 @@ affected:
 - **F# record-field scan を colon で gate します** - F# record-field extraction は typed field separator を含めない candidate で record-field regex check を skip します。
 - **F# active/operator scan を marker で gate します** - F# extraction は line に必要 marker がない場合 active-pattern と operator-definition regex check を skip します。
 - **YAML mapping-key scan を colon で gate します** - YAML structured-data extraction は mapping separator を含めない行で mapping-key regex check を skip します。
+- **Visual Basic enum-member scan を name start で gate します** - Visual Basic enum extraction は trimmed line が member 名で始まり得ない場合 enum-member regex check を skip します。
 - **Python dynamic-import scan を marker で gate します** - Python import expansion は statement に `importlib` と `__import__` marker がない場合 dynamic import literal regex enumeration を skip します。
 - **Python direct/from import scan を prefix で振り分けます** - Python import expansion は matching import keyword で始まる statement にだけ direct/from-import regex を実行します。
 - **Python `__all__` export scan を marker で gate します** - Python export expansion は `__all__` marker のない行で append/extend/assignment regex check を skip します。
