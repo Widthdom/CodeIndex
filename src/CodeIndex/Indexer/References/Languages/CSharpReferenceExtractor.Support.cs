@@ -266,11 +266,14 @@ public static partial class ReferenceExtractor
         return imports;
     }
 
-    private static HashSet<string> BuildCSharpKnownTypeNames(string language, IReadOnlyList<SymbolRecord> symbols)
+    private static (HashSet<string> KnownTypeNames, HashSet<string> NonEnumTypeNames) BuildCSharpTypeNameSets(
+        string language,
+        IReadOnlyList<SymbolRecord> symbols)
     {
-        var names = new HashSet<string>(StringComparer.Ordinal);
+        var knownTypeNames = new HashSet<string>(StringComparer.Ordinal);
+        var nonEnumTypeNames = new HashSet<string>(StringComparer.Ordinal);
         if (language != "csharp")
-            return names;
+            return (knownTypeNames, nonEnumTypeNames);
 
         foreach (var symbol in symbols)
         {
@@ -279,7 +282,7 @@ public static partial class ReferenceExtractor
 
             var normalizedName = NormalizeCSharpIdentifier(symbol.Name);
             if (!string.IsNullOrWhiteSpace(normalizedName))
-                names.Add(normalizedName);
+                knownTypeNames.Add(normalizedName);
 
             var qualifiedContainer = !string.IsNullOrWhiteSpace(symbol.ContainerQualifiedName)
                 ? symbol.ContainerQualifiedName
@@ -287,25 +290,13 @@ public static partial class ReferenceExtractor
                     ? symbol.ContainerName
                     : null;
             if (!string.IsNullOrWhiteSpace(qualifiedContainer) && !string.IsNullOrWhiteSpace(normalizedName))
-                names.Add(qualifiedContainer + "." + normalizedName);
+                knownTypeNames.Add(qualifiedContainer + "." + normalizedName);
+
+            if (symbol.Kind != "enum" && !string.IsNullOrWhiteSpace(symbol.Name))
+                nonEnumTypeNames.Add(symbol.Name);
         }
 
-        return names;
-    }
-
-    private static HashSet<string> BuildCSharpNonEnumTypeNames(IReadOnlyList<SymbolRecord> symbols)
-    {
-        var names = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var symbol in symbols)
-        {
-            if (symbol.Kind is not ("class" or "struct" or "interface" or "delegate"))
-                continue;
-
-            if (!string.IsNullOrWhiteSpace(symbol.Name))
-                names.Add(symbol.Name);
-        }
-
-        return names;
+        return (knownTypeNames, nonEnumTypeNames);
     }
 
     private static HashSet<string>? BuildCallableDefinitionNames(string language, IReadOnlyList<SymbolRecord> symbols)
@@ -558,13 +549,12 @@ public static partial class ReferenceExtractor
 
     private static Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> BuildCSharpQualifiedEnumMemberLookup(
         string language,
-        IReadOnlyList<SymbolRecord> symbols)
+        IReadOnlyList<SymbolRecord> symbols,
+        IReadOnlySet<string> conflictingNonEnumTypeNames)
     {
         var lookup = new Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
         if (language != "csharp")
             return lookup;
-
-        var conflictingNonEnumTypeNames = BuildCSharpNonEnumTypeNames(symbols);
 
         foreach (var symbol in symbols)
         {
@@ -602,13 +592,12 @@ public static partial class ReferenceExtractor
 
     private static Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> BuildCSharpQualifiedConstantPatternMemberLookup(
         string language,
-        IReadOnlyList<SymbolRecord> symbols)
+        IReadOnlyList<SymbolRecord> symbols,
+        IReadOnlySet<string> conflictingNonEnumTypeNames)
     {
         var lookup = new Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
         if (language != "csharp")
             return lookup;
-
-        var conflictingNonEnumTypeNames = BuildCSharpNonEnumTypeNames(symbols);
 
         foreach (var symbol in symbols)
         {

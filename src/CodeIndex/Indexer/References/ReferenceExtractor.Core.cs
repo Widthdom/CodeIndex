@@ -139,10 +139,12 @@ public static partial class ReferenceExtractor
         // C# のプライマリコンストラクタ宣言（record / class / struct）で base primary-ctor を呼んでいる場合、
         // 宣言ヘッダー全体を合成コンテナで上書きする。`{` / `;` 以降の本体行は通常の container に戻す。
         var recordPrimaryCtorRanges = BuildCSharpPrimaryCtorContainers(language, symbols, structuralLines);
-        var csharpQualifiedEnumMemberLookup = BuildCSharpQualifiedEnumMemberLookup(language, symbols);
-        var csharpQualifiedConstantPatternMemberLookup = BuildCSharpQualifiedConstantPatternMemberLookup(language, symbols);
+        var csharpTypeNameSets = BuildCSharpTypeNameSets(language, symbols);
+        var csharpKnownTypeNames = csharpTypeNameSets.KnownTypeNames;
+        var csharpNonEnumTypeNames = csharpTypeNameSets.NonEnumTypeNames;
+        var csharpQualifiedEnumMemberLookup = BuildCSharpQualifiedEnumMemberLookup(language, symbols, csharpNonEnumTypeNames);
+        var csharpQualifiedConstantPatternMemberLookup = BuildCSharpQualifiedConstantPatternMemberLookup(language, symbols, csharpNonEnumTypeNames);
         var csharpQualifiedTypePatternLookup = BuildCSharpQualifiedTypePatternLookup(language, symbols);
-        var csharpKnownTypeNames = BuildCSharpKnownTypeNames(language, symbols);
         var kotlinNameSets = KotlinReferenceExtractor.BuildNameSets(language, symbols);
         var kotlinConstructorTypeNames = kotlinNameSets.ConstructorTypeNames;
         var kotlinInfixFunctionNames = kotlinNameSets.InfixFunctionNames;
