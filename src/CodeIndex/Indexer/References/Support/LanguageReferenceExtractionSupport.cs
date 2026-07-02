@@ -3163,7 +3163,7 @@ internal static partial class LanguageReferenceExtractionSupport
             && preparedLine.IndexOf(')') >= 0
             && (ContainsKeywordIgnoringCase(preparedLine, "class")
                 || ContainsKeywordIgnoringCase(preparedLine, "interface")
-                || preparedLine.IndexOf("object", StringComparison.OrdinalIgnoreCase) >= 0);
+                || ContainsKeywordIgnoringCase(preparedLine, "object"));
         if (hasPascalBaseMarker)
         {
             foreach (Match match in PascalClassBaseRegex.Matches(preparedLine))

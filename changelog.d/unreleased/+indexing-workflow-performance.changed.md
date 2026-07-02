@@ -332,6 +332,7 @@ affected:
 - **Added shared keyword containment gates** - Reference extraction now has a boundary-aware case-insensitive keyword helper for replacing broad substring probes in language hot paths.
 - **Tightened Pascal class base markers to keyword boundaries** - Pascal reference extraction now treats `class` as a boundary-aware keyword before running base-list regex probes.
 - **Tightened Pascal interface base markers to keyword boundaries** - Pascal reference extraction now treats `interface` as a boundary-aware keyword before running base-list regex probes.
+- **Tightened Pascal object base markers to keyword boundaries** - Pascal reference extraction now treats `object` as a boundary-aware keyword before running base-list regex probes.
 
 ## 日本語
 
@@ -598,3 +599,4 @@ affected:
 - **共通 keyword containment gate を追加します** - Reference extraction は language hot path の broad substring probe を置き換える boundary-aware case-insensitive keyword helper を持つようになります。
 - **Pascal class base marker を keyword boundary に強化します** - Pascal reference extraction は base-list regex probe の前に `class` を boundary-aware keyword として扱います。
 - **Pascal interface base marker を keyword boundary に強化します** - Pascal reference extraction は base-list regex probe の前に `interface` を boundary-aware keyword として扱います。
+- **Pascal object base marker を keyword boundary に強化します** - Pascal reference extraction は base-list regex probe の前に `object` を boundary-aware keyword として扱います。
