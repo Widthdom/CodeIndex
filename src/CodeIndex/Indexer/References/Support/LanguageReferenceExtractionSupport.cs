@@ -1682,7 +1682,7 @@ internal static partial class LanguageReferenceExtractionSupport
         }
 
         var hasCppTypedefAliasMarker = !hasCppParen
-            && preparedLine.IndexOf("typedef", StringComparison.Ordinal) >= 0
+            && ContainsOrdinalKeyword(preparedLine, "typedef")
             && preparedLine.IndexOf(';') >= 0;
         if (hasCppTypedefAliasMarker)
         {
