@@ -3114,7 +3114,9 @@ internal static partial class LanguageReferenceExtractionSupport
                 || preparedLine.IndexOf("complex", StringComparison.OrdinalIgnoreCase) >= 0
                 || preparedLine.IndexOf("logical", StringComparison.OrdinalIgnoreCase) >= 0
                 || preparedLine.IndexOf("character", StringComparison.OrdinalIgnoreCase) >= 0);
-        if (hasFortranIntrinsicKindMarker && preparedLine.IndexOf("kind", StringComparison.OrdinalIgnoreCase) >= 0)
+        if (hasFortranIntrinsicKindMarker
+            && preparedLine.IndexOf('=') >= 0
+            && preparedLine.IndexOf("kind", StringComparison.OrdinalIgnoreCase) >= 0)
         {
             foreach (Match match in FortranIntrinsicKeywordKindRegex.Matches(preparedLine))
             {
