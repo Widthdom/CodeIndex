@@ -72,6 +72,7 @@ affected:
 - **Skipped Svelte reactive-property regex scans on ordinary lines** - Svelte supplemental extraction now checks for `$:` before running its reactive assignment regex.
 - **Dispatched Markdown reference regex scans by delimiter** - Markdown reference extraction now checks for `](`, `]:`, and `][` before running the matching link/reference regex.
 - **Gated XAML type-bearing attribute regex scans** - XAML/XML extraction now checks for `x:Class`, `x:DataType`, `x:TypeArguments`, and `TargetType` before running the matching attribute regex.
+- **Gated XAML identity/resource attribute regex scans** - XAML/XML extraction now checks for `x:Name` and `x:Key` before running the matching property attribute regexes.
 
 ## 日本語
 
@@ -108,3 +109,4 @@ affected:
 - **通常行では Svelte reactive-property regex scan を skip します** - Svelte supplemental extraction は reactive assignment regex を走らせる前に `$:` の有無を確認します。
 - **Markdown reference regex scan を delimiter で振り分けます** - Markdown reference extraction は対応する link/reference regex を走らせる前に `](`、`]:`、`][` の有無を確認します。
 - **XAML type-bearing attribute regex scan を gate します** - XAML/XML extraction は `x:Class`、`x:DataType`、`x:TypeArguments`、`TargetType` の有無を確認してから対応する attribute regex を実行します。
+- **XAML identity/resource attribute regex scan を gate します** - XAML/XML extraction は `x:Name` と `x:Key` の有無を確認してから対応する property attribute regex を実行します。
