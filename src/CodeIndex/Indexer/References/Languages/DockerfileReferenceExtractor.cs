@@ -22,38 +22,27 @@ internal static class DockerfileReferenceExtractor
         @"(?<![\$\\])\$(?<name>[A-Za-z_][A-Za-z0-9_]*)",
         RegexOptions.Compiled);
 
-    public static HashSet<string>? BuildStageNames(string language, IReadOnlyList<SymbolRecord> symbols)
+    public static (HashSet<string>? StageNames, HashSet<string>? VariableNames) BuildNameSets(
+        string language,
+        IReadOnlyList<SymbolRecord> symbols)
     {
         if (language != "dockerfile")
-            return null;
+            return (null, null);
 
-        var names = new HashSet<string>(StringComparer.Ordinal);
+        var stageNames = new HashSet<string>(StringComparer.Ordinal);
+        var variableNames = new HashSet<string>(StringComparer.Ordinal);
         foreach (var symbol in symbols)
         {
-            if (symbol.Kind != "stage" || string.IsNullOrWhiteSpace(symbol.Name))
+            if (string.IsNullOrWhiteSpace(symbol.Name))
                 continue;
 
-            names.Add(symbol.Name);
+            if (symbol.Kind == "stage")
+                stageNames.Add(symbol.Name);
+            else if (symbol.Kind is "build_arg" or "environment")
+                variableNames.Add(symbol.Name);
         }
 
-        return names;
-    }
-
-    public static HashSet<string>? BuildVariableNames(string language, IReadOnlyList<SymbolRecord> symbols)
-    {
-        if (language != "dockerfile")
-            return null;
-
-        var names = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var symbol in symbols)
-        {
-            if (symbol.Kind is not ("build_arg" or "environment") || string.IsNullOrWhiteSpace(symbol.Name))
-                continue;
-
-            names.Add(symbol.Name);
-        }
-
-        return names;
+        return (stageNames, variableNames);
     }
 
     public static void EmitStageReferences(

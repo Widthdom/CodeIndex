@@ -152,8 +152,9 @@ public static partial class ReferenceExtractor
         var stylusVariableDefinitionNames = language == "stylus"
             ? CssReferenceExtractor.BuildStylusVariableDefinitionNames(lines)
             : null;
-        var dockerfileStageNames = DockerfileReferenceExtractor.BuildStageNames(language, symbols);
-        var dockerfileVariableNames = DockerfileReferenceExtractor.BuildVariableNames(language, symbols);
+        var dockerfileNameSets = DockerfileReferenceExtractor.BuildNameSets(language, symbols);
+        var dockerfileStageNames = dockerfileNameSets.StageNames;
+        var dockerfileVariableNames = dockerfileNameSets.VariableNames;
         var shellCallableNames = ShellReferenceExtractor.BuildCallableNames(language, symbols);
         var shellGlobalAliasNames = ShellReferenceExtractor.BuildGlobalAliasNames(language, symbols);
         IReadOnlyList<(int StartLine, int EndLine)> csharpNamespaceScopes = language == "csharp"
