@@ -1502,7 +1502,7 @@ public static partial class ReferenceExtractor
         {
             inDocblock = true;
             docblockContainer = getLineContainer();
-            docblockPropertyNames = new HashSet<string>(StringComparer.Ordinal);
+            docblockPropertyNames = null;
         }
 
         var docblockContext = originalLine.Trim();
@@ -1602,7 +1602,8 @@ public static partial class ReferenceExtractor
                     docblockContext,
                     lineNumber,
                     ResolvePhpDocblockContainer(inDocblock, docblockContainer, getLineContainer),
-                    docblockPropertyNames);
+                    inDocblock,
+                    ref docblockPropertyNames);
             }
 
             if (originalLine.Contains("@method", StringComparison.OrdinalIgnoreCase))

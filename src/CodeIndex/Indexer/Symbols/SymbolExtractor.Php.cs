@@ -268,19 +268,26 @@ public static partial class SymbolExtractor
 
     private static void ExtractPhpDocblockPropertySymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
     {
+        var inDocblock = false;
         HashSet<string>? seenDocblockPropertyNames = null;
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
             var line = lines[lineIndex];
             if (line.IndexOf("/**", StringComparison.Ordinal) >= 0)
-                seenDocblockPropertyNames = new HashSet<string>(StringComparer.Ordinal);
+            {
+                inDocblock = true;
+                seenDocblockPropertyNames = null;
+            }
 
             if (line.IndexOf("property", StringComparison.OrdinalIgnoreCase) < 0
                 || line.IndexOf('@') < 0
                 || line.IndexOf('$') < 0)
             {
-                if (seenDocblockPropertyNames != null && line.IndexOf("*/", StringComparison.Ordinal) >= 0)
+                if (inDocblock && line.IndexOf("*/", StringComparison.Ordinal) >= 0)
+                {
+                    inDocblock = false;
                     seenDocblockPropertyNames = null;
+                }
                 continue;
             }
 
@@ -289,7 +296,7 @@ public static partial class SymbolExtractor
             {
                 var lineNumber = lineIndex + 1;
                 var nameGroup = match.Groups["name"];
-                if (seenDocblockPropertyNames == null || seenDocblockPropertyNames.Add(nameGroup.Value))
+                if (!inDocblock || TryAddPhpDocblockPropertyName(ref seenDocblockPropertyNames, nameGroup.Value))
                 {
                     AddSymbolRecord(
                         symbols,
@@ -311,9 +318,18 @@ public static partial class SymbolExtractor
                 }
             }
 
-            if (seenDocblockPropertyNames != null && line.IndexOf("*/", StringComparison.Ordinal) >= 0)
+            if (inDocblock && line.IndexOf("*/", StringComparison.Ordinal) >= 0)
+            {
+                inDocblock = false;
                 seenDocblockPropertyNames = null;
+            }
         }
+    }
+
+    private static bool TryAddPhpDocblockPropertyName(ref HashSet<string>? seenDocblockPropertyNames, string name)
+    {
+        seenDocblockPropertyNames ??= new HashSet<string>(StringComparer.Ordinal);
+        return seenDocblockPropertyNames.Add(name);
     }
 
     private static void ExtractPhpTraitAliasSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
