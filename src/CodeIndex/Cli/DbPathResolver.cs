@@ -106,7 +106,7 @@ public static class DbPathResolver
     private static string ComputeWorkspaceHash(string workspacePath)
     {
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(workspacePath)));
-        return Convert.ToHexString(bytes, 0, 8).ToLowerInvariant();
+        return HexEncoding.ToLowerHexString(bytes, 0, 8);
     }
 
     private static string? TryResolveOutermostAncestorDataDir(string workspacePath)

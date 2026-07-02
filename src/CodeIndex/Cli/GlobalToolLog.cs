@@ -599,7 +599,7 @@ internal static class GlobalToolLog
             return value;
 
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(value));
-        return $"<path:{Convert.ToHexString(bytes, 0, 8).ToLowerInvariant()}>";
+        return $"<path:{HexEncoding.ToLowerHexString(bytes, 0, 8)}>";
     }
 
     private static string QuoteArg(string arg)

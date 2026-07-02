@@ -80,7 +80,7 @@ public static class NameFold
         }
 
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(buffer.ToString()));
-        return Convert.ToHexString(hash[..8]).ToLowerInvariant();
+        return HexEncoding.ToLowerHexString(hash, 0, 8);
     }
 
 

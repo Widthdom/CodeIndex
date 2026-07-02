@@ -108,7 +108,7 @@ public partial class FileIndexer
 
         var payload = string.Join('\n', projectMarkers);
         return new ProjectMarkerFingerprintResult(
-            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload))).ToLowerInvariant(),
+            HexEncoding.ToLowerHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload))),
             !traversalState.Truncated)
         {
             Warnings = GetNonFatalScanErrors(errors),

@@ -349,7 +349,7 @@ internal sealed class BoundedRegex : BclRegex
     private static string HashPattern(string pattern)
     {
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(pattern));
-        return Convert.ToHexString(hash.AsSpan(0, 8)).ToLowerInvariant();
+        return HexEncoding.ToLowerHexString(hash, 0, 8);
     }
 
     private static MatchCollection EmptyMatches() =>

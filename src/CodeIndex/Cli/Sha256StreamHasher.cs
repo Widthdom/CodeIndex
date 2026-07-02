@@ -28,6 +28,6 @@ internal static class Sha256StreamHasher
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        return Convert.ToHexString(hasher.GetHashAndReset()).ToLowerInvariant();
+        return HexEncoding.ToLowerHexString(hasher.GetHashAndReset());
     }
 }
