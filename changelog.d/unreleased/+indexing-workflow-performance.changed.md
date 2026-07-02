@@ -33,6 +33,7 @@ affected:
   - src/CodeIndex/Indexer/References/Languages/FSharpReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/Languages/GoReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/Languages/GradleReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/HaskellReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/Languages/SwiftReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/Languages/SqlReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/Languages/RReferenceExtractor.cs
@@ -123,6 +124,7 @@ affected:
 - **Gated Rust function-trait return type scans by marker** - Rust reference extraction now checks return-arrow and bound markers before scanning function-trait return types in generic, where, and trait expressions.
 - **Gated Rust generic default type scans by marker** - Rust reference extraction now checks assignment markers before locating generic defaults or splitting generic clauses for default type references.
 - **Gated Gradle DSL call scans by marker** - Gradle reference extraction now checks block braces and whitespace before running block-call and command-call DSL regex probes.
+- **Gated Haskell signature and space-call scans by marker** - Haskell reference extraction now checks type-signature and whitespace markers before invoking shared signature and space-call regex probes.
 - **Gated CSS preprocessor import scans by marker** - CSS, Sass, and Stylus reference extraction now checks import/use/forward/require markers before stripping comments and running import regex probes.
 - **Gated CSS animation reference scans by marker** - CSS reference extraction now checks the animation marker before running animation-name and shorthand value regex probes.
 - **Gated CSS custom-property reference scans by marker** - CSS reference extraction now checks `var` and custom-property markers before running custom-property reference regex probes.
@@ -283,6 +285,7 @@ affected:
 - **Rust function-trait return type scan を marker で gate します** - Rust reference extraction は generic、where、trait expression 内の function-trait return type を走査する前に return-arrow と bound marker を確認します。
 - **Rust generic default type scan を marker で gate します** - Rust reference extraction は generic default や default type reference のために generic clause を分割する前に assignment marker を確認します。
 - **Gradle DSL call scan を marker で gate します** - Gradle reference extraction は block-call と command-call DSL regex probe の前に block brace と whitespace marker を確認します。
+- **Haskell signature / space-call scan を marker で gate します** - Haskell reference extraction は shared signature / space-call regex probe の前に type-signature と whitespace marker を確認します。
 - **CSS preprocessor import scan を marker で gate します** - CSS、Sass、Stylus reference extraction は comment strip と import regex probe の前に import/use/forward/require marker を確認します。
 - **CSS animation reference scan を marker で gate します** - CSS reference extraction は animation-name と shorthand value regex probe を実行する前に animation marker を確認します。
 - **CSS custom-property reference scan を marker で gate します** - CSS reference extraction は custom-property reference regex probe を実行する前に `var` と custom-property marker を確認します。
