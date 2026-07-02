@@ -2644,63 +2644,78 @@ internal static partial class SqlReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForCall,
         Func<string, bool> shouldIgnoreName)
     {
+        var hasAsKeyword = statement.IndexOf("AS", StringComparison.OrdinalIgnoreCase) >= 0;
+        var hasGeneratedKeyword = statement.IndexOf("GENERATED", StringComparison.OrdinalIgnoreCase) >= 0;
+        var hasNextKeyword = statement.IndexOf("NEXT", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (!hasAsKeyword && !hasGeneratedKeyword && !hasNextKeyword)
+            return;
+
         if (!GeneratedColumnMarkerRegex.IsMatch(statement))
             return;
 
-        foreach (Match match in GeneratedColumnExpressionStartRegex.Matches(statement))
+        if (hasAsKeyword || hasGeneratedKeyword)
         {
-            if (match.Index < statementLineOffset || IsInsideDoubleQuotedRegion(statement, match.Index))
-                continue;
-            if (match.Value.TrimStart().StartsWith("AS", StringComparison.OrdinalIgnoreCase)
-                && !IsLikelyComputedColumnAsExpression(statement, match.Index))
+            foreach (Match match in GeneratedColumnExpressionStartRegex.Matches(statement))
             {
-                continue;
+                if (match.Index < statementLineOffset || IsInsideDoubleQuotedRegion(statement, match.Index))
+                    continue;
+                if (match.Value.TrimStart().StartsWith("AS", StringComparison.OrdinalIgnoreCase)
+                    && !IsLikelyComputedColumnAsExpression(statement, match.Index))
+                {
+                    continue;
+                }
+
+                var openParenIndex = statement.IndexOf('(', match.Index + match.Length - 1);
+                if (openParenIndex < 0)
+                    continue;
+
+                var closeParenIndex = FindMatchingParen(statement, openParenIndex);
+                if (closeParenIndex <= openParenIndex)
+                    continue;
+
+                EmitSqlExpressionIdentifierDependencies(
+                    statement,
+                    openParenIndex + 1,
+                    closeParenIndex,
+                    statementStart,
+                    statementLineOffset,
+                    lineOffset,
+                    context,
+                    lineNumber,
+                    references,
+                    seen,
+                    fileId,
+                    resolveContainerForCall,
+                    shouldIgnoreName);
             }
-
-            var openParenIndex = statement.IndexOf('(', match.Index + match.Length - 1);
-            if (openParenIndex < 0)
-                continue;
-
-            var closeParenIndex = FindMatchingParen(statement, openParenIndex);
-            if (closeParenIndex <= openParenIndex)
-                continue;
-
-            EmitSqlExpressionIdentifierDependencies(
-                statement,
-                openParenIndex + 1,
-                closeParenIndex,
-                statementStart,
-                statementLineOffset,
-                lineOffset,
-                context,
-                lineNumber,
-                references,
-                seen,
-                fileId,
-                resolveContainerForCall,
-                shouldIgnoreName);
         }
 
-        foreach (Match match in DefaultNextValueForExpressionRegex.Matches(statement))
+        if (statement.IndexOf("DEFAULT", StringComparison.OrdinalIgnoreCase) >= 0
+            && hasNextKeyword
+            && statement.IndexOf("VALUE", StringComparison.OrdinalIgnoreCase) >= 0
+            && statement.IndexOf("FOR", StringComparison.OrdinalIgnoreCase) >= 0)
         {
-            if (match.Index < statementLineOffset || IsInsideDoubleQuotedRegion(statement, match.Index))
-                continue;
+            foreach (Match match in DefaultNextValueForExpressionRegex.Matches(statement))
+            {
+                if (match.Index < statementLineOffset || IsInsideDoubleQuotedRegion(statement, match.Index))
+                    continue;
 
-            var sequence = match.Groups["name"];
-            EmitSqlExpressionIdentifierDependencies(
-                statement,
-                sequence.Index,
-                sequence.Index + sequence.Length,
-                statementStart,
-                statementLineOffset,
-                lineOffset,
-                context,
-                lineNumber,
-                references,
-                seen,
-                fileId,
-                resolveContainerForCall,
-                shouldIgnoreName);
+                var sequence = match.Groups["name"];
+                EmitSqlExpressionIdentifierDependencies(
+                    statement,
+                    sequence.Index,
+                    sequence.Index + sequence.Length,
+                    statementStart,
+                    statementLineOffset,
+                    lineOffset,
+                    context,
+                    lineNumber,
+                    references,
+                    seen,
+                    fileId,
+                    resolveContainerForCall,
+                    shouldIgnoreName);
+            }
         }
     }
 
@@ -2754,6 +2769,14 @@ internal static partial class SqlReferenceExtractor
     private static bool IsLikelyComputedColumnAsExpression(string statement, int asIndex)
     {
         var prefix = statement[..asIndex];
+        if (prefix.IndexOf("TABLE", StringComparison.OrdinalIgnoreCase) < 0)
+            return false;
+        if (prefix.IndexOf("ALTER", StringComparison.OrdinalIgnoreCase) < 0
+            && prefix.IndexOf("CREATE", StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            return false;
+        }
+
         return Regex.IsMatch(prefix, @"(?<![\w$])ALTER\s+TABLE\b[\s\S]*\bADD\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
             || Regex.IsMatch(prefix, @"(?<![\w$])CREATE\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?(?:(?:(?:GLOBAL|LOCAL)\s+)?(?:TEMP|TEMPORARY)\s+|UNLOGGED\s+)?TABLE\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
