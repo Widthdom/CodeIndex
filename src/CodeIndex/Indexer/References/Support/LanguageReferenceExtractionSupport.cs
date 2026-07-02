@@ -2797,6 +2797,9 @@ internal static partial class LanguageReferenceExtractionSupport
 
     private static void EmitPascalCallReferences(string preparedLine, Action<string, int> addCallLikeReference, IReadOnlySet<string>? definitionNames)
     {
+        if (preparedLine.IndexOf(';') < 0)
+            return;
+
         var match = PascalBareCallRegex.Match(preparedLine);
         if (!match.Success)
             return;
