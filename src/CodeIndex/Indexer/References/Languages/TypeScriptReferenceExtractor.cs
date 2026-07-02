@@ -64,6 +64,7 @@ internal static class TypeScriptReferenceExtractor
 
         var bindings = new List<NamespaceAliasBinding>();
         int[]? braceDepths = null;
+        Dictionary<string, List<int>>? localDeclarationLinesByName = null;
         for (var index = 0; index < originalLines.Count; index++)
         {
             var line = originalLines[index];
@@ -77,7 +78,8 @@ internal static class TypeScriptReferenceExtractor
                     match.Groups["module"].Value,
                     index + 1,
                     null,
-                    braceDepths ??= BuildBraceDepthsBeforeLine(preparedLines));
+                    braceDepths ??= BuildBraceDepthsBeforeLine(preparedLines),
+                    localDeclarationLinesByName ??= BuildLocalDeclarationLinesByName(preparedLines));
                 continue;
             }
 
@@ -93,7 +95,8 @@ internal static class TypeScriptReferenceExtractor
                     match.Groups["module"].Value,
                     bindingLine,
                     FindDynamicImportAliasEndLine(preparedLines, sharedBraceDepths, index),
-                    sharedBraceDepths);
+                    sharedBraceDepths,
+                    localDeclarationLinesByName ??= BuildLocalDeclarationLinesByName(preparedLines));
                 continue;
             }
 
@@ -110,7 +113,8 @@ internal static class TypeScriptReferenceExtractor
                     match.Groups["module"].Value,
                     index + 1,
                     null,
-                    braceDepths ??= BuildBraceDepthsBeforeLine(preparedLines));
+                    braceDepths ??= BuildBraceDepthsBeforeLine(preparedLines),
+                    localDeclarationLinesByName ??= BuildLocalDeclarationLinesByName(preparedLines));
             }
         }
 
@@ -138,12 +142,13 @@ internal static class TypeScriptReferenceExtractor
         string module,
         int bindingLine,
         int? endLine,
-        int[] braceDepths)
+        int[] braceDepths,
+        IReadOnlyDictionary<string, List<int>> localDeclarationLinesByName)
     {
         if (string.IsNullOrWhiteSpace(alias) || string.IsNullOrWhiteSpace(module))
             return;
 
-        var shadowLine = FindShadowLine(preparedLines, alias, bindingLine);
+        var shadowLine = FindShadowLine(localDeclarationLinesByName, alias, bindingLine);
         var scopedShadowRanges = BuildParameterShadowRanges(preparedLines, braceDepths, alias);
         bindings.Add(new NamespaceAliasBinding(alias, module, bindingLine, shadowLine, endLine, scopedShadowRanges));
     }
@@ -1308,17 +1313,44 @@ internal static class TypeScriptReferenceExtractor
     private static bool IsTypeScriptNamespaceMemberStart(char ch) =>
         ch == '_' || ch == '$' || ch is >= 'A' and <= 'Z' || ch is >= 'a' and <= 'z';
 
-    private static int? FindShadowLine(IReadOnlyList<string> preparedLines, string alias, int bindingLine)
+    private static Dictionary<string, List<int>> BuildLocalDeclarationLinesByName(IReadOnlyList<string> preparedLines)
     {
-        for (var index = bindingLine; index < preparedLines.Count; index++)
+        var linesByName = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+        for (var index = 0; index < preparedLines.Count; index++)
         {
             var line = preparedLines[index];
             if (NamespaceImportExportRegex.IsMatch(line) || DynamicImportNamespaceRegex.IsMatch(line))
                 continue;
 
             var match = LocalDeclarationRegex.Match(line);
-            if (match.Success && string.Equals(match.Groups["name"].Value, alias, StringComparison.Ordinal))
-                return index + 1;
+            if (!match.Success)
+                continue;
+
+            var name = match.Groups["name"].Value;
+            if (!linesByName.TryGetValue(name, out var lines))
+            {
+                lines = [];
+                linesByName[name] = lines;
+            }
+
+            lines.Add(index + 1);
+        }
+
+        return linesByName;
+    }
+
+    private static int? FindShadowLine(
+        IReadOnlyDictionary<string, List<int>> localDeclarationLinesByName,
+        string alias,
+        int bindingLine)
+    {
+        if (!localDeclarationLinesByName.TryGetValue(alias, out var declarationLines))
+            return null;
+
+        foreach (var line in declarationLines)
+        {
+            if (line > bindingLine)
+                return line;
         }
 
         return null;
