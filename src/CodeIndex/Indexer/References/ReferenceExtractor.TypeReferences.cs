@@ -2066,19 +2066,32 @@ public static partial class ReferenceExtractor
         for (int i = startIdx; i < structuralLines.Length; i++)
         {
             var line = structuralLines[i];
-            var masked = line.ToCharArray();
+            char[]? masked = null;
             var terminatorIdx = -1;
+            void MaskChar(int index)
+            {
+                masked ??= line.ToCharArray();
+                masked[index] = ' ';
+            }
+
+            void MaskRange(int start, int endExclusive)
+            {
+                masked ??= line.ToCharArray();
+                for (int k = start; k < endExclusive; k++)
+                    masked[k] = ' ';
+            }
+
             for (int j = 0; j < line.Length; j++)
             {
                 var c = line[j];
 
                 if (inBlockComment)
                 {
-                    masked[j] = ' ';
+                    MaskChar(j);
                     if (c == '*' && j + 1 < line.Length && line[j + 1] == '/')
                     {
                         inBlockComment = false;
-                        masked[j + 1] = ' ';
+                        MaskChar(j + 1);
                         j++;
                     }
                     continue;
@@ -2086,10 +2099,10 @@ public static partial class ReferenceExtractor
 
                 if (inString)
                 {
-                    masked[j] = ' ';
+                    MaskChar(j);
                     if (c == '\\' && j + 1 < line.Length)
                     {
-                        masked[j + 1] = ' ';
+                        MaskChar(j + 1);
                         j++;
                         continue;
                     }
@@ -2102,15 +2115,14 @@ public static partial class ReferenceExtractor
                 {
                     if (line[j + 1] == '/')
                     {
-                        for (int k = j; k < line.Length; k++)
-                            masked[k] = ' ';
+                        MaskRange(j, line.Length);
                         break;
                     }
                     if (line[j + 1] == '*')
                     {
                         inBlockComment = true;
-                        masked[j] = ' ';
-                        masked[j + 1] = ' ';
+                        MaskChar(j);
+                        MaskChar(j + 1);
                         j++;
                         continue;
                     }
@@ -2119,7 +2131,7 @@ public static partial class ReferenceExtractor
                 if (c == '"')
                 {
                     inString = true;
-                    masked[j] = ' ';
+                    MaskChar(j);
                     continue;
                 }
 
@@ -2145,8 +2157,7 @@ public static partial class ReferenceExtractor
                     }
                     if (closeIdx > 0)
                     {
-                        for (int k = j; k <= closeIdx; k++)
-                            masked[k] = ' ';
+                        MaskRange(j, closeIdx + 1);
                         j = closeIdx;
                     }
                     continue;
@@ -2163,14 +2174,19 @@ public static partial class ReferenceExtractor
                 }
             }
 
-            var maskedLine = new string(masked);
             if (terminatorIdx >= 0)
             {
-                sb.Append(maskedLine, 0, terminatorIdx);
+                if (masked == null)
+                    sb.Append(line, 0, terminatorIdx);
+                else
+                    sb.Append(masked, 0, terminatorIdx);
                 return (i + 1, terminatorIdx, sb.ToString());
             }
 
-            sb.Append(maskedLine);
+            if (masked == null)
+                sb.Append(line);
+            else
+                sb.Append(masked);
             sb.Append('\n');
         }
 
