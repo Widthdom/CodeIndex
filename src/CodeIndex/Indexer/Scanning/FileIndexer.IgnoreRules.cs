@@ -334,19 +334,24 @@ public partial class FileIndexer
 
         private static bool TryBuildLiteralPattern(IReadOnlyList<PatternToken> pattern, out string literal)
         {
-            var builder = new StringBuilder(pattern.Count);
-            foreach (var token in pattern)
+            for (var index = 0; index < pattern.Count; index++)
             {
+                var token = pattern[index];
                 if (!token.Escaped && token.Value is '*' or '?' or '[')
                 {
                     literal = string.Empty;
                     return false;
                 }
-
-                builder.Append(token.Value);
             }
 
-            literal = builder.ToString();
+            literal = string.Create(
+                pattern.Count,
+                pattern,
+                static (chars, tokens) =>
+                {
+                    for (var index = 0; index < tokens.Count; index++)
+                        chars[index] = tokens[index].Value;
+                });
             return true;
         }
 
