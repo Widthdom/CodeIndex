@@ -71,130 +71,160 @@ public static partial class SymbolExtractor
         var urlParenDepth = 0;
 
         for (int lineIndex = start; lineIndex < end; lineIndex++)
+            maskedLines[lineIndex - start] = MaskCssScannerLine(
+                originalLines[lineIndex],
+                ref inBlockComment,
+                ref inSingleQuote,
+                ref inDoubleQuote,
+                ref inUrlToken,
+                ref urlParenDepth);
+
+        return maskedLines;
+    }
+
+    private static string MaskCssScannerLine(string line)
+    {
+        var inBlockComment = false;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var inUrlToken = false;
+        var urlParenDepth = 0;
+        return MaskCssScannerLine(
+            line,
+            ref inBlockComment,
+            ref inSingleQuote,
+            ref inDoubleQuote,
+            ref inUrlToken,
+            ref urlParenDepth);
+    }
+
+    private static string MaskCssScannerLine(
+        string line,
+        ref bool inBlockComment,
+        ref bool inSingleQuote,
+        ref bool inDoubleQuote,
+        ref bool inUrlToken,
+        ref int urlParenDepth)
+    {
+        var chars = line.ToCharArray();
+        for (int i = 0; i < chars.Length; i++)
         {
-            var line = originalLines[lineIndex];
-            var chars = line.ToCharArray();
-            for (int i = 0; i < chars.Length; i++)
+            if (inBlockComment)
             {
-                if (inBlockComment)
+                chars[i] = ' ';
+                if (i + 1 < chars.Length && line[i] == '*' && line[i + 1] == '/')
                 {
-                    chars[i] = ' ';
-                    if (i + 1 < chars.Length && line[i] == '*' && line[i + 1] == '/')
-                    {
-                        chars[i + 1] = ' ';
-                        inBlockComment = false;
-                        i++;
-                    }
-
-                    continue;
-                }
-
-                if (!inSingleQuote && !inDoubleQuote && i + 1 < chars.Length && line[i] == '/' && line[i + 1] == '*')
-                {
-                    chars[i] = ' ';
                     chars[i + 1] = ' ';
-                    inBlockComment = true;
+                    inBlockComment = false;
                     i++;
-                    continue;
                 }
 
-                if (inUrlToken)
-                {
-                    chars[i] = ' ';
+                continue;
+            }
 
-                    if (line[i] == '"' && !inSingleQuote)
-                    {
-                        inDoubleQuote = !inDoubleQuote;
-                        continue;
-                    }
+            if (!inSingleQuote && !inDoubleQuote && i + 1 < chars.Length && line[i] == '/' && line[i + 1] == '*')
+            {
+                chars[i] = ' ';
+                chars[i + 1] = ' ';
+                inBlockComment = true;
+                i++;
+                continue;
+            }
 
-                    if (line[i] == '\'' && !inDoubleQuote)
-                    {
-                        inSingleQuote = !inDoubleQuote;
-                        continue;
-                    }
-
-                    if ((inSingleQuote || inDoubleQuote) && line[i] == '\\' && i + 1 < chars.Length)
-                    {
-                        chars[i + 1] = ' ';
-                        i++;
-                        continue;
-                    }
-
-                    if (!inSingleQuote && !inDoubleQuote)
-                    {
-                        if (line[i] == '(')
-                            urlParenDepth++;
-                        else if (line[i] == ')')
-                        {
-                            urlParenDepth--;
-                            if (urlParenDepth <= 0)
-                            {
-                                inUrlToken = false;
-                                urlParenDepth = 0;
-                            }
-                        }
-                    }
-
-                    continue;
-                }
-
-                if (!inSingleQuote
-                    && !inDoubleQuote
-                    && !inUrlToken
-                    && i + 3 < chars.Length
-                    && (line[i] == 'u' || line[i] == 'U')
-                    && (line[i + 1] == 'r' || line[i + 1] == 'R')
-                    && (line[i + 2] == 'l' || line[i + 2] == 'L')
-                    && line[i + 3] == '(')
-                {
-                    chars[i] = ' ';
-                    chars[i + 1] = ' ';
-                    chars[i + 2] = ' ';
-                    chars[i + 3] = ' ';
-                    inUrlToken = true;
-                    urlParenDepth = 1;
-                    i += 3;
-                    continue;
-                }
-
-                if (!inSingleQuote && !inDoubleQuote && !inUrlToken && i + 1 < chars.Length && line[i] == '/' && line[i + 1] == '/')
-                {
-                    for (int j = i; j < chars.Length; j++)
-                        chars[j] = ' ';
-
-                    break;
-                }
-
-                if ((inSingleQuote || inDoubleQuote) && line[i] == '\\' && i + 1 < chars.Length)
-                {
-                    chars[i] = ' ';
-                    chars[i + 1] = ' ';
-                    i++;
-                    continue;
-                }
+            if (inUrlToken)
+            {
+                chars[i] = ' ';
 
                 if (line[i] == '"' && !inSingleQuote)
                 {
-                    chars[i] = ' ';
                     inDoubleQuote = !inDoubleQuote;
                     continue;
                 }
 
                 if (line[i] == '\'' && !inDoubleQuote)
                 {
-                    chars[i] = ' ';
                     inSingleQuote = !inDoubleQuote;
                     continue;
                 }
 
-                if (inSingleQuote || inDoubleQuote)
-                    chars[i] = ' ';
+                if ((inSingleQuote || inDoubleQuote) && line[i] == '\\' && i + 1 < chars.Length)
+                {
+                    chars[i + 1] = ' ';
+                    i++;
+                    continue;
+                }
+
+                if (!inSingleQuote && !inDoubleQuote)
+                {
+                    if (line[i] == '(')
+                        urlParenDepth++;
+                    else if (line[i] == ')')
+                    {
+                        urlParenDepth--;
+                        if (urlParenDepth <= 0)
+                        {
+                            inUrlToken = false;
+                            urlParenDepth = 0;
+                        }
+                    }
+                }
+
+                continue;
             }
 
-            maskedLines[lineIndex - start] = new string(chars);
+            if (!inSingleQuote
+                && !inDoubleQuote
+                && !inUrlToken
+                && i + 3 < chars.Length
+                && (line[i] == 'u' || line[i] == 'U')
+                && (line[i + 1] == 'r' || line[i + 1] == 'R')
+                && (line[i + 2] == 'l' || line[i + 2] == 'L')
+                && line[i + 3] == '(')
+            {
+                chars[i] = ' ';
+                chars[i + 1] = ' ';
+                chars[i + 2] = ' ';
+                chars[i + 3] = ' ';
+                inUrlToken = true;
+                urlParenDepth = 1;
+                i += 3;
+                continue;
+            }
+
+            if (!inSingleQuote && !inDoubleQuote && !inUrlToken && i + 1 < chars.Length && line[i] == '/' && line[i + 1] == '/')
+            {
+                for (int j = i; j < chars.Length; j++)
+                    chars[j] = ' ';
+
+                break;
+            }
+
+            if ((inSingleQuote || inDoubleQuote) && line[i] == '\\' && i + 1 < chars.Length)
+            {
+                chars[i] = ' ';
+                chars[i + 1] = ' ';
+                i++;
+                continue;
+            }
+
+            if (line[i] == '"' && !inSingleQuote)
+            {
+                chars[i] = ' ';
+                inDoubleQuote = !inDoubleQuote;
+                continue;
+            }
+
+            if (line[i] == '\'' && !inDoubleQuote)
+            {
+                chars[i] = ' ';
+                inSingleQuote = !inDoubleQuote;
+                continue;
+            }
+
+            if (inSingleQuote || inDoubleQuote)
+                chars[i] = ' ';
         }
 
-        return maskedLines;
+        return new string(chars);
     }
 }

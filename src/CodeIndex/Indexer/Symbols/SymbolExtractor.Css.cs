@@ -252,7 +252,7 @@ public static partial class SymbolExtractor
 
     private static int FindCssSameLineBraceEndColumn(string line, int startColumn)
     {
-        var maskedLine = MaskCssScannerLines([line])[0];
+        var maskedLine = MaskCssScannerLine(line);
         var depth = 0;
         var opened = false;
 
