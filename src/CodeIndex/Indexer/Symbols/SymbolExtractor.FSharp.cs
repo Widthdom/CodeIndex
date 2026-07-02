@@ -92,10 +92,10 @@ public static partial class SymbolExtractor
             return false;
         }
 
-        if (!FSharpTypeDeclarationRegex.IsMatch(line))
+        var declarationMatch = FSharpTypeDeclarationRegex.Match(line);
+        if (!declarationMatch.Success)
             return false;
 
-        var declarationMatch = FSharpTypeDeclarationRegex.Match(line);
         var rest = declarationMatch.Groups["rest"].Value;
         if (rest.Length == 0)
         {
@@ -182,9 +182,9 @@ public static partial class SymbolExtractor
             if (previous.Length == 0)
                 continue;
 
-            if (FSharpTypeDeclarationRegex.IsMatch(previous))
+            var declarationMatch = FSharpTypeDeclarationRegex.Match(previous);
+            if (declarationMatch.Success)
             {
-                var declarationMatch = FSharpTypeDeclarationRegex.Match(previous);
                 var rest = declarationMatch.Groups["rest"].Value.TrimStart();
                 if (rest.Length > 0 && !rest.StartsWith("{", StringComparison.Ordinal) && !rest.StartsWith("|", StringComparison.Ordinal))
                     break;

@@ -10,6 +10,7 @@ affected:
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Rust.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.KotlinScala.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Go.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.FSharp.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.GraphQL.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Razor.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Dockerfile.cs
@@ -112,6 +113,7 @@ affected:
 - **Dispatched Solidity callable declaration scans by keyword** - Solidity extraction now runs function, constructor, fallback/receive, and modifier declaration regexes only for lines with the corresponding marker.
 - **Dispatched Solidity event/error declaration scans by keyword** - Solidity extraction now runs event and error declaration regexes only on lines with the matching keyword marker.
 - **Skipped duplicate PHP constructor-start regex checks** - PHP promoted-property extraction now avoids the constructor-start regex once the same-line constructor regex has already matched.
+- **Collapsed duplicate F# type-declaration regex scans** - F# type-member extraction now reuses the declaration match instead of running `IsMatch` and `Match` on the same line.
 
 ## 日本語
 
@@ -185,3 +187,4 @@ affected:
 - **Solidity callable declaration scan を keyword で振り分けます** - Solidity extraction は function、constructor、fallback/receive、modifier の declaration regex を対応 marker がある行だけで実行します。
 - **Solidity event/error declaration scan を keyword で振り分けます** - Solidity extraction は event と error の declaration regex を対応 keyword marker がある行だけで実行します。
 - **PHP constructor-start regex の重複 check を skip します** - PHP promoted-property extraction は same-line constructor regex が既に match した場合 constructor-start regex を実行しないようになりました。
+- **F# type-declaration regex の重複 scan をまとめます** - F# type-member extraction は同じ行に `IsMatch` と `Match` を重ねず、declaration match を再利用します。
