@@ -140,6 +140,9 @@ public static partial class SymbolExtractor
         if (string.IsNullOrWhiteSpace(variantText))
             return;
 
+        if (!MayContainGraphQLNameStart(variantText))
+            return;
+
         foreach (Match variantMatch in GraphQLUnionVariantRegex.Matches(variantText))
         {
             var variantName = variantMatch.Groups["name"].Value;
@@ -178,5 +181,16 @@ public static partial class SymbolExtractor
             text = text[..directiveIndex];
 
         return text;
+    }
+
+    private static bool MayContainGraphQLNameStart(string text)
+    {
+        foreach (var ch in text)
+        {
+            if (ch == '_' || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z'))
+                return true;
+        }
+
+        return false;
     }
 }

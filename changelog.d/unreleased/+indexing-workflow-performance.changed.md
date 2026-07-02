@@ -88,6 +88,7 @@ affected:
 - **Gated shell heredoc scans by redirect marker** - Shell extraction now skips heredoc masking and redirect regex scans on lines without `<<`.
 - **Gated Perl hash-constant key scans by pair marker** - Perl extraction now skips `use constant` hash key regex scans when the collected body lacks `=>`.
 - **Gated GraphQL input field scans by colon** - GraphQL extraction now skips input-field regex scans for input bodies that cannot contain field declarations.
+- **Gated GraphQL union variant scans by name start** - GraphQL extraction now skips union-variant regex scans when stripped variant text contains no GraphQL name start.
 
 ## 日本語
 
@@ -140,3 +141,4 @@ affected:
 - **shell heredoc scan を redirect marker で gate します** - Shell extraction は `<<` がない行で heredoc masking と redirect regex scan を skip します。
 - **Perl hash-constant key scan を pair marker で gate します** - Perl extraction は collected body に `=>` がない `use constant` hash で key regex scan を skip します。
 - **GraphQL input field scan を colon で gate します** - GraphQL extraction は field declaration を含めない input body で input-field regex scan を skip します。
+- **GraphQL union variant scan を name start で gate します** - GraphQL extraction は stripped variant text に GraphQL name start がない場合 union-variant regex scan を skip します。
