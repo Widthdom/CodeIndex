@@ -292,6 +292,7 @@ affected:
 - **Gated VB AddressOf scans by marker** - Visual Basic reference extraction now checks `AddressOf` markers before running delegate target regex probes.
 - **Gated VB AddHandler scans by marker** - Visual Basic reference extraction now checks `AddHandler` markers before running event subscription regex probes.
 - **Gated VB RemoveHandler scans by marker** - Visual Basic reference extraction now checks `RemoveHandler` markers before running event unsubscription regex probes.
+- **Gated VB RaiseEvent scans by marker** - Visual Basic reference extraction now checks `RaiseEvent` markers before running event invocation regex probes.
 
 ## 日本語
 
@@ -518,3 +519,4 @@ affected:
 - **VB AddressOf scan を marker で gate します** - Visual Basic reference extraction は delegate target regex probe の前に `AddressOf` marker を確認します。
 - **VB AddHandler scan を marker で gate します** - Visual Basic reference extraction は event subscription regex probe の前に `AddHandler` marker を確認します。
 - **VB RemoveHandler scan を marker で gate します** - Visual Basic reference extraction は event unsubscription regex probe の前に `RemoveHandler` marker を確認します。
+- **VB RaiseEvent scan を marker で gate します** - Visual Basic reference extraction は event invocation regex probe の前に `RaiseEvent` marker を確認します。
