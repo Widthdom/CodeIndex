@@ -1345,28 +1345,42 @@ internal static partial class LanguageReferenceExtractionSupport
                 }
             }
 
-            foreach (Match match in CTypedefTypeofTypeRegex.Matches(preparedLine))
+            var hasCTypeofMarker = hasCParen
+                && preparedLine.IndexOf("typeof", StringComparison.Ordinal) >= 0;
+            if (hasCTypeofMarker && hasCTypedefTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTypedefTypeofTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTaggedTypeofTypeRegex.Matches(preparedLine))
+            if (hasCTypeofMarker && hasCTaggedTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTaggedTypeofTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTypedefTypeofUnqualTypeRegex.Matches(preparedLine))
+            if (hasCTypeofMarker && hasCTypedefTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTypedefTypeofUnqualTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTaggedTypeofUnqualTypeRegex.Matches(preparedLine))
+            if (hasCTypeofMarker && hasCTaggedTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTaggedTypeofUnqualTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
             foreach (Match match in CTypedefBuiltinTypesCompatibleFirstTypeRegex.Matches(preparedLine))
