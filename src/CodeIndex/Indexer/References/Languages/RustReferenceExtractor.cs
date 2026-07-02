@@ -1069,6 +1069,12 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf("let", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf(':') < 0)
+        {
+            return;
+        }
+
         foreach (var letIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "let"))
         {
             var colonIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, ':', letIndex + "let".Length);
@@ -1106,6 +1112,13 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf(':') < 0
+            || (preparedLine.IndexOf("const", StringComparison.Ordinal) < 0
+                && preparedLine.IndexOf("static", StringComparison.Ordinal) < 0))
+        {
+            return;
+        }
+
         foreach (var keyword in ConstStaticKeywords)
         {
             foreach (var keywordIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, keyword))
