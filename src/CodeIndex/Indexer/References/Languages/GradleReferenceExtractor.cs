@@ -21,10 +21,27 @@ internal static class GradleReferenceExtractor
         string preparedLine,
         Action<string, int> addDslReference)
     {
-        foreach (Match match in BlockCallRegex.Matches(preparedLine))
-            addDslReference(match.Groups["name"].Value, match.Groups["name"].Index);
+        if (preparedLine.IndexOf('{') >= 0)
+        {
+            foreach (Match match in BlockCallRegex.Matches(preparedLine))
+                addDslReference(match.Groups["name"].Value, match.Groups["name"].Index);
+        }
+
+        if (!ContainsWhitespace(preparedLine))
+            return;
 
         foreach (Match match in CommandCallRegex.Matches(preparedLine))
             addDslReference(match.Groups["name"].Value, match.Groups["name"].Index);
+    }
+
+    private static bool ContainsWhitespace(string line)
+    {
+        foreach (var ch in line)
+        {
+            if (char.IsWhiteSpace(ch))
+                return true;
+        }
+
+        return false;
     }
 }

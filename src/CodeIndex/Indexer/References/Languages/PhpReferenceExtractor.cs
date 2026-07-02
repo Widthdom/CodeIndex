@@ -276,6 +276,12 @@ internal static class PhpReferenceExtractor
         SymbolRecord? container,
         HashSet<string>? seenDocblockPropertyNames = null)
     {
+        if (originalLine.IndexOf('@') < 0
+            || originalLine.IndexOf("property", StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            return;
+        }
+
         var match = DocblockPropertyTypeRegex.Match(originalLine);
         if (!match.Success)
             return;
@@ -326,6 +332,9 @@ internal static class PhpReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (originalLine.IndexOf("@method", StringComparison.OrdinalIgnoreCase) < 0)
+            return;
+
         var match = DocblockMethodParameterListRegex.Match(originalLine);
         if (!match.Success)
             return;
@@ -410,6 +419,9 @@ internal static class PhpReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (originalLine.IndexOf('@') < 0)
+            return;
+
         var match = tagRegex.Match(originalLine);
         if (!match.Success)
             return;
@@ -519,6 +531,9 @@ internal static class PhpReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("::", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in StaticAccessRegex.Matches(preparedLine))
         {
             var nameGroup = match.Groups["name"];
@@ -595,6 +610,9 @@ internal static class PhpReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("instanceof", StringComparison.OrdinalIgnoreCase) < 0)
+            return;
+
         foreach (Match match in InstanceofRegex.Matches(preparedLine))
         {
             AddPhpTypeReferenceFromQualifiedName(
@@ -617,6 +635,9 @@ internal static class PhpReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("catch", StringComparison.OrdinalIgnoreCase) < 0)
+            return;
+
         foreach (Match match in CatchTypeRegex.Matches(preparedLine))
         {
             foreach (Capture capture in match.Groups["name"].Captures)
@@ -642,6 +663,12 @@ internal static class PhpReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf(':') < 0
+            || preparedLine.IndexOf(')') < 0)
+        {
+            return;
+        }
+
         foreach (Match match in ReturnTypeRegex.Matches(preparedLine))
         {
             foreach (Capture capture in match.Groups["name"].Captures)
@@ -670,6 +697,9 @@ internal static class PhpReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf('$') < 0)
+            return;
+
         foreach (Match match in ParameterTypeRegex.Matches(preparedLine))
         {
             foreach (Capture capture in match.Groups["name"].Captures)
@@ -698,6 +728,15 @@ internal static class PhpReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf('$') < 0
+            || (preparedLine.IndexOf("public", StringComparison.OrdinalIgnoreCase) < 0
+                && preparedLine.IndexOf("private", StringComparison.OrdinalIgnoreCase) < 0
+                && preparedLine.IndexOf("protected", StringComparison.OrdinalIgnoreCase) < 0
+                && preparedLine.IndexOf("var", StringComparison.OrdinalIgnoreCase) < 0))
+        {
+            return;
+        }
+
         foreach (Match match in PropertyTypeRegex.Matches(preparedLine))
         {
             foreach (Capture capture in match.Groups["name"].Captures)
@@ -726,6 +765,12 @@ internal static class PhpReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("extends", StringComparison.OrdinalIgnoreCase) < 0
+            && preparedLine.IndexOf("implements", StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            return;
+        }
+
         foreach (Match match in InheritanceTypeRegex.Matches(preparedLine))
         {
             foreach (Capture capture in match.Groups["name"].Captures)
@@ -751,6 +796,9 @@ internal static class PhpReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("use", StringComparison.OrdinalIgnoreCase) < 0)
+            return;
+
         var groupMatch = GroupUseTypeRegex.Match(preparedLine);
         if (groupMatch.Success)
         {
@@ -784,6 +832,12 @@ internal static class PhpReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("use", StringComparison.OrdinalIgnoreCase) < 0
+            || preparedLine.IndexOf("function", StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            return;
+        }
+
         var groupFunctionMatch = GroupUseFunctionRegex.Match(preparedLine);
         if (groupFunctionMatch.Success)
         {
@@ -828,6 +882,12 @@ internal static class PhpReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("use", StringComparison.OrdinalIgnoreCase) < 0
+            || preparedLine.IndexOf("const", StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            return;
+        }
+
         var groupConstMatch = GroupUseConstRegex.Match(preparedLine);
         if (groupConstMatch.Success)
         {
@@ -1076,6 +1136,11 @@ internal static class PhpReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("->", StringComparison.Ordinal) < 0)
+        {
+            return;
+        }
+
         foreach (Match match in ObjectMemberAccessRegex.Matches(preparedLine))
         {
             var nameGroup = match.Groups["name"];

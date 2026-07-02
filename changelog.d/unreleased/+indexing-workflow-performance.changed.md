@@ -1,18 +1,654 @@
 ---
 category: changed
 affected:
-  - .github/workflows/dotnet.yml
-  - .github/scripts/run-dotnet-tests.ps1
-  - src/CodeIndex/Indexer/References/Support/StructuralLineMasker.cs
-  - tests/CodeIndex.Tests/CiWorkflowTests.cs
-  - tests/CodeIndex.Tests/ReferenceExtractorTests.cs
-  - TESTING_GUIDE.md
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Python.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Php.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Perl.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Rust.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.KotlinScala.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Java.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Go.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.FSharp.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.GraphQL.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Razor.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Dockerfile.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.SectionHeadings.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Css.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Svelte.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Cobol.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Elixir.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Fortran.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Pascal.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Ruby.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.ShellHeredoc.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Smalltalk.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Solidity.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.StructuredData.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.VisualBasic.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Markup.cs
+  - src/CodeIndex/Indexer/References/Languages/CSharpReferenceExtractor.Support.cs
+  - src/CodeIndex/Indexer/References/Languages/CppReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/CssReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/FSharpReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/GoReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/GradleReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/HaskellReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/SwiftReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/SqlReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/RReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/RustReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/ScalaReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/LuaReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/PhpReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/PowerShellReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/PythonReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/ShellReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/TypeScriptReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/ReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/ReferenceExtractor.Core.cs
+  - src/CodeIndex/Indexer/References/ReferenceExtractor.Preparation.cs
+  - src/CodeIndex/Indexer/References/ReferenceExtractor.TypeReferences.cs
+  - src/CodeIndex/Indexer/References/Support/LanguageReferenceExtractionSupport.cs
+  - src/CodeIndex/Indexer/References/Support/LanguageReferenceExtractionSupport.Go.cs
+  - src/CodeIndex/Indexer/Scanning/FileContentLoader.cs
+  - src/CodeIndex/Indexer/Scanning/FileIndexer.GeneratedCode.cs
+  - src/CodeIndex/Indexer/Scanning/FileContentLoader.Checksum.cs
+  - src/CodeIndex/Indexer/CSharpStaticInterfacePrepass.cs
+  - src/CodeIndex/Database/DbWriter.cs
+  - src/CodeIndex/Cli/IndexCommandRunner.cs
+  - src/CodeIndex/Indexer/Scanning/IndexedFileStatReuse.cs
+  - src/CodeIndex/Cli/IndexCommandRunner.FullScan.cs
+  - src/CodeIndex/Cli/IndexCommandRunner.Update.cs
+  - src/CodeIndex/Mcp/McpToolHandlers.cs
+  - tests/CodeIndex.Tests/SymbolExtractorTests.cs
+  - tests/CodeIndex.Tests/FileIndexerContentLoadingTests.cs
+  - tests/CodeIndex.Tests/FileIndexerTests.cs
+  - tests/CodeIndex.Tests/DatabaseTests.cs
 ---
 
 ## English
 
-- **Reduced CI test-runner duplication and large C# indexing allocation pressure** - the `dotnet.yml` matrix test step now delegates test argument construction, failure-log capture, timeout handling, and flaky retry classification to a dedicated PowerShell helper, while C# structural masking reuses unchanged lines instead of allocating a new string for every line during symbol/reference extraction.
+- **Reduced unchanged-file indexing database roundtrips** - CLI and MCP indexing now combine stat-based and checksum-based reuse checks with existing cap/generated-file issue checks, avoiding a second SQLite query for unchanged files that can be skipped.
+- **Batched validation issue writes during indexing** - files that produce multiple validation issues now write those rows in multi-value SQLite inserts instead of executing one insert per issue.
+- **Capped generated-header detection work** - generated-code header detection now inspects only a bounded leading header window, avoiding whole-file scans on very long first lines or minified payloads.
+- **Avoided duplicate generated-pattern checks during indexing** - full-scan and MCP targets now cache generated-code suppression matches and reuse them across C# prepass, stat reuse, and extraction scheduling.
+- **Reused generated-pattern matches inside the C# prepass** - C# static-interface prepass callers can pass cached generated-code suppression results instead of re-running project pattern matching.
+- **Simplified reference-line lookup work** - reference insertion now resolves batched `reference_lines` ids through a small `VALUES` lookup table instead of generating long `OR` predicate chains, and skips redundant per-row lookup-key probes after SQLite returns the joined rows.
+- **Narrowed stale stem purge scans** - extension-change cleanup now asks SQLite for same-stem path candidates instead of scanning every indexed file row after each retained file update.
+- **Short-circuited oversize checksum probes** - checksum reuse now returns immediately for seekable streams whose length already exceeds the indexing byte cap, avoiding bounded-but-unnecessary reads of huge files.
+- **Kept content normalization on the fast path for mid-line invisibles** - indexing normalization now only enters the rewrite loop for carriage returns or line-leading invisible markers, preserving the unchanged-content path when U+FEFF/U+200B appears inside ordinary text.
+- **Collapsed C# doc-comment probing to one pass** - reference preparation now detects `///` and `/**` XML doc comment candidates with a single scan before deciding whether to build C# line-state masks.
+- **Gated C# reference regex probes by marker** - C# reference extraction now checks using-alias, `where`, and reflection member-name markers before running their regex probes.
+- **Gated TypeScript and Swift alias regex probes by marker** - type-alias reference extraction now checks per-line declaration keywords and assignment markers before running alias regexes.
+- **Gated SQL maintenance target scans by keyword** - SQL reference extraction now checks permission, authorization, statistics, drop-table, truncate, and revoke markers before running those target regex passes.
+- **Gated SQL temp-object establishment scans by statement marker** - SQL statement-prefix carryover now checks target, truncate, select-into, and create markers before running temp-object regex probes.
+- **Gated SQL source and call scans by statement marker** - SQL reference extraction now checks call, source, merge, delete-using, output, and select-into markers before running their statement-level regex passes.
+- **Gated SQL index target scans by statement marker** - SQL reference extraction now skips index target regex groups on non-index statements and dispatches create, alter, drop, XML, columnstore, hash, and fulltext variants by marker.
+- **Gated SQL lifecycle target scans by statement marker** - SQL reference extraction now checks trigger, security policy, references, synonym, and drop-object markers before running lifecycle target regex groups.
+- **Gated SQL alter-object target scans by statement marker** - SQL reference extraction now checks ALTER object-type markers before running view, procedure, function, trigger, sequence, policy, catalog, partition, XML schema, assembly, schema-transfer, and table-history regex groups.
+- **Gated SQL generic target scans by statement marker** - SQL reference extraction now runs the generic INSERT/UPDATE/MERGE/DELETE/ALTER TABLE target regex only for statements containing those target-capable markers.
+- **Gated SQL window clause scans by marker** - SQL reference extraction now skips window-clause discovery and suppression scans when the file or statement lacks an `OVER` marker.
+- **Gated SQL generated-column dependency scans by marker** - SQL reference extraction now checks generated-column and `NEXT VALUE FOR` markers before running generated dependency regexes and computed-column prefix probes.
+- **Gated R call-start reference scans by marker** - R reference extraction now checks source, data, system.file, documentation, and package-install call markers before running the matching call-start regexes.
+- **Gated R operator and member reference scans by marker** - R reference extraction now checks `::`, backtick-call, infix-operator, `$`, and slot markers before running the corresponding operator/member regex passes.
+- **Gated R directive reference scans by marker** - R reference extraction now checks namespace, roxygen, and S4 directive markers before running directive-start regexes or sequential directive match probes.
+- **Gated PowerShell splat reference scans by marker** - PowerShell reference extraction now checks splat assignment, splat usage, and hashtable key markers before running the corresponding regex scans.
+- **Gated PowerShell call reference scans by marker** - PowerShell reference extraction now checks statement and pipeline call-start markers before running cmdlet/function call regex probes.
+- **Gated Shell call and source reference scans by marker** - Shell reference extraction now skips command-call regexes when no callable names exist and checks substitution, source, and global-alias markers before running those scans.
+- **Gated C# using namespace/static scans by marker** - C# reference extraction now checks `using`, `static`, and alias markers before running using-namespace and using-static regex probes.
+- **Gated F# pipeline call scans by marker** - F# reference extraction now checks forward and backward pipeline markers before running pipeline call regex probes.
+- **Gated F# control-flow application scans by marker** - F# reference extraction now checks control-flow markers before running try/finally, condition, match, and when-guard application regex probes.
+- **Gated F# keyword application scans by marker** - F# reference extraction now checks assert, lazy, raise, cast, and new markers before running their application-call regex probes.
+- **Gated F# operator and composition scans by marker** - F# reference extraction now checks composition/operator markers before running those regex probes and resolves operator-definition suppression once per line.
+- **Gated SQL temp-object collection scans by marker** - SQL temp object carry-forward now skips collection without `#` markers and runs target, truncate, select-into, and create probes only when their statement keywords are present.
+- **Gated Go concurrency reference scans by marker** - Go reference extraction now checks `go` and channel-arrow markers before running goroutine and channel send/receive regex probes.
+- **Gated Scala block and type-context scans by marker** - Scala reference extraction now checks block, generator, implicit, given, and using markers before running those regex probes.
+- **Gated Lua call and table-field scans by marker** - Lua reference extraction now checks whitespace, colon, and dot markers before running command-call, method-call, and table-field regex probes.
+- **Gated Rust raw-identifier and macro call scans by marker** - Rust reference extraction now checks `r#` and `!` markers before running raw-identifier and macro-call regex probes.
+- **Gated Rust attribute reference scans by marker** - Rust reference extraction now checks the attribute hash marker before running derive, cfg_attr derive, and attribute-head regex probes.
+- **Gated Rust associated receiver scans by marker** - Rust reference extraction now checks path separator, generic, and call markers before running associated call/value receiver scans.
+- **Gated Rust struct literal scans by marker** - Rust reference extraction now checks the opening-brace marker before running struct literal instantiation regex probes.
+- **Gated Rust mutable reference type scans by marker** - Rust reference extraction now checks ampersand and `mut` markers before running mutable-reference type regex probes.
+- **Gated Rust declaration reference scans by marker** - Rust reference extraction now checks use, extern crate, and module markers before running declaration reference regex probes.
+- **Gated Rust lifetime and ranked-bound scans by marker** - Rust reference extraction now checks lifetime apostrophe and higher-ranked `for<...>` markers before scanning those reference forms.
+- **Gated Rust function signature type scans by marker** - Rust reference extraction now checks `fn`, parenthesis, and return-arrow markers before running function signature type probes.
+- **Gated Rust closure signature type scans by marker** - Rust reference extraction now checks pipe, annotation, and return-arrow markers before scanning closure parameter and return types.
+- **Gated Rust declaration type scans by marker** - Rust reference extraction now checks `let`, `const`, `static`, and type-annotation markers before scanning local and static declaration types.
+- **Gated Rust alias and associated type scans by marker** - Rust reference extraction now checks `type`, `trait`, assignment, and bound markers before scanning alias targets and associated type bounds.
+- **Gated Rust aggregate field type scans by marker** - Rust reference extraction now checks struct, tuple, and enum variant delimiters before scanning aggregate field type lists.
+- **Gated Rust cast type scans by marker** - Rust reference extraction now checks the `as` marker before trimming declarations and scanning cast target types.
+- **Gated Rust impl and trait header type scans by marker** - Rust reference extraction now checks `impl`, `trait`, and trait-bound markers before scanning implementation and trait header types.
+- **Gated Rust generic and where-bound scans by marker** - Rust reference extraction now checks generic-angle and `where` markers before scanning generic bounds, defaults, const generic usages, and where clauses.
+- **Gated Rust const generic segment scans by marker** - Rust reference extraction now checks `const` and annotation markers before splitting generic and where-clause segments for const generic references.
+- **Gated Rust function-trait return type scans by marker** - Rust reference extraction now checks return-arrow and bound markers before scanning function-trait return types in generic, where, and trait expressions.
+- **Gated Rust generic default type scans by marker** - Rust reference extraction now checks assignment markers before locating generic defaults or splitting generic clauses for default type references.
+- **Gated Gradle DSL call scans by marker** - Gradle reference extraction now checks block braces and whitespace before running block-call and command-call DSL regex probes.
+- **Gated Haskell signature and space-call scans by marker** - Haskell reference extraction now checks type-signature and whitespace markers before invoking shared signature and space-call regex probes.
+- **Gated Haskell definition suppression scans by marker** - Haskell reference extraction now checks assignment markers before running definition-suppression regex probes for space calls.
+- **Gated CSS preprocessor import scans by marker** - CSS, Sass, and Stylus reference extraction now checks import/use/forward/require markers before stripping comments and running import regex probes.
+- **Gated CSS animation reference scans by marker** - CSS reference extraction now checks the animation marker before running animation-name and shorthand value regex probes.
+- **Gated CSS custom-property reference scans by marker** - CSS reference extraction now checks `var` and custom-property markers before running custom-property reference regex probes.
+- **Gated SCSS reference scans by marker** - SCSS reference extraction now checks dollar, `@extend`, and `@include` markers before running variable, extend, and include regex probes.
+- **Gated Sass call scans by marker** - Sass reference extraction now skips reference-line preparation on plain lines and checks mixin-plus and parenthesis markers before running call regex probes.
+- **Gated Stylus reference scans by marker** - Stylus reference extraction now checks dollar and parenthesis markers before running explicit variable and function regex probes, and skips bare variable probes when no variable definitions were collected.
+- **Gated Stylus variable definition scans by marker** - Stylus variable-definition collection now preserves block-comment state while skipping definition-line preparation and regex probes on ordinary lines without assignment markers.
+- **Gated Python decorator reference scans by marker** - Python reference extraction now skips decorator-call and bare-decorator regex probes on lines without an `@` marker.
+- **Gated Python raise/except type scans by marker** - Python reference extraction now checks `raise` and `except` markers before running exception type regex probes.
+- **Gated Python runtime type-check scans by marker** - Python reference extraction now checks `isinstance` and `issubclass` markers before running runtime type-check regex probes.
+- **Gated Python typing helper scans by marker** - Python reference extraction now checks `cast` and `assert_type` markers before running typing helper regex probes.
+- **Gated Python class-base scans by marker** - Python reference extraction now checks `class` and parenthesis markers before running class base/metaclass regex probes.
+- **Gated Python function annotation scans by marker** - Python reference extraction now checks function declaration, return-arrow, and parenthesis markers before running return and parameter annotation regex probes.
+- **Gated Python variable and type-alias scans by marker** - Python reference extraction now checks annotation and alias markers before running variable annotation and type-alias regex probes.
+- **Gated Python type-factory scans by marker** - Python reference extraction now checks `NewType`, `TypeVar`, `ParamSpec`, and `bound` markers before running type factory regex probes.
+- **Gated Python dataclass and type-hints scans by marker** - Python reference extraction now checks `get_type_hints`, `fields`, `field`, `default_factory`, and `metadata` markers before running dataclass/type-hints regex probes.
+- **Gated Python framework and dynamic-import scans by marker** - Python reference extraction now checks attrs, pydantic, pytest, contextlib, importlib, and `__import__` markers before running those API regex probes.
+- **Gated PHP use import scans by marker** - PHP reference extraction now checks `use`, `function`, and `const` markers before running type, function, and const import regex probes.
+- **Gated PHP static and exception type scans by marker** - PHP reference extraction now checks `::`, `instanceof`, and `catch` markers before running static-access and exception type regex probes.
+- **Gated PHP signature type scans by marker** - PHP reference extraction now checks colon, dollar, visibility, `extends`, and `implements` markers before running return, parameter, property, and inheritance type regex probes.
+- **Gated PHP docblock type scans by marker** - PHP reference extraction now checks docblock tag markers before running generic, property, and method-parameter docblock type regex probes.
+- **Gated PHP object member scans by marker** - PHP reference extraction now checks the object access arrow marker before running object-member regex probes.
+- **Gated C++ friend reference scans by marker** - C++ reference extraction now checks the `friend` marker before running friend type/function regex probes.
+- **Skipped reference-line preparation on empty lines** - all language reference preparation now returns empty lines immediately instead of running comment/string-literal trigger checks.
+- **Collapsed string-literal delimiter probes** - reference-line preparation now checks quote/backtick trigger characters with `IndexOfAny` instead of separate scans per delimiter.
+- **Hoisted reference-line preparation language flags** - per-file reference preparation now computes language comment/string handling flags once and reuses them for each line instead of repeating language switches in the hot loop.
+- **Skipped symbol pattern scans on whitespace-only lines** - symbol extraction now bypasses the regex pattern loop when the effective match line is blank after language-specific masking.
+- **Skipped Python walrus regex scans on ordinary lines** - supplemental Python symbol extraction now checks for `:=` before running the walrus assignment regex.
+- **Skipped PHP supplemental regex scans on non-candidate lines** - PHP property, constructor-promotion, docblock, and trait-alias supplemental passes now check cheap marker substrings before running their regexes.
+- **Dispatched JS/TS module supplemental scans by marker** - JavaScript/TypeScript module import supplemental helpers now run only for lines containing the marker they scan for, instead of invoking every helper on every line.
+- **Skipped C++ friend-declaration scans on ordinary lines** - C++ supplemental friend declaration extraction now avoids regex probes unless the masked line still contains `friend`, while preserving block-comment state on comment-affecting lines.
+- **Skipped Perl hash-constant collection on non-candidate lines** - Perl supplemental constant extraction now checks for `constant` before attempting the `use constant { ... }` body collector on each line.
+- **Skipped Rust supplemental collectors before marker hits** - Rust `use`, multiline `impl`, and associated-type-default supplemental extraction now checks cheap file/line markers before running statement collectors or trait-body scans.
+- **Gated Go supplemental declaration scans by markers** - Go import/directive/label and grouped declaration helpers now skip ordinary lines before trimming, regex checks, or brace-depth scans when the required markers are absent.
+- **Gated Go import-block reference scans by marker** - Go reference preparation now skips import-block regex checks on lines without the required `import`, parenthesis, or quoted-path markers.
+- **Gated Go top-level reference scans by marker** - Go reference extraction now checks import, `func`, brace, and uppercase markers before running top-level import/function/composite regex probes.
+- **Gated Go generic helper function scans by marker** - Go generic call and instantiation helpers now skip function-line regex checks when the line lacks the `func` marker.
+- **Skipped GraphQL member extraction when input/union markers are absent** - GraphQL supplemental member extraction now avoids full-content joins for files without `input` blocks and runs union regexes only on lines containing `union`.
+- **Dispatched Razor directive scans by marker** - Razor directive supplemental extraction now skips lines without `@` and invokes only the directive regex matching the line marker.
+- **Gated Razor reference scans by marker** - Razor reference extraction now checks component-tag, directive, attribute, inject, and event-binding markers before running the matching regex probes.
+- **Dispatched Dockerfile supplemental scans by instruction** - Dockerfile extra symbol extraction now reads the leading instruction once per line and invokes only the matching ENV/LABEL/EXPOSE/VOLUME/FROM/SHELL/COPY/ADD/RUN helper.
+- **Gated Dockerfile named-stage fallback scans by marker** - Dockerfile extraction now skips named-stage base-image regex checks on `FROM` lines without an `AS` marker.
+- **Gated Java enum fallback scans by name start** - Java enum recovery now skips the line-fallback regex unless the line shape can match an uppercase enum member.
+- **Gated section-heading regex scans by marker** - C# `#region` and JavaScript/TypeScript `@module` heading extraction now checks required marker substrings before running heading regexes.
+- **Skipped CSS custom-property regex scans on ordinary lines** - CSS inline custom-property extraction now checks for the required `--` marker before running its regex.
+- **Skipped CSS font-face block joins without family markers** - CSS `@font-face` family-name resolution now checks the block for `font-family` before masking and joining block text.
+- **Skipped Svelte reactive-property regex scans on ordinary lines** - Svelte supplemental extraction now checks for `$:` before running its reactive assignment regex.
+- **Dispatched Markdown reference regex scans by delimiter** - Markdown reference extraction now checks for `](`, `]:`, and `][` before running the matching link/reference regex.
+- **Gated XAML type-bearing attribute regex scans** - XAML/XML extraction now checks for `x:Class`, `x:DataType`, `x:TypeArguments`, and `TargetType` before running the matching attribute regex.
+- **Gated XAML identity/resource attribute regex scans** - XAML/XML extraction now checks for `x:Name` and `x:Key` before running the matching property attribute regexes.
+- **Gated XAML event-handler regex scans by event name** - XAML/XML extraction now checks for configured event attribute names before running the event-handler regex.
+- **Gated XAML binding markup regex scans** - XAML/XML extraction now checks for binding markup prefixes before running the full-document binding regex.
+- **Gated wrapped XAML attribute scans by attribute name** - wrapped XAML attribute extraction now skips full-text walks for `x:Name`, `x:Key`, and event attributes whose names are absent.
+- **Gated XAML Binding ElementName scans by marker** - XAML/XML extraction now skips Binding markup, object element, and property element ElementName scans when their markers are absent.
+- **Gated XAML Binding Path scans by marker** - XAML/XML extraction now skips Binding object-element and property-element Path scans when their markers are absent.
+- **Gated XAML type element regex scans by marker** - XAML/XML extraction now checks for `x:Type`/`TypeName` markers before running type object/property element regexes.
+- **Gated XAML type markup scans by prefix** - XAML/XML extraction now invokes `{x:Type}` and `{x:TypeExtension}` markup-extension scans only when the matching prefix is present.
+- **Gated XAML static-member markup scans by prefix** - XAML/XML extraction now skips `{x:Static}` type inference when the prefix is absent.
+- **Gated XAML reference scans by prefix** - XAML/XML extraction now skips `x:Reference` markup, object element, and property element scans when their prefixes are absent.
+- **Gated XAML resource reference scans by prefix** - XAML/XML extraction now skips static/dynamic resource markup scans when their prefixes are absent.
+- **Gated Pascal range token scans by keyword** - Pascal extraction now skips begin/end/case/try regex counting on lines that cannot contain the corresponding token.
+- **Gated Ruby and Elixir block token scans by keyword** - Ruby and Elixir range extraction now skips block-token regex scans on masked text without any matching token marker.
+- **Gated shell heredoc scans by redirect marker** - Shell extraction now skips heredoc masking and redirect regex scans on lines without `<<`.
+- **Gated Perl hash-constant key scans by pair marker** - Perl extraction now skips `use constant` hash key regex scans when the collected body lacks `=>`.
+- **Gated GraphQL input field scans by colon** - GraphQL extraction now skips input-field regex scans for input bodies that cannot contain field declarations.
+- **Gated GraphQL union variant scans by name start** - GraphQL extraction now skips union-variant regex scans when stripped variant text contains no GraphQL name start.
+- **Gated GraphQL declaration boundary scans by keyword** - GraphQL union continuation scanning now skips declaration-start regex checks when no declaration keyword is present.
+- **Gated Elixir defimpl type scans by marker** - Elixir reference extraction now checks the `defimpl` marker before running defimpl protocol and implementation type regex probes.
+- **Gated Elixir pipe-call scans by marker** - Elixir reference extraction now checks the pipe operator marker before running pipe-call regex probes.
+- **Gated Elixir import and behaviour type scans by marker** - Elixir reference extraction now checks alias/import/require/use and attribute markers before running import and behaviour regex probes.
+- **Gated Elixir parenless call scans by marker** - Elixir reference extraction now checks whitespace markers before running parenless-call regex probes.
+- **Gated Elixir first-line block scans by marker** - Elixir range extraction now avoids shorthand and opener regex checks when the masked first line lacks the required markers.
+- **Gated XAML line-level attribute scans by assignment marker** - XAML extraction now skips class, type, name, and key attribute regex scans on lines without `=`.
+- **Gated wrapped XAML type-argument scans by attribute marker** - XAML extraction now skips multiline `x:TypeArguments` scanning when the attribute marker is absent from the document.
+- **Gated wrapped XAML type-bearing scans by attribute markers** - XAML extraction now skips multiline class/type attribute scanning when `x:Class`, `x:DataType`, and `TargetType` are all absent.
+- **Gated wrapped XAML search-attribute scans by markers** - XAML extraction now skips multiline name/key/event attribute scanning when none of those markers appear in the document.
+- **Gated COBOL paragraph scans by required markers** - COBOL extraction now skips program, entry, section, and paragraph regex checks when the line lacks the required marker.
+- **Gated Fortran routine-start scans by keyword** - Fortran range extraction now skips routine-start regex checks when a line contains neither `subroutine` nor `function`.
+- **Gated Fortran include and group reference scans by marker** - Fortran reference extraction now skips include/common/namelist regex checks unless the line has the required keyword and delimiter markers.
+- **Gated Fortran statement reference scans by keyword** - Fortran reference extraction now runs data, save, submodule, external, intrinsic, access, finalizer, and equivalence regex checks only on matching statement candidates.
+- **Gated Fortran allocation and type reference scans by marker** - Fortran reference extraction now checks procedure, pointer, associate, type-expression, allocation, deallocation, and kind markers before running their regex passes.
+- **Gated Fortran call reference scans by marker** - Fortran reference extraction now checks the `call` statement marker before running call-target regex probes.
+- **Gated Objective-C type reference scans by marker** - Objective-C reference extraction now checks interface-base, protocol-list, and pointer-declaration markers before running the matching type regex probes.
+- **Gated Objective-C message call scans by marker** - Objective-C reference extraction now checks message-send and selector markers before running message and `@selector` regex probes.
+- **Gated Pascal type reference scans by marker** - Pascal reference extraction now checks `uses`, base-declaration, and colon markers before running the matching type regex probes.
+- **Gated Pascal bare-call scans by marker** - Pascal reference extraction now checks the semicolon statement marker before running the bare-call regex probe.
+- **Gated Smalltalk message reference scans by marker** - Smalltalk reference extraction now checks whitespace markers before running method-definition, class-declaration, and message-send regex probes.
+- **Gated Smalltalk range-boundary scans by marker** - Smalltalk range extraction now skips method/class boundary regex checks when the line lacks `>>`, `subclass:`, or `named:`.
+- **Gated Rust use-start scans by keyword** - Rust use-statement collection now skips the start regex when the first line lacks the `use` keyword marker.
+- **Gated Kotlin class subkind scans by keyword** - Kotlin class enrichment now skips value/inline class regex checks when metadata lacks the corresponding keyword marker.
+- **Gated Kotlin inline-function scans by keyword** - Kotlin function enrichment now skips inline/reified regex checks when signatures lack the matching keyword markers.
+- **Dispatched Solidity type declaration scans by keyword** - Solidity extraction now runs contract/interface/library, struct, and enum declaration regexes only when their keyword marker is present.
+- **Dispatched Solidity callable declaration scans by keyword** - Solidity extraction now runs function, constructor, fallback/receive, and modifier declaration regexes only for lines with the corresponding marker.
+- **Dispatched Solidity event/error declaration scans by keyword** - Solidity extraction now runs event and error declaration regexes only on lines with the matching keyword marker.
+- **Gated Solidity parenthesized declaration scans by marker** - Solidity extraction now skips function, constructor, fallback/receive, event, and error regexes when the line lacks `(`.
+- **Skipped duplicate PHP constructor-start regex checks** - PHP promoted-property extraction now avoids the constructor-start regex once the same-line constructor regex has already matched.
+- **Dispatched PHP import scans by marker** - PHP import extraction now checks `use`, grouped-use braces, and require/include markers before running the corresponding regexes.
+- **Gated PHP grouped-use alias scans by marker** - PHP grouped-use import extraction now skips per-item alias regex checks unless the item contains an `as` marker.
+- **Gated PHP promoted-property parameter scans by marker** - PHP constructor promotion extraction now skips parameter regex checks when the segment lacks `$` or visibility keywords.
+- **Gated PHP docblock and alias scans by syntax marker** - PHP supplemental extraction now skips docblock, trait-alias, and constructor regex checks when lines lack required sigils or delimiters.
+- **Collapsed duplicate F# type-declaration regex scans** - F# type-member extraction now reuses the declaration match instead of running `IsMatch` and `Match` on the same line.
+- **Gated F# record-field scans by colon** - F# record-field extraction now skips record-field regex checks for candidates that cannot contain a typed field separator.
+- **Gated F# active/operator scans by marker** - F# extraction now skips active-pattern and operator-definition regex checks when lines lack their required markers.
+- **Gated YAML mapping-key scans by colon** - YAML structured-data extraction now skips mapping-key regex checks on lines that cannot contain a mapping separator.
+- **Gated JSON fallback property scans by markers** - oversized or malformed JSON fallback extraction now skips property regex checks on lines without both a quote and colon.
+- **Deferred JSON property-line queue construction** - JSON extraction now builds property-line lookup queues only for object roots that can emit structured key symbols.
+- **Gated Visual Basic enum-member scans by name start** - Visual Basic enum extraction now skips enum-member regex checks when the trimmed line cannot start a member name.
+- **Gated Python dynamic-import scans by marker** - Python import expansion now skips dynamic import literal regex enumeration when statements lack `importlib` and `__import__` markers.
+- **Dispatched Python direct/from import scans by prefix** - Python import expansion now runs direct and from-import regexes only for statements beginning with the matching import keyword.
+- **Gated Python `__all__` export scans by marker** - Python export expansion now skips append/extend/assignment regex checks on lines without the `__all__` marker.
+- **Gated Python class attribute scans by marker** - Python class-body extraction now checks special attributes, dataclass fields, annotations, and assignments with cheap markers before running the corresponding regexes.
+- **Dispatched Python `__all__` operation scans by marker** - Python export expansion now runs append, extend, and assignment regexes only when the line contains the matching operation marker.
+- **Gated Python dataclass metadata scans by marker** - Python dataclass field expansion now skips metadata regex checks on field-call lines that lack the `metadata` and dictionary markers.
+- **Gated C/C++ include, base, constructor, and cast scans by marker** - C/C++ reference extraction now checks include/import, inheritance, allocation, named-cast, and parenthesized-cast markers before running the matching type regex probes.
+- **Gated C typedef cast scans by marker** - C reference extraction now checks `*_t` and parenthesis markers before running typedef cast type regex probes.
+- **Gated C sizeof and alignof type scans by marker** - C reference extraction now checks operand keywords plus typedef/tag markers before running sizeof and alignof type regex probes.
+- **Gated C declaration type scans by marker** - C reference extraction now checks declaration terminators plus typedef/tag markers before running declaration type regex probes.
+- **Gated C function return type scans by marker** - C reference extraction now checks parenthesis plus typedef/tag markers before running function return type regex probes.
+- **Gated C parameter type scans by marker** - C reference extraction now checks parameter delimiters plus typedef/tag markers before running parameter type regex probes.
+- **Gated C compound literal type scans by marker** - C reference extraction now checks compound-literal delimiters plus typedef/tag markers before running compound literal type regex probes.
+- **Gated C typeof type scans by marker** - C reference extraction now checks `typeof` plus typedef/tag markers before running typeof and typeof_unqual type regex probes.
+- **Gated C builtin type-compatibility scans by marker** - C reference extraction now checks the `__builtin_types_compatible_p` marker plus typedef/tag markers before running builtin type comparison regex probes.
+- **Gated C generic association type scans by marker** - C reference extraction now checks `_Generic` or continuation delimiters plus typedef/tag markers before running generic association type regex probes.
+- **Gated C atomic and alignas type scans by marker** - C reference extraction now checks `_Atomic` and alignas markers plus typedef/tag markers before running atomic and alignas type regex probes.
+- **Gated C function-pointer type scans by marker** - C reference extraction now checks function-pointer delimiter markers plus typedef/tag markers before running function-pointer alias and declaration type regex probes.
+- **Gated C pointer-array declaration type scans by marker** - C reference extraction now checks function-pointer and array delimiters plus typedef/tag markers before running pointer-array declaration type regex probes.
+- **Gated C offsetof type scans by marker** - C reference extraction now checks `offsetof` call and comma markers plus typedef/tag markers before running offsetof type regex probes.
+- **Gated C va_arg type scans by marker** - C reference extraction now checks `va_arg` call and comma markers before running va_arg regex and operand scanners.
+- **Gated C++ type operand scans by marker** - C/C++ reference extraction now checks `sizeof` or `alignof` call markers before running C++ type operand regex probes.
+- **Gated C++ typeid scans by marker** - C/C++ reference extraction now checks `typeid` call markers before running C++ typeid regex probes.
+- **Gated C++ decltype brace construction scans by marker** - C/C++ reference extraction now checks `decltype`, parenthesis, and brace markers before running decltype construction regex probes.
+- **Gated C++ factory template argument scans by marker** - C/C++ reference extraction now checks `make_`, template, and call markers before running factory template argument regex probes.
+- **Gated C++ type-trait template argument scans by marker** - C/C++ reference extraction now checks `is_` and template markers before running type-trait template argument regex probes.
+- **Gated C++ brace construction scans by marker** - C/C++ reference extraction now checks brace and construction lead-in markers before running brace construction regex probes.
+- **Gated C++ qualified template brace construction scans by marker** - C/C++ reference extraction now checks brace, template, and scope markers before running qualified template brace construction regex probes.
+- **Gated C++ using-alias target scans by marker** - C/C++ reference extraction now checks `using`, assignment, and statement markers before running using-alias target regex probes.
+- **Gated C++ typedef-alias target scans by marker** - C/C++ reference extraction now checks `typedef`, statement, and no-parenthesis markers before running typedef-alias target regex probes.
+- **Gated C++ explicit template instantiation scans by marker** - C/C++ reference extraction now checks `template`, class/struct, and statement markers before running explicit template instantiation regex probes.
+- **Gated C++ template-id declaration scans by marker** - C/C++ reference extraction now checks template delimiters and declaration terminators before running template-id declaration regex probes.
+- **Gated C++ template parameter default scans by marker** - C/C++ reference extraction now checks `typename`/`class` and assignment markers before running template parameter default regex probes.
+- **Gated C++ qualified member receiver scans by marker** - C/C++ reference extraction now checks scope markers before running qualified member receiver regex probes.
+- **Gated C++ pointer-to-member type scans by marker** - C/C++ reference extraction now checks scope and pointer markers before running pointer-to-member type regex probes.
+- **Gated C++ trailing return type scans by marker** - C/C++ reference extraction now checks close-parenthesis and arrow markers before running trailing return type regex probes.
+- **Gated C++ requires concept type scans by marker** - C/C++ reference extraction now checks `requires` and template markers before running requires concept type regex probes.
+- **Gated C++ qualified requires concept scans by marker** - C/C++ reference extraction now checks `requires`, template, and scope markers before running qualified requires concept regex probes.
+- **Gated C++ concept expression type scans by marker** - C/C++ reference extraction now checks template and concept operator markers before running concept expression type regex probes.
+- **Gated C++ compound requirement concept scans by marker** - C/C++ reference extraction now checks arrow and template delimiter markers before running compound requirement concept regex probes.
+- **Gated C++ friend type scans by marker** - C/C++ reference extraction now checks `friend`, type-kind, and statement markers before running friend type regex probes.
+- **Gated C++ dynamic exception spec scans by marker** - C/C++ reference extraction now checks `throw` and parenthesis markers before running dynamic exception specification regex probes.
+- **Gated C++ declaration type scans by marker** - C/C++ reference extraction now checks declaration terminators and lightweight type markers before running declaration type regex probes.
+- **Gated Dart variable type scans by marker** - Dart reference extraction now checks declaration terminators and uppercase type markers before running variable type regex probes.
+- **Gated Dart function signature scans by marker** - Dart reference extraction now checks parenthesis and uppercase type markers before running function signature and parameter type regex probes.
+- **Gated Dart constructor call scans by marker** - Dart reference extraction now checks `new`/`const`, parenthesis, and uppercase type markers before running constructor call regex probes.
+- **Gated VB type keyword scans by marker** - Visual Basic reference extraction now checks type keyword markers before running type keyword regex probes.
+- **Gated VB generic list scans by marker** - Visual Basic reference extraction now checks `(` and `Of` markers before running generic argument list regex probes.
+- **Gated VB new type scans by marker** - Visual Basic reference extraction now checks `New` markers before running constructor type regex probes.
+- **Gated VB implements list scans by marker** - Visual Basic reference extraction now checks `Implements` markers before running implements list regex probes.
+- **Gated VB imports list scans by marker** - Visual Basic reference extraction now checks `Imports` markers before running imports list regex probes.
+- **Gated VB cast type scans by marker** - Visual Basic reference extraction now checks cast, parenthesis, and comma markers before running cast type regex probes.
+- **Gated VB GetType scans by marker** - Visual Basic reference extraction now checks `GetType` and parenthesis markers before running `GetType` regex probes.
+- **Gated VB TypeOf scans by marker** - Visual Basic reference extraction now checks `TypeOf` and `Is` markers before running `TypeOf` regex probes.
+- **Gated VB NameOf scans by marker** - Visual Basic reference extraction now checks `NameOf` and parenthesis markers before running `NameOf` regex probes.
+- **Gated VB XML namespace scans by marker** - Visual Basic reference extraction now checks `GetXmlNamespace` and parenthesis markers before running XML namespace regex probes.
+- **Gated VB AddressOf scans by marker** - Visual Basic reference extraction now checks `AddressOf` markers before running delegate target regex probes.
+- **Gated VB AddHandler scans by marker** - Visual Basic reference extraction now checks `AddHandler` markers before running event subscription regex probes.
+- **Gated VB RemoveHandler scans by marker** - Visual Basic reference extraction now checks `RemoveHandler` markers before running event unsubscription regex probes.
+- **Gated VB RaiseEvent scans by marker** - Visual Basic reference extraction now checks `RaiseEvent` markers before running event invocation regex probes.
+- **Gated VB escaped call scans by marker** - Visual Basic reference extraction now checks escaped identifier and parenthesis markers before running escaped call regex probes.
+- **Gated VB bare call scans by leading token** - Visual Basic reference extraction now checks the first non-whitespace token before running bare call regex probes.
+- **Gated VB CallByName scans by marker** - Visual Basic reference extraction now checks `CallByName`, parenthesis, comma, and quote markers before running `CallByName` regex probes.
+- **Gated VB bare member call scans by leading token** - Visual Basic reference extraction now checks for leading member access before running bare member call regex probes.
+- **Gated Fortran use scans by marker** - Fortran reference extraction now checks `use` markers before running use, only-list, and rename-list regex probes.
+- **Gated Fortran import scans by marker** - Fortran reference extraction now checks `import` markers before running import list regex probes.
+- **Gated Fortran data group scans by slash marker** - Fortran reference extraction now checks data statement slash markers before running data object group regex probes.
+- **Gated Fortran save slash group scans by marker** - Fortran reference extraction now checks save-list slash markers before running saved common block regex probes.
+- **Gated Fortran allocate source scans by marker** - Fortran reference extraction now checks `source` and `mold` markers before running allocate source keyword regex probes.
+- **Gated Fortran allocation status scans by marker** - Fortran reference extraction now checks `stat` and `errmsg` markers before running allocate/deallocate status keyword regex probes.
+- **Gated Fortran pointer assignment scans by leading token** - Fortran reference extraction now checks the leading identifier token before running pointer assignment regex probes.
+- **Gated Fortran allocate type-spec scans by marker** - Fortran reference extraction now checks `::` markers before running allocate type-spec regex probes.
+- **Gated Fortran call scans by leading keyword** - Fortran reference extraction now checks for a leading `call` keyword before running call regex probes.
+- **Tightened Fortran use scans to leading keyword gates** - Fortran reference extraction now requires leading `use` before running use-clause regex probes.
+- **Tightened Fortran import scans to leading keyword gates** - Fortran reference extraction now requires leading `import` before running import list regex probes.
+- **Tightened Fortran include scans to leading keyword gates** - Fortran reference extraction now requires leading `include` before running include filename regex probes.
+- **Replaced Fortran common line regex gates with leading keyword checks** - Fortran reference extraction now avoids common-line regex probes by using direct leading keyword checks.
+- **Replaced Fortran namelist line regex gates with leading keyword checks** - Fortran reference extraction now avoids namelist-line regex probes by using direct leading keyword checks.
+- **Tightened Fortran equivalence scans to leading keyword gates** - Fortran reference extraction now requires leading `equivalence` before running equivalence list regex probes.
+- **Tightened Fortran data scans to leading keyword gates** - Fortran reference extraction now requires leading `data` before running data-object regex probes.
+- **Tightened Fortran save scans to leading keyword gates** - Fortran reference extraction now requires leading `save` before running save-list regex probes.
+- **Tightened Fortran submodule scans to leading keyword gates** - Fortran reference extraction now requires leading `submodule` before running parent-module regex probes.
+- **Tightened Fortran external scans to leading keyword gates** - Fortran reference extraction now requires leading `external` before running external-list regex probes.
+- **Tightened Fortran intrinsic scans to leading keyword gates** - Fortran reference extraction now requires leading `intrinsic` before running intrinsic-list regex probes.
+- **Tightened Fortran access-list scans to leading keyword gates** - Fortran reference extraction now requires leading `public` or `private` before running access-list regex probes.
+- **Tightened Fortran finalizer scans to leading keyword gates** - Fortran reference extraction now requires leading `final` before running finalizer-list regex probes.
+- **Tightened Fortran procedure binding scans to leading keyword gates** - Fortran reference extraction now requires leading `procedure` or `generic` before running binding-target regex probes.
+- **Tightened Fortran associate scans to leading keyword gates** - Fortran reference extraction now requires leading `associate` before running associate-target regex probes.
+- **Tightened Fortran allocate scans to leading keyword gates** - Fortran reference extraction now requires leading `allocate` before running allocation type and object regex probes.
+- **Tightened Fortran deallocate scans to leading keyword gates** - Fortran reference extraction now requires leading `deallocate` before running deallocation object regex probes.
+- **Added Fortran keyword-kind assignment gates** - Fortran reference extraction now checks for `=` before running intrinsic `kind =` regex probes.
+- **Removed unused Fortran common and namelist gate regexes** - Fortran reference extraction now avoids carrying redundant line-gate regex definitions after direct keyword gates replaced them.
+- **Removed redundant Fortran equivalence line regex gates** - Fortran reference extraction now relies on direct leading keyword checks before scanning equivalence name lists.
+- **Removed redundant Fortran procedure binding line regex gates** - Fortran reference extraction now uses direct leading keyword checks before scanning binding targets.
+- **Tightened Pascal uses scans to leading keyword gates** - Pascal reference extraction now requires leading `uses` before running unit-list regex probes.
+- **Added Pascal class-base closing-paren gates** - Pascal reference extraction now checks for `)` before running class/interface/object base-list regex probes.
+- **Added shared keyword containment gates** - Reference extraction now has a boundary-aware case-insensitive keyword helper for replacing broad substring probes in language hot paths.
+- **Tightened Pascal class base markers to keyword boundaries** - Pascal reference extraction now treats `class` as a boundary-aware keyword before running base-list regex probes.
+- **Tightened Pascal interface base markers to keyword boundaries** - Pascal reference extraction now treats `interface` as a boundary-aware keyword before running base-list regex probes.
+- **Tightened Pascal object base markers to keyword boundaries** - Pascal reference extraction now treats `object` as a boundary-aware keyword before running base-list regex probes.
+- **Added shared leading character gates** - Reference extraction now has a leading-character helper for anchored syntax markers that are not identifier keywords.
+- **Tightened Objective-C interface base scans to leading marker gates** - Objective-C reference extraction now requires leading `@` before running interface/implementation base regex probes.
+- **Added Haskell signature separator gates** - Haskell reference extraction now checks for `::` before running type-signature regex probes.
+- **Added Haskell space-call whitespace gates** - Haskell reference extraction now skips space-call regex probes on lines without whitespace.
+- **Added shared ordinal keyword gates** - Reference extraction now has a case-sensitive leading keyword helper for languages with lowercase-only syntax markers.
+- **Tightened Elixir alias import-family scans to leading keyword gates** - Elixir reference extraction now requires leading `alias` before running import-family regex probes.
+- **Tightened Elixir import scans to leading keyword gates** - Elixir reference extraction now requires leading `import` before running import-family regex probes.
+- **Tightened Elixir require scans to leading keyword gates** - Elixir reference extraction now requires leading `require` before running import-family regex probes.
+- **Tightened Elixir use scans to leading keyword gates** - Elixir reference extraction now requires leading `use` before running import-family regex probes.
+- **Added shared ordinal containment gates** - Reference extraction now has a boundary-aware case-sensitive keyword helper for lowercase marker hot paths.
+- **Tightened Elixir behaviour attribute scans to leading marker gates** - Elixir reference extraction now requires a leading `@` before running behaviour/impl regex probes.
+- **Tightened Elixir behaviour scans to keyword boundaries** - Elixir reference extraction now treats `behaviour` as a boundary-aware keyword before running behaviour regex probes.
+- **Tightened Elixir impl scans to keyword boundaries** - Elixir reference extraction now treats `impl` as a boundary-aware keyword before running implementation regex probes.
+- **Gated Smalltalk method-definition skips by marker** - Smalltalk message extraction now checks for `>>` before running method-definition regex probes.
+- **Gated Smalltalk class-declaration skips by literal marker** - Smalltalk message extraction now checks for `#` before running class-declaration regex probes.
+- **Gated Smalltalk class-declaration skips by keyword marker** - Smalltalk message extraction now checks class-declaration keywords before running class-declaration regex probes.
+- **Gated Objective-C selector scans by parenthesis marker** - Objective-C message extraction now checks for `(` before running `@selector(...)` regex probes.
+- **Tightened C++ class base-list markers to keyword boundaries** - C++ reference extraction now treats `class` as a boundary-aware keyword before running base-list regex probes.
+- **Tightened C++ struct base-list markers to keyword boundaries** - C++ reference extraction now treats `struct` as a boundary-aware keyword before running base-list regex probes.
+- **Tightened C++ new type markers to keyword boundaries** - C++ reference extraction now treats `new` as a boundary-aware keyword before running allocation type regex probes.
+- **Tightened C function-pointer typedef markers to keyword boundaries** - C reference extraction now treats `typedef` as a boundary-aware keyword before running function-pointer alias regex probes.
+- **Tightened C++ typedef alias markers to keyword boundaries** - C++ reference extraction now treats `typedef` as a boundary-aware keyword before running alias-target regex probes.
+- **Tightened C++ explicit-template markers to keyword boundaries** - C++ reference extraction now treats `template` as a boundary-aware keyword before running explicit instantiation regex probes.
+- **Tightened C++ explicit-template class markers to keyword boundaries** - C++ reference extraction now treats `class` as a boundary-aware keyword before explicit instantiation regex probes.
+- **Tightened C++ explicit-template struct markers to keyword boundaries** - C++ reference extraction now treats `struct` as a boundary-aware keyword before explicit instantiation regex probes.
+- **Tightened C struct type markers to keyword boundaries** - C reference extraction now treats `struct` as a boundary-aware keyword before running tagged-type regex probes.
 
 ## 日本語
 
-- **CI test runner の重複と巨大 C# indexing 時の allocation 負荷を減らしました** - `dotnet.yml` の matrix test step は test argument 構築、failure log capture、timeout handling、flaky retry classification を専用 PowerShell helper に委譲し、C# structural masking は symbol/reference extraction 中に全行へ新しい string を割り当てず、変更のない行を再利用するようになりました。
+- **未変更ファイルの indexing DB 往復を削減しました** - CLI と MCP の indexing は stat ベースおよび checksum ベースの再利用判定と既存の cap/generated-file issue 判定をまとめ、skip できる未変更ファイルごとの追加 SQLite query を避けるようになりました。
+- **indexing 中の validation issue 書き込みをバッチ化しました** - 複数の validation issue を出すファイルは、issue ごとに INSERT を実行せず、複数行の SQLite INSERT でまとめて書き込むようになりました。
+- **generated header 判定の処理量を制限しました** - generated-code header 検出は先頭の bounded header window のみを調べるようになり、非常に長い先頭行や minified payload でファイル全体を走査しないようになりました。
+- **indexing 中の generated-pattern 重複判定を避けました** - full-scan と MCP の target は generated-code 抑制patternの一致結果を保持し、C# prepass、stat reuse、extraction scheduling で再利用するようになりました。
+- **C# prepass 内でも generated-pattern 判定結果を再利用しました** - C# static-interface prepass の呼び出し元は cached generated-code 抑制結果を渡せるようになり、project pattern matching の再実行を避けます。
+- **reference-line lookup 処理を単純化しました** - reference 挿入時の batched `reference_lines` id 解決は、長い `OR` predicate chain ではなく小さな `VALUES` lookup table を使い、SQLite が joined row を返した後の行ごとの重複 lookup-key probe も避けるようになりました。
+- **stale stem purge の scan 対象を絞りました** - 拡張子変更 cleanup は retained file 更新ごとに全 indexed file 行を走査せず、同じ stem の path candidate だけを SQLite に問い合わせるようになりました。
+- **oversize checksum probe を即時終了するようにしました** - checksum reuse は seekable stream の長さが indexing byte cap を既に超えている場合、巨大ファイルを上限まで読む前に即 false を返すようになりました。
+- **行中の不可視文字では content normalization の fast path を維持します** - indexing normalization は carriage return または行頭不可視 marker がある場合だけ rewrite loop に入り、U+FEFF/U+200B が通常テキスト中に出るだけなら unchanged-content 経路を保ちます。
+- **C# doc comment probe を 1 pass にまとめました** - reference preparation は C# line-state mask を作るか決める前に、`///` と `/**` の XML doc comment 候補を 1 回の scan で検出するようになりました。
+- **C# reference regex probe を marker で gate します** - C# reference extraction は using alias、`where`、reflection member-name marker を確認してから対応 regex probe を実行します。
+- **TypeScript / Swift alias regex probe を marker で gate します** - type-alias reference extraction は行ごとの declaration keyword と assignment marker を確認してから alias regex を実行します。
+- **SQL maintenance target scan を keyword で gate します** - SQL reference extraction は permission、authorization、statistics、drop-table、truncate、revoke marker を確認してから対応 target regex pass を実行します。
+- **SQL temp-object establishment scan を statement marker で gate します** - SQL statement-prefix carryover は target、truncate、select-into、create marker を確認してから temp-object regex probe を実行します。
+- **SQL source / call scan を statement marker で gate します** - SQL reference extraction は call、source、merge、delete-using、output、select-into marker を確認してから statement-level regex pass を実行します。
+- **SQL index target scan を statement marker で gate します** - SQL reference extraction は index でない statement の index target regex group を skip し、create、alter、drop、XML、columnstore、hash、fulltext variant を marker で振り分けます。
+- **SQL lifecycle target scan を statement marker で gate します** - SQL reference extraction は trigger、security policy、references、synonym、drop-object marker を確認してから lifecycle target regex group を実行します。
+- **SQL alter-object target scan を statement marker で gate します** - SQL reference extraction は ALTER object-type marker を確認してから view、procedure、function、trigger、sequence、policy、catalog、partition、XML schema、assembly、schema-transfer、table-history regex group を実行します。
+- **SQL generic target scan を statement marker で gate します** - SQL reference extraction は generic INSERT/UPDATE/MERGE/DELETE/ALTER TABLE target regex を、それらの target-capable marker がある statement だけで実行します。
+- **SQL window clause scan を marker で gate します** - SQL reference extraction は file または statement に `OVER` marker がない場合、window-clause discovery と suppression scan を skip します。
+- **SQL generated-column dependency scan を marker で gate します** - SQL reference extraction は generated-column と `NEXT VALUE FOR` marker を確認してから generated dependency regex と computed-column prefix probe を実行します。
+- **R call-start reference scan を marker で gate します** - R reference extraction は source、data、system.file、documentation、package-install call marker を確認してから対応する call-start regex を実行します。
+- **R operator / member reference scan を marker で gate します** - R reference extraction は `::`、backtick-call、infix-operator、`$`、slot marker を確認してから対応する operator/member regex pass を実行します。
+- **R directive reference scan を marker で gate します** - R reference extraction は namespace、roxygen、S4 directive marker を確認してから directive-start regex や sequential directive match probe を実行します。
+- **PowerShell splat reference scan を marker で gate します** - PowerShell reference extraction は splat assignment、splat usage、hashtable key marker を確認してから対応する regex scan を実行します。
+- **PowerShell call reference scan を marker で gate します** - PowerShell reference extraction は cmdlet/function call regex probe を実行する前に statement と pipeline の call-start marker を確認します。
+- **Shell call / source reference scan を marker で gate します** - Shell reference extraction は callable name がない場合に command-call regex を skip し、substitution、source、global-alias marker を確認してから対応 scan を実行します。
+- **C# using namespace/static scan を marker で gate します** - C# reference extraction は using-namespace と using-static regex probe を実行する前に `using`、`static`、alias marker を確認します。
+- **F# pipeline call scan を marker で gate します** - F# reference extraction は pipeline call regex probe を実行する前に forward / backward pipeline marker を確認します。
+- **F# control-flow application scan を marker で gate します** - F# reference extraction は try/finally、condition、match、when-guard application regex probe を実行する前に control-flow marker を確認します。
+- **F# keyword application scan を marker で gate します** - F# reference extraction は assert、lazy、raise、cast、new の application-call regex probe を実行する前に各 marker を確認します。
+- **F# operator / composition scan を marker で gate します** - F# reference extraction は operator/composition regex probe を実行する前に marker を確認し、operator-definition suppression を行ごとに一度だけ解決します。
+- **SQL temp-object collection scan を marker で gate します** - SQL temp object carry-forward は `#` marker がない場合の collection を skip し、target、truncate、select-into、create probe は対応する statement keyword がある場合だけ実行します。
+- **Go concurrency reference scan を marker で gate します** - Go reference extraction は goroutine と channel send/receive regex probe を実行する前に `go` と channel-arrow marker を確認します。
+- **Scala block / type-context scan を marker で gate します** - Scala reference extraction は block、generator、implicit、given、using marker を確認してから対応する regex probe を実行します。
+- **Lua call / table-field scan を marker で gate します** - Lua reference extraction は command-call、method-call、table-field regex probe を実行する前に whitespace、colon、dot marker を確認します。
+- **Rust raw-identifier / macro call scan を marker で gate します** - Rust reference extraction は raw-identifier と macro-call regex probe を実行する前に `r#` と `!` marker を確認します。
+- **Rust attribute reference scan を marker で gate します** - Rust reference extraction は derive、cfg_attr derive、attribute-head regex probe を実行する前に attribute hash marker を確認します。
+- **Rust associated receiver scan を marker で gate します** - Rust reference extraction は associated call/value receiver scan を実行する前に path separator、generic、call marker を確認します。
+- **Rust struct literal scan を marker で gate します** - Rust reference extraction は struct literal instantiation regex probe を実行する前に opening-brace marker を確認します。
+- **Rust mutable reference type scan を marker で gate します** - Rust reference extraction は mutable-reference type regex probe を実行する前に ampersand と `mut` marker を確認します。
+- **Rust declaration reference scan を marker で gate します** - Rust reference extraction は declaration reference regex probe を実行する前に use、extern crate、module marker を確認します。
+- **Rust lifetime / ranked-bound scan を marker で gate します** - Rust reference extraction は lifetime apostrophe と higher-ranked `for<...>` marker を確認してから対応する reference form を走査します。
+- **Rust function signature type scan を marker で gate します** - Rust reference extraction は function signature type probe の前に `fn`、parenthesis、return-arrow marker を確認します。
+- **Rust closure signature type scan を marker で gate します** - Rust reference extraction は closure parameter / return type を走査する前に pipe、annotation、return-arrow marker を確認します。
+- **Rust declaration type scan を marker で gate します** - Rust reference extraction は local / static declaration type を走査する前に `let`、`const`、`static`、type-annotation marker を確認します。
+- **Rust alias / associated type scan を marker で gate します** - Rust reference extraction は alias target と associated type bound を走査する前に `type`、`trait`、assignment、bound marker を確認します。
+- **Rust aggregate field type scan を marker で gate します** - Rust reference extraction は aggregate field type list を走査する前に struct、tuple、enum variant delimiter marker を確認します。
+- **Rust cast type scan を marker で gate します** - Rust reference extraction は declaration trim と cast target type scan の前に `as` marker を確認します。
+- **Rust impl / trait header type scan を marker で gate します** - Rust reference extraction は implementation と trait header type を走査する前に `impl`、`trait`、trait-bound marker を確認します。
+- **Rust generic / where-bound scan を marker で gate します** - Rust reference extraction は generic bound、default、const generic usage、where clause を走査する前に generic-angle と `where` marker を確認します。
+- **Rust const generic segment scan を marker で gate します** - Rust reference extraction は generic / where-clause segment を分割して const generic reference を探す前に `const` と annotation marker を確認します。
+- **Rust function-trait return type scan を marker で gate します** - Rust reference extraction は generic、where、trait expression 内の function-trait return type を走査する前に return-arrow と bound marker を確認します。
+- **Rust generic default type scan を marker で gate します** - Rust reference extraction は generic default や default type reference のために generic clause を分割する前に assignment marker を確認します。
+- **Gradle DSL call scan を marker で gate します** - Gradle reference extraction は block-call と command-call DSL regex probe の前に block brace と whitespace marker を確認します。
+- **Haskell signature / space-call scan を marker で gate します** - Haskell reference extraction は shared signature / space-call regex probe の前に type-signature と whitespace marker を確認します。
+- **Haskell definition suppression scan を marker で gate します** - Haskell reference extraction は space call の definition-suppression regex probe の前に assignment marker を確認します。
+- **CSS preprocessor import scan を marker で gate します** - CSS、Sass、Stylus reference extraction は comment strip と import regex probe の前に import/use/forward/require marker を確認します。
+- **CSS animation reference scan を marker で gate します** - CSS reference extraction は animation-name と shorthand value regex probe を実行する前に animation marker を確認します。
+- **CSS custom-property reference scan を marker で gate します** - CSS reference extraction は custom-property reference regex probe を実行する前に `var` と custom-property marker を確認します。
+- **SCSS reference scan を marker で gate します** - SCSS reference extraction は variable、extend、include regex probe を実行する前に dollar、`@extend`、`@include` marker を確認します。
+- **Sass call scan を marker で gate します** - Sass reference extraction は通常行で reference-line preparation を skip し、mixin-plus と parenthesis marker を確認してから call regex probe を実行します。
+- **Stylus reference scan を marker で gate します** - Stylus reference extraction は explicit variable と function regex probe の前に dollar と parenthesis marker を確認し、variable definition が集まっていない場合は bare variable probe を skip します。
+- **Stylus variable definition scan を marker で gate します** - Stylus variable-definition collection は block-comment state を維持しつつ、assignment marker がない通常行では definition-line preparation と regex probe を skip します。
+- **Python decorator reference scan を marker で gate します** - Python reference extraction は `@` marker がない行では decorator-call と bare-decorator regex probe を skip します。
+- **Python raise/except type scan を marker で gate します** - Python reference extraction は exception type regex probe を実行する前に `raise` と `except` marker を確認します。
+- **Python runtime type-check scan を marker で gate します** - Python reference extraction は runtime type-check regex probe を実行する前に `isinstance` と `issubclass` marker を確認します。
+- **Python typing helper scan を marker で gate します** - Python reference extraction は typing helper regex probe を実行する前に `cast` と `assert_type` marker を確認します。
+- **Python class-base scan を marker で gate します** - Python reference extraction は class base/metaclass regex probe を実行する前に `class` と parenthesis marker を確認します。
+- **Python function annotation scan を marker で gate します** - Python reference extraction は return/parameter annotation regex probe を実行する前に function declaration、return-arrow、parenthesis marker を確認します。
+- **Python variable / type-alias scan を marker で gate します** - Python reference extraction は variable annotation と type-alias regex probe を実行する前に annotation と alias marker を確認します。
+- **Python type-factory scan を marker で gate します** - Python reference extraction は type factory regex probe を実行する前に `NewType`、`TypeVar`、`ParamSpec`、`bound` marker を確認します。
+- **Python dataclass / type-hints scan を marker で gate します** - Python reference extraction は dataclass/type-hints regex probe を実行する前に `get_type_hints`、`fields`、`field`、`default_factory`、`metadata` marker を確認します。
+- **Python framework / dynamic-import scan を marker で gate します** - Python reference extraction は attrs、pydantic、pytest、contextlib、importlib、`__import__` API regex probe を実行する前に対応 marker を確認します。
+- **PHP use import scan を marker で gate します** - PHP reference extraction は type/function/const import regex probe を実行する前に `use`、`function`、`const` marker を確認します。
+- **PHP static / exception type scan を marker で gate します** - PHP reference extraction は static-access と exception type regex probe を実行する前に `::`、`instanceof`、`catch` marker を確認します。
+- **PHP signature type scan を marker で gate します** - PHP reference extraction は return、parameter、property、inheritance type regex probe を実行する前に colon、dollar、visibility、`extends`、`implements` marker を確認します。
+- **PHP docblock type scan を marker で gate します** - PHP reference extraction は generic、property、method-parameter docblock type regex probe を実行する前に docblock tag marker を確認します。
+- **PHP object member scan を marker で gate します** - PHP reference extraction は object-member regex probe を実行する前に object access arrow marker を確認します。
+- **C++ friend reference scan を marker で gate します** - C++ reference extraction は friend type/function regex probe を実行する前に `friend` marker を確認します。
+- **空行の reference-line preparation を skip します** - 全言語の reference preparation は空行に対して comment/string-literal trigger 判定を走らせず即 return するようになりました。
+- **string-literal delimiter probe をまとめました** - reference-line preparation は quote/backtick trigger character を delimiter ごとの個別 scan ではなく `IndexOfAny` で確認します。
+- **reference-line preparation の言語フラグを loop 外へ出しました** - ファイルごとの reference preparation は comment/string handling の言語フラグを一度だけ計算し、hot loop 内で language switch を繰り返さないようになりました。
+- **whitespace-only 行の symbol pattern scan を skip します** - symbol extraction は言語別 masking 後の実効 match line が空白だけの場合、regex pattern loop に入らないようになりました。
+- **通常行では Python walrus regex scan を skip します** - supplemental Python symbol extraction は walrus assignment regex を走らせる前に `:=` の有無を確認します。
+- **候補でない行では PHP supplemental regex scan を skip します** - PHP property、constructor promotion、docblock、trait alias の supplemental pass は regex を走らせる前に軽量な marker substring を確認します。
+- **JS/TS module supplemental scan を marker で振り分けます** - JavaScript/TypeScript の module import supplemental helper は全 helper を全行で呼ばず、それぞれが探す marker を含む行だけで実行します。
+- **通常行では C++ friend declaration scan を skip します** - C++ の supplemental friend declaration extraction は mask 後の行にまだ `friend` がある場合だけ regex probe を行い、comment に影響する行では block-comment state を維持します。
+- **候補でない行では Perl hash constant collection を skip します** - Perl の supplemental constant extraction は各行で `use constant { ... }` body collector を試す前に `constant` の有無を確認します。
+- **marker がない場合は Rust supplemental collector を skip します** - Rust の `use`、multiline `impl`、associated-type-default supplemental extraction は statement collector や trait-body scan の前に軽量な file/line marker を確認します。
+- **Go supplemental declaration scan を marker で gate します** - Go の import/directive/label と grouped declaration helper は必須 marker がない通常行では trim、regex check、brace-depth scan の前に skip します。
+- **Go import-block reference scan を marker で gate します** - Go reference preparation は必須の `import`、parenthesis、quoted-path marker がない行で import-block regex check を skip します。
+- **Go top-level reference scan を marker で gate します** - Go reference extraction は import、`func`、brace、uppercase marker を確認してから top-level import/function/composite regex probe を実行します。
+- **Go generic helper function scan を marker で gate します** - Go generic call / instantiation helper は line に `func` marker がない場合 function-line regex check を skip します。
+- **input/union marker がない場合は GraphQL member extraction を skip します** - GraphQL の supplemental member extraction は `input` block がない file では full-content join を避け、union regex も `union` を含む行だけで実行します。
+- **Razor directive scan を marker で振り分けます** - Razor の directive supplemental extraction は `@` のない行を skip し、行 marker に対応する directive regex だけを実行します。
+- **Razor reference scan を marker で gate します** - Razor reference extraction は component-tag、directive、attribute、inject、event-binding marker を確認してから対応 regex probe を実行します。
+- **Dockerfile supplemental scan を instruction で振り分けます** - Dockerfile の追加 symbol extraction は各行の先頭 instruction を一度だけ読み、対応する ENV/LABEL/EXPOSE/VOLUME/FROM/SHELL/COPY/ADD/RUN helper だけを実行します。
+- **Dockerfile named-stage fallback scan を marker で gate します** - Dockerfile extraction は `AS` marker がない `FROM` 行で named-stage base-image regex check を skip します。
+- **Java enum fallback scan を name start で gate します** - Java enum recovery は uppercase enum member に一致し得る行形状の場合だけ line-fallback regex を実行します。
+- **section-heading regex scan を marker で gate します** - C# `#region` と JavaScript/TypeScript `@module` heading extraction は heading regex を走らせる前に必須 marker substring を確認します。
+- **通常行では CSS custom-property regex scan を skip します** - CSS inline custom-property extraction は regex を走らせる前に必須の `--` marker を確認します。
+- **family marker のない CSS font-face block join を skip します** - CSS `@font-face` の family name 解決は block text を mask/join する前に `font-family` の有無を確認します。
+- **通常行では Svelte reactive-property regex scan を skip します** - Svelte supplemental extraction は reactive assignment regex を走らせる前に `$:` の有無を確認します。
+- **Markdown reference regex scan を delimiter で振り分けます** - Markdown reference extraction は対応する link/reference regex を走らせる前に `](`、`]:`、`][` の有無を確認します。
+- **XAML type-bearing attribute regex scan を gate します** - XAML/XML extraction は `x:Class`、`x:DataType`、`x:TypeArguments`、`TargetType` の有無を確認してから対応する attribute regex を実行します。
+- **XAML identity/resource attribute regex scan を gate します** - XAML/XML extraction は `x:Name` と `x:Key` の有無を確認してから対応する property attribute regex を実行します。
+- **XAML event-handler regex scan を event name で gate します** - XAML/XML extraction は configured event attribute name を確認してから event-handler regex を実行します。
+- **XAML binding markup regex scan を gate します** - XAML/XML extraction は full-document binding regex を実行する前に binding markup prefix の有無を確認します。
+- **wrapped XAML attribute scan を attribute name で gate します** - wrapped XAML attribute extraction は `x:Name`、`x:Key`、event attribute の名前がない場合に full-text walk を skip します。
+- **XAML Binding ElementName scan を marker で gate します** - XAML/XML extraction は marker がない場合に Binding markup、object element、property element の ElementName scan を skip します。
+- **XAML Binding Path scan を marker で gate します** - XAML/XML extraction は marker がない場合に Binding object-element と property-element の Path scan を skip します。
+- **XAML type element regex scan を marker で gate します** - XAML/XML extraction は type object/property element regex を実行する前に `x:Type` / `TypeName` marker を確認します。
+- **XAML type markup scan を prefix で gate します** - XAML/XML extraction は `{x:Type}` と `{x:TypeExtension}` の markup-extension scan を対応 prefix がある場合だけ呼び出します。
+- **XAML static-member markup scan を prefix で gate します** - XAML/XML extraction は `{x:Static}` prefix がない場合に static-member type inference を skip します。
+- **XAML reference scan を prefix で gate します** - XAML/XML extraction は `x:Reference` の markup、object element、property element scan を対応 prefix がない場合に skip します。
+- **XAML resource reference scan を prefix で gate します** - XAML/XML extraction は static/dynamic resource markup scan を対応 prefix がない場合に skip します。
+- **Pascal range token scan を keyword で gate します** - Pascal extraction は begin/end/case/try token を含めない行で対応 regex counting を skip します。
+- **Ruby/Elixir block token scan を keyword で gate します** - Ruby と Elixir の range extraction は token marker がない masked text で block-token regex scan を skip します。
+- **shell heredoc scan を redirect marker で gate します** - Shell extraction は `<<` がない行で heredoc masking と redirect regex scan を skip します。
+- **Perl hash-constant key scan を pair marker で gate します** - Perl extraction は collected body に `=>` がない `use constant` hash で key regex scan を skip します。
+- **GraphQL input field scan を colon で gate します** - GraphQL extraction は field declaration を含めない input body で input-field regex scan を skip します。
+- **GraphQL union variant scan を name start で gate します** - GraphQL extraction は stripped variant text に GraphQL name start がない場合 union-variant regex scan を skip します。
+- **GraphQL declaration boundary scan を keyword で gate します** - GraphQL union continuation scanning は declaration keyword がない場合 declaration-start regex check を skip します。
+- **Elixir defimpl type scan を marker で gate します** - Elixir reference extraction は defimpl protocol と implementation type regex probe の前に `defimpl` marker を確認します。
+- **Elixir pipe-call scan を marker で gate します** - Elixir reference extraction は pipe-call regex probe の前に pipe operator marker を確認します。
+- **Elixir import / behaviour type scan を marker で gate します** - Elixir reference extraction は import と behaviour regex probe の前に alias/import/require/use と attribute marker を確認します。
+- **Elixir parenless call scan を marker で gate します** - Elixir reference extraction は parenless-call regex probe の前に whitespace marker を確認します。
+- **Elixir first-line block scan を marker で gate します** - Elixir range extraction は masked first line に必要 marker がない場合 shorthand と opener regex check を skip します。
+- **XAML line-level attribute scan を assignment marker で gate します** - XAML extraction は `=` がない行で class/type/name/key 属性 regex scan を skip します。
+- **wrapped XAML type-argument scan を attribute marker で gate します** - XAML extraction は document に `x:TypeArguments` marker がない場合 multiline scan を skip します。
+- **wrapped XAML type-bearing scan を attribute marker で gate します** - XAML extraction は `x:Class`、`x:DataType`、`TargetType` がすべてない場合 multiline class/type attribute scan を skip します。
+- **wrapped XAML search-attribute scan を marker で gate します** - XAML extraction は name/key/event attribute marker がすべてない場合 multiline scan を skip します。
+- **COBOL paragraph scan を required marker で gate します** - COBOL extraction は line に必須 marker がない場合 program/entry/section/paragraph regex check を skip します。
+- **Fortran routine-start scan を keyword で gate します** - Fortran range extraction は line に `subroutine` と `function` のどちらもない場合 routine-start regex check を skip します。
+- **Fortran include / group reference scan を marker で gate します** - Fortran reference extraction は必須の keyword と delimiter marker がない行で include/common/namelist regex check を skip します。
+- **Fortran statement reference scan を keyword で gate します** - Fortran reference extraction は data、save、submodule、external、intrinsic、access、finalizer、equivalence regex check を対応 statement candidate だけで実行します。
+- **Fortran allocation / type reference scan を marker で gate します** - Fortran reference extraction は procedure、pointer、associate、type-expression、allocation、deallocation、kind marker を確認してから対応 regex pass を実行します。
+- **Fortran call reference scan を marker で gate します** - Fortran reference extraction は call-target regex probe の前に `call` statement marker を確認します。
+- **Objective-C type reference scan を marker で gate します** - Objective-C reference extraction は対応する type regex probe の前に interface-base、protocol-list、pointer-declaration marker を確認します。
+- **Objective-C message call scan を marker で gate します** - Objective-C reference extraction は message と `@selector` regex probe の前に message-send と selector marker を確認します。
+- **Pascal type reference scan を marker で gate します** - Pascal reference extraction は対応する type regex probe の前に `uses`、base-declaration、colon marker を確認します。
+- **Pascal bare-call scan を marker で gate します** - Pascal reference extraction は bare-call regex probe の前に semicolon statement marker を確認します。
+- **Smalltalk message reference scan を marker で gate します** - Smalltalk reference extraction は method-definition、class-declaration、message-send regex probe の前に whitespace marker を確認します。
+- **Smalltalk range-boundary scan を marker で gate します** - Smalltalk range extraction は line に `>>`、`subclass:`、`named:` がない場合 method/class boundary regex check を skip します。
+- **Rust use-start scan を keyword で gate します** - Rust use-statement collection は first line に `use` keyword marker がない場合 start regex を skip します。
+- **Kotlin class subkind scan を keyword で gate します** - Kotlin class enrichment は metadata に対応する keyword marker がない場合 value/inline class regex check を skip します。
+- **Kotlin inline-function scan を keyword で gate します** - Kotlin function enrichment は signature に対応する keyword marker がない場合 inline/reified regex check を skip します。
+- **Solidity type declaration scan を keyword で振り分けます** - Solidity extraction は contract/interface/library、struct、enum の declaration regex を対応 keyword marker がある場合だけ実行します。
+- **Solidity callable declaration scan を keyword で振り分けます** - Solidity extraction は function、constructor、fallback/receive、modifier の declaration regex を対応 marker がある行だけで実行します。
+- **Solidity event/error declaration scan を keyword で振り分けます** - Solidity extraction は event と error の declaration regex を対応 keyword marker がある行だけで実行します。
+- **Solidity parenthesized declaration scan を marker で gate します** - Solidity extraction は line に `(` がない場合、function、constructor、fallback/receive、event、error regex を skip します。
+- **PHP constructor-start regex の重複 check を skip します** - PHP promoted-property extraction は same-line constructor regex が既に match した場合 constructor-start regex を実行しないようになりました。
+- **PHP import scan を marker で振り分けます** - PHP import extraction は `use`、grouped-use の brace、require/include marker を確認してから対応 regex を実行します。
+- **PHP grouped-use alias scan を marker で gate します** - PHP grouped-use import extraction は item に `as` marker がある場合だけ item alias regex を実行します。
+- **PHP promoted-property parameter scan を marker で gate します** - PHP constructor promotion extraction は segment に `$` または visibility keyword がない場合 parameter regex を skip します。
+- **PHP docblock / alias scan を syntax marker で gate します** - PHP supplemental extraction は必須の sigil や delimiter がない行で docblock、trait alias、constructor regex check を skip します。
+- **F# type-declaration regex の重複 scan をまとめます** - F# type-member extraction は同じ行に `IsMatch` と `Match` を重ねず、declaration match を再利用します。
+- **F# record-field scan を colon で gate します** - F# record-field extraction は typed field separator を含めない candidate で record-field regex check を skip します。
+- **F# active/operator scan を marker で gate します** - F# extraction は line に必要 marker がない場合 active-pattern と operator-definition regex check を skip します。
+- **YAML mapping-key scan を colon で gate します** - YAML structured-data extraction は mapping separator を含めない行で mapping-key regex check を skip します。
+- **JSON fallback property scan を marker で gate します** - oversized または malformed JSON の fallback extraction は quote と colon の両方を含まない行で property regex check を skip します。
+- **JSON property-line queue 構築を遅延します** - JSON extraction は structured key symbol を出せる object root の場合だけ property-line lookup queue を構築します。
+- **Visual Basic enum-member scan を name start で gate します** - Visual Basic enum extraction は trimmed line が member 名で始まり得ない場合 enum-member regex check を skip します。
+- **Python dynamic-import scan を marker で gate します** - Python import expansion は statement に `importlib` と `__import__` marker がない場合 dynamic import literal regex enumeration を skip します。
+- **Python direct/from import scan を prefix で振り分けます** - Python import expansion は matching import keyword で始まる statement にだけ direct/from-import regex を実行します。
+- **Python `__all__` export scan を marker で gate します** - Python export expansion は `__all__` marker のない行で append/extend/assignment regex check を skip します。
+- **Python class attribute scan を marker で gate します** - Python class-body extraction は special attribute、dataclass field、annotation、assignment を対応する軽量 marker で確認してから regex を実行します。
+- **Python `__all__` operation scan を marker で振り分けます** - Python export expansion は append、extend、assignment の各 regex を、対応する operation marker がある行だけで実行します。
+- **Python dataclass metadata scan を marker で gate します** - Python dataclass field expansion は `metadata` と dictionary marker がない field-call 行で metadata regex check を skip します。
+- **C/C++ include/base/constructor/cast scan を marker で gate します** - C/C++ reference extraction は include/import、継承、allocation、named cast、parenthesized cast の marker を確認してから対応する type regex probe を実行します。
+- **C typedef cast scan を marker で gate します** - C reference extraction は typedef cast type regex probe の前に `*_t` と parenthesis marker を確認します。
+- **C sizeof / alignof type scan を marker で gate します** - C reference extraction は sizeof / alignof type regex probe の前に operand keyword と typedef/tag marker を確認します。
+- **C declaration type scan を marker で gate します** - C reference extraction は declaration type regex probe の前に declaration terminator と typedef/tag marker を確認します。
+- **C function return type scan を marker で gate します** - C reference extraction は function return type regex probe の前に parenthesis と typedef/tag marker を確認します。
+- **C parameter type scan を marker で gate します** - C reference extraction は parameter type regex probe の前に parameter delimiter と typedef/tag marker を確認します。
+- **C compound literal type scan を marker で gate します** - C reference extraction は compound literal type regex probe の前に compound-literal delimiter と typedef/tag marker を確認します。
+- **C typeof type scan を marker で gate します** - C reference extraction は typeof / typeof_unqual type regex probe の前に `typeof` と typedef/tag marker を確認します。
+- **C builtin type-compatibility scan を marker で gate します** - C reference extraction は builtin type comparison regex probe の前に `__builtin_types_compatible_p` と typedef/tag marker を確認します。
+- **C generic association type scan を marker で gate します** - C reference extraction は generic association type regex probe の前に `_Generic` または continuation delimiter と typedef/tag marker を確認します。
+- **C atomic / alignas type scan を marker で gate します** - C reference extraction は atomic / alignas type regex probe の前に `_Atomic` や alignas marker と typedef/tag marker を確認します。
+- **C function-pointer type scan を marker で gate します** - C reference extraction は function-pointer alias / declaration type regex probe の前に function-pointer delimiter marker と typedef/tag marker を確認します。
+- **C pointer-array declaration type scan を marker で gate します** - C reference extraction は pointer-array declaration type regex probe の前に function-pointer / array delimiter marker と typedef/tag marker を確認します。
+- **C offsetof type scan を marker で gate します** - C reference extraction は offsetof type regex probe の前に `offsetof` call marker / comma marker と typedef/tag marker を確認します。
+- **C va_arg type scan を marker で gate します** - C reference extraction は va_arg regex / operand scanner の前に `va_arg` call marker と comma marker を確認します。
+- **C++ type operand scan を marker で gate します** - C/C++ reference extraction は C++ type operand regex probe の前に `sizeof` / `alignof` call marker を確認します。
+- **C++ typeid scan を marker で gate します** - C/C++ reference extraction は C++ typeid regex probe の前に `typeid` call marker を確認します。
+- **C++ decltype brace construction scan を marker で gate します** - C/C++ reference extraction は decltype construction regex probe の前に `decltype` / parenthesis / brace marker を確認します。
+- **C++ factory template argument scan を marker で gate します** - C/C++ reference extraction は factory template argument regex probe の前に `make_` / template / call marker を確認します。
+- **C++ type-trait template argument scan を marker で gate します** - C/C++ reference extraction は type-trait template argument regex probe の前に `is_` と template marker を確認します。
+- **C++ brace construction scan を marker で gate します** - C/C++ reference extraction は brace construction regex probe の前に brace と construction lead-in marker を確認します。
+- **C++ qualified template brace construction scan を marker で gate します** - C/C++ reference extraction は qualified template brace construction regex probe の前に brace / template / scope marker を確認します。
+- **C++ using-alias target scan を marker で gate します** - C/C++ reference extraction は using-alias target regex probe の前に `using` / assignment / statement marker を確認します。
+- **C++ typedef-alias target scan を marker で gate します** - C/C++ reference extraction は typedef-alias target regex probe の前に `typedef` / statement / no-parenthesis marker を確認します。
+- **C++ explicit template instantiation scan を marker で gate します** - C/C++ reference extraction は explicit template instantiation regex probe の前に `template` / class-or-struct / statement marker を確認します。
+- **C++ template-id declaration scan を marker で gate します** - C/C++ reference extraction は template-id declaration regex probe の前に template delimiter と declaration terminator を確認します。
+- **C++ template parameter default scan を marker で gate します** - C/C++ reference extraction は template parameter default regex probe の前に `typename` / `class` と assignment marker を確認します。
+- **C++ qualified member receiver scan を marker で gate します** - C/C++ reference extraction は qualified member receiver regex probe の前に scope marker を確認します。
+- **C++ pointer-to-member type scan を marker で gate します** - C/C++ reference extraction は pointer-to-member type regex probe の前に scope と pointer marker を確認します。
+- **C++ trailing return type scan を marker で gate します** - C/C++ reference extraction は trailing return type regex probe の前に close-parenthesis と arrow marker を確認します。
+- **C++ requires concept type scan を marker で gate します** - C/C++ reference extraction は requires concept type regex probe の前に `requires` と template marker を確認します。
+- **C++ qualified requires concept scan を marker で gate します** - C/C++ reference extraction は qualified requires concept regex probe の前に `requires` / template / scope marker を確認します。
+- **C++ concept expression type scan を marker で gate します** - C/C++ reference extraction は concept expression type regex probe の前に template と concept operator marker を確認します。
+- **C++ compound requirement concept scan を marker で gate します** - C/C++ reference extraction は compound requirement concept regex probe の前に arrow と template delimiter marker を確認します。
+- **C++ friend type scan を marker で gate します** - C/C++ reference extraction は friend type regex probe の前に `friend` / type-kind / statement marker を確認します。
+- **C++ dynamic exception spec scan を marker で gate します** - C/C++ reference extraction は dynamic exception specification regex probe の前に `throw` と parenthesis marker を確認します。
+- **C++ declaration type scan を marker で gate します** - C/C++ reference extraction は declaration type regex probe の前に declaration terminator と軽量 type marker を確認します。
+- **Dart variable type scan を marker で gate します** - Dart reference extraction は variable type regex probe の前に declaration terminator と uppercase type marker を確認します。
+- **Dart function signature scan を marker で gate します** - Dart reference extraction は function signature / parameter type regex probe の前に parenthesis と uppercase type marker を確認します。
+- **Dart constructor call scan を marker で gate します** - Dart reference extraction は constructor call regex probe の前に `new` / `const`、parenthesis、uppercase type marker を確認します。
+- **VB type keyword scan を marker で gate します** - Visual Basic reference extraction は type keyword regex probe の前に type keyword marker を確認します。
+- **VB generic list scan を marker で gate します** - Visual Basic reference extraction は generic argument list regex probe の前に `(` と `Of` marker を確認します。
+- **VB new type scan を marker で gate します** - Visual Basic reference extraction は constructor type regex probe の前に `New` marker を確認します。
+- **VB implements list scan を marker で gate します** - Visual Basic reference extraction は implements list regex probe の前に `Implements` marker を確認します。
+- **VB imports list scan を marker で gate します** - Visual Basic reference extraction は imports list regex probe の前に `Imports` marker を確認します。
+- **VB cast type scan を marker で gate します** - Visual Basic reference extraction は cast / parenthesis / comma marker を確認してから cast type regex probe を実行します。
+- **VB GetType scan を marker で gate します** - Visual Basic reference extraction は `GetType` regex probe の前に `GetType` と parenthesis marker を確認します。
+- **VB TypeOf scan を marker で gate します** - Visual Basic reference extraction は `TypeOf` regex probe の前に `TypeOf` と `Is` marker を確認します。
+- **VB NameOf scan を marker で gate します** - Visual Basic reference extraction は `NameOf` regex probe の前に `NameOf` と parenthesis marker を確認します。
+- **VB XML namespace scan を marker で gate します** - Visual Basic reference extraction は XML namespace regex probe の前に `GetXmlNamespace` と parenthesis marker を確認します。
+- **VB AddressOf scan を marker で gate します** - Visual Basic reference extraction は delegate target regex probe の前に `AddressOf` marker を確認します。
+- **VB AddHandler scan を marker で gate します** - Visual Basic reference extraction は event subscription regex probe の前に `AddHandler` marker を確認します。
+- **VB RemoveHandler scan を marker で gate します** - Visual Basic reference extraction は event unsubscription regex probe の前に `RemoveHandler` marker を確認します。
+- **VB RaiseEvent scan を marker で gate します** - Visual Basic reference extraction は event invocation regex probe の前に `RaiseEvent` marker を確認します。
+- **VB escaped call scan を marker で gate します** - Visual Basic reference extraction は escaped call regex probe の前に escaped identifier と parenthesis marker を確認します。
+- **VB bare call scan を leading token で gate します** - Visual Basic reference extraction は bare call regex probe の前に最初の非空白tokenを確認します。
+- **VB CallByName scan を marker で gate します** - Visual Basic reference extraction は `CallByName` regex probe の前に `CallByName` / parenthesis / comma / quote marker を確認します。
+- **VB bare member call scan を leading token で gate します** - Visual Basic reference extraction は bare member call regex probe の前に leading member access を確認します。
+- **Fortran use scan を marker で gate します** - Fortran reference extraction は use / only-list / rename-list regex probe の前に `use` marker を確認します。
+- **Fortran import scan を marker で gate します** - Fortran reference extraction は import list regex probe の前に `import` marker を確認します。
+- **Fortran data group scan を slash marker で gate します** - Fortran reference extraction は data object group regex probe の前に data statement slash marker を確認します。
+- **Fortran save slash group scan を marker で gate します** - Fortran reference extraction は saved common block regex probe の前に save-list slash marker を確認します。
+- **Fortran allocate source scan を marker で gate します** - Fortran reference extraction は allocate source keyword regex probe の前に `source` と `mold` marker を確認します。
+- **Fortran allocation status scan を marker で gate します** - Fortran reference extraction は allocate/deallocate status keyword regex probe の前に `stat` と `errmsg` marker を確認します。
+- **Fortran pointer assignment scan を leading token で gate します** - Fortran reference extraction は pointer assignment regex probe の前に leading identifier token を確認します。
+- **Fortran allocate type-spec scan を marker で gate します** - Fortran reference extraction は allocate type-spec regex probe の前に `::` marker を確認します。
+- **Fortran call scan を leading keyword で gate します** - Fortran reference extraction は call regex probe の前に leading `call` keyword を確認します。
+- **Fortran use scan を leading keyword gate に強化します** - Fortran reference extraction は use-clause regex probe の前に leading `use` を要求します。
+- **Fortran import scan を leading keyword gate に強化します** - Fortran reference extraction は import list regex probe の前に leading `import` を要求します。
+- **Fortran include scan を leading keyword gate に強化します** - Fortran reference extraction は include filename regex probe の前に leading `include` を要求します。
+- **Fortran common line regex gate を leading keyword check に置き換えます** - Fortran reference extraction は direct leading keyword check により common-line regex probe を避けます。
+- **Fortran namelist line regex gate を leading keyword check に置き換えます** - Fortran reference extraction は direct leading keyword check により namelist-line regex probe を避けます。
+- **Fortran equivalence scan を leading keyword gate に強化します** - Fortran reference extraction は equivalence list regex probe の前に leading `equivalence` を要求します。
+- **Fortran data scan を leading keyword gate に強化します** - Fortran reference extraction は data-object regex probe の前に leading `data` を要求します。
+- **Fortran save scan を leading keyword gate に強化します** - Fortran reference extraction は save-list regex probe の前に leading `save` を要求します。
+- **Fortran submodule scan を leading keyword gate に強化します** - Fortran reference extraction は parent-module regex probe の前に leading `submodule` を要求します。
+- **Fortran external scan を leading keyword gate に強化します** - Fortran reference extraction は external-list regex probe の前に leading `external` を要求します。
+- **Fortran intrinsic scan を leading keyword gate に強化します** - Fortran reference extraction は intrinsic-list regex probe の前に leading `intrinsic` を要求します。
+- **Fortran access-list scan を leading keyword gate に強化します** - Fortran reference extraction は access-list regex probe の前に leading `public` または `private` を要求します。
+- **Fortran finalizer scan を leading keyword gate に強化します** - Fortran reference extraction は finalizer-list regex probe の前に leading `final` を要求します。
+- **Fortran procedure binding scan を leading keyword gate に強化します** - Fortran reference extraction は binding-target regex probe の前に leading `procedure` または `generic` を要求します。
+- **Fortran associate scan を leading keyword gate に強化します** - Fortran reference extraction は associate-target regex probe の前に leading `associate` を要求します。
+- **Fortran allocate scan を leading keyword gate に強化します** - Fortran reference extraction は allocation type/object regex probe の前に leading `allocate` を要求します。
+- **Fortran deallocate scan を leading keyword gate に強化します** - Fortran reference extraction は deallocation object regex probe の前に leading `deallocate` を要求します。
+- **Fortran keyword-kind assignment gate を追加します** - Fortran reference extraction は intrinsic `kind =` regex probe の前に `=` を確認します。
+- **未使用の Fortran common / namelist gate regex を削除します** - Fortran reference extraction は direct keyword gate への置換後に不要となった line-gate regex 定義を保持しません。
+- **冗長な Fortran equivalence line regex gate を削除します** - Fortran reference extraction は equivalence name list を scan する前に direct leading keyword check を利用します。
+- **冗長な Fortran procedure binding line regex gate を削除します** - Fortran reference extraction は binding target を scan する前に direct leading keyword check を利用します。
+- **Pascal uses scan を leading keyword gate に強化します** - Pascal reference extraction は unit-list regex probe の前に leading `uses` を要求します。
+- **Pascal class-base closing-paren gate を追加します** - Pascal reference extraction は class/interface/object base-list regex probe の前に `)` を確認します。
+- **共通 keyword containment gate を追加します** - Reference extraction は language hot path の broad substring probe を置き換える boundary-aware case-insensitive keyword helper を持つようになります。
+- **Pascal class base marker を keyword boundary に強化します** - Pascal reference extraction は base-list regex probe の前に `class` を boundary-aware keyword として扱います。
+- **Pascal interface base marker を keyword boundary に強化します** - Pascal reference extraction は base-list regex probe の前に `interface` を boundary-aware keyword として扱います。
+- **Pascal object base marker を keyword boundary に強化します** - Pascal reference extraction は base-list regex probe の前に `object` を boundary-aware keyword として扱います。
+- **共通 leading character gate を追加します** - Reference extraction は identifier keyword ではない anchored syntax marker 用の leading-character helper を持つようになります。
+- **Objective-C interface base scan を leading marker gate に強化します** - Objective-C reference extraction は interface/implementation base regex probe の前に leading `@` を要求します。
+- **Haskell signature separator gate を追加します** - Haskell reference extraction は type-signature regex probe の前に `::` を確認します。
+- **Haskell space-call whitespace gate を追加します** - Haskell reference extraction は whitespace がない行では space-call regex probe を省略します。
+- **共通 ordinal keyword gate を追加します** - Reference extraction は lowercase-only syntax marker を持つ言語向けの case-sensitive leading keyword helper を持つようになります。
+- **Elixir alias import-family scan を leading keyword gate に強化します** - Elixir reference extraction は import-family regex probe の前に leading `alias` を要求します。
+- **Elixir import scan を leading keyword gate に強化します** - Elixir reference extraction は import-family regex probe の前に leading `import` を要求します。
+- **Elixir require scan を leading keyword gate に強化します** - Elixir reference extraction は import-family regex probe の前に leading `require` を要求します。
+- **Elixir use scan を leading keyword gate に強化します** - Elixir reference extraction は import-family regex probe の前に leading `use` を要求します。
+- **共通 ordinal containment gate を追加します** - Reference extraction は lowercase marker hot path 向けの boundary-aware case-sensitive keyword helper を持つようになります。
+- **Elixir behaviour attribute scan を leading marker gate に強化します** - Elixir reference extraction は behaviour/impl regex probe の前に leading `@` を要求します。
+- **Elixir behaviour scan を keyword boundary に強化します** - Elixir reference extraction は behaviour regex probe の前に `behaviour` を boundary-aware keyword として扱います。
+- **Elixir impl scan を keyword boundary に強化します** - Elixir reference extraction は implementation regex probe の前に `impl` を boundary-aware keyword として扱います。
+- **Smalltalk method-definition skip を marker gate します** - Smalltalk message extraction は method-definition regex probe の前に `>>` を確認します。
+- **Smalltalk class-declaration skip を literal marker gate します** - Smalltalk message extraction は class-declaration regex probe の前に `#` を確認します。
+- **Smalltalk class-declaration skip を keyword marker gate します** - Smalltalk message extraction は class-declaration regex probe の前に class-declaration keyword を確認します。
+- **Objective-C selector scan を parenthesis marker gate します** - Objective-C message extraction は `@selector(...)` regex probe の前に `(` を確認します。
+- **C++ class base-list marker を keyword boundary に強化します** - C++ reference extraction は base-list regex probe の前に `class` を boundary-aware keyword として扱います。
+- **C++ struct base-list marker を keyword boundary に強化します** - C++ reference extraction は base-list regex probe の前に `struct` を boundary-aware keyword として扱います。
+- **C++ new type marker を keyword boundary に強化します** - C++ reference extraction は allocation type regex probe の前に `new` を boundary-aware keyword として扱います。
+- **C function-pointer typedef marker を keyword boundary に強化します** - C reference extraction は function-pointer alias regex probe の前に `typedef` を boundary-aware keyword として扱います。
+- **C++ typedef alias marker を keyword boundary に強化します** - C++ reference extraction は alias-target regex probe の前に `typedef` を boundary-aware keyword として扱います。
+- **C++ explicit-template marker を keyword boundary に強化します** - C++ reference extraction は explicit instantiation regex probe の前に `template` を boundary-aware keyword として扱います。
+- **C++ explicit-template class marker を keyword boundary に強化します** - C++ reference extraction は explicit instantiation regex probe の前に `class` を boundary-aware keyword として扱います。
+- **C++ explicit-template struct marker を keyword boundary に強化します** - C++ reference extraction は explicit instantiation regex probe の前に `struct` を boundary-aware keyword として扱います。
+- **C struct type marker を keyword boundary に強化します** - C reference extraction は tagged-type regex probe の前に `struct` を boundary-aware keyword として扱います。

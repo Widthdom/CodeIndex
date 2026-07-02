@@ -30,6 +30,9 @@ public static partial class SymbolExtractor
             if (i > startIndex && bodyStartLine == null)
                 bodyStartLine = i + 1;
 
+            if (!MayContainRubyBlockToken(trimmed))
+                continue;
+
             foreach (Match token in RubyBlockTokenRegex.Matches(trimmed))
             {
                 if (token.Value == "end")
@@ -51,6 +54,20 @@ public static partial class SymbolExtractor
             ? (startIndex + 1, null, null)
             : (lines.Length, bodyStartLine, lines.Length);
     }
+
+    private static bool MayContainRubyBlockToken(string text) =>
+        text.Contains("class", StringComparison.Ordinal)
+        || text.Contains("module", StringComparison.Ordinal)
+        || text.Contains("def", StringComparison.Ordinal)
+        || text.Contains("if", StringComparison.Ordinal)
+        || text.Contains("unless", StringComparison.Ordinal)
+        || text.Contains("case", StringComparison.Ordinal)
+        || text.Contains("begin", StringComparison.Ordinal)
+        || text.Contains("do", StringComparison.Ordinal)
+        || text.Contains("while", StringComparison.Ordinal)
+        || text.Contains("until", StringComparison.Ordinal)
+        || text.Contains("for", StringComparison.Ordinal)
+        || text.Contains("end", StringComparison.Ordinal);
 
     private static string MaskRubyLineForBodyScan(string line, RubyMaskState state)
     {

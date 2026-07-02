@@ -94,94 +94,135 @@ internal static class FSharpReferenceExtractor
         string preparedLine,
         Action<string, int> addCallLikeReference)
     {
-        foreach (Match match in PipelineCallRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("|>", StringComparison.Ordinal) >= 0)
         {
-            var name = match.Groups["name"].Value;
-            var callIndex = match.Groups["name"].Index;
-            addCallLikeReference(name, callIndex);
+            foreach (Match match in PipelineCallRegex.Matches(preparedLine))
+            {
+                var name = match.Groups["name"].Value;
+                var callIndex = match.Groups["name"].Index;
+                addCallLikeReference(name, callIndex);
+            }
         }
 
-        foreach (Match match in BackwardPipelineCallRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("<|", StringComparison.Ordinal) >= 0)
         {
-            var name = match.Groups["name"].Value;
-            var callIndex = match.Groups["name"].Index;
-            addCallLikeReference(name, callIndex);
+            foreach (Match match in BackwardPipelineCallRegex.Matches(preparedLine))
+            {
+                var name = match.Groups["name"].Value;
+                var callIndex = match.Groups["name"].Index;
+                addCallLikeReference(name, callIndex);
+            }
+
+            foreach (Match match in BackwardPipelineArgumentCallRegex.Matches(preparedLine))
+            {
+                var name = match.Groups["name"].Value;
+                var callIndex = match.Groups["name"].Index;
+                addCallLikeReference(name, callIndex);
+            }
         }
 
-        foreach (Match match in BackwardPipelineArgumentCallRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("try", StringComparison.Ordinal) >= 0
+            || preparedLine.IndexOf("finally", StringComparison.Ordinal) >= 0)
         {
-            var name = match.Groups["name"].Value;
-            var callIndex = match.Groups["name"].Index;
-            addCallLikeReference(name, callIndex);
+            foreach (Match match in TryFinallyApplicationCallRegex.Matches(preparedLine))
+            {
+                var name = match.Groups["name"].Value;
+                var callIndex = match.Groups["name"].Index;
+                addCallLikeReference(name, callIndex);
+            }
         }
 
-        foreach (Match match in TryFinallyApplicationCallRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("if", StringComparison.Ordinal) >= 0
+            || preparedLine.IndexOf("elif", StringComparison.Ordinal) >= 0
+            || preparedLine.IndexOf("while", StringComparison.Ordinal) >= 0)
         {
-            var name = match.Groups["name"].Value;
-            var callIndex = match.Groups["name"].Index;
-            addCallLikeReference(name, callIndex);
+            foreach (Match match in ConditionApplicationCallRegex.Matches(preparedLine))
+            {
+                var name = match.Groups["name"].Value;
+                var callIndex = match.Groups["name"].Index;
+                addCallLikeReference(name, callIndex);
+            }
         }
 
-        foreach (Match match in ConditionApplicationCallRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("match", StringComparison.Ordinal) >= 0)
         {
-            var name = match.Groups["name"].Value;
-            var callIndex = match.Groups["name"].Index;
-            addCallLikeReference(name, callIndex);
+            foreach (Match match in MatchApplicationCallRegex.Matches(preparedLine))
+            {
+                var name = match.Groups["name"].Value;
+                var callIndex = match.Groups["name"].Index;
+                addCallLikeReference(name, callIndex);
+            }
         }
 
-        foreach (Match match in MatchApplicationCallRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("when", StringComparison.Ordinal) >= 0)
         {
-            var name = match.Groups["name"].Value;
-            var callIndex = match.Groups["name"].Index;
-            addCallLikeReference(name, callIndex);
+            foreach (Match match in WhenGuardApplicationCallRegex.Matches(preparedLine))
+            {
+                var name = match.Groups["name"].Value;
+                var callIndex = match.Groups["name"].Index;
+                addCallLikeReference(name, callIndex);
+            }
         }
 
-        foreach (Match match in WhenGuardApplicationCallRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("assert", StringComparison.Ordinal) >= 0)
         {
-            var name = match.Groups["name"].Value;
-            var callIndex = match.Groups["name"].Index;
-            addCallLikeReference(name, callIndex);
+            foreach (Match match in AssertApplicationCallRegex.Matches(preparedLine))
+            {
+                var name = match.Groups["name"].Value;
+                var callIndex = match.Groups["name"].Index;
+                addCallLikeReference(name, callIndex);
+            }
         }
 
-        foreach (Match match in AssertApplicationCallRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("lazy", StringComparison.Ordinal) >= 0)
         {
-            var name = match.Groups["name"].Value;
-            var callIndex = match.Groups["name"].Index;
-            addCallLikeReference(name, callIndex);
+            foreach (Match match in LazyApplicationCallRegex.Matches(preparedLine))
+            {
+                var name = match.Groups["name"].Value;
+                var callIndex = match.Groups["name"].Index;
+                addCallLikeReference(name, callIndex);
+            }
         }
 
-        foreach (Match match in LazyApplicationCallRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("raise", StringComparison.Ordinal) >= 0)
         {
-            var name = match.Groups["name"].Value;
-            var callIndex = match.Groups["name"].Index;
-            addCallLikeReference(name, callIndex);
+            foreach (Match match in RaiseApplicationCallRegex.Matches(preparedLine))
+            {
+                var name = match.Groups["name"].Value;
+                var callIndex = match.Groups["name"].Index;
+                addCallLikeReference(name, callIndex);
+            }
         }
 
-        foreach (Match match in RaiseApplicationCallRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("upcast", StringComparison.Ordinal) >= 0
+            || preparedLine.IndexOf("downcast", StringComparison.Ordinal) >= 0)
         {
-            var name = match.Groups["name"].Value;
-            var callIndex = match.Groups["name"].Index;
-            addCallLikeReference(name, callIndex);
+            foreach (Match match in CastApplicationCallRegex.Matches(preparedLine))
+            {
+                var name = match.Groups["name"].Value;
+                var callIndex = match.Groups["name"].Index;
+                addCallLikeReference(name, callIndex);
+            }
         }
 
-        foreach (Match match in CastApplicationCallRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("new", StringComparison.Ordinal) >= 0)
         {
-            var name = match.Groups["name"].Value;
-            var callIndex = match.Groups["name"].Index;
-            addCallLikeReference(name, callIndex);
+            foreach (Match match in NewApplicationCallRegex.Matches(preparedLine))
+            {
+                var name = match.Groups["name"].Value;
+                var callIndex = match.Groups["name"].Index;
+                addCallLikeReference(name, callIndex);
+            }
         }
 
-        foreach (Match match in NewApplicationCallRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf(">>", StringComparison.Ordinal) >= 0
+            || preparedLine.IndexOf("<<", StringComparison.Ordinal) >= 0)
         {
-            var name = match.Groups["name"].Value;
-            var callIndex = match.Groups["name"].Index;
-            addCallLikeReference(name, callIndex);
-        }
-
-        foreach (Match match in CompositionOperandCallRegex.Matches(preparedLine))
-        {
-            addCallLikeReference(match.Groups["left"].Value, match.Groups["left"].Index);
-            addCallLikeReference(match.Groups["right"].Value, match.Groups["right"].Index);
+            foreach (Match match in CompositionOperandCallRegex.Matches(preparedLine))
+            {
+                addCallLikeReference(match.Groups["left"].Value, match.Groups["left"].Index);
+                addCallLikeReference(match.Groups["right"].Value, match.Groups["right"].Index);
+            }
         }
 
         foreach (Match match in SpaceApplicationCallRegex.Matches(preparedLine))
@@ -191,13 +232,18 @@ internal static class FSharpReferenceExtractor
             addCallLikeReference(name, callIndex);
         }
 
+        if (!HasOperatorCallCandidate(preparedLine))
+        {
+            return;
+        }
+
+        var definitionMatch = OperatorDefinitionCallRegex.Match(preparedLine);
         foreach (Match match in OperatorCallRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
             if (IgnoredOperatorCallNames.Contains(name))
                 continue;
 
-            var definitionMatch = OperatorDefinitionCallRegex.Match(preparedLine);
             if (definitionMatch.Success
                 && string.Equals(definitionMatch.Groups["name"].Value, name, StringComparison.Ordinal)
                 && match.Groups["name"].Index == definitionMatch.Groups["name"].Index)
@@ -217,10 +263,29 @@ internal static class FSharpReferenceExtractor
 
         foreach (var ch in name)
         {
-            if ("!%&*+-./:<=>?@^|~".IndexOf(ch) < 0)
+            if (!IsOperatorCallChar(ch))
                 return false;
         }
 
         return true;
     }
+
+    private static bool HasOperatorCallCandidate(string line)
+    {
+        var previousWasOperator = false;
+        foreach (var ch in line)
+        {
+            var isOperator = IsOperatorCallChar(ch);
+            if (isOperator && previousWasOperator)
+            {
+                return true;
+            }
+
+            previousWasOperator = isOperator;
+        }
+
+        return false;
+    }
+
+    private static bool IsOperatorCallChar(char ch) => "!%&*+-./:<=>?@^|~".IndexOf(ch) >= 0;
 }

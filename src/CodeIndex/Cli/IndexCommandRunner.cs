@@ -1221,7 +1221,8 @@ public static partial class IndexCommandRunner
         string RelativePath,
         string DisplayRelativePath,
         string IndexPath,
-        string? Language)
+        string? Language,
+        bool GeneratedExtractionSuppressed)
     {
         public static FullScanFileTarget CreateFromPath(string projectRoot, string path)
         {
@@ -1239,7 +1240,8 @@ public static partial class IndexCommandRunner
                 relativePath,
                 FileIndexer.NormalizePathSeparators(relativePath),
                 FileIndexer.NormalizeIndexPath(relativePath),
-                language);
+                language,
+                GeneratedExtractionSuppressed: false);
         }
     }
 

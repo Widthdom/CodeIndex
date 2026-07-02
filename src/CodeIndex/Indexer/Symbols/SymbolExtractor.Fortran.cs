@@ -307,7 +307,12 @@ public static partial class SymbolExtractor
 
     private static bool IsFortranRoutineStartLine(string trimmedLine) =>
         !StartsWithFortranWord(trimmedLine, "end")
+        && MayContainFortranRoutineStartKeyword(trimmedLine)
         && FortranRoutineStartLineRegex.IsMatch(trimmedLine);
+
+    private static bool MayContainFortranRoutineStartKeyword(string line) =>
+        line.Contains("subroutine", StringComparison.OrdinalIgnoreCase)
+        || line.Contains("function", StringComparison.OrdinalIgnoreCase);
 
     private static string MaskFortranStringLiterals(string line)
     {

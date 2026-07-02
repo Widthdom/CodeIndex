@@ -2657,15 +2657,7 @@ public static partial class SymbolExtractor
 
             if (lang == "dockerfile")
             {
-                AddDockerfileAdditionalEnvSymbols(fileId, line, i + 1, symbols);
-                AddDockerfileAdditionalLabelSymbols(fileId, line, i + 1, symbols);
-                AddDockerfileAdditionalExposeSymbols(fileId, line, i + 1, symbols);
-                AddDockerfileAdditionalVolumeSymbols(fileId, line, i + 1, symbols);
-                AddDockerfileNamedStageBaseImageSymbol(fileId, line, i + 1, symbols, dockerfileStageNames!);
-                AddDockerfileShellSymbol(fileId, line, i + 1, symbols);
-                AddDockerfileCopyDestinationSymbol(fileId, line, i + 1, symbols);
-                AddDockerfileAddDestinationSymbol(fileId, line, i + 1, symbols);
-                AddDockerfileRunSymbol(fileId, line, i + 1, symbols);
+                AddDockerfileAdditionalSymbols(fileId, line, i + 1, symbols, dockerfileStageNames!);
             }
 
             var structuralLine = structuralLines[i];
@@ -2721,15 +2713,31 @@ public static partial class SymbolExtractor
 
             if (lang is "javascript" or "typescript")
             {
-                ExtractJavaScriptTypeScriptDynamicImportSymbols(fileId, lang, filePath, projectRoot, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
-                ExtractJavaScriptTypeScriptStaticImportModuleSymbols(fileId, lang, filePath, projectRoot, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
-                ExtractJavaScriptTypeScriptRequireModuleSymbols(fileId, lang, filePath, projectRoot, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
-                ExtractJavaScriptTypeScriptImportMetaResolveModuleSymbols(fileId, lang, filePath, projectRoot, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
-                ExtractJavaScriptTypeScriptNewUrlModuleSymbols(fileId, lang, filePath, projectRoot, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
-                ExtractJavaScriptTypeScriptImportScriptsModuleSymbols(fileId, lang, filePath, projectRoot, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
-                ExtractJavaScriptTypeScriptServiceWorkerRegisterModuleSymbols(fileId, lang, filePath, projectRoot, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
-                ExtractJavaScriptTypeScriptWorkletAddModuleSymbols(fileId, lang, filePath, projectRoot, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
-                ExtractJavaScriptTypeScriptWorkerConstructorModuleSymbols(fileId, lang, filePath, projectRoot, lines, javaScriptTypeScriptSanitizedLines!, i, symbols);
+                var jsTsSanitizedLines = javaScriptTypeScriptSanitizedLines!;
+                var sanitizedLine = jsTsSanitizedLines[i];
+                if (sanitizedLine.IndexOf("import", StringComparison.Ordinal) >= 0)
+                {
+                    ExtractJavaScriptTypeScriptDynamicImportSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
+                    ExtractJavaScriptTypeScriptStaticImportModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
+                    ExtractJavaScriptTypeScriptImportMetaResolveModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
+                }
+
+                if (sanitizedLine.IndexOf("require", StringComparison.Ordinal) >= 0)
+                    ExtractJavaScriptTypeScriptRequireModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
+                if (sanitizedLine.IndexOf("URL", StringComparison.Ordinal) >= 0)
+                    ExtractJavaScriptTypeScriptNewUrlModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
+                if (sanitizedLine.IndexOf("importScripts", StringComparison.Ordinal) >= 0)
+                    ExtractJavaScriptTypeScriptImportScriptsModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
+                if (sanitizedLine.IndexOf("serviceWorker", StringComparison.Ordinal) >= 0
+                    || sanitizedLine.IndexOf("register", StringComparison.Ordinal) >= 0)
+                {
+                    ExtractJavaScriptTypeScriptServiceWorkerRegisterModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
+                }
+
+                if (sanitizedLine.IndexOf("addModule", StringComparison.Ordinal) >= 0)
+                    ExtractJavaScriptTypeScriptWorkletAddModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
+                if (sanitizedLine.IndexOf("Worker", StringComparison.Ordinal) >= 0)
+                    ExtractJavaScriptTypeScriptWorkerConstructorModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
             }
 
             if (lang is "javascript" or "typescript"
@@ -2753,6 +2761,9 @@ public static partial class SymbolExtractor
             // 早期スキップする — batch ラベル側は `::` / `rem` 行ではそもそも `:<名前文字>` の要件を
             // 満たさないため影響を受けない。
             if (lang == "batch" && IsBatchCommentLine(line))
+                continue;
+
+            if (string.IsNullOrWhiteSpace(matchLine))
                 continue;
 
             var patternStartOffset = lang is "javascript" or "typescript"
@@ -4309,26 +4320,29 @@ public static partial class SymbolExtractor
 
             if (lang == "css" && cssScannerLine != null)
             {
-                foreach (Match match in CssInlineCustomPropertyRegex.Matches(cssScannerLine))
+                if (cssScannerLine.IndexOf("--", StringComparison.Ordinal) >= 0)
                 {
-                    var propertyName = match.Groups["name"].Value.Trim();
-                    if (propertyName.Length == 0)
-                        continue;
+                    foreach (Match match in CssInlineCustomPropertyRegex.Matches(cssScannerLine))
+                    {
+                        var propertyName = match.Groups["name"].Value.Trim();
+                        if (propertyName.Length == 0)
+                            continue;
 
-                    AddSymbolRecord(
-                        symbols,
-                        cssSeenSymbols,
-                        i + 1,
-                        new SymbolRecord
-                        {
-                            FileId = fileId,
-                            Kind = "property",
-                            Name = propertyName,
-                            Line = i + 1,
-                            StartLine = i + 1,
-                            EndLine = i + 1,
-                            Signature = line.Trim(),
-                        });
+                        AddSymbolRecord(
+                            symbols,
+                            cssSeenSymbols,
+                            i + 1,
+                            new SymbolRecord
+                            {
+                                FileId = fileId,
+                                Kind = "property",
+                                Name = propertyName,
+                                Line = i + 1,
+                                StartLine = i + 1,
+                                EndLine = i + 1,
+                                Signature = line.Trim(),
+                            });
+                    }
                 }
 
                 ExtractCssInlineGroupingSelectors(
@@ -4671,10 +4685,10 @@ public static partial class SymbolExtractor
 
     private static void ExtractSqlCteSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
     {
-        var content = string.Join('\n', lines);
-        if (content.IndexOf("WITH", StringComparison.OrdinalIgnoreCase) < 0)
+        if (!LinesContain(lines, "WITH", StringComparison.OrdinalIgnoreCase))
             return;
 
+        var content = string.Join('\n', lines);
         var lineStarts = BuildLineStarts(content);
         foreach (Match match in SqlCteDefinitionRegex.Matches(content))
         {
@@ -4702,6 +4716,38 @@ public static partial class SymbolExtractor
         }
     }
 
+    private static bool LinesContain(IReadOnlyList<string> lines, string value, StringComparison comparison)
+    {
+        for (var i = 0; i < lines.Count; i++)
+        {
+            if (lines[i].IndexOf(value, comparison) >= 0)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool LinesContainAny(
+        IReadOnlyList<string> lines,
+        string value1,
+        string value2,
+        string value3,
+        StringComparison comparison)
+    {
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var line = lines[i];
+            if (line.IndexOf(value1, comparison) >= 0
+                || line.IndexOf(value2, comparison) >= 0
+                || line.IndexOf(value3, comparison) >= 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static List<int> BuildLineStarts(string content)
     {
         var starts = new List<int> { 0 };
@@ -4725,25 +4771,38 @@ public static partial class SymbolExtractor
 
     private static void ExtractSqlGeneratedColumnSymbols(long fileId, string[] lines, string[] structuralLines, List<SymbolRecord> symbols)
     {
-        var structuralContent = string.Join('\n', structuralLines);
-        if (structuralContent.IndexOf("GENERATED", StringComparison.OrdinalIgnoreCase) < 0
-            && structuralContent.IndexOf("NEXT VALUE FOR", StringComparison.OrdinalIgnoreCase) < 0
-            && structuralContent.IndexOf(" AS ", StringComparison.OrdinalIgnoreCase) < 0)
+        if (!LinesContainAny(
+            structuralLines,
+            "GENERATED",
+            "NEXT VALUE FOR",
+            " AS ",
+            StringComparison.OrdinalIgnoreCase))
         {
             return;
         }
 
+        var structuralContent = string.Join('\n', structuralLines);
         var lineStarts = BuildLineStarts(structuralContent);
-        foreach (Match match in SqlAlterTableAddGeneratedColumnRegex.Matches(structuralContent))
+        if (structuralContent.Contains("ALTER", StringComparison.OrdinalIgnoreCase)
+            && structuralContent.Contains("ADD", StringComparison.OrdinalIgnoreCase))
         {
-            var nameGroup = match.Groups["name"];
-            AddSqlGeneratedColumnSymbol(
-                fileId,
-                lines,
-                lineStarts,
-                new GroupProxy(nameGroup.Value, nameGroup.Index),
-                match.Groups["table"].Value,
-                symbols);
+            foreach (Match match in SqlAlterTableAddGeneratedColumnRegex.Matches(structuralContent))
+            {
+                var nameGroup = match.Groups["name"];
+                AddSqlGeneratedColumnSymbol(
+                    fileId,
+                    lines,
+                    lineStarts,
+                    new GroupProxy(nameGroup.Value, nameGroup.Index),
+                    match.Groups["table"].Value,
+                    symbols);
+            }
+        }
+
+        if (!structuralContent.Contains("CREATE", StringComparison.OrdinalIgnoreCase)
+            || !structuralContent.Contains("TABLE", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
         }
 
         foreach (Match tableMatch in SqlCreateTableBodyRegex.Matches(structuralContent))
@@ -4852,7 +4911,13 @@ public static partial class SymbolExtractor
     {
         for (var i = 0; i < lines.Length; i++)
         {
+            if (structuralLines[i].IndexOf("DEFINER", StringComparison.OrdinalIgnoreCase) < 0)
+                continue;
+
             if (!SqlDefinerMarkerRegex.IsMatch(structuralLines[i]))
+                continue;
+
+            if (structuralLines[i].IndexOf('@') < 0)
                 continue;
 
             var match = SqlDefinerRegex.Match(lines[i]);
@@ -4962,6 +5027,9 @@ public static partial class SymbolExtractor
     {
         for (var i = 0; i < lines.Length; i++)
         {
+            if (structuralLines[i].IndexOf("CREATE", StringComparison.OrdinalIgnoreCase) < 0)
+                continue;
+
             if (!SqlCreateRoutineHeaderRegex.IsMatch(structuralLines[i]))
                 continue;
 
@@ -4973,14 +5041,19 @@ public static partial class SymbolExtractor
             var ownerBodyEnd = owner?.BodyEndLine;
             var lineNumber = i + 1;
 
-            foreach (Match match in SqlReturnsTableRegex.Matches(header))
+            if (header.Contains("RETURNS", StringComparison.OrdinalIgnoreCase)
+                && header.Contains("TABLE", StringComparison.OrdinalIgnoreCase))
             {
-                foreach (var column in EnumerateSqlColumnDefinitions(match.Groups["columns"].Value))
-                    AddSqlRoutineFieldSymbol(fileId, lines, symbols, lineNumber, column.Name, column.Type, ownerName, ownerBodyStart, ownerBodyEnd);
+                foreach (Match match in SqlReturnsTableRegex.Matches(header))
+                {
+                    foreach (var column in EnumerateSqlColumnDefinitions(match.Groups["columns"].Value))
+                        AddSqlRoutineFieldSymbol(fileId, lines, symbols, lineNumber, column.Name, column.Type, ownerName, ownerBodyStart, ownerBodyEnd);
+                }
             }
 
             var parameterList = ExtractSqlRoutineParameterList(header);
-            if (parameterList != null)
+            if (parameterList != null
+                && parameterList.Contains("OUT", StringComparison.OrdinalIgnoreCase))
             {
                 foreach (Match match in SqlOutParameterRegex.Matches(parameterList))
                 {
@@ -5312,6 +5385,13 @@ public static partial class SymbolExtractor
         {
             var lineIndex = property.Line - 1;
             var propertyLine = lines[lineIndex];
+            var propertyStructuralLine = structuralLines[lineIndex];
+            if (propertyLine.IndexOf('@', StringComparison.Ordinal) < 0
+                && propertyStructuralLine.IndexOf('{') < 0)
+            {
+                continue;
+            }
+
             var declarationMatch = SwiftPropertyDeclarationRegex.Match(propertyLine);
             if (!declarationMatch.Success)
                 continue;
@@ -5335,7 +5415,11 @@ public static partial class SymbolExtractor
             var sawAccessor = false;
             for (var accessorLine = openBraceLine; accessorLine <= closeBraceLine; accessorLine++)
             {
-                foreach (Match accessorMatch in SwiftAccessorDeclarationRegex.Matches(structuralLines[accessorLine]))
+                var accessorStructuralLine = structuralLines[accessorLine];
+                if (!MayContainSwiftAccessorDeclaration(accessorStructuralLine))
+                    continue;
+
+                foreach (Match accessorMatch in SwiftAccessorDeclarationRegex.Matches(accessorStructuralLine))
                 {
                     if (!IsSwiftTopLevelAccessor(structuralLines, openBraceLine, openBraceColumn, accessorLine, accessorMatch.Index))
                         continue;
@@ -5374,6 +5458,12 @@ public static partial class SymbolExtractor
         }
     }
 
+    private static bool MayContainSwiftAccessorDeclaration(string line)
+        => line.IndexOf("get", StringComparison.Ordinal) >= 0
+           || line.IndexOf("set", StringComparison.Ordinal) >= 0
+           || line.IndexOf("willSet", StringComparison.Ordinal) >= 0
+           || line.IndexOf("didSet", StringComparison.Ordinal) >= 0;
+
     private static void AddSwiftProjectedValueSymbol(
         long fileId,
         string[] lines,
@@ -5410,6 +5500,9 @@ public static partial class SymbolExtractor
 
     private static bool HasSwiftPropertyWrapperAttribute(string attributes)
     {
+        if (attributes.IndexOf('@') < 0)
+            return false;
+
         foreach (Match match in SwiftPropertyWrapperAttributeRegex.Matches(attributes))
         {
             var name = match.Groups["name"].Value;
@@ -5506,7 +5599,17 @@ public static partial class SymbolExtractor
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
+            if (!inBlockComment
+                && line.IndexOf("friend", StringComparison.Ordinal) < 0
+                && line.IndexOf('/') < 0)
+            {
+                continue;
+            }
+
             var matchLine = MaskCppFriendDeclarationLine(line, ref inBlockComment);
+            if (matchLine.IndexOf("friend", StringComparison.Ordinal) < 0)
+                continue;
+
             var lineNumber = i + 1;
 
             foreach (Match match in CppFriendTypeDeclarationRegex.Matches(matchLine))
@@ -9174,7 +9277,12 @@ public static partial class SymbolExtractor
 
     private static void ExtractRustAssociatedTypeDefaultSymbols(long fileId, string[] lines, string[] structuralLines, List<SymbolRecord> symbols)
     {
+        if (!LinesContain(lines, "type", StringComparison.Ordinal))
+            return;
+
         var traits = BuildRustAssociatedTypeContainerSnapshot(symbols);
+        if (traits.Count == 0)
+            return;
 
         foreach (var trait in traits)
         {

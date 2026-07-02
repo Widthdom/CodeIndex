@@ -5,6 +5,7 @@ namespace CodeIndex.Indexer;
 public partial class FileIndexer
 {
     internal const string GeneratedCodeExtractionSkippedIssueKind = "generated_code_extraction_skipped";
+    private const int GeneratedCodeHeaderScanLimitChars = 16 * 1024;
 
     internal static bool IsGeneratedCodeFile(string relativePath, string content)
         => HasGeneratedCodeFileName(relativePath) || HasGeneratedCodeHeader(content);
@@ -42,7 +43,7 @@ public partial class FileIndexer
         if (!MayContainGeneratedCodeHeader(content))
             return false;
 
-        var remaining = content.AsSpan();
+        var remaining = content.AsSpan(0, Math.Min(content.Length, GeneratedCodeHeaderScanLimitChars));
         for (var lineNumber = 0; lineNumber < 20 && !remaining.IsEmpty; lineNumber++)
         {
             var newlineIndex = remaining.IndexOf('\n');
@@ -61,7 +62,7 @@ public partial class FileIndexer
 
     private static bool MayContainGeneratedCodeHeader(string content)
     {
-        var remaining = content.AsSpan();
+        var remaining = content.AsSpan(0, Math.Min(content.Length, GeneratedCodeHeaderScanLimitChars));
         var scannedLength = 0;
         for (var lineNumber = 0; lineNumber < 20 && !remaining.IsEmpty; lineNumber++)
         {

@@ -43,4 +43,47 @@ internal static class IndexedFileStatReuse
             return null;
         }
     }
+
+    internal static IndexedFileStatReuseResult? TryGetReusableUnchangedFile(
+        DbWriter writer,
+        string absolutePath,
+        string relativePath,
+        string? language,
+        int maxSymbolsPerFile,
+        int maxReferencesPerFile,
+        bool? generatedExtractionSuppressed,
+        bool allowReuse)
+    {
+        if (!allowReuse || language == null)
+            return null;
+
+        LookupForTesting?.Invoke(relativePath);
+        try
+        {
+            var info = new FileInfo(absolutePath);
+            if (!info.Exists)
+                return null;
+
+            var fileId = writer.GetReusableUnchangedFileIdByStat(
+                relativePath,
+                info.LastWriteTimeUtc,
+                info.Length,
+                language,
+                maxSymbolsPerFile,
+                maxReferencesPerFile,
+                generatedExtractionSuppressed,
+                allowReuse: true);
+            return fileId.HasValue
+                ? new IndexedFileStatReuseResult(fileId.Value, info.Length)
+                : null;
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
 }

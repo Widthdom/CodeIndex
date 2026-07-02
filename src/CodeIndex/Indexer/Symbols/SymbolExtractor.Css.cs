@@ -365,7 +365,11 @@ public static partial class SymbolExtractor
     private static bool TryGetCssFontFaceFamilyName(string[] lines, int startIndex, int endLine, out string fontFamily)
     {
         fontFamily = string.Empty;
-        var blockLines = lines.Skip(startIndex).Take(Math.Max(1, endLine - startIndex)).ToArray();
+        var blockLineCount = Math.Max(1, endLine - startIndex);
+        if (!CssBlockContains(lines, startIndex, blockLineCount, "font-family", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var blockLines = lines.Skip(startIndex).Take(blockLineCount).ToArray();
         var maskedBlockText = string.Join('\n', MaskCssScannerLines(blockLines));
         var match = CssFontFaceDeclarationRegex.Match(maskedBlockText);
         if (!match.Success)
@@ -407,6 +411,23 @@ public static partial class SymbolExtractor
 
         fontFamily = rawName;
         return true;
+    }
+
+    private static bool CssBlockContains(
+        IReadOnlyList<string> lines,
+        int startIndex,
+        int lineCount,
+        string value,
+        StringComparison comparison)
+    {
+        var endIndex = Math.Min(lines.Count, startIndex + lineCount);
+        for (var index = Math.Max(0, startIndex); index < endIndex; index++)
+        {
+            if (lines[index].IndexOf(value, comparison) >= 0)
+                return true;
+        }
+
+        return false;
     }
 
     private static string RemoveCssBlockComments(string value)

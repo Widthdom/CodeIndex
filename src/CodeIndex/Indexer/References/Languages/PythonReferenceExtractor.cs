@@ -257,6 +257,9 @@ internal static class PythonReferenceExtractor
         HashSet<string>? definitionNames,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf('@') < 0)
+            return;
+
         foreach (Match match in DecoratorCallRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -372,6 +375,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("raise", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in BareRaiseTypeRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -401,6 +407,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("except", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in ExceptTupleTypeRegex.Matches(preparedLine))
         {
             var typesGroup = match.Groups["types"];
@@ -452,6 +461,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("isinstance", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in IsInstanceTupleTypeRegex.Matches(preparedLine))
         {
             var typesGroup = match.Groups["types"];
@@ -503,6 +515,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("issubclass", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in IsSubclassTupleTypeRegex.Matches(preparedLine))
         {
             var typesGroup = match.Groups["types"];
@@ -554,6 +569,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("cast", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in QualifiedCastTypeRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -601,6 +619,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("assert_type", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in QualifiedAssertTypeRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -649,6 +670,12 @@ internal static class PythonReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForReference,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("class", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf('(') < 0)
+        {
+            return;
+        }
+
         foreach (Match match in ClassMetaclassTypeRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -748,6 +775,12 @@ internal static class PythonReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForReference,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("def", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf("->", StringComparison.Ordinal) < 0)
+        {
+            return;
+        }
+
         foreach (Match match in FunctionReturnAnnotationExpressionRegex.Matches(preparedLine))
         {
             var typeGroup = match.Groups["type"];
@@ -794,6 +827,13 @@ internal static class PythonReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForReference,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("def", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf('(') < 0
+            || preparedLine.IndexOf(')') < 0)
+        {
+            return;
+        }
+
         foreach (Match functionMatch in FunctionParameterListRegex.Matches(preparedLine))
         {
             var paramsGroup = functionMatch.Groups["params"];
@@ -847,6 +887,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf(':') < 0)
+            return;
+
         foreach (Match match in VariableAnnotationExpressionRegex.Matches(preparedLine))
         {
             var typeGroup = match.Groups["type"];
@@ -891,6 +934,13 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf('=') < 0
+            || (preparedLine.IndexOf("TypeAlias", StringComparison.Ordinal) < 0
+                && preparedLine.IndexOf("type", StringComparison.Ordinal) < 0))
+        {
+            return;
+        }
+
         foreach (Match match in TypeAliasRhsExpressionRegex.Matches(preparedLine))
         {
             var typeGroup = match.Groups["type"];
@@ -917,6 +967,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("NewType", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in NewTypeUnderlyingTypeRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -946,6 +999,13 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if ((preparedLine.IndexOf("TypeVar", StringComparison.Ordinal) < 0
+                && preparedLine.IndexOf("ParamSpec", StringComparison.Ordinal) < 0)
+            || preparedLine.IndexOf("bound", StringComparison.Ordinal) < 0)
+        {
+            return;
+        }
+
         foreach (Match match in TypeVarBoundTypeRegex.Matches(preparedLine))
         {
             EmitPythonTypeExpressionReferences(
@@ -971,6 +1031,12 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("TypeVar", StringComparison.Ordinal) < 0
+            && preparedLine.IndexOf("ParamSpec", StringComparison.Ordinal) < 0)
+        {
+            return;
+        }
+
         foreach (Match match in TypeVarConstraintTypesRegex.Matches(preparedLine))
         {
             var typesGroup = match.Groups["types"];
@@ -997,6 +1063,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("get_type_hints", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in QualifiedGetTypeHintsTargetRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -1044,6 +1113,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("fields", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in DataclassesFieldsTargetRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -1074,6 +1146,8 @@ internal static class PythonReferenceExtractor
         Func<string, bool> isIgnoredName)
     {
         var preparedLine = preparedLines[lineIndex];
+        if (preparedLine.IndexOf("field", StringComparison.Ordinal) < 0)
+            return;
         if (!DataclassFieldCallRegex.IsMatch(preparedLine))
             return;
 
@@ -1160,6 +1234,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("default_factory", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in DataclassFieldDefaultFactoryRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -1189,6 +1266,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (originalLines[lineIndex].IndexOf("metadata", StringComparison.Ordinal) < 0)
+            return;
+
         var metadataMatch = DataclassFieldMetadataRegex.Match(originalLines[lineIndex]);
         if (!metadataMatch.Success)
             return;
@@ -1301,6 +1381,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("fields", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in AttrsFieldsTargetRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -1330,6 +1413,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("TypeAdapter", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in PydanticTypeAdapterTargetRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -1359,6 +1445,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("raises", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in PytestRaisesTypeRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -1388,6 +1477,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("suppress", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in ContextlibSuppressTypeRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -1417,40 +1509,46 @@ internal static class PythonReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        foreach (Match match in ImportlibDynamicImportRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("importlib", StringComparison.Ordinal) >= 0)
         {
-            ReferenceExtractor.AddReference(
-                references,
-                seen,
-                fileId,
-                "importlib",
-                match.Index,
-                "call",
-                context,
-                lineNumber,
-                container,
-                "python");
-
-            var literalMatch = ImportlibDynamicImportLiteralRegex.Match(originalLine, match.Index);
-            if (!literalMatch.Success || literalMatch.Index != match.Index)
-                continue;
-
-            var moduleGroup = literalMatch.Groups["module"];
-            if (moduleGroup.Success && moduleGroup.Value.Length > 0)
+            foreach (Match match in ImportlibDynamicImportRegex.Matches(preparedLine))
             {
                 ReferenceExtractor.AddReference(
                     references,
                     seen,
                     fileId,
-                    moduleGroup.Value,
-                    moduleGroup.Index,
-                    "import",
+                    "importlib",
+                    match.Index,
+                    "call",
                     context,
                     lineNumber,
                     container,
                     "python");
+
+                var literalMatch = ImportlibDynamicImportLiteralRegex.Match(originalLine, match.Index);
+                if (!literalMatch.Success || literalMatch.Index != match.Index)
+                    continue;
+
+                var moduleGroup = literalMatch.Groups["module"];
+                if (moduleGroup.Success && moduleGroup.Value.Length > 0)
+                {
+                    ReferenceExtractor.AddReference(
+                        references,
+                        seen,
+                        fileId,
+                        moduleGroup.Value,
+                        moduleGroup.Index,
+                        "import",
+                        context,
+                        lineNumber,
+                        container,
+                        "python");
+                }
             }
         }
+
+        if (preparedLine.IndexOf("__import__", StringComparison.Ordinal) < 0)
+            return;
 
         foreach (Match match in BuiltinDynamicImportRegex.Matches(preparedLine))
         {

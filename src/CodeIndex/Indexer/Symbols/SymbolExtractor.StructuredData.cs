@@ -60,10 +60,10 @@ public static partial class SymbolExtractor
                 StructuredDataMaxJsonDepth + 2,
                 JsonCommentHandling.Skip,
                 allowTrailingCommas: true);
-            var propertyLines = BuildJsonPropertyLineQueues(content);
 
             if (document.RootElement.ValueKind == JsonValueKind.Object)
             {
+                var propertyLines = BuildJsonPropertyLineQueues(content);
                 ExtractJsonObjectSymbols(
                     fileId,
                     content,
@@ -178,6 +178,9 @@ public static partial class SymbolExtractor
         var truncated = false;
         for (var i = 0; i < lines.Length; i++)
         {
+            if (lines[i].IndexOf(':') < 0 || lines[i].IndexOf('"') < 0)
+                continue;
+
             var match = JsonFallbackPropertyRegex.Match(lines[i]);
             if (!match.Success)
                 continue;
@@ -226,6 +229,9 @@ public static partial class SymbolExtractor
 
             var trimmed = line.TrimStart();
             if (trimmed.StartsWith('#') || trimmed is "---" or "...")
+                continue;
+
+            if (line.IndexOf(':') < 0)
                 continue;
 
             var match = YamlMappingKeyRegex.Match(line);

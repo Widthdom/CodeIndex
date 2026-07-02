@@ -5616,9 +5616,17 @@ public partial class McpServer
             if (language == "csharp")
                 csharpPrepassTargets.Add(target);
         }
+        var generatedExtractionSuppressedByIndexPath = fileTargets.ToDictionary(
+            target => target.IndexPath,
+            target => indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath),
+            StringComparer.Ordinal);
         var knownReadableFileSizes = new Dictionary<string, long>(StringComparer.Ordinal);
         await EmitProgressNotificationAsync(progressToken, 0, files.Count, "Index scan complete; indexing files.").ConfigureAwait(false);
         var csharpPrepassStatReuse = new Dictionary<string, IndexedFileStatReuseResult?>(StringComparer.Ordinal);
+        bool IsGeneratedExtractionSuppressed(CSharpStaticInterfacePrepass.FileTarget target)
+            => generatedExtractionSuppressedByIndexPath.TryGetValue(target.IndexPath, out var generatedExtractionSuppressed)
+               && generatedExtractionSuppressed;
+
         bool CanReuseCSharpPrepassTargetWithoutRead(CSharpStaticInterfacePrepass.FileTarget target)
         {
             if (!symbolKindFilterMatchesPrior || !csharpSymbolNameContractMatchesCurrent)
@@ -5626,23 +5634,16 @@ public partial class McpServer
             if (target.Language != "csharp")
                 return false;
 
-            var existingFile = IndexedFileStatReuse.TryGetUnchangedFile(
+            var existingFile = IndexedFileStatReuse.TryGetReusableUnchangedFile(
                 writer,
                 target.FilePath,
                 target.IndexPath,
                 target.Language,
-                allowReuse: true);
-            if (existingFile == null)
-            {
-                csharpPrepassStatReuse[target.IndexPath] = null;
-                return false;
-            }
-
-            if (writer.HasReusableFileBlockingIssueForFile(
-                existingFile.Value.FileId,
                 maxSymbolsPerFile,
                 maxReferencesPerFile,
-                indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath)))
+                IsGeneratedExtractionSuppressed(target),
+                allowReuse: true);
+            if (existingFile == null)
             {
                 csharpPrepassStatReuse[target.IndexPath] = null;
                 return false;
@@ -5665,6 +5666,7 @@ public partial class McpServer
                 indexer,
                 csharpPrepassTargets,
                 canReuseExistingSymbolsWithoutRead: CanReuseCSharpPrepassTargetWithoutRead,
+                isGeneratedCodeExtractionSuppressed: IsGeneratedExtractionSuppressed,
                 cancellationToken: requestToken);
         }
         if (purged > 0 && hadCSharpStaticInterfaceContractsBeforePurge)
@@ -5695,21 +5697,15 @@ public partial class McpServer
                     && target.Language == "csharp"
                     && csharpPrepassStatReuse.TryGetValue(target.IndexPath, out var cachedCSharpPrepassReuse)
                         ? cachedCSharpPrepassReuse
-                        : IndexedFileStatReuse.TryGetUnchangedFile(
+                        : IndexedFileStatReuse.TryGetReusableUnchangedFile(
                             writer,
                             filePath,
                             target.IndexPath,
                             target.Language,
+                            maxSymbolsPerFile,
+                            maxReferencesPerFile,
+                            IsGeneratedExtractionSuppressed(target),
                             allowStatReuse);
-                if (statMatchedFile != null
-                    && writer.HasReusableFileBlockingIssueForFile(
-                        statMatchedFile.Value.FileId,
-                        maxSymbolsPerFile,
-                        maxReferencesPerFile,
-                        indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath)))
-                {
-                    statMatchedFile = null;
-                }
                 if (statMatchedFile != null)
                 {
                     skipped++;
@@ -5731,8 +5727,10 @@ public partial class McpServer
                 knownReadableFileSizes[filePath] = record.Size;
                 var content = loaded.Content;
                 var rawBytes = loaded.RawBytes;
-                var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
-                var existingId = writer.GetUnchangedFileId(
+                var generatedSuppressionIssue = IsGeneratedExtractionSuppressed(target)
+                    ? indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path)
+                    : null;
+                var existingId = writer.GetReusableUnchangedFileId(
                     record.Path,
                     record.Modified,
                     record.Checksum,
@@ -5740,20 +5738,14 @@ public partial class McpServer
                     lines: record.Lines,
                     language: record.Lang,
                     generated: record.Generated,
+                    maxSymbolsPerFile: maxSymbolsPerFile,
+                    maxReferencesPerFile: maxReferencesPerFile,
+                    generatedExtractionSuppressed: generatedSuppressionIssue != null,
                     allowReuse: symbolKindFilterMatchesPrior
                         && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                         && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                         && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)
                         && AllowReuseWithCurrentHotspotFamilyTrust(record.Lang, hotspotFamilyTrustMatchesCurrent));
-                if (existingId != null
-                    && writer.HasReusableFileBlockingIssueForFile(
-                        existingId.Value,
-                        maxSymbolsPerFile,
-                        maxReferencesPerFile,
-                        generatedSuppressionIssue != null))
-                {
-                    existingId = null;
-                }
                 if (existingId != null)
                 {
                     skipped++;

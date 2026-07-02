@@ -41,6 +41,9 @@ internal static class ScalaReferenceExtractor
         string preparedLine,
         Action<string, int> addCallLikeReference)
     {
+        if (preparedLine.IndexOf('{') < 0)
+            return;
+
         foreach (Match match in TrailingBlockCallRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -61,24 +64,42 @@ internal static class ScalaReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForColumn,
         Action<string, int> addCallLikeReference)
     {
-        foreach (Match match in ForGeneratorRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("<-", StringComparison.Ordinal) >= 0)
         {
-            var nameGroup = match.Groups["name"];
-            addCallLikeReference(nameGroup.Value, nameGroup.Index);
+            foreach (Match match in ForGeneratorRegex.Matches(preparedLine))
+            {
+                var nameGroup = match.Groups["name"];
+                addCallLikeReference(nameGroup.Value, nameGroup.Index);
+            }
         }
 
-        EmitConversionTypeReferences(ImplicitConversionRegex.Match(preparedLine));
-        EmitConversionTypeReferences(ImplicitClassRegex.Match(preparedLine));
-
-        var givenMatch = GivenRegex.Match(preparedLine);
-        if (givenMatch.Success)
-            AddTypeReference(givenMatch.Groups["type"]);
-
-        foreach (Match usingMatch in UsingClauseRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("implicit", StringComparison.Ordinal) >= 0)
         {
-            var parameters = usingMatch.Groups["params"];
-            foreach (Match typeMatch in UsingTypeRegex.Matches(parameters.Value))
-                AddTypeReference(typeMatch.Groups["type"], parameters.Index);
+            EmitConversionTypeReferences(ImplicitConversionRegex.Match(preparedLine));
+            EmitConversionTypeReferences(ImplicitClassRegex.Match(preparedLine));
+        }
+
+        if (preparedLine.IndexOf("given", StringComparison.Ordinal) >= 0)
+        {
+            var givenMatch = GivenRegex.Match(preparedLine);
+            if (givenMatch.Success)
+                AddTypeReference(givenMatch.Groups["type"]);
+        }
+
+        if (preparedLine.IndexOf("using", StringComparison.Ordinal) >= 0)
+        {
+            foreach (Match usingMatch in UsingClauseRegex.Matches(preparedLine))
+            {
+                var parameters = usingMatch.Groups["params"];
+                if (parameters.Value.IndexOf(':') < 0
+                    && parameters.Value.IndexOf('=') < 0)
+                {
+                    continue;
+                }
+
+                foreach (Match typeMatch in UsingTypeRegex.Matches(parameters.Value))
+                    AddTypeReference(typeMatch.Groups["type"], parameters.Index);
+            }
         }
 
         void EmitConversionTypeReferences(Match match)

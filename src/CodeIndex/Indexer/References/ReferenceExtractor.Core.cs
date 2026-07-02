@@ -1126,7 +1126,9 @@ public static partial class ReferenceExtractor
             if (language == "sql")
                 sqlDefinitionLeafSpansByLine?.TryGetValue(lineNumber, out sqlDefinitionLeafSpans);
             var container = containerResolver.Find(lineNumber);
-            var csharpLineHasWhereClause = language == "csharp" && CSharpWhereClauseRegex.IsMatch(preparedLine);
+            var csharpLineHasWhereClause = language == "csharp"
+                && preparedLine.IndexOf("where", StringComparison.Ordinal) >= 0
+                && CSharpWhereClauseRegex.IsMatch(preparedLine);
 
             // Per-line Java same-line ctor synthesis. When `public Leaf(){super(0); doWork();}`
             // is entirely on one line, SymbolExtractor does not emit a function symbol for the

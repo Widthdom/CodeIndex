@@ -42,73 +42,106 @@ public static partial class SymbolExtractor
         for (var i = 0; i < matchLines.Length; i++)
         {
             var line = matchLines[i];
-            var typeMatch = SolidityTypeDeclarationRegex.Match(line);
-            if (typeMatch.Success)
+            if (MayContainSolidityTypeDeclaration(line))
             {
-                var keyword = typeMatch.Groups["keyword"].Value;
-                var kind = keyword == "interface" ? "interface" : "class";
-                AddSoliditySymbol(symbols, fileId, kind, keyword, typeMatch, lines[i], matchLines, i, BodyStyle.Brace);
-                continue;
+                var typeMatch = SolidityTypeDeclarationRegex.Match(line);
+                if (typeMatch.Success)
+                {
+                    var keyword = typeMatch.Groups["keyword"].Value;
+                    var kind = keyword == "interface" ? "interface" : "class";
+                    AddSoliditySymbol(symbols, fileId, kind, keyword, typeMatch, lines[i], matchLines, i, BodyStyle.Brace);
+                    continue;
+                }
             }
 
-            var functionMatch = SolidityFunctionDeclarationRegex.Match(line);
-            if (functionMatch.Success)
+            if (line.Contains("function", StringComparison.Ordinal) && line.IndexOf('(') >= 0)
             {
-                AddSoliditySymbol(symbols, fileId, "function", "function", functionMatch, lines[i], matchLines, i, BodyStyle.Brace);
-                continue;
+                var functionMatch = SolidityFunctionDeclarationRegex.Match(line);
+                if (functionMatch.Success)
+                {
+                    AddSoliditySymbol(symbols, fileId, "function", "function", functionMatch, lines[i], matchLines, i, BodyStyle.Brace);
+                    continue;
+                }
             }
 
-            var constructorMatch = SolidityConstructorDeclarationRegex.Match(line);
-            if (constructorMatch.Success)
+            if (line.Contains("constructor", StringComparison.Ordinal) && line.IndexOf('(') >= 0)
             {
-                AddSoliditySymbol(symbols, fileId, "function", "constructor", constructorMatch, lines[i], matchLines, i, BodyStyle.Brace);
-                continue;
+                var constructorMatch = SolidityConstructorDeclarationRegex.Match(line);
+                if (constructorMatch.Success)
+                {
+                    AddSoliditySymbol(symbols, fileId, "function", "constructor", constructorMatch, lines[i], matchLines, i, BodyStyle.Brace);
+                    continue;
+                }
             }
 
-            var fallbackReceiveMatch = SolidityFallbackReceiveDeclarationRegex.Match(line);
-            if (fallbackReceiveMatch.Success)
+            if ((line.Contains("fallback", StringComparison.Ordinal) || line.Contains("receive", StringComparison.Ordinal))
+                && line.IndexOf('(') >= 0)
             {
-                AddSoliditySymbol(symbols, fileId, "function", fallbackReceiveMatch.Groups["name"].Value, fallbackReceiveMatch, lines[i], matchLines, i, BodyStyle.Brace);
-                continue;
+                var fallbackReceiveMatch = SolidityFallbackReceiveDeclarationRegex.Match(line);
+                if (fallbackReceiveMatch.Success)
+                {
+                    AddSoliditySymbol(symbols, fileId, "function", fallbackReceiveMatch.Groups["name"].Value, fallbackReceiveMatch, lines[i], matchLines, i, BodyStyle.Brace);
+                    continue;
+                }
             }
 
-            var eventMatch = SolidityEventDeclarationRegex.Match(line);
-            if (eventMatch.Success)
+            if (line.Contains("event", StringComparison.Ordinal) && line.IndexOf('(') >= 0)
             {
-                AddSoliditySymbol(symbols, fileId, "event", "event", eventMatch, lines[i], matchLines, i, BodyStyle.None);
-                continue;
+                var eventMatch = SolidityEventDeclarationRegex.Match(line);
+                if (eventMatch.Success)
+                {
+                    AddSoliditySymbol(symbols, fileId, "event", "event", eventMatch, lines[i], matchLines, i, BodyStyle.None);
+                    continue;
+                }
             }
 
-            var errorMatch = SolidityErrorDeclarationRegex.Match(line);
-            if (errorMatch.Success)
+            if (line.Contains("error", StringComparison.Ordinal) && line.IndexOf('(') >= 0)
             {
-                AddSoliditySymbol(symbols, fileId, "type", "error", errorMatch, lines[i], matchLines, i, BodyStyle.None);
-                continue;
+                var errorMatch = SolidityErrorDeclarationRegex.Match(line);
+                if (errorMatch.Success)
+                {
+                    AddSoliditySymbol(symbols, fileId, "type", "error", errorMatch, lines[i], matchLines, i, BodyStyle.None);
+                    continue;
+                }
             }
 
-            var structMatch = SolidityStructDeclarationRegex.Match(line);
-            if (structMatch.Success)
+            if (line.Contains("struct", StringComparison.Ordinal))
             {
-                AddSoliditySymbol(symbols, fileId, "struct", "struct", structMatch, lines[i], matchLines, i, BodyStyle.Brace);
-                continue;
+                var structMatch = SolidityStructDeclarationRegex.Match(line);
+                if (structMatch.Success)
+                {
+                    AddSoliditySymbol(symbols, fileId, "struct", "struct", structMatch, lines[i], matchLines, i, BodyStyle.Brace);
+                    continue;
+                }
             }
 
-            var enumMatch = SolidityEnumDeclarationRegex.Match(line);
-            if (enumMatch.Success)
+            if (line.Contains("enum", StringComparison.Ordinal))
             {
-                AddSoliditySymbol(symbols, fileId, "enum", "enum", enumMatch, lines[i], matchLines, i, BodyStyle.Brace);
-                continue;
+                var enumMatch = SolidityEnumDeclarationRegex.Match(line);
+                if (enumMatch.Success)
+                {
+                    AddSoliditySymbol(symbols, fileId, "enum", "enum", enumMatch, lines[i], matchLines, i, BodyStyle.Brace);
+                    continue;
+                }
             }
 
-            var modifierMatch = SolidityModifierDeclarationRegex.Match(line);
-            if (modifierMatch.Success)
-                AddSoliditySymbol(symbols, fileId, "function", "modifier", modifierMatch, lines[i], matchLines, i, BodyStyle.Brace);
+            if (line.Contains("modifier", StringComparison.Ordinal))
+            {
+                var modifierMatch = SolidityModifierDeclarationRegex.Match(line);
+                if (modifierMatch.Success)
+                    AddSoliditySymbol(symbols, fileId, "function", "modifier", modifierMatch, lines[i], matchLines, i, BodyStyle.Brace);
+            }
         }
 
         AssignContainers(symbols, lines, null);
         PopulateDeclaredContainerQualifiedNames(symbols);
         return symbols;
     }
+
+    private static bool MayContainSolidityTypeDeclaration(string line) =>
+        line.Contains("contract", StringComparison.Ordinal)
+        || line.Contains("interface", StringComparison.Ordinal)
+        || line.Contains("library", StringComparison.Ordinal);
 
     private static void AddSoliditySymbol(
         List<SymbolRecord> symbols,

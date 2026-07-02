@@ -875,12 +875,20 @@ public static partial class IndexCommandRunner
         {
             var filePath = files[i];
             var language = FileIndexer.GetReusableDetectedLanguage(filePath, scanResult.FileLanguages);
-            fileTargets[i] = FullScanFileTarget.Create(projectRoot, filePath, language);
+            var target = FullScanFileTarget.Create(projectRoot, filePath, language);
+            fileTargets[i] = target with
+            {
+                GeneratedExtractionSuppressed = indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath),
+            };
             if (language == null)
                 continue;
 
             languageCounts[language] = languageCounts.TryGetValue(language, out var count) ? count + 1 : 1;
         }
+        var generatedExtractionSuppressedByIndexPath = fileTargets.ToDictionary(
+            target => target.IndexPath,
+            target => target.GeneratedExtractionSuppressed,
+            StringComparer.Ordinal);
         var knownReadableFileSizes = new Dictionary<string, long>(StringComparer.Ordinal);
         var errorList = discovery.ErrorList;
         var warningList = discovery.WarningList;
@@ -1220,24 +1228,17 @@ public static partial class IndexCommandRunner
             if (target.Language != "csharp")
                 return false;
 
-            var existingFile = IndexedFileStatReuse.TryGetUnchangedFile(
+            var existingFile = IndexedFileStatReuse.TryGetReusableUnchangedFile(
                 writer,
                 target.FilePath,
                 target.IndexPath,
                 target.Language,
-                allowReuse: true);
-            if (existingFile == null)
-            {
-                csharpPrepassStatReuse[target.IndexPath] = null;
-                return false;
-            }
-
-            if (ExistingFileBlocksReuse(
-                writer,
-                existingFile.Value.FileId,
                 options.MaxSymbolsPerFile,
                 options.MaxReferencesPerFile,
-                indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath)))
+                generatedExtractionSuppressedByIndexPath.TryGetValue(target.IndexPath, out var generatedExtractionSuppressed)
+                    && generatedExtractionSuppressed,
+                allowReuse: true);
+            if (existingFile == null)
             {
                 csharpPrepassStatReuse[target.IndexPath] = null;
                 return false;
@@ -1290,6 +1291,9 @@ public static partial class IndexCommandRunner
                         csharpPrepassTargets,
                         includeExistingSymbols: !options.Rebuild && !startedWithNoIndexedFiles,
                         canReuseExistingSymbolsWithoutRead: CanReuseCSharpPrepassTargetWithoutRead,
+                        isGeneratedCodeExtractionSuppressed: target =>
+                            generatedExtractionSuppressedByIndexPath.TryGetValue(target.IndexPath, out var generatedExtractionSuppressed)
+                            && generatedExtractionSuppressed,
                         reportCurrentFile: path => currentCSharpWorkspaceFile = path,
                         cancellationToken: cancellationToken);
                 }
@@ -1324,23 +1328,17 @@ public static partial class IndexCommandRunner
                 && language == "csharp"
                 && csharpPrepassStatReuse.TryGetValue(target.IndexPath, out var cachedCSharpPrepassReuse)
                     ? cachedCSharpPrepassReuse
-                    : IndexedFileStatReuse.TryGetUnchangedFile(
+                    : IndexedFileStatReuse.TryGetReusableUnchangedFile(
                         writer,
                         target.FilePath,
                         target.IndexPath,
                         language,
+                        options.MaxSymbolsPerFile,
+                        options.MaxReferencesPerFile,
+                        target.GeneratedExtractionSuppressed,
                         allowReuse);
             if (existingFile == null)
                 return false;
-            if (ExistingFileBlocksReuse(
-                writer,
-                existingFile.Value.FileId,
-                options.MaxSymbolsPerFile,
-                options.MaxReferencesPerFile,
-                indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath)))
-            {
-                return false;
-            }
 
             skipped++;
             processed++;
@@ -1442,7 +1440,9 @@ public static partial class IndexCommandRunner
                                 IReadOnlyList<SymbolRecord>? symbols = null;
                                 IReadOnlyList<ReferenceRecord>? references = null;
                                 IReadOnlyList<FileIssue>? issues = null;
-                                var generatedSuppressionIssue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
+                                var generatedSuppressionIssue = target.GeneratedExtractionSuppressed
+                                    ? indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path)
+                                    : null;
                                 if (parallelizeExtraction)
                                 {
                                     activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "chunking");
@@ -1711,7 +1711,7 @@ public static partial class IndexCommandRunner
                         if (!options.Rebuild && !startedWithNoIndexedFiles && !options.SymbolsOnly)
                         {
                             var targetRequiresRefresh = TargetRequiresJavaScriptTypeScriptRefresh(record.Lang, record.Path);
-                            existingId = writer.GetUnchangedFileId(
+                            existingId = writer.GetReusableUnchangedFileId(
                                 record.Path,
                                 record.Modified,
                                 record.Checksum,
@@ -1719,6 +1719,9 @@ public static partial class IndexCommandRunner
                                 lines: record.Lines,
                                 language: record.Lang,
                                 generated: record.Generated,
+                                maxSymbolsPerFile: options.MaxSymbolsPerFile,
+                                maxReferencesPerFile: options.MaxReferencesPerFile,
+                                generatedExtractionSuppressed: generatedSuppressionIssue != null,
                                 allowReuse: symbolKindFilterMatchesPrior
                                     && !targetRequiresRefresh
                                     && !priorSymbolsOnlyGraphOmitted
@@ -1726,16 +1729,6 @@ public static partial class IndexCommandRunner
                                     && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                                     && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)
                                     && AllowReuseWithCurrentHotspotFamilyTrust(record.Lang, hotspotFamilyTrustMatchesCurrent));
-                        }
-                        if (existingId != null
-                            && ExistingFileBlocksReuse(
-                                writer,
-                                existingId.Value,
-                                options.MaxSymbolsPerFile,
-                                options.MaxReferencesPerFile,
-                                generatedSuppressionIssue))
-                        {
-                            existingId = null;
                         }
                         if (existingId != null)
                         {

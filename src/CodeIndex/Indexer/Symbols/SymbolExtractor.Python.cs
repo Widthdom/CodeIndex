@@ -295,35 +295,44 @@ public static partial class SymbolExtractor
         var entries = new List<PythonImportSymbolEntry>();
         var seenNames = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (Match match in PythonDynamicImportLiteralRegex.Matches(statement))
+        if (statement.Contains("importlib", StringComparison.Ordinal) || statement.Contains("__import__", StringComparison.Ordinal))
         {
-            AddPythonImportEntry(
-                line,
-                absoluteStartColumn,
-                match.Groups["module"].Value,
-                entries,
-                seenNames,
-                ref absoluteStartColumn);
+            foreach (Match match in PythonDynamicImportLiteralRegex.Matches(statement))
+            {
+                AddPythonImportEntry(
+                    line,
+                    absoluteStartColumn,
+                    match.Groups["module"].Value,
+                    entries,
+                    seenNames,
+                    ref absoluteStartColumn);
+            }
         }
 
         if (entries.Count > 0)
             return entries;
 
-        var directImportMatch = PythonDirectImportRegex.Match(statement);
-        if (directImportMatch.Success)
+        if (StartsWithPythonImportKeyword(statement, "import"))
         {
-            var directImportSpecs = directImportMatch.Groups["imports"].Value;
-            AddPythonImportSpecEntries(
-                line,
-                absoluteStartColumn,
-                modulePart: null,
-                directImportSpecs,
-                entries,
-                seenNames,
-                treatAsFromImport: false,
-                pythonModulePrefix);
-            return entries.Count > 0 ? entries : null;
+            var directImportMatch = PythonDirectImportRegex.Match(statement);
+            if (directImportMatch.Success)
+            {
+                var directImportSpecs = directImportMatch.Groups["imports"].Value;
+                AddPythonImportSpecEntries(
+                    line,
+                    absoluteStartColumn,
+                    modulePart: null,
+                    directImportSpecs,
+                    entries,
+                    seenNames,
+                    treatAsFromImport: false,
+                    pythonModulePrefix);
+                return entries.Count > 0 ? entries : null;
+            }
         }
+
+        if (!StartsWithPythonImportKeyword(statement, "from"))
+            return null;
 
         var fromImportMatch = PythonFromImportRegex.Match(statement);
         if (!fromImportMatch.Success)
@@ -356,6 +365,11 @@ public static partial class SymbolExtractor
             pythonModulePrefix);
         return entries.Count > 0 ? entries : null;
     }
+
+    private static bool StartsWithPythonImportKeyword(string value, string keyword) =>
+        value.Length > keyword.Length
+        && value.StartsWith(keyword, StringComparison.Ordinal)
+        && char.IsWhiteSpace(value[keyword.Length]);
 
     private static void ExtractPythonAllExportSymbols(
         long fileId,
@@ -453,10 +467,12 @@ public static partial class SymbolExtractor
                     continue;
                 }
 
-                var slotsMatch = PythonClassSlotsAssignmentRegex.Match(line);
-                if (!slotsMatch.Success)
+                Match? slotsMatch = null;
+                if (line.IndexOf("__slots__", StringComparison.Ordinal) >= 0)
+                    slotsMatch = PythonClassSlotsAssignmentRegex.Match(line);
+                else if (line.IndexOf("__match_args__", StringComparison.Ordinal) >= 0)
                     slotsMatch = PythonClassMatchArgsAssignmentRegex.Match(line);
-                if (slotsMatch.Success)
+                if (slotsMatch is { Success: true })
                 {
                     var slots = TryExpandPythonAllExportSymbolsFromValues(lines, i, slotsMatch.Groups["values"].Index);
                     if (slots != null)
@@ -476,59 +492,72 @@ public static partial class SymbolExtractor
                     continue;
                 }
 
-                var annotationsMatch = PythonClassAnnotationsAssignmentRegex.Match(line);
-                if (annotationsMatch.Success)
+                if (line.IndexOf("__annotations__", StringComparison.Ordinal) >= 0)
                 {
-                    var annotationKeys = TryExpandPythonStringDictionaryKeys(lines, i, annotationsMatch.Groups["values"].Index);
-                    if (annotationKeys != null)
+                    var annotationsMatch = PythonClassAnnotationsAssignmentRegex.Match(line);
+                    if (annotationsMatch.Success)
                     {
-                        foreach (var key in annotationKeys)
+                        var annotationKeys = TryExpandPythonStringDictionaryKeys(lines, i, annotationsMatch.Groups["values"].Index);
+                        if (annotationKeys != null)
                         {
-                            AddPythonClassPropertySymbol(
-                                fileId,
-                                lines,
-                                symbols,
-                                key.Name,
-                                key.LineIndex,
-                                key.StartColumn);
+                            foreach (var key in annotationKeys)
+                            {
+                                AddPythonClassPropertySymbol(
+                                    fileId,
+                                    lines,
+                                    symbols,
+                                    key.Name,
+                                    key.LineIndex,
+                                    key.StartColumn);
+                            }
                         }
-                    }
 
-                    continue;
+                        continue;
+                    }
                 }
 
-                var fieldMatch = PythonDataclassFieldAttributeRegex.Match(line);
-                if (fieldMatch.Success)
-                {
-                    AddPythonClassPropertySymbol(
-                        fileId,
-                        lines,
-                        symbols,
-                        fieldMatch.Groups["name"].Value,
-                        i,
-                        fieldMatch.Groups["name"].Index,
-                        subKind: "dataclass_field");
-
-                    var metadataKeys = TryExpandPythonDataclassFieldMetadataKeys(lines, i, fieldMatch.Groups["name"].Index);
-                    if (metadataKeys != null)
-                    {
-                        foreach (var key in metadataKeys)
-                        {
-                            AddPythonDataclassFieldMetadataSymbol(
-                                fileId,
-                                lines,
-                                symbols,
-                                key.Name,
-                                key.LineIndex,
-                                key.StartColumn);
-                        }
-                    }
-
+                var hasAssignment = line.IndexOf('=') >= 0;
+                var hasAnnotation = line.IndexOf(':') >= 0;
+                if (!hasAssignment && !hasAnnotation)
                     continue;
+
+                if (hasAssignment && line.IndexOf("field", StringComparison.Ordinal) >= 0)
+                {
+                    var fieldMatch = PythonDataclassFieldAttributeRegex.Match(line);
+                    if (fieldMatch.Success)
+                    {
+                        AddPythonClassPropertySymbol(
+                            fileId,
+                            lines,
+                            symbols,
+                            fieldMatch.Groups["name"].Value,
+                            i,
+                            fieldMatch.Groups["name"].Index,
+                            subKind: "dataclass_field");
+
+                        var metadataKeys = TryExpandPythonDataclassFieldMetadataKeys(lines, i, fieldMatch.Groups["name"].Index);
+                        if (metadataKeys != null)
+                        {
+                            foreach (var key in metadataKeys)
+                            {
+                                AddPythonDataclassFieldMetadataSymbol(
+                                    fileId,
+                                    lines,
+                                    symbols,
+                                    key.Name,
+                                    key.LineIndex,
+                                    key.StartColumn);
+                            }
+                        }
+
+                        continue;
+                    }
                 }
 
-                var match = PythonClassAnnotatedAttributeRegex.Match(line);
-                if (!match.Success)
+                var match = hasAnnotation
+                    ? PythonClassAnnotatedAttributeRegex.Match(line)
+                    : PythonClassAssignedAttributeRegex.Match(line);
+                if (!match.Success && hasAnnotation && hasAssignment)
                     match = PythonClassAssignedAttributeRegex.Match(line);
                 if (!match.Success)
                     continue;
@@ -611,6 +640,9 @@ public static partial class SymbolExtractor
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
+            if (!line.Contains(":=", StringComparison.Ordinal))
+                continue;
+
             foreach (Match match in PythonWalrusAssignmentRegex.Matches(line))
             {
                 var name = match.Groups["name"].Value;
@@ -752,9 +784,13 @@ public static partial class SymbolExtractor
         while (currentLineIndex < lines.Length)
         {
             var currentLine = lines[currentLineIndex];
-            var metadataMatch = PythonDataclassFieldMetadataRegex.Match(currentLine);
-            if (metadataMatch.Success)
-                return TryExpandPythonStringDictionaryKeys(lines, currentLineIndex, metadataMatch.Groups["values"].Index);
+            if (currentLine.Contains("metadata", StringComparison.Ordinal)
+                && currentLine.IndexOf('{') >= 0)
+            {
+                var metadataMatch = PythonDataclassFieldMetadataRegex.Match(currentLine);
+                if (metadataMatch.Success)
+                    return TryExpandPythonStringDictionaryKeys(lines, currentLineIndex, metadataMatch.Groups["values"].Index);
+            }
 
             for (; currentColumn < currentLine.Length; currentColumn++)
             {
@@ -807,21 +843,33 @@ public static partial class SymbolExtractor
     private static List<PythonExportSymbolEntry>? TryExpandPythonAllExportSymbols(string[] lines, int lineIndex)
     {
         var line = lines[lineIndex];
-        var appendMatch = PythonAllAppendRegex.Match(line);
-        if (appendMatch.Success)
+        if (line.IndexOf("__all__", StringComparison.Ordinal) < 0)
+            return null;
+
+        if (line.IndexOf(".append", StringComparison.Ordinal) >= 0)
         {
-            return
-            [
-                new PythonExportSymbolEntry(
-                    appendMatch.Groups["name"].Value,
-                    lineIndex,
-                    appendMatch.Groups["name"].Index),
-            ];
+            var appendMatch = PythonAllAppendRegex.Match(line);
+            if (appendMatch.Success)
+            {
+                return
+                [
+                    new PythonExportSymbolEntry(
+                        appendMatch.Groups["name"].Value,
+                        lineIndex,
+                        appendMatch.Groups["name"].Index),
+                ];
+            }
         }
 
-        var extendMatch = PythonAllExtendRegex.Match(line);
-        if (extendMatch.Success)
-            return TryExpandPythonAllExportSymbolsFromCallValues(lines, lineIndex, extendMatch.Groups["values"].Index);
+        if (line.IndexOf(".extend", StringComparison.Ordinal) >= 0)
+        {
+            var extendMatch = PythonAllExtendRegex.Match(line);
+            if (extendMatch.Success)
+                return TryExpandPythonAllExportSymbolsFromCallValues(lines, lineIndex, extendMatch.Groups["values"].Index);
+        }
+
+        if (line.IndexOf('=') < 0)
+            return null;
 
         var match = PythonAllAssignmentRegex.Match(line);
         if (!match.Success)

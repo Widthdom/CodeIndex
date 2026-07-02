@@ -737,6 +737,124 @@ public class DbWriter
         }
     }
 
+    public long? GetReusableUnchangedFileId(
+        string relativePath,
+        DateTime modified,
+        string? checksum,
+        long? size,
+        int? lines,
+        string? language,
+        bool? generated,
+        int maxSymbolsPerFile,
+        int maxReferencesPerFile,
+        bool? generatedExtractionSuppressed,
+        bool allowReuse = true)
+    {
+        if (!allowReuse)
+            return null;
+        if (!SymbolExtractorVersionMatchesCurrent(language))
+            return null;
+
+        var hasIssueMetadataColumns = HasIssueMetadataColumns();
+        var isSolutionFile = string.Equals(Path.GetExtension(relativePath), ".sln", StringComparison.OrdinalIgnoreCase);
+        var staleIssuePredicate = hasIssueMetadataColumns
+            ? @"
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM file_issues stale_i
+                    WHERE stale_i.file_id = files.id
+                      AND (
+                          (stale_i.kind IN ('replacement_char', 'non_utf8_likely', 'bom', 'utf16_bom')
+                              AND (stale_i.origin IS NULL OR stale_i.severity IS NULL))
+                          OR (stale_i.kind = 'bom' AND @is_solution_file = 1)
+                      )
+                )"
+            : string.Empty;
+        var cmd = RentCommand(
+            $@"UPDATE files
+              SET modified = CASE
+                  WHEN modified <> @modified
+                       AND @checksum IS NOT NULL
+                       AND checksum = @checksum
+                  THEN @modified
+                  ELSE modified
+              END,
+                  generated = CASE
+                  WHEN @generated IS NOT NULL THEN @generated
+                  ELSE generated
+              END
+              WHERE path = @path
+                AND (
+                    (@checksum IS NOT NULL AND checksum = @checksum AND (@lines IS NULL OR lines = @lines))
+                    OR (@checksum IS NULL AND modified = @modified AND (@size IS NULL OR size = @size) AND (@lines IS NULL OR lines = @lines))
+                )
+                {staleIssuePredicate}
+                AND (SELECT COUNT(*) FROM symbols WHERE file_id = files.id) <= @max_symbols
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM file_issues
+                    WHERE file_id = files.id
+                      AND kind = 'symbol_count_exceeded'
+                )
+                AND (SELECT COUNT(*) FROM symbol_references WHERE file_id = files.id) <= @max_references
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM file_issues
+                    WHERE file_id = files.id
+                      AND kind = 'reference_count_exceeded'
+                )
+                AND (
+                    @generated_suppressed IS NULL
+                    OR (
+                        EXISTS (
+                            SELECT 1
+                            FROM file_issues
+                            WHERE file_id = files.id
+                              AND kind = @generated_issue_kind
+                        )
+                    ) = @generated_suppressed
+                )
+              RETURNING id",
+            c =>
+            {
+                c.Parameters.Add("@path", SqliteType.Text);
+                c.Parameters.Add("@modified", SqliteType.Text);
+                c.Parameters.Add("@checksum", SqliteType.Text);
+                c.Parameters.Add("@size", SqliteType.Integer);
+                c.Parameters.Add("@lines", SqliteType.Integer);
+                c.Parameters.Add("@generated", SqliteType.Integer);
+                if (hasIssueMetadataColumns)
+                    c.Parameters.Add("@is_solution_file", SqliteType.Integer);
+                c.Parameters.Add("@max_symbols", SqliteType.Integer);
+                c.Parameters.Add("@max_references", SqliteType.Integer);
+                c.Parameters.Add("@generated_suppressed", SqliteType.Integer);
+                c.Parameters.Add("@generated_issue_kind", SqliteType.Text);
+            });
+        try
+        {
+            cmd.Parameters["@path"].Value = relativePath;
+            cmd.Parameters["@modified"].Value = modified;
+            cmd.Parameters["@checksum"].Value = checksum is null ? DBNull.Value : checksum;
+            cmd.Parameters["@size"].Value = size.HasValue ? size.Value : DBNull.Value;
+            cmd.Parameters["@lines"].Value = lines.HasValue ? lines.Value : DBNull.Value;
+            cmd.Parameters["@generated"].Value = generated.HasValue ? (generated.Value ? 1 : 0) : DBNull.Value;
+            if (hasIssueMetadataColumns)
+                cmd.Parameters["@is_solution_file"].Value = isSolutionFile ? 1 : 0;
+            cmd.Parameters["@max_symbols"].Value = maxSymbolsPerFile;
+            cmd.Parameters["@max_references"].Value = maxReferencesPerFile;
+            cmd.Parameters["@generated_suppressed"].Value = generatedExtractionSuppressed.HasValue
+                ? (generatedExtractionSuppressed.Value ? 1 : 0)
+                : DBNull.Value;
+            cmd.Parameters["@generated_issue_kind"].Value = FileIndexer.GeneratedCodeExtractionSkippedIssueKind;
+            var raw = cmd.ExecuteScalar();
+            return raw is long id ? id : null;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
+    }
+
     /// <summary>
     /// Read-only unchanged lookup for callers that have only filesystem stat data.
     /// filesystem stat だけを持つ呼び出し元向けの read-only 変更なし判定。
@@ -773,6 +891,103 @@ public class DbWriter
             cmd.Parameters["@path"].Value = relativePath;
             cmd.Parameters["@modified"].Value = modified;
             cmd.Parameters["@size"].Value = size;
+            var raw = cmd.ExecuteScalar();
+            return raw is long id ? id : null;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
+    }
+
+    public long? GetReusableUnchangedFileIdByStat(
+        string relativePath,
+        DateTime modified,
+        long size,
+        string? language,
+        int maxSymbolsPerFile,
+        int maxReferencesPerFile,
+        bool? generatedExtractionSuppressed,
+        bool allowReuse = true)
+    {
+        if (!allowReuse)
+            return null;
+        if (!SymbolExtractorVersionMatchesCurrent(language))
+            return null;
+
+        var hasIssueMetadataColumns = HasIssueMetadataColumns();
+        var isSolutionFile = string.Equals(Path.GetExtension(relativePath), ".sln", StringComparison.OrdinalIgnoreCase);
+        var staleIssuePredicate = hasIssueMetadataColumns
+            ? @"
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM file_issues stale_i
+                    WHERE stale_i.file_id = f.id
+                      AND (
+                          (stale_i.kind IN ('replacement_char', 'non_utf8_likely', 'bom', 'utf16_bom')
+                              AND (stale_i.origin IS NULL OR stale_i.severity IS NULL))
+                          OR (stale_i.kind = 'bom' AND @is_solution_file = 1)
+                      )
+                )"
+            : string.Empty;
+        var cmd = RentCommand(
+            $@"SELECT f.id
+              FROM files f
+              WHERE f.path = @path
+                AND f.modified = @modified
+                AND f.size = @size
+                {staleIssuePredicate}
+                AND (SELECT COUNT(*) FROM symbols WHERE file_id = f.id) <= @max_symbols
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM file_issues
+                    WHERE file_id = f.id
+                      AND kind = 'symbol_count_exceeded'
+                )
+                AND (SELECT COUNT(*) FROM symbol_references WHERE file_id = f.id) <= @max_references
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM file_issues
+                    WHERE file_id = f.id
+                      AND kind = 'reference_count_exceeded'
+                )
+                AND (
+                    @generated_suppressed IS NULL
+                    OR (
+                        EXISTS (
+                            SELECT 1
+                            FROM file_issues
+                            WHERE file_id = f.id
+                              AND kind = @generated_issue_kind
+                        )
+                    ) = @generated_suppressed
+                )
+              LIMIT 1",
+            c =>
+            {
+                c.Parameters.Add("@path", SqliteType.Text);
+                c.Parameters.Add("@modified", SqliteType.Text);
+                c.Parameters.Add("@size", SqliteType.Integer);
+                if (hasIssueMetadataColumns)
+                    c.Parameters.Add("@is_solution_file", SqliteType.Integer);
+                c.Parameters.Add("@max_symbols", SqliteType.Integer);
+                c.Parameters.Add("@max_references", SqliteType.Integer);
+                c.Parameters.Add("@generated_suppressed", SqliteType.Integer);
+                c.Parameters.Add("@generated_issue_kind", SqliteType.Text);
+            });
+        try
+        {
+            cmd.Parameters["@path"].Value = relativePath;
+            cmd.Parameters["@modified"].Value = modified;
+            cmd.Parameters["@size"].Value = size;
+            if (hasIssueMetadataColumns)
+                cmd.Parameters["@is_solution_file"].Value = isSolutionFile ? 1 : 0;
+            cmd.Parameters["@max_symbols"].Value = maxSymbolsPerFile;
+            cmd.Parameters["@max_references"].Value = maxReferencesPerFile;
+            cmd.Parameters["@generated_suppressed"].Value = generatedExtractionSuppressed.HasValue
+                ? (generatedExtractionSuppressed.Value ? 1 : 0)
+                : DBNull.Value;
+            cmd.Parameters["@generated_issue_kind"].Value = FileIndexer.GeneratedCodeExtractionSkippedIssueKind;
             var raw = cmd.ExecuteScalar();
             return raw is long id ? id : null;
         }
@@ -1061,13 +1276,32 @@ public class DbWriter
         if (retainedStem.Length == 0)
             return 0;
 
+        var basePath = retainedDirectory.Length == 0
+            ? retainedStem
+            : $"{retainedDirectory}/{retainedStem}";
+        var baseDotPattern = EscapeLikePattern(basePath + ".") + "%";
         var staleIds = new List<long>();
         var cmd = RentCommand(
-            "SELECT id, path FROM files WHERE path <> @path",
-            static c => c.Parameters.Add("@path", SqliteType.Text));
+            """
+            SELECT id, path
+            FROM files
+            WHERE path <> @path
+              AND (
+                  path = @base_path
+                  OR path LIKE @base_dot_pattern ESCAPE '\'
+              )
+            """,
+            static c =>
+            {
+                c.Parameters.Add("@path", SqliteType.Text);
+                c.Parameters.Add("@base_path", SqliteType.Text);
+                c.Parameters.Add("@base_dot_pattern", SqliteType.Text);
+            });
         try
         {
             cmd.Parameters["@path"].Value = retainedRelativePath;
+            cmd.Parameters["@base_path"].Value = basePath;
+            cmd.Parameters["@base_dot_pattern"].Value = baseDotPattern;
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
@@ -1170,6 +1404,20 @@ public class DbWriter
         var fileName = slashIndex < 0 ? normalized : normalized[(slashIndex + 1)..];
         var dotIndex = fileName.LastIndexOf('.');
         return dotIndex <= 0 ? fileName : fileName[..dotIndex];
+    }
+
+    private static string EscapeLikePattern(string value)
+    {
+        var builder = new StringBuilder(value.Length);
+        foreach (var ch in value)
+        {
+            if (ch is '\\' or '%' or '_')
+                builder.Append('\\');
+
+            builder.Append(ch);
+        }
+
+        return builder.ToString();
     }
 
     /// <summary>
@@ -1813,24 +2061,30 @@ public class DbWriter
             CheckBatchCancellationAndReportProgress("lookup_reference_lines", i, rows.Length, cancellationToken);
             int keyEnd = Math.Min(i + keysPerStatement, rows.Length);
             using var cmd = _conn.CreateCommand();
-            var predicates = CreateBatchSqlBuilder(keyEnd - i, estimatedCharsPerRow: 96);
+            var lookupRows = CreateBatchSqlBuilder(keyEnd - i, estimatedCharsPerRow: 48);
             for (int j = i; j < keyEnd; j++)
             {
                 if (j > i)
-                    predicates.Append(" OR ");
+                    lookupRows.Append(", ");
 
                 var suffix = j - i;
                 var (fileId, line, context) = rows[j];
-                predicates.Append($"(file_id = @lookupFid{suffix} AND line = @lookupLine{suffix} AND context = @lookupContext{suffix})");
+                lookupRows.Append($"(@lookupFid{suffix}, @lookupLine{suffix}, @lookupContext{suffix})");
                 cmd.Parameters.Add($"@lookupFid{suffix}", SqliteType.Integer).Value = fileId;
                 cmd.Parameters.Add($"@lookupLine{suffix}", SqliteType.Integer).Value = line;
                 cmd.Parameters.Add($"@lookupContext{suffix}", SqliteType.Text).Value = context;
             }
 
             cmd.CommandText = $@"
-                SELECT id, file_id, line, context
-                FROM reference_lines
-                WHERE {predicates}";
+                WITH lookup(file_id, line, context) AS (
+                    VALUES {lookupRows}
+                )
+                SELECT rl.id, rl.file_id, rl.line, rl.context
+                FROM reference_lines rl
+                JOIN lookup l
+                  ON l.file_id = rl.file_id
+                 AND l.line = rl.line
+                 AND l.context = rl.context";
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
@@ -1839,8 +2093,7 @@ public class DbWriter
                 var line = reader.GetInt32(2);
                 var context = reader.GetString(3);
                 var key = (fileId, line, context);
-                if (referenceLineKeys.Contains(key))
-                    lineIds[key] = id;
+                lineIds[key] = id;
             }
         }
 
@@ -2118,7 +2371,22 @@ public class DbWriter
         }
 
         if (issues.Count == 0) return;
+        if (issues.Count == 1)
+        {
+            InsertSingleIssue(fileId, issues[0]);
+            return;
+        }
 
+        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 6);
+        for (int i = 0; i < issues.Count; i += rowsPerStatement)
+        {
+            int end = Math.Min(i + rowsPerStatement, issues.Count);
+            InsertIssueBatch(fileId, issues, i, end);
+        }
+    }
+
+    private void InsertSingleIssue(long fileId, CodeIndex.Models.FileIssue issue)
+    {
         var cmd = RentCommand(
             "INSERT INTO file_issues (file_id, kind, line, message, origin, severity) VALUES (@fid, @kind, @line, @message, @origin, @severity)",
             static c =>
@@ -2139,21 +2407,43 @@ public class DbWriter
             var pOrigin = cmd.Parameters["@origin"];
             var pSeverity = cmd.Parameters["@severity"];
 
-            foreach (var issue in issues)
-            {
-                pFid.Value = fileId;
-                pKind.Value = issue.Kind;
-                pLine.Value = issue.Line;
-                pMessage.Value = issue.Message;
-                pOrigin.Value = issue.Origin ?? (object)DBNull.Value;
-                pSeverity.Value = issue.Severity ?? (object)DBNull.Value;
-                cmd.ExecuteNonQuery();
-            }
+            pFid.Value = fileId;
+            pKind.Value = issue.Kind;
+            pLine.Value = issue.Line;
+            pMessage.Value = issue.Message;
+            pOrigin.Value = issue.Origin ?? (object)DBNull.Value;
+            pSeverity.Value = issue.Severity ?? (object)DBNull.Value;
+            cmd.ExecuteNonQuery();
         }
         finally
         {
             ReleaseCommand(cmd);
         }
+    }
+
+    private void InsertIssueBatch(long fileId, IReadOnlyList<CodeIndex.Models.FileIssue> issues, int start, int end)
+    {
+        using var cmd = _conn.CreateCommand();
+        var sql = CreateBatchSqlBuilder(end - start, estimatedCharsPerRow: 96);
+        sql.Append("INSERT INTO file_issues (file_id, kind, line, message, origin, severity) VALUES ");
+        for (int j = start; j < end; j++)
+        {
+            if (j > start)
+                sql.Append(", ");
+
+            var issue = issues[j];
+            var suffix = j - start;
+            sql.Append($"(@fid{suffix}, @kind{suffix}, @line{suffix}, @message{suffix}, @origin{suffix}, @severity{suffix})");
+            cmd.Parameters.Add($"@fid{suffix}", SqliteType.Integer).Value = fileId;
+            cmd.Parameters.Add($"@kind{suffix}", SqliteType.Text).Value = issue.Kind;
+            cmd.Parameters.Add($"@line{suffix}", SqliteType.Integer).Value = issue.Line;
+            cmd.Parameters.Add($"@message{suffix}", SqliteType.Text).Value = issue.Message;
+            cmd.Parameters.Add($"@origin{suffix}", SqliteType.Text).Value = issue.Origin ?? (object)DBNull.Value;
+            cmd.Parameters.Add($"@severity{suffix}", SqliteType.Text).Value = issue.Severity ?? (object)DBNull.Value;
+        }
+
+        cmd.CommandText = sql.ToString();
+        cmd.ExecuteNonQuery();
     }
 
     /// <summary>

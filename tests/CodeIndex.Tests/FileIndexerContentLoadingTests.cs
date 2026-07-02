@@ -47,6 +47,21 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void FileContentLoader_Normalization_MidLineInvisibleCharactersStayOnFastPath()
+    {
+        var content = "a\uFEFFb\nc\u200Bd";
+
+        var normalized = FileContentLoader.NormalizeForIndexing(content);
+        var prepass = FileContentLoader.NormalizeContentForPrepass(content);
+
+        Assert.Same(content, normalized.Content);
+        Assert.Same(content, prepass);
+        Assert.Equal(2, normalized.LineCount);
+        Assert.False(normalized.HasOversizeLine);
+        Assert.Equal(0, normalized.ConflictMarkerLine);
+    }
+
+    [Fact]
     public void FileContentLoader_Load_LfOnlyUtf8CanReuseRawChecksum()
     {
         var content = new string('a', 4097)

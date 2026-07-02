@@ -1803,6 +1803,9 @@ public partial class SymbolExtractorTests
               template <typename U> friend class Container;
               // friend class CommentOnly;
               const char* text = "friend class StringOnly;";
+              /*
+                friend class BlockCommentOnly;
+              */
             };
 
             template <typename T>
@@ -1828,6 +1831,7 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Probe" && s.Signature == "friend class Outer::Probe;");
         Assert.DoesNotContain(symbols, s => s.Name == "CommentOnly");
         Assert.DoesNotContain(symbols, s => s.Name == "StringOnly");
+        Assert.DoesNotContain(symbols, s => s.Name == "BlockCommentOnly");
     }
 
     [Fact]

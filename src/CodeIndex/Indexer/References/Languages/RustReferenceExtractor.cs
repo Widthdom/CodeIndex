@@ -337,12 +337,18 @@ internal static class RustReferenceExtractor
 
     public static void EmitAdditionalCallReferences(string preparedLine, Action<string, int> addCallLikeReference)
     {
-        foreach (Match match in RawIdentifierCallRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("r#", StringComparison.Ordinal) >= 0)
         {
-            var name = match.Groups["name"].Value;
-            var callIndex = match.Groups["name"].Index;
-            addCallLikeReference(name, callIndex);
+            foreach (Match match in RawIdentifierCallRegex.Matches(preparedLine))
+            {
+                var name = match.Groups["name"].Value;
+                var callIndex = match.Groups["name"].Index;
+                addCallLikeReference(name, callIndex);
+            }
         }
+
+        if (preparedLine.IndexOf('!') < 0)
+            return;
 
         foreach (Match match in MacroCallRegex.Matches(preparedLine))
         {
@@ -361,6 +367,11 @@ internal static class RustReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf('#') < 0)
+        {
+            return;
+        }
+
         foreach (Match match in DeriveAttributeRegex.Matches(preparedLine))
         {
             EmitDeriveTypeList(match.Groups["types"], references, seen, fileId, context, lineNumber, container);
@@ -584,6 +595,12 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf('&') < 0
+            || preparedLine.IndexOf("mut", StringComparison.Ordinal) < 0)
+        {
+            return;
+        }
+
         foreach (Match match in MutableReferenceTypeRegex.Matches(preparedLine))
         {
             if (!IsMutableReferenceTypeContext(preparedLine, match.Index))
@@ -632,6 +649,11 @@ internal static class RustReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf('\'') < 0)
+        {
+            return;
+        }
+
         for (var index = 0; index + 1 < preparedLine.Length; index++)
         {
             if (preparedLine[index] != '\'' || !IsRustLifetimeStart(preparedLine[index + 1]))
@@ -670,6 +692,12 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (line.IndexOf("for", StringComparison.Ordinal) < 0
+            || line.IndexOf('<') < 0)
+        {
+            return;
+        }
+
         foreach (var forIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(line, "for"))
         {
             var openAngle = SkipWhitespace(line, forIndex + "for".Length);
@@ -707,6 +735,11 @@ internal static class RustReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("use", StringComparison.Ordinal) < 0)
+        {
+            return;
+        }
+
         var match = UseStatementRegex.Match(preparedLine);
         if (!match.Success)
             return;
@@ -829,6 +862,12 @@ internal static class RustReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("extern", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf("crate", StringComparison.Ordinal) < 0)
+        {
+            return;
+        }
+
         var match = ExternCrateRegex.Match(preparedLine);
         if (!match.Success)
             return;
@@ -855,6 +894,11 @@ internal static class RustReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("mod", StringComparison.Ordinal) < 0)
+        {
+            return;
+        }
+
         var match = ModuleDeclarationRegex.Match(preparedLine);
         if (!match.Success)
             return;
@@ -881,6 +925,12 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf("fn", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf('(') < 0)
+        {
+            return;
+        }
+
         var fnIndex = ReferenceExtractor.FindTopLevelKeyword(preparedLine, "fn");
         if (fnIndex < 0)
             return;
@@ -904,6 +954,9 @@ internal static class RustReferenceExtractor
             context,
             lineNumber,
             resolveContainerForColumn);
+
+        if (preparedLine.IndexOf("->", StringComparison.Ordinal) < 0)
+            return;
 
         var arrowIndex = TypedLanguageReferenceExtractor.FindTopLevelSequence(preparedLine, "->", closeParen + 1);
         if (arrowIndex < 0)
@@ -935,6 +988,12 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf('|') < 0
+            || (preparedLine.IndexOf(':') < 0 && preparedLine.IndexOf("->", StringComparison.Ordinal) < 0))
+        {
+            return;
+        }
+
         var searchIndex = 0;
         while (searchIndex < preparedLine.Length)
         {
@@ -1010,6 +1069,12 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf("let", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf(':') < 0)
+        {
+            return;
+        }
+
         foreach (var letIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "let"))
         {
             var colonIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, ':', letIndex + "let".Length);
@@ -1047,6 +1112,13 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf(':') < 0
+            || (preparedLine.IndexOf("const", StringComparison.Ordinal) < 0
+                && preparedLine.IndexOf("static", StringComparison.Ordinal) < 0))
+        {
+            return;
+        }
+
         foreach (var keyword in ConstStaticKeywords)
         {
             foreach (var keywordIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, keyword))
@@ -1110,6 +1182,12 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf("type", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf('=') < 0)
+        {
+            return;
+        }
+
         foreach (var typeIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "type"))
         {
             var assignmentIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '=', typeIndex + "type".Length);
@@ -1143,6 +1221,12 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf("trait", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf('=') < 0)
+        {
+            return;
+        }
+
         foreach (var traitIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "trait"))
         {
             var assignmentIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '=', traitIndex + "trait".Length);
@@ -1176,6 +1260,12 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf("type", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf(':') < 0)
+        {
+            return;
+        }
+
         foreach (var typeIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "type"))
         {
             var colonIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, ':', typeIndex + "type".Length);
@@ -1216,6 +1306,12 @@ internal static class RustReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForColumn,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("struct", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf('(') < 0)
+        {
+            return;
+        }
+
         var structIndex = ReferenceExtractor.FindTopLevelKeyword(preparedLine, "struct");
         if (structIndex < 0)
             return;
@@ -1361,6 +1457,11 @@ internal static class RustReferenceExtractor
     {
         if (enumContainer?.Kind != "enum")
             return;
+        if (preparedLine.IndexOf('(') < 0
+            && preparedLine.IndexOf('{') < 0)
+        {
+            return;
+        }
 
         var variantStart = FirstNonWhitespaceIndex(preparedLine);
         if (variantStart >= preparedLine.Length
@@ -1488,6 +1589,9 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf("as", StringComparison.Ordinal) < 0)
+            return;
+
         var trimmed = preparedLine.TrimStart();
         if (trimmed.StartsWith("use ", StringComparison.Ordinal)
             || trimmed.StartsWith("pub use ", StringComparison.Ordinal)
@@ -1526,6 +1630,12 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf("::", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf('(') < 0)
+        {
+            return;
+        }
+
         foreach (Match match in AssociatedCallReceiverRegex.Matches(preparedLine))
         {
             var receiverGroup = match.Groups["receiver"];
@@ -1574,6 +1684,11 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf("::", StringComparison.Ordinal) < 0)
+        {
+            return;
+        }
+
         foreach (Match match in AssociatedValueReceiverRegex.Matches(preparedLine))
         {
             var receiverGroup = match.Groups["receiver"];
@@ -1622,6 +1737,13 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf('<') < 0
+            || preparedLine.IndexOf("::", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf('(') < 0)
+        {
+            return;
+        }
+
         var searchIndex = 0;
         while (searchIndex < preparedLine.Length)
         {
@@ -1733,8 +1855,12 @@ internal static class RustReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForColumn,
         SymbolRecord? enumContainer)
     {
-        if (enumContainer != null || IsRustTypeDeclarationLine(preparedLine))
+        if (enumContainer != null
+            || preparedLine.IndexOf('{') < 0
+            || IsRustTypeDeclarationLine(preparedLine))
+        {
             return;
+        }
 
         foreach (Match match in StructLiteralRegex.Matches(preparedLine))
         {
@@ -1807,48 +1933,59 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        var implIndex = ReferenceExtractor.FindTopLevelKeyword(preparedLine, "impl");
-        if (implIndex >= 0)
+        var hasImplMarker = preparedLine.IndexOf("impl", StringComparison.Ordinal) >= 0;
+        var hasTraitMarker = preparedLine.IndexOf("trait", StringComparison.Ordinal) >= 0;
+        if (!hasImplMarker && !hasTraitMarker)
+            return;
+
+        if (hasImplMarker)
         {
-            var typeListStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, implIndex + "impl".Length);
-            var forIndex = ReferenceExtractor.FindTopLevelKeyword(preparedLine, "for");
-            var typeListEnd = forIndex >= 0
-                ? forIndex
-                : TypedLanguageReferenceExtractor.FindTypeExpressionEnd(preparedLine, typeListStart);
-
-            if (typeListEnd > typeListStart)
+            var implIndex = ReferenceExtractor.FindTopLevelKeyword(preparedLine, "impl");
+            if (implIndex >= 0)
             {
-                TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
-                    preparedLine.Substring(typeListStart, typeListEnd - typeListStart),
-                    typeListStart,
-                    "rust",
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    resolveContainerForColumn(typeListStart));
-            }
+                var typeListStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, implIndex + "impl".Length);
+                var forIndex = ReferenceExtractor.FindTopLevelKeyword(preparedLine, "for");
+                var typeListEnd = forIndex >= 0
+                    ? forIndex
+                    : TypedLanguageReferenceExtractor.FindTypeExpressionEnd(preparedLine, typeListStart);
 
-            if (forIndex >= 0)
-            {
-                var targetStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, forIndex + "for".Length);
-                var targetEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(preparedLine, targetStart);
-                if (targetEnd > targetStart)
+                if (typeListEnd > typeListStart)
                 {
                     TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
-                        preparedLine.Substring(targetStart, targetEnd - targetStart),
-                        targetStart,
+                        preparedLine.Substring(typeListStart, typeListEnd - typeListStart),
+                        typeListStart,
                         "rust",
                         references,
                         seen,
                         fileId,
                         context,
                         lineNumber,
-                        resolveContainerForColumn(targetStart));
+                        resolveContainerForColumn(typeListStart));
+                }
+
+                if (forIndex >= 0)
+                {
+                    var targetStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, forIndex + "for".Length);
+                    var targetEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(preparedLine, targetStart);
+                    if (targetEnd > targetStart)
+                    {
+                        TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                            preparedLine.Substring(targetStart, targetEnd - targetStart),
+                            targetStart,
+                            "rust",
+                            references,
+                            seen,
+                            fileId,
+                            context,
+                            lineNumber,
+                            resolveContainerForColumn(targetStart));
+                    }
                 }
             }
         }
+
+        if (!hasTraitMarker || preparedLine.IndexOf(':') < 0)
+            return;
 
         var traitIndex = ReferenceExtractor.FindTopLevelKeyword(preparedLine, "trait");
         if (traitIndex < 0)
@@ -1898,7 +2035,14 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        var genericOpenIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '<');
+        var hasGenericMarker = preparedLine.IndexOf('<') >= 0;
+        var hasWhereMarker = preparedLine.IndexOf("where", StringComparison.Ordinal) >= 0;
+        if (!hasGenericMarker && !hasWhereMarker)
+            return;
+
+        var genericOpenIndex = hasGenericMarker
+            ? TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '<')
+            : -1;
         if (genericOpenIndex >= 0)
         {
             var constGenericNames = EmitConstGenericParameterReferences(
@@ -1949,6 +2093,9 @@ internal static class RustReferenceExtractor
                 lineNumber,
                 resolveContainerForColumn);
         }
+
+        if (!hasWhereMarker)
+            return;
 
         TypedLanguageReferenceExtractor.EmitWhereClauseTypeReferences(
             preparedLine,
@@ -2091,6 +2238,12 @@ internal static class RustReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForColumn,
         HashSet<string>? constGenericNames = null)
     {
+        if (clause.IndexOf("const", StringComparison.Ordinal) < 0
+            || clause.IndexOf(':') < 0)
+        {
+            return;
+        }
+
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(clause))
         {
             var fragment = clause.Substring(segmentStart, segmentLength);
@@ -2143,6 +2296,9 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf("->", StringComparison.Ordinal) < 0)
+            return;
+
         var genericCloseIndex = FindRustGenericClose(preparedLine, genericOpenIndex);
         if (genericCloseIndex <= genericOpenIndex)
             return;
@@ -2168,6 +2324,9 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf("->", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (var whereIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "where"))
         {
             var clauseStart = whereIndex + "where".Length;
@@ -2197,6 +2356,12 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (clause.IndexOf("->", StringComparison.Ordinal) < 0
+            || clause.IndexOf(':') < 0)
+        {
+            return;
+        }
+
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(clause))
         {
             var fragment = clause.Substring(segmentStart, segmentLength);
@@ -2237,6 +2402,9 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (expression.IndexOf("->", StringComparison.Ordinal) < 0)
+            return;
+
         var arrowIndex = TypedLanguageReferenceExtractor.FindTopLevelSequence(expression, "->");
         if (arrowIndex < 0)
             return;
@@ -2269,11 +2437,17 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf('=') < 0)
+            return;
+
         var genericCloseIndex = FindRustGenericClose(preparedLine, genericOpenIndex);
         if (genericCloseIndex <= genericOpenIndex)
             return;
 
         var clause = preparedLine.Substring(genericOpenIndex + 1, genericCloseIndex - genericOpenIndex - 1);
+        if (clause.IndexOf('=') < 0)
+            return;
+
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(clause))
         {
             var fragment = clause.Substring(segmentStart, segmentLength);

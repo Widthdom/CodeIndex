@@ -333,17 +333,8 @@ internal static partial class LanguageReferenceExtractionSupport
     private static readonly Regex FortranIncludeRegex = new(
         @"^\s*include\s*['""](?<name>[^'""]+)['""]",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex FortranCommonLineRegex = new(
-        @"^\s*common\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex FortranBlankCommonMemberListRegex = new(
         @"^\s*common\s+(?<list>[^/].*)$",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex FortranNamelistLineRegex = new(
-        @"^\s*namelist\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex FortranEquivalenceLineRegex = new(
-        @"^\s*equivalence\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex FortranParenthesizedNameListRegex = new(
         @"\((?<list>[^()]*)\)",
@@ -413,9 +404,6 @@ internal static partial class LanguageReferenceExtractionSupport
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex FortranIntrinsicPositionalKindRegex = new(
         @"\b(?:integer|real|complex|logical)\s*\(\s*(?<type>[A-Za-z_]\w*)\s*\)",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex FortranProcedureBindingLineRegex = new(
-        @"^\s*(?:procedure|generic)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex FortranBindingTargetListRegex = new(
         @"=>.*$",
@@ -617,30 +605,100 @@ internal static partial class LanguageReferenceExtractionSupport
         IReadOnlySet<string>? fileDefinitionNames,
         IReadOnlyList<string>? implementedTypeNames)
     {
-        foreach (Match match in RazorComponentTagRegex.Matches(originalLine))
+        if (originalLine.IndexOf('<') >= 0)
         {
-            var group = match.Groups["name"];
-            var rawName = group.Value;
-            var name = rawName;
-            if (definitionNames?.Contains(name) == true)
-                continue;
-            var nameIndex = group.Index;
+            foreach (Match match in RazorComponentTagRegex.Matches(originalLine))
+            {
+                var group = match.Groups["name"];
+                var rawName = group.Value;
+                var name = rawName;
+                if (definitionNames?.Contains(name) == true)
+                    continue;
+                var nameIndex = group.Index;
 
-            ReferenceExtractor.AddReference(
-                references,
-                seen,
-                fileId,
-                name,
-                nameIndex,
-                "call",
-                context,
-                lineNumber,
-                resolveContainerForColumn(nameIndex));
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    name,
+                    nameIndex,
+                    "call",
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn(nameIndex));
+            }
         }
 
-        foreach (var match in EnumerateMatches(RazorDirectiveTypeRegex, originalLine)
-                     .Concat(EnumerateMatches(RazorAttributeTypeRegex, originalLine))
-                     .Concat(EnumerateMatches(RazorInjectRegex, originalLine)))
+        if (originalLine.IndexOf('@') >= 0)
+        {
+            if (originalLine.IndexOf("inherits", StringComparison.Ordinal) >= 0
+                || originalLine.IndexOf("implements", StringComparison.Ordinal) >= 0
+                || originalLine.IndexOf("model", StringComparison.Ordinal) >= 0)
+            {
+                foreach (var match in EnumerateMatches(RazorDirectiveTypeRegex, originalLine))
+                    EmitRazorTypeReference(match);
+            }
+
+            if (originalLine.IndexOf("@attribute", StringComparison.Ordinal) >= 0 && originalLine.IndexOf('[') >= 0)
+            {
+                foreach (var match in EnumerateMatches(RazorAttributeTypeRegex, originalLine))
+                    EmitRazorTypeReference(match);
+            }
+
+            if (originalLine.IndexOf("@inject", StringComparison.Ordinal) >= 0)
+            {
+                foreach (var match in EnumerateMatches(RazorInjectRegex, originalLine))
+                    EmitRazorTypeReference(match);
+            }
+        }
+
+        if (originalLine.IndexOf("@on", StringComparison.Ordinal) >= 0 && originalLine.IndexOf('=') >= 0)
+        {
+            foreach (Match match in RazorEventHandlerRegex.Matches(originalLine))
+            {
+                var name = match.Groups["name"].Value;
+                var nameIndex = match.Groups["name"].Index;
+                var container = resolveContainerForColumn(nameIndex);
+                var kind = "razor_event_binding";
+
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    name,
+                    nameIndex,
+                    kind,
+                    context,
+                    lineNumber,
+                    container);
+
+                if (fileDefinitionNames?.Contains(name) == true || implementedTypeNames is not { Count: > 0 })
+                    continue;
+
+                foreach (var implementedTypeName in implementedTypeNames)
+                {
+                    ReferenceExtractor.AddReference(
+                        references,
+                        seen,
+                        fileId,
+                        name,
+                        nameIndex,
+                        "implicit_implementation",
+                        context,
+                        lineNumber,
+                        new SymbolRecord
+                        {
+                            Kind = "interface",
+                            Name = LastQualifiedSegment(implementedTypeName),
+                            Line = lineNumber,
+                            StartLine = lineNumber,
+                            EndLine = lineNumber
+                        });
+                }
+            }
+        }
+
+        void EmitRazorTypeReference(Match match)
         {
             var group = match.Groups["type"];
             ReferenceExtractor.AddTypeExpressionSegments(
@@ -653,49 +711,6 @@ internal static partial class LanguageReferenceExtractionSupport
                 lineNumber,
                 resolveContainerForColumn(group.Index),
                 "csharp");
-        }
-
-        foreach (Match match in RazorEventHandlerRegex.Matches(originalLine))
-        {
-            var name = match.Groups["name"].Value;
-            var nameIndex = match.Groups["name"].Index;
-            var container = resolveContainerForColumn(nameIndex);
-            var kind = "razor_event_binding";
-
-            ReferenceExtractor.AddReference(
-                references,
-                seen,
-                fileId,
-                name,
-                nameIndex,
-                kind,
-                context,
-                lineNumber,
-                container);
-
-            if (fileDefinitionNames?.Contains(name) == true || implementedTypeNames is not { Count: > 0 })
-                continue;
-
-            foreach (var implementedTypeName in implementedTypeNames)
-            {
-                ReferenceExtractor.AddReference(
-                    references,
-                    seen,
-                    fileId,
-                    name,
-                    nameIndex,
-                    "implicit_implementation",
-                    context,
-                    lineNumber,
-                    new SymbolRecord
-                    {
-                        Kind = "interface",
-                        Name = LastQualifiedSegment(implementedTypeName),
-                        Line = lineNumber,
-                        StartLine = lineNumber,
-                        EndLine = lineNumber
-                    });
-            }
         }
     }
 
@@ -1119,7 +1134,11 @@ internal static partial class LanguageReferenceExtractionSupport
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        var includeMatch = !string.IsNullOrWhiteSpace(preparedLine)
+        var hasCppIncludeMarker = !string.IsNullOrWhiteSpace(preparedLine)
+            && (originalLine.IndexOf('#') >= 0
+                || originalLine.IndexOf("import", StringComparison.Ordinal) >= 0
+                || originalLine.IndexOf("include", StringComparison.Ordinal) >= 0);
+        var includeMatch = hasCppIncludeMarker
             ? CppIncludeRegex.Match(originalLine)
             : Match.Empty;
         if (includeMatch.Success)
@@ -1128,7 +1147,11 @@ internal static partial class LanguageReferenceExtractionSupport
             ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "type_reference", context, lineNumber, resolveContainerForColumn(group.Index));
         }
 
-        var baseMatch = CppBaseListRegex.Match(preparedLine);
+        var baseMatch = preparedLine.IndexOf(':') >= 0
+            && (ContainsOrdinalKeyword(preparedLine, "class")
+                || ContainsOrdinalKeyword(preparedLine, "struct"))
+            ? CppBaseListRegex.Match(preparedLine)
+            : Match.Empty;
         if (baseMatch.Success)
         {
             var group = baseMatch.Groups["bases"];
@@ -1144,371 +1167,671 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        foreach (Match match in CppNewTypeRegex.Matches(preparedLine))
+        if (ContainsOrdinalKeyword(preparedLine, "new"))
         {
-            var group = match.Groups["type"];
-            var typeName = LastCppQualifiedSegment(group.Value);
-            var typeStart = group.Index + group.Value.LastIndexOf(typeName, StringComparison.Ordinal);
-            ReferenceExtractor.AddReference(references, seen, fileId, typeName, typeStart, "instantiate", context, lineNumber, resolveContainerForColumn(typeStart));
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            foreach (Match match in CppNewTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                var typeName = LastCppQualifiedSegment(group.Value);
+                var typeStart = group.Index + group.Value.LastIndexOf(typeName, StringComparison.Ordinal);
+                ReferenceExtractor.AddReference(references, seen, fileId, typeName, typeStart, "instantiate", context, lineNumber, resolveContainerForColumn(typeStart));
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
         }
 
-        foreach (Match match in CppNamedCastTypeRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("_cast", StringComparison.Ordinal) >= 0)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            foreach (Match match in CppNamedCastTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
         }
 
-        foreach (Match match in CppCStyleCastTypeRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf('(') >= 0)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            foreach (Match match in CppCStyleCastTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
         }
 
         if (language == "c")
         {
-            foreach (Match match in CTypedefCastTypeRegex.Matches(preparedLine))
+            var hasCParen = preparedLine.IndexOf('(') >= 0;
+            var hasCTypedefTypeMarker = preparedLine.IndexOf("_t", StringComparison.Ordinal) >= 0;
+            var hasCTaggedTypeMarker = ContainsOrdinalKeyword(preparedLine, "struct")
+                || preparedLine.IndexOf("enum", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("union", StringComparison.Ordinal) >= 0;
+            if (hasCParen && hasCTypedefTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTypedefCastTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTypedefSizeofTypeRegex.Matches(preparedLine))
+            var hasCSizeofMarker = hasCParen
+                && preparedLine.IndexOf("sizeof", StringComparison.Ordinal) >= 0;
+            if (hasCSizeofMarker && hasCTypedefTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTypedefSizeofTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTaggedSizeofTypeRegex.Matches(preparedLine))
+            if (hasCSizeofMarker && hasCTaggedTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTaggedSizeofTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTypedefAlignofTypeRegex.Matches(preparedLine))
+            var hasCAlignofMarker = hasCParen
+                && (preparedLine.IndexOf("alignof", StringComparison.Ordinal) >= 0
+                    || preparedLine.IndexOf("_Alignof", StringComparison.Ordinal) >= 0
+                    || preparedLine.IndexOf("__alignof", StringComparison.Ordinal) >= 0);
+            if (hasCAlignofMarker && hasCTypedefTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTypedefAlignofTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTaggedAlignofTypeRegex.Matches(preparedLine))
+            if (hasCAlignofMarker && hasCTaggedTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTaggedAlignofTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTypedefDeclarationTypeRegex.Matches(preparedLine))
+            var hasCDeclarationTerminator = preparedLine.IndexOf('=') >= 0
+                || preparedLine.IndexOf(',') >= 0
+                || preparedLine.IndexOf(';') >= 0
+                || preparedLine.IndexOf('[') >= 0;
+            if (hasCDeclarationTerminator && hasCTypedefTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTypedefDeclarationTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTaggedDeclarationTypeRegex.Matches(preparedLine))
+            if (hasCDeclarationTerminator && hasCTaggedTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTaggedDeclarationTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTypedefFunctionReturnTypeRegex.Matches(preparedLine))
+            if (hasCParen && hasCTypedefTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTypedefFunctionReturnTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTaggedFunctionReturnTypeRegex.Matches(preparedLine))
+            if (hasCParen && hasCTaggedTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTaggedFunctionReturnTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTypedefParameterTypeRegex.Matches(preparedLine))
+            var hasCParameterDelimiter = hasCParen || preparedLine.IndexOf(',') >= 0;
+            if (hasCParameterDelimiter && hasCTypedefTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTypedefParameterTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTaggedParameterTypeRegex.Matches(preparedLine))
+            if (hasCParameterDelimiter && hasCTaggedTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTaggedParameterTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTypedefCompoundLiteralTypeRegex.Matches(preparedLine))
+            var hasCCompoundLiteralMarkers = hasCParen && preparedLine.IndexOf('{') >= 0;
+            if (hasCCompoundLiteralMarkers && hasCTypedefTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTypedefCompoundLiteralTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTaggedCompoundLiteralTypeRegex.Matches(preparedLine))
+            if (hasCCompoundLiteralMarkers && hasCTaggedTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTaggedCompoundLiteralTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTypedefTypeofTypeRegex.Matches(preparedLine))
+            var hasCTypeofMarker = hasCParen
+                && preparedLine.IndexOf("typeof", StringComparison.Ordinal) >= 0;
+            if (hasCTypeofMarker && hasCTypedefTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTypedefTypeofTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTaggedTypeofTypeRegex.Matches(preparedLine))
+            if (hasCTypeofMarker && hasCTaggedTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTaggedTypeofTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTypedefTypeofUnqualTypeRegex.Matches(preparedLine))
+            if (hasCTypeofMarker && hasCTypedefTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTypedefTypeofUnqualTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTaggedTypeofUnqualTypeRegex.Matches(preparedLine))
+            if (hasCTypeofMarker && hasCTaggedTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTaggedTypeofUnqualTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTypedefBuiltinTypesCompatibleFirstTypeRegex.Matches(preparedLine))
+            var hasCBuiltinTypesCompatibleMarker = hasCParen
+                && preparedLine.IndexOf("__builtin_types_compatible_p", StringComparison.Ordinal) >= 0;
+            if (hasCBuiltinTypesCompatibleMarker && hasCTypedefTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTypedefBuiltinTypesCompatibleFirstTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTypedefBuiltinTypesCompatibleSecondTypeRegex.Matches(preparedLine))
+            if (hasCBuiltinTypesCompatibleMarker && hasCTypedefTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTypedefBuiltinTypesCompatibleSecondTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTaggedBuiltinTypesCompatibleFirstTypeRegex.Matches(preparedLine))
+            if (hasCBuiltinTypesCompatibleMarker && hasCTaggedTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTaggedBuiltinTypesCompatibleFirstTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTaggedBuiltinTypesCompatibleSecondTypeRegex.Matches(preparedLine))
+            if (hasCBuiltinTypesCompatibleMarker && hasCTaggedTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTaggedBuiltinTypesCompatibleSecondTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTypedefGenericAssociationTypeRegex.Matches(preparedLine))
+            var hasCGenericAssociationMarker = preparedLine.IndexOf(':') >= 0
+                && (preparedLine.IndexOf("_Generic", StringComparison.Ordinal) >= 0
+                    || preparedLine.IndexOf(',') >= 0);
+            if (hasCGenericAssociationMarker && hasCTypedefTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTypedefGenericAssociationTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTaggedGenericAssociationTypeRegex.Matches(preparedLine))
+            if (hasCGenericAssociationMarker && hasCTaggedTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTaggedGenericAssociationTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTypedefAtomicTypeRegex.Matches(preparedLine))
+            var hasCAtomicMarker = hasCParen
+                && preparedLine.IndexOf("_Atomic", StringComparison.Ordinal) >= 0;
+            if (hasCAtomicMarker && hasCTypedefTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTypedefAtomicTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTaggedAtomicTypeRegex.Matches(preparedLine))
+            if (hasCAtomicMarker && hasCTaggedTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTaggedAtomicTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTypedefAlignasTypeRegex.Matches(preparedLine))
+            var hasCAlignasMarker = hasCParen
+                && (preparedLine.IndexOf("alignas", StringComparison.Ordinal) >= 0
+                    || preparedLine.IndexOf("_Alignas", StringComparison.Ordinal) >= 0);
+            if (hasCAlignasMarker && hasCTypedefTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTypedefAlignasTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTaggedAlignasTypeRegex.Matches(preparedLine))
+            if (hasCAlignasMarker && hasCTaggedTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTaggedAlignasTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTypedefFunctionPointerAliasTypeRegex.Matches(preparedLine))
+            var hasCFunctionPointerMarker = hasCParen
+                && preparedLine.IndexOf('*') >= 0;
+            var hasCFunctionPointerAliasMarker = hasCFunctionPointerMarker
+                && ContainsOrdinalKeyword(preparedLine, "typedef");
+            if (hasCFunctionPointerAliasMarker && hasCTypedefTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTypedefFunctionPointerAliasTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTaggedFunctionPointerAliasTypeRegex.Matches(preparedLine))
+            if (hasCFunctionPointerAliasMarker && hasCTaggedTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTaggedFunctionPointerAliasTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTypedefFunctionPointerDeclarationTypeRegex.Matches(preparedLine))
+            if (hasCFunctionPointerMarker && hasCTypedefTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTypedefFunctionPointerDeclarationTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTaggedFunctionPointerDeclarationTypeRegex.Matches(preparedLine))
+            if (hasCFunctionPointerMarker && hasCTaggedTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTaggedFunctionPointerDeclarationTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTypedefPointerArrayDeclarationTypeRegex.Matches(preparedLine))
+            var hasCPointerArrayMarker = hasCFunctionPointerMarker
+                && preparedLine.IndexOf('[') >= 0;
+            if (hasCPointerArrayMarker && hasCTypedefTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTypedefPointerArrayDeclarationTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTaggedPointerArrayDeclarationTypeRegex.Matches(preparedLine))
+            if (hasCPointerArrayMarker && hasCTaggedTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTaggedPointerArrayDeclarationTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTypedefOffsetofTypeRegex.Matches(preparedLine))
+            var hasCOffsetofMarker = hasCParen
+                && preparedLine.IndexOf(',') >= 0
+                && (preparedLine.IndexOf("offsetof", StringComparison.Ordinal) >= 0
+                    || preparedLine.IndexOf("__builtin_offsetof", StringComparison.Ordinal) >= 0);
+            if (hasCOffsetofMarker && hasCTypedefTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTypedefOffsetofTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTaggedOffsetofTypeRegex.Matches(preparedLine))
+            if (hasCOffsetofMarker && hasCTaggedTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTaggedOffsetofTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTypedefVaArgTypeRegex.Matches(preparedLine))
+            var hasCVaArgMarker = hasCParen
+                && preparedLine.IndexOf(',') >= 0
+                && (preparedLine.IndexOf("va_arg", StringComparison.Ordinal) >= 0
+                    || preparedLine.IndexOf("__builtin_va_arg", StringComparison.Ordinal) >= 0);
+            if (hasCVaArgMarker && hasCTypedefTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTypedefVaArgTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTaggedVaArgTypeRegex.Matches(preparedLine))
+            if (hasCVaArgMarker && hasCTaggedTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTaggedVaArgTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            EmitCVaArgTypeOperandReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, language);
+            if (hasCVaArgMarker)
+                EmitCVaArgTypeOperandReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, language);
         }
 
-        foreach (Match match in CppTypeOperandOperatorRegex.Matches(preparedLine))
+        var hasCppParen = preparedLine.IndexOf('(') >= 0;
+        var hasCppTypeOperandOperatorMarker = hasCppParen
+            && (preparedLine.IndexOf("sizeof", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("alignof", StringComparison.Ordinal) >= 0);
+        if (hasCppTypeOperandOperatorMarker)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            foreach (Match match in CppTypeOperandOperatorRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
         }
 
-        foreach (Match match in CppTypeIdRegex.Matches(preparedLine))
+        var hasCppTypeIdMarker = hasCppParen
+            && preparedLine.IndexOf("typeid", StringComparison.Ordinal) >= 0;
+        if (hasCppTypeIdMarker)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            foreach (Match match in CppTypeIdRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
         }
 
-        foreach (Match match in CppDecltypeBraceConstructionRegex.Matches(preparedLine))
+        var hasCppDecltypeBraceMarker = hasCppParen
+            && preparedLine.IndexOf('{') >= 0
+            && preparedLine.IndexOf("decltype", StringComparison.Ordinal) >= 0;
+        if (hasCppDecltypeBraceMarker)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            foreach (Match match in CppDecltypeBraceConstructionRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
         }
 
-        foreach (Match match in CppFactoryTemplateArgumentRegex.Matches(preparedLine))
+        var hasCppTemplateOpen = preparedLine.IndexOf('<') >= 0;
+        var hasCppFactoryTemplateMarker = hasCppParen
+            && hasCppTemplateOpen
+            && preparedLine.IndexOf("make_", StringComparison.Ordinal) >= 0;
+        if (hasCppFactoryTemplateMarker)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            foreach (Match match in CppFactoryTemplateArgumentRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
         }
 
-        foreach (Match match in CppTypeTraitTemplateArgumentRegex.Matches(preparedLine))
+        var hasCppTypeTraitTemplateMarker = hasCppTemplateOpen
+            && preparedLine.IndexOf("is_", StringComparison.Ordinal) >= 0;
+        if (hasCppTypeTraitTemplateMarker)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            foreach (Match match in CppTypeTraitTemplateArgumentRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
         }
 
-        foreach (Match match in CppBraceConstructionRegex.Matches(preparedLine))
+        var hasCppBrace = preparedLine.IndexOf('{') >= 0;
+        var hasCppBraceConstructionMarker = hasCppBrace
+            && (preparedLine.IndexOf("return", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("throw", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf('=') >= 0);
+        if (hasCppBraceConstructionMarker)
         {
-            var group = match.Groups["type"];
-            var typeName = LastCppQualifiedSegment(group.Value);
-            var typeStart = group.Index + group.Value.LastIndexOf(typeName, StringComparison.Ordinal);
-            ReferenceExtractor.AddReference(references, seen, fileId, typeName, typeStart, "instantiate", context, lineNumber, resolveContainerForColumn(typeStart));
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            foreach (Match match in CppBraceConstructionRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                var typeName = LastCppQualifiedSegment(group.Value);
+                var typeStart = group.Index + group.Value.LastIndexOf(typeName, StringComparison.Ordinal);
+                ReferenceExtractor.AddReference(references, seen, fileId, typeName, typeStart, "instantiate", context, lineNumber, resolveContainerForColumn(typeStart));
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
         }
 
-        foreach (Match match in CppQualifiedTemplateBraceConstructionRegex.Matches(preparedLine))
+        var hasCppScopeSeparator = preparedLine.IndexOf("::", StringComparison.Ordinal) >= 0;
+        var hasCppQualifiedTemplateBraceMarker = hasCppBraceConstructionMarker
+            && hasCppTemplateOpen
+            && hasCppScopeSeparator;
+        if (hasCppQualifiedTemplateBraceMarker)
         {
-            var group = match.Groups["args"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            foreach (Match match in CppQualifiedTemplateBraceConstructionRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["args"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
         }
 
-        foreach (Match match in CppUsingAliasTargetRegex.Matches(preparedLine))
+        var hasCppUsingAliasMarker = preparedLine.IndexOf("using", StringComparison.Ordinal) >= 0
+            && preparedLine.IndexOf('=') >= 0
+            && preparedLine.IndexOf(';') >= 0;
+        if (hasCppUsingAliasMarker)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            foreach (Match match in CppUsingAliasTargetRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
         }
 
-        foreach (Match match in CppTypedefAliasTargetRegex.Matches(preparedLine))
+        var hasCppTypedefAliasMarker = !hasCppParen
+            && ContainsOrdinalKeyword(preparedLine, "typedef")
+            && preparedLine.IndexOf(';') >= 0;
+        if (hasCppTypedefAliasMarker)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            foreach (Match match in CppTypedefAliasTargetRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
         }
 
-        foreach (Match match in CppExplicitTemplateInstantiationRegex.Matches(preparedLine))
+        var hasCppExplicitTemplateInstantiationMarker = ContainsOrdinalKeyword(preparedLine, "template")
+            && preparedLine.IndexOf(';') >= 0
+            && (ContainsOrdinalKeyword(preparedLine, "class")
+                || ContainsOrdinalKeyword(preparedLine, "struct"));
+        if (hasCppExplicitTemplateInstantiationMarker)
         {
-            var group = match.Groups["type"];
-            var typeName = LastCppQualifiedSegment(group.Value);
-            var typeStart = group.Index + group.Value.LastIndexOf(typeName, StringComparison.Ordinal);
-            ReferenceExtractor.AddReference(references, seen, fileId, typeName, typeStart, "instantiate", context, lineNumber, resolveContainerForColumn(typeStart));
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            foreach (Match match in CppExplicitTemplateInstantiationRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                var typeName = LastCppQualifiedSegment(group.Value);
+                var typeStart = group.Index + group.Value.LastIndexOf(typeName, StringComparison.Ordinal);
+                ReferenceExtractor.AddReference(references, seen, fileId, typeName, typeStart, "instantiate", context, lineNumber, resolveContainerForColumn(typeStart));
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
         }
 
-        foreach (Match match in CppTemplateIdDeclarationRegex.Matches(preparedLine))
+        var hasCppTemplateClose = preparedLine.IndexOf('>') >= 0;
+        var hasCppTemplateIdDeclarationMarker = hasCppTemplateOpen
+            && hasCppTemplateClose
+            && (preparedLine.IndexOf('=') >= 0
+                || preparedLine.IndexOf(';') >= 0
+                || preparedLine.IndexOf('{') >= 0
+                || preparedLine.IndexOf(',') >= 0
+                || preparedLine.IndexOf(')') >= 0
+                || preparedLine.IndexOf('[') >= 0);
+        if (hasCppTemplateIdDeclarationMarker)
         {
-            if (IsCppTemplateDeclarationOrSpecializationLine(preparedLine, match.Index))
-                continue;
+            foreach (Match match in CppTemplateIdDeclarationRegex.Matches(preparedLine))
+            {
+                if (IsCppTemplateDeclarationOrSpecializationLine(preparedLine, match.Index))
+                    continue;
 
-            var group = match.Groups["type"];
-            var typeName = LastCppQualifiedSegment(group.Value);
-            var typeStart = group.Index + group.Value.LastIndexOf(typeName, StringComparison.Ordinal);
-            ReferenceExtractor.AddReference(references, seen, fileId, typeName, typeStart, "instantiate", context, lineNumber, resolveContainerForColumn(typeStart));
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, match.Groups["args"].Value, match.Groups["args"].Index, context, lineNumber, resolveContainerForColumn(match.Groups["args"].Index), language);
+                var group = match.Groups["type"];
+                var typeName = LastCppQualifiedSegment(group.Value);
+                var typeStart = group.Index + group.Value.LastIndexOf(typeName, StringComparison.Ordinal);
+                ReferenceExtractor.AddReference(references, seen, fileId, typeName, typeStart, "instantiate", context, lineNumber, resolveContainerForColumn(typeStart));
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, match.Groups["args"].Value, match.Groups["args"].Index, context, lineNumber, resolveContainerForColumn(match.Groups["args"].Index), language);
+            }
         }
 
-        foreach (Match match in CppTemplateParameterDefaultTypeRegex.Matches(preparedLine))
+        var hasCppTemplateParameterDefaultMarker = preparedLine.IndexOf('=') >= 0
+            && (preparedLine.IndexOf("typename", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("class", StringComparison.Ordinal) >= 0);
+        if (hasCppTemplateParameterDefaultMarker)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            foreach (Match match in CppTemplateParameterDefaultTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
         }
 
-        foreach (Match match in CppQualifiedMemberReceiverRegex.Matches(preparedLine))
+        if (hasCppScopeSeparator)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            foreach (Match match in CppQualifiedMemberReceiverRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
         }
 
-        foreach (Match match in CppPointerToMemberTypeRegex.Matches(preparedLine))
+        var hasCppPointerToMemberMarker = hasCppScopeSeparator
+            && preparedLine.IndexOf('*') >= 0;
+        if (hasCppPointerToMemberMarker)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            foreach (Match match in CppPointerToMemberTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
         }
 
-        foreach (Match match in CppTrailingReturnTypeRegex.Matches(preparedLine))
+        var hasCppTrailingReturnMarker = preparedLine.IndexOf(')') >= 0
+            && preparedLine.IndexOf("->", StringComparison.Ordinal) >= 0;
+        if (hasCppTrailingReturnMarker)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            foreach (Match match in CppTrailingReturnTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
         }
 
         if (preparedLine.Contains("requires", StringComparison.Ordinal) || preparedLine.Contains("concept", StringComparison.Ordinal))
         {
-            foreach (Match match in CppRequiresConceptTypeRegex.Matches(preparedLine))
+            var hasCppRequiresConceptTypeMarker = hasCppTemplateOpen
+                && preparedLine.IndexOf("requires", StringComparison.Ordinal) >= 0;
+            if (hasCppRequiresConceptTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CppRequiresConceptTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CppParenthesizedRequiresConceptTypeRegex.Matches(preparedLine))
+            if (hasCppRequiresConceptTypeMarker && hasCppParen)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CppParenthesizedRequiresConceptTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CppQualifiedRequiresConceptConstraintRegex.Matches(preparedLine))
+            var hasCppQualifiedRequiresConceptMarker = hasCppRequiresConceptTypeMarker
+                && hasCppScopeSeparator;
+            if (hasCppQualifiedRequiresConceptMarker)
+            {
+                foreach (Match match in CppQualifiedRequiresConceptConstraintRegex.Matches(preparedLine))
+                {
+                    var conceptGroup = match.Groups["concept"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, conceptGroup.Value, conceptGroup.Index, context, lineNumber, resolveContainerForColumn(conceptGroup.Index), language);
+
+                    var argsGroup = match.Groups["args"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, argsGroup.Value, argsGroup.Index, context, lineNumber, resolveContainerForColumn(argsGroup.Index), language);
+                }
+            }
+
+            var hasCppConceptExpressionMarker = hasCppTemplateOpen
+                && (preparedLine.IndexOf('=') >= 0
+                    || preparedLine.IndexOf("&&", StringComparison.Ordinal) >= 0
+                    || preparedLine.IndexOf("||", StringComparison.Ordinal) >= 0);
+            if (hasCppConceptExpressionMarker)
+            {
+                foreach (Match match in CppConceptExpressionTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
+            }
+        }
+
+        var hasCppCompoundRequirementConceptMarker = hasCppTemplateOpen
+            && hasCppTemplateClose
+            && preparedLine.IndexOf("->", StringComparison.Ordinal) >= 0;
+        if (hasCppCompoundRequirementConceptMarker)
+        {
+            foreach (Match match in CppCompoundRequirementConceptRegex.Matches(preparedLine))
             {
                 var conceptGroup = match.Groups["concept"];
                 ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, conceptGroup.Value, conceptGroup.Index, context, lineNumber, resolveContainerForColumn(conceptGroup.Index), language);
@@ -1516,44 +1839,64 @@ internal static partial class LanguageReferenceExtractionSupport
                 var argsGroup = match.Groups["args"];
                 ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, argsGroup.Value, argsGroup.Index, context, lineNumber, resolveContainerForColumn(argsGroup.Index), language);
             }
+        }
 
-            foreach (Match match in CppConceptExpressionTypeRegex.Matches(preparedLine))
+        var hasCppFriendTypeMarker = preparedLine.IndexOf("friend", StringComparison.Ordinal) >= 0
+            && preparedLine.IndexOf(';') >= 0
+            && (preparedLine.IndexOf("class", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("struct", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("union", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("typename", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("enum", StringComparison.Ordinal) >= 0);
+        if (hasCppFriendTypeMarker)
+        {
+            foreach (Match match in CppFriendTypeRegex.Matches(preparedLine))
             {
                 var group = match.Groups["type"];
                 ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
             }
         }
 
-        foreach (Match match in CppCompoundRequirementConceptRegex.Matches(preparedLine))
+        var hasCppDynamicExceptionSpecMarker = hasCppParen
+            && preparedLine.IndexOf("throw", StringComparison.Ordinal) >= 0;
+        if (hasCppDynamicExceptionSpecMarker)
         {
-            var conceptGroup = match.Groups["concept"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, conceptGroup.Value, conceptGroup.Index, context, lineNumber, resolveContainerForColumn(conceptGroup.Index), language);
-
-            var argsGroup = match.Groups["args"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, argsGroup.Value, argsGroup.Index, context, lineNumber, resolveContainerForColumn(argsGroup.Index), language);
+            foreach (Match match in CppDynamicExceptionSpecRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
         }
 
-        foreach (Match match in CppFriendTypeRegex.Matches(preparedLine))
+        var hasCppDeclarationTerminator = preparedLine.IndexOf(',') >= 0
+            || preparedLine.IndexOf(';') >= 0
+            || preparedLine.IndexOf(')') >= 0
+            || preparedLine.IndexOf('=') >= 0;
+        var hasCppDeclarationTypeMarker = hasCppDeclarationTerminator
+            && (ContainsAsciiUppercase(preparedLine)
+                || hasCppScopeSeparator
+                || hasCppTemplateOpen
+                || preparedLine.IndexOf("const", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("volatile", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("static", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("inline", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("constexpr", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("typename", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("class", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("struct", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("enum", StringComparison.Ordinal) >= 0);
+        if (hasCppDeclarationTypeMarker)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
-        }
+            foreach (Match match in CppDeclarationTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                var expression = StripCppAccessPrefix(group.Value);
+                if (expression.Length == 0)
+                    continue;
 
-        foreach (Match match in CppDynamicExceptionSpecRegex.Matches(preparedLine))
-        {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
-        }
-
-        foreach (Match match in CppDeclarationTypeRegex.Matches(preparedLine))
-        {
-            var group = match.Groups["type"];
-            var expression = StripCppAccessPrefix(group.Value);
-            if (expression.Length == 0)
-                continue;
-
-            var start = group.Index + group.Value.IndexOf(expression, StringComparison.Ordinal);
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, expression, start, context, lineNumber, resolveContainerForColumn(start), language);
+                var start = group.Index + group.Value.IndexOf(expression, StringComparison.Ordinal);
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, expression, start, context, lineNumber, resolveContainerForColumn(start), language);
+            }
         }
     }
 
@@ -1746,13 +2089,22 @@ internal static partial class LanguageReferenceExtractionSupport
         TypedLanguageReferenceExtractor.EmitColonParameterTypeReferences(preparedLine, 0, preparedLine.Length, "dart", references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         TypedLanguageReferenceExtractor.EmitColonVariableTypeReferences(preparedLine, ["final", "var", "late", "const"], "dart", references, seen, fileId, context, lineNumber, resolveContainerForColumn);
 
-        foreach (Match match in DartVariableTypeRegex.Matches(preparedLine))
+        var hasDartDeclarationTerminator = preparedLine.IndexOf('=') >= 0
+            || preparedLine.IndexOf(';') >= 0;
+        var hasDartUppercaseTypeMarker = ContainsAsciiUppercase(preparedLine);
+        if (hasDartDeclarationTerminator && hasDartUppercaseTypeMarker)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "dart");
+            foreach (Match match in DartVariableTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "dart");
+            }
         }
 
-        var signatureMatch = DartFunctionSignatureRegex.Match(preparedLine);
+        var hasDartParen = preparedLine.IndexOf('(') >= 0;
+        var signatureMatch = hasDartParen && hasDartUppercaseTypeMarker
+            ? DartFunctionSignatureRegex.Match(preparedLine)
+            : Match.Empty;
         if (signatureMatch.Success)
         {
             var returnGroup = signatureMatch.Groups["return"];
@@ -1767,10 +2119,17 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        foreach (Match match in DartCtorRegex.Matches(preparedLine))
+        var hasDartCtorMarker = hasDartParen
+            && hasDartUppercaseTypeMarker
+            && (preparedLine.IndexOf("new", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("const", StringComparison.Ordinal) >= 0);
+        if (hasDartCtorMarker)
         {
-            var group = match.Groups["name"];
-            ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "instantiate", context, lineNumber, resolveContainerForColumn(group.Index));
+            foreach (Match match in DartCtorRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["name"];
+                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "instantiate", context, lineNumber, resolveContainerForColumn(group.Index));
+            }
         }
     }
 
@@ -1783,96 +2142,151 @@ internal static partial class LanguageReferenceExtractionSupport
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        foreach (Match match in VbTypeKeywordRegex.Matches(preparedLine))
+        var hasVbTypeKeywordMarker = preparedLine.IndexOf("As", StringComparison.OrdinalIgnoreCase) >= 0
+            || preparedLine.IndexOf("New", StringComparison.OrdinalIgnoreCase) >= 0
+            || preparedLine.IndexOf("Inherits", StringComparison.OrdinalIgnoreCase) >= 0
+            || preparedLine.IndexOf("Implements", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (hasVbTypeKeywordMarker)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "vb");
-        }
-
-        foreach (Match match in VbGenericArgumentListRegex.Matches(preparedLine))
-        {
-            if (VbGenericDeclarationOwnerRegex.IsMatch(preparedLine[..match.Index]))
+            foreach (Match match in VbTypeKeywordRegex.Matches(preparedLine))
             {
-                var constraintGroup = match.Groups["list"];
-                EmitVbGenericConstraintReferences(constraintGroup.Value, constraintGroup.Index, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-                continue;
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "vb");
             }
-
-            var group = match.Groups["list"];
-            EmitCommaSeparatedNames(group.Value, group.Index, "vb", references, seen, fileId, context, lineNumber, resolveContainerForColumn(group.Index));
         }
 
-        foreach (Match match in VbNewTypeRegex.Matches(preparedLine))
+        var hasVbGenericArgumentListMarker = preparedLine.Contains('(')
+            && preparedLine.IndexOf("Of", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (hasVbGenericArgumentListMarker)
         {
-            var group = match.Groups["type"];
-            var rawName = LastQualifiedSegment(group.Value);
-            var name = NormalizeVbIdentifierSegment(rawName);
-            if (string.Equals(name, "With", StringComparison.OrdinalIgnoreCase))
-                continue;
+            foreach (Match match in VbGenericArgumentListRegex.Matches(preparedLine))
+            {
+                if (VbGenericDeclarationOwnerRegex.IsMatch(preparedLine[..match.Index]))
+                {
+                    var constraintGroup = match.Groups["list"];
+                    EmitVbGenericConstraintReferences(constraintGroup.Value, constraintGroup.Index, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+                    continue;
+                }
 
-            var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
-            var nameIndex = group.Index + Math.Max(0, nameOffset);
-            ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "instantiate", context, lineNumber, resolveContainerForColumn(nameIndex));
+                var group = match.Groups["list"];
+                EmitCommaSeparatedNames(group.Value, group.Index, "vb", references, seen, fileId, context, lineNumber, resolveContainerForColumn(group.Index));
+            }
         }
 
-        foreach (Match match in VbImplementsListRegex.Matches(preparedLine))
+        var hasVbNewMarker = preparedLine.IndexOf("New", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (hasVbNewMarker)
         {
-            var group = match.Groups["list"];
-            EmitCommaSeparatedNames(group.Value, group.Index, "vb", references, seen, fileId, context, lineNumber, resolveContainerForColumn(group.Index));
-            if (IsVisualBasicMemberImplementsClause(preparedLine, match.Index))
-                EmitVisualBasicImplementsOwnerReferences(group.Value, group.Index, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+            foreach (Match match in VbNewTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                var rawName = LastQualifiedSegment(group.Value);
+                var name = NormalizeVbIdentifierSegment(rawName);
+                if (string.Equals(name, "With", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
+                var nameIndex = group.Index + Math.Max(0, nameOffset);
+                ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "instantiate", context, lineNumber, resolveContainerForColumn(nameIndex));
+            }
         }
 
-        var importsMatch = VbImportsListRegex.Match(preparedLine);
-        if (importsMatch.Success)
+        var hasVbImplementsMarker = preparedLine.IndexOf("Implements", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (hasVbImplementsMarker)
         {
-            var group = importsMatch.Groups["list"];
-            EmitCommaSeparatedNames(group.Value, group.Index, "vb", references, seen, fileId, context, lineNumber, resolveContainerForColumn(group.Index));
+            foreach (Match match in VbImplementsListRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["list"];
+                EmitCommaSeparatedNames(group.Value, group.Index, "vb", references, seen, fileId, context, lineNumber, resolveContainerForColumn(group.Index));
+                if (IsVisualBasicMemberImplementsClause(preparedLine, match.Index))
+                    EmitVisualBasicImplementsOwnerReferences(group.Value, group.Index, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+            }
         }
 
-        foreach (Match match in VbCastTypeRegex.Matches(preparedLine))
+        var hasVbImportsMarker = preparedLine.IndexOf("Imports", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (hasVbImportsMarker)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "vb");
+            var importsMatch = VbImportsListRegex.Match(preparedLine);
+            if (importsMatch.Success)
+            {
+                var group = importsMatch.Groups["list"];
+                EmitCommaSeparatedNames(group.Value, group.Index, "vb", references, seen, fileId, context, lineNumber, resolveContainerForColumn(group.Index));
+            }
         }
 
-        foreach (Match match in VbGetTypeRegex.Matches(preparedLine))
+        var hasVbCastTypeMarker = preparedLine.Contains('(')
+            && preparedLine.Contains(',')
+            && (preparedLine.IndexOf("Cast", StringComparison.OrdinalIgnoreCase) >= 0
+                || preparedLine.IndexOf("CType", StringComparison.OrdinalIgnoreCase) >= 0);
+        if (hasVbCastTypeMarker)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "vb");
+            foreach (Match match in VbCastTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "vb");
+            }
         }
 
-        foreach (Match match in VbTypeOfRegex.Matches(preparedLine))
+        var hasVbGetTypeMarker = preparedLine.Contains('(')
+            && preparedLine.IndexOf("GetType", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (hasVbGetTypeMarker)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "vb");
+            foreach (Match match in VbGetTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "vb");
+            }
         }
 
-        foreach (Match match in VbNameOfRegex.Matches(preparedLine))
+        var hasVbTypeOfMarker = preparedLine.IndexOf("TypeOf", StringComparison.OrdinalIgnoreCase) >= 0
+            && preparedLine.IndexOf("Is", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (hasVbTypeOfMarker)
         {
-            var group = match.Groups["name"];
-            var rawName = LastQualifiedSegment(group.Value);
-            var name = NormalizeVbIdentifierSegment(rawName);
-            var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
-            var rawNameIndex = group.Index + Math.Max(0, nameOffset);
-            var nameIndex = rawName.StartsWith('[') ? rawNameIndex + 1 : rawNameIndex;
-            ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "type_reference", context, lineNumber, resolveContainerForColumn(nameIndex));
+            foreach (Match match in VbTypeOfRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "vb");
+            }
         }
 
-        foreach (Match match in VbGetXmlNamespaceRegex.Matches(preparedLine))
+        var hasVbNameOfMarker = preparedLine.Contains('(')
+            && preparedLine.IndexOf("NameOf", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (hasVbNameOfMarker)
         {
-            var group = match.Groups["name"];
-            ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "type_reference", context, lineNumber, resolveContainerForColumn(group.Index));
+            foreach (Match match in VbNameOfRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["name"];
+                var rawName = LastQualifiedSegment(group.Value);
+                var name = NormalizeVbIdentifierSegment(rawName);
+                var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
+                var rawNameIndex = group.Index + Math.Max(0, nameOffset);
+                var nameIndex = rawName.StartsWith('[') ? rawNameIndex + 1 : rawNameIndex;
+                ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "type_reference", context, lineNumber, resolveContainerForColumn(nameIndex));
+            }
         }
 
-        foreach (Match match in VbAddressOfRegex.Matches(preparedLine))
+        var hasVbGetXmlNamespaceMarker = preparedLine.Contains('(')
+            && preparedLine.IndexOf("GetXmlNamespace", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (hasVbGetXmlNamespaceMarker)
         {
-            var group = match.Groups["name"];
-            var rawName = LastQualifiedSegment(group.Value);
-            var name = NormalizeVbIdentifierSegment(rawName);
-            var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
-            var nameIndex = group.Index + Math.Max(0, nameOffset);
-            ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "call", context, lineNumber, resolveContainerForColumn(nameIndex));
+            foreach (Match match in VbGetXmlNamespaceRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["name"];
+                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "type_reference", context, lineNumber, resolveContainerForColumn(group.Index));
+            }
+        }
+
+        var hasVbAddressOfMarker = preparedLine.IndexOf("AddressOf", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (hasVbAddressOfMarker)
+        {
+            foreach (Match match in VbAddressOfRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["name"];
+                var rawName = LastQualifiedSegment(group.Value);
+                var name = NormalizeVbIdentifierSegment(rawName);
+                var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
+                var nameIndex = group.Index + Math.Max(0, nameOffset);
+                ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "call", context, lineNumber, resolveContainerForColumn(nameIndex));
+            }
         }
 
         var handlesIndex = preparedLine.IndexOf("Handles", StringComparison.OrdinalIgnoreCase);
@@ -1890,34 +2304,46 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        foreach (Match match in VbAddHandlerRegex.Matches(preparedLine))
+        var hasVbAddHandlerMarker = preparedLine.IndexOf("AddHandler", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (hasVbAddHandlerMarker)
         {
-            var group = match.Groups["name"];
-            var rawName = LastQualifiedSegment(group.Value);
-            var name = NormalizeVbIdentifierSegment(rawName);
-            var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
-            var nameIndex = group.Index + Math.Max(0, nameOffset);
-            ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "subscribe", context, lineNumber, resolveContainerForColumn(nameIndex));
+            foreach (Match match in VbAddHandlerRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["name"];
+                var rawName = LastQualifiedSegment(group.Value);
+                var name = NormalizeVbIdentifierSegment(rawName);
+                var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
+                var nameIndex = group.Index + Math.Max(0, nameOffset);
+                ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "subscribe", context, lineNumber, resolveContainerForColumn(nameIndex));
+            }
         }
 
-        foreach (Match match in VbRemoveHandlerRegex.Matches(preparedLine))
+        var hasVbRemoveHandlerMarker = preparedLine.IndexOf("RemoveHandler", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (hasVbRemoveHandlerMarker)
         {
-            var group = match.Groups["name"];
-            var rawName = LastQualifiedSegment(group.Value);
-            var name = NormalizeVbIdentifierSegment(rawName);
-            var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
-            var nameIndex = group.Index + Math.Max(0, nameOffset);
-            ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "unsubscribe", context, lineNumber, resolveContainerForColumn(nameIndex));
+            foreach (Match match in VbRemoveHandlerRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["name"];
+                var rawName = LastQualifiedSegment(group.Value);
+                var name = NormalizeVbIdentifierSegment(rawName);
+                var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
+                var nameIndex = group.Index + Math.Max(0, nameOffset);
+                ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "unsubscribe", context, lineNumber, resolveContainerForColumn(nameIndex));
+            }
         }
 
-        foreach (Match match in VbRaiseEventRegex.Matches(preparedLine))
+        var hasVbRaiseEventMarker = preparedLine.IndexOf("RaiseEvent", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (hasVbRaiseEventMarker)
         {
-            var group = match.Groups["name"];
-            var rawName = LastQualifiedSegment(group.Value);
-            var name = NormalizeVbIdentifierSegment(rawName);
-            var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
-            var nameIndex = group.Index + Math.Max(0, nameOffset);
-            ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "call", context, lineNumber, resolveContainerForColumn(nameIndex));
+            foreach (Match match in VbRaiseEventRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["name"];
+                var rawName = LastQualifiedSegment(group.Value);
+                var name = NormalizeVbIdentifierSegment(rawName);
+                var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
+                var nameIndex = group.Index + Math.Max(0, nameOffset);
+                ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "call", context, lineNumber, resolveContainerForColumn(nameIndex));
+            }
         }
     }
 
@@ -1931,6 +2357,9 @@ internal static partial class LanguageReferenceExtractionSupport
         Func<int, SymbolRecord?> resolveContainerForColumn,
         IReadOnlySet<string>? definitionNames)
     {
+        if (!preparedLine.Contains('(') || !preparedLine.Contains('['))
+            return;
+
         foreach (Match match in VbCallRegex.Matches(preparedLine))
         {
             var group = match.Groups["name"];
@@ -1959,6 +2388,10 @@ internal static partial class LanguageReferenceExtractionSupport
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        var firstNonWhitespace = FirstNonWhitespaceIndex(preparedLine);
+        if (firstNonWhitespace < 0 || !CanStartVisualBasicIdentifierPattern(preparedLine[firstNonWhitespace]))
+            return;
+
         var match = VbBareCallRegex.Match(preparedLine);
         if (!match.Success)
             return;
@@ -1989,6 +2422,12 @@ internal static partial class LanguageReferenceExtractionSupport
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (!originalLine.Contains('(')
+            || !originalLine.Contains(',')
+            || !originalLine.Contains('"')
+            || originalLine.IndexOf("CallByName", StringComparison.OrdinalIgnoreCase) < 0)
+            return;
+
         foreach (Match match in VbCallByNameRegex.Matches(originalLine))
         {
             if (match.Index >= preparedLine.Length || char.IsWhiteSpace(preparedLine[match.Index]))
@@ -2016,6 +2455,101 @@ internal static partial class LanguageReferenceExtractionSupport
 
         return true;
     }
+
+    private static int FirstNonWhitespaceIndex(string value)
+    {
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (!char.IsWhiteSpace(value[i]))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static bool StartsWithKeywordIgnoringLeadingWhitespace(string value, string keyword)
+    {
+        var start = FirstNonWhitespaceIndex(value);
+        if (start < 0 || value.Length - start < keyword.Length)
+            return false;
+
+        if (!value.AsSpan(start, keyword.Length).Equals(keyword, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var boundary = start + keyword.Length;
+        return boundary >= value.Length || !IsSimpleIdentifierPart(value[boundary]);
+    }
+
+    private static bool StartsWithOrdinalKeywordIgnoringLeadingWhitespace(string value, string keyword)
+    {
+        var start = FirstNonWhitespaceIndex(value);
+        if (start < 0 || value.Length - start < keyword.Length)
+            return false;
+
+        if (!value.AsSpan(start, keyword.Length).Equals(keyword, StringComparison.Ordinal))
+            return false;
+
+        var boundary = start + keyword.Length;
+        return boundary >= value.Length || !IsSimpleIdentifierPart(value[boundary]);
+    }
+
+    private static bool StartsWithCharIgnoringLeadingWhitespace(string value, char marker)
+    {
+        var start = FirstNonWhitespaceIndex(value);
+        return start >= 0 && value[start] == marker;
+    }
+
+    private static bool ContainsKeywordIgnoringCase(string value, string keyword)
+    {
+        var searchStart = 0;
+        while (searchStart < value.Length)
+        {
+            var matchIndex = value.IndexOf(keyword, searchStart, StringComparison.OrdinalIgnoreCase);
+            if (matchIndex < 0)
+                return false;
+
+            var beforeBoundary = matchIndex == 0 || !IsSimpleIdentifierPart(value[matchIndex - 1]);
+            var afterIndex = matchIndex + keyword.Length;
+            if (beforeBoundary && (afterIndex >= value.Length || !IsSimpleIdentifierPart(value[afterIndex])))
+                return true;
+
+            searchStart = matchIndex + 1;
+        }
+
+        return false;
+    }
+
+    private static bool ContainsOrdinalKeyword(string value, string keyword)
+    {
+        var searchStart = 0;
+        while (searchStart < value.Length)
+        {
+            var matchIndex = value.IndexOf(keyword, searchStart, StringComparison.Ordinal);
+            if (matchIndex < 0)
+                return false;
+
+            var beforeBoundary = matchIndex == 0 || !IsSimpleIdentifierPart(value[matchIndex - 1]);
+            var afterIndex = matchIndex + keyword.Length;
+            if (beforeBoundary && (afterIndex >= value.Length || !IsSimpleIdentifierPart(value[afterIndex])))
+                return true;
+
+            searchStart = matchIndex + 1;
+        }
+
+        return false;
+    }
+
+    private static bool CanStartVisualBasicIdentifierPattern(char value) =>
+        value == '['
+        || CanStartAsciiIdentifierPattern(value);
+
+    private static bool CanStartFortranIdentifierPattern(char value) =>
+        CanStartAsciiIdentifierPattern(value);
+
+    private static bool CanStartAsciiIdentifierPattern(char value) =>
+        value == '_'
+        || value is >= 'A' and <= 'Z'
+        || value is >= 'a' and <= 'z';
 
     private static bool ShouldSkipVisualBasicBareCall(string rawName, string tail)
     {
@@ -2066,6 +2600,10 @@ internal static partial class LanguageReferenceExtractionSupport
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        var firstNonWhitespace = FirstNonWhitespaceIndex(preparedLine);
+        if (firstNonWhitespace < 0 || preparedLine[firstNonWhitespace] != '.')
+            return;
+
         var match = VbBareMemberCallRegex.Match(preparedLine);
         if (!match.Success)
             return;
@@ -2200,65 +2738,90 @@ internal static partial class LanguageReferenceExtractionSupport
         Func<int, SymbolRecord?> resolveContainerForColumn,
         SymbolRecord? container)
     {
-        foreach (Match match in FortranUseRegex.Matches(preparedLine))
-            ReferenceExtractor.AddReference(references, seen, fileId, match, "type_reference", context, lineNumber, container);
-
-        var useOnlyMatch = FortranUseOnlyRegex.Match(preparedLine);
-        if (useOnlyMatch.Success)
+        var hasFortranUseMarker = StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "use");
+        if (hasFortranUseMarker)
         {
-            EmitCommaSeparatedNames(useOnlyMatch.Groups["list"].Value, useOnlyMatch.Groups["list"].Index, "fortran", references, seen, fileId, context, lineNumber, container);
+            foreach (Match match in FortranUseRegex.Matches(preparedLine))
+                ReferenceExtractor.AddReference(references, seen, fileId, match, "type_reference", context, lineNumber, container);
 
-            var list = useOnlyMatch.Groups["list"];
-            foreach (Match match in FortranUseAliasRegex.Matches(list.Value))
+            var useOnlyMatch = FortranUseOnlyRegex.Match(preparedLine);
+            if (useOnlyMatch.Success)
             {
-                var group = match.Groups["alias"];
-                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "type_reference", context, lineNumber, container);
+                EmitCommaSeparatedNames(useOnlyMatch.Groups["list"].Value, useOnlyMatch.Groups["list"].Index, "fortran", references, seen, fileId, context, lineNumber, container);
+
+                var list = useOnlyMatch.Groups["list"];
+                foreach (Match match in FortranUseAliasRegex.Matches(list.Value))
+                {
+                    var group = match.Groups["alias"];
+                    ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "type_reference", context, lineNumber, container);
+                }
+
+                foreach (Match match in FortranUseAliasTargetRegex.Matches(list.Value))
+                {
+                    var group = match.Groups["target"];
+                    ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "type_reference", context, lineNumber, container);
+                }
             }
 
-            foreach (Match match in FortranUseAliasTargetRegex.Matches(list.Value))
+            var useRenameMatch = FortranUseRenameListRegex.Match(preparedLine);
+            if (useRenameMatch.Success)
             {
-                var group = match.Groups["target"];
-                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "type_reference", context, lineNumber, container);
+                var list = useRenameMatch.Groups["list"];
+                foreach (Match match in FortranUseAliasRegex.Matches(list.Value))
+                {
+                    var group = match.Groups["alias"];
+                    ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "type_reference", context, lineNumber, container);
+                }
+
+                foreach (Match match in FortranUseAliasTargetRegex.Matches(list.Value))
+                {
+                    var group = match.Groups["target"];
+                    ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "type_reference", context, lineNumber, container);
+                }
             }
         }
 
-        var useRenameMatch = FortranUseRenameListRegex.Match(preparedLine);
-        if (useRenameMatch.Success)
+        if (StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "import"))
         {
-            var list = useRenameMatch.Groups["list"];
-            foreach (Match match in FortranUseAliasRegex.Matches(list.Value))
-            {
-                var group = match.Groups["alias"];
-                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "type_reference", context, lineNumber, container);
-            }
-
-            foreach (Match match in FortranUseAliasTargetRegex.Matches(list.Value))
-            {
-                var group = match.Groups["target"];
-                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "type_reference", context, lineNumber, container);
-            }
+            var importMatch = FortranImportRegex.Match(preparedLine);
+            if (importMatch.Success)
+                EmitCommaSeparatedNames(importMatch.Groups["list"].Value, importMatch.Groups["list"].Index, "fortran", references, seen, fileId, context, lineNumber, container);
         }
 
-        var importMatch = FortranImportRegex.Match(preparedLine);
-        if (importMatch.Success)
-            EmitCommaSeparatedNames(importMatch.Groups["list"].Value, importMatch.Groups["list"].Index, "fortran", references, seen, fileId, context, lineNumber, container);
-
-        foreach (Match match in FortranIncludeRegex.Matches(originalLine))
-            ReferenceExtractor.AddReference(references, seen, fileId, match, "reference", context, lineNumber, container);
-
-        var isFortranCommonLine = FortranCommonLineRegex.IsMatch(preparedLine);
-        var isFortranNamelistLine = FortranNamelistLineRegex.IsMatch(preparedLine);
-        if (isFortranCommonLine || isFortranNamelistLine)
+        if (StartsWithKeywordIgnoringLeadingWhitespace(originalLine, "include")
+            && (originalLine.IndexOf('\'') >= 0 || originalLine.IndexOf('"') >= 0))
         {
-            foreach (Match match in FortranSlashGroupNameRegex.Matches(preparedLine))
+            foreach (Match match in FortranIncludeRegex.Matches(originalLine))
                 ReferenceExtractor.AddReference(references, seen, fileId, match, "reference", context, lineNumber, container);
         }
 
+        var isFortranCommonLine = StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "common");
+        var isFortranNamelistLine = StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "namelist");
         if (isFortranCommonLine || isFortranNamelistLine)
         {
-            foreach (Match memberListMatch in FortranSlashGroupMemberListRegex.Matches(preparedLine))
+            if (preparedLine.IndexOf('/') >= 0)
             {
-                var list = memberListMatch.Groups["list"];
+                foreach (Match match in FortranSlashGroupNameRegex.Matches(preparedLine))
+                    ReferenceExtractor.AddReference(references, seen, fileId, match, "reference", context, lineNumber, container);
+
+                foreach (Match memberListMatch in FortranSlashGroupMemberListRegex.Matches(preparedLine))
+                {
+                    var list = memberListMatch.Groups["list"];
+                    foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+                    {
+                        var group = match.Groups["name"];
+                        ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+                    }
+                }
+            }
+        }
+
+        if (isFortranCommonLine && preparedLine.IndexOf('/') < 0)
+        {
+            var blankCommonMemberListMatch = FortranBlankCommonMemberListRegex.Match(preparedLine);
+            if (blankCommonMemberListMatch.Success)
+            {
+                var list = blankCommonMemberListMatch.Groups["list"];
                 foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
                 {
                     var group = match.Groups["name"];
@@ -2267,18 +2830,8 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        var blankCommonMemberListMatch = FortranBlankCommonMemberListRegex.Match(preparedLine);
-        if (blankCommonMemberListMatch.Success)
-        {
-            var list = blankCommonMemberListMatch.Groups["list"];
-            foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
-            {
-                var group = match.Groups["name"];
-                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
-            }
-        }
-
-        if (FortranEquivalenceLineRegex.IsMatch(preparedLine))
+        if (StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "equivalence")
+            && preparedLine.IndexOf('(') >= 0)
         {
             foreach (Match listMatch in FortranParenthesizedNameListRegex.Matches(preparedLine))
             {
@@ -2291,237 +2844,339 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        var dataLineMatch = FortranDataLineRegex.Match(preparedLine);
-        if (dataLineMatch.Success)
+        if (StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "data"))
         {
-            var tail = dataLineMatch.Groups["tail"];
-            foreach (Match groupMatch in FortranDataObjectGroupRegex.Matches(tail.Value))
+            var dataLineMatch = FortranDataLineRegex.Match(preparedLine);
+            if (dataLineMatch.Success)
             {
-                var list = groupMatch.Groups["list"];
+                var tail = dataLineMatch.Groups["tail"];
+                if (tail.Value.IndexOf('/') >= 0)
+                {
+                    foreach (Match groupMatch in FortranDataObjectGroupRegex.Matches(tail.Value))
+                    {
+                        var list = groupMatch.Groups["list"];
+                        foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+                        {
+                            var group = match.Groups["name"];
+                            ReferenceExtractor.AddReference(references, seen, fileId, group.Value, tail.Index + list.Index + group.Index, "reference", context, lineNumber, container);
+                        }
+                    }
+                }
+            }
+        }
+
+        if (StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "save"))
+        {
+            var saveMatch = FortranSaveRegex.Match(preparedLine);
+            if (saveMatch.Success)
+            {
+                var list = saveMatch.Groups["list"];
+                if (list.Value.IndexOf('/') >= 0)
+                {
+                    foreach (Match match in FortranSlashGroupNameRegex.Matches(list.Value))
+                        ReferenceExtractor.AddReference(references, seen, fileId, match.Groups["name"].Value, list.Index + match.Groups["name"].Index, "reference", context, lineNumber, container);
+                }
+
                 foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
                 {
                     var group = match.Groups["name"];
-                    ReferenceExtractor.AddReference(references, seen, fileId, group.Value, tail.Index + list.Index + group.Index, "reference", context, lineNumber, container);
+                    ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
                 }
             }
         }
 
-        var saveMatch = FortranSaveRegex.Match(preparedLine);
-        if (saveMatch.Success)
+        if (StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "submodule")
+            && preparedLine.IndexOf('(') >= 0)
         {
-            var list = saveMatch.Groups["list"];
-            foreach (Match match in FortranSlashGroupNameRegex.Matches(list.Value))
-                ReferenceExtractor.AddReference(references, seen, fileId, match.Groups["name"].Value, list.Index + match.Groups["name"].Index, "reference", context, lineNumber, container);
-
-            foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+            var submoduleMatch = FortranSubmoduleParentRegex.Match(preparedLine);
+            if (submoduleMatch.Success)
             {
-                var group = match.Groups["name"];
-                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+                var parent = submoduleMatch.Groups["parent"];
+                ReferenceExtractor.AddReference(references, seen, fileId, parent.Value, parent.Index, "type_reference", context, lineNumber, container);
+
+                var ancestor = submoduleMatch.Groups["ancestor"];
+                if (ancestor.Success)
+                    ReferenceExtractor.AddReference(references, seen, fileId, ancestor.Value, ancestor.Index, "type_reference", context, lineNumber, container);
             }
         }
 
-        var submoduleMatch = FortranSubmoduleParentRegex.Match(preparedLine);
-        if (submoduleMatch.Success)
+        if (StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "external"))
         {
-            var parent = submoduleMatch.Groups["parent"];
-            ReferenceExtractor.AddReference(references, seen, fileId, parent.Value, parent.Index, "type_reference", context, lineNumber, container);
-
-            var ancestor = submoduleMatch.Groups["ancestor"];
-            if (ancestor.Success)
-                ReferenceExtractor.AddReference(references, seen, fileId, ancestor.Value, ancestor.Index, "type_reference", context, lineNumber, container);
-        }
-
-        var externalMatch = FortranExternalRegex.Match(preparedLine);
-        if (externalMatch.Success)
-        {
-            var list = externalMatch.Groups["list"];
-            foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+            var externalMatch = FortranExternalRegex.Match(preparedLine);
+            if (externalMatch.Success)
             {
-                var group = match.Groups["name"];
-                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
-            }
-        }
-
-        var intrinsicProcedureMatch = FortranIntrinsicProcedureRegex.Match(preparedLine);
-        if (intrinsicProcedureMatch.Success)
-        {
-            var list = intrinsicProcedureMatch.Groups["list"];
-            foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
-            {
-                var group = match.Groups["name"];
-                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
-            }
-        }
-
-        var accessListMatch = FortranAccessListRegex.Match(preparedLine);
-        if (accessListMatch.Success)
-        {
-            var list = accessListMatch.Groups["list"];
-            foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
-            {
-                var group = match.Groups["name"];
-                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
-            }
-        }
-
-        var finalizerMatch = FortranFinalizerRegex.Match(preparedLine);
-        if (finalizerMatch.Success)
-        {
-            var list = finalizerMatch.Groups["list"];
-            foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
-            {
-                var group = match.Groups["name"];
-                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
-            }
-        }
-
-        if (FortranProcedureBindingLineRegex.IsMatch(preparedLine))
-        {
-            var targetListMatch = FortranBindingTargetListRegex.Match(preparedLine);
-            if (targetListMatch.Success)
-            {
-                foreach (Match match in FortranBindingTargetRegex.Matches(targetListMatch.Value))
+                var list = externalMatch.Groups["list"];
+                foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
                 {
                     var group = match.Groups["name"];
-                    ReferenceExtractor.AddReference(references, seen, fileId, group.Value, targetListMatch.Index + group.Index, "reference", context, lineNumber, container);
+                    ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
                 }
             }
         }
 
-        var pointerAssignmentMatch = FortranPointerAssignmentRegex.Match(preparedLine);
-        if (pointerAssignmentMatch.Success)
+        if (StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "intrinsic"))
         {
-            var group = pointerAssignmentMatch.Groups["name"];
-            if (!group.Value.Equals("null", StringComparison.OrdinalIgnoreCase))
-                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "reference", context, lineNumber, container);
-        }
-
-        var associateMatch = FortranAssociateLineRegex.Match(preparedLine);
-        if (associateMatch.Success)
-        {
-            var list = associateMatch.Groups["list"];
-            foreach (Match match in FortranAssociateTargetRegex.Matches(list.Value))
+            var intrinsicProcedureMatch = FortranIntrinsicProcedureRegex.Match(preparedLine);
+            if (intrinsicProcedureMatch.Success)
             {
-                var group = match.Groups["name"];
-                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+                var list = intrinsicProcedureMatch.Groups["list"];
+                foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+                {
+                    var group = match.Groups["name"];
+                    ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+                }
             }
         }
 
-        foreach (Match match in FortranTypeRegex.Matches(preparedLine))
+        if (StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "public")
+            || StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "private"))
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "fortran");
-        }
-
-        foreach (Match match in FortranTypeGuardRegex.Matches(preparedLine))
-        {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "fortran");
-        }
-
-        foreach (Match match in FortranExtendsRegex.Matches(preparedLine))
-        {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "fortran");
-        }
-
-        foreach (Match match in FortranProcedureTypeRegex.Matches(preparedLine))
-        {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "fortran");
-        }
-
-        foreach (Match match in FortranAllocateTypeSpecRegex.Matches(preparedLine))
-        {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "fortran");
-        }
-
-        var allocateListMatch = FortranAllocateListRegex.Match(preparedLine);
-        if (allocateListMatch.Success)
-        {
-            var list = allocateListMatch.Groups["list"];
-            var objectList = list.Value;
-            var objectListStart = list.Index;
-            var typeSpecEnd = objectList.IndexOf("::", StringComparison.Ordinal);
-            if (typeSpecEnd >= 0)
+            var accessListMatch = FortranAccessListRegex.Match(preparedLine);
+            if (accessListMatch.Success)
             {
-                objectListStart += typeSpecEnd + 2;
-                objectList = objectList[(typeSpecEnd + 2)..];
-            }
-
-            foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(objectList))
-            {
-                var segment = objectList.Substring(segmentStart, segmentLength);
-                if (segment.Contains('=', StringComparison.Ordinal))
-                    continue;
-
-                var leading = 0;
-                while (leading < segment.Length && char.IsWhiteSpace(segment[leading]))
-                    leading++;
-                if (leading >= segment.Length || !IsIdentifierStart(segment[leading]))
-                    continue;
-
-                var end = leading + 1;
-                while (end < segment.Length && IsSimpleIdentifierPart(segment[end]))
-                    end++;
-
-                ReferenceExtractor.AddReference(references, seen, fileId, segment[leading..end], objectListStart + segmentStart + leading, "reference", context, lineNumber, container);
-            }
-
-            foreach (Match match in FortranAllocateSourceKeywordRegex.Matches(list.Value))
-            {
-                var group = match.Groups["name"];
-                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
-            }
-
-            foreach (Match match in FortranAllocationStatusKeywordRegex.Matches(list.Value))
-            {
-                var group = match.Groups["name"];
-                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+                var list = accessListMatch.Groups["list"];
+                foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+                {
+                    var group = match.Groups["name"];
+                    ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+                }
             }
         }
 
-        var deallocateListMatch = FortranDeallocateListRegex.Match(preparedLine);
-        if (deallocateListMatch.Success)
+        if (StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "final"))
         {
-            var list = deallocateListMatch.Groups["list"];
-            foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(list.Value))
+            var finalizerMatch = FortranFinalizerRegex.Match(preparedLine);
+            if (finalizerMatch.Success)
             {
-                var segment = list.Value.Substring(segmentStart, segmentLength);
-                if (segment.Contains('=', StringComparison.Ordinal))
-                    continue;
-
-                var leading = 0;
-                while (leading < segment.Length && char.IsWhiteSpace(segment[leading]))
-                    leading++;
-                if (leading >= segment.Length || !IsIdentifierStart(segment[leading]))
-                    continue;
-
-                var end = leading + 1;
-                while (end < segment.Length && IsSimpleIdentifierPart(segment[end]))
-                    end++;
-
-                ReferenceExtractor.AddReference(references, seen, fileId, segment[leading..end], list.Index + segmentStart + leading, "reference", context, lineNumber, container);
-            }
-
-            foreach (Match match in FortranAllocationStatusKeywordRegex.Matches(list.Value))
-            {
-                var group = match.Groups["name"];
-                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+                var list = finalizerMatch.Groups["list"];
+                foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+                {
+                    var group = match.Groups["name"];
+                    ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+                }
             }
         }
 
-        foreach (Match match in FortranIntrinsicKeywordKindRegex.Matches(preparedLine))
+        if (StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "procedure")
+            || StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "generic"))
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "fortran");
+            if (preparedLine.IndexOf("=>", StringComparison.Ordinal) >= 0)
+            {
+                var targetListMatch = FortranBindingTargetListRegex.Match(preparedLine);
+                if (targetListMatch.Success)
+                {
+                    foreach (Match match in FortranBindingTargetRegex.Matches(targetListMatch.Value))
+                    {
+                        var group = match.Groups["name"];
+                        ReferenceExtractor.AddReference(references, seen, fileId, group.Value, targetListMatch.Index + group.Index, "reference", context, lineNumber, container);
+                    }
+                }
+            }
         }
 
-        foreach (Match match in FortranIntrinsicPositionalKindRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("=>", StringComparison.Ordinal) >= 0)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "fortran");
+            var firstNonWhitespace = FirstNonWhitespaceIndex(preparedLine);
+            if (firstNonWhitespace >= 0 && CanStartFortranIdentifierPattern(preparedLine[firstNonWhitespace]))
+            {
+                var pointerAssignmentMatch = FortranPointerAssignmentRegex.Match(preparedLine);
+                if (pointerAssignmentMatch.Success)
+                {
+                    var group = pointerAssignmentMatch.Groups["name"];
+                    if (!group.Value.Equals("null", StringComparison.OrdinalIgnoreCase))
+                        ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "reference", context, lineNumber, container);
+                }
+            }
+        }
+
+        if (StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "associate")
+            && preparedLine.IndexOf("=>", StringComparison.Ordinal) >= 0)
+        {
+            var associateMatch = FortranAssociateLineRegex.Match(preparedLine);
+            if (associateMatch.Success)
+            {
+                var list = associateMatch.Groups["list"];
+                foreach (Match match in FortranAssociateTargetRegex.Matches(list.Value))
+                {
+                    var group = match.Groups["name"];
+                    ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+                }
+            }
+        }
+
+        var hasFortranParen = preparedLine.IndexOf('(') >= 0;
+        var hasFortranTypeOrClassMarker = preparedLine.IndexOf("type", StringComparison.OrdinalIgnoreCase) >= 0
+            || preparedLine.IndexOf("class", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (hasFortranParen && hasFortranTypeOrClassMarker)
+        {
+            foreach (Match match in FortranTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "fortran");
+            }
+
+            if (preparedLine.IndexOf("is", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                foreach (Match match in FortranTypeGuardRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "fortran");
+                }
+            }
+        }
+
+        if (hasFortranParen && preparedLine.IndexOf("extends", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            foreach (Match match in FortranExtendsRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "fortran");
+            }
+        }
+
+        if (hasFortranParen && preparedLine.IndexOf("procedure", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            foreach (Match match in FortranProcedureTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "fortran");
+            }
+        }
+
+        var hasFortranAllocateMarker = hasFortranParen
+            && StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "allocate");
+        if (hasFortranAllocateMarker && preparedLine.IndexOf("::", StringComparison.Ordinal) >= 0)
+        {
+            foreach (Match match in FortranAllocateTypeSpecRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "fortran");
+            }
+        }
+
+        if (hasFortranAllocateMarker)
+        {
+            var allocateListMatch = FortranAllocateListRegex.Match(preparedLine);
+            if (allocateListMatch.Success)
+            {
+                var list = allocateListMatch.Groups["list"];
+                var objectList = list.Value;
+                var objectListStart = list.Index;
+                var typeSpecEnd = objectList.IndexOf("::", StringComparison.Ordinal);
+                if (typeSpecEnd >= 0)
+                {
+                    objectListStart += typeSpecEnd + 2;
+                    objectList = objectList[(typeSpecEnd + 2)..];
+                }
+
+                foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(objectList))
+                {
+                    var segment = objectList.Substring(segmentStart, segmentLength);
+                    if (segment.Contains('=', StringComparison.Ordinal))
+                        continue;
+
+                    var leading = 0;
+                    while (leading < segment.Length && char.IsWhiteSpace(segment[leading]))
+                        leading++;
+                    if (leading >= segment.Length || !IsIdentifierStart(segment[leading]))
+                        continue;
+
+                    var end = leading + 1;
+                    while (end < segment.Length && IsSimpleIdentifierPart(segment[end]))
+                        end++;
+
+                    ReferenceExtractor.AddReference(references, seen, fileId, segment[leading..end], objectListStart + segmentStart + leading, "reference", context, lineNumber, container);
+                }
+
+                if (list.Value.IndexOf('=') >= 0)
+                {
+                    if (list.Value.IndexOf("source", StringComparison.OrdinalIgnoreCase) >= 0
+                        || list.Value.IndexOf("mold", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        foreach (Match match in FortranAllocateSourceKeywordRegex.Matches(list.Value))
+                        {
+                            var group = match.Groups["name"];
+                            ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+                        }
+                    }
+
+                    if (list.Value.IndexOf("stat", StringComparison.OrdinalIgnoreCase) >= 0
+                        || list.Value.IndexOf("errmsg", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        foreach (Match match in FortranAllocationStatusKeywordRegex.Matches(list.Value))
+                        {
+                            var group = match.Groups["name"];
+                            ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+                        }
+                    }
+                }
+            }
+        }
+
+        if (hasFortranParen && StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "deallocate"))
+        {
+            var deallocateListMatch = FortranDeallocateListRegex.Match(preparedLine);
+            if (deallocateListMatch.Success)
+            {
+                var list = deallocateListMatch.Groups["list"];
+                foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(list.Value))
+                {
+                    var segment = list.Value.Substring(segmentStart, segmentLength);
+                    if (segment.Contains('=', StringComparison.Ordinal))
+                        continue;
+
+                    var leading = 0;
+                    while (leading < segment.Length && char.IsWhiteSpace(segment[leading]))
+                        leading++;
+                    if (leading >= segment.Length || !IsIdentifierStart(segment[leading]))
+                        continue;
+
+                    var end = leading + 1;
+                    while (end < segment.Length && IsSimpleIdentifierPart(segment[end]))
+                        end++;
+
+                    ReferenceExtractor.AddReference(references, seen, fileId, segment[leading..end], list.Index + segmentStart + leading, "reference", context, lineNumber, container);
+                }
+
+                if (list.Value.IndexOf('=') >= 0)
+                {
+                    if (list.Value.IndexOf("stat", StringComparison.OrdinalIgnoreCase) >= 0
+                        || list.Value.IndexOf("errmsg", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        foreach (Match match in FortranAllocationStatusKeywordRegex.Matches(list.Value))
+                        {
+                            var group = match.Groups["name"];
+                            ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+                        }
+                    }
+                }
+            }
+        }
+
+        var hasFortranIntrinsicKindMarker = hasFortranParen
+            && (preparedLine.IndexOf("integer", StringComparison.OrdinalIgnoreCase) >= 0
+                || preparedLine.IndexOf("real", StringComparison.OrdinalIgnoreCase) >= 0
+                || preparedLine.IndexOf("complex", StringComparison.OrdinalIgnoreCase) >= 0
+                || preparedLine.IndexOf("logical", StringComparison.OrdinalIgnoreCase) >= 0
+                || preparedLine.IndexOf("character", StringComparison.OrdinalIgnoreCase) >= 0);
+        if (hasFortranIntrinsicKindMarker
+            && preparedLine.IndexOf('=') >= 0
+            && preparedLine.IndexOf("kind", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            foreach (Match match in FortranIntrinsicKeywordKindRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "fortran");
+            }
+        }
+
+        if (hasFortranIntrinsicKindMarker)
+        {
+            foreach (Match match in FortranIntrinsicPositionalKindRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "fortran");
+            }
         }
     }
 
@@ -2535,12 +3190,27 @@ internal static partial class LanguageReferenceExtractionSupport
         Func<int, SymbolRecord?> resolveContainerForColumn,
         SymbolRecord? container)
     {
-        var usesMatch = PascalUsesRegex.Match(preparedLine);
-        if (usesMatch.Success)
-            EmitCommaSeparatedNames(usesMatch.Groups["list"].Value, usesMatch.Groups["list"].Index, "pascal", references, seen, fileId, context, lineNumber, container);
+        if (StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "uses"))
+        {
+            var usesMatch = PascalUsesRegex.Match(preparedLine);
+            if (usesMatch.Success)
+                EmitCommaSeparatedNames(usesMatch.Groups["list"].Value, usesMatch.Groups["list"].Index, "pascal", references, seen, fileId, context, lineNumber, container);
+        }
 
-        foreach (Match match in PascalClassBaseRegex.Matches(preparedLine))
-            EmitCommaSeparatedNames(match.Groups["bases"].Value, match.Groups["bases"].Index, "pascal", references, seen, fileId, context, lineNumber, resolveContainerForColumn(match.Groups["bases"].Index));
+        var hasPascalBaseMarker = preparedLine.IndexOf('=') >= 0
+            && preparedLine.IndexOf('(') >= 0
+            && preparedLine.IndexOf(')') >= 0
+            && (ContainsKeywordIgnoringCase(preparedLine, "class")
+                || ContainsKeywordIgnoringCase(preparedLine, "interface")
+                || ContainsKeywordIgnoringCase(preparedLine, "object"));
+        if (hasPascalBaseMarker)
+        {
+            foreach (Match match in PascalClassBaseRegex.Matches(preparedLine))
+                EmitCommaSeparatedNames(match.Groups["bases"].Value, match.Groups["bases"].Index, "pascal", references, seen, fileId, context, lineNumber, resolveContainerForColumn(match.Groups["bases"].Index));
+        }
+
+        if (preparedLine.IndexOf(':') < 0)
+            return;
 
         foreach (Match match in PascalTypeAfterColonRegex.Matches(preparedLine))
         {
@@ -2589,14 +3259,23 @@ internal static partial class LanguageReferenceExtractionSupport
         Func<int, SymbolRecord?> resolveContainerForColumn,
         SymbolRecord? container)
     {
-        foreach (Match match in ObjCInterfaceBaseRegex.Matches(preparedLine))
+        if (StartsWithCharIgnoringLeadingWhitespace(preparedLine, '@') && preparedLine.IndexOf(':') >= 0)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "type_reference", context, lineNumber, container);
+            foreach (Match match in ObjCInterfaceBaseRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "type_reference", context, lineNumber, container);
+            }
         }
 
-        foreach (Match match in ObjCProtocolListRegex.Matches(preparedLine))
-            EmitCommaSeparatedNames(match.Groups["list"].Value, match.Groups["list"].Index, "objc", references, seen, fileId, context, lineNumber, container);
+        if (preparedLine.IndexOf('<') >= 0 && preparedLine.IndexOf('>') >= 0)
+        {
+            foreach (Match match in ObjCProtocolListRegex.Matches(preparedLine))
+                EmitCommaSeparatedNames(match.Groups["list"].Value, match.Groups["list"].Index, "objc", references, seen, fileId, context, lineNumber, container);
+        }
+
+        if (preparedLine.IndexOf('*') < 0)
+            return;
 
         foreach (Match match in ObjCDeclTypeRegex.Matches(preparedLine))
         {
@@ -2614,6 +3293,9 @@ internal static partial class LanguageReferenceExtractionSupport
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("::", StringComparison.Ordinal) < 0)
+            return;
+
         var match = HaskellSignatureRegex.Match(preparedLine);
         if (!match.Success)
             return;
@@ -2665,8 +3347,24 @@ internal static partial class LanguageReferenceExtractionSupport
         int lineNumber,
         SymbolRecord? container)
     {
-        foreach (var match in EnumerateMatches(ElixirImportRegex, preparedLine).Concat(EnumerateMatches(ElixirBehaviourRegex, preparedLine)))
-            ReferenceExtractor.AddReference(references, seen, fileId, match, "type_reference", context, lineNumber, container);
+        var hasImportMarker = StartsWithOrdinalKeywordIgnoringLeadingWhitespace(preparedLine, "alias")
+            || StartsWithOrdinalKeywordIgnoringLeadingWhitespace(preparedLine, "import")
+            || StartsWithOrdinalKeywordIgnoringLeadingWhitespace(preparedLine, "require")
+            || StartsWithOrdinalKeywordIgnoringLeadingWhitespace(preparedLine, "use");
+        if (hasImportMarker)
+        {
+            foreach (var match in EnumerateMatches(ElixirImportRegex, preparedLine))
+                ReferenceExtractor.AddReference(references, seen, fileId, match, "type_reference", context, lineNumber, container);
+        }
+
+        var hasBehaviourMarker = StartsWithCharIgnoringLeadingWhitespace(preparedLine, '@')
+            && (ContainsOrdinalKeyword(preparedLine, "behaviour")
+                || ContainsOrdinalKeyword(preparedLine, "impl"));
+        if (hasBehaviourMarker)
+        {
+            foreach (var match in EnumerateMatches(ElixirBehaviourRegex, preparedLine))
+                ReferenceExtractor.AddReference(references, seen, fileId, match, "type_reference", context, lineNumber, container);
+        }
     }
 
     private static bool IsIdentifierAt(string line, int index, string identifier)
@@ -2687,12 +3385,18 @@ internal static partial class LanguageReferenceExtractionSupport
 
     private static void EmitFortranCallReferences(string preparedLine, Action<string, int> addCallLikeReference)
     {
+        if (!StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "call"))
+            return;
+
         foreach (Match match in FortranCallRegex.Matches(preparedLine))
             addCallLikeReference(match.Groups["name"].Value, match.Groups["name"].Index);
     }
 
     private static void EmitPascalCallReferences(string preparedLine, Action<string, int> addCallLikeReference, IReadOnlySet<string>? definitionNames)
     {
+        if (preparedLine.IndexOf(';') < 0)
+            return;
+
         var match = PascalBareCallRegex.Match(preparedLine);
         if (!match.Success)
             return;
@@ -2714,35 +3418,49 @@ internal static partial class LanguageReferenceExtractionSupport
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        foreach (Match match in ObjCMessageRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf('[') >= 0)
         {
-            var receiver = match.Groups["receiver"];
-            var selector = match.Groups["name"];
-            if (char.IsUpper(receiver.Value[0]) && selector.Value is "alloc" or "new")
+            foreach (Match match in ObjCMessageRegex.Matches(preparedLine))
             {
-                ReferenceExtractor.AddReference(references, seen, fileId, receiver.Value, receiver.Index, "instantiate", context, lineNumber, resolveContainerForColumn(receiver.Index));
-            }
+                var receiver = match.Groups["receiver"];
+                var selector = match.Groups["name"];
+                if (char.IsUpper(receiver.Value[0]) && selector.Value is "alloc" or "new")
+                {
+                    ReferenceExtractor.AddReference(references, seen, fileId, receiver.Value, receiver.Index, "instantiate", context, lineNumber, resolveContainerForColumn(receiver.Index));
+                }
 
-            addCallLikeReference(selector.Value, selector.Index);
+                addCallLikeReference(selector.Value, selector.Index);
+            }
         }
 
-        foreach (Match match in ObjCSelectorRegex.Matches(preparedLine))
-            addCallLikeReference(match.Groups["name"].Value.TrimEnd(':'), match.Groups["name"].Index);
+        if (preparedLine.IndexOf("@selector", StringComparison.Ordinal) >= 0
+            && preparedLine.IndexOf('(') >= 0)
+        {
+            foreach (Match match in ObjCSelectorRegex.Matches(preparedLine))
+                addCallLikeReference(match.Groups["name"].Value.TrimEnd(':'), match.Groups["name"].Index);
+        }
     }
 
     private static void EmitHaskellSpaceCallReferences(string preparedLine, Action<string, int> addCallLikeReference, IReadOnlySet<string>? definitionNames)
     {
-        var definitionMatch = HaskellDefinitionRegex.Match(preparedLine);
-        var definitionName = definitionMatch.Success ? definitionMatch.Groups["name"].Value : null;
+        if (!ContainsWhitespace(preparedLine))
+            return;
+
+        string? definitionName = null;
         var scanStart = 0;
         var scanText = preparedLine;
-        if (definitionMatch.Success)
+        if (preparedLine.IndexOf('=') >= 0)
         {
-            var equalsIndex = preparedLine.IndexOf('=');
-            if (equalsIndex >= 0)
+            var definitionMatch = HaskellDefinitionRegex.Match(preparedLine);
+            if (definitionMatch.Success)
             {
-                scanStart = equalsIndex + 1;
-                scanText = preparedLine[scanStart..];
+                definitionName = definitionMatch.Groups["name"].Value;
+                var equalsIndex = preparedLine.IndexOf('=');
+                if (equalsIndex >= 0)
+                {
+                    scanStart = equalsIndex + 1;
+                    scanText = preparedLine[scanStart..];
+                }
             }
         }
 
@@ -2757,6 +3475,9 @@ internal static partial class LanguageReferenceExtractionSupport
 
     private static void EmitElixirParenlessCallReferences(string preparedLine, Action<string, int> addCallLikeReference, IReadOnlySet<string>? definitionNames)
     {
+        if (!ContainsWhitespace(preparedLine))
+            return;
+
         foreach (Match match in ElixirParenlessCallRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -2768,8 +3489,16 @@ internal static partial class LanguageReferenceExtractionSupport
 
     private static void EmitSmalltalkMessageReferences(string preparedLine, Action<string, int> addCallLikeReference, IReadOnlySet<string>? definitionNames)
     {
-        var definitionMatch = SmalltalkMethodDefinitionRegex.Match(preparedLine);
-        if (definitionMatch.Success || SmalltalkClassDeclarationRegex.IsMatch(preparedLine))
+        if (!ContainsWhitespace(preparedLine))
+            return;
+
+        var isDefinitionLine = preparedLine.IndexOf(">>", StringComparison.Ordinal) >= 0
+            && SmalltalkMethodDefinitionRegex.IsMatch(preparedLine);
+        var hasClassDeclarationLiteralMarker = preparedLine.IndexOf('#') >= 0
+            && (preparedLine.IndexOf("subclass:", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("Class", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("Object", StringComparison.Ordinal) >= 0);
+        if (isDefinitionLine || (hasClassDeclarationLiteralMarker && SmalltalkClassDeclarationRegex.IsMatch(preparedLine)))
             return;
 
         var consumedUntil = 0;
@@ -2785,6 +3514,17 @@ internal static partial class LanguageReferenceExtractionSupport
                 continue;
             addCallLikeReference(name, selectorGroup.Index);
         }
+    }
+
+    private static bool ContainsWhitespace(string value)
+    {
+        foreach (var ch in value)
+        {
+            if (char.IsWhiteSpace(ch))
+                return true;
+        }
+
+        return false;
     }
 
     private static string ReadSmalltalkSelector(string line, int selectorIndex, out int endIndex)
@@ -2985,6 +3725,18 @@ internal static partial class LanguageReferenceExtractionSupport
             text = text[..genericIndex].TrimEnd();
         var separator = text.LastIndexOf("::", StringComparison.Ordinal);
         return separator >= 0 ? text[(separator + 2)..].Trim() : text;
+    }
+
+    private static bool ContainsAsciiUppercase(string value)
+    {
+        for (var i = 0; i < value.Length; i++)
+        {
+            var c = value[i];
+            if (c is >= 'A' and <= 'Z')
+                return true;
+        }
+
+        return false;
     }
 
     private static bool IsCppTemplateDeclarationOrSpecializationLine(string line, int matchIndex)

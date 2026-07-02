@@ -42,10 +42,17 @@ public static partial class SymbolExtractor
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
-            TryAddRazorDirectiveSymbol(fileId, symbols, line, i + 1, RazorPageDirectiveRegex, "route", "route");
-            TryAddRazorDirectiveSymbol(fileId, symbols, line, i + 1, RazorImplementsDirectiveRegex, "implements", "type");
-            TryAddRazorDirectiveSymbol(fileId, symbols, line, i + 1, RazorAttributeDirectiveRegex, "attribute", "type");
-            TryAddRazorDirectiveSymbol(fileId, symbols, line, i + 1, RazorLayoutDirectiveRegex, "layout", "type");
+            if (line.IndexOf('@') < 0)
+                continue;
+
+            if (line.IndexOf("@page", StringComparison.Ordinal) >= 0)
+                TryAddRazorDirectiveSymbol(fileId, symbols, line, i + 1, RazorPageDirectiveRegex, "route", "route");
+            if (line.IndexOf("@implements", StringComparison.Ordinal) >= 0)
+                TryAddRazorDirectiveSymbol(fileId, symbols, line, i + 1, RazorImplementsDirectiveRegex, "implements", "type");
+            if (line.IndexOf("@attribute", StringComparison.Ordinal) >= 0)
+                TryAddRazorDirectiveSymbol(fileId, symbols, line, i + 1, RazorAttributeDirectiveRegex, "attribute", "type");
+            if (line.IndexOf("@layout", StringComparison.Ordinal) >= 0)
+                TryAddRazorDirectiveSymbol(fileId, symbols, line, i + 1, RazorLayoutDirectiveRegex, "layout", "type");
         }
     }
 

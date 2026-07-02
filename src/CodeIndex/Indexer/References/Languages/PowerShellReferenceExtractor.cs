@@ -26,6 +26,11 @@ internal static class PowerShellReferenceExtractor
 
     public static void EmitCallReferences(string preparedLine, Action<string, int> addCallLikeReference)
     {
+        if (!HasCallStartCandidate(preparedLine))
+        {
+            return;
+        }
+
         foreach (Match match in CallRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -42,6 +47,13 @@ internal static class PowerShellReferenceExtractor
         for (var index = 0; index < preparedLines.Length; index++)
         {
             var line = preparedLines[index];
+            if (line.IndexOf("@{", StringComparison.Ordinal) < 0
+                || line.IndexOf('$') < 0
+                || line.IndexOf('=') < 0)
+            {
+                continue;
+            }
+
             foreach (Match match in SplatAssignmentStartRegex.Matches(line))
             {
                 var start = match.Index + match.Length;
@@ -102,7 +114,9 @@ internal static class PowerShellReferenceExtractor
         int lineNumber,
         Action<string, int> addParameterReference)
     {
-        if (splatAssignments.Count == 0 || !CallRegex.IsMatch(preparedLine))
+        if (splatAssignments.Count == 0 || preparedLine.IndexOf('@') < 0)
+            return;
+        if (!CallRegex.IsMatch(preparedLine))
             return;
 
         foreach (Match splat in SplatTokenRegex.Matches(preparedLine))
@@ -129,6 +143,9 @@ internal static class PowerShellReferenceExtractor
     private static List<string> ExtractHashtableKeys(string text)
     {
         var keys = new List<string>();
+        if (text.IndexOf('=') < 0)
+            return keys;
+
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (Match match in HashtableKeyRegex.Matches(text))
         {
@@ -141,6 +158,30 @@ internal static class PowerShellReferenceExtractor
 
         return keys;
     }
+
+    private static bool HasCallStartCandidate(string line)
+    {
+        var expectCommand = true;
+        for (var index = 0; index < line.Length; index++)
+        {
+            var ch = line[index];
+            if (char.IsWhiteSpace(ch) && expectCommand)
+            {
+                continue;
+            }
+
+            if (expectCommand && IsCallNameStart(ch))
+            {
+                return true;
+            }
+
+            expectCommand = ch is '|' or ';' or '&' or '{' or '=';
+        }
+
+        return false;
+    }
+
+    private static bool IsCallNameStart(char ch) => ch is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or '_';
 
     private static bool IsAssignmentKey(string line, int cursor)
     {

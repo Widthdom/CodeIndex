@@ -53,93 +53,109 @@ public static partial class SymbolExtractor
         if (string.IsNullOrWhiteSpace(line))
             return;
 
-        var groupUseMatch = PhpGroupUseRegex.Match(line);
-        if (groupUseMatch.Success)
+        var hasUseMarker = line.IndexOf("use", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (hasUseMarker && line.IndexOf('{') >= 0)
         {
-            var prefix = groupUseMatch.Groups["prefix"].Value;
-            var signature = line.Trim();
-            var items = groupUseMatch.Groups["items"].Value;
-            var itemStart = 0;
-            while (itemStart <= items.Length)
+            var groupUseMatch = PhpGroupUseRegex.Match(line);
+            if (groupUseMatch.Success)
             {
-                var commaIndex = items.IndexOf(',', itemStart);
-                var itemEnd = commaIndex >= 0 ? commaIndex : items.Length;
-                var trimStart = itemStart;
-                var trimEnd = itemEnd;
-                while (trimStart < trimEnd && char.IsWhiteSpace(items[trimStart]))
-                    trimStart++;
-                while (trimEnd > trimStart && char.IsWhiteSpace(items[trimEnd - 1]))
-                    trimEnd--;
-
-                if (trimStart == trimEnd)
+                var prefix = groupUseMatch.Groups["prefix"].Value;
+                var signature = line.Trim();
+                var items = groupUseMatch.Groups["items"].Value;
+                var itemStart = 0;
+                while (itemStart <= items.Length)
                 {
+                    var commaIndex = items.IndexOf(',', itemStart);
+                    var itemEnd = commaIndex >= 0 ? commaIndex : items.Length;
+                    var trimStart = itemStart;
+                    var trimEnd = itemEnd;
+                    while (trimStart < trimEnd && char.IsWhiteSpace(items[trimStart]))
+                        trimStart++;
+                    while (trimEnd > trimStart && char.IsWhiteSpace(items[trimEnd - 1]))
+                        trimEnd--;
+
+                    if (trimStart == trimEnd)
+                    {
+                        if (commaIndex < 0)
+                            break;
+
+                        itemStart = commaIndex + 1;
+                        continue;
+                    }
+
+                    var item = items[trimStart..trimEnd];
+                    var importedName = item;
+                    var alias = string.Empty;
+                    if (item.IndexOf("as", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        var aliasMatch = PhpUseGroupItemAliasRegex.Match(item);
+                        if (aliasMatch.Success)
+                        {
+                            importedName = aliasMatch.Groups["name"].Value;
+                            alias = aliasMatch.Groups["alias"].Value;
+                        }
+                    }
+
+                    var symbolName = alias.Length > 0 ? alias : prefix + importedName;
+                    if (symbolName.Length == 0)
+                        continue;
+
+                    AddSymbolRecord(
+                        symbols,
+                        cssSeenSymbols: null,
+                        lineNumber,
+                        new SymbolRecord
+                        {
+                            Kind = "import",
+                            Name = symbolName,
+                            Line = lineNumber,
+                            StartLine = lineNumber,
+                            EndLine = lineNumber,
+                            Signature = signature
+                        });
+
                     if (commaIndex < 0)
                         break;
 
                     itemStart = commaIndex + 1;
-                    continue;
                 }
 
-                var item = items[trimStart..trimEnd];
-                var importedName = item;
-                var alias = string.Empty;
-                var aliasMatch = PhpUseGroupItemAliasRegex.Match(item);
-                if (aliasMatch.Success)
-                {
-                    importedName = aliasMatch.Groups["name"].Value;
-                    alias = aliasMatch.Groups["alias"].Value;
-                }
-
-                var symbolName = alias.Length > 0 ? alias : prefix + importedName;
-                if (symbolName.Length == 0)
-                    continue;
-
-                AddSymbolRecord(
-                    symbols,
-                    cssSeenSymbols: null,
-                    lineNumber,
-                    new SymbolRecord
-                    {
-                        Kind = "import",
-                        Name = symbolName,
-                        Line = lineNumber,
-                        StartLine = lineNumber,
-                        EndLine = lineNumber,
-                        Signature = signature
-                    });
-
-                if (commaIndex < 0)
-                    break;
-
-                itemStart = commaIndex + 1;
+                return;
             }
-
-            return;
         }
 
-        var useMatch = PhpUseRegex.Match(line);
-        if (useMatch.Success)
+        if (hasUseMarker)
         {
-            var symbolName = useMatch.Groups["alias"].Success
-                ? useMatch.Groups["alias"].Value.Trim()
-                : useMatch.Groups["name"].Value.Trim();
-            if (symbolName.Length > 0)
+            var useMatch = PhpUseRegex.Match(line);
+            if (useMatch.Success)
             {
-                AddSymbolRecord(
-                    symbols,
-                    cssSeenSymbols: null,
-                    lineNumber,
-                    new SymbolRecord
-                    {
-                        Kind = "import",
-                        Name = symbolName,
-                        Line = lineNumber,
-                        StartLine = lineNumber,
-                        EndLine = lineNumber,
-                        Signature = line.Trim()
-                    });
-            }
+                var symbolName = useMatch.Groups["alias"].Success
+                    ? useMatch.Groups["alias"].Value.Trim()
+                    : useMatch.Groups["name"].Value.Trim();
+                if (symbolName.Length > 0)
+                {
+                    AddSymbolRecord(
+                        symbols,
+                        cssSeenSymbols: null,
+                        lineNumber,
+                        new SymbolRecord
+                        {
+                            Kind = "import",
+                            Name = symbolName,
+                            Line = lineNumber,
+                            StartLine = lineNumber,
+                            EndLine = lineNumber,
+                            Signature = line.Trim()
+                        });
+                }
 
+                return;
+            }
+        }
+
+        if (line.IndexOf("require", StringComparison.OrdinalIgnoreCase) < 0
+            && line.IndexOf("include", StringComparison.OrdinalIgnoreCase) < 0)
+        {
             return;
         }
 
@@ -178,6 +194,9 @@ public static partial class SymbolExtractor
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
             var line = lines[lineIndex];
+            if (line.IndexOf('$') < 0)
+                continue;
+
             var match = PhpPropertyDeclarationHeadRegex.Match(line);
             if (!match.Success)
                 continue;
@@ -215,6 +234,10 @@ public static partial class SymbolExtractor
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
             var line = lines[lineIndex];
+            if (!line.Contains("@method", StringComparison.OrdinalIgnoreCase)
+                || line.IndexOf('(') < 0)
+                continue;
+
             var match = PhpDocblockMethodRegex.Match(line);
             if (!match.Success)
                 continue;
@@ -251,6 +274,15 @@ public static partial class SymbolExtractor
             var line = lines[lineIndex];
             if (line.IndexOf("/**", StringComparison.Ordinal) >= 0)
                 seenDocblockPropertyNames = new HashSet<string>(StringComparer.Ordinal);
+
+            if (line.IndexOf("property", StringComparison.OrdinalIgnoreCase) < 0
+                || line.IndexOf('@') < 0
+                || line.IndexOf('$') < 0)
+            {
+                if (seenDocblockPropertyNames != null && line.IndexOf("*/", StringComparison.Ordinal) >= 0)
+                    seenDocblockPropertyNames = null;
+                continue;
+            }
 
             var match = PhpDocblockPropertyRegex.Match(line);
             if (match.Success)
@@ -289,6 +321,10 @@ public static partial class SymbolExtractor
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
             var line = lines[lineIndex];
+            if (line.IndexOf("as", StringComparison.OrdinalIgnoreCase) < 0
+                || line.IndexOf(';') < 0)
+                continue;
+
             var match = PhpTraitAliasRegex.Match(line);
             if (!match.Success)
                 continue;
@@ -319,6 +355,10 @@ public static partial class SymbolExtractor
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
             var line = lines[lineIndex];
+            if (line.IndexOf("type", StringComparison.OrdinalIgnoreCase) < 0
+                || line.IndexOf('@') < 0)
+                continue;
+
             var match = PhpDocblockTypeAliasRegex.Match(line);
             if (!match.Success)
                 continue;
@@ -350,6 +390,10 @@ public static partial class SymbolExtractor
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
             var line = lines[lineIndex];
+            if (line.IndexOf("import-type", StringComparison.OrdinalIgnoreCase) < 0
+                || line.IndexOf("from", StringComparison.OrdinalIgnoreCase) < 0)
+                continue;
+
             var match = PhpDocblockImportTypeRegex.Match(line);
             if (!match.Success)
                 continue;
@@ -454,8 +498,13 @@ public static partial class SymbolExtractor
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
             var line = lines[lineIndex];
+            if (line.IndexOf("__construct", StringComparison.OrdinalIgnoreCase) < 0)
+                continue;
+            if (line.IndexOf('(') < 0)
+                continue;
+
             var constructorMatch = PhpSameLineConstructorRegex.Match(line);
-            var constructorStart = PhpConstructorStartRegex.IsMatch(line);
+            var constructorStart = !constructorMatch.Success && PhpConstructorStartRegex.IsMatch(line);
             if (!constructorMatch.Success && !constructorStart)
                 continue;
 
@@ -505,6 +554,12 @@ public static partial class SymbolExtractor
         int baseColumn,
         string parameterText)
     {
+        if (parameterText.IndexOf('$') < 0
+            || !MayContainPhpVisibility(parameterText))
+        {
+            return;
+        }
+
         var match = PhpPromotedPropertyParameterRegex.Match(parameterText);
         if (!match.Success)
             return;
@@ -531,6 +586,11 @@ public static partial class SymbolExtractor
             },
             line);
     }
+
+    private static bool MayContainPhpVisibility(string text) =>
+        text.IndexOf("public", StringComparison.OrdinalIgnoreCase) >= 0
+        || text.IndexOf("private", StringComparison.OrdinalIgnoreCase) >= 0
+        || text.IndexOf("protected", StringComparison.OrdinalIgnoreCase) >= 0;
 
     private static IEnumerable<(string Text, int StartColumn)> EnumeratePhpTopLevelCommaSegments(string text)
     {

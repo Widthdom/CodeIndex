@@ -16,8 +16,14 @@ public static partial class SymbolExtractor
 
         var scanState = default(ElixirMaskState);
         var maskedFirstLine = MaskElixirLineForBodyScan(firstLine, ref scanState);
-        if (ElixirDoShorthandRegex.IsMatch(maskedFirstLine))
+        if (maskedFirstLine.Contains("do:", StringComparison.Ordinal)
+            && ElixirDoShorthandRegex.IsMatch(maskedFirstLine))
+        {
             return (startIndex + 1, startIndex + 1, startIndex + 1);
+        }
+
+        if (!MayContainElixirBlockToken(maskedFirstLine))
+            return (startIndex + 1, null, null);
 
         var openerMatch = ElixirBlockTokenRegex.Match(maskedFirstLine);
         if (!openerMatch.Success || openerMatch.Value != "do")
@@ -30,15 +36,18 @@ public static partial class SymbolExtractor
         if (!string.IsNullOrWhiteSpace(firstLineTail))
             bodyStartLine = startIndex + 1;
 
-        foreach (Match token in ElixirBlockTokenRegex.Matches(firstLineTail))
+        if (MayContainElixirBlockToken(firstLineTail))
         {
-            if (token.Value == "end")
-                depth--;
-            else
-                depth++;
+            foreach (Match token in ElixirBlockTokenRegex.Matches(firstLineTail))
+            {
+                if (token.Value == "end")
+                    depth--;
+                else
+                    depth++;
 
-            if (depth == 0)
-                return (startIndex + 1, bodyStartLine ?? startIndex + 1, startIndex + 1);
+                if (depth == 0)
+                    return (startIndex + 1, bodyStartLine ?? startIndex + 1, startIndex + 1);
+            }
         }
 
         for (int i = startIndex + 1; i < lines.Length; i++)
@@ -48,6 +57,8 @@ public static partial class SymbolExtractor
                 continue;
 
             bodyStartLine ??= i + 1;
+            if (!MayContainElixirBlockToken(masked))
+                continue;
 
             foreach (Match token in ElixirBlockTokenRegex.Matches(masked))
             {
@@ -65,6 +76,11 @@ public static partial class SymbolExtractor
             ? (startIndex + 1, null, null)
             : (lines.Length, bodyStartLine, lines.Length);
     }
+
+    private static bool MayContainElixirBlockToken(string text) =>
+        text.Contains("do", StringComparison.Ordinal)
+        || text.Contains("fn", StringComparison.Ordinal)
+        || text.Contains("end", StringComparison.Ordinal);
 
     private enum ElixirMaskMode
     {

@@ -49,6 +49,9 @@ public static partial class SymbolExtractor
 
     private static IEnumerable<ShellHeredocTerminator> EnumerateShellHeredocTerminators(string line)
     {
+        if (line.IndexOf("<<", StringComparison.Ordinal) < 0)
+            yield break;
+
         var ignored = BuildShellIgnoredCharacterMask(line);
         foreach (Match match in ShellHeredocRedirectRegex.Matches(line))
         {

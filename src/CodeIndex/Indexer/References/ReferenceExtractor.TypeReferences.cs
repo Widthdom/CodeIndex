@@ -2632,17 +2632,50 @@ public static partial class ReferenceExtractor
         return segment.Length > 0 ? segment : null;
     }
 
+    private readonly record struct ReferenceLinePrepareOptions(
+        bool UseCSharpTriggerFastPath,
+        bool MaskRustLifetimes,
+        bool MaskStringLiterals,
+        bool IncludeBacktickStringDelimiter,
+        bool UsesHashComments,
+        bool UsesRHashComments,
+        bool UsesSlashComments,
+        bool UsesDashDashComments,
+        bool UsesFortranBangComments,
+        bool UsesPascalBlockComments,
+        bool UsesVisualBasicComments);
+
+    private static ReferenceLinePrepareOptions CreateReferenceLinePrepareOptions(string lang)
+        => new(
+            UseCSharpTriggerFastPath: lang == "csharp",
+            MaskRustLifetimes: lang == "rust",
+            MaskStringLiterals: lang != "cobol",
+            IncludeBacktickStringDelimiter: lang is not ("kotlin" or "r"),
+            UsesHashComments: UsesHashComments(lang),
+            UsesRHashComments: lang == "r",
+            UsesSlashComments: UsesSlashComments(lang),
+            UsesDashDashComments: UsesDashDashComments(lang),
+            UsesFortranBangComments: lang == "fortran",
+            UsesPascalBlockComments: lang == "pascal",
+            UsesVisualBasicComments: lang == "vb");
+
     private static string PrepareLine(string lang, string line)
+        => PrepareLine(line, CreateReferenceLinePrepareOptions(lang));
+
+    private static string PrepareLine(string line, ReferenceLinePrepareOptions options)
     {
-        if (lang == "csharp" && line.IndexOfAny(CSharpReferenceLinePreparationTriggerChars) < 0)
+        if (line.Length == 0)
+            return line;
+
+        if (options.UseCSharpTriggerFastPath && line.IndexOfAny(CSharpReferenceLinePreparationTriggerChars) < 0)
             return line;
 
         var result = line;
-        if (lang == "rust")
+        if (options.MaskRustLifetimes)
             result = MaskRustLifetimeTokens(result);
-        if (lang != "cobol" && MayContainStringLiteralDelimiter(lang, result))
+        if (options.MaskStringLiterals && MayContainStringLiteralDelimiter(result, options.IncludeBacktickStringDelimiter))
         {
-            var stringLiteralRegex = lang is "kotlin" or "r"
+            var stringLiteralRegex = !options.IncludeBacktickStringDelimiter
                 ? NonBacktickStringLiteralRegex
                 : StringLiteralRegex;
             result = stringLiteralRegex.Replace(result, "\"\"");
@@ -2650,16 +2683,16 @@ public static partial class ReferenceExtractor
         if (result.Contains("/*", StringComparison.Ordinal))
             result = InlineBlockCommentRegex.Replace(result, " ");
 
-        if (UsesHashComments(lang))
+        if (options.UsesHashComments)
         {
-            var hashIndex = lang == "r"
+            var hashIndex = options.UsesRHashComments
                 ? FindRHashCommentStart(result)
                 : result.IndexOf('#');
             if (hashIndex >= 0)
                 result = result[..hashIndex];
         }
 
-        if (UsesSlashComments(lang))
+        if (options.UsesSlashComments)
         {
             var slashIndex = result.IndexOf("//", StringComparison.Ordinal);
             if (slashIndex >= 0)
@@ -2667,28 +2700,28 @@ public static partial class ReferenceExtractor
         }
 
         // Lua, SQL, Haskell use -- for line comments / Lua、SQL、Haskell は -- を行コメントに使う
-        if (UsesDashDashComments(lang))
+        if (options.UsesDashDashComments)
         {
             var dashCommentIndex = result.IndexOf("--", StringComparison.Ordinal);
             if (dashCommentIndex >= 0)
                 result = result[..dashCommentIndex];
         }
 
-        if (lang is "fortran")
+        if (options.UsesFortranBangComments)
         {
             var bangCommentIndex = result.IndexOf('!');
             if (bangCommentIndex >= 0)
                 result = result[..bangCommentIndex];
         }
 
-        if (lang is "pascal")
+        if (options.UsesPascalBlockComments)
         {
             result = PascalBraceCommentRegex.Replace(result, " ");
             result = PascalParenStarCommentRegex.Replace(result, " ");
         }
 
         // VB.NET uses Rem and ' for line comments / VB.NET は Rem と ' を行コメントに使う
-        if (lang is "vb")
+        if (options.UsesVisualBasicComments)
         {
             var remCommentMatch = VisualBasicRemCommentRegex.Match(result);
             if (remCommentMatch.Success)
@@ -2702,10 +2735,10 @@ public static partial class ReferenceExtractor
         return result;
     }
 
-    private static bool MayContainStringLiteralDelimiter(string lang, string line)
-        => line.IndexOf('"') >= 0
-            || line.IndexOf('\'') >= 0
-            || (lang is not ("kotlin" or "r") && line.IndexOf('`') >= 0);
+    private static bool MayContainStringLiteralDelimiter(string line, bool includeBacktick)
+        => includeBacktick
+            ? line.AsSpan().IndexOfAny('"', '\'', '`') >= 0
+            : line.AsSpan().IndexOfAny('"', '\'') >= 0;
 
     private static int FindRHashCommentStart(string line)
     {

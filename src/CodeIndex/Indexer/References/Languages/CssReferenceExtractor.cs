@@ -73,12 +73,9 @@ internal static class CssReferenceExtractor
         new(CssCustomPropertyReferenceRegex, "reference"),
     ];
 
-    private static readonly ReferencePattern[] ScssReferencePatterns =
-    [
-        new(ScssVariableReferenceRegex, "call", SkipVariableDeclarations: true),
-        new(ScssExtendReferenceRegex, "call"),
-        new(ScssIncludeReferenceRegex, "call"),
-    ];
+    private static readonly ReferencePattern ScssVariableReferencePattern = new(ScssVariableReferenceRegex, "call", SkipVariableDeclarations: true);
+    private static readonly ReferencePattern ScssExtendReferencePattern = new(ScssExtendReferenceRegex, "call");
+    private static readonly ReferencePattern ScssIncludeReferencePattern = new(ScssIncludeReferenceRegex, "call");
 
     private static readonly HashSet<string> CssAnimationShorthandIgnoredTokens = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -105,35 +102,42 @@ internal static class CssReferenceExtractor
         HashSet<string>? definitionNames,
         SymbolRecord? container)
     {
-        foreach (var pattern in CssReferencePatterns)
-            EmitMatches(pattern, preparedLine, context, lineNumber, references, seen, fileId, definitionNames, container);
-
-        foreach (Match match in CssAnimationNameValueRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("var", StringComparison.OrdinalIgnoreCase) >= 0
+            && preparedLine.IndexOf("--", StringComparison.Ordinal) >= 0)
         {
-            EmitCssAnimationNameReferences(
-                match.Groups["value"].Value,
-                match.Groups["value"].Index,
-                context,
-                lineNumber,
-                references,
-                seen,
-                fileId,
-                definitionNames,
-                container);
+            foreach (var pattern in CssReferencePatterns)
+                EmitMatches(pattern, preparedLine, context, lineNumber, references, seen, fileId, definitionNames, container);
         }
 
-        foreach (Match match in CssAnimationShorthandValueRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("animation", StringComparison.OrdinalIgnoreCase) >= 0)
         {
-            EmitCssAnimationShorthandReferences(
-                match.Groups["value"].Value,
-                match.Groups["value"].Index,
-                context,
-                lineNumber,
-                references,
-                seen,
-                fileId,
-                definitionNames,
-                container);
+            foreach (Match match in CssAnimationNameValueRegex.Matches(preparedLine))
+            {
+                EmitCssAnimationNameReferences(
+                    match.Groups["value"].Value,
+                    match.Groups["value"].Index,
+                    context,
+                    lineNumber,
+                    references,
+                    seen,
+                    fileId,
+                    definitionNames,
+                    container);
+            }
+
+            foreach (Match match in CssAnimationShorthandValueRegex.Matches(preparedLine))
+            {
+                EmitCssAnimationShorthandReferences(
+                    match.Groups["value"].Value,
+                    match.Groups["value"].Index,
+                    context,
+                    lineNumber,
+                    references,
+                    seen,
+                    fileId,
+                    definitionNames,
+                    container);
+            }
         }
 
         EmitCssClassSelectorReferences(
@@ -152,23 +156,26 @@ internal static class CssReferenceExtractor
         // 共有の文字列リテラルマスカーが `@import "theme.css";` のパスを潰すため、@import の
         // パターンは元行（ブロックコメント除去後）に対して走らせる。`/* @import "fake.css"; */`
         // のような偽陽性を避けるため、ここでローカルに `/* */` を除去する。
-        var importScanLine = CssInlineBlockCommentRegex.Replace(originalLine, " ");
-        foreach (Match match in CssImportReferenceRegex.Matches(importScanLine))
+        if (HasCssImportMarker(originalLine))
         {
-            var nameGroup = match.Groups["name"];
-            if (!nameGroup.Success || nameGroup.Value.Length == 0)
-                continue;
+            var importScanLine = CssInlineBlockCommentRegex.Replace(originalLine, " ");
+            foreach (Match match in CssImportReferenceRegex.Matches(importScanLine))
+            {
+                var nameGroup = match.Groups["name"];
+                if (!nameGroup.Success || nameGroup.Value.Length == 0)
+                    continue;
 
-            ReferenceExtractor.AddReference(
-                references,
-                seen,
-                fileId,
-                nameGroup.Value,
-                nameGroup.Index,
-                "import",
-                context,
-                lineNumber,
-                container);
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    nameGroup.Value,
+                    nameGroup.Index,
+                    "import",
+                    context,
+                    lineNumber,
+                    container);
+            }
         }
     }
 
@@ -181,8 +188,14 @@ internal static class CssReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        foreach (var pattern in ScssReferencePatterns)
-            EmitMatches(pattern, preparedLine, context, lineNumber, references, seen, fileId, definitionNames: null, container);
+        if (preparedLine.IndexOf('$') >= 0)
+            EmitMatches(ScssVariableReferencePattern, preparedLine, context, lineNumber, references, seen, fileId, definitionNames: null, container);
+
+        if (preparedLine.IndexOf("@extend", StringComparison.Ordinal) >= 0)
+            EmitMatches(ScssExtendReferencePattern, preparedLine, context, lineNumber, references, seen, fileId, definitionNames: null, container);
+
+        if (preparedLine.IndexOf("@include", StringComparison.Ordinal) >= 0)
+            EmitMatches(ScssIncludeReferencePattern, preparedLine, context, lineNumber, references, seen, fileId, definitionNames: null, container);
     }
 
     public static void EmitSass(
@@ -195,47 +208,62 @@ internal static class CssReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        EmitPreprocessorImportReferences(SassImportReferenceRegex, originalLine, references, seen, fileId, context, lineNumber, container);
+
+        if (originalLine.IndexOf('$') < 0
+            && originalLine.IndexOf('@') < 0
+            && originalLine.IndexOf('+') < 0
+            && originalLine.IndexOf('(') < 0)
+        {
+            return;
+        }
+
         var sassReferenceLine = PrepareSassStylusReferenceLine(originalLine);
         if (ShouldSkipSassIndentedDeclarationReferences(sassReferenceLine))
             sassReferenceLine = "";
 
         EmitScss(sassReferenceLine, references, seen, fileId, context, lineNumber, container);
-        EmitPreprocessorImportReferences(SassImportReferenceRegex, originalLine, references, seen, fileId, context, lineNumber, container);
 
         var sassMixinReferenceLine = ShouldSkipSassIndentedDeclarationReferences(sassReferenceLine)
             ? ""
             : sassReferenceLine;
 
-        foreach (Match match in BoundedRegex.EnumerateMatches(SassIndentedMixinReferenceRegex, sassMixinReferenceLine))
+        if (sassMixinReferenceLine.IndexOf('+') >= 0)
         {
-            ReferenceExtractor.AddReference(
-                references,
-                seen,
-                fileId,
-                match,
-                "call",
-                context,
-                lineNumber,
-                container);
+            foreach (Match match in BoundedRegex.EnumerateMatches(SassIndentedMixinReferenceRegex, sassMixinReferenceLine))
+            {
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    match,
+                    "call",
+                    context,
+                    lineNumber,
+                    container);
+            }
         }
 
-        foreach (Match match in BoundedRegex.EnumerateMatches(SassBareFunctionReferenceRegex, sassReferenceLine))
+        if (sassReferenceLine.IndexOf('(') >= 0)
         {
-            var name = match.Groups["name"].Value;
-            if (CssBuiltInFunctionNames.Contains(name))
-                continue;
-            if (ShouldSkipSassBareFunctionReference(sassReferenceLine, match.Groups["name"].Index))
-                continue;
+            foreach (Match match in BoundedRegex.EnumerateMatches(SassBareFunctionReferenceRegex, sassReferenceLine))
+            {
+                var name = match.Groups["name"].Value;
+                if (CssBuiltInFunctionNames.Contains(name))
+                    continue;
+                if (ShouldSkipSassBareFunctionReference(sassReferenceLine, match.Groups["name"].Index))
+                    continue;
 
-            ReferenceExtractor.AddReference(
-                references,
-                seen,
-                fileId,
-                match,
-                "call",
-                context,
-                lineNumber,
-                container);
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    match,
+                    "call",
+                    context,
+                    lineNumber,
+                    container);
+            }
         }
     }
 
@@ -253,24 +281,34 @@ internal static class CssReferenceExtractor
     {
         EmitPreprocessorImportReferences(StylusImportReferenceRegex, originalLine, references, seen, fileId, context, lineNumber, container);
 
-        var stylusReferenceLine = PrepareSassStylusReferenceLine(originalLine);
-        foreach (Match match in BoundedRegex.EnumerateMatches(StylusVariableReferenceRegex, stylusReferenceLine))
+        if (originalLine.IndexOf('$') < 0
+            && originalLine.IndexOf('(') < 0
+            && (variableDefinitionNames == null || variableDefinitionNames.Count == 0))
         {
-            if (ShouldSkipStylusVariableReference(stylusReferenceLine, match.Groups["name"].Index))
-                continue;
-
-            ReferenceExtractor.AddReference(
-                references,
-                seen,
-                fileId,
-                match,
-                "call",
-                context,
-                lineNumber,
-                container);
+            return;
         }
 
-        if (variableDefinitionNames != null)
+        var stylusReferenceLine = PrepareSassStylusReferenceLine(originalLine);
+        if (stylusReferenceLine.IndexOf('$') >= 0)
+        {
+            foreach (Match match in BoundedRegex.EnumerateMatches(StylusVariableReferenceRegex, stylusReferenceLine))
+            {
+                if (ShouldSkipStylusVariableReference(stylusReferenceLine, match.Groups["name"].Index))
+                    continue;
+
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    match,
+                    "call",
+                    context,
+                    lineNumber,
+                    container);
+            }
+        }
+
+        if (variableDefinitionNames is { Count: > 0 })
         {
             foreach (Match match in BoundedRegex.EnumerateMatches(StylusBareVariableReferenceRegex, stylusReferenceLine))
             {
@@ -293,23 +331,26 @@ internal static class CssReferenceExtractor
             }
         }
 
-        foreach (Match match in BoundedRegex.EnumerateMatches(StylusBareFunctionReferenceRegex, stylusReferenceLine))
+        if (stylusReferenceLine.IndexOf('(') >= 0)
         {
-            var name = match.Groups["name"].Value;
-            if (CssBuiltInFunctionNames.Contains(name))
-                continue;
-            if (definitionNames != null && definitionNames.Contains(name) && match.Groups["name"].Index == 0)
-                continue;
+            foreach (Match match in BoundedRegex.EnumerateMatches(StylusBareFunctionReferenceRegex, stylusReferenceLine))
+            {
+                var name = match.Groups["name"].Value;
+                if (CssBuiltInFunctionNames.Contains(name))
+                    continue;
+                if (definitionNames != null && definitionNames.Contains(name) && match.Groups["name"].Index == 0)
+                    continue;
 
-            ReferenceExtractor.AddReference(
-                references,
-                seen,
-                fileId,
-                match,
-                "call",
-                context,
-                lineNumber,
-                container);
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    match,
+                    "call",
+                    context,
+                    lineNumber,
+                    container);
+            }
         }
     }
 
@@ -320,7 +361,16 @@ internal static class CssReferenceExtractor
 
         foreach (var line in lines)
         {
+            var mayAffectBlockComment = inBlockComment
+                || line.IndexOf("/*", StringComparison.Ordinal) >= 0
+                || line.IndexOf("*/", StringComparison.Ordinal) >= 0;
+            if (!mayAffectBlockComment && line.IndexOf('=') < 0)
+                continue;
+
             var blockMaskedLine = MaskSassStylusBlockCommentLine(line, ref inBlockComment);
+            if (blockMaskedLine.IndexOf('=') < 0)
+                continue;
+
             var referenceLine = PrepareSassStylusReferenceLine(blockMaskedLine);
             var match = StylusVariableDefinitionRegex.Match(referenceLine);
             if (match.Success)
@@ -525,6 +575,9 @@ internal static class CssReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (!HasPreprocessorImportMarker(originalLine))
+            return;
+
         if (originalLine.TrimStart().StartsWith("//", StringComparison.Ordinal))
             return;
 
@@ -547,6 +600,17 @@ internal static class CssReferenceExtractor
                 container);
         }
     }
+
+    private static bool HasCssImportMarker(string line) =>
+        line.IndexOf('@') >= 0
+        && line.IndexOf("import", StringComparison.OrdinalIgnoreCase) >= 0;
+
+    private static bool HasPreprocessorImportMarker(string line) =>
+        line.IndexOf('@') >= 0
+        && (line.IndexOf("import", StringComparison.OrdinalIgnoreCase) >= 0
+            || line.IndexOf("use", StringComparison.OrdinalIgnoreCase) >= 0
+            || line.IndexOf("forward", StringComparison.OrdinalIgnoreCase) >= 0
+            || line.IndexOf("require", StringComparison.OrdinalIgnoreCase) >= 0);
 
     private static void EmitMatches(
         ReferencePattern pattern,

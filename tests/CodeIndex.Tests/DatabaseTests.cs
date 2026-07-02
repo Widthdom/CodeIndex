@@ -333,6 +333,41 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void PurgeStaleFilesSharingDirectoryAndStem_HandlesLikeWildcardCharacters()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("purge-stale-stem-wildcards");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "target_%100.py"), "# retained rename target");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "targetA%100.cs"), "# similar live file");
+
+            var retainedId = UpsertTestFile("src/target_%100.py", checksum: "retained");
+            var staleId = UpsertTestFile("src/target_%100.cs", checksum: "stale");
+            var similarId = UpsertTestFile("src/targetA%100.cs", checksum: "similar");
+            _writer.InsertChunks([
+                new() { FileId = retainedId, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = "retained" },
+                new() { FileId = staleId, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = "stale" },
+                new() { FileId = similarId, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = "similar" },
+            ]);
+
+            var purged = _writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, "src/target_%100.py");
+
+            Assert.Equal(1, purged);
+            Assert.True(_writer.HasFileAtPath("src/target_%100.py"));
+            Assert.False(_writer.HasFileAtPath("src/target_%100.cs"));
+            Assert.True(_writer.HasFileAtPath("src/targetA%100.cs"));
+            using var cmd = _db.Connection.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM chunks";
+            Assert.Equal(2L, (long)cmd.ExecuteScalar()!);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void InsertSymbols_UnknownKind_ThrowsBeforePersisting()
     {
         var ex = Assert.Throws<ArgumentException>(() => _writer.InsertSymbols(
@@ -1793,6 +1828,59 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void InsertIssues_BatchesMultipleRowsAndClearsPreviousIssues()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/issues.py",
+            Lang = "python",
+            Size = 20,
+            Lines = 3,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        _writer.InsertIssues(fileId,
+        [
+            new FileIssue
+            {
+                Path = "src/issues.py",
+                Kind = "replacement_char",
+                Line = 1,
+                Message = "replacement char",
+                Origin = FileIssue.OriginSourceLiteral,
+                Severity = FileIssue.SeverityInfo,
+            },
+            new FileIssue
+            {
+                Path = "src/issues.py",
+                Kind = "non_utf8_likely",
+                Line = 2,
+                Message = "non UTF-8",
+                Origin = FileIssue.OriginDecodeReplacement,
+                Severity = FileIssue.SeverityWarning,
+            },
+            new FileIssue
+            {
+                Path = "src/issues.py",
+                Kind = "bom",
+                Line = 0,
+                Message = "BOM marker",
+                Origin = FileIssue.OriginByteOrderMark,
+                Severity = FileIssue.SeverityWarning,
+            },
+        ]);
+
+        using var countCmd = _db.Connection.CreateCommand();
+        countCmd.CommandText = "SELECT COUNT(*) FROM file_issues WHERE file_id = @file_id";
+        countCmd.Parameters.AddWithValue("@file_id", fileId);
+        Assert.Equal(3L, countCmd.ExecuteScalar());
+
+        _writer.InsertIssues(fileId, []);
+
+        Assert.Equal(0L, countCmd.ExecuteScalar());
+    }
+
+    [Fact]
     public void GetUnchangedFileId_WithNullChecksumUsesModifiedAndSize()
     {
         var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
@@ -1978,11 +2066,43 @@ public class DatabaseTests : IDisposable
             Size = 20,
             Lines = 2,
             Modified = modified,
+            Checksum = "caps_checksum",
         });
 
         Assert.False(_writer.HasExtractionCapViolationForFile(fileId, maxSymbolsPerFile: 2, maxReferencesPerFile: 2));
         Assert.False(_writer.HasReusableFileBlockingIssueForFile(fileId, maxSymbolsPerFile: 2, maxReferencesPerFile: 2, generatedExtractionSuppressed: false));
         Assert.True(_writer.HasReusableFileBlockingIssueForFile(fileId, maxSymbolsPerFile: 2, maxReferencesPerFile: 2, generatedExtractionSuppressed: true));
+        Assert.Equal(
+            fileId,
+            _writer.GetReusableUnchangedFileIdByStat(
+                "src/caps.cs",
+                modified,
+                size: 20,
+                language: "csharp",
+                maxSymbolsPerFile: 2,
+                maxReferencesPerFile: 2,
+                generatedExtractionSuppressed: false));
+        Assert.Equal(
+            fileId,
+            _writer.GetReusableUnchangedFileId(
+                "src/caps.cs",
+                modified.AddMinutes(1),
+                checksum: "caps_checksum",
+                size: 20,
+                lines: 2,
+                language: "csharp",
+                generated: false,
+                maxSymbolsPerFile: 2,
+                maxReferencesPerFile: 2,
+                generatedExtractionSuppressed: false));
+        Assert.Null(_writer.GetReusableUnchangedFileIdByStat(
+            "src/caps.cs",
+            modified,
+            size: 20,
+            language: "csharp",
+            maxSymbolsPerFile: 2,
+            maxReferencesPerFile: 2,
+            generatedExtractionSuppressed: true));
 
         _writer.InsertSymbols(
         [
@@ -1991,6 +2111,25 @@ public class DatabaseTests : IDisposable
         ]);
         Assert.False(_writer.HasExtractionCapViolationForFile(fileId, maxSymbolsPerFile: 2, maxReferencesPerFile: 2));
         Assert.True(_writer.HasExtractionCapViolationForFile(fileId, maxSymbolsPerFile: 1, maxReferencesPerFile: 2));
+        Assert.Null(_writer.GetReusableUnchangedFileIdByStat(
+            "src/caps.cs",
+            modified.AddMinutes(1),
+            size: 20,
+            language: "csharp",
+            maxSymbolsPerFile: 1,
+            maxReferencesPerFile: 2,
+            generatedExtractionSuppressed: false));
+        Assert.Null(_writer.GetReusableUnchangedFileId(
+            "src/caps.cs",
+            modified.AddMinutes(1),
+            checksum: "caps_checksum",
+            size: 20,
+            lines: 2,
+            language: "csharp",
+            generated: false,
+            maxSymbolsPerFile: 1,
+            maxReferencesPerFile: 2,
+            generatedExtractionSuppressed: false));
 
         var issueFileId = _writer.UpsertFile(new FileRecord
         {
@@ -1999,6 +2138,7 @@ public class DatabaseTests : IDisposable
             Size = 20,
             Lines = 2,
             Modified = modified,
+            Checksum = "cap_issue_checksum",
         });
         _writer.InsertIssues(issueFileId,
         [
@@ -2012,6 +2152,25 @@ public class DatabaseTests : IDisposable
         ]);
 
         Assert.True(_writer.HasExtractionCapViolationForFile(issueFileId, maxSymbolsPerFile: 10, maxReferencesPerFile: 10));
+        Assert.Null(_writer.GetReusableUnchangedFileIdByStat(
+            "src/cap-issue.cs",
+            modified,
+            size: 20,
+            language: "csharp",
+            maxSymbolsPerFile: 10,
+            maxReferencesPerFile: 10,
+            generatedExtractionSuppressed: false));
+        Assert.Null(_writer.GetReusableUnchangedFileId(
+            "src/cap-issue.cs",
+            modified,
+            checksum: "cap_issue_checksum",
+            size: 20,
+            lines: 2,
+            language: "csharp",
+            generated: false,
+            maxSymbolsPerFile: 10,
+            maxReferencesPerFile: 10,
+            generatedExtractionSuppressed: false));
 
         var generatedFileId = _writer.UpsertFile(new FileRecord
         {
@@ -2020,6 +2179,7 @@ public class DatabaseTests : IDisposable
             Size = 20,
             Lines = 2,
             Modified = modified,
+            Checksum = "generated_checksum",
         });
         _writer.InsertIssues(generatedFileId,
         [
@@ -2034,6 +2194,48 @@ public class DatabaseTests : IDisposable
 
         Assert.False(_writer.HasReusableFileBlockingIssueForFile(generatedFileId, maxSymbolsPerFile: 10, maxReferencesPerFile: 10, generatedExtractionSuppressed: true));
         Assert.True(_writer.HasReusableFileBlockingIssueForFile(generatedFileId, maxSymbolsPerFile: 10, maxReferencesPerFile: 10, generatedExtractionSuppressed: false));
+        Assert.Equal(
+            generatedFileId,
+            _writer.GetReusableUnchangedFileIdByStat(
+                "src/generated.g.cs",
+                modified,
+                size: 20,
+                language: "csharp",
+                maxSymbolsPerFile: 10,
+                maxReferencesPerFile: 10,
+                generatedExtractionSuppressed: true));
+        Assert.Equal(
+            generatedFileId,
+            _writer.GetReusableUnchangedFileId(
+                "src/generated.g.cs",
+                modified,
+                checksum: "generated_checksum",
+                size: 20,
+                lines: 2,
+                language: "csharp",
+                generated: true,
+                maxSymbolsPerFile: 10,
+                maxReferencesPerFile: 10,
+                generatedExtractionSuppressed: true));
+        Assert.Null(_writer.GetReusableUnchangedFileIdByStat(
+            "src/generated.g.cs",
+            modified,
+            size: 20,
+            language: "csharp",
+            maxSymbolsPerFile: 10,
+            maxReferencesPerFile: 10,
+            generatedExtractionSuppressed: false));
+        Assert.Null(_writer.GetReusableUnchangedFileId(
+            "src/generated.g.cs",
+            modified,
+            checksum: "generated_checksum",
+            size: 20,
+            lines: 2,
+            language: "csharp",
+            generated: true,
+            maxSymbolsPerFile: 10,
+            maxReferencesPerFile: 10,
+            generatedExtractionSuppressed: false));
     }
 
     [Fact]

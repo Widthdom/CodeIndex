@@ -27,41 +27,59 @@ public static partial class SymbolExtractor
 
     private static void ExtractGraphQLMemberSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
     {
-        var content = string.Join('\n', lines);
-        var lineStarts = BuildLineStarts(content);
-        foreach (Match inputMatch in GraphQLInputBlockRegex.Matches(content))
+        var hasInputBlocks = LinesContain(lines, "input", StringComparison.Ordinal);
+        var hasUnions = LinesContain(lines, "union", StringComparison.Ordinal);
+        if (!hasInputBlocks && !hasUnions)
+            return;
+
+        if (hasInputBlocks)
         {
-            var inputName = inputMatch.Groups["name"].Value;
-            var body = inputMatch.Groups["body"];
-            foreach (Match fieldMatch in GraphQLInputFieldRegex.Matches(body.Value))
+            var content = string.Join('\n', lines);
+            var lineStarts = BuildLineStarts(content);
+            foreach (Match inputMatch in GraphQLInputBlockRegex.Matches(content))
             {
-                var fieldGroup = fieldMatch.Groups["name"];
-                var absoluteIndex = body.Index + fieldGroup.Index;
-                var lineNumber = GetLineNumberFromOffset(lineStarts, absoluteIndex);
-                AddSymbolRecord(
-                    symbols,
-                    null,
-                    lineNumber,
-                    new SymbolRecord
-                    {
-                        FileId = fileId,
-                        Kind = "property",
-                        Name = fieldGroup.Value,
-                        Line = lineNumber,
-                        StartLine = lineNumber,
-                        StartColumn = absoluteIndex - lineStarts[lineNumber - 1],
-                        EndLine = lineNumber,
-                        Signature = lines[lineNumber - 1].Trim(),
-                        ContainerKind = "class",
-                        ContainerName = inputName,
-                    },
-                    lines[lineNumber - 1]);
+                var inputName = inputMatch.Groups["name"].Value;
+                var body = inputMatch.Groups["body"];
+                if (body.Value.IndexOf(':', StringComparison.Ordinal) < 0)
+                    continue;
+
+                foreach (Match fieldMatch in GraphQLInputFieldRegex.Matches(body.Value))
+                {
+                    var fieldGroup = fieldMatch.Groups["name"];
+                    var absoluteIndex = body.Index + fieldGroup.Index;
+                    var lineNumber = GetLineNumberFromOffset(lineStarts, absoluteIndex);
+                    AddSymbolRecord(
+                        symbols,
+                        null,
+                        lineNumber,
+                        new SymbolRecord
+                        {
+                            FileId = fileId,
+                            Kind = "property",
+                            Name = fieldGroup.Value,
+                            Line = lineNumber,
+                            StartLine = lineNumber,
+                            StartColumn = absoluteIndex - lineStarts[lineNumber - 1],
+                            EndLine = lineNumber,
+                            Signature = lines[lineNumber - 1].Trim(),
+                            ContainerKind = "class",
+                            ContainerName = inputName,
+                        },
+                        lines[lineNumber - 1]);
+                }
             }
         }
 
+        if (!hasUnions)
+            return;
+
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
-            var match = GraphQLUnionDeclarationRegex.Match(lines[lineIndex]);
+            var line = lines[lineIndex];
+            if (line.IndexOf("union", StringComparison.Ordinal) < 0)
+                continue;
+
+            var match = GraphQLUnionDeclarationRegex.Match(line);
             if (match.Success)
             {
                 var unionName = match.Groups["name"].Value;
@@ -69,7 +87,7 @@ public static partial class SymbolExtractor
                 for (var continuationIndex = lineIndex + 1; continuationIndex < lines.Length; continuationIndex++)
                 {
                     var continuation = lines[continuationIndex];
-                    if (string.IsNullOrWhiteSpace(continuation) || GraphQLDeclarationStartRegex.IsMatch(continuation))
+                    if (string.IsNullOrWhiteSpace(continuation) || IsGraphQLDeclarationStartLine(continuation))
                         break;
 
                     AddGraphQLUnionVariantSymbols(fileId, lines, continuationIndex, continuation, 0, unionName, symbols);
@@ -78,7 +96,7 @@ public static partial class SymbolExtractor
                 continue;
             }
 
-            var headerMatch = GraphQLUnionHeaderRegex.Match(lines[lineIndex]);
+            var headerMatch = GraphQLUnionHeaderRegex.Match(line);
             if (!headerMatch.Success)
                 continue;
 
@@ -86,7 +104,7 @@ public static partial class SymbolExtractor
             for (var continuationIndex = lineIndex + 1; continuationIndex < lines.Length; continuationIndex++)
             {
                 var continuation = lines[continuationIndex];
-                if (string.IsNullOrWhiteSpace(continuation) || GraphQLDeclarationStartRegex.IsMatch(continuation))
+                if (string.IsNullOrWhiteSpace(continuation) || IsGraphQLDeclarationStartLine(continuation))
                     break;
 
                 var equalsIndex = continuation.IndexOf('=', StringComparison.Ordinal);
@@ -96,7 +114,7 @@ public static partial class SymbolExtractor
                     for (var variantIndex = continuationIndex + 1; variantIndex < lines.Length; variantIndex++)
                     {
                         var variantContinuation = lines[variantIndex];
-                        if (string.IsNullOrWhiteSpace(variantContinuation) || GraphQLDeclarationStartRegex.IsMatch(variantContinuation))
+                        if (string.IsNullOrWhiteSpace(variantContinuation) || IsGraphQLDeclarationStartLine(variantContinuation))
                             break;
 
                         AddGraphQLUnionVariantSymbols(fileId, lines, variantIndex, variantContinuation, 0, headerUnionName, symbols);
@@ -120,6 +138,9 @@ public static partial class SymbolExtractor
     {
         variantText = StripGraphQLUnionVariantTrivia(variantText);
         if (string.IsNullOrWhiteSpace(variantText))
+            return;
+
+        if (!MayContainGraphQLNameStart(variantText))
             return;
 
         foreach (Match variantMatch in GraphQLUnionVariantRegex.Matches(variantText))
@@ -160,5 +181,34 @@ public static partial class SymbolExtractor
             text = text[..directiveIndex];
 
         return text;
+    }
+
+    private static bool IsGraphQLDeclarationStartLine(string line) =>
+        MayContainGraphQLDeclarationKeyword(line)
+        && GraphQLDeclarationStartRegex.IsMatch(line);
+
+    private static bool MayContainGraphQLDeclarationKeyword(string line) =>
+        line.Contains("type", StringComparison.Ordinal)
+        || line.Contains("interface", StringComparison.Ordinal)
+        || line.Contains("input", StringComparison.Ordinal)
+        || line.Contains("enum", StringComparison.Ordinal)
+        || line.Contains("union", StringComparison.Ordinal)
+        || line.Contains("scalar", StringComparison.Ordinal)
+        || line.Contains("schema", StringComparison.Ordinal)
+        || line.Contains("query", StringComparison.Ordinal)
+        || line.Contains("mutation", StringComparison.Ordinal)
+        || line.Contains("subscription", StringComparison.Ordinal)
+        || line.Contains("fragment", StringComparison.Ordinal)
+        || line.Contains("directive", StringComparison.Ordinal);
+
+    private static bool MayContainGraphQLNameStart(string text)
+    {
+        foreach (var ch in text)
+        {
+            if (ch == '_' || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z'))
+                return true;
+        }
+
+        return false;
     }
 }

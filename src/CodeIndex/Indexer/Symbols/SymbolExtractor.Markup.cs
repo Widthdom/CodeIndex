@@ -520,8 +520,11 @@ public static partial class SymbolExtractor
             if (inFence)
                 continue;
 
-            foreach (Match match in MarkdownReferenceDefinitionRegex.Matches(line))
-                targets[match.Groups["label"].Value.Trim()] = match.Groups["target"].Value.Trim();
+            if (line.Contains("]:", StringComparison.Ordinal))
+            {
+                foreach (Match match in MarkdownReferenceDefinitionRegex.Matches(line))
+                    targets[match.Groups["label"].Value.Trim()] = match.Groups["target"].Value.Trim();
+            }
         }
 
         return targets;
@@ -529,11 +532,20 @@ public static partial class SymbolExtractor
 
     private static void AddMarkdownReferenceSymbols(long fileId, string line, int lineNumber, List<SymbolRecord> symbols, IReadOnlyDictionary<string, string> referenceTargets)
     {
-        foreach (Match match in MarkdownLocalAnchorLinkRegex.Matches(line))
-            AddMarkdownReferenceSymbol(fileId, match.Groups["target"].Value, line, lineNumber, symbols);
+        if (line.Contains("](", StringComparison.Ordinal))
+        {
+            foreach (Match match in MarkdownLocalAnchorLinkRegex.Matches(line))
+                AddMarkdownReferenceSymbol(fileId, match.Groups["target"].Value, line, lineNumber, symbols);
+        }
 
-        foreach (Match match in MarkdownLocalAnchorReferenceRegex.Matches(line))
-            AddMarkdownReferenceSymbol(fileId, match.Groups["target"].Value, line, lineNumber, symbols);
+        if (line.Contains("]:", StringComparison.Ordinal))
+        {
+            foreach (Match match in MarkdownLocalAnchorReferenceRegex.Matches(line))
+                AddMarkdownReferenceSymbol(fileId, match.Groups["target"].Value, line, lineNumber, symbols);
+        }
+
+        if (!line.Contains("][", StringComparison.Ordinal))
+            return;
 
         foreach (Match match in MarkdownReferenceLinkRegex.Matches(line))
         {
@@ -728,44 +740,14 @@ public static partial class SymbolExtractor
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
-            foreach (Match classMatch in XamlClassRegex.Matches(line))
+            var hasAttributeAssignment = line.IndexOf('=') >= 0;
+            if (hasAttributeAssignment && line.Contains("x:Class", StringComparison.Ordinal))
             {
-                var value = classMatch.Groups["value"].Value.Trim();
-                if (value.Length == 0)
-                    continue;
-                symbols.Add(new SymbolRecord
+                foreach (Match classMatch in XamlClassRegex.Matches(line))
                 {
-                    FileId = fileId,
-                    Kind = "class",
-                    Name = value,
-                    Line = i + 1,
-                    StartLine = i + 1,
-                    EndLine = i + 1,
-                    Signature = line.Trim(),
-                });
-            }
-
-            foreach (Match dataTypeMatch in XamlDataTypeRegex.Matches(line))
-            {
-                var value = NormalizeXamlKeyValue(dataTypeMatch.Groups["value"].Value);
-                if (value.Length == 0)
-                    continue;
-                symbols.Add(new SymbolRecord
-                {
-                    FileId = fileId,
-                    Kind = "class",
-                    Name = value,
-                    Line = i + 1,
-                    StartLine = i + 1,
-                    EndLine = i + 1,
-                    Signature = line.Trim(),
-                });
-            }
-
-            foreach (Match typeArgumentsMatch in XamlTypeArgumentsRegex.Matches(line))
-            {
-                foreach (var value in NormalizeXamlTypeArgumentsValue(typeArgumentsMatch.Groups["value"].Value))
-                {
+                    var value = classMatch.Groups["value"].Value.Trim();
+                    if (value.Length == 0)
+                        continue;
                     symbols.Add(new SymbolRecord
                     {
                         FileId = fileId,
@@ -779,81 +761,142 @@ public static partial class SymbolExtractor
                 }
             }
 
-            foreach (Match targetTypeMatch in XamlTargetTypeRegex.Matches(line))
+            if (hasAttributeAssignment && line.Contains("x:DataType", StringComparison.Ordinal))
             {
-                var value = NormalizeXamlKeyValue(targetTypeMatch.Groups["value"].Value);
-                if (value.Length == 0)
-                    continue;
-                symbols.Add(new SymbolRecord
+                foreach (Match dataTypeMatch in XamlDataTypeRegex.Matches(line))
                 {
-                    FileId = fileId,
-                    Kind = "class",
-                    Name = value,
-                    Line = i + 1,
-                    StartLine = i + 1,
-                    EndLine = i + 1,
-                    Signature = line.Trim(),
-                });
+                    var value = NormalizeXamlKeyValue(dataTypeMatch.Groups["value"].Value);
+                    if (value.Length == 0)
+                        continue;
+                    symbols.Add(new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "class",
+                        Name = value,
+                        Line = i + 1,
+                        StartLine = i + 1,
+                        EndLine = i + 1,
+                        Signature = line.Trim(),
+                    });
+                }
             }
 
-            foreach (Match nameMatch in XamlNameRegex.Matches(line))
+            if (hasAttributeAssignment && line.Contains("x:TypeArguments", StringComparison.Ordinal))
             {
-                var value = nameMatch.Groups["value"].Value.Trim();
-                if (value.Length == 0)
-                    continue;
-                symbols.Add(new SymbolRecord
+                foreach (Match typeArgumentsMatch in XamlTypeArgumentsRegex.Matches(line))
                 {
-                    FileId = fileId,
-                    Kind = "property",
-                    Name = value,
-                    Line = i + 1,
-                    StartLine = i + 1,
-                    EndLine = i + 1,
-                    Signature = line.Trim(),
-                });
+                    foreach (var value in NormalizeXamlTypeArgumentsValue(typeArgumentsMatch.Groups["value"].Value))
+                    {
+                        symbols.Add(new SymbolRecord
+                        {
+                            FileId = fileId,
+                            Kind = "class",
+                            Name = value,
+                            Line = i + 1,
+                            StartLine = i + 1,
+                            EndLine = i + 1,
+                            Signature = line.Trim(),
+                        });
+                    }
+                }
             }
 
-            foreach (Match keyMatch in XamlKeyRegex.Matches(line))
+            if (hasAttributeAssignment && line.Contains("TargetType", StringComparison.Ordinal))
             {
-                var value = NormalizeXamlKeyValue(keyMatch.Groups["value"].Value);
-                if (value.Length == 0)
-                    continue;
-                symbols.Add(new SymbolRecord
+                foreach (Match targetTypeMatch in XamlTargetTypeRegex.Matches(line))
                 {
-                    FileId = fileId,
-                    Kind = "property",
-                    Name = value,
-                    Line = i + 1,
-                    StartLine = i + 1,
-                    EndLine = i + 1,
-                    Signature = line.Trim(),
-                });
+                    var value = NormalizeXamlKeyValue(targetTypeMatch.Groups["value"].Value);
+                    if (value.Length == 0)
+                        continue;
+                    symbols.Add(new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "class",
+                        Name = value,
+                        Line = i + 1,
+                        StartLine = i + 1,
+                        EndLine = i + 1,
+                        Signature = line.Trim(),
+                    });
+                }
             }
 
-            foreach (Match handlerMatch in XamlEventHandlerRegex.Matches(line))
+            if (hasAttributeAssignment && line.Contains("x:Name", StringComparison.Ordinal))
             {
-                var value = handlerMatch.Groups["value"].Value.Trim();
-                if (value.Length == 0)
-                    continue;
-                symbols.Add(new SymbolRecord
+                foreach (Match nameMatch in XamlNameRegex.Matches(line))
                 {
-                    FileId = fileId,
-                    Kind = "function",
-                    Name = value,
-                    Line = i + 1,
-                    StartLine = i + 1,
-                    EndLine = i + 1,
-                    Signature = line.Trim(),
-                });
+                    var value = nameMatch.Groups["value"].Value.Trim();
+                    if (value.Length == 0)
+                        continue;
+                    symbols.Add(new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "property",
+                        Name = value,
+                        Line = i + 1,
+                        StartLine = i + 1,
+                        EndLine = i + 1,
+                        Signature = line.Trim(),
+                    });
+                }
+            }
+
+            if (hasAttributeAssignment && line.Contains("x:Key", StringComparison.Ordinal))
+            {
+                foreach (Match keyMatch in XamlKeyRegex.Matches(line))
+                {
+                    var value = NormalizeXamlKeyValue(keyMatch.Groups["value"].Value);
+                    if (value.Length == 0)
+                        continue;
+                    symbols.Add(new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "property",
+                        Name = value,
+                        Line = i + 1,
+                        StartLine = i + 1,
+                        EndLine = i + 1,
+                        Signature = line.Trim(),
+                    });
+                }
+            }
+
+            if (MayContainXamlEventHandlerAttribute(line))
+            {
+                foreach (Match handlerMatch in XamlEventHandlerRegex.Matches(line))
+                {
+                    var value = handlerMatch.Groups["value"].Value.Trim();
+                    if (value.Length == 0)
+                        continue;
+                    symbols.Add(new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "function",
+                        Name = value,
+                        Line = i + 1,
+                        StartLine = i + 1,
+                        EndLine = i + 1,
+                        Signature = line.Trim(),
+                    });
+                }
             }
         }
 
-        if (symbols.Count < StructuredDataMaxSymbols)
+        if (symbols.Count < StructuredDataMaxSymbols
+            && rawText.Contains("x:TypeArguments", StringComparison.Ordinal))
+        {
             AddWrappedXamlTypeArgumentSymbols(fileId, rawText, lines, lineStarts, symbols);
-        if (symbols.Count < StructuredDataMaxSymbols)
+        }
+        if (symbols.Count < StructuredDataMaxSymbols
+            && MayContainWrappedXamlTypeBearingAttribute(rawText))
+        {
             AddWrappedXamlTypeBearingAttributeSymbols(fileId, rawText, lines, lineStarts, symbols);
-        if (symbols.Count < StructuredDataMaxSymbols)
+        }
+        if (symbols.Count < StructuredDataMaxSymbols
+            && MayContainWrappedXamlSearchAttribute(rawText))
+        {
             AddWrappedXamlSearchAttributeSymbols(fileId, rawText, lines, lineStarts, symbols);
+        }
         if (symbols.Count < StructuredDataMaxSymbols)
             AddXamlTypeObjectElementSymbols(fileId, rawText, lines, lineStarts, symbols);
         if (symbols.Count < StructuredDataMaxSymbols)
@@ -871,30 +914,76 @@ public static partial class SymbolExtractor
         if (symbols.Count < StructuredDataMaxSymbols)
             AddXamlBindingObjectElementSymbols(fileId, rawText, lines, lineStarts, symbols);
 
-        foreach (Match bindingMatch in XamlBindingRegex.Matches(rawText))
+        if (MayContainXamlBindingMarkup(rawText))
         {
-            if (symbols.Count >= StructuredDataMaxSymbols)
-                break;
-
-            var value = NormalizeXamlBindingValue(bindingMatch.Groups["kind"].Value, bindingMatch.Groups["content"].Value);
-            if (value.Length == 0)
-                continue;
-
-            var startLine = FindHtmlLineNumber(lineStarts, bindingMatch.Index);
-            var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
-            symbols.Add(new SymbolRecord
+            foreach (Match bindingMatch in XamlBindingRegex.Matches(rawText))
             {
-                FileId = fileId,
-                Kind = "property",
-                Name = value,
-                Line = startLine,
-                StartLine = startLine,
-                EndLine = startLine,
-                Signature = lines[signatureIndex].Trim(),
-            });
+                if (symbols.Count >= StructuredDataMaxSymbols)
+                    break;
+
+                var value = NormalizeXamlBindingValue(bindingMatch.Groups["kind"].Value, bindingMatch.Groups["content"].Value);
+                if (value.Length == 0)
+                    continue;
+
+                var startLine = FindHtmlLineNumber(lineStarts, bindingMatch.Index);
+                var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "property",
+                    Name = value,
+                    Line = startLine,
+                    StartLine = startLine,
+                    EndLine = startLine,
+                    Signature = lines[signatureIndex].Trim(),
+                });
+            }
         }
 
         return TrimStructuredDataSymbols(symbols, fileId, "structured_data_xml_symbol_budget_exceeded", lines);
+    }
+
+    private static bool MayContainXamlEventHandlerAttribute(string line)
+    {
+        if (line.IndexOf('=') < 0)
+            return false;
+
+        foreach (var eventName in XamlEventAttributeNames)
+        {
+            if (line.Contains(eventName, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool MayContainXamlBindingMarkup(string rawText)
+        => rawText.Contains("{Binding", StringComparison.Ordinal)
+        || rawText.Contains("{x:Bind", StringComparison.Ordinal)
+        || rawText.Contains("{TemplateBinding", StringComparison.Ordinal)
+        || rawText.Contains("{CompiledBinding", StringComparison.Ordinal)
+        || rawText.Contains("{ReflectionBinding", StringComparison.Ordinal);
+
+    private static bool MayContainWrappedXamlTypeBearingAttribute(string rawText) =>
+        rawText.Contains("x:Class", StringComparison.Ordinal)
+        || rawText.Contains("x:DataType", StringComparison.Ordinal)
+        || rawText.Contains("TargetType", StringComparison.Ordinal);
+
+    private static bool MayContainWrappedXamlSearchAttribute(string rawText)
+    {
+        if (rawText.Contains("x:Name", StringComparison.Ordinal)
+            || rawText.Contains("x:Key", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        foreach (var attributeName in XamlEventAttributeNames)
+        {
+            if (rawText.Contains(attributeName, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
     }
 
     private static void AddWrappedXamlTypeArgumentSymbols(
@@ -1059,14 +1148,23 @@ public static partial class SymbolExtractor
         int[] lineStarts,
         List<SymbolRecord> symbols)
     {
-        foreach (var occurrence in EnumerateWrappedXamlAttributeValues(rawText, lineStarts, "x:Name"))
-            AddXamlAttributeSymbol(fileId, lines, lineStarts, symbols, occurrence.AttributeIndex, "property", occurrence.Value.Trim());
+        if (rawText.Contains("x:Name", StringComparison.Ordinal))
+        {
+            foreach (var occurrence in EnumerateWrappedXamlAttributeValues(rawText, lineStarts, "x:Name"))
+                AddXamlAttributeSymbol(fileId, lines, lineStarts, symbols, occurrence.AttributeIndex, "property", occurrence.Value.Trim());
+        }
 
-        foreach (var occurrence in EnumerateWrappedXamlAttributeValues(rawText, lineStarts, "x:Key"))
-            AddXamlAttributeSymbol(fileId, lines, lineStarts, symbols, occurrence.AttributeIndex, "property", NormalizeXamlKeyValue(occurrence.Value));
+        if (rawText.Contains("x:Key", StringComparison.Ordinal))
+        {
+            foreach (var occurrence in EnumerateWrappedXamlAttributeValues(rawText, lineStarts, "x:Key"))
+                AddXamlAttributeSymbol(fileId, lines, lineStarts, symbols, occurrence.AttributeIndex, "property", NormalizeXamlKeyValue(occurrence.Value));
+        }
 
         foreach (var attributeName in XamlEventAttributeNames)
         {
+            if (!rawText.Contains(attributeName, StringComparison.Ordinal))
+                continue;
+
             foreach (var occurrence in EnumerateWrappedXamlAttributeValues(rawText, lineStarts, attributeName))
                 AddXamlAttributeSymbol(fileId, lines, lineStarts, symbols, occurrence.AttributeIndex, "function", occurrence.Value.Trim());
         }
@@ -1182,53 +1280,64 @@ public static partial class SymbolExtractor
         int[] lineStarts,
         List<SymbolRecord> symbols)
     {
-        foreach (Match bindingMatch in XamlBindingRegex.Matches(rawText))
+        if (MayContainXamlBindingMarkup(rawText)
+            && rawText.Contains("ElementName", StringComparison.Ordinal))
         {
-            if (!bindingMatch.Groups["kind"].Value.Equals("Binding", StringComparison.OrdinalIgnoreCase))
-                continue;
+            foreach (Match bindingMatch in XamlBindingRegex.Matches(rawText))
+            {
+                if (!bindingMatch.Groups["kind"].Value.Equals("Binding", StringComparison.OrdinalIgnoreCase))
+                    continue;
 
-            var value = NormalizeXamlBindingElementNameValue(bindingMatch.Groups["content"].Value);
-            if (value.Length == 0)
-                continue;
+                var value = NormalizeXamlBindingElementNameValue(bindingMatch.Groups["content"].Value);
+                if (value.Length == 0)
+                    continue;
 
-            AddXamlAttributeSymbol(fileId, lines, lineStarts, symbols, bindingMatch.Index, "property", value);
+                AddXamlAttributeSymbol(fileId, lines, lineStarts, symbols, bindingMatch.Index, "property", value);
+            }
         }
 
-        var cursor = 0;
-        while (cursor < rawText.Length)
+        if (rawText.Contains("<Binding", StringComparison.Ordinal)
+            && rawText.Contains("ElementName", StringComparison.Ordinal))
         {
-            var tagIndex = rawText.IndexOf("<Binding", cursor, StringComparison.Ordinal);
-            if (tagIndex < 0)
-                break;
-
-            var nameEnd = tagIndex + "<Binding".Length;
-            if (nameEnd < rawText.Length && IsXamlAttributeNameChar(rawText[nameEnd]))
+            var cursor = 0;
+            while (cursor < rawText.Length)
             {
-                cursor = nameEnd;
-                continue;
+                var tagIndex = rawText.IndexOf("<Binding", cursor, StringComparison.Ordinal);
+                if (tagIndex < 0)
+                    break;
+
+                var nameEnd = tagIndex + "<Binding".Length;
+                if (nameEnd < rawText.Length && IsXamlAttributeNameChar(rawText[nameEnd]))
+                {
+                    cursor = nameEnd;
+                    continue;
+                }
+
+                var tagEnd = FindXamlTagEnd(rawText, nameEnd);
+                if (tagEnd < 0)
+                    break;
+
+                var elementNameAttributeIndex = IndexOfXamlAttributeInRange(rawText, "ElementName", nameEnd, tagEnd);
+                if (elementNameAttributeIndex >= 0
+                    && TryReadXamlAttributeValue(rawText, "ElementName", elementNameAttributeIndex, out var valueStart, out var valueEnd)
+                    && valueEnd <= tagEnd)
+                {
+                    AddXamlAttributeSymbol(
+                        fileId,
+                        lines,
+                        lineStarts,
+                        symbols,
+                        elementNameAttributeIndex,
+                        "property",
+                        NormalizeXamlElementReferenceValue(rawText[valueStart..valueEnd]));
+                }
+
+                cursor = tagEnd + 1;
             }
-
-            var tagEnd = FindXamlTagEnd(rawText, nameEnd);
-            if (tagEnd < 0)
-                break;
-
-            var elementNameAttributeIndex = IndexOfXamlAttributeInRange(rawText, "ElementName", nameEnd, tagEnd);
-            if (elementNameAttributeIndex >= 0
-                && TryReadXamlAttributeValue(rawText, "ElementName", elementNameAttributeIndex, out var valueStart, out var valueEnd)
-                && valueEnd <= tagEnd)
-            {
-                AddXamlAttributeSymbol(
-                    fileId,
-                    lines,
-                    lineStarts,
-                    symbols,
-                    elementNameAttributeIndex,
-                    "property",
-                    NormalizeXamlElementReferenceValue(rawText[valueStart..valueEnd]));
-            }
-
-            cursor = tagEnd + 1;
         }
+
+        if (!rawText.Contains("Binding.ElementName", StringComparison.Ordinal))
+            return;
 
         foreach (Match elementNameMatch in XamlBindingElementNamePropertyElementRegex.Matches(rawText))
         {
@@ -1277,41 +1386,48 @@ public static partial class SymbolExtractor
         int[] lineStarts,
         List<SymbolRecord> symbols)
     {
-        var cursor = 0;
-        while (cursor < rawText.Length)
+        if (rawText.Contains("<Binding", StringComparison.Ordinal)
+            && rawText.Contains("Path", StringComparison.Ordinal))
         {
-            var tagIndex = rawText.IndexOf("<Binding", cursor, StringComparison.Ordinal);
-            if (tagIndex < 0)
-                break;
-
-            var nameEnd = tagIndex + "<Binding".Length;
-            if (nameEnd < rawText.Length && IsXamlAttributeNameChar(rawText[nameEnd]))
+            var cursor = 0;
+            while (cursor < rawText.Length)
             {
-                cursor = nameEnd;
-                continue;
+                var tagIndex = rawText.IndexOf("<Binding", cursor, StringComparison.Ordinal);
+                if (tagIndex < 0)
+                    break;
+
+                var nameEnd = tagIndex + "<Binding".Length;
+                if (nameEnd < rawText.Length && IsXamlAttributeNameChar(rawText[nameEnd]))
+                {
+                    cursor = nameEnd;
+                    continue;
+                }
+
+                var tagEnd = FindXamlTagEnd(rawText, nameEnd);
+                if (tagEnd < 0)
+                    break;
+
+                var pathAttributeIndex = IndexOfXamlAttributeInRange(rawText, "Path", nameEnd, tagEnd);
+                if (pathAttributeIndex >= 0
+                    && TryReadXamlAttributeValue(rawText, "Path", pathAttributeIndex, out var valueStart, out var valueEnd)
+                    && valueEnd <= tagEnd)
+                {
+                    AddXamlAttributeSymbol(
+                        fileId,
+                        lines,
+                        lineStarts,
+                        symbols,
+                        pathAttributeIndex,
+                        "property",
+                        NormalizeXamlBindingPathValue(rawText[valueStart..valueEnd]));
+                }
+
+                cursor = tagEnd + 1;
             }
-
-            var tagEnd = FindXamlTagEnd(rawText, nameEnd);
-            if (tagEnd < 0)
-                break;
-
-            var pathAttributeIndex = IndexOfXamlAttributeInRange(rawText, "Path", nameEnd, tagEnd);
-            if (pathAttributeIndex >= 0
-                && TryReadXamlAttributeValue(rawText, "Path", pathAttributeIndex, out var valueStart, out var valueEnd)
-                && valueEnd <= tagEnd)
-            {
-                AddXamlAttributeSymbol(
-                    fileId,
-                    lines,
-                    lineStarts,
-                    symbols,
-                    pathAttributeIndex,
-                    "property",
-                    NormalizeXamlBindingPathValue(rawText[valueStart..valueEnd]));
-            }
-
-            cursor = tagEnd + 1;
         }
+
+        if (!rawText.Contains("Binding.Path", StringComparison.Ordinal))
+            return;
 
         foreach (Match pathMatch in XamlBindingPathPropertyElementRegex.Matches(rawText))
         {
@@ -1400,6 +1516,12 @@ public static partial class SymbolExtractor
         int[] lineStarts,
         List<SymbolRecord> symbols)
     {
+        if (!rawText.Contains("x:Type", StringComparison.Ordinal)
+            || !rawText.Contains("TypeName", StringComparison.Ordinal))
+        {
+            return;
+        }
+
         foreach (Match typeMatch in XamlTypeObjectElementRegex.Matches(rawText))
         {
             var value = NormalizeXamlKeyValue(typeMatch.Groups["value"].Value);
@@ -1428,6 +1550,9 @@ public static partial class SymbolExtractor
         int[] lineStarts,
         List<SymbolRecord> symbols)
     {
+        if (!rawText.Contains(".TypeName", StringComparison.Ordinal))
+            return;
+
         foreach (Match typeMatch in XamlTypePropertyElementRegex.Matches(rawText))
         {
             var value = NormalizeXamlKeyValue(typeMatch.Groups["value"].Value);
@@ -1456,8 +1581,10 @@ public static partial class SymbolExtractor
         int[] lineStarts,
         List<SymbolRecord> symbols)
     {
-        AddXamlMarkupExtensionTypeSymbols(fileId, rawText, lines, lineStarts, symbols, "{x:TypeExtension", false);
-        AddXamlMarkupExtensionTypeSymbols(fileId, rawText, lines, lineStarts, symbols, "{x:Type", true);
+        if (rawText.Contains("{x:TypeExtension", StringComparison.Ordinal))
+            AddXamlMarkupExtensionTypeSymbols(fileId, rawText, lines, lineStarts, symbols, "{x:TypeExtension", false);
+        if (rawText.Contains("{x:Type", StringComparison.Ordinal))
+            AddXamlMarkupExtensionTypeSymbols(fileId, rawText, lines, lineStarts, symbols, "{x:Type", true);
     }
 
     private static void AddXamlMarkupExtensionTypeSymbols(
@@ -1549,6 +1676,9 @@ public static partial class SymbolExtractor
         int[] lineStarts,
         List<SymbolRecord> symbols)
     {
+        if (!rawText.Contains("{x:Static", StringComparison.Ordinal))
+            return;
+
         var cursor = 0;
         while (cursor < rawText.Length)
         {
@@ -1597,10 +1727,22 @@ public static partial class SymbolExtractor
         List<SymbolRecord> symbols)
     {
         foreach (var prefix in XamlReferenceMarkupPrefixes)
-            AddXamlReferenceMarkupSymbols(fileId, rawText, lines, lineStarts, symbols, prefix);
+        {
+            if (rawText.Contains(prefix, StringComparison.Ordinal))
+                AddXamlReferenceMarkupSymbols(fileId, rawText, lines, lineStarts, symbols, prefix);
+        }
 
         foreach (var prefix in XamlReferenceObjectElementPrefixes)
-            AddXamlReferenceObjectElementSymbols(fileId, rawText, lines, lineStarts, symbols, prefix);
+        {
+            if (rawText.Contains(prefix, StringComparison.Ordinal))
+                AddXamlReferenceObjectElementSymbols(fileId, rawText, lines, lineStarts, symbols, prefix);
+        }
+
+        if (!rawText.Contains("x:Reference", StringComparison.Ordinal)
+            || !rawText.Contains(".Name", StringComparison.Ordinal))
+        {
+            return;
+        }
 
         foreach (Match nameMatch in XamlReferenceNamePropertyElementRegex.Matches(rawText))
         {
@@ -1702,7 +1844,10 @@ public static partial class SymbolExtractor
         List<SymbolRecord> symbols)
     {
         foreach (var prefix in XamlResourceReferenceMarkupPrefixes)
-            AddXamlResourceReferenceSymbols(fileId, rawText, lines, lineStarts, symbols, prefix);
+        {
+            if (rawText.Contains(prefix, StringComparison.Ordinal))
+                AddXamlResourceReferenceSymbols(fileId, rawText, lines, lineStarts, symbols, prefix);
+        }
     }
 
     private static void AddXamlResourceReferenceSymbols(

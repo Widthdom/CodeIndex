@@ -98,6 +98,12 @@ public static partial class SymbolExtractor
 
     private static bool TryExtractVisualBasicEnumMemberName(string line, out string name)
     {
+        if (!MayStartVisualBasicEnumMemberName(line[0]))
+        {
+            name = string.Empty;
+            return false;
+        }
+
         var match = VisualBasicEnumMemberRegex.Match(line);
         if (!match.Success)
         {
@@ -114,6 +120,9 @@ public static partial class SymbolExtractor
 
         return true;
     }
+
+    private static bool MayStartVisualBasicEnumMemberName(char ch) =>
+        ch == '[' || ch == '_' || char.IsLetterOrDigit(ch);
 
     private static void UpdateVisualBasicEnumInitializerState(string line, ref int parenDepth, ref bool inInitializer)
     {

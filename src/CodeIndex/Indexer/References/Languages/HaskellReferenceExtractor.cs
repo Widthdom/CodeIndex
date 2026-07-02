@@ -13,6 +13,9 @@ internal static class HaskellReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("::", StringComparison.Ordinal) < 0)
+            return;
+
         LanguageReferenceExtractionSupport.EmitTypePositionReferences(
             "haskell",
             preparedLine,
@@ -31,6 +34,9 @@ internal static class HaskellReferenceExtractor
         Action<string, int> addCallLikeReference,
         IReadOnlySet<string>? definitionNames)
     {
+        if (!ContainsWhitespace(preparedLine))
+            return;
+
         LanguageReferenceExtractionSupport.EmitAdditionalCallReferences(
             "haskell",
             preparedLine,
@@ -43,5 +49,16 @@ internal static class HaskellReferenceExtractor
             0,
             _ => null,
             definitionNames);
+    }
+
+    private static bool ContainsWhitespace(string value)
+    {
+        foreach (var ch in value)
+        {
+            if (char.IsWhiteSpace(ch))
+                return true;
+        }
+
+        return false;
     }
 }

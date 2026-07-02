@@ -16,7 +16,7 @@ public static partial class SymbolExtractor
         for (var i = startIndex + 1; i < lines.Length; i++)
         {
             var trimmed = lines[i].Trim();
-            if (SmalltalkMethodStartForRangeRegex.IsMatch(trimmed) || SmalltalkClassDeclarationForRangeRegex.IsMatch(trimmed))
+            if (IsSmalltalkRangeBoundary(trimmed))
                 break;
 
             if (trimmed.Length == 0)
@@ -30,4 +30,9 @@ public static partial class SymbolExtractor
             ? (startIndex + 1, null, null)
             : (lastBodyLine, bodyStartLine, lastBodyLine);
     }
+
+    private static bool IsSmalltalkRangeBoundary(string line) =>
+        (line.Contains(">>", StringComparison.Ordinal) && SmalltalkMethodStartForRangeRegex.IsMatch(line))
+        || ((line.Contains("subclass:", StringComparison.Ordinal) || line.Contains("named:", StringComparison.Ordinal))
+            && SmalltalkClassDeclarationForRangeRegex.IsMatch(line));
 }
