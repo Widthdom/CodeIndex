@@ -145,6 +145,9 @@ public static partial class SymbolExtractor
             if (candidate.Length == 0)
                 continue;
 
+            if (candidate.IndexOf(':') < 0)
+                continue;
+
             var match = FSharpRecordFieldRegex.Match(candidate);
             if (!match.Success)
                 continue;
@@ -173,7 +176,7 @@ public static partial class SymbolExtractor
     private static bool TryAddFSharpRecordFieldsFromContext(List<SymbolRecord> symbols, long fileId, string[] lines, int lineIndex, string line, int lineNumber)
     {
         var candidate = line.TrimStart().TrimStart('{').TrimEnd('}').TrimStart();
-        if (candidate.Length == 0 || !FSharpRecordFieldRegex.IsMatch(candidate))
+        if (candidate.Length == 0 || candidate.IndexOf(':') < 0 || !FSharpRecordFieldRegex.IsMatch(candidate))
             return false;
 
         for (var i = lineIndex - 1; i >= 0; i--)

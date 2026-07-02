@@ -114,6 +114,7 @@ affected:
 - **Dispatched Solidity event/error declaration scans by keyword** - Solidity extraction now runs event and error declaration regexes only on lines with the matching keyword marker.
 - **Skipped duplicate PHP constructor-start regex checks** - PHP promoted-property extraction now avoids the constructor-start regex once the same-line constructor regex has already matched.
 - **Collapsed duplicate F# type-declaration regex scans** - F# type-member extraction now reuses the declaration match instead of running `IsMatch` and `Match` on the same line.
+- **Gated F# record-field scans by colon** - F# record-field extraction now skips record-field regex checks for candidates that cannot contain a typed field separator.
 
 ## 日本語
 
@@ -188,3 +189,4 @@ affected:
 - **Solidity event/error declaration scan を keyword で振り分けます** - Solidity extraction は event と error の declaration regex を対応 keyword marker がある行だけで実行します。
 - **PHP constructor-start regex の重複 check を skip します** - PHP promoted-property extraction は same-line constructor regex が既に match した場合 constructor-start regex を実行しないようになりました。
 - **F# type-declaration regex の重複 scan をまとめます** - F# type-member extraction は同じ行に `IsMatch` と `Match` を重ねず、declaration match を再利用します。
+- **F# record-field scan を colon で gate します** - F# record-field extraction は typed field separator を含めない candidate で record-field regex check を skip します。
