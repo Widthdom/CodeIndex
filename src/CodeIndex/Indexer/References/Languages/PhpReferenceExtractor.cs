@@ -1136,6 +1136,11 @@ internal static class PhpReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("->", StringComparison.Ordinal) < 0)
+        {
+            return;
+        }
+
         foreach (Match match in ObjectMemberAccessRegex.Matches(preparedLine))
         {
             var nameGroup = match.Groups["name"];
