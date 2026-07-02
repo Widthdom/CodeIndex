@@ -152,23 +152,26 @@ internal static class CssReferenceExtractor
         // 共有の文字列リテラルマスカーが `@import "theme.css";` のパスを潰すため、@import の
         // パターンは元行（ブロックコメント除去後）に対して走らせる。`/* @import "fake.css"; */`
         // のような偽陽性を避けるため、ここでローカルに `/* */` を除去する。
-        var importScanLine = CssInlineBlockCommentRegex.Replace(originalLine, " ");
-        foreach (Match match in CssImportReferenceRegex.Matches(importScanLine))
+        if (HasCssImportMarker(originalLine))
         {
-            var nameGroup = match.Groups["name"];
-            if (!nameGroup.Success || nameGroup.Value.Length == 0)
-                continue;
+            var importScanLine = CssInlineBlockCommentRegex.Replace(originalLine, " ");
+            foreach (Match match in CssImportReferenceRegex.Matches(importScanLine))
+            {
+                var nameGroup = match.Groups["name"];
+                if (!nameGroup.Success || nameGroup.Value.Length == 0)
+                    continue;
 
-            ReferenceExtractor.AddReference(
-                references,
-                seen,
-                fileId,
-                nameGroup.Value,
-                nameGroup.Index,
-                "import",
-                context,
-                lineNumber,
-                container);
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    nameGroup.Value,
+                    nameGroup.Index,
+                    "import",
+                    context,
+                    lineNumber,
+                    container);
+            }
         }
     }
 
@@ -525,6 +528,9 @@ internal static class CssReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (!HasPreprocessorImportMarker(originalLine))
+            return;
+
         if (originalLine.TrimStart().StartsWith("//", StringComparison.Ordinal))
             return;
 
@@ -547,6 +553,17 @@ internal static class CssReferenceExtractor
                 container);
         }
     }
+
+    private static bool HasCssImportMarker(string line) =>
+        line.IndexOf('@') >= 0
+        && line.IndexOf("import", StringComparison.OrdinalIgnoreCase) >= 0;
+
+    private static bool HasPreprocessorImportMarker(string line) =>
+        line.IndexOf('@') >= 0
+        && (line.IndexOf("import", StringComparison.OrdinalIgnoreCase) >= 0
+            || line.IndexOf("use", StringComparison.OrdinalIgnoreCase) >= 0
+            || line.IndexOf("forward", StringComparison.OrdinalIgnoreCase) >= 0
+            || line.IndexOf("require", StringComparison.OrdinalIgnoreCase) >= 0);
 
     private static void EmitMatches(
         ReferencePattern pattern,
