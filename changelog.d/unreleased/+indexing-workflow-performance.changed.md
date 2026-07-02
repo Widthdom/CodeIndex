@@ -66,6 +66,7 @@ affected:
 - **Dispatched Dockerfile supplemental scans by instruction** - Dockerfile extra symbol extraction now reads the leading instruction once per line and invokes only the matching ENV/LABEL/EXPOSE/VOLUME/FROM/SHELL/COPY/ADD/RUN helper.
 - **Gated section-heading regex scans by marker** - C# `#region` and JavaScript/TypeScript `@module` heading extraction now checks required marker substrings before running heading regexes.
 - **Skipped CSS custom-property regex scans on ordinary lines** - CSS inline custom-property extraction now checks for the required `--` marker before running its regex.
+- **Skipped CSS font-face block joins without family markers** - CSS `@font-face` family-name resolution now checks the block for `font-family` before masking and joining block text.
 
 ## 日本語
 
@@ -98,3 +99,4 @@ affected:
 - **Dockerfile supplemental scan を instruction で振り分けます** - Dockerfile の追加 symbol extraction は各行の先頭 instruction を一度だけ読み、対応する ENV/LABEL/EXPOSE/VOLUME/FROM/SHELL/COPY/ADD/RUN helper だけを実行します。
 - **section-heading regex scan を marker で gate します** - C# `#region` と JavaScript/TypeScript `@module` heading extraction は heading regex を走らせる前に必須 marker substring を確認します。
 - **通常行では CSS custom-property regex scan を skip します** - CSS inline custom-property extraction は regex を走らせる前に必須の `--` marker を確認します。
+- **family marker のない CSS font-face block join を skip します** - CSS `@font-face` の family name 解決は block text を mask/join する前に `font-family` の有無を確認します。
