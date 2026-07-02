@@ -215,10 +215,14 @@ internal static class FSharpReferenceExtractor
             }
         }
 
-        foreach (Match match in CompositionOperandCallRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf(">>", StringComparison.Ordinal) >= 0
+            || preparedLine.IndexOf("<<", StringComparison.Ordinal) >= 0)
         {
-            addCallLikeReference(match.Groups["left"].Value, match.Groups["left"].Index);
-            addCallLikeReference(match.Groups["right"].Value, match.Groups["right"].Index);
+            foreach (Match match in CompositionOperandCallRegex.Matches(preparedLine))
+            {
+                addCallLikeReference(match.Groups["left"].Value, match.Groups["left"].Index);
+                addCallLikeReference(match.Groups["right"].Value, match.Groups["right"].Index);
+            }
         }
 
         foreach (Match match in SpaceApplicationCallRegex.Matches(preparedLine))
@@ -228,13 +232,18 @@ internal static class FSharpReferenceExtractor
             addCallLikeReference(name, callIndex);
         }
 
+        if (!HasOperatorCallCandidate(preparedLine))
+        {
+            return;
+        }
+
+        var definitionMatch = OperatorDefinitionCallRegex.Match(preparedLine);
         foreach (Match match in OperatorCallRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
             if (IgnoredOperatorCallNames.Contains(name))
                 continue;
 
-            var definitionMatch = OperatorDefinitionCallRegex.Match(preparedLine);
             if (definitionMatch.Success
                 && string.Equals(definitionMatch.Groups["name"].Value, name, StringComparison.Ordinal)
                 && match.Groups["name"].Index == definitionMatch.Groups["name"].Index)
@@ -254,10 +263,29 @@ internal static class FSharpReferenceExtractor
 
         foreach (var ch in name)
         {
-            if ("!%&*+-./:<=>?@^|~".IndexOf(ch) < 0)
+            if (!IsOperatorCallChar(ch))
                 return false;
         }
 
         return true;
     }
+
+    private static bool HasOperatorCallCandidate(string line)
+    {
+        var previousWasOperator = false;
+        foreach (var ch in line)
+        {
+            var isOperator = IsOperatorCallChar(ch);
+            if (isOperator && previousWasOperator)
+            {
+                return true;
+            }
+
+            previousWasOperator = isOperator;
+        }
+
+        return false;
+    }
+
+    private static bool IsOperatorCallChar(char ch) => "!%&*+-./:<=>?@^|~".IndexOf(ch) >= 0;
 }

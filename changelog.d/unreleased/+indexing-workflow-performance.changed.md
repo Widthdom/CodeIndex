@@ -97,6 +97,7 @@ affected:
 - **Gated F# pipeline call scans by marker** - F# reference extraction now checks forward and backward pipeline markers before running pipeline call regex probes.
 - **Gated F# control-flow application scans by marker** - F# reference extraction now checks control-flow markers before running try/finally, condition, match, and when-guard application regex probes.
 - **Gated F# keyword application scans by marker** - F# reference extraction now checks assert, lazy, raise, cast, and new markers before running their application-call regex probes.
+- **Gated F# operator and composition scans by marker** - F# reference extraction now checks composition/operator markers before running those regex probes and resolves operator-definition suppression once per line.
 - **Gated SQL temp-object collection scans by marker** - SQL temp object carry-forward now skips collection without `#` markers and runs target, truncate, select-into, and create probes only when their statement keywords are present.
 - **Gated Go concurrency reference scans by marker** - Go reference extraction now checks `go` and channel-arrow markers before running goroutine and channel send/receive regex probes.
 - **Gated Scala block and type-context scans by marker** - Scala reference extraction now checks block, generator, implicit, given, and using markers before running those regex probes.
@@ -231,6 +232,7 @@ affected:
 - **F# pipeline call scan を marker で gate します** - F# reference extraction は pipeline call regex probe を実行する前に forward / backward pipeline marker を確認します。
 - **F# control-flow application scan を marker で gate します** - F# reference extraction は try/finally、condition、match、when-guard application regex probe を実行する前に control-flow marker を確認します。
 - **F# keyword application scan を marker で gate します** - F# reference extraction は assert、lazy、raise、cast、new の application-call regex probe を実行する前に各 marker を確認します。
+- **F# operator / composition scan を marker で gate します** - F# reference extraction は operator/composition regex probe を実行する前に marker を確認し、operator-definition suppression を行ごとに一度だけ解決します。
 - **SQL temp-object collection scan を marker で gate します** - SQL temp object carry-forward は `#` marker がない場合の collection を skip し、target、truncate、select-into、create probe は対応する statement keyword がある場合だけ実行します。
 - **Go concurrency reference scan を marker で gate します** - Go reference extraction は goroutine と channel send/receive regex probe を実行する前に `go` と channel-arrow marker を確認します。
 - **Scala block / type-context scan を marker で gate します** - Scala reference extraction は block、generator、implicit、given、using marker を確認してから対応する regex probe を実行します。
