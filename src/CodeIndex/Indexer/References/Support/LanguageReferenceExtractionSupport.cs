@@ -2167,17 +2167,22 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        foreach (Match match in VbGenericArgumentListRegex.Matches(preparedLine))
+        var hasVbGenericArgumentListMarker = preparedLine.Contains('(')
+            && preparedLine.IndexOf("Of", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (hasVbGenericArgumentListMarker)
         {
-            if (VbGenericDeclarationOwnerRegex.IsMatch(preparedLine[..match.Index]))
+            foreach (Match match in VbGenericArgumentListRegex.Matches(preparedLine))
             {
-                var constraintGroup = match.Groups["list"];
-                EmitVbGenericConstraintReferences(constraintGroup.Value, constraintGroup.Index, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-                continue;
-            }
+                if (VbGenericDeclarationOwnerRegex.IsMatch(preparedLine[..match.Index]))
+                {
+                    var constraintGroup = match.Groups["list"];
+                    EmitVbGenericConstraintReferences(constraintGroup.Value, constraintGroup.Index, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+                    continue;
+                }
 
-            var group = match.Groups["list"];
-            EmitCommaSeparatedNames(group.Value, group.Index, "vb", references, seen, fileId, context, lineNumber, resolveContainerForColumn(group.Index));
+                var group = match.Groups["list"];
+                EmitCommaSeparatedNames(group.Value, group.Index, "vb", references, seen, fileId, context, lineNumber, resolveContainerForColumn(group.Index));
+            }
         }
 
         foreach (Match match in VbNewTypeRegex.Matches(preparedLine))

@@ -280,6 +280,7 @@ affected:
 - **Gated Dart function signature scans by marker** - Dart reference extraction now checks parenthesis and uppercase type markers before running function signature and parameter type regex probes.
 - **Gated Dart constructor call scans by marker** - Dart reference extraction now checks `new`/`const`, parenthesis, and uppercase type markers before running constructor call regex probes.
 - **Gated VB type keyword scans by marker** - Visual Basic reference extraction now checks type keyword markers before running type keyword regex probes.
+- **Gated VB generic list scans by marker** - Visual Basic reference extraction now checks `(` and `Of` markers before running generic argument list regex probes.
 
 ## 日本語
 
@@ -494,3 +495,4 @@ affected:
 - **Dart function signature scan を marker で gate します** - Dart reference extraction は function signature / parameter type regex probe の前に parenthesis と uppercase type marker を確認します。
 - **Dart constructor call scan を marker で gate します** - Dart reference extraction は constructor call regex probe の前に `new` / `const`、parenthesis、uppercase type marker を確認します。
 - **VB type keyword scan を marker で gate します** - Visual Basic reference extraction は type keyword regex probe の前に type keyword marker を確認します。
+- **VB generic list scan を marker で gate します** - Visual Basic reference extraction は generic argument list regex probe の前に `(` と `Of` marker を確認します。
