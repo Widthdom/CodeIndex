@@ -3260,6 +3260,9 @@ internal static partial class LanguageReferenceExtractionSupport
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("::", StringComparison.Ordinal) < 0)
+            return;
+
         var match = HaskellSignatureRegex.Match(preparedLine);
         if (!match.Success)
             return;
