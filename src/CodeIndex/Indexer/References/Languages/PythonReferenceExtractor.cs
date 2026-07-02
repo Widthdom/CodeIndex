@@ -887,6 +887,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf(':') < 0)
+            return;
+
         foreach (Match match in VariableAnnotationExpressionRegex.Matches(preparedLine))
         {
             var typeGroup = match.Groups["type"];
@@ -931,6 +934,13 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf('=') < 0
+            || (preparedLine.IndexOf("TypeAlias", StringComparison.Ordinal) < 0
+                && preparedLine.IndexOf("type", StringComparison.Ordinal) < 0))
+        {
+            return;
+        }
+
         foreach (Match match in TypeAliasRhsExpressionRegex.Matches(preparedLine))
         {
             var typeGroup = match.Groups["type"];
