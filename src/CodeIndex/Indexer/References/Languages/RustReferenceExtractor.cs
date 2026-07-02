@@ -724,6 +724,11 @@ internal static class RustReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("use", StringComparison.Ordinal) < 0)
+        {
+            return;
+        }
+
         var match = UseStatementRegex.Match(preparedLine);
         if (!match.Success)
             return;
@@ -846,6 +851,12 @@ internal static class RustReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("extern", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf("crate", StringComparison.Ordinal) < 0)
+        {
+            return;
+        }
+
         var match = ExternCrateRegex.Match(preparedLine);
         if (!match.Success)
             return;
@@ -872,6 +883,11 @@ internal static class RustReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("mod", StringComparison.Ordinal) < 0)
+        {
+            return;
+        }
+
         var match = ModuleDeclarationRegex.Match(preparedLine);
         if (!match.Success)
             return;
