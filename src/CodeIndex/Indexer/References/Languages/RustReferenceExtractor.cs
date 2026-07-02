@@ -1537,6 +1537,12 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf("::", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf('(') < 0)
+        {
+            return;
+        }
+
         foreach (Match match in AssociatedCallReceiverRegex.Matches(preparedLine))
         {
             var receiverGroup = match.Groups["receiver"];
@@ -1585,6 +1591,11 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf("::", StringComparison.Ordinal) < 0)
+        {
+            return;
+        }
+
         foreach (Match match in AssociatedValueReceiverRegex.Matches(preparedLine))
         {
             var receiverGroup = match.Groups["receiver"];
@@ -1633,6 +1644,13 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf('<') < 0
+            || preparedLine.IndexOf("::", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf('(') < 0)
+        {
+            return;
+        }
+
         var searchIndex = 0;
         while (searchIndex < preparedLine.Length)
         {

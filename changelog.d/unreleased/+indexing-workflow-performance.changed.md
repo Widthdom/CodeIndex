@@ -104,6 +104,7 @@ affected:
 - **Gated Lua call and table-field scans by marker** - Lua reference extraction now checks whitespace, colon, and dot markers before running command-call, method-call, and table-field regex probes.
 - **Gated Rust raw-identifier and macro call scans by marker** - Rust reference extraction now checks `r#` and `!` markers before running raw-identifier and macro-call regex probes.
 - **Gated Rust attribute reference scans by marker** - Rust reference extraction now checks the attribute hash marker before running derive, cfg_attr derive, and attribute-head regex probes.
+- **Gated Rust associated receiver scans by marker** - Rust reference extraction now checks path separator, generic, and call markers before running associated call/value receiver scans.
 - **Gated Python decorator reference scans by marker** - Python reference extraction now skips decorator-call and bare-decorator regex probes on lines without an `@` marker.
 - **Gated Python raise/except type scans by marker** - Python reference extraction now checks `raise` and `except` markers before running exception type regex probes.
 - **Gated Python runtime type-check scans by marker** - Python reference extraction now checks `isinstance` and `issubclass` markers before running runtime type-check regex probes.
@@ -240,6 +241,7 @@ affected:
 - **Lua call / table-field scan を marker で gate します** - Lua reference extraction は command-call、method-call、table-field regex probe を実行する前に whitespace、colon、dot marker を確認します。
 - **Rust raw-identifier / macro call scan を marker で gate します** - Rust reference extraction は raw-identifier と macro-call regex probe を実行する前に `r#` と `!` marker を確認します。
 - **Rust attribute reference scan を marker で gate します** - Rust reference extraction は derive、cfg_attr derive、attribute-head regex probe を実行する前に attribute hash marker を確認します。
+- **Rust associated receiver scan を marker で gate します** - Rust reference extraction は associated call/value receiver scan を実行する前に path separator、generic、call marker を確認します。
 - **Python decorator reference scan を marker で gate します** - Python reference extraction は `@` marker がない行では decorator-call と bare-decorator regex probe を skip します。
 - **Python raise/except type scan を marker で gate します** - Python reference extraction は exception type regex probe を実行する前に `raise` と `except` marker を確認します。
 - **Python runtime type-check scan を marker で gate します** - Python reference extraction は runtime type-check regex probe を実行する前に `isinstance` と `issubclass` marker を確認します。
