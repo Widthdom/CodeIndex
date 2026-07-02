@@ -5,6 +5,7 @@ namespace CodeIndex.Indexer;
 
 internal static class CSharpStaticInterfacePrepass
 {
+    private static readonly bool IsWindowsPlatform = OperatingSystem.IsWindows();
     private static readonly byte[] CSharpInterfaceKeywordBytes = "interface"u8.ToArray();
     private static readonly byte[] CSharpStaticKeywordBytes = "static"u8.ToArray();
     private static readonly byte[] CSharpAbstractKeywordBytes = "abstract"u8.ToArray();
@@ -651,7 +652,7 @@ internal static class CSharpStaticInterfacePrepass
         if (Path.IsPathRooted(relativePath))
             return true;
 
-        var normalized = OperatingSystem.IsWindows()
+        var normalized = IsWindowsPlatform
             ? relativePath.Replace('\\', '/')
             : relativePath;
         return normalized == ".." || normalized.StartsWith("../", StringComparison.Ordinal);

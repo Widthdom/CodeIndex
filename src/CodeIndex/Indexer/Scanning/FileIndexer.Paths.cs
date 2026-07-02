@@ -45,7 +45,7 @@ public partial class FileIndexer
         if (root.Length == 0)
             return null;
 
-        var comparison = OperatingSystem.IsWindows()
+        var comparison = IsWindowsPlatform
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
         if (path.Length == root.Length)
