@@ -527,32 +527,42 @@ internal static partial class SqlReferenceExtractor
         Func<string, bool> shouldIgnoreName,
         HashSet<int> suppressedCallIndices)
     {
-        EmitCreateIndexTargetReferences(
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName,
-            suppressedCallIndices);
+        if (statement.IndexOf("INDEX", StringComparison.OrdinalIgnoreCase) < 0)
+            return;
 
-        EmitAlterAndDropIndexTargetReferences(
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (statement.IndexOf("CREATE", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitCreateIndexTargetReferences(
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName,
+                suppressedCallIndices);
+        }
+
+        if (statement.IndexOf("ALTER", StringComparison.OrdinalIgnoreCase) >= 0
+            || statement.IndexOf("DROP", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitAlterAndDropIndexTargetReferences(
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
     }
 
     private static void EmitCreateIndexTargetReferences(
@@ -569,6 +579,9 @@ internal static partial class SqlReferenceExtractor
         Func<string, bool> shouldIgnoreName,
         HashSet<int> suppressedCallIndices)
     {
+        if (statement.IndexOf("ON", StringComparison.OrdinalIgnoreCase) < 0)
+            return;
+
         EmitMultiTargetReferences(
             CreateIndexOnTargetRegex.Matches(statement),
             statement,
@@ -584,65 +597,77 @@ internal static partial class SqlReferenceExtractor
             shouldIgnoreName,
             suppressedCallIndices);
 
-        EmitMultiTargetReferences(
-            CreateSpecialXmlIndexOnTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName,
-            suppressedCallIndices);
+        if (statement.IndexOf("XML", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                CreateSpecialXmlIndexOnTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName,
+                suppressedCallIndices);
+        }
 
-        EmitMultiTargetReferences(
-            CreateClusteredColumnstoreIndexOnTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName,
-            suppressedCallIndices);
+        if (statement.IndexOf("COLUMNSTORE", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                CreateClusteredColumnstoreIndexOnTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName,
+                suppressedCallIndices);
+        }
 
-        EmitMultiTargetReferences(
-            CreateHashIndexOnTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName,
-            suppressedCallIndices);
+        if (statement.IndexOf("HASH", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                CreateHashIndexOnTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName,
+                suppressedCallIndices);
+        }
 
-        EmitMultiTargetReferences(
-            CreateFullTextIndexOnTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName,
-            suppressedCallIndices);
+        if (statement.IndexOf("FULLTEXT", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                CreateFullTextIndexOnTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName,
+                suppressedCallIndices);
+        }
     }
 
     private static void EmitAlterAndDropIndexTargetReferences(
@@ -658,47 +683,60 @@ internal static partial class SqlReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForCall,
         Func<string, bool> shouldIgnoreName)
     {
-        EmitMultiTargetReferences(
-            AlterIndexOnTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (statement.IndexOf("ALTER", StringComparison.OrdinalIgnoreCase) >= 0
+            && statement.IndexOf("ON", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                AlterIndexOnTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
 
-        EmitMultiTargetReferences(
-            AlterFullTextIndexOnTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+            if (statement.IndexOf("FULLTEXT", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                EmitMultiTargetReferences(
+                    AlterFullTextIndexOnTargetRegex.Matches(statement),
+                    statement,
+                    statementStart,
+                    statementLineOffset,
+                    lineOffset,
+                    context,
+                    lineNumber,
+                    references,
+                    seen,
+                    fileId,
+                    resolveContainerForCall,
+                    shouldIgnoreName);
+            }
+        }
 
-        EmitMultiTargetReferences(
-            DropIndexOnTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (statement.IndexOf("DROP", StringComparison.OrdinalIgnoreCase) < 0)
+            return;
+
+        if (statement.IndexOf("ON", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                DropIndexOnTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
 
         EmitMultiTargetReferences(
             DropIndexLegacyTargetRegex.Matches(statement),
@@ -714,19 +752,23 @@ internal static partial class SqlReferenceExtractor
             resolveContainerForCall,
             shouldIgnoreName);
 
-        EmitMultiTargetReferences(
-            DropFullTextIndexOnTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        if (statement.IndexOf("FULLTEXT", StringComparison.OrdinalIgnoreCase) >= 0
+            && statement.IndexOf("ON", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            EmitMultiTargetReferences(
+                DropFullTextIndexOnTargetRegex.Matches(statement),
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
     }
 
     private static void EmitObjectLifecycleTargetReferences(
