@@ -658,6 +658,12 @@ internal static class RReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("source", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf('(') < 0)
+        {
+            return;
+        }
+
         if (!SourceFileReferenceStartRegex.IsMatch(preparedLine))
             return;
 
@@ -688,6 +694,12 @@ internal static class RReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (originalLine.IndexOf("load_all", StringComparison.Ordinal) < 0
+            || originalLine.IndexOf('(') < 0)
+        {
+            return;
+        }
+
         var line = StripRNamespaceDirectiveComment(originalLine);
         var match = LoadAllReferenceRegex.Match(line);
         if (!match.Success)
@@ -716,6 +728,12 @@ internal static class RReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("data", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf('(') < 0)
+        {
+            return;
+        }
+
         if (!DataCallStartRegex.IsMatch(preparedLine))
             return;
 
@@ -762,6 +780,12 @@ internal static class RReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("system.file", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf('(') < 0)
+        {
+            return;
+        }
+
         if (!SystemFileCallStartRegex.IsMatch(preparedLine))
             return;
 
@@ -808,6 +832,12 @@ internal static class RReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("vignette", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf('(') < 0)
+        {
+            return;
+        }
+
         EmitDocumentationTopicReferences(
             preparedLine,
             originalLine,
@@ -830,6 +860,13 @@ internal static class RReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if ((preparedLine.IndexOf("help", StringComparison.Ordinal) < 0
+                && preparedLine.IndexOf("example", StringComparison.Ordinal) < 0)
+            || preparedLine.IndexOf('(') < 0)
+        {
+            return;
+        }
+
         EmitDocumentationTopicReferences(
             preparedLine,
             originalLine,
@@ -899,6 +936,12 @@ internal static class RReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("install.packages", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf('(') < 0)
+        {
+            return;
+        }
+
         EmitPackageNameArgumentReferences(
             preparedLine,
             originalLine,
@@ -921,6 +964,12 @@ internal static class RReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("install", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf('(') < 0)
+        {
+            return;
+        }
+
         EmitPackageNameArgumentReferences(
             preparedLine,
             originalLine,
@@ -943,6 +992,12 @@ internal static class RReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("install_github", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf('(') < 0)
+        {
+            return;
+        }
+
         EmitPackageNameArgumentReferences(
             preparedLine,
             originalLine,
