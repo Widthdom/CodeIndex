@@ -2778,8 +2778,24 @@ internal static partial class LanguageReferenceExtractionSupport
         int lineNumber,
         SymbolRecord? container)
     {
-        foreach (var match in EnumerateMatches(ElixirImportRegex, preparedLine).Concat(EnumerateMatches(ElixirBehaviourRegex, preparedLine)))
-            ReferenceExtractor.AddReference(references, seen, fileId, match, "type_reference", context, lineNumber, container);
+        var hasImportMarker = preparedLine.IndexOf("alias", StringComparison.Ordinal) >= 0
+            || preparedLine.IndexOf("import", StringComparison.Ordinal) >= 0
+            || preparedLine.IndexOf("require", StringComparison.Ordinal) >= 0
+            || preparedLine.IndexOf("use", StringComparison.Ordinal) >= 0;
+        if (hasImportMarker)
+        {
+            foreach (var match in EnumerateMatches(ElixirImportRegex, preparedLine))
+                ReferenceExtractor.AddReference(references, seen, fileId, match, "type_reference", context, lineNumber, container);
+        }
+
+        var hasBehaviourMarker = preparedLine.IndexOf('@') >= 0
+            && (preparedLine.IndexOf("behaviour", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("impl", StringComparison.Ordinal) >= 0);
+        if (hasBehaviourMarker)
+        {
+            foreach (var match in EnumerateMatches(ElixirBehaviourRegex, preparedLine))
+                ReferenceExtractor.AddReference(references, seen, fileId, match, "type_reference", context, lineNumber, container);
+        }
     }
 
     private static bool IsIdentifierAt(string line, int index, string identifier)
