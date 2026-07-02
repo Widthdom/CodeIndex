@@ -83,6 +83,7 @@ affected:
 - **Gated XAML static-member markup scans by prefix** - XAML/XML extraction now skips `{x:Static}` type inference when the prefix is absent.
 - **Gated XAML reference scans by prefix** - XAML/XML extraction now skips `x:Reference` markup, object element, and property element scans when their prefixes are absent.
 - **Gated XAML resource reference scans by prefix** - XAML/XML extraction now skips static/dynamic resource markup scans when their prefixes are absent.
+- **Gated Pascal range token scans by keyword** - Pascal extraction now skips begin/end/case/try regex counting on lines that cannot contain the corresponding token.
 
 ## 日本語
 
@@ -130,3 +131,4 @@ affected:
 - **XAML static-member markup scan を prefix で gate します** - XAML/XML extraction は `{x:Static}` prefix がない場合に static-member type inference を skip します。
 - **XAML reference scan を prefix で gate します** - XAML/XML extraction は `x:Reference` の markup、object element、property element scan を対応 prefix がない場合に skip します。
 - **XAML resource reference scan を prefix で gate します** - XAML/XML extraction は static/dynamic resource markup scan を対応 prefix がない場合に skip します。
+- **Pascal range token scan を keyword で gate します** - Pascal extraction は begin/end/case/try token を含めない行で対応 regex counting を skip します。

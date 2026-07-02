@@ -31,21 +31,21 @@ public static partial class SymbolExtractor
                 if (PascalRoutineStartRegex.IsMatch(trimmed) || PascalRangeBoundaryRegex.IsMatch(trimmed))
                     return (startIndex + 1, null, null);
 
-                var beginCount = PascalBeginRegex.Matches(code).Count;
+                var beginCount = CountPascalBeginTokens(code);
                 if (beginCount == 0)
                     continue;
 
                 opened = true;
                 bodyStartLine = i + 1;
                 depth += beginCount;
-                depth -= PascalEndRegex.Matches(code).Count;
+                depth -= CountPascalEndTokens(code);
                 if (depth <= 0)
                     return (i + 1, bodyStartLine, i + 1);
                 continue;
             }
 
             depth += CountPascalRangeBlockStarts(code);
-            depth -= PascalEndRegex.Matches(code).Count;
+            depth -= CountPascalEndTokens(code);
             if (depth <= 0)
                 return (i + 1, bodyStartLine, i + 1);
         }
@@ -55,8 +55,27 @@ public static partial class SymbolExtractor
             : (lines.Length, bodyStartLine, lines.Length);
     }
 
-    private static int CountPascalRangeBlockStarts(string code) =>
-        PascalBeginRegex.Matches(code).Count + PascalNestedEndBlockStartRegex.Matches(code).Count;
+    private static int CountPascalBeginTokens(string code) =>
+        code.Contains("begin", StringComparison.OrdinalIgnoreCase)
+            ? PascalBeginRegex.Matches(code).Count
+            : 0;
+
+    private static int CountPascalEndTokens(string code) =>
+        code.Contains("end", StringComparison.OrdinalIgnoreCase)
+            ? PascalEndRegex.Matches(code).Count
+            : 0;
+
+    private static int CountPascalRangeBlockStarts(string code)
+    {
+        var count = CountPascalBeginTokens(code);
+        if (code.Contains("case", StringComparison.OrdinalIgnoreCase)
+            || code.Contains("try", StringComparison.OrdinalIgnoreCase))
+        {
+            count += PascalNestedEndBlockStartRegex.Matches(code).Count;
+        }
+
+        return count;
+    }
 
     private static string MaskPascalRangeStrings(string line)
     {
