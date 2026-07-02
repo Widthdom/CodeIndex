@@ -256,6 +256,9 @@ public static partial class SymbolExtractor
 
     private static bool TryAddFSharpActivePatternSymbols(List<SymbolRecord> symbols, long fileId, string line, int lineNumber)
     {
+        if (line.IndexOf("(|", StringComparison.Ordinal) < 0)
+            return false;
+
         var match = FSharpActivePatternDefinitionRegex.Match(line);
         if (!match.Success)
             return false;
@@ -314,6 +317,9 @@ public static partial class SymbolExtractor
 
     private static bool TryAddFSharpOperatorSymbols(List<SymbolRecord> symbols, long fileId, string line, int lineNumber)
     {
+        if (line.IndexOf("let", StringComparison.Ordinal) < 0 || line.IndexOf('(') < 0)
+            return false;
+
         var match = FSharpOperatorDefinitionRegex.Match(line);
         if (!match.Success)
             return false;

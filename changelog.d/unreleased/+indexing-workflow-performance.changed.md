@@ -115,6 +115,7 @@ affected:
 - **Skipped duplicate PHP constructor-start regex checks** - PHP promoted-property extraction now avoids the constructor-start regex once the same-line constructor regex has already matched.
 - **Collapsed duplicate F# type-declaration regex scans** - F# type-member extraction now reuses the declaration match instead of running `IsMatch` and `Match` on the same line.
 - **Gated F# record-field scans by colon** - F# record-field extraction now skips record-field regex checks for candidates that cannot contain a typed field separator.
+- **Gated F# active/operator scans by marker** - F# extraction now skips active-pattern and operator-definition regex checks when lines lack their required markers.
 
 ## 日本語
 
@@ -190,3 +191,4 @@ affected:
 - **PHP constructor-start regex の重複 check を skip します** - PHP promoted-property extraction は same-line constructor regex が既に match した場合 constructor-start regex を実行しないようになりました。
 - **F# type-declaration regex の重複 scan をまとめます** - F# type-member extraction は同じ行に `IsMatch` と `Match` を重ねず、declaration match を再利用します。
 - **F# record-field scan を colon で gate します** - F# record-field extraction は typed field separator を含めない candidate で record-field regex check を skip します。
+- **F# active/operator scan を marker で gate します** - F# extraction は line に必要 marker がない場合 active-pattern と operator-definition regex check を skip します。
