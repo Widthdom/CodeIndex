@@ -4724,6 +4724,27 @@ public static partial class SymbolExtractor
         return false;
     }
 
+    private static bool LinesContainAny(
+        IReadOnlyList<string> lines,
+        string value1,
+        string value2,
+        string value3,
+        StringComparison comparison)
+    {
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var line = lines[i];
+            if (line.IndexOf(value1, comparison) >= 0
+                || line.IndexOf(value2, comparison) >= 0
+                || line.IndexOf(value3, comparison) >= 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static List<int> BuildLineStarts(string content)
     {
         var starts = new List<int> { 0 };
@@ -4747,14 +4768,17 @@ public static partial class SymbolExtractor
 
     private static void ExtractSqlGeneratedColumnSymbols(long fileId, string[] lines, string[] structuralLines, List<SymbolRecord> symbols)
     {
-        var structuralContent = string.Join('\n', structuralLines);
-        if (structuralContent.IndexOf("GENERATED", StringComparison.OrdinalIgnoreCase) < 0
-            && structuralContent.IndexOf("NEXT VALUE FOR", StringComparison.OrdinalIgnoreCase) < 0
-            && structuralContent.IndexOf(" AS ", StringComparison.OrdinalIgnoreCase) < 0)
+        if (!LinesContainAny(
+            structuralLines,
+            "GENERATED",
+            "NEXT VALUE FOR",
+            " AS ",
+            StringComparison.OrdinalIgnoreCase))
         {
             return;
         }
 
+        var structuralContent = string.Join('\n', structuralLines);
         var lineStarts = BuildLineStarts(structuralContent);
         foreach (Match match in SqlAlterTableAddGeneratedColumnRegex.Matches(structuralContent))
         {
