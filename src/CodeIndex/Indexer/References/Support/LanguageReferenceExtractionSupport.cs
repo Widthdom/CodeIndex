@@ -2276,10 +2276,15 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        foreach (Match match in VbGetXmlNamespaceRegex.Matches(preparedLine))
+        var hasVbGetXmlNamespaceMarker = preparedLine.Contains('(')
+            && preparedLine.IndexOf("GetXmlNamespace", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (hasVbGetXmlNamespaceMarker)
         {
-            var group = match.Groups["name"];
-            ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "type_reference", context, lineNumber, resolveContainerForColumn(group.Index));
+            foreach (Match match in VbGetXmlNamespaceRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["name"];
+                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "type_reference", context, lineNumber, resolveContainerForColumn(group.Index));
+            }
         }
 
         foreach (Match match in VbAddressOfRegex.Matches(preparedLine))

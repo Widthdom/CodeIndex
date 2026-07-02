@@ -288,6 +288,7 @@ affected:
 - **Gated VB GetType scans by marker** - Visual Basic reference extraction now checks `GetType` and parenthesis markers before running `GetType` regex probes.
 - **Gated VB TypeOf scans by marker** - Visual Basic reference extraction now checks `TypeOf` and `Is` markers before running `TypeOf` regex probes.
 - **Gated VB NameOf scans by marker** - Visual Basic reference extraction now checks `NameOf` and parenthesis markers before running `NameOf` regex probes.
+- **Gated VB XML namespace scans by marker** - Visual Basic reference extraction now checks `GetXmlNamespace` and parenthesis markers before running XML namespace regex probes.
 
 ## 日本語
 
@@ -510,3 +511,4 @@ affected:
 - **VB GetType scan を marker で gate します** - Visual Basic reference extraction は `GetType` regex probe の前に `GetType` と parenthesis marker を確認します。
 - **VB TypeOf scan を marker で gate します** - Visual Basic reference extraction は `TypeOf` regex probe の前に `TypeOf` と `Is` marker を確認します。
 - **VB NameOf scan を marker で gate します** - Visual Basic reference extraction は `NameOf` regex probe の前に `NameOf` と parenthesis marker を確認します。
+- **VB XML namespace scan を marker で gate します** - Visual Basic reference extraction は XML namespace regex probe の前に `GetXmlNamespace` と parenthesis marker を確認します。
