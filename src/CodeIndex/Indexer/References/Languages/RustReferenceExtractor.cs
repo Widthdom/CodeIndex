@@ -2035,7 +2035,14 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        var genericOpenIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '<');
+        var hasGenericMarker = preparedLine.IndexOf('<') >= 0;
+        var hasWhereMarker = preparedLine.IndexOf("where", StringComparison.Ordinal) >= 0;
+        if (!hasGenericMarker && !hasWhereMarker)
+            return;
+
+        var genericOpenIndex = hasGenericMarker
+            ? TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '<')
+            : -1;
         if (genericOpenIndex >= 0)
         {
             var constGenericNames = EmitConstGenericParameterReferences(
@@ -2086,6 +2093,9 @@ internal static class RustReferenceExtractor
                 lineNumber,
                 resolveContainerForColumn);
         }
+
+        if (!hasWhereMarker)
+            return;
 
         TypedLanguageReferenceExtractor.EmitWhereClauseTypeReferences(
             preparedLine,
