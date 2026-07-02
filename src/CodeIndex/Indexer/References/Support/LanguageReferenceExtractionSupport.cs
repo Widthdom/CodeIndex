@@ -1721,16 +1721,28 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        foreach (Match match in CppTemplateIdDeclarationRegex.Matches(preparedLine))
+        var hasCppTemplateClose = preparedLine.IndexOf('>') >= 0;
+        var hasCppTemplateIdDeclarationMarker = hasCppTemplateOpen
+            && hasCppTemplateClose
+            && (preparedLine.IndexOf('=') >= 0
+                || preparedLine.IndexOf(';') >= 0
+                || preparedLine.IndexOf('{') >= 0
+                || preparedLine.IndexOf(',') >= 0
+                || preparedLine.IndexOf(')') >= 0
+                || preparedLine.IndexOf('[') >= 0);
+        if (hasCppTemplateIdDeclarationMarker)
         {
-            if (IsCppTemplateDeclarationOrSpecializationLine(preparedLine, match.Index))
-                continue;
+            foreach (Match match in CppTemplateIdDeclarationRegex.Matches(preparedLine))
+            {
+                if (IsCppTemplateDeclarationOrSpecializationLine(preparedLine, match.Index))
+                    continue;
 
-            var group = match.Groups["type"];
-            var typeName = LastCppQualifiedSegment(group.Value);
-            var typeStart = group.Index + group.Value.LastIndexOf(typeName, StringComparison.Ordinal);
-            ReferenceExtractor.AddReference(references, seen, fileId, typeName, typeStart, "instantiate", context, lineNumber, resolveContainerForColumn(typeStart));
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, match.Groups["args"].Value, match.Groups["args"].Index, context, lineNumber, resolveContainerForColumn(match.Groups["args"].Index), language);
+                var group = match.Groups["type"];
+                var typeName = LastCppQualifiedSegment(group.Value);
+                var typeStart = group.Index + group.Value.LastIndexOf(typeName, StringComparison.Ordinal);
+                ReferenceExtractor.AddReference(references, seen, fileId, typeName, typeStart, "instantiate", context, lineNumber, resolveContainerForColumn(typeStart));
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, match.Groups["args"].Value, match.Groups["args"].Index, context, lineNumber, resolveContainerForColumn(match.Groups["args"].Index), language);
+            }
         }
 
         foreach (Match match in CppTemplateParameterDefaultTypeRegex.Matches(preparedLine))
