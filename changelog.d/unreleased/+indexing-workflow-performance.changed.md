@@ -106,6 +106,7 @@ affected:
 - **Gated Smalltalk range-boundary scans by marker** - Smalltalk range extraction now skips method/class boundary regex checks when the line lacks `>>`, `subclass:`, or `named:`.
 - **Gated Rust use-start scans by keyword** - Rust use-statement collection now skips the start regex when the first line lacks the `use` keyword marker.
 - **Gated Kotlin class subkind scans by keyword** - Kotlin class enrichment now skips value/inline class regex checks when metadata lacks the corresponding keyword marker.
+- **Gated Kotlin inline-function scans by keyword** - Kotlin function enrichment now skips inline/reified regex checks when signatures lack the matching keyword markers.
 
 ## 日本語
 
@@ -174,3 +175,4 @@ affected:
 - **Smalltalk range-boundary scan を marker で gate します** - Smalltalk range extraction は line に `>>`、`subclass:`、`named:` がない場合 method/class boundary regex check を skip します。
 - **Rust use-start scan を keyword で gate します** - Rust use-statement collection は first line に `use` keyword marker がない場合 start regex を skip します。
 - **Kotlin class subkind scan を keyword で gate します** - Kotlin class enrichment は metadata に対応する keyword marker がない場合 value/inline class regex check を skip します。
+- **Kotlin inline-function scan を keyword で gate します** - Kotlin function enrichment は signature に対応する keyword marker がない場合 inline/reified regex check を skip します。

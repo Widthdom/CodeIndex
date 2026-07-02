@@ -42,9 +42,12 @@ public static partial class SymbolExtractor
             }
         }
 
-        if (kind == "function" && KotlinInlineFunctionSignatureRegex.IsMatch(signature))
+        if (kind == "function"
+            && signature.Contains("inline", StringComparison.Ordinal)
+            && KotlinInlineFunctionSignatureRegex.IsMatch(signature))
         {
-            return KotlinReifiedTypeParameterSignatureRegex.IsMatch(signature)
+            return signature.Contains("reified", StringComparison.Ordinal)
+                && KotlinReifiedTypeParameterSignatureRegex.IsMatch(signature)
                 ? "kotlin_inline_reified_function"
                 : "kotlin_inline_function";
         }
