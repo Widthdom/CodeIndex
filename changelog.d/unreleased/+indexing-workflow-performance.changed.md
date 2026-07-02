@@ -86,6 +86,7 @@ affected:
 - **Gated Pascal range token scans by keyword** - Pascal extraction now skips begin/end/case/try regex counting on lines that cannot contain the corresponding token.
 - **Gated Ruby and Elixir block token scans by keyword** - Ruby and Elixir range extraction now skips block-token regex scans on masked text without any matching token marker.
 - **Gated shell heredoc scans by redirect marker** - Shell extraction now skips heredoc masking and redirect regex scans on lines without `<<`.
+- **Gated Perl hash-constant key scans by pair marker** - Perl extraction now skips `use constant` hash key regex scans when the collected body lacks `=>`.
 
 ## 日本語
 
@@ -136,3 +137,4 @@ affected:
 - **Pascal range token scan を keyword で gate します** - Pascal extraction は begin/end/case/try token を含めない行で対応 regex counting を skip します。
 - **Ruby/Elixir block token scan を keyword で gate します** - Ruby と Elixir の range extraction は token marker がない masked text で block-token regex scan を skip します。
 - **shell heredoc scan を redirect marker で gate します** - Shell extraction は `<<` がない行で heredoc masking と redirect regex scan を skip します。
+- **Perl hash-constant key scan を pair marker で gate します** - Perl extraction は collected body に `=>` がない `use constant` hash で key regex scan を skip します。

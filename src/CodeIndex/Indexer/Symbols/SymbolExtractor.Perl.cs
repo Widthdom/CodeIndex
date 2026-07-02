@@ -27,6 +27,12 @@ public static partial class SymbolExtractor
             if (!TryCollectPerlHashConstantBody(lines, i, out var body, out var lineSegments, out var endLineIndex, out var signature))
                 continue;
 
+            if (body.IndexOf("=>", StringComparison.Ordinal) < 0)
+            {
+                i = endLineIndex;
+                continue;
+            }
+
             var seenConstantNames = new HashSet<string>(StringComparer.Ordinal);
             foreach (Match keyMatch in PerlHashConstantKeyRegex.Matches(body))
             {
