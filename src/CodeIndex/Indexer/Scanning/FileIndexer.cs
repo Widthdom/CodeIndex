@@ -46,6 +46,7 @@ public partial class FileIndexer
     private readonly Func<string, IEnumerable<string>>? _enumerateFilesForTesting;
     private readonly Func<string, IEnumerable<string>> _enumerateFileSystemEntries;
     private readonly Dictionary<string, bool> _directoryIgnoreCaseCache;
+    private readonly Dictionary<string, IReadOnlyDictionary<string, string>> _languageMapOverrideCache;
     private readonly long _maxFileSizeBytes;
     private readonly FileContentLoader _contentLoader;
     private readonly SymlinkPolicy _symlinkPolicy;
@@ -126,6 +127,7 @@ public partial class FileIndexer
         _enumerateFilesForTesting = enumerateFiles;
         _enumerateFileSystemEntries = enumerateFileSystemEntries ?? (dir => CodeIndex.FileSystemTraversalPolicy.EnumerateFileSystemEntries(LongPath.EnsureWindowsPrefix(dir)));
         _directoryIgnoreCaseCache = new Dictionary<string, bool>(StringComparer.Ordinal);
+        _languageMapOverrideCache = new Dictionary<string, IReadOnlyDictionary<string, string>>(StringComparer.Ordinal);
         _maxFileSizeBytes = ResolveMaxFileSizeBytes(maxFileSizeBytes);
         _contentLoader = new FileContentLoader(_maxFileSizeBytes);
         _symlinkPolicy = symlinkPolicy;

@@ -826,6 +826,40 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void TryDetectLanguageForIndexing_CachesLanguageMapOverridesPerDirectory()
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_indexer_cache");
+        LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        var stampProbeCount = 0;
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(tempDir, LanguageMapOverrides.WorkspaceFileName),
+                "entries:\n- extension: custom\n  language: ruby\n");
+            var firstPath = Path.Combine(tempDir, "first.custom");
+            var secondPath = Path.Combine(tempDir, "second.custom");
+            File.WriteAllText(firstPath, "first");
+            File.WriteAllText(secondPath, "second");
+            LanguageMapOverrides.ConfigPathStampProbeForTesting = _ => stampProbeCount++;
+
+            var indexer = new FileIndexer(tempDir);
+
+            Assert.Equal("ruby", indexer.TryDetectLanguageForIndexing(firstPath).Language);
+            var firstProbeCount = stampProbeCount;
+            Assert.True(firstProbeCount > 0);
+
+            Assert.Equal("ruby", indexer.TryDetectLanguageForIndexing(secondPath).Language);
+            Assert.Equal(firstProbeCount, stampProbeCount);
+        }
+        finally
+        {
+            LanguageMapOverrides.ConfigPathStampProbeForTesting = null;
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public void LanguageMapOverrides_LoadEffectiveMapReloadsWhenWorkspaceConfigChanges()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_cache_{Guid.NewGuid():N}");

@@ -253,7 +253,30 @@ public partial class FileIndexer
         string filePath,
         string? content = null,
         FileProbeStatus? knownIndexability = null)
-        => TryDetectLanguage(filePath, content, _symlinkPolicy, _projectRoot, knownIndexability);
+        => TryDetectLanguage(
+            filePath,
+            content,
+            _symlinkPolicy,
+            _projectRoot,
+            knownIndexability,
+            LoadLanguageMapOverridesForIndexing);
+
+    private IReadOnlyDictionary<string, string> LoadLanguageMapOverridesForIndexing(string? startDirectory)
+    {
+        startDirectory = string.IsNullOrWhiteSpace(startDirectory)
+            ? Environment.CurrentDirectory
+            : Path.GetFullPath(startDirectory);
+
+        lock (_languageMapOverrideCache)
+        {
+            if (_languageMapOverrideCache.TryGetValue(startDirectory, out var cached))
+                return cached;
+
+            var loaded = LanguageMapOverrides.LoadEffectiveMapFromDirectory(startDirectory);
+            _languageMapOverrideCache[startDirectory] = loaded;
+            return loaded;
+        }
+    }
 
     internal static string? GetReusableDetectedLanguage(
         string filePath,
@@ -298,7 +321,8 @@ public partial class FileIndexer
         string? content,
         SymlinkPolicy symlinkPolicy,
         string? projectRoot,
-        FileProbeStatus? knownIndexability = null)
+        FileProbeStatus? knownIndexability = null,
+        Func<string?, IReadOnlyDictionary<string, string>>? languageMapOverrideResolver = null)
     {
         // Exact filename matching beats extension lookup so manifest-style filenames like
         // `pyproject.toml` can map to a dependency category instead of the generic file type.
@@ -322,7 +346,7 @@ public partial class FileIndexer
         }
 
         var ext = Path.GetExtension(fileName);
-        if (TryDetectLanguageOverride(filePath, fileName, out var overrideLang))
+        if (TryDetectLanguageOverride(filePath, fileName, languageMapOverrideResolver, out var overrideLang))
             return new LanguageDetectionResult(FileProbeStatus.Supported, overrideLang);
 
         if (LangMap.TryGetValue(ext, out var lang))
@@ -352,14 +376,20 @@ public partial class FileIndexer
         return TryDetectLanguageFromShebang(filePath, symlinkPolicy, projectRoot, knownIndexability);
     }
 
-    private static bool TryDetectLanguageOverride(string filePath, string fileName, out string language)
+    private static bool TryDetectLanguageOverride(
+        string filePath,
+        string fileName,
+        Func<string?, IReadOnlyDictionary<string, string>>? languageMapOverrideResolver,
+        out string language)
     {
         language = string.Empty;
         if (!fileName.Contains('.', StringComparison.Ordinal))
             return false;
 
         var startDirectory = Path.GetDirectoryName(Path.GetFullPath(filePath));
-        var overrides = LanguageMapOverrides.LoadEffectiveMapFromDirectory(startDirectory);
+        var overrides = languageMapOverrideResolver == null
+            ? LanguageMapOverrides.LoadEffectiveMapFromDirectory(startDirectory)
+            : languageMapOverrideResolver(startDirectory);
         if (overrides.Count == 0)
             return false;
 

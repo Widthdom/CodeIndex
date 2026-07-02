@@ -18,6 +18,7 @@ internal static class LanguageMapOverrides
     private static readonly Dictionary<string, EffectiveMapCacheEntry> EffectiveMapCache = new(StringComparer.Ordinal);
 
     internal static Func<string, Stream>? OpenOverrideFileForTesting { get; set; }
+    internal static Action<string>? ConfigPathStampProbeForTesting { get; set; }
 
     private readonly record struct ConfigPathCandidate(string Path, bool IsUserConfig);
 
@@ -133,6 +134,7 @@ internal static class LanguageMapOverrides
     {
         try
         {
+            ConfigPathStampProbeForTesting?.Invoke(candidate.Path);
             var info = new FileInfo(candidate.Path);
             return info.Exists
                 ? new ConfigPathStamp(candidate.Path, candidate.IsUserConfig, Exists: true, info.LastWriteTimeUtc, info.Length)
