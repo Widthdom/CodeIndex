@@ -178,6 +178,9 @@ public static partial class SymbolExtractor
         var truncated = false;
         for (var i = 0; i < lines.Length; i++)
         {
+            if (lines[i].IndexOf(':') < 0 || lines[i].IndexOf('"') < 0)
+                continue;
+
             var match = JsonFallbackPropertyRegex.Match(lines[i]);
             if (!match.Success)
                 continue;
