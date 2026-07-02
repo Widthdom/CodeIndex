@@ -116,6 +116,7 @@ affected:
 - **Dispatched PHP import scans by marker** - PHP import extraction now checks `use`, grouped-use braces, and require/include markers before running the corresponding regexes.
 - **Gated PHP grouped-use alias scans by marker** - PHP grouped-use import extraction now skips per-item alias regex checks unless the item contains an `as` marker.
 - **Gated PHP promoted-property parameter scans by marker** - PHP constructor promotion extraction now skips parameter regex checks when the segment lacks `$` or visibility keywords.
+- **Gated PHP docblock and alias scans by syntax marker** - PHP supplemental extraction now skips docblock, trait-alias, and constructor regex checks when lines lack required sigils or delimiters.
 - **Collapsed duplicate F# type-declaration regex scans** - F# type-member extraction now reuses the declaration match instead of running `IsMatch` and `Match` on the same line.
 - **Gated F# record-field scans by colon** - F# record-field extraction now skips record-field regex checks for candidates that cannot contain a typed field separator.
 - **Gated F# active/operator scans by marker** - F# extraction now skips active-pattern and operator-definition regex checks when lines lack their required markers.
@@ -201,6 +202,7 @@ affected:
 - **PHP import scan を marker で振り分けます** - PHP import extraction は `use`、grouped-use の brace、require/include marker を確認してから対応 regex を実行します。
 - **PHP grouped-use alias scan を marker で gate します** - PHP grouped-use import extraction は item に `as` marker がある場合だけ item alias regex を実行します。
 - **PHP promoted-property parameter scan を marker で gate します** - PHP constructor promotion extraction は segment に `$` または visibility keyword がない場合 parameter regex を skip します。
+- **PHP docblock / alias scan を syntax marker で gate します** - PHP supplemental extraction は必須の sigil や delimiter がない行で docblock、trait alias、constructor regex check を skip します。
 - **F# type-declaration regex の重複 scan をまとめます** - F# type-member extraction は同じ行に `IsMatch` と `Match` を重ねず、declaration match を再利用します。
 - **F# record-field scan を colon で gate します** - F# record-field extraction は typed field separator を含めない candidate で record-field regex check を skip します。
 - **F# active/operator scan を marker で gate します** - F# extraction は line に必要 marker がない場合 active-pattern と operator-definition regex check を skip します。
