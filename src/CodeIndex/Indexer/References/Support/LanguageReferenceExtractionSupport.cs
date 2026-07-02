@@ -1824,10 +1824,17 @@ internal static partial class LanguageReferenceExtractionSupport
                 }
             }
 
-            foreach (Match match in CppConceptExpressionTypeRegex.Matches(preparedLine))
+            var hasCppConceptExpressionMarker = hasCppTemplateOpen
+                && (preparedLine.IndexOf('=') >= 0
+                    || preparedLine.IndexOf("&&", StringComparison.Ordinal) >= 0
+                    || preparedLine.IndexOf("||", StringComparison.Ordinal) >= 0);
+            if (hasCppConceptExpressionMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CppConceptExpressionTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
         }
 

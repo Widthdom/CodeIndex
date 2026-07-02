@@ -271,6 +271,7 @@ affected:
 - **Gated C++ trailing return type scans by marker** - C/C++ reference extraction now checks close-parenthesis and arrow markers before running trailing return type regex probes.
 - **Gated C++ requires concept type scans by marker** - C/C++ reference extraction now checks `requires` and template markers before running requires concept type regex probes.
 - **Gated C++ qualified requires concept scans by marker** - C/C++ reference extraction now checks `requires`, template, and scope markers before running qualified requires concept regex probes.
+- **Gated C++ concept expression type scans by marker** - C/C++ reference extraction now checks template and concept operator markers before running concept expression type regex probes.
 
 ## 日本語
 
@@ -476,3 +477,4 @@ affected:
 - **C++ trailing return type scan を marker で gate します** - C/C++ reference extraction は trailing return type regex probe の前に close-parenthesis と arrow marker を確認します。
 - **C++ requires concept type scan を marker で gate します** - C/C++ reference extraction は requires concept type regex probe の前に `requires` と template marker を確認します。
 - **C++ qualified requires concept scan を marker で gate します** - C/C++ reference extraction は qualified requires concept regex probe の前に `requires` / template / scope marker を確認します。
+- **C++ concept expression type scan を marker で gate します** - C/C++ reference extraction は concept expression type regex probe の前に template と concept operator marker を確認します。
