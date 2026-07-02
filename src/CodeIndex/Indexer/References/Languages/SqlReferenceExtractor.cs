@@ -9,6 +9,7 @@ namespace CodeIndex.Indexer;
 internal static partial class SqlReferenceExtractor
 {
     private readonly record struct CteBodySpan(int StartIndex, int EndIndexExclusive);
+    private readonly record struct DefinitionLeafPattern(string LeafName, string Pattern);
     public static State CreateState() => new();
 
     public static void AddDefinitionNameAliases(HashSet<string> names, SymbolRecord symbol)
@@ -23,11 +24,12 @@ internal static partial class SqlReferenceExtractor
         IReadOnlyList<SymbolRecord> symbols)
     {
         var spansByLine = new Dictionary<int, List<DefinitionLeafSpan>>();
+        var patternCache = new Dictionary<string, DefinitionLeafPattern>(StringComparer.Ordinal);
         foreach (var symbol in symbols)
         {
             if (symbol.Line < 1 || symbol.Line > lines.Length)
                 continue;
-            if (!TryFindDefinitionLeafSpan(lines[symbol.Line - 1], symbol.Name, out var span))
+            if (!TryFindDefinitionLeafSpan(lines[symbol.Line - 1], symbol.Name, patternCache, out var span))
                 continue;
 
             if (!spansByLine.TryGetValue(symbol.Line, out var spans))
@@ -3595,11 +3597,38 @@ internal static partial class SqlReferenceExtractor
         }
     }
 
-    private static bool TryFindDefinitionLeafSpan(string line, string qualifiedName, out DefinitionLeafSpan span)
+    private static bool TryFindDefinitionLeafSpan(
+        string line,
+        string qualifiedName,
+        Dictionary<string, DefinitionLeafPattern> patternCache,
+        out DefinitionLeafSpan span)
     {
         span = default;
         if (string.IsNullOrWhiteSpace(line) || string.IsNullOrWhiteSpace(qualifiedName))
             return false;
+
+        if (!TryGetDefinitionLeafPattern(qualifiedName, patternCache, out var leafPattern))
+            return false;
+
+        var match = BoundedRegex.Match(line, leafPattern.Pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!match.Success)
+            return false;
+
+        var leafGroup = match.Groups["leaf"];
+        if (!leafGroup.Success)
+            return false;
+
+        span = new DefinitionLeafSpan(leafPattern.LeafName, leafGroup.Index, leafGroup.Index + leafGroup.Length);
+        return true;
+    }
+
+    private static bool TryGetDefinitionLeafPattern(
+        string qualifiedName,
+        Dictionary<string, DefinitionLeafPattern> patternCache,
+        out DefinitionLeafPattern leafPattern)
+    {
+        if (patternCache.TryGetValue(qualifiedName, out leafPattern))
+            return true;
 
         var leafName = SqlNameResolver.GetLeafName(qualifiedName);
         if (string.IsNullOrWhiteSpace(leafName))
@@ -3622,15 +3651,8 @@ internal static partial class SqlReferenceExtractor
                 pattern.Append(escaped);
         }
 
-        var match = BoundedRegex.Match(line, pattern.ToString(), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        if (!match.Success)
-            return false;
-
-        var leafGroup = match.Groups["leaf"];
-        if (!leafGroup.Success)
-            return false;
-
-        span = new DefinitionLeafSpan(leafName, leafGroup.Index, leafGroup.Index + leafGroup.Length);
+        leafPattern = new DefinitionLeafPattern(leafName, pattern.ToString());
+        patternCache[qualifiedName] = leafPattern;
         return true;
     }
 
