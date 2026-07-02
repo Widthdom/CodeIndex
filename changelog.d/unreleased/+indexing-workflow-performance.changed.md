@@ -251,6 +251,7 @@ affected:
 - **Gated C generic association type scans by marker** - C reference extraction now checks `_Generic` or continuation delimiters plus typedef/tag markers before running generic association type regex probes.
 - **Gated C atomic and alignas type scans by marker** - C reference extraction now checks `_Atomic` and alignas markers plus typedef/tag markers before running atomic and alignas type regex probes.
 - **Gated C function-pointer type scans by marker** - C reference extraction now checks function-pointer delimiter markers plus typedef/tag markers before running function-pointer alias and declaration type regex probes.
+- **Gated C pointer-array declaration type scans by marker** - C reference extraction now checks function-pointer and array delimiters plus typedef/tag markers before running pointer-array declaration type regex probes.
 
 ## 日本語
 
@@ -436,3 +437,4 @@ affected:
 - **C generic association type scan を marker で gate します** - C reference extraction は generic association type regex probe の前に `_Generic` または continuation delimiter と typedef/tag marker を確認します。
 - **C atomic / alignas type scan を marker で gate します** - C reference extraction は atomic / alignas type regex probe の前に `_Atomic` や alignas marker と typedef/tag marker を確認します。
 - **C function-pointer type scan を marker で gate します** - C reference extraction は function-pointer alias / declaration type regex probe の前に function-pointer delimiter marker と typedef/tag marker を確認します。
+- **C pointer-array declaration type scan を marker で gate します** - C reference extraction は pointer-array declaration type regex probe の前に function-pointer / array delimiter marker と typedef/tag marker を確認します。
