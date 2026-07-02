@@ -88,6 +88,7 @@ internal static class IndexFreshnessChecker
                     target.RelativePath,
                     knownLanguage,
                     detectGeneratedCode: false,
+                    knownIndexability: FileIndexer.FileProbeStatus.Supported,
                     cancellationToken);
                 var record = loaded.Record;
                 result.WorkspaceFileCount++;

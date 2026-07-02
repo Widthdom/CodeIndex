@@ -51,12 +51,56 @@ public partial class FileIndexer
         string? knownLanguage,
         bool detectGeneratedCode,
         CancellationToken cancellationToken = default)
+        => BuildLoadedRecordWithRawBytes(
+            absolutePath,
+            relativePath,
+            knownLanguage,
+            detectGeneratedCode,
+            knownIndexability: null,
+            cancellationToken);
+
+    internal LoadedFileRecord BuildLoadedRecordWithRawBytes(
+        string absolutePath,
+        string relativePath,
+        string? knownLanguage,
+        FileProbeStatus knownIndexability,
+        CancellationToken cancellationToken = default)
+        => BuildLoadedRecordWithRawBytes(
+            absolutePath,
+            relativePath,
+            knownLanguage,
+            detectGeneratedCode: true,
+            knownIndexability,
+            cancellationToken);
+
+    internal LoadedFileRecord BuildLoadedRecordWithRawBytes(
+        string absolutePath,
+        string relativePath,
+        string? knownLanguage,
+        bool detectGeneratedCode,
+        FileProbeStatus knownIndexability,
+        CancellationToken cancellationToken = default)
+        => BuildLoadedRecordWithRawBytes(
+            absolutePath,
+            relativePath,
+            knownLanguage,
+            detectGeneratedCode,
+            (FileProbeStatus?)knownIndexability,
+            cancellationToken);
+
+    private LoadedFileRecord BuildLoadedRecordWithRawBytes(
+        string absolutePath,
+        string relativePath,
+        string? knownLanguage,
+        bool detectGeneratedCode,
+        FileProbeStatus? knownIndexability,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!IsFilePathSyntaxIndexable(absolutePath))
             throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
 
-        var indexability = GetFileIndexabilityForIndexing(absolutePath);
+        var indexability = knownIndexability ?? GetFileIndexabilityForIndexing(absolutePath);
         if (indexability != FileProbeStatus.Supported)
             throw new InvalidOperationException("Only regular files can be indexed");
 

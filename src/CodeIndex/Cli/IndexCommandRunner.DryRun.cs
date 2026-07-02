@@ -600,7 +600,8 @@ public static partial class IndexCommandRunner
             var loaded = indexer.BuildLoadedRecordWithRawBytes(
                 absolutePath,
                 relativePath,
-                reusableLanguage);
+                reusableLanguage,
+                indexability);
             var record = loaded.Record;
             return new DryRunFileProbe(
                 true,
