@@ -2225,10 +2225,17 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        foreach (Match match in VbCastTypeRegex.Matches(preparedLine))
+        var hasVbCastTypeMarker = preparedLine.Contains('(')
+            && preparedLine.Contains(',')
+            && (preparedLine.IndexOf("Cast", StringComparison.OrdinalIgnoreCase) >= 0
+                || preparedLine.IndexOf("CType", StringComparison.OrdinalIgnoreCase) >= 0);
+        if (hasVbCastTypeMarker)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "vb");
+            foreach (Match match in VbCastTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "vb");
+            }
         }
 
         foreach (Match match in VbGetTypeRegex.Matches(preparedLine))
