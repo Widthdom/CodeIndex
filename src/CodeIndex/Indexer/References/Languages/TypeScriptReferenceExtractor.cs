@@ -65,6 +65,7 @@ internal static class TypeScriptReferenceExtractor
         var bindings = new List<NamespaceAliasBinding>();
         int[]? braceDepths = null;
         Dictionary<string, List<int>>? localDeclarationLinesByName = null;
+        Dictionary<string, IReadOnlyList<LineRange>>? parameterShadowRangesByAlias = null;
         for (var index = 0; index < originalLines.Count; index++)
         {
             var line = originalLines[index];
@@ -79,7 +80,8 @@ internal static class TypeScriptReferenceExtractor
                     index + 1,
                     null,
                     braceDepths ??= BuildBraceDepthsBeforeLine(preparedLines),
-                    localDeclarationLinesByName ??= BuildLocalDeclarationLinesByName(preparedLines));
+                    localDeclarationLinesByName ??= BuildLocalDeclarationLinesByName(preparedLines),
+                    parameterShadowRangesByAlias ??= new Dictionary<string, IReadOnlyList<LineRange>>(StringComparer.Ordinal));
                 continue;
             }
 
@@ -96,7 +98,8 @@ internal static class TypeScriptReferenceExtractor
                     bindingLine,
                     FindDynamicImportAliasEndLine(preparedLines, sharedBraceDepths, index),
                     sharedBraceDepths,
-                    localDeclarationLinesByName ??= BuildLocalDeclarationLinesByName(preparedLines));
+                    localDeclarationLinesByName ??= BuildLocalDeclarationLinesByName(preparedLines),
+                    parameterShadowRangesByAlias ??= new Dictionary<string, IReadOnlyList<LineRange>>(StringComparer.Ordinal));
                 continue;
             }
 
@@ -114,7 +117,8 @@ internal static class TypeScriptReferenceExtractor
                     index + 1,
                     null,
                     braceDepths ??= BuildBraceDepthsBeforeLine(preparedLines),
-                    localDeclarationLinesByName ??= BuildLocalDeclarationLinesByName(preparedLines));
+                    localDeclarationLinesByName ??= BuildLocalDeclarationLinesByName(preparedLines),
+                    parameterShadowRangesByAlias ??= new Dictionary<string, IReadOnlyList<LineRange>>(StringComparer.Ordinal));
             }
         }
 
@@ -143,13 +147,14 @@ internal static class TypeScriptReferenceExtractor
         int bindingLine,
         int? endLine,
         int[] braceDepths,
-        IReadOnlyDictionary<string, List<int>> localDeclarationLinesByName)
+        IReadOnlyDictionary<string, List<int>> localDeclarationLinesByName,
+        Dictionary<string, IReadOnlyList<LineRange>> parameterShadowRangesByAlias)
     {
         if (string.IsNullOrWhiteSpace(alias) || string.IsNullOrWhiteSpace(module))
             return;
 
         var shadowLine = FindShadowLine(localDeclarationLinesByName, alias, bindingLine);
-        var scopedShadowRanges = BuildParameterShadowRanges(preparedLines, braceDepths, alias);
+        var scopedShadowRanges = GetParameterShadowRanges(preparedLines, braceDepths, parameterShadowRangesByAlias, alias);
         bindings.Add(new NamespaceAliasBinding(alias, module, bindingLine, shadowLine, endLine, scopedShadowRanges));
     }
 
@@ -1412,6 +1417,20 @@ internal static class TypeScriptReferenceExtractor
                 ranges.Add(new LineRange(index + 1, endLine));
         }
 
+        return ranges;
+    }
+
+    private static IReadOnlyList<LineRange> GetParameterShadowRanges(
+        IReadOnlyList<string> preparedLines,
+        int[] braceDepths,
+        Dictionary<string, IReadOnlyList<LineRange>> parameterShadowRangesByAlias,
+        string alias)
+    {
+        if (parameterShadowRangesByAlias.TryGetValue(alias, out var ranges))
+            return ranges;
+
+        ranges = BuildParameterShadowRanges(preparedLines, braceDepths, alias);
+        parameterShadowRangesByAlias[alias] = ranges;
         return ranges;
     }
 
