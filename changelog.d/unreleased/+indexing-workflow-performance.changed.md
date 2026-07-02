@@ -293,6 +293,7 @@ affected:
 - **Gated VB AddHandler scans by marker** - Visual Basic reference extraction now checks `AddHandler` markers before running event subscription regex probes.
 - **Gated VB RemoveHandler scans by marker** - Visual Basic reference extraction now checks `RemoveHandler` markers before running event unsubscription regex probes.
 - **Gated VB RaiseEvent scans by marker** - Visual Basic reference extraction now checks `RaiseEvent` markers before running event invocation regex probes.
+- **Gated VB escaped call scans by marker** - Visual Basic reference extraction now checks escaped identifier and parenthesis markers before running escaped call regex probes.
 
 ## 日本語
 
@@ -520,3 +521,4 @@ affected:
 - **VB AddHandler scan を marker で gate します** - Visual Basic reference extraction は event subscription regex probe の前に `AddHandler` marker を確認します。
 - **VB RemoveHandler scan を marker で gate します** - Visual Basic reference extraction は event unsubscription regex probe の前に `RemoveHandler` marker を確認します。
 - **VB RaiseEvent scan を marker で gate します** - Visual Basic reference extraction は event invocation regex probe の前に `RaiseEvent` marker を確認します。
+- **VB escaped call scan を marker で gate します** - Visual Basic reference extraction は escaped call regex probe の前に escaped identifier と parenthesis marker を確認します。

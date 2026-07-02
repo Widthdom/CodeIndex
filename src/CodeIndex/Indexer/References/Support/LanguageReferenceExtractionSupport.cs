@@ -2369,6 +2369,9 @@ internal static partial class LanguageReferenceExtractionSupport
         Func<int, SymbolRecord?> resolveContainerForColumn,
         IReadOnlySet<string>? definitionNames)
     {
+        if (!preparedLine.Contains('(') || !preparedLine.Contains('['))
+            return;
+
         foreach (Match match in VbCallRegex.Matches(preparedLine))
         {
             var group = match.Groups["name"];
