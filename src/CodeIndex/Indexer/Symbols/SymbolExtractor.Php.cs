@@ -480,7 +480,7 @@ public static partial class SymbolExtractor
                 continue;
 
             var constructorMatch = PhpSameLineConstructorRegex.Match(line);
-            var constructorStart = PhpConstructorStartRegex.IsMatch(line);
+            var constructorStart = !constructorMatch.Success && PhpConstructorStartRegex.IsMatch(line);
             if (!constructorMatch.Success && !constructorStart)
                 continue;
 

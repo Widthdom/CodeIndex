@@ -111,6 +111,7 @@ affected:
 - **Dispatched Solidity type declaration scans by keyword** - Solidity extraction now runs contract/interface/library, struct, and enum declaration regexes only when their keyword marker is present.
 - **Dispatched Solidity callable declaration scans by keyword** - Solidity extraction now runs function, constructor, fallback/receive, and modifier declaration regexes only for lines with the corresponding marker.
 - **Dispatched Solidity event/error declaration scans by keyword** - Solidity extraction now runs event and error declaration regexes only on lines with the matching keyword marker.
+- **Skipped duplicate PHP constructor-start regex checks** - PHP promoted-property extraction now avoids the constructor-start regex once the same-line constructor regex has already matched.
 
 ## 日本語
 
@@ -183,3 +184,4 @@ affected:
 - **Solidity type declaration scan を keyword で振り分けます** - Solidity extraction は contract/interface/library、struct、enum の declaration regex を対応 keyword marker がある場合だけ実行します。
 - **Solidity callable declaration scan を keyword で振り分けます** - Solidity extraction は function、constructor、fallback/receive、modifier の declaration regex を対応 marker がある行だけで実行します。
 - **Solidity event/error declaration scan を keyword で振り分けます** - Solidity extraction は event と error の declaration regex を対応 keyword marker がある行だけで実行します。
+- **PHP constructor-start regex の重複 check を skip します** - PHP promoted-property extraction は same-line constructor regex が既に match した場合 constructor-start regex を実行しないようになりました。
