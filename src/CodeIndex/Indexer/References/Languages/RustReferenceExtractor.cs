@@ -118,13 +118,14 @@ internal static class RustReferenceExtractor
         int startLineIndex,
         int openBracket)
     {
-        var parts = new List<string>();
+        string? firstPart = null;
+        StringBuilder? builder = null;
         var depth = 0;
         for (var lineIndex = startLineIndex; lineIndex < lines.Length; lineIndex++)
         {
             var line = lines[lineIndex];
             var startColumn = lineIndex == startLineIndex ? openBracket : 0;
-            parts.Add(line[startColumn..]);
+            AppendAttributeLine(line[startColumn..]);
 
             for (var column = startColumn; column < line.Length; column++)
             {
@@ -156,11 +157,31 @@ internal static class RustReferenceExtractor
 
                 depth--;
                 if (c == ']' && depth == 0)
-                    return (string.Join('\n', parts), lineIndex, column);
+                    return (BuildAttributeText(), lineIndex, column);
             }
         }
 
-        return (string.Join('\n', parts), lines.Length - 1, lines[^1].Length);
+        return (BuildAttributeText(), lines.Length - 1, lines[^1].Length);
+
+        void AppendAttributeLine(string part)
+        {
+            if (firstPart == null)
+            {
+                firstPart = part;
+                return;
+            }
+
+            if (builder == null)
+            {
+                builder = new StringBuilder(firstPart.Length + 1 + part.Length);
+                builder.Append(firstPart);
+            }
+
+            builder.Append('\n');
+            builder.Append(part);
+        }
+
+        string BuildAttributeText() => builder?.ToString() ?? firstPart ?? string.Empty;
     }
 
     private static void EmitDeriveReferencesFromAttribute(
