@@ -28,6 +28,8 @@ affected:
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.VisualBasic.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Markup.cs
   - src/CodeIndex/Indexer/References/Languages/CSharpReferenceExtractor.Support.cs
+  - src/CodeIndex/Indexer/References/Languages/SwiftReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/TypeScriptReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.Core.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.Preparation.cs
@@ -63,6 +65,7 @@ affected:
 - **Kept content normalization on the fast path for mid-line invisibles** - indexing normalization now only enters the rewrite loop for carriage returns or line-leading invisible markers, preserving the unchanged-content path when U+FEFF/U+200B appears inside ordinary text.
 - **Collapsed C# doc-comment probing to one pass** - reference preparation now detects `///` and `/**` XML doc comment candidates with a single scan before deciding whether to build C# line-state masks.
 - **Gated C# reference regex probes by marker** - C# reference extraction now checks using-alias, `where`, and reflection member-name markers before running their regex probes.
+- **Gated TypeScript and Swift alias regex probes by marker** - type-alias reference extraction now checks per-line declaration keywords and assignment markers before running alias regexes.
 - **Skipped reference-line preparation on empty lines** - all language reference preparation now returns empty lines immediately instead of running comment/string-literal trigger checks.
 - **Collapsed string-literal delimiter probes** - reference-line preparation now checks quote/backtick trigger characters with `IndexOfAny` instead of separate scans per delimiter.
 - **Hoisted reference-line preparation language flags** - per-file reference preparation now computes language comment/string handling flags once and reuses them for each line instead of repeating language switches in the hot loop.
@@ -154,6 +157,7 @@ affected:
 - **行中の不可視文字では content normalization の fast path を維持します** - indexing normalization は carriage return または行頭不可視 marker がある場合だけ rewrite loop に入り、U+FEFF/U+200B が通常テキスト中に出るだけなら unchanged-content 経路を保ちます。
 - **C# doc comment probe を 1 pass にまとめました** - reference preparation は C# line-state mask を作るか決める前に、`///` と `/**` の XML doc comment 候補を 1 回の scan で検出するようになりました。
 - **C# reference regex probe を marker で gate します** - C# reference extraction は using alias、`where`、reflection member-name marker を確認してから対応 regex probe を実行します。
+- **TypeScript / Swift alias regex probe を marker で gate します** - type-alias reference extraction は行ごとの declaration keyword と assignment marker を確認してから alias regex を実行します。
 - **空行の reference-line preparation を skip します** - 全言語の reference preparation は空行に対して comment/string-literal trigger 判定を走らせず即 return するようになりました。
 - **string-literal delimiter probe をまとめました** - reference-line preparation は quote/backtick trigger character を delimiter ごとの個別 scan ではなく `IndexOfAny` で確認します。
 - **reference-line preparation の言語フラグを loop 外へ出しました** - ファイルごとの reference preparation は comment/string handling の言語フラグを一度だけ計算し、hot loop 内で language switch を繰り返さないようになりました。

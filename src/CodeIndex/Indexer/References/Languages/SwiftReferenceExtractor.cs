@@ -104,6 +104,12 @@ internal static class SwiftReferenceExtractor
         for (var index = 0; index < preparedLines.Count; index++)
         {
             var line = preparedLines[index];
+            if (line.IndexOf("typealias", StringComparison.Ordinal) < 0
+                || line.IndexOf('=') < 0)
+            {
+                continue;
+            }
+
             var match = TypeAliasRegex.Match(line);
             if (!match.Success)
                 continue;
@@ -144,8 +150,13 @@ internal static class SwiftReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        if (aliases.Count == 0 || TypeAliasRegex.IsMatch(preparedLine))
+        if (aliases.Count == 0
+            || (preparedLine.IndexOf("typealias", StringComparison.Ordinal) >= 0
+                && preparedLine.IndexOf('=') >= 0
+                && TypeAliasRegex.IsMatch(preparedLine)))
+        {
             return;
+        }
 
         var emittedAliases = new HashSet<string>(StringComparer.Ordinal);
         foreach (var bindingCandidate in aliases)
