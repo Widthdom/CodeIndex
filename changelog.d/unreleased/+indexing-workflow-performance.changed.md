@@ -265,6 +265,7 @@ affected:
 - **Gated C++ typedef-alias target scans by marker** - C/C++ reference extraction now checks `typedef`, statement, and no-parenthesis markers before running typedef-alias target regex probes.
 - **Gated C++ explicit template instantiation scans by marker** - C/C++ reference extraction now checks `template`, class/struct, and statement markers before running explicit template instantiation regex probes.
 - **Gated C++ template-id declaration scans by marker** - C/C++ reference extraction now checks template delimiters and declaration terminators before running template-id declaration regex probes.
+- **Gated C++ template parameter default scans by marker** - C/C++ reference extraction now checks `typename`/`class` and assignment markers before running template parameter default regex probes.
 
 ## 日本語
 
@@ -464,3 +465,4 @@ affected:
 - **C++ typedef-alias target scan を marker で gate します** - C/C++ reference extraction は typedef-alias target regex probe の前に `typedef` / statement / no-parenthesis marker を確認します。
 - **C++ explicit template instantiation scan を marker で gate します** - C/C++ reference extraction は explicit template instantiation regex probe の前に `template` / class-or-struct / statement marker を確認します。
 - **C++ template-id declaration scan を marker で gate します** - C/C++ reference extraction は template-id declaration regex probe の前に template delimiter と declaration terminator を確認します。
+- **C++ template parameter default scan を marker で gate します** - C/C++ reference extraction は template parameter default regex probe の前に `typename` / `class` と assignment marker を確認します。
