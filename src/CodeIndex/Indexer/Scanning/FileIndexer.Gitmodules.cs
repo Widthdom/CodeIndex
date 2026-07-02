@@ -22,6 +22,7 @@ public partial class FileIndexer
         var prefixedGitmodulesPath = LongPath.EnsureWindowsPrefix(gitmodulesPath);
         if (!File.Exists(prefixedGitmodulesPath))
             return (submodulePaths, ancestorPaths, warnings);
+        var gitmodulesRelativePath = NormalizeIgnorePath(Path.GetRelativePath(projectRoot, gitmodulesPath));
 
         try
         {
@@ -41,7 +42,7 @@ public partial class FileIndexer
                         out _))
                 {
                     warnings.Add(new ScanError(
-                        NormalizeIgnorePath(Path.GetRelativePath(projectRoot, gitmodulesPath)),
+                        gitmodulesRelativePath,
                         $"Skipped .gitmodules because {skippedReason}.",
                         ScanIssueSeverity.Warning));
                     return (submodulePaths, ancestorPaths, warnings);
@@ -72,7 +73,7 @@ public partial class FileIndexer
                 if (submodulePathCount >= MaxGitmodulesSubmodulePaths)
                 {
                     warnings.Add(new ScanError(
-                        NormalizeIgnorePath(Path.GetRelativePath(projectRoot, gitmodulesPath)),
+                        gitmodulesRelativePath,
                         $"Stopped parsing .gitmodules submodule paths after {MaxGitmodulesSubmodulePaths} entries.",
                         ScanIssueSeverity.Warning));
                     break;
@@ -89,11 +90,11 @@ public partial class FileIndexer
         }
         catch (IOException ex)
         {
-            AddGitmodulesDiscoveryWarning(warnings, projectRoot, gitmodulesPath, ex.GetType().Name);
+            AddGitmodulesDiscoveryWarning(warnings, gitmodulesRelativePath, ex.GetType().Name);
         }
         catch (UnauthorizedAccessException ex)
         {
-            AddGitmodulesDiscoveryWarning(warnings, projectRoot, gitmodulesPath, ex.GetType().Name);
+            AddGitmodulesDiscoveryWarning(warnings, gitmodulesRelativePath, ex.GetType().Name);
         }
 
         return (submodulePaths, ancestorPaths, warnings);
@@ -101,12 +102,11 @@ public partial class FileIndexer
 
     private static void AddGitmodulesDiscoveryWarning(
         List<ScanError> warnings,
-        string projectRoot,
-        string gitmodulesPath,
+        string gitmodulesRelativePath,
         string exceptionType)
     {
         warnings.Add(new ScanError(
-            NormalizeIgnorePath(Path.GetRelativePath(projectRoot, gitmodulesPath)),
+            gitmodulesRelativePath,
             $"Skipped .gitmodules because it could not be read ({exceptionType}).",
             ScanIssueSeverity.Warning));
     }
