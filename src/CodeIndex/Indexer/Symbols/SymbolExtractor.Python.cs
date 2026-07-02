@@ -295,15 +295,18 @@ public static partial class SymbolExtractor
         var entries = new List<PythonImportSymbolEntry>();
         var seenNames = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (Match match in PythonDynamicImportLiteralRegex.Matches(statement))
+        if (statement.Contains("importlib", StringComparison.Ordinal) || statement.Contains("__import__", StringComparison.Ordinal))
         {
-            AddPythonImportEntry(
-                line,
-                absoluteStartColumn,
-                match.Groups["module"].Value,
-                entries,
-                seenNames,
-                ref absoluteStartColumn);
+            foreach (Match match in PythonDynamicImportLiteralRegex.Matches(statement))
+            {
+                AddPythonImportEntry(
+                    line,
+                    absoluteStartColumn,
+                    match.Groups["module"].Value,
+                    entries,
+                    seenNames,
+                    ref absoluteStartColumn);
+            }
         }
 
         if (entries.Count > 0)

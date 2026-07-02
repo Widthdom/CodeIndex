@@ -118,6 +118,7 @@ affected:
 - **Gated F# record-field scans by colon** - F# record-field extraction now skips record-field regex checks for candidates that cannot contain a typed field separator.
 - **Gated F# active/operator scans by marker** - F# extraction now skips active-pattern and operator-definition regex checks when lines lack their required markers.
 - **Gated YAML mapping-key scans by colon** - YAML structured-data extraction now skips mapping-key regex checks on lines that cannot contain a mapping separator.
+- **Gated Python dynamic-import scans by marker** - Python import expansion now skips dynamic import literal regex enumeration when statements lack `importlib` and `__import__` markers.
 
 ## 日本語
 
@@ -195,3 +196,4 @@ affected:
 - **F# record-field scan を colon で gate します** - F# record-field extraction は typed field separator を含めない candidate で record-field regex check を skip します。
 - **F# active/operator scan を marker で gate します** - F# extraction は line に必要 marker がない場合 active-pattern と operator-definition regex check を skip します。
 - **YAML mapping-key scan を colon で gate します** - YAML structured-data extraction は mapping separator を含めない行で mapping-key regex check を skip します。
+- **Python dynamic-import scan を marker で gate します** - Python import expansion は statement に `importlib` と `__import__` marker がない場合 dynamic import literal regex enumeration を skip します。
