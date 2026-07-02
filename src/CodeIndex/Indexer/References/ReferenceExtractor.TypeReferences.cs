@@ -2838,15 +2838,19 @@ public static partial class ReferenceExtractor
         for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
         {
             var line = lines[lineIndex];
-            var chars = line.ToCharArray();
+            char[]? chars = null;
+
+            void MaskAt(int index) =>
+                (chars ??= line.ToCharArray())[index] = ' ';
+
             var cursor = 0;
 
-            while (cursor < chars.Length)
+            while (cursor < line.Length)
             {
                 if (inBraceComment)
                 {
-                    var closes = chars[cursor] == '}';
-                    chars[cursor++] = ' ';
+                    var closes = line[cursor] == '}';
+                    MaskAt(cursor++);
                     if (closes)
                         inBraceComment = false;
                     continue;
@@ -2854,27 +2858,27 @@ public static partial class ReferenceExtractor
 
                 if (inParenStarComment)
                 {
-                    if (chars[cursor] == '*' && cursor + 1 < chars.Length && chars[cursor + 1] == ')')
+                    if (line[cursor] == '*' && cursor + 1 < line.Length && line[cursor + 1] == ')')
                     {
-                        chars[cursor++] = ' ';
-                        chars[cursor++] = ' ';
+                        MaskAt(cursor++);
+                        MaskAt(cursor++);
                         inParenStarComment = false;
                         continue;
                     }
 
-                    chars[cursor++] = ' ';
+                    MaskAt(cursor++);
                     continue;
                 }
 
-                if (chars[cursor] == '\'')
+                if (line[cursor] == '\'')
                 {
                     cursor++;
-                    while (cursor < chars.Length)
+                    while (cursor < line.Length)
                     {
-                        if (chars[cursor] == '\'')
+                        if (line[cursor] == '\'')
                         {
                             cursor++;
-                            if (cursor < chars.Length && chars[cursor] == '\'')
+                            if (cursor < line.Length && line[cursor] == '\'')
                             {
                                 cursor++;
                                 continue;
@@ -2887,17 +2891,17 @@ public static partial class ReferenceExtractor
                     continue;
                 }
 
-                if (chars[cursor] == '{')
+                if (line[cursor] == '{')
                 {
-                    chars[cursor++] = ' ';
+                    MaskAt(cursor++);
                     inBraceComment = true;
                     continue;
                 }
 
-                if (chars[cursor] == '(' && cursor + 1 < chars.Length && chars[cursor + 1] == '*')
+                if (line[cursor] == '(' && cursor + 1 < line.Length && line[cursor + 1] == '*')
                 {
-                    chars[cursor++] = ' ';
-                    chars[cursor++] = ' ';
+                    MaskAt(cursor++);
+                    MaskAt(cursor++);
                     inParenStarComment = true;
                     continue;
                 }
@@ -2905,7 +2909,7 @@ public static partial class ReferenceExtractor
                 cursor++;
             }
 
-            result[lineIndex] = new string(chars);
+            result[lineIndex] = chars is null ? line : new string(chars);
         }
 
         return result;
