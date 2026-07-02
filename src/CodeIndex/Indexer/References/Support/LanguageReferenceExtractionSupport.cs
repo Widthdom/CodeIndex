@@ -3327,7 +3327,7 @@ internal static partial class LanguageReferenceExtractionSupport
         int lineNumber,
         SymbolRecord? container)
     {
-        var hasImportMarker = preparedLine.IndexOf("alias", StringComparison.Ordinal) >= 0
+        var hasImportMarker = StartsWithOrdinalKeywordIgnoringLeadingWhitespace(preparedLine, "alias")
             || preparedLine.IndexOf("import", StringComparison.Ordinal) >= 0
             || preparedLine.IndexOf("require", StringComparison.Ordinal) >= 0
             || preparedLine.IndexOf("use", StringComparison.Ordinal) >= 0;
