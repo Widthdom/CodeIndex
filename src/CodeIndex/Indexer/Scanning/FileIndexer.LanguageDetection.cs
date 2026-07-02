@@ -270,19 +270,30 @@ public partial class FileIndexer
     private IReadOnlyDictionary<string, string> LoadLanguageMapOverridesForIndexing(string? startDirectory)
     {
         startDirectory = LanguageMapOverrides.NormalizeStartDirectory(startDirectory);
+        var lastLookup = _lastLanguageMapOverrideLookup;
+        if (lastLookup != null && string.Equals(lastLookup.StartDirectory, startDirectory, StringComparison.Ordinal))
+            return lastLookup.Overrides;
 
         lock (_languageMapOverrideCache)
         {
             if (_languageMapOverrideCache.TryGetValue(startDirectory, out var cached))
-                return cached;
+                return CacheLastLanguageMapOverrideLookup(startDirectory, cached);
 
             if (TryReuseParentLanguageMapOverrides(startDirectory, out cached))
-                return cached;
+                return CacheLastLanguageMapOverrideLookup(startDirectory, cached);
 
             var loaded = LanguageMapOverrides.LoadEffectiveMapFromDirectory(startDirectory);
             _languageMapOverrideCache[startDirectory] = loaded;
-            return loaded;
+            return CacheLastLanguageMapOverrideLookup(startDirectory, loaded);
         }
+    }
+
+    private IReadOnlyDictionary<string, string> CacheLastLanguageMapOverrideLookup(
+        string startDirectory,
+        IReadOnlyDictionary<string, string> overrides)
+    {
+        _lastLanguageMapOverrideLookup = new LanguageMapOverrideLookupCache(startDirectory, overrides);
+        return overrides;
     }
 
     private bool TryReuseParentLanguageMapOverrides(

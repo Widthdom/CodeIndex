@@ -48,6 +48,7 @@ public partial class FileIndexer
     private readonly Func<string, IEnumerable<string>> _enumerateFileSystemEntries;
     private readonly Dictionary<string, bool> _directoryIgnoreCaseCache;
     private readonly Dictionary<string, IReadOnlyDictionary<string, string>> _languageMapOverrideCache;
+    private LanguageMapOverrideLookupCache? _lastLanguageMapOverrideLookup;
     private readonly long _maxFileSizeBytes;
     private readonly FileContentLoader _contentLoader;
     private readonly SymlinkPolicy _symlinkPolicy;
@@ -87,6 +88,10 @@ public partial class FileIndexer
         HashSet<string> DanglingSymlinks,
         HashSet<FileIdentity> VisitedFileIdentities,
         HashSet<string> VisitedDirectories);
+
+    private sealed record LanguageMapOverrideLookupCache(
+        string StartDirectory,
+        IReadOnlyDictionary<string, string> Overrides);
 
     public FileIndexer(string projectRoot)
         : this(projectRoot, ignoreCase: ProbeFileSystemIgnoreCase(projectRoot), ignoreRuleRoot: null)
