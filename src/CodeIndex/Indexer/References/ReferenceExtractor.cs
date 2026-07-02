@@ -24,6 +24,15 @@ public static partial class ReferenceExtractor
     internal const int MaxReferenceLookupNamesPerLine = 512;
     internal const int MaxReferenceContainerCandidates = 20_000;
     internal const int MaxSwiftPropertyDefinitionsPerLine = 256;
+    private static readonly string[] AdditionalReferenceLanguages =
+    [
+        "vue",
+        "svelte",
+        "razor",
+        "blazor",
+        "cshtml",
+    ];
+
     // THREAD-SAFETY: Reference extraction is stateless per call. Shared Regex instances and
     // lookup tables are initialized once and then read concurrently; language-specific state
     // must be created per extraction call (for example via CreateState helpers) rather than
@@ -780,7 +789,7 @@ public static partial class ReferenceExtractor
 
     public static IReadOnlyCollection<string> GetSupportedLanguages()
         => RegisteredLanguages
-            .Concat(new[] { "vue", "svelte", "razor", "blazor", "cshtml" })
+            .Concat(AdditionalReferenceLanguages)
             .Concat(ExtractorPluginRegistry.ReferenceLanguages)
             .Distinct(StringComparer.Ordinal)
             .ToArray();

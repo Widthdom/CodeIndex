@@ -8,6 +8,16 @@ namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
+    private static readonly string[] CSharpAccessorAccessibilityModifiers =
+    [
+        "protected internal",
+        "private protected",
+        "protected",
+        "internal",
+        "private",
+        "public",
+    ];
+
     // THREAD-SAFETY: The C# scanner keeps all scan state in parameters, locals, or caller-owned
     // collections. It may read shared Regex fields from SymbolExtractor, but must not add static
     // mutable scanner state.
@@ -2251,7 +2261,7 @@ public static partial class SymbolExtractor
 
     private static bool TrySkipCSharpAccessorAccessibility(string text, ref int cursor)
     {
-        foreach (var modifier in new[] { "protected internal", "private protected", "protected", "internal", "private", "public" })
+        foreach (var modifier in CSharpAccessorAccessibilityModifiers)
         {
             if (StartsWithWord(text, cursor, modifier))
             {

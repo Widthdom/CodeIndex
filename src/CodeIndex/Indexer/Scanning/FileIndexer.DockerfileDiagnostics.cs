@@ -7,6 +7,7 @@ namespace CodeIndex.Indexer;
 public partial class FileIndexer
 {
     private const int DockerfileJsonFormIssueLimit = 32;
+    private static readonly string[] DockerfileJsonFormInstructions = ["VOLUME", "SHELL", "COPY", "ADD"];
 
     private static void AddDockerfileJsonFormIssues(List<FileIssue> issues, string relativePath, string content)
     {
@@ -139,7 +140,7 @@ public partial class FileIndexer
         if (TryConsumeDockerfileInstruction(trimmed, "ONBUILD", out var onbuildBody))
             trimmed = onbuildBody.TrimStart();
 
-        foreach (var candidate in new[] { "VOLUME", "SHELL", "COPY", "ADD" })
+        foreach (var candidate in DockerfileJsonFormInstructions)
         {
             if (!TryConsumeDockerfileInstruction(trimmed, candidate, out var body))
                 continue;

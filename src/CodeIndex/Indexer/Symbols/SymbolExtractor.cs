@@ -22,6 +22,27 @@ public static partial class SymbolExtractor
     public const int FunctionalLanguageContractVersion = 2;
     public const int DynamicLanguageContractVersion = 2;
     public const int SystemsLanguageContractVersion = 2;
+    private static readonly string[] AdditionalSymbolLanguages =
+    [
+        "app_manifest",
+        "commonlisp",
+        "racket",
+        "vue",
+        "svelte",
+        "markdown",
+        "json",
+        "yaml",
+        "xml",
+        "razor",
+        "blazor",
+        "cshtml",
+        "solidity",
+        "solution",
+        "cuda",
+        "dependency_manifest",
+        "dependency_lock",
+    ];
+
     public static int GetContractVersion(string? lang)
     {
         return lang switch
@@ -2298,7 +2319,7 @@ public static partial class SymbolExtractor
     /// </summary>
     public static IReadOnlyCollection<string> GetSupportedLanguages()
       => PatternCache.Keys
-          .Concat(new[] { "app_manifest", "commonlisp", "racket", "vue", "svelte", "markdown", "json", "yaml", "xml", "razor", "blazor", "cshtml", "solidity", "solution", "cuda", "dependency_manifest", "dependency_lock" })
+          .Concat(AdditionalSymbolLanguages)
           .Concat(ExtractorPluginRegistry.SymbolLanguages)
           .Distinct(StringComparer.Ordinal)
           .ToArray();

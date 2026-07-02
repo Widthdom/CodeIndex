@@ -24,6 +24,24 @@ public static partial class SymbolExtractor
     private const string TypeScriptPathAliasDiagnosticSizeLimit = "tsconfig_size_limit";
     private const string TypeScriptPathAliasDiagnosticDepthLimit = "path_alias_depth_limit";
     private const string TypeScriptPathAliasDiagnosticExpansionCandidateLimit = "path_alias_expansion_candidate_limit";
+    private static readonly string[] TypeScriptPathAliasConfigFileNames =
+    [
+        "tsconfig.json",
+        "jsconfig.json",
+    ];
+    private static readonly string[] TypeScriptModuleCandidateExtensions =
+    [
+        ".ts",
+        ".tsx",
+        ".mts",
+        ".cts",
+        ".js",
+        ".jsx",
+        ".mjs",
+        ".cjs",
+        ".d.ts",
+        ".json",
+    ];
     private static readonly object TypeScriptPathAliasWarningLock = new();
     private static readonly HashSet<string> TypeScriptPathAliasReportedWarnings = new(StringComparer.Ordinal);
     private sealed record TypeScriptPathAliasConfig(string ConfigPath, string ProjectDirectory, string BaseDirectory, bool HasBaseUrl, IReadOnlyList<TypeScriptPathAliasRule> Rules);
@@ -130,7 +148,7 @@ public static partial class SymbolExtractor
             : Path.GetDirectoryName(fullFilePath);
         while (!string.IsNullOrEmpty(directory))
         {
-            foreach (var configFileName in new[] { "tsconfig.json", "jsconfig.json" })
+            foreach (var configFileName in TypeScriptPathAliasConfigFileNames)
             {
                 var configPath = Path.Combine(directory, configFileName);
                 if (File.Exists(configPath) || Directory.Exists(configPath))
@@ -572,10 +590,10 @@ public static partial class SymbolExtractor
     {
         yield return candidate;
 
-        foreach (var extension in new[] { ".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".d.ts", ".json" })
+        foreach (var extension in TypeScriptModuleCandidateExtensions)
             yield return candidate + extension;
 
-        foreach (var extension in new[] { ".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".d.ts", ".json" })
+        foreach (var extension in TypeScriptModuleCandidateExtensions)
             yield return Path.Combine(candidate, "index" + extension);
     }
 

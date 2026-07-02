@@ -8,6 +8,8 @@ namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
+    private static readonly string[] WrappedXamlTypeBearingAttributeNames = ["x:Class", "x:DataType", "TargetType"];
+
     private static List<SymbolRecord> ExtractHtmlSymbols(long fileId, string[] lines)
     {
         const string defaultSlotSymbolName = "(default)";
@@ -1072,7 +1074,7 @@ public static partial class SymbolExtractor
         // Handle XAML values that are split away from `=` onto later lines.
         // `x:Class`, `x:DataType`, and `TargetType` are intentionally kept on the
         // same normalization path as the line-based extractor so search results stay consistent.
-        foreach (var attributeName in new[] { "x:Class", "x:DataType", "TargetType" })
+        foreach (var attributeName in WrappedXamlTypeBearingAttributeNames)
         {
             var cursor = 0;
             while (cursor < rawText.Length)
