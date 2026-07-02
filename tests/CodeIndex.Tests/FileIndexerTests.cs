@@ -860,6 +860,81 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void TryDetectLanguageForIndexing_ReusesParentLanguageMapOverridesWhenChildHasNoConfig()
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_parent_cache");
+        LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        var stampProbeCount = 0;
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(tempDir, LanguageMapOverrides.WorkspaceFileName),
+                "entries:\n- extension: custom\n  language: ruby\n");
+            var childDir = Path.Combine(tempDir, "src");
+            Directory.CreateDirectory(childDir);
+            var parentPath = Path.Combine(tempDir, "parent.custom");
+            var childPath = Path.Combine(childDir, "child.custom");
+            File.WriteAllText(parentPath, "parent");
+            File.WriteAllText(childPath, "child");
+            LanguageMapOverrides.ConfigPathStampProbeForTesting = _ => stampProbeCount++;
+
+            var indexer = new FileIndexer(tempDir);
+
+            Assert.Equal("ruby", indexer.TryDetectLanguageForIndexing(parentPath).Language);
+            var parentProbeCount = stampProbeCount;
+            Assert.True(parentProbeCount > 0);
+
+            Assert.Equal("ruby", indexer.TryDetectLanguageForIndexing(childPath).Language);
+            Assert.Equal(parentProbeCount, stampProbeCount);
+        }
+        finally
+        {
+            LanguageMapOverrides.ConfigPathStampProbeForTesting = null;
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void TryDetectLanguageForIndexing_DoesNotReuseParentLanguageMapOverridesWhenChildHasConfig()
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_child_cache");
+        LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        var stampProbeCount = 0;
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(tempDir, LanguageMapOverrides.WorkspaceFileName),
+                "entries:\n- extension: custom\n  language: ruby\n");
+            var childDir = Path.Combine(tempDir, "src");
+            Directory.CreateDirectory(childDir);
+            File.WriteAllText(
+                Path.Combine(childDir, LanguageMapOverrides.WorkspaceFileName),
+                "entries:\n- extension: custom\n  language: python\n");
+            var parentPath = Path.Combine(tempDir, "parent.custom");
+            var childPath = Path.Combine(childDir, "child.custom");
+            File.WriteAllText(parentPath, "parent");
+            File.WriteAllText(childPath, "child");
+            LanguageMapOverrides.ConfigPathStampProbeForTesting = _ => stampProbeCount++;
+
+            var indexer = new FileIndexer(tempDir);
+
+            Assert.Equal("ruby", indexer.TryDetectLanguageForIndexing(parentPath).Language);
+            var parentProbeCount = stampProbeCount;
+            Assert.True(parentProbeCount > 0);
+
+            Assert.Equal("python", indexer.TryDetectLanguageForIndexing(childPath).Language);
+            Assert.True(stampProbeCount > parentProbeCount);
+        }
+        finally
+        {
+            LanguageMapOverrides.ConfigPathStampProbeForTesting = null;
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public void LanguageMapOverrides_LoadEffectiveMapReloadsWhenWorkspaceConfigChanges()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_cache_{Guid.NewGuid():N}");

@@ -212,6 +212,8 @@ public partial class FileIndexer
     [
         (".S", "assembly"),
     ];
+    private static readonly IReadOnlyDictionary<string, string> EmptyLanguageMapOverrides =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Return all file patterns (extensions and filenames) mapped to their language names.
@@ -272,9 +274,42 @@ public partial class FileIndexer
             if (_languageMapOverrideCache.TryGetValue(startDirectory, out var cached))
                 return cached;
 
+            if (TryReuseParentLanguageMapOverrides(startDirectory, out cached))
+                return cached;
+
             var loaded = LanguageMapOverrides.LoadEffectiveMapFromDirectory(startDirectory);
             _languageMapOverrideCache[startDirectory] = loaded;
             return loaded;
+        }
+    }
+
+    private bool TryReuseParentLanguageMapOverrides(
+        string startDirectory,
+        out IReadOnlyDictionary<string, string> overrides)
+    {
+        overrides = EmptyLanguageMapOverrides;
+        var parent = Directory.GetParent(startDirectory)?.FullName;
+        if (string.IsNullOrEmpty(parent)
+            || !_languageMapOverrideCache.TryGetValue(parent, out var parentOverrides)
+            || LanguageMapOverrideFileExists(startDirectory))
+        {
+            return false;
+        }
+
+        overrides = parentOverrides;
+        _languageMapOverrideCache[startDirectory] = overrides;
+        return true;
+    }
+
+    private static bool LanguageMapOverrideFileExists(string directory)
+    {
+        try
+        {
+            return File.Exists(Path.Combine(directory, LanguageMapOverrides.WorkspaceFileName));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            return false;
         }
     }
 
