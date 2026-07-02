@@ -1565,19 +1565,30 @@ internal static partial class LanguageReferenceExtractionSupport
                 }
             }
 
-            foreach (Match match in CTypedefVaArgTypeRegex.Matches(preparedLine))
+            var hasCVaArgMarker = hasCParen
+                && preparedLine.IndexOf(',') >= 0
+                && (preparedLine.IndexOf("va_arg", StringComparison.Ordinal) >= 0
+                    || preparedLine.IndexOf("__builtin_va_arg", StringComparison.Ordinal) >= 0);
+            if (hasCVaArgMarker && hasCTypedefTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTypedefVaArgTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTaggedVaArgTypeRegex.Matches(preparedLine))
+            if (hasCVaArgMarker && hasCTaggedTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTaggedVaArgTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            EmitCVaArgTypeOperandReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, language);
+            if (hasCVaArgMarker)
+                EmitCVaArgTypeOperandReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, language);
         }
 
         foreach (Match match in CppTypeOperandOperatorRegex.Matches(preparedLine))
