@@ -321,6 +321,7 @@ affected:
 - **Tightened Fortran finalizer scans to leading keyword gates** - Fortran reference extraction now requires leading `final` before running finalizer-list regex probes.
 - **Tightened Fortran procedure binding scans to leading keyword gates** - Fortran reference extraction now requires leading `procedure` or `generic` before running binding-target regex probes.
 - **Tightened Fortran associate scans to leading keyword gates** - Fortran reference extraction now requires leading `associate` before running associate-target regex probes.
+- **Tightened Fortran allocate scans to leading keyword gates** - Fortran reference extraction now requires leading `allocate` before running allocation type and object regex probes.
 
 ## 日本語
 
@@ -576,3 +577,4 @@ affected:
 - **Fortran finalizer scan を leading keyword gate に強化します** - Fortran reference extraction は finalizer-list regex probe の前に leading `final` を要求します。
 - **Fortran procedure binding scan を leading keyword gate に強化します** - Fortran reference extraction は binding-target regex probe の前に leading `procedure` または `generic` を要求します。
 - **Fortran associate scan を leading keyword gate に強化します** - Fortran reference extraction は associate-target regex probe の前に leading `associate` を要求します。
+- **Fortran allocate scan を leading keyword gate に強化します** - Fortran reference extraction は allocation type/object regex probe の前に leading `allocate` を要求します。

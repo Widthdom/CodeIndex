@@ -2999,7 +2999,7 @@ internal static partial class LanguageReferenceExtractionSupport
         }
 
         var hasFortranAllocateMarker = hasFortranParen
-            && preparedLine.IndexOf("allocate", StringComparison.OrdinalIgnoreCase) >= 0;
+            && StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "allocate");
         if (hasFortranAllocateMarker && preparedLine.IndexOf("::", StringComparison.Ordinal) >= 0)
         {
             foreach (Match match in FortranAllocateTypeSpecRegex.Matches(preparedLine))
