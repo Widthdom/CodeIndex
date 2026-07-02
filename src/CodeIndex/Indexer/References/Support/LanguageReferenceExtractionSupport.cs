@@ -2749,8 +2749,7 @@ internal static partial class LanguageReferenceExtractionSupport
         }
 
         var isFortranCommonLine = StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "common");
-        var isFortranNamelistLine = preparedLine.IndexOf("namelist", StringComparison.OrdinalIgnoreCase) >= 0
-            && FortranNamelistLineRegex.IsMatch(preparedLine);
+        var isFortranNamelistLine = StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "namelist");
         if (isFortranCommonLine || isFortranNamelistLine)
         {
             if (preparedLine.IndexOf('/') >= 0)
