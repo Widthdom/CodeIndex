@@ -2305,8 +2305,12 @@ public static partial class SymbolExtractor
         int openBraceExclusiveEndColumn,
         int endLineIndex)
     {
-        var builder = new StringBuilder();
         var openBraceColumn = Math.Max(0, openBraceExclusiveEndColumn - 1);
+        var builder = new StringBuilder(EstimateCSharpAccessorProbeCapacity(
+            csharpMatchLines,
+            openBraceLineIndex,
+            openBraceColumn,
+            endLineIndex));
         for (int i = openBraceLineIndex; i <= endLineIndex && i < csharpMatchLines.Length; i++)
         {
             AppendCSharpAccessorProbeLine(
@@ -2316,6 +2320,25 @@ public static partial class SymbolExtractor
         }
 
         return builder;
+    }
+
+    private static int EstimateCSharpAccessorProbeCapacity(
+        string[] csharpMatchLines,
+        int openBraceLineIndex,
+        int openBraceColumn,
+        int endLineIndex)
+    {
+        var capacity = 0;
+        for (int i = openBraceLineIndex; i <= endLineIndex && i < csharpMatchLines.Length; i++)
+        {
+            var line = csharpMatchLines[i];
+            var start = i == openBraceLineIndex
+                ? Math.Clamp(openBraceColumn, 0, line.Length)
+                : 0;
+            capacity += line.Length - start + 1;
+        }
+
+        return capacity;
     }
 
     private static void AppendCSharpAccessorProbeLine(StringBuilder builder, string sanitizedLine, int? startColumn)

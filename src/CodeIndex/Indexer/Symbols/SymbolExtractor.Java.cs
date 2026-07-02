@@ -83,7 +83,7 @@ public static partial class SymbolExtractor
         if (startLineIndex < 0 || startLineIndex >= rawLines.Length || endLineIndex < startLineIndex)
             yield break;
 
-        var rawBuilder = new StringBuilder();
+        var rawBuilder = new StringBuilder(rawLines[startLineIndex].Length);
         var statementStartLine = -1;
         var statementStartColumn = -1;
 

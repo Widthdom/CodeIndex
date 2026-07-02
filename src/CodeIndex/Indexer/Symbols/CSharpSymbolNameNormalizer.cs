@@ -64,7 +64,7 @@ internal static class CSharpSymbolNameNormalizer
     private static bool TryReadTypeUntilParameterList(string line, int startIndex, out string typeName)
     {
         typeName = string.Empty;
-        var builder = new StringBuilder();
+        var builder = new StringBuilder(Math.Max(0, line.Length - startIndex));
         var angleDepth = 0;
         var bracketDepth = 0;
         var parenDepth = 0;

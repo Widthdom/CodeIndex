@@ -2534,7 +2534,7 @@ public static partial class SymbolExtractor
 
         startColumnText = startColumn + startLineSlice.IndexOf("export", StringComparison.Ordinal);
 
-        var specifierBuilder = new StringBuilder();
+        var specifierBuilder = new StringBuilder(EstimateJavaScriptTypeScriptStatementCapacity(sanitizedLines, startLineIndex));
         var sawOpenBrace = false;
         var braceDepth = 0;
         var scanEndExclusive = Math.Min(sanitizedLines.Length, startLineIndex + 16);
@@ -2954,8 +2954,9 @@ public static partial class SymbolExtractor
         pattern = string.Empty;
         signature = string.Empty;
 
-        var patternBuilder = new System.Text.StringBuilder();
-        var signatureBuilder = new System.Text.StringBuilder();
+        var builderCapacity = EstimateJavaScriptTypeScriptStatementCapacity(sanitizedLines, startLineIndex);
+        var patternBuilder = new System.Text.StringBuilder(builderCapacity);
+        var signatureBuilder = new System.Text.StringBuilder(builderCapacity);
         var braceDepth = 0;
 
         for (int lineIndex = startLineIndex; lineIndex < sanitizedLines.Length; lineIndex++)
