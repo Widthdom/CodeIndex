@@ -4320,26 +4320,29 @@ public static partial class SymbolExtractor
 
             if (lang == "css" && cssScannerLine != null)
             {
-                foreach (Match match in CssInlineCustomPropertyRegex.Matches(cssScannerLine))
+                if (cssScannerLine.IndexOf("--", StringComparison.Ordinal) >= 0)
                 {
-                    var propertyName = match.Groups["name"].Value.Trim();
-                    if (propertyName.Length == 0)
-                        continue;
+                    foreach (Match match in CssInlineCustomPropertyRegex.Matches(cssScannerLine))
+                    {
+                        var propertyName = match.Groups["name"].Value.Trim();
+                        if (propertyName.Length == 0)
+                            continue;
 
-                    AddSymbolRecord(
-                        symbols,
-                        cssSeenSymbols,
-                        i + 1,
-                        new SymbolRecord
-                        {
-                            FileId = fileId,
-                            Kind = "property",
-                            Name = propertyName,
-                            Line = i + 1,
-                            StartLine = i + 1,
-                            EndLine = i + 1,
-                            Signature = line.Trim(),
-                        });
+                        AddSymbolRecord(
+                            symbols,
+                            cssSeenSymbols,
+                            i + 1,
+                            new SymbolRecord
+                            {
+                                FileId = fileId,
+                                Kind = "property",
+                                Name = propertyName,
+                                Line = i + 1,
+                                StartLine = i + 1,
+                                EndLine = i + 1,
+                                Signature = line.Trim(),
+                            });
+                    }
                 }
 
                 ExtractCssInlineGroupingSelectors(
