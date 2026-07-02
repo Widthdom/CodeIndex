@@ -1375,19 +1375,28 @@ internal static partial class SqlReferenceExtractor
                 shouldIgnoreName);
         }
 
-        EmitTargetReferences(
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            suppressedCallIndices,
-            resolveContainerForCall,
-            shouldIgnoreName);
+        var mayContainTargetReference = statement.IndexOf("INSERT", StringComparison.OrdinalIgnoreCase) >= 0
+            || statement.IndexOf("UPDATE", StringComparison.OrdinalIgnoreCase) >= 0
+            || statement.IndexOf("MERGE", StringComparison.OrdinalIgnoreCase) >= 0
+            || statement.IndexOf("DELETE", StringComparison.OrdinalIgnoreCase) >= 0
+            || (statement.IndexOf("ALTER", StringComparison.OrdinalIgnoreCase) >= 0
+                && statement.IndexOf("TABLE", StringComparison.OrdinalIgnoreCase) >= 0);
+        if (mayContainTargetReference)
+        {
+            EmitTargetReferences(
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                suppressedCallIndices,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
 
         if (statement.IndexOf("DROP", StringComparison.OrdinalIgnoreCase) >= 0
             && statement.IndexOf("TABLE", StringComparison.OrdinalIgnoreCase) >= 0)
