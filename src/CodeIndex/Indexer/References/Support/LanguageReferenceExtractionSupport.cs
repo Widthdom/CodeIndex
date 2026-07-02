@@ -1289,16 +1289,22 @@ internal static partial class LanguageReferenceExtractionSupport
                 }
             }
 
-            foreach (Match match in CTypedefFunctionReturnTypeRegex.Matches(preparedLine))
+            if (hasCParen && hasCTypedefTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTypedefFunctionReturnTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTaggedFunctionReturnTypeRegex.Matches(preparedLine))
+            if (hasCParen && hasCTaggedTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTaggedFunctionReturnTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
             foreach (Match match in CTypedefParameterTypeRegex.Matches(preparedLine))
