@@ -2185,17 +2185,21 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        foreach (Match match in VbNewTypeRegex.Matches(preparedLine))
+        var hasVbNewMarker = preparedLine.IndexOf("New", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (hasVbNewMarker)
         {
-            var group = match.Groups["type"];
-            var rawName = LastQualifiedSegment(group.Value);
-            var name = NormalizeVbIdentifierSegment(rawName);
-            if (string.Equals(name, "With", StringComparison.OrdinalIgnoreCase))
-                continue;
+            foreach (Match match in VbNewTypeRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                var rawName = LastQualifiedSegment(group.Value);
+                var name = NormalizeVbIdentifierSegment(rawName);
+                if (string.Equals(name, "With", StringComparison.OrdinalIgnoreCase))
+                    continue;
 
-            var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
-            var nameIndex = group.Index + Math.Max(0, nameOffset);
-            ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "instantiate", context, lineNumber, resolveContainerForColumn(nameIndex));
+                var nameOffset = group.Value.LastIndexOf(rawName, StringComparison.Ordinal);
+                var nameIndex = group.Index + Math.Max(0, nameOffset);
+                ReferenceExtractor.AddReference(references, seen, fileId, name, nameIndex, "instantiate", context, lineNumber, resolveContainerForColumn(nameIndex));
+            }
         }
 
         foreach (Match match in VbImplementsListRegex.Matches(preparedLine))
