@@ -2783,7 +2783,7 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        if (preparedLine.IndexOf("equivalence", StringComparison.OrdinalIgnoreCase) >= 0
+        if (StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "equivalence")
             && preparedLine.IndexOf('(') >= 0
             && FortranEquivalenceLineRegex.IsMatch(preparedLine))
         {
