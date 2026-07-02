@@ -595,6 +595,12 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf('&') < 0
+            || preparedLine.IndexOf("mut", StringComparison.Ordinal) < 0)
+        {
+            return;
+        }
+
         foreach (Match match in MutableReferenceTypeRegex.Matches(preparedLine))
         {
             if (!IsMutableReferenceTypeContext(preparedLine, match.Index))
