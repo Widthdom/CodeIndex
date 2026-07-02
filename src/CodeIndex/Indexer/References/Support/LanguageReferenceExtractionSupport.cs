@@ -2243,38 +2243,47 @@ internal static partial class LanguageReferenceExtractionSupport
         if (importMatch.Success)
             EmitCommaSeparatedNames(importMatch.Groups["list"].Value, importMatch.Groups["list"].Index, "fortran", references, seen, fileId, context, lineNumber, container);
 
-        foreach (Match match in FortranIncludeRegex.Matches(originalLine))
-            ReferenceExtractor.AddReference(references, seen, fileId, match, "reference", context, lineNumber, container);
-
-        var isFortranCommonLine = FortranCommonLineRegex.IsMatch(preparedLine);
-        var isFortranNamelistLine = FortranNamelistLineRegex.IsMatch(preparedLine);
-        if (isFortranCommonLine || isFortranNamelistLine)
+        if (originalLine.IndexOf("include", StringComparison.OrdinalIgnoreCase) >= 0
+            && (originalLine.IndexOf('\'') >= 0 || originalLine.IndexOf('"') >= 0))
         {
-            foreach (Match match in FortranSlashGroupNameRegex.Matches(preparedLine))
+            foreach (Match match in FortranIncludeRegex.Matches(originalLine))
                 ReferenceExtractor.AddReference(references, seen, fileId, match, "reference", context, lineNumber, container);
         }
 
+        var isFortranCommonLine = preparedLine.IndexOf("common", StringComparison.OrdinalIgnoreCase) >= 0
+            && FortranCommonLineRegex.IsMatch(preparedLine);
+        var isFortranNamelistLine = preparedLine.IndexOf("namelist", StringComparison.OrdinalIgnoreCase) >= 0
+            && FortranNamelistLineRegex.IsMatch(preparedLine);
         if (isFortranCommonLine || isFortranNamelistLine)
         {
-            foreach (Match memberListMatch in FortranSlashGroupMemberListRegex.Matches(preparedLine))
+            if (preparedLine.IndexOf('/') >= 0)
             {
-                var list = memberListMatch.Groups["list"];
+                foreach (Match match in FortranSlashGroupNameRegex.Matches(preparedLine))
+                    ReferenceExtractor.AddReference(references, seen, fileId, match, "reference", context, lineNumber, container);
+
+                foreach (Match memberListMatch in FortranSlashGroupMemberListRegex.Matches(preparedLine))
+                {
+                    var list = memberListMatch.Groups["list"];
+                    foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+                    {
+                        var group = match.Groups["name"];
+                        ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
+                    }
+                }
+            }
+        }
+
+        if (isFortranCommonLine && preparedLine.IndexOf('/') < 0)
+        {
+            var blankCommonMemberListMatch = FortranBlankCommonMemberListRegex.Match(preparedLine);
+            if (blankCommonMemberListMatch.Success)
+            {
+                var list = blankCommonMemberListMatch.Groups["list"];
                 foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
                 {
                     var group = match.Groups["name"];
                     ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
                 }
-            }
-        }
-
-        var blankCommonMemberListMatch = FortranBlankCommonMemberListRegex.Match(preparedLine);
-        if (blankCommonMemberListMatch.Success)
-        {
-            var list = blankCommonMemberListMatch.Groups["list"];
-            foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
-            {
-                var group = match.Groups["name"];
-                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, list.Index + group.Index, "reference", context, lineNumber, container);
             }
         }
 

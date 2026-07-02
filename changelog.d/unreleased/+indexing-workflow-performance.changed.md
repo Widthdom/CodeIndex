@@ -29,6 +29,7 @@ affected:
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Markup.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.Preparation.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.TypeReferences.cs
+  - src/CodeIndex/Indexer/References/Support/LanguageReferenceExtractionSupport.cs
   - src/CodeIndex/Indexer/References/Support/LanguageReferenceExtractionSupport.Go.cs
   - src/CodeIndex/Indexer/Scanning/FileContentLoader.cs
   - src/CodeIndex/Indexer/Scanning/FileIndexer.GeneratedCode.cs
@@ -106,6 +107,7 @@ affected:
 - **Gated wrapped XAML search-attribute scans by markers** - XAML extraction now skips multiline name/key/event attribute scanning when none of those markers appear in the document.
 - **Gated COBOL paragraph scans by required markers** - COBOL extraction now skips program, entry, section, and paragraph regex checks when the line lacks the required marker.
 - **Gated Fortran routine-start scans by keyword** - Fortran range extraction now skips routine-start regex checks when a line contains neither `subroutine` nor `function`.
+- **Gated Fortran include and group reference scans by marker** - Fortran reference extraction now skips include/common/namelist regex checks unless the line has the required keyword and delimiter markers.
 - **Gated Smalltalk range-boundary scans by marker** - Smalltalk range extraction now skips method/class boundary regex checks when the line lacks `>>`, `subclass:`, or `named:`.
 - **Gated Rust use-start scans by keyword** - Rust use-statement collection now skips the start regex when the first line lacks the `use` keyword marker.
 - **Gated Kotlin class subkind scans by keyword** - Kotlin class enrichment now skips value/inline class regex checks when metadata lacks the corresponding keyword marker.
@@ -193,6 +195,7 @@ affected:
 - **wrapped XAML search-attribute scan を marker で gate します** - XAML extraction は name/key/event attribute marker がすべてない場合 multiline scan を skip します。
 - **COBOL paragraph scan を required marker で gate します** - COBOL extraction は line に必須 marker がない場合 program/entry/section/paragraph regex check を skip します。
 - **Fortran routine-start scan を keyword で gate します** - Fortran range extraction は line に `subroutine` と `function` のどちらもない場合 routine-start regex check を skip します。
+- **Fortran include / group reference scan を marker で gate します** - Fortran reference extraction は必須の keyword と delimiter marker がない行で include/common/namelist regex check を skip します。
 - **Smalltalk range-boundary scan を marker で gate します** - Smalltalk range extraction は line に `>>`、`subclass:`、`named:` がない場合 method/class boundary regex check を skip します。
 - **Rust use-start scan を keyword で gate します** - Rust use-statement collection は first line に `use` keyword marker がない場合 start regex を skip します。
 - **Kotlin class subkind scan を keyword で gate します** - Kotlin class enrichment は metadata に対応する keyword marker がない場合 value/inline class regex check を skip します。
