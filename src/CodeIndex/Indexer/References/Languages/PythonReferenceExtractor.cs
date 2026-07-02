@@ -461,6 +461,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("isinstance", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in IsInstanceTupleTypeRegex.Matches(preparedLine))
         {
             var typesGroup = match.Groups["types"];
@@ -512,6 +515,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("issubclass", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in IsSubclassTupleTypeRegex.Matches(preparedLine))
         {
             var typesGroup = match.Groups["types"];
