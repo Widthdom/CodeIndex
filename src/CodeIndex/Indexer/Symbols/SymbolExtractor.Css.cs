@@ -461,6 +461,9 @@ public static partial class SymbolExtractor
         if (value.Length == 0)
             return value;
 
+        if (!value.Contains("/*", StringComparison.Ordinal))
+            return value;
+
         var builder = new System.Text.StringBuilder(value.Length);
         for (int i = 0; i < value.Length; i++)
         {
