@@ -967,6 +967,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("NewType", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in NewTypeUnderlyingTypeRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -996,6 +999,13 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if ((preparedLine.IndexOf("TypeVar", StringComparison.Ordinal) < 0
+                && preparedLine.IndexOf("ParamSpec", StringComparison.Ordinal) < 0)
+            || preparedLine.IndexOf("bound", StringComparison.Ordinal) < 0)
+        {
+            return;
+        }
+
         foreach (Match match in TypeVarBoundTypeRegex.Matches(preparedLine))
         {
             EmitPythonTypeExpressionReferences(
@@ -1021,6 +1031,12 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("TypeVar", StringComparison.Ordinal) < 0
+            && preparedLine.IndexOf("ParamSpec", StringComparison.Ordinal) < 0)
+        {
+            return;
+        }
+
         foreach (Match match in TypeVarConstraintTypesRegex.Matches(preparedLine))
         {
             var typesGroup = match.Groups["types"];
