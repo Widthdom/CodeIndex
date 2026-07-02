@@ -3651,7 +3651,11 @@ internal static partial class SqlReferenceExtractor
         if (rawSegments.Count == 0)
             return false;
 
-        var pattern = new StringBuilder();
+        var patternCapacity = Math.Max(0, rawSegments.Count - 1) * @"\s*\.\s*".Length;
+        for (var i = 0; i < rawSegments.Count; i++)
+            patternCapacity += rawSegments[i].Length + (i == rawSegments.Count - 1 ? "(?<leaf>)".Length : 0);
+
+        var pattern = new StringBuilder(patternCapacity);
         for (var i = 0; i < rawSegments.Count; i++)
         {
             if (i > 0)

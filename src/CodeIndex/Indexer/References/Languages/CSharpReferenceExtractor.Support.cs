@@ -1409,14 +1409,30 @@ public static partial class ReferenceExtractor
         IReadOnlyList<(int Start, int End)> segments,
         int count)
     {
-        var builder = new StringBuilder();
+        var capacity = Math.Max(0, count - 1);
+        for (var i = 0; i < count; i++)
+        {
+            var (start, end) = segments[i];
+            var length = end - start;
+            if (length > 0 && preparedLine[start] == '@')
+                length--;
+            capacity += length;
+        }
+
+        var builder = new StringBuilder(capacity);
         for (var i = 0; i < count; i++)
         {
             if (i > 0)
                 builder.Append('.');
             var (start, end) = segments[i];
-            var segment = preparedLine.Substring(start, end - start);
-            builder.Append(segment[0] == '@' ? segment[1..] : segment);
+            var length = end - start;
+            if (length > 0 && preparedLine[start] == '@')
+            {
+                start++;
+                length--;
+            }
+
+            builder.Append(preparedLine, start, length);
         }
         return builder.ToString();
     }

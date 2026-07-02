@@ -625,7 +625,11 @@ internal static class SqlNameResolver
             var segmentCount = i + 1;
             var names = new List<string>(segmentCount);
             var caseSensitiveSegments = new List<bool>(segmentCount);
-            var normalizedNameBuilder = new StringBuilder();
+            var normalizedNameLength = segmentCount - 1;
+            for (var segmentIndex = 0; segmentIndex < segmentCount; segmentIndex++)
+                normalizedNameLength += segments[segmentIndex].Name.Length;
+
+            var normalizedNameBuilder = new StringBuilder(normalizedNameLength);
             for (var segmentIndex = 0; segmentIndex < segmentCount; segmentIndex++)
             {
                 var part = segments[segmentIndex];
