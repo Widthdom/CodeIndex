@@ -860,21 +860,24 @@ public static partial class SymbolExtractor
                 }
             }
 
-            foreach (Match handlerMatch in XamlEventHandlerRegex.Matches(line))
+            if (MayContainXamlEventHandlerAttribute(line))
             {
-                var value = handlerMatch.Groups["value"].Value.Trim();
-                if (value.Length == 0)
-                    continue;
-                symbols.Add(new SymbolRecord
+                foreach (Match handlerMatch in XamlEventHandlerRegex.Matches(line))
                 {
-                    FileId = fileId,
-                    Kind = "function",
-                    Name = value,
-                    Line = i + 1,
-                    StartLine = i + 1,
-                    EndLine = i + 1,
-                    Signature = line.Trim(),
-                });
+                    var value = handlerMatch.Groups["value"].Value.Trim();
+                    if (value.Length == 0)
+                        continue;
+                    symbols.Add(new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "function",
+                        Name = value,
+                        Line = i + 1,
+                        StartLine = i + 1,
+                        EndLine = i + 1,
+                        Signature = line.Trim(),
+                    });
+                }
             }
         }
 
@@ -925,6 +928,20 @@ public static partial class SymbolExtractor
         }
 
         return TrimStructuredDataSymbols(symbols, fileId, "structured_data_xml_symbol_budget_exceeded", lines);
+    }
+
+    private static bool MayContainXamlEventHandlerAttribute(string line)
+    {
+        if (line.IndexOf('=') < 0)
+            return false;
+
+        foreach (var eventName in XamlEventAttributeNames)
+        {
+            if (line.Contains(eventName, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
     }
 
     private static void AddWrappedXamlTypeArgumentSymbols(
