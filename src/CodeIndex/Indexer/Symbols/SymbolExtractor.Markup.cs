@@ -1248,53 +1248,64 @@ public static partial class SymbolExtractor
         int[] lineStarts,
         List<SymbolRecord> symbols)
     {
-        foreach (Match bindingMatch in XamlBindingRegex.Matches(rawText))
+        if (MayContainXamlBindingMarkup(rawText)
+            && rawText.Contains("ElementName", StringComparison.Ordinal))
         {
-            if (!bindingMatch.Groups["kind"].Value.Equals("Binding", StringComparison.OrdinalIgnoreCase))
-                continue;
+            foreach (Match bindingMatch in XamlBindingRegex.Matches(rawText))
+            {
+                if (!bindingMatch.Groups["kind"].Value.Equals("Binding", StringComparison.OrdinalIgnoreCase))
+                    continue;
 
-            var value = NormalizeXamlBindingElementNameValue(bindingMatch.Groups["content"].Value);
-            if (value.Length == 0)
-                continue;
+                var value = NormalizeXamlBindingElementNameValue(bindingMatch.Groups["content"].Value);
+                if (value.Length == 0)
+                    continue;
 
-            AddXamlAttributeSymbol(fileId, lines, lineStarts, symbols, bindingMatch.Index, "property", value);
+                AddXamlAttributeSymbol(fileId, lines, lineStarts, symbols, bindingMatch.Index, "property", value);
+            }
         }
 
-        var cursor = 0;
-        while (cursor < rawText.Length)
+        if (rawText.Contains("<Binding", StringComparison.Ordinal)
+            && rawText.Contains("ElementName", StringComparison.Ordinal))
         {
-            var tagIndex = rawText.IndexOf("<Binding", cursor, StringComparison.Ordinal);
-            if (tagIndex < 0)
-                break;
-
-            var nameEnd = tagIndex + "<Binding".Length;
-            if (nameEnd < rawText.Length && IsXamlAttributeNameChar(rawText[nameEnd]))
+            var cursor = 0;
+            while (cursor < rawText.Length)
             {
-                cursor = nameEnd;
-                continue;
+                var tagIndex = rawText.IndexOf("<Binding", cursor, StringComparison.Ordinal);
+                if (tagIndex < 0)
+                    break;
+
+                var nameEnd = tagIndex + "<Binding".Length;
+                if (nameEnd < rawText.Length && IsXamlAttributeNameChar(rawText[nameEnd]))
+                {
+                    cursor = nameEnd;
+                    continue;
+                }
+
+                var tagEnd = FindXamlTagEnd(rawText, nameEnd);
+                if (tagEnd < 0)
+                    break;
+
+                var elementNameAttributeIndex = IndexOfXamlAttributeInRange(rawText, "ElementName", nameEnd, tagEnd);
+                if (elementNameAttributeIndex >= 0
+                    && TryReadXamlAttributeValue(rawText, "ElementName", elementNameAttributeIndex, out var valueStart, out var valueEnd)
+                    && valueEnd <= tagEnd)
+                {
+                    AddXamlAttributeSymbol(
+                        fileId,
+                        lines,
+                        lineStarts,
+                        symbols,
+                        elementNameAttributeIndex,
+                        "property",
+                        NormalizeXamlElementReferenceValue(rawText[valueStart..valueEnd]));
+                }
+
+                cursor = tagEnd + 1;
             }
-
-            var tagEnd = FindXamlTagEnd(rawText, nameEnd);
-            if (tagEnd < 0)
-                break;
-
-            var elementNameAttributeIndex = IndexOfXamlAttributeInRange(rawText, "ElementName", nameEnd, tagEnd);
-            if (elementNameAttributeIndex >= 0
-                && TryReadXamlAttributeValue(rawText, "ElementName", elementNameAttributeIndex, out var valueStart, out var valueEnd)
-                && valueEnd <= tagEnd)
-            {
-                AddXamlAttributeSymbol(
-                    fileId,
-                    lines,
-                    lineStarts,
-                    symbols,
-                    elementNameAttributeIndex,
-                    "property",
-                    NormalizeXamlElementReferenceValue(rawText[valueStart..valueEnd]));
-            }
-
-            cursor = tagEnd + 1;
         }
+
+        if (!rawText.Contains("Binding.ElementName", StringComparison.Ordinal))
+            return;
 
         foreach (Match elementNameMatch in XamlBindingElementNamePropertyElementRegex.Matches(rawText))
         {
