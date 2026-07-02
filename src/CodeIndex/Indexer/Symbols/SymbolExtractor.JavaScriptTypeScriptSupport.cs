@@ -368,12 +368,15 @@ public static partial class SymbolExtractor
         if (requireIndex <= 0 || requireIndex > sanitizedLine.Length)
             return false;
 
-        var prefix = sanitizedLine[..requireIndex].TrimEnd();
-        if (prefix.Length == 0 || prefix[^1] != '=')
+        var prefixEnd = FindJavaScriptTypeScriptTrimmedEndExclusive(sanitizedLine, requireIndex);
+        if (prefixEnd == 0 || sanitizedLine[prefixEnd - 1] != '=')
             return false;
 
-        var beforeEquals = prefix[..^1].TrimStart();
-        return IsJavaScriptTypeScriptKeywordAt(beforeEquals, 0, "import");
+        var importStart = 0;
+        while (importStart < prefixEnd - 1 && char.IsWhiteSpace(sanitizedLine[importStart]))
+            importStart++;
+
+        return IsJavaScriptTypeScriptKeywordAt(sanitizedLine, importStart, "import");
     }
 
     private static bool TryReadJavaScriptTypeScriptRequireResolveModule(
@@ -2837,10 +2840,10 @@ public static partial class SymbolExtractor
                 && braceDepth == 0
                 && variableNames.Count > 0
                 && !expectingName
-                && CanStopJavaScriptTypeScriptExportedVariableDeclarationAtLineEnd(line))
+                && CanStopJavaScriptTypeScriptExportedVariableDeclarationAtLineEnd(line, out var lastContentColumn))
             {
                 endLineIndex = lineIndex;
-                endColumn = Math.Max(0, line.TrimEnd().Length - 1);
+                endColumn = lastContentColumn;
                 break;
             }
 
@@ -2851,13 +2854,25 @@ public static partial class SymbolExtractor
         return variableNames.Count > 0;
     }
 
-    private static bool CanStopJavaScriptTypeScriptExportedVariableDeclarationAtLineEnd(string sanitizedLine)
+    private static bool CanStopJavaScriptTypeScriptExportedVariableDeclarationAtLineEnd(
+        string sanitizedLine,
+        out int lastContentColumn)
     {
-        var trimmed = sanitizedLine.TrimEnd();
-        if (trimmed.Length == 0)
+        var endExclusive = FindJavaScriptTypeScriptTrimmedEndExclusive(sanitizedLine, sanitizedLine.Length);
+        lastContentColumn = endExclusive - 1;
+        if (endExclusive == 0)
             return false;
 
-        return trimmed[^1] is not (',' or '=' or '(' or '[' or '{' or '.' or '?' or ':' or '+' or '-' or '*' or '%' or '&' or '|' or '^' or '!' or '<' or '>');
+        return sanitizedLine[lastContentColumn] is not (',' or '=' or '(' or '[' or '{' or '.' or '?' or ':' or '+' or '-' or '*' or '%' or '&' or '|' or '^' or '!' or '<' or '>');
+    }
+
+    private static int FindJavaScriptTypeScriptTrimmedEndExclusive(string text, int endExclusive)
+    {
+        endExclusive = Math.Clamp(endExclusive, 0, text.Length);
+        while (endExclusive > 0 && char.IsWhiteSpace(text[endExclusive - 1]))
+            endExclusive--;
+
+        return endExclusive;
     }
 
     private readonly record struct JavaScriptTypeScriptExportedVariableName(string Name, int LineIndex, int Column);
@@ -9181,7 +9196,9 @@ public static partial class SymbolExtractor
                 && parenDepth == 0
                 && bracketDepth == 0
                 && angleDepth == 0
-                && scanLine.TrimEnd().EndsWith(';'))
+                && FindJavaScriptTypeScriptTrimmedEndExclusive(scanLine, scanLine.Length) is var trimmedEnd
+                && trimmedEnd > 0
+                && scanLine[trimmedEnd - 1] == ';')
                 return (startIndex + 1, null, null);
         }
 
