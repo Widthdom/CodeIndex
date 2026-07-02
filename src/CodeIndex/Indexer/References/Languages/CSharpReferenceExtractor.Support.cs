@@ -172,7 +172,15 @@ public static partial class ReferenceExtractor
             if (symbol.Kind != "import" || string.IsNullOrWhiteSpace(symbol.Signature))
                 continue;
 
-            var match = CSharpUsingNamespaceRegex.Match(symbol.Signature!);
+            var signature = symbol.Signature!;
+            if (signature.IndexOf("using", StringComparison.Ordinal) < 0
+                || signature.IndexOf('=') >= 0
+                || signature.IndexOf("static", StringComparison.Ordinal) >= 0)
+            {
+                continue;
+            }
+
+            var match = CSharpUsingNamespaceRegex.Match(signature);
             if (!match.Success)
                 continue;
 
@@ -219,7 +227,14 @@ public static partial class ReferenceExtractor
             if (symbol.Kind != "import" || string.IsNullOrWhiteSpace(symbol.Signature))
                 continue;
 
-            var match = CSharpUsingStaticRegex.Match(symbol.Signature!);
+            var signature = symbol.Signature!;
+            if (signature.IndexOf("using", StringComparison.Ordinal) < 0
+                || signature.IndexOf("static", StringComparison.Ordinal) < 0)
+            {
+                continue;
+            }
+
+            var match = CSharpUsingStaticRegex.Match(signature);
             if (!match.Success)
                 continue;
 

@@ -84,6 +84,7 @@ affected:
 - **Gated R directive reference scans by marker** - R reference extraction now checks namespace, roxygen, and S4 directive markers before running directive-start regexes or sequential directive match probes.
 - **Gated PowerShell splat reference scans by marker** - PowerShell reference extraction now checks splat assignment, splat usage, and hashtable key markers before running the corresponding regex scans.
 - **Gated Shell call and source reference scans by marker** - Shell reference extraction now skips command-call regexes when no callable names exist and checks substitution, source, and global-alias markers before running those scans.
+- **Gated C# using namespace/static scans by marker** - C# reference extraction now checks `using`, `static`, and alias markers before running using-namespace and using-static regex probes.
 - **Skipped reference-line preparation on empty lines** - all language reference preparation now returns empty lines immediately instead of running comment/string-literal trigger checks.
 - **Collapsed string-literal delimiter probes** - reference-line preparation now checks quote/backtick trigger characters with `IndexOfAny` instead of separate scans per delimiter.
 - **Hoisted reference-line preparation language flags** - per-file reference preparation now computes language comment/string handling flags once and reuses them for each line instead of repeating language switches in the hot loop.
@@ -192,6 +193,7 @@ affected:
 - **R directive reference scan を marker で gate します** - R reference extraction は namespace、roxygen、S4 directive marker を確認してから directive-start regex や sequential directive match probe を実行します。
 - **PowerShell splat reference scan を marker で gate します** - PowerShell reference extraction は splat assignment、splat usage、hashtable key marker を確認してから対応する regex scan を実行します。
 - **Shell call / source reference scan を marker で gate します** - Shell reference extraction は callable name がない場合に command-call regex を skip し、substitution、source、global-alias marker を確認してから対応 scan を実行します。
+- **C# using namespace/static scan を marker で gate します** - C# reference extraction は using-namespace と using-static regex probe を実行する前に `using`、`static`、alias marker を確認します。
 - **空行の reference-line preparation を skip します** - 全言語の reference preparation は空行に対して comment/string-literal trigger 判定を走らせず即 return するようになりました。
 - **string-literal delimiter probe をまとめました** - reference-line preparation は quote/backtick trigger character を delimiter ごとの個別 scan ではなく `IndexOfAny` で確認します。
 - **reference-line preparation の言語フラグを loop 外へ出しました** - ファイルごとの reference preparation は comment/string handling の言語フラグを一度だけ計算し、hot loop 内で language switch を繰り返さないようになりました。
