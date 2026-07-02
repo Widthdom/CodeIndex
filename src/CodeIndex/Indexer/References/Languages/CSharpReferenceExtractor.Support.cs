@@ -33,7 +33,14 @@ public static partial class ReferenceExtractor
             if (symbol.Kind != "import" || string.IsNullOrWhiteSpace(symbol.Signature))
                 continue;
 
-            var match = CSharpUsingAliasRegex.Match(symbol.Signature!);
+            var signature = symbol.Signature!;
+            if (signature.IndexOf("using", StringComparison.Ordinal) < 0
+                || signature.IndexOf('=') < 0)
+            {
+                continue;
+            }
+
+            var match = CSharpUsingAliasRegex.Match(signature);
             if (!match.Success)
                 continue;
 
@@ -47,8 +54,12 @@ public static partial class ReferenceExtractor
                 var scanLine = aliasScanLines != null && i < aliasScanLines.Count
                     ? aliasScanLines[i]
                     : lines[i];
-                if (!CSharpUsingAliasRegex.IsMatch(scanLine))
+                if (scanLine.IndexOf("using", StringComparison.Ordinal) < 0
+                    || scanLine.IndexOf('=') < 0
+                    || !CSharpUsingAliasRegex.IsMatch(scanLine))
+                {
                     continue;
+                }
 
                 var match = CSharpUsingAliasRegex.Match(lines[i]);
                 if (!match.Success)

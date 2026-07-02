@@ -2472,8 +2472,12 @@ public static partial class ReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        if (!CSharpReflectionNameApiIntroRegex.IsMatch(preparedLine))
+        if (preparedLine.IndexOf("Get", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf('(') < 0
+            || !CSharpReflectionNameApiIntroRegex.IsMatch(preparedLine))
+        {
             return;
+        }
 
         var codeLine = SanitizeCSharpCommentsForReflectionNameScan(originalLine);
         foreach (Match match in CSharpReflectionNameApiIntroRegex.Matches(codeLine))
