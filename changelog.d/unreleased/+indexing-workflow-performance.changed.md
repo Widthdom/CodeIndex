@@ -108,6 +108,7 @@ affected:
 - **Gated Rust struct literal scans by marker** - Rust reference extraction now checks the opening-brace marker before running struct literal instantiation regex probes.
 - **Gated Rust mutable reference type scans by marker** - Rust reference extraction now checks ampersand and `mut` markers before running mutable-reference type regex probes.
 - **Gated Rust declaration reference scans by marker** - Rust reference extraction now checks use, extern crate, and module markers before running declaration reference regex probes.
+- **Gated Rust lifetime and ranked-bound scans by marker** - Rust reference extraction now checks lifetime apostrophe and higher-ranked `for<...>` markers before scanning those reference forms.
 - **Gated Python decorator reference scans by marker** - Python reference extraction now skips decorator-call and bare-decorator regex probes on lines without an `@` marker.
 - **Gated Python raise/except type scans by marker** - Python reference extraction now checks `raise` and `except` markers before running exception type regex probes.
 - **Gated Python runtime type-check scans by marker** - Python reference extraction now checks `isinstance` and `issubclass` markers before running runtime type-check regex probes.
@@ -248,6 +249,7 @@ affected:
 - **Rust struct literal scan を marker で gate します** - Rust reference extraction は struct literal instantiation regex probe を実行する前に opening-brace marker を確認します。
 - **Rust mutable reference type scan を marker で gate します** - Rust reference extraction は mutable-reference type regex probe を実行する前に ampersand と `mut` marker を確認します。
 - **Rust declaration reference scan を marker で gate します** - Rust reference extraction は declaration reference regex probe を実行する前に use、extern crate、module marker を確認します。
+- **Rust lifetime / ranked-bound scan を marker で gate します** - Rust reference extraction は lifetime apostrophe と higher-ranked `for<...>` marker を確認してから対応する reference form を走査します。
 - **Python decorator reference scan を marker で gate します** - Python reference extraction は `@` marker がない行では decorator-call と bare-decorator regex probe を skip します。
 - **Python raise/except type scan を marker で gate します** - Python reference extraction は exception type regex probe を実行する前に `raise` と `except` marker を確認します。
 - **Python runtime type-check scan を marker で gate します** - Python reference extraction は runtime type-check regex probe を実行する前に `isinstance` と `issubclass` marker を確認します。

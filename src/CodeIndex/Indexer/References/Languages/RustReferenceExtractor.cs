@@ -649,6 +649,11 @@ internal static class RustReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf('\'') < 0)
+        {
+            return;
+        }
+
         for (var index = 0; index + 1 < preparedLine.Length; index++)
         {
             if (preparedLine[index] != '\'' || !IsRustLifetimeStart(preparedLine[index + 1]))
@@ -687,6 +692,12 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (line.IndexOf("for", StringComparison.Ordinal) < 0
+            || line.IndexOf('<') < 0)
+        {
+            return;
+        }
+
         foreach (var forIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(line, "for"))
         {
             var openAngle = SkipWhitespace(line, forIndex + "for".Length);
