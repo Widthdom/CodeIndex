@@ -30,24 +30,30 @@ internal static class GoReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        foreach (Match match in GoroutineCallRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("go", StringComparison.Ordinal) >= 0)
         {
-            var group = match.Groups["name"];
-            var rawName = group.Value;
-            var dot = rawName.LastIndexOf('.');
-            var name = dot >= 0 && dot + 1 < rawName.Length ? rawName[(dot + 1)..] : rawName;
-            var nameIndex = dot >= 0 && dot + 1 < rawName.Length ? group.Index + dot + 1 : group.Index;
-            ReferenceExtractor.AddReference(
-                references,
-                seen,
-                fileId,
-                name,
-                nameIndex,
-                "goroutine_spawn",
-                context,
-                lineNumber,
-                resolveContainerForColumn(nameIndex));
+            foreach (Match match in GoroutineCallRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["name"];
+                var rawName = group.Value;
+                var dot = rawName.LastIndexOf('.');
+                var name = dot >= 0 && dot + 1 < rawName.Length ? rawName[(dot + 1)..] : rawName;
+                var nameIndex = dot >= 0 && dot + 1 < rawName.Length ? group.Index + dot + 1 : group.Index;
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    name,
+                    nameIndex,
+                    "goroutine_spawn",
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn(nameIndex));
+            }
         }
+
+        if (preparedLine.IndexOf("<-", StringComparison.Ordinal) < 0)
+            return;
 
         foreach (Match match in ChannelSendRegex.Matches(preparedLine))
         {

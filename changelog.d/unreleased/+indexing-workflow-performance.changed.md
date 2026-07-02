@@ -28,6 +28,7 @@ affected:
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.VisualBasic.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Markup.cs
   - src/CodeIndex/Indexer/References/Languages/CSharpReferenceExtractor.Support.cs
+  - src/CodeIndex/Indexer/References/Languages/GoReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/Languages/SwiftReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/Languages/SqlReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/Languages/RReferenceExtractor.cs
@@ -86,6 +87,7 @@ affected:
 - **Gated Shell call and source reference scans by marker** - Shell reference extraction now skips command-call regexes when no callable names exist and checks substitution, source, and global-alias markers before running those scans.
 - **Gated C# using namespace/static scans by marker** - C# reference extraction now checks `using`, `static`, and alias markers before running using-namespace and using-static regex probes.
 - **Gated SQL temp-object collection scans by marker** - SQL temp object carry-forward now skips collection without `#` markers and runs target, truncate, select-into, and create probes only when their statement keywords are present.
+- **Gated Go concurrency reference scans by marker** - Go reference extraction now checks `go` and channel-arrow markers before running goroutine and channel send/receive regex probes.
 - **Skipped reference-line preparation on empty lines** - all language reference preparation now returns empty lines immediately instead of running comment/string-literal trigger checks.
 - **Collapsed string-literal delimiter probes** - reference-line preparation now checks quote/backtick trigger characters with `IndexOfAny` instead of separate scans per delimiter.
 - **Hoisted reference-line preparation language flags** - per-file reference preparation now computes language comment/string handling flags once and reuses them for each line instead of repeating language switches in the hot loop.
@@ -196,6 +198,7 @@ affected:
 - **Shell call / source reference scan を marker で gate します** - Shell reference extraction は callable name がない場合に command-call regex を skip し、substitution、source、global-alias marker を確認してから対応 scan を実行します。
 - **C# using namespace/static scan を marker で gate します** - C# reference extraction は using-namespace と using-static regex probe を実行する前に `using`、`static`、alias marker を確認します。
 - **SQL temp-object collection scan を marker で gate します** - SQL temp object carry-forward は `#` marker がない場合の collection を skip し、target、truncate、select-into、create probe は対応する statement keyword がある場合だけ実行します。
+- **Go concurrency reference scan を marker で gate します** - Go reference extraction は goroutine と channel send/receive regex probe を実行する前に `go` と channel-arrow marker を確認します。
 - **空行の reference-line preparation を skip します** - 全言語の reference preparation は空行に対して comment/string-literal trigger 判定を走らせず即 return するようになりました。
 - **string-literal delimiter probe をまとめました** - reference-line preparation は quote/backtick trigger character を delimiter ごとの個別 scan ではなく `IndexOfAny` で確認します。
 - **reference-line preparation の言語フラグを loop 外へ出しました** - ファイルごとの reference preparation は comment/string handling の言語フラグを一度だけ計算し、hot loop 内で language switch を繰り返さないようになりました。
