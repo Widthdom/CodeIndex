@@ -2854,7 +2854,7 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        if (preparedLine.IndexOf("external", StringComparison.OrdinalIgnoreCase) >= 0)
+        if (StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "external"))
         {
             var externalMatch = FortranExternalRegex.Match(preparedLine);
             if (externalMatch.Success)
