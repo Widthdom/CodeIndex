@@ -108,32 +108,35 @@ internal static class CssReferenceExtractor
         foreach (var pattern in CssReferencePatterns)
             EmitMatches(pattern, preparedLine, context, lineNumber, references, seen, fileId, definitionNames, container);
 
-        foreach (Match match in CssAnimationNameValueRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("animation", StringComparison.OrdinalIgnoreCase) >= 0)
         {
-            EmitCssAnimationNameReferences(
-                match.Groups["value"].Value,
-                match.Groups["value"].Index,
-                context,
-                lineNumber,
-                references,
-                seen,
-                fileId,
-                definitionNames,
-                container);
-        }
+            foreach (Match match in CssAnimationNameValueRegex.Matches(preparedLine))
+            {
+                EmitCssAnimationNameReferences(
+                    match.Groups["value"].Value,
+                    match.Groups["value"].Index,
+                    context,
+                    lineNumber,
+                    references,
+                    seen,
+                    fileId,
+                    definitionNames,
+                    container);
+            }
 
-        foreach (Match match in CssAnimationShorthandValueRegex.Matches(preparedLine))
-        {
-            EmitCssAnimationShorthandReferences(
-                match.Groups["value"].Value,
-                match.Groups["value"].Index,
-                context,
-                lineNumber,
-                references,
-                seen,
-                fileId,
-                definitionNames,
-                container);
+            foreach (Match match in CssAnimationShorthandValueRegex.Matches(preparedLine))
+            {
+                EmitCssAnimationShorthandReferences(
+                    match.Groups["value"].Value,
+                    match.Groups["value"].Index,
+                    context,
+                    lineNumber,
+                    references,
+                    seen,
+                    fileId,
+                    definitionNames,
+                    container);
+            }
         }
 
         EmitCssClassSelectorReferences(
