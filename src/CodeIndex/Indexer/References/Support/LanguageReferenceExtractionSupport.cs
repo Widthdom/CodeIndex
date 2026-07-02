@@ -1483,28 +1483,44 @@ internal static partial class LanguageReferenceExtractionSupport
                 }
             }
 
-            foreach (Match match in CTypedefFunctionPointerAliasTypeRegex.Matches(preparedLine))
+            var hasCFunctionPointerMarker = hasCParen
+                && preparedLine.IndexOf('*') >= 0;
+            var hasCFunctionPointerAliasMarker = hasCFunctionPointerMarker
+                && preparedLine.IndexOf("typedef", StringComparison.Ordinal) >= 0;
+            if (hasCFunctionPointerAliasMarker && hasCTypedefTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTypedefFunctionPointerAliasTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTaggedFunctionPointerAliasTypeRegex.Matches(preparedLine))
+            if (hasCFunctionPointerAliasMarker && hasCTaggedTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTaggedFunctionPointerAliasTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTypedefFunctionPointerDeclarationTypeRegex.Matches(preparedLine))
+            if (hasCFunctionPointerMarker && hasCTypedefTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTypedefFunctionPointerDeclarationTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
-            foreach (Match match in CTaggedFunctionPointerDeclarationTypeRegex.Matches(preparedLine))
+            if (hasCFunctionPointerMarker && hasCTaggedTypeMarker)
             {
-                var group = match.Groups["type"];
-                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                foreach (Match match in CTaggedFunctionPointerDeclarationTypeRegex.Matches(preparedLine))
+                {
+                    var group = match.Groups["type"];
+                    ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+                }
             }
 
             foreach (Match match in CTypedefPointerArrayDeclarationTypeRegex.Matches(preparedLine))
