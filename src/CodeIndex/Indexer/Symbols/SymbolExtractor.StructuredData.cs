@@ -60,10 +60,10 @@ public static partial class SymbolExtractor
                 StructuredDataMaxJsonDepth + 2,
                 JsonCommentHandling.Skip,
                 allowTrailingCommas: true);
-            var propertyLines = BuildJsonPropertyLineQueues(content);
 
             if (document.RootElement.ValueKind == JsonValueKind.Object)
             {
+                var propertyLines = BuildJsonPropertyLineQueues(content);
                 ExtractJsonObjectSymbols(
                     fileId,
                     content,
