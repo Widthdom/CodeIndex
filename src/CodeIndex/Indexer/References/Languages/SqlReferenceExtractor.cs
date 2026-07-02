@@ -8,6 +8,7 @@ namespace CodeIndex.Indexer;
 
 internal static partial class SqlReferenceExtractor
 {
+    private static readonly char[] QualifiedNameSourceSegmentSpecialChars = ['.', '[', '"', '`'];
     private readonly record struct CteBodySpan(int StartIndex, int EndIndexExclusive);
     private readonly record struct DefinitionLeafPattern(string LeafName, string Pattern);
     public static State CreateState() => new();
@@ -3671,6 +3672,9 @@ internal static partial class SqlReferenceExtractor
     private static List<string> SplitQualifiedNameSourceSegments(string qualifiedName)
     {
         var trimmed = qualifiedName.Trim();
+        if (trimmed.IndexOfAny(QualifiedNameSourceSegmentSpecialChars) < 0)
+            return trimmed.Length == 0 ? [] : [trimmed];
+
         var segments = new List<string>();
         var current = new StringBuilder();
         char quote = '\0';
