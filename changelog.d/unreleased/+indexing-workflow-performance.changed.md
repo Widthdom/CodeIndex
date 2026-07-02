@@ -110,6 +110,7 @@ affected:
 - **Gated Rust mutable reference type scans by marker** - Rust reference extraction now checks ampersand and `mut` markers before running mutable-reference type regex probes.
 - **Gated Rust declaration reference scans by marker** - Rust reference extraction now checks use, extern crate, and module markers before running declaration reference regex probes.
 - **Gated Rust lifetime and ranked-bound scans by marker** - Rust reference extraction now checks lifetime apostrophe and higher-ranked `for<...>` markers before scanning those reference forms.
+- **Gated Rust function signature type scans by marker** - Rust reference extraction now checks `fn`, parenthesis, and return-arrow markers before running function signature type probes.
 - **Gated CSS preprocessor import scans by marker** - CSS, Sass, and Stylus reference extraction now checks import/use/forward/require markers before stripping comments and running import regex probes.
 - **Gated CSS animation reference scans by marker** - CSS reference extraction now checks the animation marker before running animation-name and shorthand value regex probes.
 - **Gated CSS custom-property reference scans by marker** - CSS reference extraction now checks `var` and custom-property markers before running custom-property reference regex probes.
@@ -258,6 +259,7 @@ affected:
 - **Rust mutable reference type scan を marker で gate します** - Rust reference extraction は mutable-reference type regex probe を実行する前に ampersand と `mut` marker を確認します。
 - **Rust declaration reference scan を marker で gate します** - Rust reference extraction は declaration reference regex probe を実行する前に use、extern crate、module marker を確認します。
 - **Rust lifetime / ranked-bound scan を marker で gate します** - Rust reference extraction は lifetime apostrophe と higher-ranked `for<...>` marker を確認してから対応する reference form を走査します。
+- **Rust function signature type scan を marker で gate します** - Rust reference extraction は function signature type probe の前に `fn`、parenthesis、return-arrow marker を確認します。
 - **CSS preprocessor import scan を marker で gate します** - CSS、Sass、Stylus reference extraction は comment strip と import regex probe の前に import/use/forward/require marker を確認します。
 - **CSS animation reference scan を marker で gate します** - CSS reference extraction は animation-name と shorthand value regex probe を実行する前に animation marker を確認します。
 - **CSS custom-property reference scan を marker で gate します** - CSS reference extraction は custom-property reference regex probe を実行する前に `var` と custom-property marker を確認します。

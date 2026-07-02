@@ -925,6 +925,12 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf("fn", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf('(') < 0)
+        {
+            return;
+        }
+
         var fnIndex = ReferenceExtractor.FindTopLevelKeyword(preparedLine, "fn");
         if (fnIndex < 0)
             return;
@@ -948,6 +954,9 @@ internal static class RustReferenceExtractor
             context,
             lineNumber,
             resolveContainerForColumn);
+
+        if (preparedLine.IndexOf("->", StringComparison.Ordinal) < 0)
+            return;
 
         var arrowIndex = TypedLanguageReferenceExtractor.FindTopLevelSequence(preparedLine, "->", closeParen + 1);
         if (arrowIndex < 0)
