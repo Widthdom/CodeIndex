@@ -27,7 +27,7 @@ public static partial class SymbolExtractor
         if (string.IsNullOrWhiteSpace(filePath))
             return false;
 
-        var extension = Path.GetExtension(Path.GetFileName(filePath.AsSpan()));
+        var extension = Path.GetExtension(filePath.AsSpan());
         return extension.Equals(".razor".AsSpan(), StringComparison.OrdinalIgnoreCase)
             || extension.Equals(".cshtml".AsSpan(), StringComparison.OrdinalIgnoreCase);
     }
