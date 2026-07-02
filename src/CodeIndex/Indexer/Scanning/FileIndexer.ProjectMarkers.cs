@@ -9,18 +9,19 @@ public partial class FileIndexer
 {
     public string GetFamilyScopeKey(string absolutePath, string? lang)
     {
+        var fullPath = GetProjectMarkerScopeFullPath(absolutePath);
         var projectMarkerPatterns = GetProjectMarkerPatterns(lang);
         if (projectMarkerPatterns != null)
         {
             var primaryProjectMarkerPatterns = GetPrimaryProjectMarkerPatterns(lang) ?? projectMarkerPatterns;
-            var currentDir = Path.GetDirectoryName(Path.GetFullPath(absolutePath));
+            var currentDir = Path.GetDirectoryName(fullPath);
             while (!string.IsNullOrEmpty(currentDir))
             {
                 var markerCount = CountProjectMarkerFiles(currentDir, primaryProjectMarkerPatterns);
                 if (markerCount == 1)
                     return NormalizeScopeKey(ToRelativePath(currentDir));
                 if (markerCount > 1)
-                    return DeriveAmbiguousProjectScopeKey(Path.GetFullPath(absolutePath), currentDir);
+                    return DeriveAmbiguousProjectScopeKey(fullPath, currentDir);
                 if (CountProjectMarkerFiles(currentDir, projectMarkerPatterns) > 0)
                     return NormalizeScopeKey(ToRelativePath(currentDir));
 
@@ -31,7 +32,7 @@ public partial class FileIndexer
             }
         }
 
-        var relativePath = ToRelativePath(absolutePath);
+        var relativePath = ToRelativePath(fullPath);
         return DeriveFallbackFamilyScopeKey(relativePath);
     }
 
@@ -157,6 +158,9 @@ public partial class FileIndexer
 
         return $"{left}/{right}";
     }
+
+    private static string GetProjectMarkerScopeFullPath(string path) =>
+        Path.IsPathFullyQualified(path) ? path : Path.GetFullPath(path);
 
     private int CountProjectMarkerFiles(string dir, IReadOnlyList<string> patterns)
     {
