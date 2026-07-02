@@ -79,6 +79,7 @@ affected:
 - **Gated SQL generated-column dependency scans by marker** - SQL reference extraction now checks generated-column and `NEXT VALUE FOR` markers before running generated dependency regexes and computed-column prefix probes.
 - **Gated R call-start reference scans by marker** - R reference extraction now checks source, data, system.file, documentation, and package-install call markers before running the matching call-start regexes.
 - **Gated R operator and member reference scans by marker** - R reference extraction now checks `::`, backtick-call, infix-operator, `$`, and slot markers before running the corresponding operator/member regex passes.
+- **Gated R directive reference scans by marker** - R reference extraction now checks namespace, roxygen, and S4 directive markers before running directive-start regexes or sequential directive match probes.
 - **Skipped reference-line preparation on empty lines** - all language reference preparation now returns empty lines immediately instead of running comment/string-literal trigger checks.
 - **Collapsed string-literal delimiter probes** - reference-line preparation now checks quote/backtick trigger characters with `IndexOfAny` instead of separate scans per delimiter.
 - **Hoisted reference-line preparation language flags** - per-file reference preparation now computes language comment/string handling flags once and reuses them for each line instead of repeating language switches in the hot loop.
@@ -184,6 +185,7 @@ affected:
 - **SQL generated-column dependency scan を marker で gate します** - SQL reference extraction は generated-column と `NEXT VALUE FOR` marker を確認してから generated dependency regex と computed-column prefix probe を実行します。
 - **R call-start reference scan を marker で gate します** - R reference extraction は source、data、system.file、documentation、package-install call marker を確認してから対応する call-start regex を実行します。
 - **R operator / member reference scan を marker で gate します** - R reference extraction は `::`、backtick-call、infix-operator、`$`、slot marker を確認してから対応する operator/member regex pass を実行します。
+- **R directive reference scan を marker で gate します** - R reference extraction は namespace、roxygen、S4 directive marker を確認してから directive-start regex や sequential directive match probe を実行します。
 - **空行の reference-line preparation を skip します** - 全言語の reference preparation は空行に対して comment/string-literal trigger 判定を走らせず即 return するようになりました。
 - **string-literal delimiter probe をまとめました** - reference-line preparation は quote/backtick trigger character を delimiter ごとの個別 scan ではなく `IndexOfAny` で確認します。
 - **reference-line preparation の言語フラグを loop 外へ出しました** - ファイルごとの reference preparation は comment/string handling の言語フラグを一度だけ計算し、hot loop 内で language switch を繰り返さないようになりました。

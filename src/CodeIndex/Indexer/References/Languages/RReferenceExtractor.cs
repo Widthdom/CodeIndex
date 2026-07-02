@@ -180,162 +180,181 @@ internal static class RReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        var hasImportMarker = preparedLine.IndexOf("import", StringComparison.Ordinal) >= 0;
+        var hasExportMarker = preparedLine.IndexOf("export", StringComparison.Ordinal) >= 0;
+        var hasS3MethodMarker = preparedLine.IndexOf("S3method", StringComparison.Ordinal) >= 0;
+        var hasUseDynLibMarker = preparedLine.IndexOf("useDynLib", StringComparison.Ordinal) >= 0;
+        if (!hasImportMarker && !hasExportMarker && !hasS3MethodMarker && !hasUseDynLibMarker)
+            return;
+
         var directiveLine = NamespaceDirectiveStartRegex.IsMatch(preparedLine)
             ? StripRNamespaceDirectiveComment(originalLine)
             : preparedLine;
 
-        var importFromMatch = NamespaceImportFromDirectiveRegex.Match(directiveLine);
-        if (importFromMatch.Success)
+        if (hasImportMarker)
         {
-            var package = importFromMatch.Groups["package"].Value;
-            var namesGroup = importFromMatch.Groups["names"];
-            foreach (var (name, nameIndex) in EnumerateNamespaceDirectiveNames(namesGroup.Value, namesGroup.Index))
+            var importFromMatch = NamespaceImportFromDirectiveRegex.Match(directiveLine);
+            if (importFromMatch.Success)
+            {
+                var package = importFromMatch.Groups["package"].Value;
+                var namesGroup = importFromMatch.Groups["names"];
+                foreach (var (name, nameIndex) in EnumerateNamespaceDirectiveNames(namesGroup.Value, namesGroup.Index))
+                {
+                    ReferenceExtractor.AddReference(
+                        references,
+                        seen,
+                        fileId,
+                        $"{package}::{name}",
+                        importFromMatch.Groups["package"].Index,
+                        "reference",
+                        context,
+                        lineNumber,
+                        container);
+                    ReferenceExtractor.AddReference(
+                        references,
+                        seen,
+                        fileId,
+                        name,
+                        nameIndex,
+                        "reference",
+                        context,
+                        lineNumber,
+                        container);
+                }
+
+                return;
+            }
+
+            var importMatch = NamespaceImportDirectiveRegex.Match(directiveLine);
+            if (importMatch.Success)
             {
                 ReferenceExtractor.AddReference(
                     references,
                     seen,
                     fileId,
-                    $"{package}::{name}",
-                    importFromMatch.Groups["package"].Index,
+                    importMatch.Groups["package"].Value,
+                    importMatch.Groups["package"].Index,
                     "reference",
                     context,
                     lineNumber,
                     container);
-                ReferenceExtractor.AddReference(
-                    references,
-                    seen,
-                    fileId,
-                    name,
-                    nameIndex,
-                    "reference",
-                    context,
-                    lineNumber,
-                    container);
+                return;
             }
-
-            return;
         }
 
-        var importMatch = NamespaceImportDirectiveRegex.Match(directiveLine);
-        if (importMatch.Success)
+        if (hasS3MethodMarker)
         {
-            ReferenceExtractor.AddReference(
-                references,
-                seen,
-                fileId,
-                importMatch.Groups["package"].Value,
-                importMatch.Groups["package"].Index,
-                "reference",
-                context,
-                lineNumber,
-                container);
-            return;
+            var s3MethodMatch = NamespaceS3MethodDirectiveRegex.Match(directiveLine);
+            if (s3MethodMatch.Success)
+            {
+                var generic = GetNamespaceDirectiveToken(
+                    s3MethodMatch,
+                    "genericBacktick",
+                    "genericQuoted",
+                    "generic");
+                var @class = GetNamespaceDirectiveToken(
+                    s3MethodMatch,
+                    "classBacktick",
+                    "classQuoted",
+                    "class");
+                var explicitMethod = GetNamespaceDirectiveToken(
+                    s3MethodMatch,
+                    "methodBacktick",
+                    "methodQuoted",
+                    "method");
+                if (generic != null && @class != null)
+                {
+                    var method = explicitMethod ?? ($"{generic.Value.Name}.{@class.Value.Name}", generic.Value.Index);
+                    ReferenceExtractor.AddReference(
+                        references,
+                        seen,
+                        fileId,
+                        method.Name,
+                        method.Index,
+                        "reference",
+                        context,
+                        lineNumber,
+                        container);
+                    ReferenceExtractor.AddReference(
+                        references,
+                        seen,
+                        fileId,
+                        generic.Value.Name,
+                        generic.Value.Index,
+                        "reference",
+                        context,
+                        lineNumber,
+                        container);
+                    ReferenceExtractor.AddReference(
+                        references,
+                        seen,
+                        fileId,
+                        @class.Value.Name,
+                        @class.Value.Index,
+                        "reference",
+                        context,
+                        lineNumber,
+                        container);
+                }
+
+                return;
+            }
         }
 
-        var s3MethodMatch = NamespaceS3MethodDirectiveRegex.Match(directiveLine);
-        if (s3MethodMatch.Success)
+        if (hasUseDynLibMarker)
         {
-            var generic = GetNamespaceDirectiveToken(
-                s3MethodMatch,
-                "genericBacktick",
-                "genericQuoted",
-                "generic");
-            var @class = GetNamespaceDirectiveToken(
-                s3MethodMatch,
-                "classBacktick",
-                "classQuoted",
-                "class");
-            var explicitMethod = GetNamespaceDirectiveToken(
-                s3MethodMatch,
-                "methodBacktick",
-                "methodQuoted",
-                "method");
-            if (generic != null && @class != null)
+            var useDynLibMatch = NamespaceUseDynLibDirectiveRegex.Match(directiveLine);
+            if (useDynLibMatch.Success)
             {
-                var method = explicitMethod ?? ($"{generic.Value.Name}.{@class.Value.Name}", generic.Value.Index);
-                ReferenceExtractor.AddReference(
-                    references,
-                    seen,
-                    fileId,
-                    method.Name,
-                    method.Index,
-                    "reference",
-                    context,
-                    lineNumber,
-                    container);
-                ReferenceExtractor.AddReference(
-                    references,
-                    seen,
-                    fileId,
-                    generic.Value.Name,
-                    generic.Value.Index,
-                    "reference",
-                    context,
-                    lineNumber,
-                    container);
-                ReferenceExtractor.AddReference(
-                    references,
-                    seen,
-                    fileId,
-                    @class.Value.Name,
-                    @class.Value.Index,
-                    "reference",
-                    context,
-                    lineNumber,
-                    container);
-            }
+                var package = GetNamespaceDirectiveToken(
+                    useDynLibMatch,
+                    "packageBacktick",
+                    "packageQuoted",
+                    "package");
+                if (package != null)
+                {
+                    ReferenceExtractor.AddReference(
+                        references,
+                        seen,
+                        fileId,
+                        package.Value.Name,
+                        package.Value.Index,
+                        "reference",
+                        context,
+                        lineNumber,
+                        container);
+                }
 
-            return;
+                var routinesStart = useDynLibMatch.Index + useDynLibMatch.Length;
+                var routines = directiveLine[routinesStart..];
+                foreach (Match routineMatch in NamespaceUseDynLibRoutineRegex.Matches(routines))
+                {
+                    var routine = GetNamespaceDirectiveToken(
+                        routineMatch,
+                        "backtickName",
+                        "quotedName",
+                        "name");
+                    if (routine == null)
+                        continue;
+
+                    ReferenceExtractor.AddReference(
+                        references,
+                        seen,
+                        fileId,
+                        routine.Value.Name,
+                        routinesStart + routine.Value.Index,
+                        "reference",
+                        context,
+                        lineNumber,
+                        container);
+                }
+
+                return;
+            }
         }
 
-        var useDynLibMatch = NamespaceUseDynLibDirectiveRegex.Match(directiveLine);
-        if (useDynLibMatch.Success)
-        {
-            var package = GetNamespaceDirectiveToken(
-                useDynLibMatch,
-                "packageBacktick",
-                "packageQuoted",
-                "package");
-            if (package != null)
-            {
-                ReferenceExtractor.AddReference(
-                    references,
-                    seen,
-                    fileId,
-                    package.Value.Name,
-                    package.Value.Index,
-                    "reference",
-                    context,
-                    lineNumber,
-                    container);
-            }
-
-            var routinesStart = useDynLibMatch.Index + useDynLibMatch.Length;
-            var routines = directiveLine[routinesStart..];
-            foreach (Match routineMatch in NamespaceUseDynLibRoutineRegex.Matches(routines))
-            {
-                var routine = GetNamespaceDirectiveToken(
-                    routineMatch,
-                    "backtickName",
-                    "quotedName",
-                    "name");
-                if (routine == null)
-                    continue;
-
-                ReferenceExtractor.AddReference(
-                    references,
-                    seen,
-                    fileId,
-                    routine.Value.Name,
-                    routinesStart + routine.Value.Index,
-                    "reference",
-                    context,
-                    lineNumber,
-                    container);
-            }
-
+        if (!hasExportMarker)
             return;
-        }
 
         var exportMatch = NamespaceExportDirectiveRegex.Match(directiveLine);
         if (!exportMatch.Success)
@@ -366,6 +385,12 @@ internal static class RReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (originalLine.IndexOf("#'", StringComparison.Ordinal) < 0
+            || originalLine.IndexOf("@import", StringComparison.Ordinal) < 0)
+        {
+            return;
+        }
+
         var match = RoxygenImportFromTagRegex.Match(originalLine);
         if (!match.Success)
             return;
@@ -406,6 +431,12 @@ internal static class RReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (originalLine.IndexOf("#'", StringComparison.Ordinal) < 0
+            || originalLine.IndexOf("@import", StringComparison.Ordinal) < 0)
+        {
+            return;
+        }
+
         var match = RoxygenImportTagRegex.Match(originalLine);
         if (!match.Success)
             return;
@@ -436,6 +467,12 @@ internal static class RReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (originalLine.IndexOf("set", StringComparison.Ordinal) < 0
+            || originalLine.IndexOf('(') < 0)
+        {
+            return;
+        }
+
         var line = StripRNamespaceDirectiveComment(originalLine);
 
         var genericMatch = S4SetGenericCallRegex.Match(line);
@@ -542,6 +579,12 @@ internal static class RReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (originalLine.IndexOf("#'", StringComparison.Ordinal) < 0
+            || originalLine.IndexOf("@method", StringComparison.Ordinal) < 0)
+        {
+            return;
+        }
+
         var match = RoxygenMethodTagRegex.Match(originalLine);
         if (!match.Success)
             return;
