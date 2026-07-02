@@ -117,25 +117,28 @@ public partial class FileIndexer
             if (tokens[0] is { Value: '!', Escaped: false })
             {
                 negated = true;
-                tokens.RemoveAt(0);
             }
+            var firstTokenIndex = negated ? 1 : 0;
 
-            if (tokens.Count == 0)
+            if (firstTokenIndex == tokens.Count)
                 return false;
 
             var directoryOnly = tokens[^1] is { Value: '/', Escaped: false };
             if (directoryOnly)
                 tokens.RemoveAt(tokens.Count - 1);
 
-            if (tokens.Count == 0)
+            if (firstTokenIndex == tokens.Count)
                 return false;
 
-            var anchoredToSourceDirectory = tokens[0] is { Value: '/', Escaped: false };
+            var anchoredToSourceDirectory = tokens[firstTokenIndex] is { Value: '/', Escaped: false };
             if (anchoredToSourceDirectory)
-                tokens.RemoveAt(0);
+                firstTokenIndex++;
 
-            if (tokens.Count == 0)
+            if (firstTokenIndex == tokens.Count)
                 return false;
+
+            if (firstTokenIndex > 0)
+                tokens.RemoveRange(0, firstTokenIndex);
 
             var matchBasenameOnly = !anchoredToSourceDirectory && !ContainsUnescapedSlash(tokens);
             try
@@ -226,8 +229,12 @@ public partial class FileIndexer
 
             while (tokens.Count > 0 && tokens[^1] is { Value: ' ' or '\t', Escaped: false })
                 tokens.RemoveAt(tokens.Count - 1);
-            while (tokens.Count > 0 && tokens[0] is { Value: ' ' or '\t', Escaped: false })
-                tokens.RemoveAt(0);
+
+            var leadingTrimCount = 0;
+            while (leadingTrimCount < tokens.Count && tokens[leadingTrimCount] is { Value: ' ' or '\t', Escaped: false })
+                leadingTrimCount++;
+            if (leadingTrimCount > 0)
+                tokens.RemoveRange(0, leadingTrimCount);
 
             return tokens.Count > 0;
         }
