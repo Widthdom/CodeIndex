@@ -3491,8 +3491,9 @@ internal static partial class LanguageReferenceExtractionSupport
         if (!ContainsWhitespace(preparedLine))
             return;
 
-        var definitionMatch = SmalltalkMethodDefinitionRegex.Match(preparedLine);
-        if (definitionMatch.Success || SmalltalkClassDeclarationRegex.IsMatch(preparedLine))
+        var isDefinitionLine = preparedLine.IndexOf(">>", StringComparison.Ordinal) >= 0
+            && SmalltalkMethodDefinitionRegex.IsMatch(preparedLine);
+        if (isDefinitionLine || SmalltalkClassDeclarationRegex.IsMatch(preparedLine))
             return;
 
         var consumedUntil = 0;
