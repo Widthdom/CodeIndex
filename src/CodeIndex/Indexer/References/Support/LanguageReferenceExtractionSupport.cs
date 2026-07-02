@@ -3359,7 +3359,7 @@ internal static partial class LanguageReferenceExtractionSupport
 
         var hasBehaviourMarker = StartsWithCharIgnoringLeadingWhitespace(preparedLine, '@')
             && (ContainsOrdinalKeyword(preparedLine, "behaviour")
-                || preparedLine.IndexOf("impl", StringComparison.Ordinal) >= 0);
+                || ContainsOrdinalKeyword(preparedLine, "impl"));
         if (hasBehaviourMarker)
         {
             foreach (var match in EnumerateMatches(ElixirBehaviourRegex, preparedLine))

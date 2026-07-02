@@ -345,6 +345,7 @@ affected:
 - **Added shared ordinal containment gates** - Reference extraction now has a boundary-aware case-sensitive keyword helper for lowercase marker hot paths.
 - **Tightened Elixir behaviour attribute scans to leading marker gates** - Elixir reference extraction now requires a leading `@` before running behaviour/impl regex probes.
 - **Tightened Elixir behaviour scans to keyword boundaries** - Elixir reference extraction now treats `behaviour` as a boundary-aware keyword before running behaviour regex probes.
+- **Tightened Elixir impl scans to keyword boundaries** - Elixir reference extraction now treats `impl` as a boundary-aware keyword before running implementation regex probes.
 
 ## 日本語
 
@@ -624,3 +625,4 @@ affected:
 - **共通 ordinal containment gate を追加します** - Reference extraction は lowercase marker hot path 向けの boundary-aware case-sensitive keyword helper を持つようになります。
 - **Elixir behaviour attribute scan を leading marker gate に強化します** - Elixir reference extraction は behaviour/impl regex probe の前に leading `@` を要求します。
 - **Elixir behaviour scan を keyword boundary に強化します** - Elixir reference extraction は behaviour regex probe の前に `behaviour` を boundary-aware keyword として扱います。
+- **Elixir impl scan を keyword boundary に強化します** - Elixir reference extraction は implementation regex probe の前に `impl` を boundary-aware keyword として扱います。
