@@ -2691,7 +2691,7 @@ internal static partial class LanguageReferenceExtractionSupport
         Func<int, SymbolRecord?> resolveContainerForColumn,
         SymbolRecord? container)
     {
-        var hasFortranUseMarker = preparedLine.IndexOf("use", StringComparison.OrdinalIgnoreCase) >= 0;
+        var hasFortranUseMarker = StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "use");
         if (hasFortranUseMarker)
         {
             foreach (Match match in FortranUseRegex.Matches(preparedLine))
