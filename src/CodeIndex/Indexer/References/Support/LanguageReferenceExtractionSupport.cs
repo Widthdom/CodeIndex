@@ -2882,8 +2882,8 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        if (preparedLine.IndexOf("public", StringComparison.OrdinalIgnoreCase) >= 0
-            || preparedLine.IndexOf("private", StringComparison.OrdinalIgnoreCase) >= 0)
+        if (StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "public")
+            || StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "private"))
         {
             var accessListMatch = FortranAccessListRegex.Match(preparedLine);
             if (accessListMatch.Success)
