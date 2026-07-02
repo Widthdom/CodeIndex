@@ -2693,14 +2693,23 @@ internal static partial class LanguageReferenceExtractionSupport
         Func<int, SymbolRecord?> resolveContainerForColumn,
         SymbolRecord? container)
     {
-        foreach (Match match in ObjCInterfaceBaseRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf('@') >= 0 && preparedLine.IndexOf(':') >= 0)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "type_reference", context, lineNumber, container);
+            foreach (Match match in ObjCInterfaceBaseRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "type_reference", context, lineNumber, container);
+            }
         }
 
-        foreach (Match match in ObjCProtocolListRegex.Matches(preparedLine))
-            EmitCommaSeparatedNames(match.Groups["list"].Value, match.Groups["list"].Index, "objc", references, seen, fileId, context, lineNumber, container);
+        if (preparedLine.IndexOf('<') >= 0 && preparedLine.IndexOf('>') >= 0)
+        {
+            foreach (Match match in ObjCProtocolListRegex.Matches(preparedLine))
+                EmitCommaSeparatedNames(match.Groups["list"].Value, match.Groups["list"].Index, "objc", references, seen, fileId, context, lineNumber, container);
+        }
+
+        if (preparedLine.IndexOf('*') < 0)
+            return;
 
         foreach (Match match in ObjCDeclTypeRegex.Matches(preparedLine))
         {
