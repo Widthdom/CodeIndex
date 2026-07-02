@@ -86,11 +86,14 @@ public static partial class SymbolExtractor
                     var item = items[trimStart..trimEnd];
                     var importedName = item;
                     var alias = string.Empty;
-                    var aliasMatch = PhpUseGroupItemAliasRegex.Match(item);
-                    if (aliasMatch.Success)
+                    if (item.IndexOf("as", StringComparison.OrdinalIgnoreCase) >= 0)
                     {
-                        importedName = aliasMatch.Groups["name"].Value;
-                        alias = aliasMatch.Groups["alias"].Value;
+                        var aliasMatch = PhpUseGroupItemAliasRegex.Match(item);
+                        if (aliasMatch.Success)
+                        {
+                            importedName = aliasMatch.Groups["name"].Value;
+                            alias = aliasMatch.Groups["alias"].Value;
+                        }
                     }
 
                     var symbolName = alias.Length > 0 ? alias : prefix + importedName;
