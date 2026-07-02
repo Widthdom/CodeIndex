@@ -798,7 +798,7 @@ public static partial class ReferenceExtractor
     /// Registered language keys for reference extraction.
     /// 参照抽出に登録されている言語キー。
     /// </summary>
-    public static IReadOnlyCollection<string> RegisteredLanguages => Extractors.Keys.ToArray();
+    public static IReadOnlyCollection<string> RegisteredLanguages => BuiltInLanguages;
 
     private static string? NormalizeLanguage(string? lang)
     {

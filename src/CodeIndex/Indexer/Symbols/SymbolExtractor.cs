@@ -2313,12 +2313,14 @@ public static partial class SymbolExtractor
         ],
     };
 
+    private static readonly string[] BuiltInSymbolLanguages = PatternCache.Keys.ToArray();
+
     /// <summary>
     /// Return the set of languages that have symbol-extraction patterns.
     /// シンボル抽出パターンを持つ言語のセットを返す。
     /// </summary>
     public static IReadOnlyCollection<string> GetSupportedLanguages()
-      => PatternCache.Keys
+      => BuiltInSymbolLanguages
           .Concat(AdditionalSymbolLanguages)
           .Concat(ExtractorPluginRegistry.SymbolLanguages)
           .Distinct(StringComparer.Ordinal)
