@@ -5482,6 +5482,9 @@ public static partial class SymbolExtractor
 
     private static bool HasSwiftPropertyWrapperAttribute(string attributes)
     {
+        if (attributes.IndexOf('@') < 0)
+            return false;
+
         foreach (Match match in SwiftPropertyWrapperAttributeRegex.Matches(attributes))
         {
             var name = match.Groups["name"].Value;
