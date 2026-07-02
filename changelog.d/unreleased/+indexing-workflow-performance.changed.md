@@ -242,6 +242,7 @@ affected:
 - **Gated C/C++ include, base, constructor, and cast scans by marker** - C/C++ reference extraction now checks include/import, inheritance, allocation, named-cast, and parenthesized-cast markers before running the matching type regex probes.
 - **Gated C typedef cast scans by marker** - C reference extraction now checks `*_t` and parenthesis markers before running typedef cast type regex probes.
 - **Gated C sizeof and alignof type scans by marker** - C reference extraction now checks operand keywords plus typedef/tag markers before running sizeof and alignof type regex probes.
+- **Gated C declaration type scans by marker** - C reference extraction now checks declaration terminators plus typedef/tag markers before running declaration type regex probes.
 
 ## 日本語
 
@@ -418,3 +419,4 @@ affected:
 - **C/C++ include/base/constructor/cast scan を marker で gate します** - C/C++ reference extraction は include/import、継承、allocation、named cast、parenthesized cast の marker を確認してから対応する type regex probe を実行します。
 - **C typedef cast scan を marker で gate します** - C reference extraction は typedef cast type regex probe の前に `*_t` と parenthesis marker を確認します。
 - **C sizeof / alignof type scan を marker で gate します** - C reference extraction は sizeof / alignof type regex probe の前に operand keyword と typedef/tag marker を確認します。
+- **C declaration type scan を marker で gate します** - C reference extraction は declaration type regex probe の前に declaration terminator と typedef/tag marker を確認します。
