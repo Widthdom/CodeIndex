@@ -793,7 +793,7 @@ public static partial class SymbolExtractor
             if (index >= body.Length || body[index] == '#')
                 yield break;
 
-            var token = new StringBuilder();
+            var token = new StringBuilder(Math.Min(64, body.Length - index));
             var quote = '\0';
             while (index < body.Length)
             {
