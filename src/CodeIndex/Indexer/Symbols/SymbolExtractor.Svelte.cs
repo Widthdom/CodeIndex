@@ -12,7 +12,11 @@ public static partial class SymbolExtractor
     {
         for (var i = 0; i < lines.Length; i++)
         {
-            var match = SvelteReactivePropertyRegex.Match(lines[i]);
+            var line = lines[i];
+            if (line.IndexOf("$:", StringComparison.Ordinal) < 0)
+                continue;
+
+            var match = SvelteReactivePropertyRegex.Match(line);
             if (!match.Success)
                 continue;
 
@@ -28,7 +32,7 @@ public static partial class SymbolExtractor
                 Line = i + 1,
                 StartLine = i + 1,
                 EndLine = i + 1,
-                Signature = lines[i].Trim(),
+                Signature = line.Trim(),
             });
         }
     }

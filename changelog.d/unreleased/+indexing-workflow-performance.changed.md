@@ -13,6 +13,7 @@ affected:
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Razor.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Dockerfile.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.SectionHeadings.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Svelte.cs
   - src/CodeIndex/Indexer/References/Support/StructuralLineMasker.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.Preparation.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.TypeReferences.cs
@@ -67,6 +68,7 @@ affected:
 - **Gated section-heading regex scans by marker** - C# `#region` and JavaScript/TypeScript `@module` heading extraction now checks required marker substrings before running heading regexes.
 - **Skipped CSS custom-property regex scans on ordinary lines** - CSS inline custom-property extraction now checks for the required `--` marker before running its regex.
 - **Skipped CSS font-face block joins without family markers** - CSS `@font-face` family-name resolution now checks the block for `font-family` before masking and joining block text.
+- **Skipped Svelte reactive-property regex scans on ordinary lines** - Svelte supplemental extraction now checks for `$:` before running its reactive assignment regex.
 
 ## 日本語
 
@@ -100,3 +102,4 @@ affected:
 - **section-heading regex scan を marker で gate します** - C# `#region` と JavaScript/TypeScript `@module` heading extraction は heading regex を走らせる前に必須 marker substring を確認します。
 - **通常行では CSS custom-property regex scan を skip します** - CSS inline custom-property extraction は regex を走らせる前に必須の `--` marker を確認します。
 - **family marker のない CSS font-face block join を skip します** - CSS `@font-face` の family name 解決は block text を mask/join する前に `font-family` の有無を確認します。
+- **通常行では Svelte reactive-property regex scan を skip します** - Svelte supplemental extraction は reactive assignment regex を走らせる前に `$:` の有無を確認します。
