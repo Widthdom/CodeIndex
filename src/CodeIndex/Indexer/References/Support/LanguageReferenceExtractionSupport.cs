@@ -2154,10 +2154,17 @@ internal static partial class LanguageReferenceExtractionSupport
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        foreach (Match match in VbTypeKeywordRegex.Matches(preparedLine))
+        var hasVbTypeKeywordMarker = preparedLine.IndexOf("As", StringComparison.OrdinalIgnoreCase) >= 0
+            || preparedLine.IndexOf("New", StringComparison.OrdinalIgnoreCase) >= 0
+            || preparedLine.IndexOf("Inherits", StringComparison.OrdinalIgnoreCase) >= 0
+            || preparedLine.IndexOf("Implements", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (hasVbTypeKeywordMarker)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "vb");
+            foreach (Match match in VbTypeKeywordRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), "vb");
+            }
         }
 
         foreach (Match match in VbGenericArgumentListRegex.Matches(preparedLine))
