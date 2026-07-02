@@ -259,6 +259,7 @@ affected:
 - **Gated C++ decltype brace construction scans by marker** - C/C++ reference extraction now checks `decltype`, parenthesis, and brace markers before running decltype construction regex probes.
 - **Gated C++ factory template argument scans by marker** - C/C++ reference extraction now checks `make_`, template, and call markers before running factory template argument regex probes.
 - **Gated C++ type-trait template argument scans by marker** - C/C++ reference extraction now checks `is_` and template markers before running type-trait template argument regex probes.
+- **Gated C++ brace construction scans by marker** - C/C++ reference extraction now checks brace and construction lead-in markers before running brace construction regex probes.
 
 ## 日本語
 
@@ -452,3 +453,4 @@ affected:
 - **C++ decltype brace construction scan を marker で gate します** - C/C++ reference extraction は decltype construction regex probe の前に `decltype` / parenthesis / brace marker を確認します。
 - **C++ factory template argument scan を marker で gate します** - C/C++ reference extraction は factory template argument regex probe の前に `make_` / template / call marker を確認します。
 - **C++ type-trait template argument scan を marker で gate します** - C/C++ reference extraction は type-trait template argument regex probe の前に `is_` と template marker を確認します。
+- **C++ brace construction scan を marker で gate します** - C/C++ reference extraction は brace construction regex probe の前に brace と construction lead-in marker を確認します。
