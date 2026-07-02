@@ -740,44 +740,13 @@ public static partial class SymbolExtractor
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
-            foreach (Match classMatch in XamlClassRegex.Matches(line))
+            if (line.Contains("x:Class", StringComparison.Ordinal))
             {
-                var value = classMatch.Groups["value"].Value.Trim();
-                if (value.Length == 0)
-                    continue;
-                symbols.Add(new SymbolRecord
+                foreach (Match classMatch in XamlClassRegex.Matches(line))
                 {
-                    FileId = fileId,
-                    Kind = "class",
-                    Name = value,
-                    Line = i + 1,
-                    StartLine = i + 1,
-                    EndLine = i + 1,
-                    Signature = line.Trim(),
-                });
-            }
-
-            foreach (Match dataTypeMatch in XamlDataTypeRegex.Matches(line))
-            {
-                var value = NormalizeXamlKeyValue(dataTypeMatch.Groups["value"].Value);
-                if (value.Length == 0)
-                    continue;
-                symbols.Add(new SymbolRecord
-                {
-                    FileId = fileId,
-                    Kind = "class",
-                    Name = value,
-                    Line = i + 1,
-                    StartLine = i + 1,
-                    EndLine = i + 1,
-                    Signature = line.Trim(),
-                });
-            }
-
-            foreach (Match typeArgumentsMatch in XamlTypeArgumentsRegex.Matches(line))
-            {
-                foreach (var value in NormalizeXamlTypeArgumentsValue(typeArgumentsMatch.Groups["value"].Value))
-                {
+                    var value = classMatch.Groups["value"].Value.Trim();
+                    if (value.Length == 0)
+                        continue;
                     symbols.Add(new SymbolRecord
                     {
                         FileId = fileId,
@@ -791,21 +760,64 @@ public static partial class SymbolExtractor
                 }
             }
 
-            foreach (Match targetTypeMatch in XamlTargetTypeRegex.Matches(line))
+            if (line.Contains("x:DataType", StringComparison.Ordinal))
             {
-                var value = NormalizeXamlKeyValue(targetTypeMatch.Groups["value"].Value);
-                if (value.Length == 0)
-                    continue;
-                symbols.Add(new SymbolRecord
+                foreach (Match dataTypeMatch in XamlDataTypeRegex.Matches(line))
                 {
-                    FileId = fileId,
-                    Kind = "class",
-                    Name = value,
-                    Line = i + 1,
-                    StartLine = i + 1,
-                    EndLine = i + 1,
-                    Signature = line.Trim(),
-                });
+                    var value = NormalizeXamlKeyValue(dataTypeMatch.Groups["value"].Value);
+                    if (value.Length == 0)
+                        continue;
+                    symbols.Add(new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "class",
+                        Name = value,
+                        Line = i + 1,
+                        StartLine = i + 1,
+                        EndLine = i + 1,
+                        Signature = line.Trim(),
+                    });
+                }
+            }
+
+            if (line.Contains("x:TypeArguments", StringComparison.Ordinal))
+            {
+                foreach (Match typeArgumentsMatch in XamlTypeArgumentsRegex.Matches(line))
+                {
+                    foreach (var value in NormalizeXamlTypeArgumentsValue(typeArgumentsMatch.Groups["value"].Value))
+                    {
+                        symbols.Add(new SymbolRecord
+                        {
+                            FileId = fileId,
+                            Kind = "class",
+                            Name = value,
+                            Line = i + 1,
+                            StartLine = i + 1,
+                            EndLine = i + 1,
+                            Signature = line.Trim(),
+                        });
+                    }
+                }
+            }
+
+            if (line.Contains("TargetType", StringComparison.Ordinal))
+            {
+                foreach (Match targetTypeMatch in XamlTargetTypeRegex.Matches(line))
+                {
+                    var value = NormalizeXamlKeyValue(targetTypeMatch.Groups["value"].Value);
+                    if (value.Length == 0)
+                        continue;
+                    symbols.Add(new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "class",
+                        Name = value,
+                        Line = i + 1,
+                        StartLine = i + 1,
+                        EndLine = i + 1,
+                        Signature = line.Trim(),
+                    });
+                }
             }
 
             foreach (Match nameMatch in XamlNameRegex.Matches(line))
