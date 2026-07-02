@@ -2939,16 +2939,27 @@ public static partial class ReferenceExtractor
         for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
         {
             var line = lines[lineIndex];
-            var chars = line.ToCharArray();
+            char[]? chars = null;
+
+            void MaskAt(int index) =>
+                (chars ??= line.ToCharArray())[index] = ' ';
+
+            void MaskRange(int start, int endExclusive)
+            {
+                var masked = chars ??= line.ToCharArray();
+                for (var index = start; index < endExclusive; index++)
+                    masked[index] = ' ';
+            }
+
             var cursor = 0;
-            while (cursor < chars.Length)
+            while (cursor < line.Length)
             {
                 if (inBlockComment)
                 {
-                    chars[cursor] = ' ';
-                    if (line[cursor] == '*' && cursor + 1 < chars.Length && line[cursor + 1] == '/')
+                    MaskAt(cursor);
+                    if (line[cursor] == '*' && cursor + 1 < line.Length && line[cursor + 1] == '/')
                     {
-                        chars[cursor + 1] = ' ';
+                        MaskAt(cursor + 1);
                         inBlockComment = false;
                         cursor += 2;
                         continue;
@@ -2960,7 +2971,7 @@ public static partial class ReferenceExtractor
 
                 if (inGoRawString)
                 {
-                    chars[cursor] = ' ';
+                    MaskAt(cursor);
                     if (line[cursor] == '`')
                         inGoRawString = false;
                     cursor++;
@@ -2971,13 +2982,13 @@ public static partial class ReferenceExtractor
                 {
                     if (IsTripleQuoteAt(line, cursor, dartTripleQuote))
                     {
-                        ReplaceWithSpaces(chars, cursor, 3);
+                        MaskRange(cursor, cursor + 3);
                         dartTripleQuote = '\0';
                         cursor += 3;
                         continue;
                     }
 
-                    chars[cursor] = ' ';
+                    MaskAt(cursor);
                     cursor++;
                     continue;
                 }
@@ -2987,22 +2998,22 @@ public static partial class ReferenceExtractor
                     var closeIndex = line.IndexOf(cppRawStringTerminator, cursor, StringComparison.Ordinal);
                     if (closeIndex < 0)
                     {
-                        ReplaceWithSpaces(chars, cursor, chars.Length - cursor);
+                        MaskRange(cursor, line.Length);
                         break;
                     }
 
-                    ReplaceWithSpaces(chars, cursor, closeIndex + cppRawStringTerminator.Length - cursor);
+                    MaskRange(cursor, closeIndex + cppRawStringTerminator.Length);
                     cursor = closeIndex + cppRawStringTerminator.Length;
                     cppRawStringTerminator = null;
                     continue;
                 }
 
-                if (line[cursor] == '/' && cursor + 1 < chars.Length && line[cursor + 1] == '/')
+                if (line[cursor] == '/' && cursor + 1 < line.Length && line[cursor + 1] == '/')
                     break;
 
                 if (language == "go" && line[cursor] == '`')
                 {
-                    chars[cursor] = ' ';
+                    MaskAt(cursor);
                     inGoRawString = true;
                     cursor++;
                     continue;
@@ -3013,12 +3024,12 @@ public static partial class ReferenceExtractor
                     var closeIndex = IndexOfTripleQuote(line, cursor + dartOpeningLength, dartQuote);
                     if (closeIndex < 0)
                     {
-                        ReplaceWithSpaces(chars, cursor, chars.Length - cursor);
+                        MaskRange(cursor, line.Length);
                         dartTripleQuote = dartQuote;
                         break;
                     }
 
-                    ReplaceWithSpaces(chars, cursor, closeIndex + 3 - cursor);
+                    MaskRange(cursor, closeIndex + 3);
                     cursor = closeIndex + 3;
                     continue;
                 }
@@ -3028,12 +3039,12 @@ public static partial class ReferenceExtractor
                     var closeIndex = line.IndexOf(rawTerminator, cursor + rawOpeningLength, StringComparison.Ordinal);
                     if (closeIndex < 0)
                     {
-                        ReplaceWithSpaces(chars, cursor, chars.Length - cursor);
+                        MaskRange(cursor, line.Length);
                         cppRawStringTerminator = rawTerminator;
                         break;
                     }
 
-                    ReplaceWithSpaces(chars, cursor, closeIndex + rawTerminator.Length - cursor);
+                    MaskRange(cursor, closeIndex + rawTerminator.Length);
                     cursor = closeIndex + rawTerminator.Length;
                     continue;
                 }
@@ -3044,11 +3055,11 @@ public static partial class ReferenceExtractor
                     continue;
                 }
 
-                if (line[cursor] == '/' && cursor + 1 < chars.Length && line[cursor + 1] == '*')
+                if (line[cursor] == '/' && cursor + 1 < line.Length && line[cursor + 1] == '*')
                 {
-                    chars[cursor] = ' ';
+                    MaskAt(cursor);
                     cursor++;
-                    chars[cursor] = ' ';
+                    MaskAt(cursor);
                     inBlockComment = true;
                     cursor++;
                     continue;
@@ -3057,7 +3068,7 @@ public static partial class ReferenceExtractor
                 cursor++;
             }
 
-            result[lineIndex] = new string(chars);
+            result[lineIndex] = chars is null ? line : new string(chars);
         }
 
         return result;
@@ -3160,32 +3171,36 @@ public static partial class ReferenceExtractor
         for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
         {
             var line = lines[lineIndex];
-            var chars = line.ToCharArray();
+            char[]? chars = null;
+
+            void MaskAt(int index) =>
+                (chars ??= line.ToCharArray())[index] = ' ';
+
             var cursor = 0;
 
-            while (cursor < chars.Length)
+            while (cursor < line.Length)
             {
                 if (blockDepth > 0)
                 {
-                    if (line[cursor] == '{' && cursor + 1 < chars.Length && line[cursor + 1] == '-')
+                    if (line[cursor] == '{' && cursor + 1 < line.Length && line[cursor + 1] == '-')
                     {
-                        chars[cursor] = ' ';
-                        chars[cursor + 1] = ' ';
+                        MaskAt(cursor);
+                        MaskAt(cursor + 1);
                         blockDepth++;
                         cursor += 2;
                         continue;
                     }
 
-                    if (line[cursor] == '-' && cursor + 1 < chars.Length && line[cursor + 1] == '}')
+                    if (line[cursor] == '-' && cursor + 1 < line.Length && line[cursor + 1] == '}')
                     {
-                        chars[cursor] = ' ';
-                        chars[cursor + 1] = ' ';
+                        MaskAt(cursor);
+                        MaskAt(cursor + 1);
                         blockDepth--;
                         cursor += 2;
                         continue;
                     }
 
-                    chars[cursor++] = ' ';
+                    MaskAt(cursor++);
                     continue;
                 }
 
@@ -3195,13 +3210,13 @@ public static partial class ReferenceExtractor
                     continue;
                 }
 
-                if (line[cursor] == '-' && cursor + 1 < chars.Length && line[cursor + 1] == '-')
+                if (line[cursor] == '-' && cursor + 1 < line.Length && line[cursor + 1] == '-')
                     break;
 
-                if (line[cursor] == '{' && cursor + 1 < chars.Length && line[cursor + 1] == '-')
+                if (line[cursor] == '{' && cursor + 1 < line.Length && line[cursor + 1] == '-')
                 {
-                    chars[cursor] = ' ';
-                    chars[cursor + 1] = ' ';
+                    MaskAt(cursor);
+                    MaskAt(cursor + 1);
                     blockDepth = 1;
                     cursor += 2;
                     continue;
@@ -3210,7 +3225,7 @@ public static partial class ReferenceExtractor
                 cursor++;
             }
 
-            result[lineIndex] = new string(chars);
+            result[lineIndex] = chars is null ? line : new string(chars);
         }
 
         return result;
