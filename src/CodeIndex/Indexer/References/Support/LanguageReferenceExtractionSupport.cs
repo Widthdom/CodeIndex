@@ -2819,7 +2819,7 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        if (preparedLine.IndexOf("save", StringComparison.OrdinalIgnoreCase) >= 0)
+        if (StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "save"))
         {
             var saveMatch = FortranSaveRegex.Match(preparedLine);
             if (saveMatch.Success)
