@@ -42,6 +42,13 @@ internal static class PowerShellReferenceExtractor
         for (var index = 0; index < preparedLines.Length; index++)
         {
             var line = preparedLines[index];
+            if (line.IndexOf("@{", StringComparison.Ordinal) < 0
+                || line.IndexOf('$') < 0
+                || line.IndexOf('=') < 0)
+            {
+                continue;
+            }
+
             foreach (Match match in SplatAssignmentStartRegex.Matches(line))
             {
                 var start = match.Index + match.Length;
@@ -102,7 +109,9 @@ internal static class PowerShellReferenceExtractor
         int lineNumber,
         Action<string, int> addParameterReference)
     {
-        if (splatAssignments.Count == 0 || !CallRegex.IsMatch(preparedLine))
+        if (splatAssignments.Count == 0 || preparedLine.IndexOf('@') < 0)
+            return;
+        if (!CallRegex.IsMatch(preparedLine))
             return;
 
         foreach (Match splat in SplatTokenRegex.Matches(preparedLine))
@@ -129,6 +138,9 @@ internal static class PowerShellReferenceExtractor
     private static List<string> ExtractHashtableKeys(string text)
     {
         var keys = new List<string>();
+        if (text.IndexOf('=') < 0)
+            return keys;
+
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (Match match in HashtableKeyRegex.Matches(text))
         {
