@@ -2521,6 +2521,9 @@ public static partial class ReferenceExtractor
 
     internal static List<(int Start, int Length)> SplitTopLevelCommaSpans(string text)
     {
+        if (text.IndexOf(',') < 0)
+            return [(0, text.Length)];
+
         var spans = new List<(int Start, int Length)>();
         int angleDepth = 0;
         int parenDepth = 0;
@@ -2569,6 +2572,9 @@ public static partial class ReferenceExtractor
 
     internal static List<(int Start, int Length)> SplitTopLevelAmpersandSpans(string text)
     {
+        if (text.IndexOf('&') < 0)
+            return [(0, text.Length)];
+
         var spans = new List<(int Start, int Length)>();
         int angleDepth = 0;
         int parenDepth = 0;
