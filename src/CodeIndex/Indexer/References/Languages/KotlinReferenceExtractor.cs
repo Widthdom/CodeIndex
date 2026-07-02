@@ -38,59 +38,57 @@ internal static class KotlinReferenceExtractor
         "and", "downTo", "or", "shl", "shr", "step", "to", "until", "ushr", "xor",
     };
 
-    public static HashSet<string> BuildConstructorTypeNames(string language, IReadOnlyList<SymbolRecord> symbols)
+    public static (HashSet<string> ConstructorTypeNames, HashSet<string> InfixFunctionNames) BuildNameSets(
+        string language,
+        IReadOnlyList<SymbolRecord> symbols)
     {
-        var names = new HashSet<string>(StringComparer.Ordinal);
+        var constructorTypeNames = new HashSet<string>(StringComparer.Ordinal);
+        var infixFunctionNames = new HashSet<string>(BuiltInInfixFunctionNames, StringComparer.Ordinal);
         if (language != "kotlin")
-            return names;
+            return (constructorTypeNames, infixFunctionNames);
 
         var callableNames = new HashSet<string>(StringComparer.Ordinal);
+        List<string>? constructableClassNames = null;
         foreach (var symbol in symbols)
         {
             if (symbol.Kind == "function" && !string.IsNullOrWhiteSpace(symbol.Name))
+            {
                 callableNames.Add(symbol.Name);
+                if (!string.IsNullOrWhiteSpace(symbol.Signature)
+                    && InfixFunctionDeclarationRegex.IsMatch(symbol.Signature))
+                {
+                    infixFunctionNames.Add(symbol.Name);
+                    var dotIndex = symbol.Name.LastIndexOf('.');
+                    if (dotIndex >= 0 && dotIndex + 1 < symbol.Name.Length)
+                        infixFunctionNames.Add(symbol.Name[(dotIndex + 1)..]);
+                }
+
+                continue;
+            }
+
+            if (symbol.Kind != "class"
+                || string.IsNullOrWhiteSpace(symbol.Name)
+                || !IsConstructableClassSymbol(symbol))
+            {
+                continue;
+            }
+
+            constructableClassNames ??= [];
+            constructableClassNames.Add(symbol.Name);
         }
 
-        foreach (var symbol in symbols)
+        if (constructableClassNames != null)
         {
-            if (symbol.Kind != "class" || string.IsNullOrWhiteSpace(symbol.Name))
-                continue;
-            if (!IsConstructableClassSymbol(symbol))
-                continue;
-            if (callableNames.Contains(symbol.Name))
-                continue;
-
-            names.Add(symbol.Name);
+            foreach (var name in constructableClassNames)
+                if (!callableNames.Contains(name))
+                    constructorTypeNames.Add(name);
         }
 
-        return names;
+        return (constructorTypeNames, infixFunctionNames);
     }
 
     public static bool IsConstructorCallName(string name, IReadOnlySet<string> constructorTypeNames)
         => constructorTypeNames.Contains(name);
-
-    public static HashSet<string> BuildInfixFunctionNames(string language, IReadOnlyList<SymbolRecord> symbols)
-    {
-        var names = new HashSet<string>(BuiltInInfixFunctionNames, StringComparer.Ordinal);
-        if (language != "kotlin")
-            return names;
-
-        foreach (var symbol in symbols)
-        {
-            if (symbol.Kind != "function" || string.IsNullOrWhiteSpace(symbol.Name) || string.IsNullOrWhiteSpace(symbol.Signature))
-                continue;
-
-            if (InfixFunctionDeclarationRegex.IsMatch(symbol.Signature))
-            {
-                names.Add(symbol.Name);
-                var dotIndex = symbol.Name.LastIndexOf('.');
-                if (dotIndex >= 0 && dotIndex + 1 < symbol.Name.Length)
-                    names.Add(symbol.Name[(dotIndex + 1)..]);
-            }
-        }
-
-        return names;
-    }
 
     public static void AddDeclaredInfixFunctionNames(string language, IEnumerable<string> lines, HashSet<string> names)
     {

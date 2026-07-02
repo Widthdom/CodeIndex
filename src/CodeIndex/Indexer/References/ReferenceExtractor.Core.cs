@@ -144,8 +144,9 @@ public static partial class ReferenceExtractor
         var csharpQualifiedConstantPatternMemberLookup = BuildCSharpQualifiedConstantPatternMemberLookup(language, symbols);
         var csharpQualifiedTypePatternLookup = BuildCSharpQualifiedTypePatternLookup(language, symbols);
         var csharpKnownTypeNames = BuildCSharpKnownTypeNames(language, symbols);
-        var kotlinConstructorTypeNames = KotlinReferenceExtractor.BuildConstructorTypeNames(language, symbols);
-        var kotlinInfixFunctionNames = KotlinReferenceExtractor.BuildInfixFunctionNames(language, symbols);
+        var kotlinNameSets = KotlinReferenceExtractor.BuildNameSets(language, symbols);
+        var kotlinConstructorTypeNames = kotlinNameSets.ConstructorTypeNames;
+        var kotlinInfixFunctionNames = kotlinNameSets.InfixFunctionNames;
         KotlinReferenceExtractor.AddDeclaredInfixFunctionNames(language, lines, kotlinInfixFunctionNames);
         var callableDefinitionNames = BuildCallableDefinitionNames(language, symbols);
         var stylusVariableDefinitionNames = language == "stylus"
