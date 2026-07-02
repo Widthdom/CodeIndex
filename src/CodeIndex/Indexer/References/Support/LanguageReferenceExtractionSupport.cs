@@ -2625,12 +2625,26 @@ internal static partial class LanguageReferenceExtractionSupport
         Func<int, SymbolRecord?> resolveContainerForColumn,
         SymbolRecord? container)
     {
-        var usesMatch = PascalUsesRegex.Match(preparedLine);
-        if (usesMatch.Success)
-            EmitCommaSeparatedNames(usesMatch.Groups["list"].Value, usesMatch.Groups["list"].Index, "pascal", references, seen, fileId, context, lineNumber, container);
+        if (preparedLine.IndexOf("uses", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            var usesMatch = PascalUsesRegex.Match(preparedLine);
+            if (usesMatch.Success)
+                EmitCommaSeparatedNames(usesMatch.Groups["list"].Value, usesMatch.Groups["list"].Index, "pascal", references, seen, fileId, context, lineNumber, container);
+        }
 
-        foreach (Match match in PascalClassBaseRegex.Matches(preparedLine))
-            EmitCommaSeparatedNames(match.Groups["bases"].Value, match.Groups["bases"].Index, "pascal", references, seen, fileId, context, lineNumber, resolveContainerForColumn(match.Groups["bases"].Index));
+        var hasPascalBaseMarker = preparedLine.IndexOf('=') >= 0
+            && preparedLine.IndexOf('(') >= 0
+            && (preparedLine.IndexOf("class", StringComparison.OrdinalIgnoreCase) >= 0
+                || preparedLine.IndexOf("interface", StringComparison.OrdinalIgnoreCase) >= 0
+                || preparedLine.IndexOf("object", StringComparison.OrdinalIgnoreCase) >= 0);
+        if (hasPascalBaseMarker)
+        {
+            foreach (Match match in PascalClassBaseRegex.Matches(preparedLine))
+                EmitCommaSeparatedNames(match.Groups["bases"].Value, match.Groups["bases"].Index, "pascal", references, seen, fileId, context, lineNumber, resolveContainerForColumn(match.Groups["bases"].Index));
+        }
+
+        if (preparedLine.IndexOf(':') < 0)
+            return;
 
         foreach (Match match in PascalTypeAfterColonRegex.Matches(preparedLine))
         {
