@@ -358,8 +358,8 @@ public static partial class SymbolExtractor
         if (lastWhitespaceIndex <= 0)
             return false;
 
-        type = segment[..lastWhitespaceIndex].TrimEnd();
-        name = segment[(lastWhitespaceIndex + 1)..].Trim();
+        type = SliceCSharpTrimEnd(segment, lastWhitespaceIndex);
+        name = SliceCSharpTrim(segment, lastWhitespaceIndex + 1, segment.Length);
         return !string.IsNullOrEmpty(type) && IsCSharpIdentifier(name);
     }
 
@@ -386,10 +386,33 @@ public static partial class SymbolExtractor
                 // Skip `==` / `=>` -- not initializers.
                 if (i + 1 < segment.Length && (segment[i + 1] == '=' || segment[i + 1] == '>'))
                     continue;
-                return segment[..i].TrimEnd();
+                return SliceCSharpTrimEnd(segment, i);
             }
         }
-        return segment.TrimEnd();
+        return SliceCSharpTrimEnd(segment, segment.Length);
+    }
+
+    private static string SliceCSharpTrimEnd(string text, int endExclusive)
+    {
+        endExclusive = Math.Clamp(endExclusive, 0, text.Length);
+        while (endExclusive > 0 && char.IsWhiteSpace(text[endExclusive - 1]))
+            endExclusive--;
+
+        return endExclusive == text.Length ? text : text[..endExclusive];
+    }
+
+    private static string SliceCSharpTrim(string text, int start, int endExclusive)
+    {
+        start = Math.Clamp(start, 0, text.Length);
+        endExclusive = Math.Clamp(endExclusive, start, text.Length);
+
+        while (start < endExclusive && char.IsWhiteSpace(text[start]))
+            start++;
+
+        while (endExclusive > start && char.IsWhiteSpace(text[endExclusive - 1]))
+            endExclusive--;
+
+        return start == 0 && endExclusive == text.Length ? text : text[start..endExclusive];
     }
 
     private static bool IsCSharpIdentifier(string text)

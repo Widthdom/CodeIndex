@@ -7940,7 +7940,7 @@ public static partial class SymbolExtractor
                         braceDepth--;
                     continue;
                 case '=' when parenDepth == 0 && angleDepth == 0 && bracketDepth == 0 && braceDepth == 0:
-                    return text[..i].TrimEnd();
+                    return SliceCSharpTrimEnd(text, i);
             }
         }
 
