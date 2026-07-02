@@ -281,24 +281,34 @@ internal static class CssReferenceExtractor
     {
         EmitPreprocessorImportReferences(StylusImportReferenceRegex, originalLine, references, seen, fileId, context, lineNumber, container);
 
-        var stylusReferenceLine = PrepareSassStylusReferenceLine(originalLine);
-        foreach (Match match in BoundedRegex.EnumerateMatches(StylusVariableReferenceRegex, stylusReferenceLine))
+        if (originalLine.IndexOf('$') < 0
+            && originalLine.IndexOf('(') < 0
+            && (variableDefinitionNames == null || variableDefinitionNames.Count == 0))
         {
-            if (ShouldSkipStylusVariableReference(stylusReferenceLine, match.Groups["name"].Index))
-                continue;
-
-            ReferenceExtractor.AddReference(
-                references,
-                seen,
-                fileId,
-                match,
-                "call",
-                context,
-                lineNumber,
-                container);
+            return;
         }
 
-        if (variableDefinitionNames != null)
+        var stylusReferenceLine = PrepareSassStylusReferenceLine(originalLine);
+        if (stylusReferenceLine.IndexOf('$') >= 0)
+        {
+            foreach (Match match in BoundedRegex.EnumerateMatches(StylusVariableReferenceRegex, stylusReferenceLine))
+            {
+                if (ShouldSkipStylusVariableReference(stylusReferenceLine, match.Groups["name"].Index))
+                    continue;
+
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    match,
+                    "call",
+                    context,
+                    lineNumber,
+                    container);
+            }
+        }
+
+        if (variableDefinitionNames is { Count: > 0 })
         {
             foreach (Match match in BoundedRegex.EnumerateMatches(StylusBareVariableReferenceRegex, stylusReferenceLine))
             {
@@ -321,23 +331,26 @@ internal static class CssReferenceExtractor
             }
         }
 
-        foreach (Match match in BoundedRegex.EnumerateMatches(StylusBareFunctionReferenceRegex, stylusReferenceLine))
+        if (stylusReferenceLine.IndexOf('(') >= 0)
         {
-            var name = match.Groups["name"].Value;
-            if (CssBuiltInFunctionNames.Contains(name))
-                continue;
-            if (definitionNames != null && definitionNames.Contains(name) && match.Groups["name"].Index == 0)
-                continue;
+            foreach (Match match in BoundedRegex.EnumerateMatches(StylusBareFunctionReferenceRegex, stylusReferenceLine))
+            {
+                var name = match.Groups["name"].Value;
+                if (CssBuiltInFunctionNames.Contains(name))
+                    continue;
+                if (definitionNames != null && definitionNames.Contains(name) && match.Groups["name"].Index == 0)
+                    continue;
 
-            ReferenceExtractor.AddReference(
-                references,
-                seen,
-                fileId,
-                match,
-                "call",
-                context,
-                lineNumber,
-                container);
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    match,
+                    "call",
+                    context,
+                    lineNumber,
+                    container);
+            }
         }
     }
 

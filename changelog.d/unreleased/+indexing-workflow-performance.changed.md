@@ -115,6 +115,7 @@ affected:
 - **Gated CSS custom-property reference scans by marker** - CSS reference extraction now checks `var` and custom-property markers before running custom-property reference regex probes.
 - **Gated SCSS reference scans by marker** - SCSS reference extraction now checks dollar, `@extend`, and `@include` markers before running variable, extend, and include regex probes.
 - **Gated Sass call scans by marker** - Sass reference extraction now skips reference-line preparation on plain lines and checks mixin-plus and parenthesis markers before running call regex probes.
+- **Gated Stylus reference scans by marker** - Stylus reference extraction now checks dollar and parenthesis markers before running explicit variable and function regex probes, and skips bare variable probes when no variable definitions were collected.
 - **Gated Python decorator reference scans by marker** - Python reference extraction now skips decorator-call and bare-decorator regex probes on lines without an `@` marker.
 - **Gated Python raise/except type scans by marker** - Python reference extraction now checks `raise` and `except` markers before running exception type regex probes.
 - **Gated Python runtime type-check scans by marker** - Python reference extraction now checks `isinstance` and `issubclass` markers before running runtime type-check regex probes.
@@ -261,6 +262,7 @@ affected:
 - **CSS custom-property reference scan を marker で gate します** - CSS reference extraction は custom-property reference regex probe を実行する前に `var` と custom-property marker を確認します。
 - **SCSS reference scan を marker で gate します** - SCSS reference extraction は variable、extend、include regex probe を実行する前に dollar、`@extend`、`@include` marker を確認します。
 - **Sass call scan を marker で gate します** - Sass reference extraction は通常行で reference-line preparation を skip し、mixin-plus と parenthesis marker を確認してから call regex probe を実行します。
+- **Stylus reference scan を marker で gate します** - Stylus reference extraction は explicit variable と function regex probe の前に dollar と parenthesis marker を確認し、variable definition が集まっていない場合は bare variable probe を skip します。
 - **Python decorator reference scan を marker で gate します** - Python reference extraction は `@` marker がない行では decorator-call と bare-decorator regex probe を skip します。
 - **Python raise/except type scan を marker で gate します** - Python reference extraction は exception type regex probe を実行する前に `raise` と `except` marker を確認します。
 - **Python runtime type-check scan を marker で gate します** - Python reference extraction は runtime type-check regex probe を実行する前に `isinstance` と `issubclass` marker を確認します。
