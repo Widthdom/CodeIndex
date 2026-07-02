@@ -352,6 +352,7 @@ affected:
 - **Gated Objective-C selector scans by parenthesis marker** - Objective-C message extraction now checks for `(` before running `@selector(...)` regex probes.
 - **Tightened C++ class base-list markers to keyword boundaries** - C++ reference extraction now treats `class` as a boundary-aware keyword before running base-list regex probes.
 - **Tightened C++ struct base-list markers to keyword boundaries** - C++ reference extraction now treats `struct` as a boundary-aware keyword before running base-list regex probes.
+- **Tightened C++ new type markers to keyword boundaries** - C++ reference extraction now treats `new` as a boundary-aware keyword before running allocation type regex probes.
 
 ## 日本語
 
@@ -638,3 +639,4 @@ affected:
 - **Objective-C selector scan を parenthesis marker gate します** - Objective-C message extraction は `@selector(...)` regex probe の前に `(` を確認します。
 - **C++ class base-list marker を keyword boundary に強化します** - C++ reference extraction は base-list regex probe の前に `class` を boundary-aware keyword として扱います。
 - **C++ struct base-list marker を keyword boundary に強化します** - C++ reference extraction は base-list regex probe の前に `struct` を boundary-aware keyword として扱います。
+- **C++ new type marker を keyword boundary に強化します** - C++ reference extraction は allocation type regex probe の前に `new` を boundary-aware keyword として扱います。

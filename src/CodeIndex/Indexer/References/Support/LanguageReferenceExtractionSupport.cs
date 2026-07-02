@@ -1167,7 +1167,7 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        if (preparedLine.IndexOf("new", StringComparison.Ordinal) >= 0)
+        if (ContainsOrdinalKeyword(preparedLine, "new"))
         {
             foreach (Match match in CppNewTypeRegex.Matches(preparedLine))
             {
