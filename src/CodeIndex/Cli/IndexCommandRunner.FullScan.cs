@@ -938,9 +938,6 @@ public static partial class IndexCommandRunner
             foreach (var relPath in scanResult.NonIndexablePaths)
             {
                 var dbPath = FileIndexer.NormalizeIndexPath(relPath);
-                if (!writer.HasFileAtPath(dbPath))
-                    continue;
-
                 if (writer.DeleteFileByPath(dbPath))
                     purged++;
             }
