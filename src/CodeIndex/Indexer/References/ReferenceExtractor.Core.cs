@@ -155,8 +155,9 @@ public static partial class ReferenceExtractor
         var dockerfileNameSets = DockerfileReferenceExtractor.BuildNameSets(language, symbols);
         var dockerfileStageNames = dockerfileNameSets.StageNames;
         var dockerfileVariableNames = dockerfileNameSets.VariableNames;
-        var shellCallableNames = ShellReferenceExtractor.BuildCallableNames(language, symbols);
-        var shellGlobalAliasNames = ShellReferenceExtractor.BuildGlobalAliasNames(language, symbols);
+        var shellNameSets = ShellReferenceExtractor.BuildNameSets(language, symbols);
+        var shellCallableNames = shellNameSets.CallableNames;
+        var shellGlobalAliasNames = shellNameSets.GlobalAliasNames;
         IReadOnlyList<(int StartLine, int EndLine)> csharpNamespaceScopes = language == "csharp"
             ? BuildCSharpNamespaceScopes(symbols)
             : Array.Empty<(int StartLine, int EndLine)>();
