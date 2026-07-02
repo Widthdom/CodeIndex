@@ -1149,7 +1149,7 @@ internal static partial class LanguageReferenceExtractionSupport
 
         var baseMatch = preparedLine.IndexOf(':') >= 0
             && (ContainsOrdinalKeyword(preparedLine, "class")
-                || preparedLine.IndexOf("struct", StringComparison.Ordinal) >= 0)
+                || ContainsOrdinalKeyword(preparedLine, "struct"))
             ? CppBaseListRegex.Match(preparedLine)
             : Match.Empty;
         if (baseMatch.Success)

@@ -351,6 +351,7 @@ affected:
 - **Gated Smalltalk class-declaration skips by keyword marker** - Smalltalk message extraction now checks class-declaration keywords before running class-declaration regex probes.
 - **Gated Objective-C selector scans by parenthesis marker** - Objective-C message extraction now checks for `(` before running `@selector(...)` regex probes.
 - **Tightened C++ class base-list markers to keyword boundaries** - C++ reference extraction now treats `class` as a boundary-aware keyword before running base-list regex probes.
+- **Tightened C++ struct base-list markers to keyword boundaries** - C++ reference extraction now treats `struct` as a boundary-aware keyword before running base-list regex probes.
 
 ## 日本語
 
@@ -636,3 +637,4 @@ affected:
 - **Smalltalk class-declaration skip を keyword marker gate します** - Smalltalk message extraction は class-declaration regex probe の前に class-declaration keyword を確認します。
 - **Objective-C selector scan を parenthesis marker gate します** - Objective-C message extraction は `@selector(...)` regex probe の前に `(` を確認します。
 - **C++ class base-list marker を keyword boundary に強化します** - C++ reference extraction は base-list regex probe の前に `class` を boundary-aware keyword として扱います。
+- **C++ struct base-list marker を keyword boundary に強化します** - C++ reference extraction は base-list regex probe の前に `struct` を boundary-aware keyword として扱います。
