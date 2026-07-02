@@ -519,6 +519,9 @@ internal static class PhpReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("::", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in StaticAccessRegex.Matches(preparedLine))
         {
             var nameGroup = match.Groups["name"];
@@ -595,6 +598,9 @@ internal static class PhpReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("instanceof", StringComparison.OrdinalIgnoreCase) < 0)
+            return;
+
         foreach (Match match in InstanceofRegex.Matches(preparedLine))
         {
             AddPhpTypeReferenceFromQualifiedName(
@@ -617,6 +623,9 @@ internal static class PhpReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("catch", StringComparison.OrdinalIgnoreCase) < 0)
+            return;
+
         foreach (Match match in CatchTypeRegex.Matches(preparedLine))
         {
             foreach (Capture capture in match.Groups["name"].Captures)
