@@ -868,8 +868,11 @@ internal static partial class LanguageReferenceExtractionSupport
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        if (GoFuncRegex.IsMatch(line))
+        if (line.IndexOf("func", StringComparison.Ordinal) >= 0
+            && GoFuncRegex.IsMatch(line))
+        {
             return;
+        }
 
         var searchStart = 0;
         while (searchStart < line.Length)
@@ -1667,8 +1670,11 @@ internal static partial class LanguageReferenceExtractionSupport
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        if (GoFuncRegex.IsMatch(line))
+        if (line.IndexOf("func", StringComparison.Ordinal) >= 0
+            && GoFuncRegex.IsMatch(line))
+        {
             return;
+        }
 
         var searchStart = 0;
         while (searchStart < line.Length)
