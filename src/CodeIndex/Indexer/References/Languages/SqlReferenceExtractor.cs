@@ -51,8 +51,10 @@ internal static partial class SqlReferenceExtractor
             return suppressed;
 
         var hasWindowClauseKeyword = false;
+        long joinedLength = lines.Length - 1;
         foreach (var line in lines)
         {
+            joinedLength = Math.Min((long)int.MaxValue, joinedLength + line.Length);
             if (line.IndexOf("OVER", StringComparison.OrdinalIgnoreCase) < 0)
                 continue;
 
@@ -64,7 +66,7 @@ internal static partial class SqlReferenceExtractor
             return suppressed;
 
         var lineStarts = new int[lines.Length];
-        var textBuilder = new StringBuilder();
+        var textBuilder = new StringBuilder((int)joinedLength);
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
             if (lineIndex > 0)
