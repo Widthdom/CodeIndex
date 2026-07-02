@@ -272,6 +272,7 @@ affected:
 - **Gated C++ requires concept type scans by marker** - C/C++ reference extraction now checks `requires` and template markers before running requires concept type regex probes.
 - **Gated C++ qualified requires concept scans by marker** - C/C++ reference extraction now checks `requires`, template, and scope markers before running qualified requires concept regex probes.
 - **Gated C++ concept expression type scans by marker** - C/C++ reference extraction now checks template and concept operator markers before running concept expression type regex probes.
+- **Gated C++ compound requirement concept scans by marker** - C/C++ reference extraction now checks arrow and template delimiter markers before running compound requirement concept regex probes.
 
 ## 日本語
 
@@ -478,3 +479,4 @@ affected:
 - **C++ requires concept type scan を marker で gate します** - C/C++ reference extraction は requires concept type regex probe の前に `requires` と template marker を確認します。
 - **C++ qualified requires concept scan を marker で gate します** - C/C++ reference extraction は qualified requires concept regex probe の前に `requires` / template / scope marker を確認します。
 - **C++ concept expression type scan を marker で gate します** - C/C++ reference extraction は concept expression type regex probe の前に template と concept operator marker を確認します。
+- **C++ compound requirement concept scan を marker で gate します** - C/C++ reference extraction は compound requirement concept regex probe の前に arrow と template delimiter marker を確認します。
