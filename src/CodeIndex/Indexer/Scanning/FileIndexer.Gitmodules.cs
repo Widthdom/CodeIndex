@@ -81,11 +81,7 @@ public partial class FileIndexer
 
                 submodulePathCount++;
                 if (submodulePaths.Add(relativeToProject))
-                {
-                    var segments = relativeToProject.Split('/', StringSplitOptions.RemoveEmptyEntries);
-                    for (var i = 1; i < segments.Length; i++)
-                        ancestorPaths.Add(string.Join('/', segments, 0, i));
-                }
+                    AddSubmoduleAncestorPaths(relativeToProject, ancestorPaths);
             }
         }
         catch (IOException ex)
@@ -98,6 +94,31 @@ public partial class FileIndexer
         }
 
         return (submodulePaths, ancestorPaths, warnings);
+    }
+
+    private static void AddSubmoduleAncestorPaths(string relativeToProject, HashSet<string> ancestorPaths)
+    {
+        var segmentCount = 0;
+        var ancestorEnd = 0;
+        var segmentStart = 0;
+        while (segmentStart < relativeToProject.Length)
+        {
+            while (segmentStart < relativeToProject.Length && relativeToProject[segmentStart] == '/')
+                segmentStart++;
+            if (segmentStart >= relativeToProject.Length)
+                break;
+
+            var segmentEnd = relativeToProject.IndexOf('/', segmentStart);
+            if (segmentEnd < 0)
+                segmentEnd = relativeToProject.Length;
+
+            if (segmentCount > 0)
+                ancestorPaths.Add(relativeToProject[..ancestorEnd]);
+
+            segmentCount++;
+            ancestorEnd = segmentEnd;
+            segmentStart = segmentEnd + 1;
+        }
     }
 
     private static void AddGitmodulesDiscoveryWarning(
