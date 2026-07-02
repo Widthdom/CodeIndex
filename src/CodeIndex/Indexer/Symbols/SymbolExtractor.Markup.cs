@@ -740,7 +740,8 @@ public static partial class SymbolExtractor
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
-            if (line.Contains("x:Class", StringComparison.Ordinal))
+            var hasAttributeAssignment = line.IndexOf('=') >= 0;
+            if (hasAttributeAssignment && line.Contains("x:Class", StringComparison.Ordinal))
             {
                 foreach (Match classMatch in XamlClassRegex.Matches(line))
                 {
@@ -760,7 +761,7 @@ public static partial class SymbolExtractor
                 }
             }
 
-            if (line.Contains("x:DataType", StringComparison.Ordinal))
+            if (hasAttributeAssignment && line.Contains("x:DataType", StringComparison.Ordinal))
             {
                 foreach (Match dataTypeMatch in XamlDataTypeRegex.Matches(line))
                 {
@@ -780,7 +781,7 @@ public static partial class SymbolExtractor
                 }
             }
 
-            if (line.Contains("x:TypeArguments", StringComparison.Ordinal))
+            if (hasAttributeAssignment && line.Contains("x:TypeArguments", StringComparison.Ordinal))
             {
                 foreach (Match typeArgumentsMatch in XamlTypeArgumentsRegex.Matches(line))
                 {
@@ -800,7 +801,7 @@ public static partial class SymbolExtractor
                 }
             }
 
-            if (line.Contains("TargetType", StringComparison.Ordinal))
+            if (hasAttributeAssignment && line.Contains("TargetType", StringComparison.Ordinal))
             {
                 foreach (Match targetTypeMatch in XamlTargetTypeRegex.Matches(line))
                 {
@@ -820,7 +821,7 @@ public static partial class SymbolExtractor
                 }
             }
 
-            if (line.Contains("x:Name", StringComparison.Ordinal))
+            if (hasAttributeAssignment && line.Contains("x:Name", StringComparison.Ordinal))
             {
                 foreach (Match nameMatch in XamlNameRegex.Matches(line))
                 {
@@ -840,7 +841,7 @@ public static partial class SymbolExtractor
                 }
             }
 
-            if (line.Contains("x:Key", StringComparison.Ordinal))
+            if (hasAttributeAssignment && line.Contains("x:Key", StringComparison.Ordinal))
             {
                 foreach (Match keyMatch in XamlKeyRegex.Matches(line))
                 {

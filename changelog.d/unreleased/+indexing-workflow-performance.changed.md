@@ -91,6 +91,7 @@ affected:
 - **Gated GraphQL union variant scans by name start** - GraphQL extraction now skips union-variant regex scans when stripped variant text contains no GraphQL name start.
 - **Gated GraphQL declaration boundary scans by keyword** - GraphQL union continuation scanning now skips declaration-start regex checks when no declaration keyword is present.
 - **Gated Elixir first-line block scans by marker** - Elixir range extraction now avoids shorthand and opener regex checks when the masked first line lacks the required markers.
+- **Gated XAML line-level attribute scans by assignment marker** - XAML extraction now skips class, type, name, and key attribute regex scans on lines without `=`.
 
 ## 日本語
 
@@ -146,3 +147,4 @@ affected:
 - **GraphQL union variant scan を name start で gate します** - GraphQL extraction は stripped variant text に GraphQL name start がない場合 union-variant regex scan を skip します。
 - **GraphQL declaration boundary scan を keyword で gate します** - GraphQL union continuation scanning は declaration keyword がない場合 declaration-start regex check を skip します。
 - **Elixir first-line block scan を marker で gate します** - Elixir range extraction は masked first line に必要 marker がない場合 shorthand と opener regex check を skip します。
+- **XAML line-level attribute scan を assignment marker で gate します** - XAML extraction は `=` がない行で class/type/name/key 属性 regex scan を skip します。
