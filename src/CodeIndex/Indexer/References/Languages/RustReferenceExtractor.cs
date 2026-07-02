@@ -2238,6 +2238,12 @@ internal static class RustReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForColumn,
         HashSet<string>? constGenericNames = null)
     {
+        if (clause.IndexOf("const", StringComparison.Ordinal) < 0
+            || clause.IndexOf(':') < 0)
+        {
+            return;
+        }
+
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(clause))
         {
             var fragment = clause.Substring(segmentStart, segmentLength);
