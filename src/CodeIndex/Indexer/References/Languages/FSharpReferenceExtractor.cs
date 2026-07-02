@@ -94,25 +94,31 @@ internal static class FSharpReferenceExtractor
         string preparedLine,
         Action<string, int> addCallLikeReference)
     {
-        foreach (Match match in PipelineCallRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("|>", StringComparison.Ordinal) >= 0)
         {
-            var name = match.Groups["name"].Value;
-            var callIndex = match.Groups["name"].Index;
-            addCallLikeReference(name, callIndex);
+            foreach (Match match in PipelineCallRegex.Matches(preparedLine))
+            {
+                var name = match.Groups["name"].Value;
+                var callIndex = match.Groups["name"].Index;
+                addCallLikeReference(name, callIndex);
+            }
         }
 
-        foreach (Match match in BackwardPipelineCallRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("<|", StringComparison.Ordinal) >= 0)
         {
-            var name = match.Groups["name"].Value;
-            var callIndex = match.Groups["name"].Index;
-            addCallLikeReference(name, callIndex);
-        }
+            foreach (Match match in BackwardPipelineCallRegex.Matches(preparedLine))
+            {
+                var name = match.Groups["name"].Value;
+                var callIndex = match.Groups["name"].Index;
+                addCallLikeReference(name, callIndex);
+            }
 
-        foreach (Match match in BackwardPipelineArgumentCallRegex.Matches(preparedLine))
-        {
-            var name = match.Groups["name"].Value;
-            var callIndex = match.Groups["name"].Index;
-            addCallLikeReference(name, callIndex);
+            foreach (Match match in BackwardPipelineArgumentCallRegex.Matches(preparedLine))
+            {
+                var name = match.Groups["name"].Value;
+                var callIndex = match.Groups["name"].Index;
+                addCallLikeReference(name, callIndex);
+            }
         }
 
         foreach (Match match in TryFinallyApplicationCallRegex.Matches(preparedLine))

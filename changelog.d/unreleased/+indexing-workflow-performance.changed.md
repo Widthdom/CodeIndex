@@ -29,6 +29,7 @@ affected:
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Markup.cs
   - src/CodeIndex/Indexer/References/Languages/CSharpReferenceExtractor.Support.cs
   - src/CodeIndex/Indexer/References/Languages/CppReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/Languages/FSharpReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/Languages/GoReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/Languages/SwiftReferenceExtractor.cs
   - src/CodeIndex/Indexer/References/Languages/SqlReferenceExtractor.cs
@@ -93,6 +94,7 @@ affected:
 - **Gated PowerShell call reference scans by marker** - PowerShell reference extraction now checks statement and pipeline call-start markers before running cmdlet/function call regex probes.
 - **Gated Shell call and source reference scans by marker** - Shell reference extraction now skips command-call regexes when no callable names exist and checks substitution, source, and global-alias markers before running those scans.
 - **Gated C# using namespace/static scans by marker** - C# reference extraction now checks `using`, `static`, and alias markers before running using-namespace and using-static regex probes.
+- **Gated F# pipeline call scans by marker** - F# reference extraction now checks forward and backward pipeline markers before running pipeline call regex probes.
 - **Gated SQL temp-object collection scans by marker** - SQL temp object carry-forward now skips collection without `#` markers and runs target, truncate, select-into, and create probes only when their statement keywords are present.
 - **Gated Go concurrency reference scans by marker** - Go reference extraction now checks `go` and channel-arrow markers before running goroutine and channel send/receive regex probes.
 - **Gated Scala block and type-context scans by marker** - Scala reference extraction now checks block, generator, implicit, given, and using markers before running those regex probes.
@@ -224,6 +226,7 @@ affected:
 - **PowerShell call reference scan を marker で gate します** - PowerShell reference extraction は cmdlet/function call regex probe を実行する前に statement と pipeline の call-start marker を確認します。
 - **Shell call / source reference scan を marker で gate します** - Shell reference extraction は callable name がない場合に command-call regex を skip し、substitution、source、global-alias marker を確認してから対応 scan を実行します。
 - **C# using namespace/static scan を marker で gate します** - C# reference extraction は using-namespace と using-static regex probe を実行する前に `using`、`static`、alias marker を確認します。
+- **F# pipeline call scan を marker で gate します** - F# reference extraction は pipeline call regex probe を実行する前に forward / backward pipeline marker を確認します。
 - **SQL temp-object collection scan を marker で gate します** - SQL temp object carry-forward は `#` marker がない場合の collection を skip し、target、truncate、select-into、create probe は対応する statement keyword がある場合だけ実行します。
 - **Go concurrency reference scan を marker で gate します** - Go reference extraction は goroutine と channel send/receive regex probe を実行する前に `go` と channel-arrow marker を確認します。
 - **Scala block / type-context scan を marker で gate します** - Scala reference extraction は block、generator、implicit、given、using marker を確認してから対応する regex probe を実行します。
