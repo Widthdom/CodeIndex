@@ -3226,7 +3226,7 @@ internal static partial class LanguageReferenceExtractionSupport
         Func<int, SymbolRecord?> resolveContainerForColumn,
         SymbolRecord? container)
     {
-        if (preparedLine.IndexOf('@') >= 0 && preparedLine.IndexOf(':') >= 0)
+        if (StartsWithCharIgnoringLeadingWhitespace(preparedLine, '@') && preparedLine.IndexOf(':') >= 0)
         {
             foreach (Match match in ObjCInterfaceBaseRegex.Matches(preparedLine))
             {

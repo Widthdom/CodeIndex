@@ -334,6 +334,7 @@ affected:
 - **Tightened Pascal interface base markers to keyword boundaries** - Pascal reference extraction now treats `interface` as a boundary-aware keyword before running base-list regex probes.
 - **Tightened Pascal object base markers to keyword boundaries** - Pascal reference extraction now treats `object` as a boundary-aware keyword before running base-list regex probes.
 - **Added shared leading character gates** - Reference extraction now has a leading-character helper for anchored syntax markers that are not identifier keywords.
+- **Tightened Objective-C interface base scans to leading marker gates** - Objective-C reference extraction now requires leading `@` before running interface/implementation base regex probes.
 
 ## 日本語
 
@@ -602,3 +603,4 @@ affected:
 - **Pascal interface base marker を keyword boundary に強化します** - Pascal reference extraction は base-list regex probe の前に `interface` を boundary-aware keyword として扱います。
 - **Pascal object base marker を keyword boundary に強化します** - Pascal reference extraction は base-list regex probe の前に `object` を boundary-aware keyword として扱います。
 - **共通 leading character gate を追加します** - Reference extraction は identifier keyword ではない anchored syntax marker 用の leading-character helper を持つようになります。
+- **Objective-C interface base scan を leading marker gate に強化します** - Objective-C reference extraction は interface/implementation base regex probe の前に leading `@` を要求します。
