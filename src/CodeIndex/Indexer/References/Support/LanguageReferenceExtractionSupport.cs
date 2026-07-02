@@ -2911,8 +2911,8 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        if ((preparedLine.IndexOf("procedure", StringComparison.OrdinalIgnoreCase) >= 0
-                || preparedLine.IndexOf("generic", StringComparison.OrdinalIgnoreCase) >= 0)
+        if ((StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "procedure")
+                || StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "generic"))
             && FortranProcedureBindingLineRegex.IsMatch(preparedLine))
         {
             if (preparedLine.IndexOf("=>", StringComparison.Ordinal) >= 0)
