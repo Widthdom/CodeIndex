@@ -106,13 +106,56 @@ public partial class FileIndexer
 
         projectMarkers.Sort(StringComparer.Ordinal);
 
-        var payload = string.Join('\n', projectMarkers);
         return new ProjectMarkerFingerprintResult(
-            HexEncoding.ToLowerHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload))),
+            ComputeProjectMarkerFingerprint(projectMarkers),
             !traversalState.Truncated)
         {
             Warnings = GetNonFatalScanErrors(errors),
         };
+    }
+
+    private static string ComputeProjectMarkerFingerprint(IReadOnlyList<string> projectMarkers)
+    {
+        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        Span<byte> separator = stackalloc byte[1];
+        separator[0] = (byte)'\n';
+        for (var i = 0; i < projectMarkers.Count; i++)
+        {
+            if (i > 0)
+                hasher.AppendData(separator);
+
+            AppendUtf8StringToHash(hasher, projectMarkers[i]);
+        }
+
+        var hash = hasher.GetHashAndReset();
+        if (hash.Length != SHA256.HashSizeInBytes)
+            throw new InvalidOperationException("SHA256 produced an unexpected hash length");
+        return HexEncoding.ToLowerHexString(hash);
+    }
+
+    private static void AppendUtf8StringToHash(IncrementalHash hasher, string value)
+    {
+        Span<byte> buffer = stackalloc byte[4096];
+        const int MaxCharsPerChunk = 1024;
+        for (var offset = 0; offset < value.Length;)
+        {
+            var charCount = Math.Min(MaxCharsPerChunk, value.Length - offset);
+            if (offset + charCount < value.Length
+                && charCount > 0
+                && char.IsHighSurrogate(value[offset + charCount - 1])
+                && char.IsLowSurrogate(value[offset + charCount]))
+            {
+                charCount--;
+            }
+
+            if (charCount == 0)
+                charCount = 1;
+
+            var written = Encoding.UTF8.GetBytes(value.AsSpan(offset, charCount), buffer);
+            if (written > 0)
+                hasher.AppendData(buffer[..written]);
+            offset += charCount;
+        }
     }
 
     private static ScanError[] GetNonFatalScanErrors(List<ScanError> errors)

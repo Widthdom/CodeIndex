@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
@@ -1227,6 +1228,28 @@ public partial class FileIndexerTests
 
             Assert.True(FileIndexer.SupportsHotspotFamilyMarkerLanguage("msbuild"));
             Assert.False(string.IsNullOrWhiteSpace(indexer.GetProjectMarkerFingerprint("msbuild")));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void GetProjectMarkerFingerprint_UsesJoinedSortedMarkerPaths()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_exact_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(tempDir, "Directory.Build.props"), "<Project />");
+            File.WriteAllText(Path.Combine(tempDir, "App.csproj"), "<Project />");
+
+            var indexer = new FileIndexer(tempDir);
+            var expectedPayload = "App.csproj\nDirectory.Build.props";
+            var expected = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(expectedPayload))).ToLowerInvariant();
+
+            Assert.Equal(expected, indexer.GetProjectMarkerFingerprint("msbuild"));
         }
         finally
         {
