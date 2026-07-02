@@ -50,6 +50,9 @@ internal static class ShellReferenceExtractor
             if (string.IsNullOrWhiteSpace(signature))
                 continue;
 
+            if (signature.IndexOf("-g", StringComparison.Ordinal) < 0)
+                continue;
+
             if (!GlobalAliasSignatureRegex.IsMatch(signature))
                 continue;
 
@@ -72,14 +75,17 @@ internal static class ShellReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForCall,
         Action<string, int> addCallLikeReference)
     {
-        foreach (Match match in CommandCallRegex.Matches(preparedLine))
+        if (callableNames != null && callableNames.Count > 0)
         {
-            var name = match.Groups["name"].Value;
-            if (callableNames == null || !callableNames.Contains(name))
-                continue;
+            foreach (Match match in CommandCallRegex.Matches(preparedLine))
+            {
+                var name = match.Groups["name"].Value;
+                if (!callableNames.Contains(name))
+                    continue;
 
-            var callIndex = match.Groups["name"].Index;
-            addCallLikeReference(name, callIndex);
+                var callIndex = match.Groups["name"].Index;
+                addCallLikeReference(name, callIndex);
+            }
         }
 
         var shellSourceLine = StripComment(originalLine);
@@ -89,35 +95,46 @@ internal static class ShellReferenceExtractor
         // never matched against `preparedLine` alone. PrepareLine also blanks backtick
         // spans via StringLiteralRegex. Re-scan the raw line so nested `helper` calls in
         // `result=$(helper)` or ``output=`helper arg` `` still emit call edges (#1499).
-        EmitSubstitutionCalls(
-            shellSourceLine,
-            0,
-            shellSourceLine.Length,
-            references,
-            seen,
-            fileId,
-            context,
-            lineNumber,
-            callableNames,
-            resolveContainerForCall);
-
-        foreach (Match match in SourceReferenceRegex.Matches(shellSourceLine))
+        if (callableNames != null
+            && callableNames.Count > 0
+            && (shellSourceLine.IndexOf("$(", StringComparison.Ordinal) >= 0
+                || shellSourceLine.IndexOf('`') >= 0))
         {
-            var name = NormalizeSourceTargetToken(match.Groups["name"].Value);
-            if (string.IsNullOrWhiteSpace(name))
-                continue;
-
-            var sourceIndex = match.Groups["name"].Index;
-            ReferenceExtractor.AddReference(
+            EmitSubstitutionCalls(
+                shellSourceLine,
+                0,
+                shellSourceLine.Length,
                 references,
                 seen,
                 fileId,
-                name,
-                sourceIndex,
-                "reference",
                 context,
                 lineNumber,
-                resolveContainerForCall(sourceIndex));
+                callableNames,
+                resolveContainerForCall);
+        }
+
+        if (shellSourceLine.IndexOf("source", StringComparison.Ordinal) >= 0
+            || shellSourceLine.IndexOf(". ", StringComparison.Ordinal) >= 0
+            || shellSourceLine.IndexOf(".\t", StringComparison.Ordinal) >= 0)
+        {
+            foreach (Match match in SourceReferenceRegex.Matches(shellSourceLine))
+            {
+                var name = NormalizeSourceTargetToken(match.Groups["name"].Value);
+                if (string.IsNullOrWhiteSpace(name))
+                    continue;
+
+                var sourceIndex = match.Groups["name"].Index;
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    name,
+                    sourceIndex,
+                    "reference",
+                    context,
+                    lineNumber,
+                    resolveContainerForCall(sourceIndex));
+            }
         }
 
         if (globalAliasNames == null || globalAliasNames.Count == 0)
