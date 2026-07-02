@@ -98,6 +98,7 @@ affected:
 - **Gated Swift property-wrapper scans by attribute marker** - Swift extraction now skips property-wrapper attribute regex scans when a declaration captured no `@` attributes.
 - **Gated SQL routine result scans by routine markers** - SQL extraction now skips `RETURNS TABLE` and `OUT` parameter regex scans when routine headers lack the required markers.
 - **Gated SQL definer scans by host marker** - SQL extraction now skips detailed `DEFINER` regex matching when the structural line lacks the required `@` marker.
+- **Gated SQL generated-column scans by DDL branch markers** - SQL extraction now skips ALTER/CREATE generated-column regex scans when the corresponding DDL keywords are absent.
 
 ## 日本語
 
@@ -160,3 +161,4 @@ affected:
 - **Swift property-wrapper scan を attribute marker で gate します** - Swift extraction は declaration が `@` attribute を持たない場合 property-wrapper attribute regex scan を skip します。
 - **SQL routine result scan を routine marker で gate します** - SQL extraction は routine header に必要 marker がない場合 `RETURNS TABLE` と `OUT` parameter regex scan を skip します。
 - **SQL definer scan を host marker で gate します** - SQL extraction は structural line に必須の `@` marker がない場合 detailed `DEFINER` regex matching を skip します。
+- **SQL generated-column scan を DDL branch marker で gate します** - SQL extraction は対応する DDL keyword がない場合 ALTER/CREATE generated-column regex scan を skip します。

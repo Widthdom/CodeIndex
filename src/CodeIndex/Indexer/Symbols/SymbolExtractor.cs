@@ -4783,16 +4783,26 @@ public static partial class SymbolExtractor
 
         var structuralContent = string.Join('\n', structuralLines);
         var lineStarts = BuildLineStarts(structuralContent);
-        foreach (Match match in SqlAlterTableAddGeneratedColumnRegex.Matches(structuralContent))
+        if (structuralContent.Contains("ALTER", StringComparison.OrdinalIgnoreCase)
+            && structuralContent.Contains("ADD", StringComparison.OrdinalIgnoreCase))
         {
-            var nameGroup = match.Groups["name"];
-            AddSqlGeneratedColumnSymbol(
-                fileId,
-                lines,
-                lineStarts,
-                new GroupProxy(nameGroup.Value, nameGroup.Index),
-                match.Groups["table"].Value,
-                symbols);
+            foreach (Match match in SqlAlterTableAddGeneratedColumnRegex.Matches(structuralContent))
+            {
+                var nameGroup = match.Groups["name"];
+                AddSqlGeneratedColumnSymbol(
+                    fileId,
+                    lines,
+                    lineStarts,
+                    new GroupProxy(nameGroup.Value, nameGroup.Index),
+                    match.Groups["table"].Value,
+                    symbols);
+            }
+        }
+
+        if (!structuralContent.Contains("CREATE", StringComparison.OrdinalIgnoreCase)
+            || !structuralContent.Contains("TABLE", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
         }
 
         foreach (Match tableMatch in SqlCreateTableBodyRegex.Matches(structuralContent))
