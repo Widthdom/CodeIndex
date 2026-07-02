@@ -3493,7 +3493,8 @@ internal static partial class LanguageReferenceExtractionSupport
 
         var isDefinitionLine = preparedLine.IndexOf(">>", StringComparison.Ordinal) >= 0
             && SmalltalkMethodDefinitionRegex.IsMatch(preparedLine);
-        if (isDefinitionLine || SmalltalkClassDeclarationRegex.IsMatch(preparedLine))
+        var hasClassDeclarationLiteralMarker = preparedLine.IndexOf('#') >= 0;
+        if (isDefinitionLine || (hasClassDeclarationLiteralMarker && SmalltalkClassDeclarationRegex.IsMatch(preparedLine)))
             return;
 
         var consumedUntil = 0;

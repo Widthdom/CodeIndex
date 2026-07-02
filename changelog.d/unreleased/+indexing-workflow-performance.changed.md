@@ -347,6 +347,7 @@ affected:
 - **Tightened Elixir behaviour scans to keyword boundaries** - Elixir reference extraction now treats `behaviour` as a boundary-aware keyword before running behaviour regex probes.
 - **Tightened Elixir impl scans to keyword boundaries** - Elixir reference extraction now treats `impl` as a boundary-aware keyword before running implementation regex probes.
 - **Gated Smalltalk method-definition skips by marker** - Smalltalk message extraction now checks for `>>` before running method-definition regex probes.
+- **Gated Smalltalk class-declaration skips by literal marker** - Smalltalk message extraction now checks for `#` before running class-declaration regex probes.
 
 ## 日本語
 
@@ -628,3 +629,4 @@ affected:
 - **Elixir behaviour scan を keyword boundary に強化します** - Elixir reference extraction は behaviour regex probe の前に `behaviour` を boundary-aware keyword として扱います。
 - **Elixir impl scan を keyword boundary に強化します** - Elixir reference extraction は implementation regex probe の前に `impl` を boundary-aware keyword として扱います。
 - **Smalltalk method-definition skip を marker gate します** - Smalltalk message extraction は method-definition regex probe の前に `>>` を確認します。
+- **Smalltalk class-declaration skip を literal marker gate します** - Smalltalk message extraction は class-declaration regex probe の前に `#` を確認します。
