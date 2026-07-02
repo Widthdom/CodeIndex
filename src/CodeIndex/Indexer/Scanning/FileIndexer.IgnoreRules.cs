@@ -277,7 +277,7 @@ public partial class FileIndexer
                 var ch = token.Value;
                 if (token.Escaped)
                 {
-                    builder.Append(Regex.Escape(ch.ToString()));
+                    AppendRegexEscapedChar(builder, ch);
                     continue;
                 }
 
@@ -325,12 +325,26 @@ public partial class FileIndexer
                 if (ch == '[' && TryBuildCharacterClass(pattern, ref i, builder, ignoreCase))
                     continue;
 
-                builder.Append(Regex.Escape(ch.ToString()));
+                AppendRegexEscapedChar(builder, ch);
             }
 
             builder.Append('$');
             return new RegexIgnoreMatcher(RegexRegistry.CreateFileIgnorePatternRegex(builder.ToString()));
         }
+
+        private static void AppendRegexEscapedChar(StringBuilder builder, char ch)
+        {
+            if (IsOrdinaryRegexLiteralChar(ch))
+            {
+                builder.Append(ch);
+                return;
+            }
+
+            builder.Append(Regex.Escape(ch.ToString()));
+        }
+
+        private static bool IsOrdinaryRegexLiteralChar(char ch) =>
+            ch is not ('\\' or '*' or '+' or '?' or '|' or '{' or '[' or '(' or ')' or '^' or '$' or '.' or '#' or ' ' or '\t' or '\r' or '\n' or '\f');
 
         private static bool TryBuildLiteralPattern(IReadOnlyList<PatternToken> pattern, out string literal)
         {
