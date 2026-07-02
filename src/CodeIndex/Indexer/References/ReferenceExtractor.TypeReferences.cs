@@ -3258,7 +3258,7 @@ public static partial class ReferenceExtractor
         if (line.IndexOf('f') < 0 && line.IndexOf('F') < 0)
             return line;
 
-        var masked = line.ToCharArray();
+        char[]? masked = null;
         for (var i = 0; i < line.Length; i++)
         {
             if (!TryOpenPythonSingleLineString(line, i, out var prefixLength, out var quoteChar, out var isRaw, out var isFString))
@@ -3270,9 +3270,10 @@ public static partial class ReferenceExtractor
                 continue;
             }
 
+            var chars = masked ??= line.ToCharArray();
             var quoteStart = i + prefixLength;
             var openingLength = prefixLength + 1;
-            ReplaceWithSpaces(masked, i, openingLength);
+            ReplaceWithSpaces(chars, i, openingLength);
             i += openingLength;
 
             var inExpression = false;
@@ -3283,28 +3284,28 @@ public static partial class ReferenceExtractor
                 {
                     if (!isRaw && line[i] == '\\' && i + 1 < line.Length)
                     {
-                        ReplaceWithSpaces(masked, i, 2);
+                        ReplaceWithSpaces(chars, i, 2);
                         i += 2;
                         continue;
                     }
 
                     if (line[i] == '{' && i + 1 < line.Length && line[i + 1] == '{')
                     {
-                        ReplaceWithSpaces(masked, i, 2);
+                        ReplaceWithSpaces(chars, i, 2);
                         i += 2;
                         continue;
                     }
 
                     if (line[i] == '}' && i + 1 < line.Length && line[i + 1] == '}')
                     {
-                        ReplaceWithSpaces(masked, i, 2);
+                        ReplaceWithSpaces(chars, i, 2);
                         i += 2;
                         continue;
                     }
 
                     if (line[i] == '{')
                     {
-                        masked[i] = ' ';
+                        chars[i] = ' ';
                         inExpression = true;
                         expressionDepth = 1;
                         i++;
@@ -3313,12 +3314,12 @@ public static partial class ReferenceExtractor
 
                     if (line[i] == quoteChar)
                     {
-                        masked[i] = ' ';
+                        chars[i] = ' ';
                         i++;
                         break;
                     }
 
-                    masked[i] = ' ';
+                    chars[i] = ' ';
                     i++;
                     continue;
                 }
@@ -3333,7 +3334,7 @@ public static partial class ReferenceExtractor
                 if (line[i] == '}')
                 {
                     expressionDepth--;
-                    masked[i] = ' ';
+                    chars[i] = ' ';
                     i++;
                     if (expressionDepth == 0)
                         inExpression = false;
@@ -3370,7 +3371,7 @@ public static partial class ReferenceExtractor
 
                 if (line[i] == '#')
                 {
-                    masked[i] = ' ';
+                    chars[i] = ' ';
                     i++;
                     continue;
                 }
@@ -3381,7 +3382,7 @@ public static partial class ReferenceExtractor
             i = Math.Max(i - 1, quoteStart);
         }
 
-        return new string(masked);
+        return masked is null ? line : new string(masked);
     }
 
     private static string[] MaskPythonFStrings(IReadOnlyList<string> lines)
