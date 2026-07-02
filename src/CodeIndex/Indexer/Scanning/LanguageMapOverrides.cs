@@ -55,7 +55,7 @@ internal static class LanguageMapOverrides
                 return cached.Map;
         }
 
-        var candidates = EnumerateConfigPathCandidates(startDirectory).ToArray();
+        var candidates = CreateConfigPathCandidates(startDirectory);
         var stamps = GetConfigPathStamps(candidates);
         var map = LoadEffectiveMapFromPaths(SelectEffectiveConfigPaths(stamps), ReportWarningOnce);
 
@@ -101,20 +101,23 @@ internal static class LanguageMapOverrides
         return map;
     }
 
-    private static IEnumerable<ConfigPathCandidate> EnumerateConfigPathCandidates(string startDirectory)
+    private static List<ConfigPathCandidate> CreateConfigPathCandidates(string startDirectory)
     {
+        var candidates = new List<ConfigPathCandidate>();
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         if (!string.IsNullOrWhiteSpace(home))
-            yield return new ConfigPathCandidate(Path.Combine(home, ".config", "cdidx", "langmap.yaml"), IsUserConfig: true);
+            candidates.Add(new ConfigPathCandidate(Path.Combine(home, ".config", "cdidx", "langmap.yaml"), IsUserConfig: true));
 
         var directory = startDirectory;
         while (!string.IsNullOrEmpty(directory))
         {
             var candidate = Path.Combine(directory, WorkspaceFileName);
-            yield return new ConfigPathCandidate(candidate, IsUserConfig: false);
+            candidates.Add(new ConfigPathCandidate(candidate, IsUserConfig: false));
 
             directory = Directory.GetParent(directory)?.FullName ?? string.Empty;
         }
+
+        return candidates;
     }
 
     private static ConfigPathStamp[] GetConfigPathStamps(IReadOnlyList<ConfigPathCandidate> candidates)
