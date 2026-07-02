@@ -57,7 +57,7 @@ internal static class LanguageMapOverrides
 
         var candidates = CreateConfigPathCandidates(startDirectory);
         var stamps = GetConfigPathStamps(candidates);
-        var map = LoadEffectiveMapFromPaths(SelectEffectiveConfigPaths(stamps), ReportWarningOnce);
+        var map = LoadEffectiveMapFromStamps(stamps, ReportWarningOnce);
 
         lock (EffectiveMapCacheLock)
         {
@@ -98,6 +98,30 @@ internal static class LanguageMapOverrides
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var path in configPaths)
             LoadInto(path, map, reportWarning);
+        return map;
+    }
+
+    private static IReadOnlyDictionary<string, string> LoadEffectiveMapFromStamps(
+        IReadOnlyList<ConfigPathStamp> stamps,
+        Action<string, string?>? reportWarning)
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var stamp in stamps)
+        {
+            if (stamp.IsUserConfig)
+            {
+                if (stamp.Exists)
+                    LoadInto(stamp.Path, map, reportWarning);
+                continue;
+            }
+
+            if (!stamp.Exists)
+                continue;
+
+            LoadInto(stamp.Path, map, reportWarning);
+            break;
+        }
+
         return map;
     }
 
@@ -153,25 +177,6 @@ internal static class LanguageMapOverrides
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
         {
             return new ConfigPathStamp(candidate.Path, candidate.IsUserConfig, Exists: false, DateTime.MinValue, 0);
-        }
-    }
-
-    private static IEnumerable<string> SelectEffectiveConfigPaths(IReadOnlyList<ConfigPathStamp> stamps)
-    {
-        foreach (var stamp in stamps)
-        {
-            if (stamp.IsUserConfig)
-            {
-                if (stamp.Exists)
-                    yield return stamp.Path;
-                continue;
-            }
-
-            if (stamp.Exists)
-            {
-                yield return stamp.Path;
-                yield break;
-            }
         }
     }
 
