@@ -33,7 +33,7 @@ public partial class FileIndexer
             return false;
         }
 
-        var fileName = Path.GetFileName(file);
+        var fileName = Path.GetFileName(file.AsSpan());
 
         // Skip excluded file names / 除外ファイル名をスキップ
         if (IsDefaultExcludedFileName(fileName))

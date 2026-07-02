@@ -34,10 +34,10 @@ public partial class FileIndexer
 
     // Files to skip (case-insensitive for cross-platform consistency with SkipDirs)
     // スキップするファイル名（SkipDirsと同様にクロスプラットフォーム対応で大文字小文字を区別しない）
-    private static readonly HashSet<string> SkipFiles = new(StringComparer.OrdinalIgnoreCase)
-    {
+    private static readonly string[] SkipFileNames =
+    [
         ".DS_Store", "Thumbs.db",
-    };
+    ];
 
     // macOS AppleDouble resource-fork prefix. Files written by HFS+/SMB-style metadata carriers
     // (e.g. archives unpacked on a non-HFS volume, or macOS-mounted SMB/NFS shares) appear as
@@ -62,9 +62,20 @@ public partial class FileIndexer
     {
         if (string.IsNullOrEmpty(fileName))
             return false;
-        if (SkipFiles.Contains(fileName))
-            return true;
-        return fileName.StartsWith(AppleDoublePrefix, StringComparison.Ordinal);
+        return IsDefaultExcludedFileName(fileName.AsSpan());
+    }
+
+    private static bool IsDefaultExcludedFileName(ReadOnlySpan<char> fileName)
+    {
+        if (fileName.IsEmpty)
+            return false;
+        foreach (var skipFile in SkipFileNames)
+        {
+            if (fileName.Equals(skipFile.AsSpan(), StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return fileName.StartsWith(AppleDoublePrefix.AsSpan(), StringComparison.Ordinal);
     }
 
     private static bool IsDefaultExcludedDirectoryName(ReadOnlySpan<char> directoryName)

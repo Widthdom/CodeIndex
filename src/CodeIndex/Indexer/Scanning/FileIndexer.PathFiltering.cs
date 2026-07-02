@@ -174,7 +174,7 @@ public partial class FileIndexer
         if (inSubmodulePassthrough)
             return new PathFilterResult(PathFilterKind.ExcludedByDefaultDirectory, errors);
 
-        var fileName = Path.GetFileName(fullPath);
+        var fileName = Path.GetFileName(fullPath.AsSpan());
         if (IsDefaultExcludedFileName(fileName))
             return new PathFilterResult(PathFilterKind.ExcludedByDefaultFile, errors);
 
