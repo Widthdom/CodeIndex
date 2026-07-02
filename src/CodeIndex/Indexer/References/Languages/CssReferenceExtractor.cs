@@ -390,7 +390,15 @@ internal static class CssReferenceExtractor
 
     internal static string MaskSassBlockCommentLine(string line, SassLoudCommentState state)
     {
-        var chars = line.ToCharArray();
+        char[]? chars = null;
+
+        void MaskRange(int start, int endExclusive)
+        {
+            var masked = chars ??= line.ToCharArray();
+            for (var index = start; index < endExclusive; index++)
+                masked[index] = ' ';
+        }
+
         var lineIndent = CountLeadingWhitespace(line);
         var isBlank = lineIndent == line.Length;
         var cursor = 0;
@@ -399,9 +407,7 @@ internal static class CssReferenceExtractor
         {
             if (isBlank || lineIndent > state.SilentIndent)
             {
-                for (var j = 0; j < chars.Length; j++)
-                    chars[j] = ' ';
-                return new string(chars);
+                return new string(' ', line.Length);
             }
 
             state.SilentActive = false;
@@ -421,14 +427,11 @@ internal static class CssReferenceExtractor
                 var commentEnd = line.IndexOf("*/", StringComparison.Ordinal);
                 if (commentEnd < 0)
                 {
-                    for (var j = 0; j < chars.Length; j++)
-                        chars[j] = ' ';
-                    return new string(chars);
+                    return new string(' ', line.Length);
                 }
 
                 var stop = commentEnd + 2;
-                for (var j = 0; j < stop; j++)
-                    chars[j] = ' ';
+                MaskRange(0, stop);
                 cursor = stop;
                 state.Active = false;
             }
@@ -474,8 +477,7 @@ internal static class CssReferenceExtractor
             {
                 var commentEnd = line.IndexOf("*/", i + 2, StringComparison.Ordinal);
                 var stop = commentEnd >= 0 ? commentEnd + 2 : line.Length;
-                for (var j = i; j < stop; j++)
-                    chars[j] = ' ';
+                MaskRange(i, stop);
 
                 if (commentEnd < 0)
                 {
@@ -490,8 +492,7 @@ internal static class CssReferenceExtractor
 
             if (parenDepth == 0 && ch == '/' && i + 1 < line.Length && line[i + 1] == '/')
             {
-                for (var j = i; j < chars.Length; j++)
-                    chars[j] = ' ';
+                MaskRange(i, line.Length);
                 if (i == lineIndent)
                 {
                     state.SilentActive = true;
@@ -501,7 +502,7 @@ internal static class CssReferenceExtractor
             }
         }
 
-        return new string(chars);
+        return chars is null ? line : new string(chars);
     }
 
     internal static string MaskSassStylusBlockCommentLine(string line, ref bool inBlockComment)
@@ -1207,7 +1208,18 @@ internal static class CssReferenceExtractor
 
     private static string PrepareSassStylusReferenceLine(string originalLine)
     {
-        var chars = originalLine.ToCharArray();
+        char[]? chars = null;
+
+        void MaskAt(int index) =>
+            (chars ??= originalLine.ToCharArray())[index] = ' ';
+
+        void MaskRange(int start, int endExclusive)
+        {
+            var masked = chars ??= originalLine.ToCharArray();
+            for (var index = start; index < endExclusive; index++)
+                masked[index] = ' ';
+        }
+
         char quote = '\0';
         var parenDepth = 0;
         for (var i = 0; i < originalLine.Length; i++)
@@ -1215,7 +1227,7 @@ internal static class CssReferenceExtractor
             var ch = originalLine[i];
             if (quote != '\0')
             {
-                chars[i] = ' ';
+                MaskAt(i);
                 if (ch == quote && (i == 0 || originalLine[i - 1] != '\\'))
                     quote = '\0';
                 continue;
@@ -1223,7 +1235,7 @@ internal static class CssReferenceExtractor
 
             if (ch is '\'' or '"')
             {
-                chars[i] = ' ';
+                MaskAt(i);
                 quote = ch;
                 continue;
             }
@@ -1232,8 +1244,7 @@ internal static class CssReferenceExtractor
             {
                 var commentEnd = originalLine.IndexOf("*/", i + 2, StringComparison.Ordinal);
                 var stop = commentEnd >= 0 ? commentEnd + 2 : originalLine.Length;
-                for (var j = i; j < stop; j++)
-                    chars[j] = ' ';
+                MaskRange(i, stop);
                 i = stop - 1;
                 continue;
             }
@@ -1252,13 +1263,12 @@ internal static class CssReferenceExtractor
 
             if (parenDepth == 0 && ch == '/' && i + 1 < originalLine.Length && originalLine[i + 1] == '/')
             {
-                for (var j = i; j < originalLine.Length; j++)
-                    chars[j] = ' ';
+                MaskRange(i, originalLine.Length);
                 break;
             }
         }
 
-        return new string(chars);
+        return chars is null ? originalLine : new string(chars);
     }
 
     private static bool ShouldSkipStylusVariableReference(string preparedLine, int variableIndex)
