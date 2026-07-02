@@ -402,7 +402,7 @@ public static partial class SymbolExtractor
                 accumulator.Write(buffer, 0, read);
             }
 
-            text = Encoding.UTF8.GetString(accumulator.ToArray());
+            text = DecodeTypeScriptPathAliasConfigText(accumulator);
             if (text.Length > 0 && text[0] == '\uFEFF')
                 text = text[1..];
             return true;
@@ -412,6 +412,14 @@ public static partial class SymbolExtractor
             skippedReason = new(TypeScriptPathAliasDiagnosticReadFailed, "it could not be read");
             return false;
         }
+    }
+
+    private static string DecodeTypeScriptPathAliasConfigText(MemoryStream accumulator)
+    {
+        if (accumulator.TryGetBuffer(out var segment) && segment.Array is { } buffer)
+            return Encoding.UTF8.GetString(buffer, segment.Offset, segment.Count);
+
+        return Encoding.UTF8.GetString(accumulator.ToArray());
     }
 
     private static string FormatTypeScriptPathAliasConfigSkippedMessage(

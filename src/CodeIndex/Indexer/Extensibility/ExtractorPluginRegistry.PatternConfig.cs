@@ -182,13 +182,9 @@ public static partial class ExtractorPluginRegistry
             return null;
         }
 
-        var bytes = OperatingSystem.IsWindows()
-            ? TryReadWindowsPatternConfigBytes(path)
-            : TryReadUnixPatternConfigBytes(path);
-        if (bytes == null)
-            return null;
-
-        return Encoding.UTF8.GetString(bytes);
+        return OperatingSystem.IsWindows()
+            ? TryReadWindowsPatternConfigText(path)
+            : TryReadUnixPatternConfigText(path);
     }
 
     private static bool TryReadNextPatternConfigLine(ref ReadOnlySpan<char> remaining, out ReadOnlySpan<char> line)
@@ -222,7 +218,7 @@ public static partial class ExtractorPluginRegistry
         return line.Trim();
     }
 
-    private static byte[]? TryReadWindowsPatternConfigBytes(string path)
+    private static string? TryReadWindowsPatternConfigText(string path)
     {
         using var handle = CreateFile(
             path,
@@ -259,10 +255,10 @@ public static partial class ExtractorPluginRegistry
         }
 
         using var stream = new FileStream(handle, FileAccess.Read, bufferSize: 8192, isAsync: false);
-        return TryReadBoundedPatternConfigBytes(path, stream);
+        return TryReadBoundedPatternConfigText(path, stream);
     }
 
-    private static byte[]? TryReadUnixPatternConfigBytes(string path)
+    private static string? TryReadUnixPatternConfigText(string path)
     {
         var fd = UnixOpen(path, GetUnixOpenFlags());
         if (fd < 0)
@@ -299,7 +295,7 @@ public static partial class ExtractorPluginRegistry
                 stream.Write(buffer, 0, (int)bytesRead);
             }
 
-            return ValidatePatternConfigBytes(path, stream.ToArray());
+            return ValidatePatternConfigText(path, stream);
         }
         finally
         {
@@ -307,7 +303,7 @@ public static partial class ExtractorPluginRegistry
         }
     }
 
-    private static byte[]? TryReadBoundedPatternConfigBytes(string path, Stream stream)
+    private static string? TryReadBoundedPatternConfigText(string path, Stream stream)
     {
         using var output = new MemoryStream(MaxPatternConfigBytes + 1);
         var buffer = new byte[Math.Min(8192, MaxPatternConfigBytes + 1)];
@@ -324,16 +320,24 @@ public static partial class ExtractorPluginRegistry
             output.Write(buffer, 0, bytesRead);
         }
 
-        return ValidatePatternConfigBytes(path, output.ToArray());
+        return ValidatePatternConfigText(path, output);
     }
 
-    private static byte[]? ValidatePatternConfigBytes(string path, byte[] bytes)
+    private static string? ValidatePatternConfigText(string path, MemoryStream stream)
     {
-        if (bytes.Length <= MaxPatternConfigBytes)
-            return bytes;
+        if (stream.Length <= MaxPatternConfigBytes)
+            return DecodePatternConfigText(stream);
 
         ReportPatternConfigRejected(path, $"file is too large (more than {MaxPatternConfigBytes} bytes)");
         return null;
+    }
+
+    private static string DecodePatternConfigText(MemoryStream stream)
+    {
+        if (stream.TryGetBuffer(out var segment) && segment.Array is { } buffer)
+            return Encoding.UTF8.GetString(buffer, segment.Offset, segment.Count);
+
+        return Encoding.UTF8.GetString(stream.ToArray());
     }
 
     private static bool TryGetUnixFileType(int fd, out uint mode)
