@@ -1693,7 +1693,7 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        var hasCppExplicitTemplateInstantiationMarker = preparedLine.IndexOf("template", StringComparison.Ordinal) >= 0
+        var hasCppExplicitTemplateInstantiationMarker = ContainsOrdinalKeyword(preparedLine, "template")
             && preparedLine.IndexOf(';') >= 0
             && (preparedLine.IndexOf("class", StringComparison.Ordinal) >= 0
                 || preparedLine.IndexOf("struct", StringComparison.Ordinal) >= 0);
