@@ -842,21 +842,30 @@ public static partial class SymbolExtractor
         if (line.IndexOf("__all__", StringComparison.Ordinal) < 0)
             return null;
 
-        var appendMatch = PythonAllAppendRegex.Match(line);
-        if (appendMatch.Success)
+        if (line.IndexOf(".append", StringComparison.Ordinal) >= 0)
         {
-            return
-            [
-                new PythonExportSymbolEntry(
-                    appendMatch.Groups["name"].Value,
-                    lineIndex,
-                    appendMatch.Groups["name"].Index),
-            ];
+            var appendMatch = PythonAllAppendRegex.Match(line);
+            if (appendMatch.Success)
+            {
+                return
+                [
+                    new PythonExportSymbolEntry(
+                        appendMatch.Groups["name"].Value,
+                        lineIndex,
+                        appendMatch.Groups["name"].Index),
+                ];
+            }
         }
 
-        var extendMatch = PythonAllExtendRegex.Match(line);
-        if (extendMatch.Success)
-            return TryExpandPythonAllExportSymbolsFromCallValues(lines, lineIndex, extendMatch.Groups["values"].Index);
+        if (line.IndexOf(".extend", StringComparison.Ordinal) >= 0)
+        {
+            var extendMatch = PythonAllExtendRegex.Match(line);
+            if (extendMatch.Success)
+                return TryExpandPythonAllExportSymbolsFromCallValues(lines, lineIndex, extendMatch.Groups["values"].Index);
+        }
+
+        if (line.IndexOf('=') < 0)
+            return null;
 
         var match = PythonAllAssignmentRegex.Match(line);
         if (!match.Success)
