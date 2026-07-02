@@ -10,7 +10,7 @@ public partial class FileIndexer
         List<ScanError> errors,
         ref bool fullyScanned)
     {
-        var rules = new List<IgnoreRule>();
+        List<IgnoreRule>? rules = null;
         var ignoreRulesAvailable = true;
 
         foreach (var ignoreFileName in IgnoreFileNames)
@@ -20,7 +20,7 @@ public partial class FileIndexer
                     dir,
                     ignorePath,
                     ignoreFileName,
-                    rules,
+                    ref rules,
                     errors,
                     ref fullyScanned))
             {
@@ -30,7 +30,7 @@ public partial class FileIndexer
         }
 
         return ignoreRulesAvailable
-            ? new IgnoreRuleLoadResult(IgnoreRuleSet.CreateChild(inheritedIgnoreRules, rules), IgnoreRulesAvailable: true)
+            ? new IgnoreRuleLoadResult(IgnoreRuleSet.CreateChild(inheritedIgnoreRules, AsLoadedIgnoreRules(rules)), IgnoreRulesAvailable: true)
             : new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: false);
     }
 
@@ -78,12 +78,12 @@ public partial class FileIndexer
         List<ScanError> errors,
         ref bool fullyScanned)
     {
-        var rules = new List<IgnoreRule>();
+        List<IgnoreRule>? rules = null;
         if (!TryAppendIgnoreRulesFromFile(
                 sourceDirectory,
                 ignorePath,
                 ignoreFileName,
-                rules,
+                ref rules,
                 errors,
                 ref fullyScanned))
         {
@@ -91,14 +91,17 @@ public partial class FileIndexer
             return new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: false);
         }
 
-        return new IgnoreRuleLoadResult(IgnoreRuleSet.CreateChild(inheritedIgnoreRules, rules), IgnoreRulesAvailable: true);
+        return new IgnoreRuleLoadResult(IgnoreRuleSet.CreateChild(inheritedIgnoreRules, AsLoadedIgnoreRules(rules)), IgnoreRulesAvailable: true);
     }
+
+    private static IReadOnlyList<IgnoreRule> AsLoadedIgnoreRules(List<IgnoreRule>? rules)
+        => rules is { Count: > 0 } ? rules : Array.Empty<IgnoreRule>();
 
     private bool TryAppendIgnoreRulesFromFile(
         string sourceDirectory,
         string ignorePath,
         string ignoreFileName,
-        List<IgnoreRule> rules,
+        ref List<IgnoreRule>? rules,
         List<ScanError> errors,
         ref bool fullyScanned)
     {
@@ -149,7 +152,7 @@ public partial class FileIndexer
                         return false;
                     }
 
-                    rules.Add(rule);
+                    (rules ??= []).Add(rule);
                     rulesInFile++;
                 }
                 else if (errorMessage != null)
