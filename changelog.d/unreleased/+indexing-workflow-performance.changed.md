@@ -257,6 +257,7 @@ affected:
 - **Gated C++ type operand scans by marker** - C/C++ reference extraction now checks `sizeof` or `alignof` call markers before running C++ type operand regex probes.
 - **Gated C++ typeid scans by marker** - C/C++ reference extraction now checks `typeid` call markers before running C++ typeid regex probes.
 - **Gated C++ decltype brace construction scans by marker** - C/C++ reference extraction now checks `decltype`, parenthesis, and brace markers before running decltype construction regex probes.
+- **Gated C++ factory template argument scans by marker** - C/C++ reference extraction now checks `make_`, template, and call markers before running factory template argument regex probes.
 
 ## 日本語
 
@@ -448,3 +449,4 @@ affected:
 - **C++ type operand scan を marker で gate します** - C/C++ reference extraction は C++ type operand regex probe の前に `sizeof` / `alignof` call marker を確認します。
 - **C++ typeid scan を marker で gate します** - C/C++ reference extraction は C++ typeid regex probe の前に `typeid` call marker を確認します。
 - **C++ decltype brace construction scan を marker で gate します** - C/C++ reference extraction は decltype construction regex probe の前に `decltype` / parenthesis / brace marker を確認します。
+- **C++ factory template argument scan を marker で gate します** - C/C++ reference extraction は factory template argument regex probe の前に `make_` / template / call marker を確認します。

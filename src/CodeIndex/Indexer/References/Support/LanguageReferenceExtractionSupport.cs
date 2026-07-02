@@ -1627,10 +1627,17 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        foreach (Match match in CppFactoryTemplateArgumentRegex.Matches(preparedLine))
+        var hasCppTemplateOpen = preparedLine.IndexOf('<') >= 0;
+        var hasCppFactoryTemplateMarker = hasCppParen
+            && hasCppTemplateOpen
+            && preparedLine.IndexOf("make_", StringComparison.Ordinal) >= 0;
+        if (hasCppFactoryTemplateMarker)
         {
-            var group = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            foreach (Match match in CppFactoryTemplateArgumentRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, group.Value, group.Index, context, lineNumber, resolveContainerForColumn(group.Index), language);
+            }
         }
 
         foreach (Match match in CppTypeTraitTemplateArgumentRegex.Matches(preparedLine))
