@@ -108,6 +108,7 @@ affected:
 - **Gated Python framework and dynamic-import scans by marker** - Python reference extraction now checks attrs, pydantic, pytest, contextlib, importlib, and `__import__` markers before running those API regex probes.
 - **Gated PHP use import scans by marker** - PHP reference extraction now checks `use`, `function`, and `const` markers before running type, function, and const import regex probes.
 - **Gated PHP static and exception type scans by marker** - PHP reference extraction now checks `::`, `instanceof`, and `catch` markers before running static-access and exception type regex probes.
+- **Gated PHP signature type scans by marker** - PHP reference extraction now checks colon, dollar, visibility, `extends`, and `implements` markers before running return, parameter, property, and inheritance type regex probes.
 - **Skipped reference-line preparation on empty lines** - all language reference preparation now returns empty lines immediately instead of running comment/string-literal trigger checks.
 - **Collapsed string-literal delimiter probes** - reference-line preparation now checks quote/backtick trigger characters with `IndexOfAny` instead of separate scans per delimiter.
 - **Hoisted reference-line preparation language flags** - per-file reference preparation now computes language comment/string handling flags once and reuses them for each line instead of repeating language switches in the hot loop.
@@ -234,6 +235,7 @@ affected:
 - **Python framework / dynamic-import scan を marker で gate します** - Python reference extraction は attrs、pydantic、pytest、contextlib、importlib、`__import__` API regex probe を実行する前に対応 marker を確認します。
 - **PHP use import scan を marker で gate します** - PHP reference extraction は type/function/const import regex probe を実行する前に `use`、`function`、`const` marker を確認します。
 - **PHP static / exception type scan を marker で gate します** - PHP reference extraction は static-access と exception type regex probe を実行する前に `::`、`instanceof`、`catch` marker を確認します。
+- **PHP signature type scan を marker で gate します** - PHP reference extraction は return、parameter、property、inheritance type regex probe を実行する前に colon、dollar、visibility、`extends`、`implements` marker を確認します。
 - **空行の reference-line preparation を skip します** - 全言語の reference preparation は空行に対して comment/string-literal trigger 判定を走らせず即 return するようになりました。
 - **string-literal delimiter probe をまとめました** - reference-line preparation は quote/backtick trigger character を delimiter ごとの個別 scan ではなく `IndexOfAny` で確認します。
 - **reference-line preparation の言語フラグを loop 外へ出しました** - ファイルごとの reference preparation は comment/string handling の言語フラグを一度だけ計算し、hot loop 内で language switch を繰り返さないようになりました。
