@@ -892,8 +892,11 @@ public static partial class SymbolExtractor
         {
             AddWrappedXamlTypeBearingAttributeSymbols(fileId, rawText, lines, lineStarts, symbols);
         }
-        if (symbols.Count < StructuredDataMaxSymbols)
+        if (symbols.Count < StructuredDataMaxSymbols
+            && MayContainWrappedXamlSearchAttribute(rawText))
+        {
             AddWrappedXamlSearchAttributeSymbols(fileId, rawText, lines, lineStarts, symbols);
+        }
         if (symbols.Count < StructuredDataMaxSymbols)
             AddXamlTypeObjectElementSymbols(fileId, rawText, lines, lineStarts, symbols);
         if (symbols.Count < StructuredDataMaxSymbols)
@@ -965,6 +968,23 @@ public static partial class SymbolExtractor
         rawText.Contains("x:Class", StringComparison.Ordinal)
         || rawText.Contains("x:DataType", StringComparison.Ordinal)
         || rawText.Contains("TargetType", StringComparison.Ordinal);
+
+    private static bool MayContainWrappedXamlSearchAttribute(string rawText)
+    {
+        if (rawText.Contains("x:Name", StringComparison.Ordinal)
+            || rawText.Contains("x:Key", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        foreach (var attributeName in XamlEventAttributeNames)
+        {
+            if (rawText.Contains(attributeName, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
 
     private static void AddWrappedXamlTypeArgumentSymbols(
         long fileId,
