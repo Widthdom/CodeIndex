@@ -628,14 +628,13 @@ internal static class CSharpStaticInterfacePrepass
         {
             var filePath = Path.IsPathRooted(path)
                 ? path
-                : Path.Combine(projectRoot, path.Replace('/', Path.DirectorySeparatorChar));
+                : Path.Combine(projectRoot, FileIndexer.NormalizeRelativePathForCurrentPlatform(path));
             return Create(projectRoot, filePath);
         }
 
         public static FileTarget Create(string projectRoot, string filePath, string? language = null)
         {
-            var relativePath = TryGetRootPrefixedRelativePath(projectRoot, filePath)
-                ?? Path.GetRelativePath(projectRoot, filePath);
+            var relativePath = FileIndexer.GetRelativePathFromProjectRoot(projectRoot, filePath);
             return new FileTarget(
                 filePath,
                 relativePath,
@@ -643,30 +642,6 @@ internal static class CSharpStaticInterfacePrepass
                 FileIndexer.NormalizeIndexPath(relativePath),
                 language);
         }
-
-        private static string? TryGetRootPrefixedRelativePath(string projectRoot, string filePath)
-        {
-            var root = Path.TrimEndingDirectorySeparator(projectRoot);
-            if (root.Length == 0)
-                return null;
-
-            var comparison = OperatingSystem.IsWindows()
-                ? StringComparison.OrdinalIgnoreCase
-                : StringComparison.Ordinal;
-            if (filePath.Length == root.Length)
-                return filePath.AsSpan().Equals(root.AsSpan(), comparison) ? "." : null;
-            if (filePath.Length <= root.Length
-                || !filePath.AsSpan(0, root.Length).Equals(root.AsSpan(), comparison)
-                || !IsDirectorySeparator(filePath[root.Length]))
-            {
-                return null;
-            }
-
-            return filePath[(root.Length + 1)..];
-        }
-
-        private static bool IsDirectorySeparator(char value) =>
-            value == Path.DirectorySeparatorChar || value == Path.AltDirectorySeparatorChar;
     }
 
     private static bool IsOutsideProjectRoot(string relativePath)

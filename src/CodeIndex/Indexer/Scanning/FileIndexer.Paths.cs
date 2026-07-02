@@ -27,6 +27,36 @@ public partial class FileIndexer
     public static string NormalizePathSeparators(string path)
         => Path.DirectorySeparatorChar == '\\' ? path.Replace('\\', '/') : path;
 
+    internal static string NormalizeRelativePathForCurrentPlatform(string path)
+        => Path.DirectorySeparatorChar == '/' ? path : path.Replace('/', Path.DirectorySeparatorChar);
+
+    internal static string GetRelativePathFromProjectRoot(string projectRoot, string path) =>
+        TryGetRelativePathFromProjectRootPrefix(projectRoot, path) ?? Path.GetRelativePath(projectRoot, path);
+
+    internal static string? TryGetRelativePathFromProjectRootPrefix(string projectRoot, string path)
+    {
+        var root = Path.TrimEndingDirectorySeparator(projectRoot);
+        if (root.Length == 0)
+            return null;
+
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        if (path.Length == root.Length)
+            return path.AsSpan().Equals(root.AsSpan(), comparison) ? "." : null;
+        if (path.Length <= root.Length
+            || !path.AsSpan(0, root.Length).Equals(root.AsSpan(), comparison)
+            || !IsPathDirectorySeparator(path[root.Length]))
+        {
+            return null;
+        }
+
+        return path[(root.Length + 1)..];
+    }
+
+    private static bool IsPathDirectorySeparator(char value) =>
+        value == Path.DirectorySeparatorChar || value == Path.AltDirectorySeparatorChar;
+
     /// <summary>
     /// Normalize index paths to the DB invariant: platform separators plus Unicode NFC.
     /// DB 保存・lookup 用 path は区切り文字正規化に加えて Unicode NFC に正規化する。

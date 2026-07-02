@@ -31,7 +31,7 @@ public partial class FileIndexer
         if (!IsFilePathSyntaxIndexable(absolutePath))
             throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
 
-        var relativePath = Path.GetRelativePath(_projectRoot, absolutePath);
+        var relativePath = GetRelativePathFromProjectRoot(_projectRoot, absolutePath);
         return BuildLoadedRecordWithRawBytes(absolutePath, relativePath, cancellationToken);
     }
 
@@ -135,7 +135,7 @@ public partial class FileIndexer
         if (!IsFilePathSyntaxIndexable(absolutePath))
             throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
 
-        var relativePath = Path.GetRelativePath(_projectRoot, absolutePath);
+        var relativePath = GetRelativePathFromProjectRoot(_projectRoot, absolutePath);
         return BuildSkippedFileRecord(absolutePath, relativePath);
     }
 

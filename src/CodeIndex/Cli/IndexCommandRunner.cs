@@ -1228,13 +1228,13 @@ public static partial class IndexCommandRunner
         {
             var filePath = Path.IsPathRooted(path)
                 ? path
-                : Path.Combine(projectRoot, path.Replace('/', Path.DirectorySeparatorChar));
+                : Path.Combine(projectRoot, FileIndexer.NormalizeRelativePathForCurrentPlatform(path));
             return Create(projectRoot, filePath);
         }
 
         public static FullScanFileTarget Create(string projectRoot, string filePath, string? language = null)
         {
-            var relativePath = Path.GetRelativePath(projectRoot, filePath);
+            var relativePath = FileIndexer.GetRelativePathFromProjectRoot(projectRoot, filePath);
             return new FullScanFileTarget(
                 filePath,
                 relativePath,
