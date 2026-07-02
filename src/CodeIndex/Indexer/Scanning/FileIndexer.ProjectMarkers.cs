@@ -132,11 +132,29 @@ public partial class FileIndexer
 
     private static string NormalizeScopeKey(string relativePath)
     {
-        var normalized = relativePath.Replace('\\', '/').Trim('/');
-        return string.IsNullOrEmpty(normalized) || normalized == "."
-            ? "."
-            : normalized;
+        var start = 0;
+        var end = relativePath.Length;
+        while (start < end && IsScopeKeySeparator(relativePath[start]))
+            start++;
+        while (end > start && IsScopeKeySeparator(relativePath[end - 1]))
+            end--;
+
+        if (start == end)
+            return ".";
+
+        var span = relativePath.AsSpan(start, end - start);
+        if (span.Length == 1 && span[0] == '.')
+            return ".";
+
+        if (span.IndexOf('\\') >= 0)
+            return span.ToString().Replace('\\', '/');
+
+        return start == 0 && end == relativePath.Length
+            ? relativePath
+            : relativePath[start..end];
     }
+
+    private static bool IsScopeKeySeparator(char value) => value is '/' or '\\';
 
     private string DeriveAmbiguousProjectScopeKey(string absolutePath, string anchorDir)
     {
