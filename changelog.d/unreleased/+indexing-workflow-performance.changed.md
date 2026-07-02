@@ -316,6 +316,7 @@ affected:
 - **Tightened Fortran save scans to leading keyword gates** - Fortran reference extraction now requires leading `save` before running save-list regex probes.
 - **Tightened Fortran submodule scans to leading keyword gates** - Fortran reference extraction now requires leading `submodule` before running parent-module regex probes.
 - **Tightened Fortran external scans to leading keyword gates** - Fortran reference extraction now requires leading `external` before running external-list regex probes.
+- **Tightened Fortran intrinsic scans to leading keyword gates** - Fortran reference extraction now requires leading `intrinsic` before running intrinsic-list regex probes.
 
 ## 日本語
 
@@ -566,3 +567,4 @@ affected:
 - **Fortran save scan を leading keyword gate に強化します** - Fortran reference extraction は save-list regex probe の前に leading `save` を要求します。
 - **Fortran submodule scan を leading keyword gate に強化します** - Fortran reference extraction は parent-module regex probe の前に leading `submodule` を要求します。
 - **Fortran external scan を leading keyword gate に強化します** - Fortran reference extraction は external-list regex probe の前に leading `external` を要求します。
+- **Fortran intrinsic scan を leading keyword gate に強化します** - Fortran reference extraction は intrinsic-list regex probe の前に leading `intrinsic` を要求します。

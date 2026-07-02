@@ -2868,7 +2868,7 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        if (preparedLine.IndexOf("intrinsic", StringComparison.OrdinalIgnoreCase) >= 0)
+        if (StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "intrinsic"))
         {
             var intrinsicProcedureMatch = FortranIntrinsicProcedureRegex.Match(preparedLine);
             if (intrinsicProcedureMatch.Success)
