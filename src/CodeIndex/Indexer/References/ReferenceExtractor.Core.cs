@@ -346,8 +346,10 @@ public static partial class ReferenceExtractor
             if (language != "csharp")
                 return;
 
-            foreach (var reference in references.ToArray())
+            var referenceCount = references.Count;
+            for (var referenceIndex = 0; referenceIndex < referenceCount; referenceIndex++)
             {
+                var reference = references[referenceIndex];
                 if (reference.ReferenceKind != "instantiate"
                     || !string.Equals(reference.SymbolName, "Regex", StringComparison.Ordinal)
                     || reference.Line <= 0
