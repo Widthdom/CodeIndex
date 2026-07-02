@@ -1182,6 +1182,12 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf("type", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf('=') < 0)
+        {
+            return;
+        }
+
         foreach (var typeIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "type"))
         {
             var assignmentIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '=', typeIndex + "type".Length);
@@ -1215,6 +1221,12 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf("trait", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf('=') < 0)
+        {
+            return;
+        }
+
         foreach (var traitIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "trait"))
         {
             var assignmentIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '=', traitIndex + "trait".Length);
@@ -1248,6 +1260,12 @@ internal static class RustReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf("type", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf(':') < 0)
+        {
+            return;
+        }
+
         foreach (var typeIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "type"))
         {
             var colonIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, ':', typeIndex + "type".Length);
