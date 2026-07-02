@@ -16,8 +16,14 @@ public static partial class SymbolExtractor
 
         var scanState = default(ElixirMaskState);
         var maskedFirstLine = MaskElixirLineForBodyScan(firstLine, ref scanState);
-        if (ElixirDoShorthandRegex.IsMatch(maskedFirstLine))
+        if (maskedFirstLine.Contains("do:", StringComparison.Ordinal)
+            && ElixirDoShorthandRegex.IsMatch(maskedFirstLine))
+        {
             return (startIndex + 1, startIndex + 1, startIndex + 1);
+        }
+
+        if (!MayContainElixirBlockToken(maskedFirstLine))
+            return (startIndex + 1, null, null);
 
         var openerMatch = ElixirBlockTokenRegex.Match(maskedFirstLine);
         if (!openerMatch.Success || openerMatch.Value != "do")
