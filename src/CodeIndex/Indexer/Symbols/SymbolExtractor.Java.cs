@@ -951,7 +951,9 @@ public static partial class SymbolExtractor
             // Only try the fallback regex when this line starts at the enum body's top level and
             // not inside a string / comment / text block carried over from the previous line.
             // 行頭が enum 本体の top-level で、かつ非コード状態でもないときだけ fallback regex を試す。
-            if (lineStartBraceDepth == 0 && lineStartMode == JavaScanMode.Normal)
+            if (lineStartBraceDepth == 0
+                && lineStartMode == JavaScanMode.Normal
+                && MayContainJavaEnumFallbackMemberLine(line))
             {
                 var match = JavaEnumMemberLineFallbackRegex.Match(line);
                 if (match.Success)
@@ -1000,6 +1002,18 @@ public static partial class SymbolExtractor
                 column++;
             }
         }
+    }
+
+    private static bool MayContainJavaEnumFallbackMemberLine(string line)
+    {
+        if (line.Length == 0 || !char.IsWhiteSpace(line[0]))
+            return false;
+
+        var index = 1;
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+
+        return index < line.Length && line[index] is >= 'A' and <= 'Z';
     }
 
     private static void TryAddJavaEnumMemberFromSpan(
