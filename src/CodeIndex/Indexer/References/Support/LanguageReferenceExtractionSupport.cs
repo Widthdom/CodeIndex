@@ -405,9 +405,6 @@ internal static partial class LanguageReferenceExtractionSupport
     private static readonly Regex FortranIntrinsicPositionalKindRegex = new(
         @"\b(?:integer|real|complex|logical)\s*\(\s*(?<type>[A-Za-z_]\w*)\s*\)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex FortranProcedureBindingLineRegex = new(
-        @"^\s*(?:procedure|generic)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex FortranBindingTargetListRegex = new(
         @"=>.*$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -2901,9 +2898,8 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        if ((StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "procedure")
-                || StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "generic"))
-            && FortranProcedureBindingLineRegex.IsMatch(preparedLine))
+        if (StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "procedure")
+            || StartsWithKeywordIgnoringLeadingWhitespace(preparedLine, "generic"))
         {
             if (preparedLine.IndexOf("=>", StringComparison.Ordinal) >= 0)
             {
