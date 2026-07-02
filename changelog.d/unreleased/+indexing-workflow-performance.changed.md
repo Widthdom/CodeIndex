@@ -282,6 +282,7 @@ affected:
 - **Gated VB type keyword scans by marker** - Visual Basic reference extraction now checks type keyword markers before running type keyword regex probes.
 - **Gated VB generic list scans by marker** - Visual Basic reference extraction now checks `(` and `Of` markers before running generic argument list regex probes.
 - **Gated VB new type scans by marker** - Visual Basic reference extraction now checks `New` markers before running constructor type regex probes.
+- **Gated VB implements list scans by marker** - Visual Basic reference extraction now checks `Implements` markers before running implements list regex probes.
 
 ## 日本語
 
@@ -498,3 +499,4 @@ affected:
 - **VB type keyword scan を marker で gate します** - Visual Basic reference extraction は type keyword regex probe の前に type keyword marker を確認します。
 - **VB generic list scan を marker で gate します** - Visual Basic reference extraction は generic argument list regex probe の前に `(` と `Of` marker を確認します。
 - **VB new type scan を marker で gate します** - Visual Basic reference extraction は constructor type regex probe の前に `New` marker を確認します。
+- **VB implements list scan を marker で gate します** - Visual Basic reference extraction は implements list regex probe の前に `Implements` marker を確認します。

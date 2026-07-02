@@ -2202,12 +2202,16 @@ internal static partial class LanguageReferenceExtractionSupport
             }
         }
 
-        foreach (Match match in VbImplementsListRegex.Matches(preparedLine))
+        var hasVbImplementsMarker = preparedLine.IndexOf("Implements", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (hasVbImplementsMarker)
         {
-            var group = match.Groups["list"];
-            EmitCommaSeparatedNames(group.Value, group.Index, "vb", references, seen, fileId, context, lineNumber, resolveContainerForColumn(group.Index));
-            if (IsVisualBasicMemberImplementsClause(preparedLine, match.Index))
-                EmitVisualBasicImplementsOwnerReferences(group.Value, group.Index, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+            foreach (Match match in VbImplementsListRegex.Matches(preparedLine))
+            {
+                var group = match.Groups["list"];
+                EmitCommaSeparatedNames(group.Value, group.Index, "vb", references, seen, fileId, context, lineNumber, resolveContainerForColumn(group.Index));
+                if (IsVisualBasicMemberImplementsClause(preparedLine, match.Index))
+                    EmitVisualBasicImplementsOwnerReferences(group.Value, group.Index, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+            }
         }
 
         var importsMatch = VbImportsListRegex.Match(preparedLine);
