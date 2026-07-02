@@ -142,21 +142,25 @@ internal static class PowerShellReferenceExtractor
 
     private static List<string> ExtractHashtableKeys(string text)
     {
-        var keys = new List<string>();
         if (text.IndexOf('=') < 0)
-            return keys;
+            return [];
 
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        List<string>? keys = null;
+        HashSet<string>? seen = null;
         foreach (Match match in HashtableKeyRegex.Matches(text))
         {
             var key = match.Groups["quoted"].Success
                 ? match.Groups["quoted"].Value
                 : match.Groups["bare"].Value;
+            seen ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             if (seen.Add(key))
+            {
+                keys ??= [];
                 keys.Add(key);
+            }
         }
 
-        return keys;
+        return keys ?? [];
     }
 
     private static bool HasCallStartCandidate(string line)
