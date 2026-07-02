@@ -163,9 +163,10 @@ public static partial class ReferenceExtractor
         IReadOnlyList<(int StartLine, int EndLine)> csharpNamespaceScopes = language == "csharp"
             ? BuildCSharpNamespaceScopes(symbols)
             : Array.Empty<(int StartLine, int EndLine)>();
-        var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols, csharpKnownTypeNames, csharpNamespaceScopes, lines, structuralLines);
-        var csharpUsingNamespaces = BuildCSharpUsingNamespaces(language, symbols, csharpNamespaceScopes);
-        var csharpUsingStatics = BuildCSharpUsingStatics(language, symbols, csharpNamespaceScopes);
+        var csharpUsingImports = BuildCSharpUsingImports(language, symbols, csharpKnownTypeNames, csharpNamespaceScopes, lines, structuralLines);
+        var csharpUsingAliases = csharpUsingImports.Aliases;
+        var csharpUsingNamespaces = csharpUsingImports.Namespaces;
+        var csharpUsingStatics = csharpUsingImports.Statics;
         var csharpValueReceiverNames = BuildCSharpValueReceiverNamesByContainingType(language, symbols);
         var csharpFunctionValueReceiverNames = BuildCSharpValueReceiverNamesByFunctionStartLine(
             language,

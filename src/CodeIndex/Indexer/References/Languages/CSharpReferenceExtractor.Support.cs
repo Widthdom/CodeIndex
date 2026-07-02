@@ -16,7 +16,10 @@ public static partial class ReferenceExtractor
     internal sealed record CSharpContainingTypeValueReceiverNames(HashSet<string> InstanceNames, HashSet<string> StaticNames);
     internal sealed record CSharpFunctionValueReceiverNameRecord(string Name, int ScopeStartLine, int ScopeStartColumn, int ScopeEndLine, int ScopeEndColumn);
 
-    private static List<CSharpUsingAliasRecord> BuildCSharpUsingAliases(
+    private static (
+        List<CSharpUsingAliasRecord> Aliases,
+        List<CSharpUsingNamespaceRecord> Namespaces,
+        List<CSharpUsingStaticRecord> Statics) BuildCSharpUsingImports(
         string language,
         IReadOnlyList<SymbolRecord> symbols,
         IReadOnlySet<string> csharpKnownTypeNames,
@@ -25,8 +28,10 @@ public static partial class ReferenceExtractor
         IReadOnlyList<string>? aliasScanLines = null)
     {
         var aliases = new List<CSharpUsingAliasRecord>();
+        var namespaces = new List<CSharpUsingNamespaceRecord>();
+        var statics = new List<CSharpUsingStaticRecord>();
         if (language != "csharp")
-            return aliases;
+            return (aliases, namespaces, statics);
 
         foreach (var symbol in symbols)
         {
@@ -34,17 +39,30 @@ public static partial class ReferenceExtractor
                 continue;
 
             var signature = symbol.Signature!;
-            if (signature.IndexOf("using", StringComparison.Ordinal) < 0
-                || signature.IndexOf('=') < 0)
-            {
+            if (signature.IndexOf("using", StringComparison.Ordinal) < 0)
                 continue;
+
+            if (signature.IndexOf('=') >= 0)
+            {
+                var aliasMatch = CSharpUsingAliasRegex.Match(signature);
+                if (aliasMatch.Success)
+                    AddCSharpUsingAliasRecord(aliases, namespaceScopes, symbol.Line, aliasMatch, csharpKnownTypeNames);
             }
 
-            var match = CSharpUsingAliasRegex.Match(signature);
-            if (!match.Success)
-                continue;
+            if (signature.IndexOf('=') < 0
+                && signature.IndexOf("static", StringComparison.Ordinal) < 0)
+            {
+                var namespaceMatch = CSharpUsingNamespaceRegex.Match(signature);
+                if (namespaceMatch.Success)
+                    AddCSharpUsingNamespaceRecord(namespaces, namespaceScopes, symbol.Line, namespaceMatch);
+            }
 
-            AddCSharpUsingAliasRecord(aliases, namespaceScopes, symbol.Line, match, csharpKnownTypeNames);
+            if (signature.IndexOf("static", StringComparison.Ordinal) >= 0)
+            {
+                var staticMatch = CSharpUsingStaticRegex.Match(signature);
+                if (staticMatch.Success)
+                    AddCSharpUsingStaticRecord(statics, namespaceScopes, symbol.Line, staticMatch);
+            }
         }
 
         if (lines != null)
@@ -75,7 +93,9 @@ public static partial class ReferenceExtractor
         }
 
         aliases.Sort(static (left, right) => left.Line.CompareTo(right.Line));
-        return aliases;
+        namespaces.Sort(static (left, right) => left.Line.CompareTo(right.Line));
+        statics.Sort(static (left, right) => left.Line.CompareTo(right.Line));
+        return (aliases, namespaces, statics);
     }
 
     private static List<(int StartLine, int EndLine)> BuildCSharpNamespaceScopes(IReadOnlyList<SymbolRecord> symbols)
@@ -123,6 +143,50 @@ public static partial class ReferenceExtractor
         if (string.IsNullOrWhiteSpace(alias) || string.IsNullOrWhiteSpace(target))
             return;
 
+        var (scopeStartLine, scopeEndLine) = ResolveCSharpUsingScope(namespaceScopes, lineNumber);
+
+        aliases.Add(new CSharpUsingAliasRecord(
+            alias,
+            target,
+            lineNumber,
+            scopeStartLine,
+            scopeEndLine,
+            IsCSharpUsingAliasTypeTarget(target, csharpKnownTypeNames)));
+    }
+
+    private static void AddCSharpUsingNamespaceRecord(
+        List<CSharpUsingNamespaceRecord> imports,
+        IReadOnlyList<(int StartLine, int EndLine)> namespaceScopes,
+        int lineNumber,
+        Match match)
+    {
+        var target = TryNormalizeCSharpQualifiedName(match.Groups["target"].Value)
+            ?? NormalizeCSharpUsingAliasRawTarget(match.Groups["target"].Value);
+        if (string.IsNullOrWhiteSpace(target))
+            return;
+
+        var (scopeStartLine, scopeEndLine) = ResolveCSharpUsingScope(namespaceScopes, lineNumber);
+        imports.Add(new CSharpUsingNamespaceRecord(target, lineNumber, scopeStartLine, scopeEndLine));
+    }
+
+    private static void AddCSharpUsingStaticRecord(
+        List<CSharpUsingStaticRecord> imports,
+        IReadOnlyList<(int StartLine, int EndLine)> namespaceScopes,
+        int lineNumber,
+        Match match)
+    {
+        var target = TryNormalizeCSharpQualifiedName(match.Groups["target"].Value);
+        if (string.IsNullOrWhiteSpace(target))
+            return;
+
+        var (scopeStartLine, scopeEndLine) = ResolveCSharpUsingScope(namespaceScopes, lineNumber);
+        imports.Add(new CSharpUsingStaticRecord(target, lineNumber, scopeStartLine, scopeEndLine));
+    }
+
+    private static (int ScopeStartLine, int ScopeEndLine) ResolveCSharpUsingScope(
+        IReadOnlyList<(int StartLine, int EndLine)> namespaceScopes,
+        int lineNumber)
+    {
         var scopeStartLine = 1;
         var scopeEndLine = int.MaxValue;
         var scopeWidth = int.MaxValue;
@@ -140,13 +204,7 @@ public static partial class ReferenceExtractor
             scopeWidth = width;
         }
 
-        aliases.Add(new CSharpUsingAliasRecord(
-            alias,
-            target,
-            lineNumber,
-            scopeStartLine,
-            scopeEndLine,
-            IsCSharpUsingAliasTypeTarget(target, csharpKnownTypeNames)));
+        return (scopeStartLine, scopeEndLine);
     }
 
     private static string NormalizeCSharpUsingAliasRawTarget(string target)
@@ -156,114 +214,6 @@ public static partial class ReferenceExtractor
         if (genericStart >= 0)
             trimmed = trimmed[..genericStart].TrimEnd();
         return trimmed;
-    }
-
-    private static List<CSharpUsingNamespaceRecord> BuildCSharpUsingNamespaces(
-        string language,
-        IReadOnlyList<SymbolRecord> symbols,
-        IReadOnlyList<(int StartLine, int EndLine)> namespaceScopes)
-    {
-        var imports = new List<CSharpUsingNamespaceRecord>();
-        if (language != "csharp")
-            return imports;
-
-        foreach (var symbol in symbols)
-        {
-            if (symbol.Kind != "import" || string.IsNullOrWhiteSpace(symbol.Signature))
-                continue;
-
-            var signature = symbol.Signature!;
-            if (signature.IndexOf("using", StringComparison.Ordinal) < 0
-                || signature.IndexOf('=') >= 0
-                || signature.IndexOf("static", StringComparison.Ordinal) >= 0)
-            {
-                continue;
-            }
-
-            var match = CSharpUsingNamespaceRegex.Match(signature);
-            if (!match.Success)
-                continue;
-
-            var target = TryNormalizeCSharpQualifiedName(match.Groups["target"].Value)
-                ?? NormalizeCSharpUsingAliasRawTarget(match.Groups["target"].Value);
-            if (string.IsNullOrWhiteSpace(target))
-                continue;
-
-            var scopeStartLine = 1;
-            var scopeEndLine = int.MaxValue;
-            var scopeWidth = int.MaxValue;
-            foreach (var (startLine, endLine) in namespaceScopes)
-            {
-                if (symbol.Line < startLine || symbol.Line > endLine)
-                    continue;
-
-                var width = endLine - startLine;
-                if (width > scopeWidth)
-                    continue;
-
-                scopeStartLine = startLine;
-                scopeEndLine = endLine;
-                scopeWidth = width;
-            }
-
-            imports.Add(new CSharpUsingNamespaceRecord(target, symbol.Line, scopeStartLine, scopeEndLine));
-        }
-
-        imports.Sort(static (left, right) => left.Line.CompareTo(right.Line));
-        return imports;
-    }
-
-    private static List<CSharpUsingStaticRecord> BuildCSharpUsingStatics(
-        string language,
-        IReadOnlyList<SymbolRecord> symbols,
-        IReadOnlyList<(int StartLine, int EndLine)> namespaceScopes)
-    {
-        var imports = new List<CSharpUsingStaticRecord>();
-        if (language != "csharp")
-            return imports;
-
-        foreach (var symbol in symbols)
-        {
-            if (symbol.Kind != "import" || string.IsNullOrWhiteSpace(symbol.Signature))
-                continue;
-
-            var signature = symbol.Signature!;
-            if (signature.IndexOf("using", StringComparison.Ordinal) < 0
-                || signature.IndexOf("static", StringComparison.Ordinal) < 0)
-            {
-                continue;
-            }
-
-            var match = CSharpUsingStaticRegex.Match(signature);
-            if (!match.Success)
-                continue;
-
-            var target = TryNormalizeCSharpQualifiedName(match.Groups["target"].Value);
-            if (string.IsNullOrWhiteSpace(target))
-                continue;
-
-            var scopeStartLine = 1;
-            var scopeEndLine = int.MaxValue;
-            var scopeWidth = int.MaxValue;
-            foreach (var (startLine, endLine) in namespaceScopes)
-            {
-                if (symbol.Line < startLine || symbol.Line > endLine)
-                    continue;
-
-                var width = endLine - startLine;
-                if (width > scopeWidth)
-                    continue;
-
-                scopeStartLine = startLine;
-                scopeEndLine = endLine;
-                scopeWidth = width;
-            }
-
-            imports.Add(new CSharpUsingStaticRecord(target, symbol.Line, scopeStartLine, scopeEndLine));
-        }
-
-        imports.Sort(static (left, right) => left.Line.CompareTo(right.Line));
-        return imports;
     }
 
     private static (HashSet<string> KnownTypeNames, HashSet<string> NonEnumTypeNames) BuildCSharpTypeNameSets(
