@@ -2787,13 +2787,16 @@ internal static partial class LanguageReferenceExtractionSupport
             if (dataLineMatch.Success)
             {
                 var tail = dataLineMatch.Groups["tail"];
-                foreach (Match groupMatch in FortranDataObjectGroupRegex.Matches(tail.Value))
+                if (tail.Value.IndexOf('/') >= 0)
                 {
-                    var list = groupMatch.Groups["list"];
-                    foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+                    foreach (Match groupMatch in FortranDataObjectGroupRegex.Matches(tail.Value))
                     {
-                        var group = match.Groups["name"];
-                        ReferenceExtractor.AddReference(references, seen, fileId, group.Value, tail.Index + list.Index + group.Index, "reference", context, lineNumber, container);
+                        var list = groupMatch.Groups["list"];
+                        foreach (Match match in FortranSimpleListNameRegex.Matches(list.Value))
+                        {
+                            var group = match.Groups["name"];
+                            ReferenceExtractor.AddReference(references, seen, fileId, group.Value, tail.Index + list.Index + group.Index, "reference", context, lineNumber, container);
+                        }
                     }
                 }
             }
