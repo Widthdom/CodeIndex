@@ -4,6 +4,8 @@ namespace CodeIndex.Indexer;
 
 public partial class FileIndexer
 {
+    private static readonly bool IsWindowsPlatform = OperatingSystem.IsWindows();
+
     internal static bool CanIndexFile(string filePath)
         => GetFileIndexability(filePath) == FileProbeStatus.Supported;
 
@@ -16,7 +18,7 @@ public partial class FileIndexer
     }
 
     private static bool HasSkippedAttributes(FileAttributes attributes)
-        => HasSkippedAttributes(attributes, OperatingSystem.IsWindows());
+        => HasSkippedAttributes(attributes, IsWindowsPlatform);
 
     // Detect symbolic links / reparse points and Windows Hidden/System paths so the scanner can skip them.
     // Treats probe failures (e.g. dangling symlinks whose target is gone) as skipped attributes
@@ -44,7 +46,7 @@ public partial class FileIndexer
         => status switch
         {
             FileSystemBoundaryProbeStatus.Missing => FileProbeStatus.Missing,
-            FileSystemBoundaryProbeStatus.PermissionDenied or FileSystemBoundaryProbeStatus.IoError => OperatingSystem.IsWindows()
+            FileSystemBoundaryProbeStatus.PermissionDenied or FileSystemBoundaryProbeStatus.IoError => IsWindowsPlatform
                 ? FileProbeStatus.Supported
                 : FileProbeStatus.ProbeFailed,
             _ => FileProbeStatus.ProbeFailed,
@@ -61,7 +63,7 @@ public partial class FileIndexer
         SymlinkPolicy symlinkPolicy,
         string? projectRoot)
     {
-        if (OperatingSystem.IsWindows() && IsWindowsDevicePath(filePath))
+        if (IsWindowsPlatform && IsWindowsDevicePath(filePath))
             return FileProbeStatus.Unsupported;
 
         // File.GetAttributes uses lstat-like semantics on .NET (does not follow the symlink target),
@@ -89,7 +91,7 @@ public partial class FileIndexer
         if (HasSkippedAttributes(attributes))
             return FileProbeStatus.Unsupported;
 
-        if (OperatingSystem.IsWindows())
+        if (IsWindowsPlatform)
             return FileProbeStatus.Supported;
 
         if (!UnixFileStatus.TryGetFileMode(filePath, out var mode))
