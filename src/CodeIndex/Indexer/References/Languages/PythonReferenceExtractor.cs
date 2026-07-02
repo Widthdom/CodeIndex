@@ -1381,6 +1381,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("fields", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in AttrsFieldsTargetRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -1410,6 +1413,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("TypeAdapter", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in PydanticTypeAdapterTargetRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -1439,6 +1445,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("raises", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in PytestRaisesTypeRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -1468,6 +1477,9 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
+        if (preparedLine.IndexOf("suppress", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in ContextlibSuppressTypeRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -1497,40 +1509,46 @@ internal static class PythonReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        foreach (Match match in ImportlibDynamicImportRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("importlib", StringComparison.Ordinal) >= 0)
         {
-            ReferenceExtractor.AddReference(
-                references,
-                seen,
-                fileId,
-                "importlib",
-                match.Index,
-                "call",
-                context,
-                lineNumber,
-                container,
-                "python");
-
-            var literalMatch = ImportlibDynamicImportLiteralRegex.Match(originalLine, match.Index);
-            if (!literalMatch.Success || literalMatch.Index != match.Index)
-                continue;
-
-            var moduleGroup = literalMatch.Groups["module"];
-            if (moduleGroup.Success && moduleGroup.Value.Length > 0)
+            foreach (Match match in ImportlibDynamicImportRegex.Matches(preparedLine))
             {
                 ReferenceExtractor.AddReference(
                     references,
                     seen,
                     fileId,
-                    moduleGroup.Value,
-                    moduleGroup.Index,
-                    "import",
+                    "importlib",
+                    match.Index,
+                    "call",
                     context,
                     lineNumber,
                     container,
                     "python");
+
+                var literalMatch = ImportlibDynamicImportLiteralRegex.Match(originalLine, match.Index);
+                if (!literalMatch.Success || literalMatch.Index != match.Index)
+                    continue;
+
+                var moduleGroup = literalMatch.Groups["module"];
+                if (moduleGroup.Success && moduleGroup.Value.Length > 0)
+                {
+                    ReferenceExtractor.AddReference(
+                        references,
+                        seen,
+                        fileId,
+                        moduleGroup.Value,
+                        moduleGroup.Index,
+                        "import",
+                        context,
+                        lineNumber,
+                        container,
+                        "python");
+                }
             }
         }
+
+        if (preparedLine.IndexOf("__import__", StringComparison.Ordinal) < 0)
+            return;
 
         foreach (Match match in BuiltinDynamicImportRegex.Matches(preparedLine))
         {
