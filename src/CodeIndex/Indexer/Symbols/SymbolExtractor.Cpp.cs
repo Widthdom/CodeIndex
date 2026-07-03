@@ -11,6 +11,8 @@ public static partial class SymbolExtractor
     private static void ExtractCppSameLineClassBodyMembers(long fileId, string[] lines, List<SymbolRecord> symbols)
     {
         var classSymbols = BuildCppSameLineClassSymbolSnapshot(symbols);
+        if (classSymbols is null)
+            return;
 
         foreach (var classSymbol in classSymbols)
         {
@@ -34,9 +36,9 @@ public static partial class SymbolExtractor
         }
     }
 
-    private static List<SymbolRecord> BuildCppSameLineClassSymbolSnapshot(IReadOnlyList<SymbolRecord> symbols)
+    private static IReadOnlyList<SymbolRecord>? BuildCppSameLineClassSymbolSnapshot(IReadOnlyList<SymbolRecord> symbols)
     {
-        var classSymbols = new List<SymbolRecord>();
+        List<SymbolRecord>? classSymbols = null;
         foreach (var symbol in symbols)
         {
             if (symbol.Kind is ("class" or "struct")
@@ -45,7 +47,7 @@ public static partial class SymbolExtractor
                 && symbol.StartLine == symbol.BodyStartLine.Value
                 && symbol.EndLine == symbol.BodyEndLine.Value)
             {
-                classSymbols.Add(symbol);
+                (classSymbols ??= []).Add(symbol);
             }
         }
 

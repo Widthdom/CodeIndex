@@ -11,6 +11,8 @@ public static partial class SymbolExtractor
     private static void ExtractJavaModuleDirectiveSymbols(long fileId, string[] rawLines, string[] structuralLines, List<SymbolRecord> symbols)
     {
         var moduleDeclarations = BuildJavaModuleDeclarationSnapshot(symbols);
+        if (moduleDeclarations is null)
+            return;
 
         foreach (var moduleDeclaration in moduleDeclarations)
         {
@@ -39,15 +41,18 @@ public static partial class SymbolExtractor
         }
     }
 
-    private static List<SymbolRecord> BuildJavaModuleDeclarationSnapshot(IReadOnlyList<SymbolRecord> symbols)
+    private static IReadOnlyList<SymbolRecord>? BuildJavaModuleDeclarationSnapshot(IReadOnlyList<SymbolRecord> symbols)
     {
-        var candidates = new List<(SymbolRecord Symbol, int OriginalIndex)>();
+        List<(SymbolRecord Symbol, int OriginalIndex)>? candidates = null;
         for (var index = 0; index < symbols.Count; index++)
         {
             var symbol = symbols[index];
             if (symbol.Kind == "namespace" && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
-                candidates.Add((symbol, index));
+                (candidates ??= []).Add((symbol, index));
         }
+
+        if (candidates is not { Count: > 0 })
+            return null;
 
         candidates.Sort(static (left, right) =>
         {
