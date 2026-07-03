@@ -6968,6 +6968,8 @@ public static partial class SymbolExtractor
 
     private sealed class DartClassBodyScope
     {
+        public static readonly DartClassBodyScope Empty = new(null);
+
         private readonly bool[]? _lineStartInsideClassBody;
 
         public DartClassBodyScope(bool[]? lineStartInsideClassBody)
@@ -6981,7 +6983,7 @@ public static partial class SymbolExtractor
     private static DartClassBodyScope BuildDartClassBodyScope(string[] structuralLines)
     {
         if (!LinesContain(structuralLines, "class", StringComparison.Ordinal))
-            return new DartClassBodyScope(null);
+            return DartClassBodyScope.Empty;
 
         var lineStartInsideClassBody = new bool[structuralLines.Length];
         var scopeStack = new Stack<bool>();
