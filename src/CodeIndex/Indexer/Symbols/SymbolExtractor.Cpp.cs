@@ -32,7 +32,7 @@ public static partial class SymbolExtractor
 
             var existingMemberNames = BuildCppSameLineClassMemberNameSet(symbols, classSymbol);
             foreach (var segment in EnumerateTrimmedCppSegments(body))
-                TryAddCppSameLineClassMemberSymbol(fileId, classSymbol, segment, lineIndex + 1, symbols, existingMemberNames);
+                TryAddCppSameLineClassMemberSymbol(fileId, classSymbol, segment, lineIndex + 1, symbols, ref existingMemberNames);
         }
     }
 
@@ -54,9 +54,9 @@ public static partial class SymbolExtractor
         return classSymbols;
     }
 
-    private static HashSet<string> BuildCppSameLineClassMemberNameSet(IReadOnlyList<SymbolRecord> symbols, SymbolRecord classSymbol)
+    private static HashSet<string>? BuildCppSameLineClassMemberNameSet(IReadOnlyList<SymbolRecord> symbols, SymbolRecord classSymbol)
     {
-        var existingMemberNames = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string>? existingMemberNames = null;
         foreach (var symbol in symbols)
         {
             if (symbol.Kind == "function"
@@ -64,7 +64,7 @@ public static partial class SymbolExtractor
                 && symbol.ContainerKind == classSymbol.Kind
                 && symbol.ContainerName == classSymbol.Name)
             {
-                existingMemberNames.Add(symbol.Name);
+                (existingMemberNames ??= new HashSet<string>(StringComparer.Ordinal)).Add(symbol.Name);
             }
         }
 
@@ -102,7 +102,7 @@ public static partial class SymbolExtractor
         string segment,
         int lineNumber,
         List<SymbolRecord> symbols,
-        HashSet<string> existingMemberNames)
+        ref HashSet<string>? existingMemberNames)
     {
         foreach (var pattern in PatternCache["cpp"])
         {
@@ -119,6 +119,7 @@ public static partial class SymbolExtractor
             if (string.IsNullOrWhiteSpace(name))
                 continue;
 
+            existingMemberNames ??= new HashSet<string>(StringComparer.Ordinal);
             if (!existingMemberNames.Add(name))
                 return true;
 
