@@ -807,32 +807,32 @@ internal static class XamlReferenceExtractor
             return "";
 
         if (value.StartsWith("ResourceKey=", StringComparison.Ordinal))
-            value = value["ResourceKey=".Length..].Trim();
+            value = TrimXamlArgumentValue(value, "ResourceKey=".Length);
         if (TryNormalizeXStaticMarkup(value, out var staticMember))
             return staticMember;
 
         var equalsIndex = value.IndexOf('=');
         if (equalsIndex >= 0)
-            value = value[(equalsIndex + 1)..].Trim();
+            value = TrimXamlArgumentValue(value, equalsIndex + 1);
 
         if (TryNormalizeXStaticMarkup(value, out staticMember))
             return staticMember;
 
         if (value.StartsWith("{x:Type ", StringComparison.Ordinal))
-            value = value["{x:Type ".Length..].TrimEnd('}', ' ');
+            value = TrimXamlMarkupExtensionBody(value, "{x:Type ".Length);
         else if (value.StartsWith("{x:TypeExtension ", StringComparison.Ordinal))
-            value = value["{x:TypeExtension ".Length..].TrimEnd('}', ' ');
+            value = TrimXamlMarkupExtensionBody(value, "{x:TypeExtension ".Length);
         else if (value.StartsWith("{x:Static ", StringComparison.Ordinal))
-            value = value["{x:Static ".Length..].TrimEnd('}', ' ');
+            value = TrimXamlMarkupExtensionBody(value, "{x:Static ".Length);
 
         if (value.StartsWith("TypeName=", StringComparison.Ordinal))
-            value = value["TypeName=".Length..].Trim();
+            value = TrimXamlArgumentValue(value, "TypeName=".Length);
         if (value.StartsWith("Member=", StringComparison.Ordinal))
-            value = value["Member=".Length..].Trim();
+            value = TrimXamlArgumentValue(value, "Member=".Length);
         if (value.StartsWith("Name=", StringComparison.Ordinal))
-            value = value["Name=".Length..].Trim();
+            value = TrimXamlArgumentValue(value, "Name=".Length);
         if (value.StartsWith("ResourceKey=", StringComparison.Ordinal))
-            value = value["ResourceKey=".Length..].Trim();
+            value = TrimXamlArgumentValue(value, "ResourceKey=".Length);
 
         var memberTypeEnd = value.IndexOf("}.", StringComparison.Ordinal);
         if (memberTypeEnd >= 0 && memberTypeEnd + 2 < value.Length)
@@ -845,9 +845,9 @@ internal static class XamlReferenceExtractor
         }
 
         if (value.StartsWith("{x:Type ", StringComparison.Ordinal))
-            value = value["{x:Type ".Length..].TrimEnd('}', ' ');
+            value = TrimXamlMarkupExtensionBody(value, "{x:Type ".Length);
         if (value.StartsWith("{x:TypeExtension ", StringComparison.Ordinal))
-            value = value["{x:TypeExtension ".Length..].TrimEnd('}', ' ');
+            value = TrimXamlMarkupExtensionBody(value, "{x:TypeExtension ".Length);
 
         return value.Trim().TrimEnd('}', '/', '>');
     }
@@ -858,9 +858,9 @@ internal static class XamlReferenceExtractor
         if (!value.StartsWith("{x:Static ", StringComparison.Ordinal))
             return false;
 
-        value = value["{x:Static ".Length..].TrimEnd('}', ' ');
+        value = TrimXamlMarkupExtensionBody(value, "{x:Static ".Length);
         if (value.StartsWith("Member=", StringComparison.Ordinal))
-            value = value["Member=".Length..].Trim();
+            value = TrimXamlArgumentValue(value, "Member=".Length);
 
         var memberTypeEnd = value.IndexOf("}.", StringComparison.Ordinal);
         if (memberTypeEnd >= 0 && memberTypeEnd + 2 < value.Length)
@@ -877,6 +877,19 @@ internal static class XamlReferenceExtractor
 
         normalized = value.Trim().TrimEnd('}');
         return normalized.Length > 0;
+    }
+
+    private static string TrimXamlArgumentValue(string value, int start)
+    {
+        return value.AsSpan(start).Trim().ToString();
+    }
+
+    private static string TrimXamlMarkupExtensionBody(string value, int start)
+    {
+        var span = value.AsSpan(start);
+        while (span.Length > 0 && (span[^1] == '}' || span[^1] == ' '))
+            span = span[..^1];
+        return span.ToString();
     }
 
     private static IEnumerable<string> SplitMarkupArguments(string content)
