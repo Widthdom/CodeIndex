@@ -29,17 +29,17 @@ internal static class DockerfileReferenceExtractor
         if (language != "dockerfile")
             return (null, null);
 
-        var stageNames = new HashSet<string>(StringComparer.Ordinal);
-        var variableNames = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string>? stageNames = null;
+        HashSet<string>? variableNames = null;
         foreach (var symbol in symbols)
         {
             if (string.IsNullOrWhiteSpace(symbol.Name))
                 continue;
 
             if (symbol.Kind == "stage")
-                stageNames.Add(symbol.Name);
+                (stageNames ??= new HashSet<string>(StringComparer.Ordinal)).Add(symbol.Name);
             else if (symbol.Kind is "build_arg" or "environment")
-                variableNames.Add(symbol.Name);
+                (variableNames ??= new HashSet<string>(StringComparer.Ordinal)).Add(symbol.Name);
         }
 
         return (stageNames, variableNames);

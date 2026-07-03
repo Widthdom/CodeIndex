@@ -25,14 +25,14 @@ internal static class ShellReferenceExtractor
         if (language != "shell")
             return (null, null);
 
-        var callableNames = new HashSet<string>(StringComparer.Ordinal);
-        var globalAliasNames = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string>? callableNames = null;
+        HashSet<string>? globalAliasNames = null;
         foreach (var symbol in symbols)
         {
             if (symbol.Kind is not ("function" or "alias") || string.IsNullOrWhiteSpace(symbol.Name))
                 continue;
 
-            callableNames.Add(symbol.Name);
+            (callableNames ??= new HashSet<string>(StringComparer.Ordinal)).Add(symbol.Name);
             if (symbol.Kind != "alias")
                 continue;
 
@@ -49,7 +49,7 @@ internal static class ShellReferenceExtractor
             if (!GlobalAliasSignatureRegex.IsMatch(signature.ToString()))
                 continue;
 
-            globalAliasNames.Add(symbol.Name);
+            (globalAliasNames ??= new HashSet<string>(StringComparer.Ordinal)).Add(symbol.Name);
         }
 
         return (callableNames, globalAliasNames);
