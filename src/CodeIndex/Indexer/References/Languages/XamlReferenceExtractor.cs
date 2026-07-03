@@ -931,9 +931,9 @@ internal static class XamlReferenceExtractor
                     continue;
             }
 
-            var segment = content[start..i].Trim();
+            var segment = content.AsSpan(start, i - start).Trim();
             if (segment.Length > 0)
-                yield return segment;
+                yield return segment.ToString();
             start = i + 1;
         }
     }
