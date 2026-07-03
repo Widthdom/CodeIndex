@@ -2320,11 +2320,29 @@ public static partial class SymbolExtractor
     /// シンボル抽出パターンを持つ言語のセットを返す。
     /// </summary>
     public static IReadOnlyCollection<string> GetSupportedLanguages()
-      => BuiltInSymbolLanguages
-          .Concat(AdditionalSymbolLanguages)
-          .Concat(ExtractorPluginRegistry.SymbolLanguages)
-          .Distinct(StringComparer.Ordinal)
-          .ToArray();
+    {
+        var pluginLanguages = ExtractorPluginRegistry.SymbolLanguages;
+        var capacity = BuiltInSymbolLanguages.Length + AdditionalSymbolLanguages.Length + pluginLanguages.Count;
+        var languages = new List<string>(capacity);
+        var seen = new HashSet<string>(capacity, StringComparer.Ordinal);
+
+        AddSupportedLanguages(BuiltInSymbolLanguages, languages, seen);
+        AddSupportedLanguages(AdditionalSymbolLanguages, languages, seen);
+        AddSupportedLanguages(pluginLanguages, languages, seen);
+        return languages.ToArray();
+    }
+
+    private static void AddSupportedLanguages(
+        IEnumerable<string> candidates,
+        List<string> languages,
+        HashSet<string> seen)
+    {
+        foreach (var language in candidates)
+        {
+            if (seen.Add(language))
+                languages.Add(language);
+        }
+    }
 
     private static string? NormalizeLanguage(string? lang)
     {
