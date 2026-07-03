@@ -793,29 +793,13 @@ public class ConsoleUiTests
     [Fact]
     public void LoadVersionFromFile_MalformedJson_ReturnsFallback()
     {
-        var path = WriteTempVersionJson("""{"version":""");
-        try
-        {
-            Assert.Equal("0.0.0", ConsoleUi.LoadVersionFromFile(path));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteFile(path);
-        }
+        AssertLoadVersionFallbackForTempJson("""{"version":""");
     }
 
     [Fact]
     public void LoadVersionFromFile_NonStringVersion_ReturnsFallback()
     {
-        var path = WriteTempVersionJson("""{"version":{}}""");
-        try
-        {
-            Assert.Equal("0.0.0", ConsoleUi.LoadVersionFromFile(path));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteFile(path);
-        }
+        AssertLoadVersionFallbackForTempJson("""{"version":{}}""");
     }
 
     [Fact]
@@ -829,27 +813,24 @@ public class ConsoleUiTests
     [Fact]
     public void LoadVersionFromFile_OversizedJson_ReturnsFallback()
     {
-        var path = WriteTempVersionJson("{\"version\":\"" + new string('1', ConsoleUi.MaxVersionJsonBytes) + "\"}");
-        try
-        {
-            Assert.Equal("0.0.0", ConsoleUi.LoadVersionFromFile(path));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteFile(path);
-        }
+        AssertLoadVersionFallbackForTempJson("{\"version\":\"" + new string('1', ConsoleUi.MaxVersionJsonBytes) + "\"}");
     }
 
     [Fact]
     public void LoadVersionFromFile_TooDeepJson_ReturnsFallback()
     {
         var nesting = ConsoleUi.MaxVersionJsonDepth + 1;
-        var path = WriteTempVersionJson(
+        AssertLoadVersionFallbackForTempJson(
             """{"version":"1.2.3","nested":"""
             + new string('[', nesting)
             + "0"
             + new string(']', nesting)
             + "}");
+    }
+
+    private static void AssertLoadVersionFallbackForTempJson(string content)
+    {
+        var path = WriteTempVersionJson(content);
         try
         {
             Assert.Equal("0.0.0", ConsoleUi.LoadVersionFromFile(path));
