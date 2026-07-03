@@ -5410,9 +5410,13 @@ public static partial class SymbolExtractor
         string[] structuralLines,
         List<SymbolRecord> symbols)
     {
+        var properties = BuildPropertySymbolSnapshot(symbols, lines.Length);
+        if (properties.Count == 0)
+            return;
+
         var existing = BuildSymbolLineKeySet(symbols);
 
-        foreach (var property in BuildPropertySymbolSnapshot(symbols, lines.Length))
+        foreach (var property in properties)
         {
             var lineIndex = property.Line - 1;
             var openBraceColumn = structuralLines[lineIndex].IndexOf('{', StringComparison.Ordinal);
@@ -5481,9 +5485,13 @@ public static partial class SymbolExtractor
         string[] structuralLines,
         List<SymbolRecord> symbols)
     {
+        var properties = BuildPropertySymbolSnapshot(symbols, lines.Length);
+        if (properties.Count == 0)
+            return;
+
         var existing = BuildSymbolLineKeySet(symbols);
 
-        foreach (var property in BuildPropertySymbolSnapshot(symbols, lines.Length))
+        foreach (var property in properties)
         {
             var lineIndex = property.Line - 1;
             var propertyLine = lines[lineIndex];
