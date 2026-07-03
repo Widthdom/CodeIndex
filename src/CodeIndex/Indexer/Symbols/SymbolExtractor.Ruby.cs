@@ -74,12 +74,21 @@ public static partial class SymbolExtractor
         if (line.Length == 0)
             return line;
 
-        var masked = line.ToCharArray();
+        char[]? masked = null;
+
+        void MaskAt(int index) =>
+            (masked ??= line.ToCharArray())[index] = ' ';
+
+        void MaskRange(int start)
+        {
+            var chars = masked ??= line.ToCharArray();
+            for (int index = start; index < line.Length; index++)
+                chars[index] = ' ';
+        }
 
         if (state.Mode == RubyScanMode.Heredoc)
         {
-            for (int i = 0; i < masked.Length; i++)
-                masked[i] = ' ';
+            MaskRange(0);
 
             if (IsRubyHeredocTerminatorLine(line, state.HeredocTerminator!, state.HeredocAllowsIndentation))
             {
@@ -88,17 +97,17 @@ public static partial class SymbolExtractor
                 state.HeredocAllowsIndentation = false;
             }
 
-            return new string(masked);
+            return new string(masked!);
         }
 
-        for (int i = 0; i < masked.Length; i++)
+        for (int i = 0; i < line.Length; i++)
         {
             if (state.Mode == RubyScanMode.SingleQuote)
             {
-                masked[i] = ' ';
-                if (line[i] == '\\' && i + 1 < masked.Length)
+                MaskAt(i);
+                if (line[i] == '\\' && i + 1 < line.Length)
                 {
-                    masked[++i] = ' ';
+                    MaskAt(++i);
                     continue;
                 }
 
@@ -110,10 +119,10 @@ public static partial class SymbolExtractor
 
             if (state.Mode == RubyScanMode.DoubleQuote)
             {
-                masked[i] = ' ';
-                if (line[i] == '\\' && i + 1 < masked.Length)
+                MaskAt(i);
+                if (line[i] == '\\' && i + 1 < line.Length)
                 {
-                    masked[++i] = ' ';
+                    MaskAt(++i);
                     continue;
                 }
 
@@ -125,10 +134,10 @@ public static partial class SymbolExtractor
 
             if (state.Mode == RubyScanMode.PercentLiteral)
             {
-                masked[i] = ' ';
-                if (line[i] == '\\' && i + 1 < masked.Length)
+                MaskAt(i);
+                if (line[i] == '\\' && i + 1 < line.Length)
                 {
-                    masked[++i] = ' ';
+                    MaskAt(++i);
                     continue;
                 }
 
@@ -158,29 +167,28 @@ public static partial class SymbolExtractor
 
             if (line[i] == '#')
             {
-                for (int j = i; j < masked.Length; j++)
-                    masked[j] = ' ';
+                MaskRange(i);
                 break;
             }
 
             if (line[i] == '\'')
             {
-                masked[i] = ' ';
+                MaskAt(i);
                 state.Mode = RubyScanMode.SingleQuote;
                 continue;
             }
 
             if (line[i] == '"')
             {
-                masked[i] = ' ';
+                MaskAt(i);
                 state.Mode = RubyScanMode.DoubleQuote;
                 continue;
             }
 
             if (TryStartRubyPercentLiteral(line, i, out var consumedChars, out var openDelimiter, out var closeDelimiter, out var isPaired))
             {
-                for (int j = 0; j < consumedChars && i + j < masked.Length; j++)
-                    masked[i + j] = ' ';
+                for (int j = 0; j < consumedChars && i + j < line.Length; j++)
+                    MaskAt(i + j);
 
                 state.Mode = RubyScanMode.PercentLiteral;
                 state.PercentOpenDelimiter = openDelimiter;
@@ -193,17 +201,16 @@ public static partial class SymbolExtractor
 
             if (TryStartRubyHeredoc(line, i, out consumedChars, out var heredocTerminator, out var heredocAllowsIndentation))
             {
-                for (int j = i; j < masked.Length; j++)
-                    masked[j] = ' ';
+                MaskRange(i);
 
                 state.Mode = RubyScanMode.Heredoc;
                 state.HeredocTerminator = heredocTerminator;
                 state.HeredocAllowsIndentation = heredocAllowsIndentation;
-                return new string(masked);
+                return new string(masked!);
             }
         }
 
-        return new string(masked);
+        return masked is null ? line : new string(masked);
     }
 
     private static bool TryStartRubyPercentLiteral(string line, int index, out int consumedChars, out char openDelimiter, out char closeDelimiter, out bool isPaired)

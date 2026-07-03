@@ -280,7 +280,7 @@ public static partial class IndexCommandRunner
 
         string ToUpdateRelativePath(string path)
             => Path.IsPathRooted(path)
-                ? Path.GetRelativePath(projectRoot, path)
+                ? FileIndexer.GetRelativePathFromProjectRoot(projectRoot, path)
                 : path;
 
         List<CSharpStaticInterfacePrepass.FileTarget> BuildCSharpPrepassTargets(
@@ -307,7 +307,12 @@ public static partial class IndexCommandRunner
                     language = detection.Language;
                 }
 
-                targets.Add(CSharpStaticInterfacePrepass.FileTarget.Create(projectRoot, absPath, language));
+                var target = CSharpStaticInterfacePrepass.FileTarget.Create(projectRoot, absPath, language);
+                targets.Add(target with
+                {
+                    GeneratedExtractionSuppressed = indexer.HasGeneratedCodeExtractionSuppressionPatterns
+                        && indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath)
+                });
             }
 
             return targets;
@@ -424,17 +429,10 @@ public static partial class IndexCommandRunner
                 {
                     if (!File.Exists(LongPath.EnsureWindowsPrefix(absPath)))
                     {
-                        if (!writer.HasFileAtPath(dbPath))
-                        {
-                            skipped++;
-                            WriteUpdateVerboseStatus($"  [SKIP] {relPath} (not in DB)");
-                            continue;
-                        }
-
-                        DemoteReadinessOnce();
                         using var deleteTxn = writer.BeginTransaction(cancellationToken, "update delete missing target");
                         if (writer.DeleteFileByPath(dbPath))
                         {
+                            DemoteReadinessOnce();
                             WriteProjectRootOnce();
                             RequireTypeScriptAugmentationRefresh();
                             deleteTxn.Commit();
@@ -466,22 +464,10 @@ public static partial class IndexCommandRunner
                             continue;
                         }
 
-                        if (!writer.HasFileAtPath(dbPath))
-                        {
-                            skipped++;
-                            if (options.Verbose && !options.Json && !options.Quiet)
-                            {
-                                PauseUpdateSpinnerForConsoleWrite();
-                                Console.WriteLine($"  [SKIP] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
-                                ResumeUpdateSpinnerAfterConsoleWrite();
-                            }
-                            continue;
-                        }
-
-                        DemoteReadinessOnce();
                         using var deleteTxn = writer.BeginTransaction(cancellationToken, "update delete skipped path");
                         if (writer.DeleteFileByPath(dbPath))
                         {
+                            DemoteReadinessOnce();
                             WriteProjectRootOnce();
                             RequireTypeScriptAugmentationRefresh();
                             deleteTxn.Commit();
@@ -521,18 +507,15 @@ public static partial class IndexCommandRunner
                             ResumeUpdateSpinnerAfterConsoleWrite();
                         }
 
-                        if (writer.HasFileAtPath(dbPath))
+                        using var deleteTxn = writer.BeginTransaction(cancellationToken, "update delete missing during probe");
+                        if (writer.DeleteFileByPath(dbPath))
                         {
                             DemoteReadinessOnce();
-                            using var deleteTxn = writer.BeginTransaction(cancellationToken, "update delete missing during probe");
-                            if (writer.DeleteFileByPath(dbPath))
-                            {
-                                WriteProjectRootOnce();
-                                RequireTypeScriptAugmentationRefresh();
-                                deleteTxn.Commit();
-                                removed++;
-                                ftsMutated = true;
-                            }
+                            WriteProjectRootOnce();
+                            RequireTypeScriptAugmentationRefresh();
+                            deleteTxn.Commit();
+                            removed++;
+                            ftsMutated = true;
                         }
                         else
                         {
@@ -636,16 +619,10 @@ public static partial class IndexCommandRunner
                             ResumeUpdateSpinnerAfterConsoleWrite();
                         }
 
-                        if (!writer.HasFileAtPath(dbPath))
-                        {
-                            skipped++;
-                            continue;
-                        }
-
-                        DemoteReadinessOnce();
                         using var deleteTxn = writer.BeginTransaction();
                         if (writer.DeleteFileByPath(dbPath))
                         {
+                            DemoteReadinessOnce();
                             WriteProjectRootOnce();
                             RequireTypeScriptAugmentationRefresh();
                             deleteTxn.Commit();

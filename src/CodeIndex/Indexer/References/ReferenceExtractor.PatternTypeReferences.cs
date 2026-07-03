@@ -1704,10 +1704,10 @@ public static partial class ReferenceExtractor
         if (!TryFindLastIdentifier(clause, start, end, out var lastStart, out _))
             return end;
 
-        var before = clause.Substring(start, lastStart - start).TrimEnd();
+        var before = clause.AsSpan(start, lastStart - start).TrimEnd();
         if (language == "csharp" && before.EndsWith("@", StringComparison.Ordinal))
         {
-            var prefix = before.Substring(0, before.Length - 1).TrimEnd();
+            var prefix = before[..^1].TrimEnd();
             if (prefix.Length == 0
                 || prefix.EndsWith(".", StringComparison.Ordinal)
                 || prefix.EndsWith("::", StringComparison.Ordinal))
@@ -2521,6 +2521,9 @@ public static partial class ReferenceExtractor
 
     internal static List<(int Start, int Length)> SplitTopLevelCommaSpans(string text)
     {
+        if (text.IndexOf(',') < 0)
+            return [(0, text.Length)];
+
         var spans = new List<(int Start, int Length)>();
         int angleDepth = 0;
         int parenDepth = 0;
@@ -2567,8 +2570,57 @@ public static partial class ReferenceExtractor
         return spans;
     }
 
+    internal static (int Start, int Length) GetFirstTopLevelCommaSpan(string text)
+    {
+        if (text.IndexOf(',') < 0)
+            return (0, text.Length);
+
+        int angleDepth = 0;
+        int parenDepth = 0;
+        int squareDepth = 0;
+        int braceDepth = 0;
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            switch (text[i])
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0) angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0) parenDepth--;
+                    break;
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0) squareDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0) braceDepth--;
+                    break;
+                case ',' when angleDepth == 0 && parenDepth == 0 && squareDepth == 0 && braceDepth == 0:
+                    return (0, i);
+            }
+        }
+
+        return (0, text.Length);
+    }
+
     internal static List<(int Start, int Length)> SplitTopLevelAmpersandSpans(string text)
     {
+        if (text.IndexOf('&') < 0)
+            return [(0, text.Length)];
+
         var spans = new List<(int Start, int Length)>();
         int angleDepth = 0;
         int parenDepth = 0;

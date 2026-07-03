@@ -94,6 +94,10 @@ internal static class TrimmedCliTestHelper
         psi.ArgumentList.Add("-p:PublishTrimmed=true");
         psi.ArgumentList.Add("-p:SelfContained=true");
         psi.ArgumentList.Add($"-p:PublishSingleFile={publishSingleFile.ToString().ToLowerInvariant()}");
+        // This helper exercises the trimmed CLI output, not compile-time trim
+        // analyzer diagnostics. Keep trimming enabled while avoiding SDK analyzer
+        // crashes before the published subprocess can run.
+        psi.ArgumentList.Add("-p:EnableTrimAnalyzer=false");
         psi.ArgumentList.Add($"-p:OutputPath={buildOutputDir}");
         psi.ArgumentList.Add($"-p:IntermediateOutputPath={intermediateDir}");
         psi.ArgumentList.Add($"-p:NuGetLockFilePath={lockFilePath}");

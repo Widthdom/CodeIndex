@@ -167,17 +167,17 @@ internal sealed partial class FileContentLoader
 
     private static string FinishChecksum(IncrementalHash hasher)
     {
-        Span<byte> hash = stackalloc byte[32];
-        if (!hasher.TryGetHashAndReset(hash, out var written) || written != hash.Length)
+        var hash = hasher.GetHashAndReset();
+        if (hash.Length != SHA256.HashSizeInBytes)
             throw new InvalidOperationException("SHA256 produced an unexpected hash length");
-        return Convert.ToHexString(hash).ToLowerInvariant();
+        return HexEncoding.ToLowerHexString(hash);
     }
 
     private static string ComputeRawChecksum(ReadOnlySpan<byte> bytes)
     {
-        Span<byte> hash = stackalloc byte[32];
-        if (!SHA256.TryHashData(bytes, hash, out var written) || written != hash.Length)
+        var hash = SHA256.HashData(bytes);
+        if (hash.Length != SHA256.HashSizeInBytes)
             throw new InvalidOperationException("SHA256 produced an unexpected hash length");
-        return Convert.ToHexString(hash).ToLowerInvariant();
+        return HexEncoding.ToLowerHexString(hash);
     }
 }

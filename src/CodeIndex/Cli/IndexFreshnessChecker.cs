@@ -88,7 +88,7 @@ internal static class IndexFreshnessChecker
                     target.RelativePath,
                     knownLanguage,
                     detectGeneratedCode: false,
-                    cancellationToken);
+                    cancellationToken: cancellationToken);
                 var record = loaded.Record;
                 result.WorkspaceFileCount++;
                 while (hasIndexed && string.Compare(indexedEnumerator.Current.Path, record.Path, StringComparison.Ordinal) < 0)
@@ -191,7 +191,7 @@ internal static class IndexFreshnessChecker
     {
         public static WorkspaceFileTarget Create(string projectRoot, string absolutePath)
         {
-            var relativePath = Path.GetRelativePath(projectRoot, absolutePath);
+            var relativePath = FileIndexer.GetRelativePathFromProjectRoot(projectRoot, absolutePath);
             return new WorkspaceFileTarget(
                 absolutePath,
                 relativePath,

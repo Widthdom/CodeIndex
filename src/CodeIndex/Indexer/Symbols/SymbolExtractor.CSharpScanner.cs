@@ -8,6 +8,16 @@ namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
+    private static readonly string[] CSharpAccessorAccessibilityModifiers =
+    [
+        "protected internal",
+        "private protected",
+        "protected",
+        "internal",
+        "private",
+        "public",
+    ];
+
     // THREAD-SAFETY: The C# scanner keeps all scan state in parameters, locals, or caller-owned
     // collections. It may read shared Regex fields from SymbolExtractor, but must not add static
     // mutable scanner state.
@@ -1145,10 +1155,10 @@ public static partial class SymbolExtractor
 
     private static bool HasInvalidCSharpReturnTypeSuffix(string? returnType)
     {
-        if (string.IsNullOrWhiteSpace(returnType))
+        if (string.IsNullOrEmpty(returnType))
             return true;
 
-        var trimmed = returnType.TrimEnd();
+        var trimmed = returnType.AsSpan().TrimEnd();
         if (trimmed.Length == 0)
             return true;
 
@@ -1174,12 +1184,16 @@ public static partial class SymbolExtractor
         }
 
         var lastToken = trimmed[tokenStart..];
-        return lastToken is "as" or "is" or "return" or "throw" or "new";
+        return lastToken.SequenceEqual("as")
+            || lastToken.SequenceEqual("is")
+            || lastToken.SequenceEqual("return")
+            || lastToken.SequenceEqual("throw")
+            || lastToken.SequenceEqual("new");
     }
 
-    private static bool LooksLikeCSharpDeclaratorListReturnType(string returnType)
+    private static bool LooksLikeCSharpDeclaratorListReturnType(ReadOnlySpan<char> returnType)
     {
-        var withoutTrailingComma = returnType.AsSpan(0, returnType.Length - 1).TrimEnd();
+        var withoutTrailingComma = returnType[..^1].TrimEnd();
         var firstSegmentEnd = withoutTrailingComma.IndexOf(',');
         var firstSegment = (firstSegmentEnd >= 0 ? withoutTrailingComma[..firstSegmentEnd] : withoutTrailingComma).Trim();
         foreach (var ch in firstSegment)
@@ -2251,7 +2265,7 @@ public static partial class SymbolExtractor
 
     private static bool TrySkipCSharpAccessorAccessibility(string text, ref int cursor)
     {
-        foreach (var modifier in new[] { "protected internal", "private protected", "protected", "internal", "private", "public" })
+        foreach (var modifier in CSharpAccessorAccessibilityModifiers)
         {
             if (StartsWithWord(text, cursor, modifier))
             {
@@ -2295,8 +2309,12 @@ public static partial class SymbolExtractor
         int openBraceExclusiveEndColumn,
         int endLineIndex)
     {
-        var builder = new StringBuilder();
         var openBraceColumn = Math.Max(0, openBraceExclusiveEndColumn - 1);
+        var builder = new StringBuilder(EstimateCSharpAccessorProbeCapacity(
+            csharpMatchLines,
+            openBraceLineIndex,
+            openBraceColumn,
+            endLineIndex));
         for (int i = openBraceLineIndex; i <= endLineIndex && i < csharpMatchLines.Length; i++)
         {
             AppendCSharpAccessorProbeLine(
@@ -2306,6 +2324,25 @@ public static partial class SymbolExtractor
         }
 
         return builder;
+    }
+
+    private static int EstimateCSharpAccessorProbeCapacity(
+        string[] csharpMatchLines,
+        int openBraceLineIndex,
+        int openBraceColumn,
+        int endLineIndex)
+    {
+        var capacity = 0;
+        for (int i = openBraceLineIndex; i <= endLineIndex && i < csharpMatchLines.Length; i++)
+        {
+            var line = csharpMatchLines[i];
+            var start = i == openBraceLineIndex
+                ? Math.Clamp(openBraceColumn, 0, line.Length)
+                : 0;
+            capacity += line.Length - start + 1;
+        }
+
+        return capacity;
     }
 
     private static void AppendCSharpAccessorProbeLine(StringBuilder builder, string sanitizedLine, int? startColumn)
@@ -2535,23 +2572,40 @@ public static partial class SymbolExtractor
         int? signatureLastLineExclusiveEndColumn = null)
     {
         var builder = new StringBuilder(lines[startLineIndex].Length);
-        builder.Append(lines[startLineIndex][startColumn..].TrimEnd());
+        AppendTrimmedCSharpSignatureSlice(builder, lines[startLineIndex], startColumn, lines[startLineIndex].Length);
 
         for (int i = startLineIndex + 1; i <= signatureLastLineIndex && i < lines.Length; i++)
         {
-            var slice = i == signatureLastLineIndex && signatureLastLineExclusiveEndColumn.HasValue
-                ? lines[i][..Math.Min(signatureLastLineExclusiveEndColumn.Value, lines[i].Length)]
-                : lines[i];
-            var trimmed = slice.Trim();
-            if (trimmed.Length == 0)
-                continue;
-
-            if (builder.Length > 0)
-                builder.Append(' ');
-            builder.Append(trimmed);
+            var endExclusive = i == signatureLastLineIndex && signatureLastLineExclusiveEndColumn.HasValue
+                ? signatureLastLineExclusiveEndColumn.Value
+                : lines[i].Length;
+            AppendTrimmedCSharpSignatureSlice(builder, lines[i], 0, endExclusive);
         }
 
-        return builder.ToString().Trim();
+        return builder.ToString();
+    }
+
+    private static void AppendTrimmedCSharpSignatureSlice(
+        StringBuilder builder,
+        string line,
+        int start,
+        int endExclusive)
+    {
+        start = Math.Clamp(start, 0, line.Length);
+        endExclusive = Math.Clamp(endExclusive, start, line.Length);
+
+        while (start < endExclusive && char.IsWhiteSpace(line[start]))
+            start++;
+
+        while (endExclusive > start && char.IsWhiteSpace(line[endExclusive - 1]))
+            endExclusive--;
+
+        if (endExclusive <= start)
+            return;
+
+        if (builder.Length > 0)
+            builder.Append(' ');
+        builder.Append(line, start, endExclusive - start);
     }
 
     private static bool TryFindCSharpBraceBodyHeaderExtent(
@@ -2773,7 +2827,12 @@ public static partial class SymbolExtractor
         // verbatim 文字列リテラルの改行と行頭インデントを保持する。専用サニタイザが
         // lex モード（Code / String / Verbatim / Raw / Char / LineComment / BlockComment）
         // と補間ホールを 1 パスで処理する。
-        var rawSlice = new StringBuilder();
+        var rawSlice = new StringBuilder(EstimateCSharpSourceSpanLength(
+            lines,
+            startLineIndex,
+            startColumn,
+            lastLineIndex,
+            lastLineExclusiveEndColumn ?? int.MaxValue));
         for (int i = startLineIndex; i <= lastLineIndex && i < lines.Length; i++)
         {
             var line = lines[i];
@@ -3760,7 +3819,7 @@ public static partial class SymbolExtractor
         {
             FileId = fileId,
             Kind = "enum",
-            Name = CSharpSymbolNameNormalizer.Normalize(match.Groups["name"].Value.Trim(), match, maskedSnippet),
+            Name = CSharpSymbolNameNormalizer.Normalize(match.Groups["name"].ValueSpan.Trim().ToString(), match, maskedSnippet),
             Line = start.LineIndex + 1,
             StartLine = start.LineIndex + 1,
             EndLine = endExclusive.LineIndex + 1,
@@ -3822,7 +3881,12 @@ public static partial class SymbolExtractor
             return line[startColumn..endColumn];
         }
 
-        var builder = new StringBuilder();
+        var builder = new StringBuilder(EstimateCSharpSourceSpanLength(
+            lines,
+            start.LineIndex,
+            start.Column,
+            endExclusive.LineIndex,
+            endExclusive.Column));
         for (int lineIndex = start.LineIndex; lineIndex <= endExclusive.LineIndex; lineIndex++)
         {
             var line = lines[lineIndex];
@@ -3840,12 +3904,41 @@ public static partial class SymbolExtractor
                 ? Math.Min(Math.Max(endExclusive.Column, startColumn), effectiveLength)
                 : effectiveLength;
 
-            builder.Append(line[startColumn..endColumn]);
+            if (endColumn > startColumn)
+                builder.Append(line, startColumn, endColumn - startColumn);
             if (lineIndex < endExclusive.LineIndex)
                 builder.Append('\n');
         }
 
         return builder.ToString();
+    }
+
+    private static int EstimateCSharpSourceSpanLength(
+        string[] lines,
+        int startLineIndex,
+        int startColumn,
+        int endLineIndex,
+        int endExclusiveColumn)
+    {
+        var length = 0;
+        for (int lineIndex = startLineIndex; lineIndex <= endLineIndex && lineIndex < lines.Length; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            var effectiveLength = GetLineLengthExcludingTrailingCr(line);
+            var from = lineIndex == startLineIndex
+                ? Math.Clamp(startColumn, 0, effectiveLength)
+                : 0;
+            var to = lineIndex == endLineIndex
+                ? Math.Clamp(endExclusiveColumn, 0, effectiveLength)
+                : effectiveLength;
+            if (to < from)
+                to = from;
+            length += to - from;
+            if (lineIndex < endLineIndex)
+                length++;
+        }
+
+        return length;
     }
 
     private static int GetLineLengthExcludingTrailingCr(string line)

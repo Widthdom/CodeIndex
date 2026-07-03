@@ -11,6 +11,8 @@ public static partial class SymbolExtractor
     private static void ExtractCppSameLineClassBodyMembers(long fileId, string[] lines, List<SymbolRecord> symbols)
     {
         var classSymbols = BuildCppSameLineClassSymbolSnapshot(symbols);
+        if (classSymbols is null)
+            return;
 
         foreach (var classSymbol in classSymbols)
         {
@@ -30,13 +32,13 @@ public static partial class SymbolExtractor
 
             var existingMemberNames = BuildCppSameLineClassMemberNameSet(symbols, classSymbol);
             foreach (var segment in EnumerateTrimmedCppSegments(body))
-                TryAddCppSameLineClassMemberSymbol(fileId, classSymbol, segment, lineIndex + 1, symbols, existingMemberNames);
+                TryAddCppSameLineClassMemberSymbol(fileId, classSymbol, segment, lineIndex + 1, symbols, ref existingMemberNames);
         }
     }
 
-    private static List<SymbolRecord> BuildCppSameLineClassSymbolSnapshot(IReadOnlyList<SymbolRecord> symbols)
+    private static IReadOnlyList<SymbolRecord>? BuildCppSameLineClassSymbolSnapshot(IReadOnlyList<SymbolRecord> symbols)
     {
-        var classSymbols = new List<SymbolRecord>();
+        List<SymbolRecord>? classSymbols = null;
         foreach (var symbol in symbols)
         {
             if (symbol.Kind is ("class" or "struct")
@@ -45,16 +47,16 @@ public static partial class SymbolExtractor
                 && symbol.StartLine == symbol.BodyStartLine.Value
                 && symbol.EndLine == symbol.BodyEndLine.Value)
             {
-                classSymbols.Add(symbol);
+                (classSymbols ??= []).Add(symbol);
             }
         }
 
         return classSymbols;
     }
 
-    private static HashSet<string> BuildCppSameLineClassMemberNameSet(IReadOnlyList<SymbolRecord> symbols, SymbolRecord classSymbol)
+    private static HashSet<string>? BuildCppSameLineClassMemberNameSet(IReadOnlyList<SymbolRecord> symbols, SymbolRecord classSymbol)
     {
-        var existingMemberNames = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string>? existingMemberNames = null;
         foreach (var symbol in symbols)
         {
             if (symbol.Kind == "function"
@@ -62,7 +64,7 @@ public static partial class SymbolExtractor
                 && symbol.ContainerKind == classSymbol.Kind
                 && symbol.ContainerName == classSymbol.Name)
             {
-                existingMemberNames.Add(symbol.Name);
+                (existingMemberNames ??= new HashSet<string>(StringComparer.Ordinal)).Add(symbol.Name);
             }
         }
 
@@ -100,7 +102,7 @@ public static partial class SymbolExtractor
         string segment,
         int lineNumber,
         List<SymbolRecord> symbols,
-        HashSet<string> existingMemberNames)
+        ref HashSet<string>? existingMemberNames)
     {
         foreach (var pattern in PatternCache["cpp"])
         {
@@ -112,11 +114,12 @@ public static partial class SymbolExtractor
                 continue;
 
             var name = match.Groups["name"].Success
-                ? match.Groups["name"].Value.Trim()
-                : match.Value.Trim();
+                ? match.Groups["name"].ValueSpan.Trim().ToString()
+                : match.ValueSpan.Trim().ToString();
             if (string.IsNullOrWhiteSpace(name))
                 continue;
 
+            existingMemberNames ??= new HashSet<string>(StringComparer.Ordinal);
             if (!existingMemberNames.Add(name))
                 return true;
 
@@ -146,10 +149,12 @@ public static partial class SymbolExtractor
         int lineNumber,
         List<SymbolRecord> symbols)
     {
-        if (string.IsNullOrWhiteSpace(line))
+        var trimmedSpan = line.AsSpan().TrimStart();
+        if (trimmedSpan.IsEmpty)
             return false;
 
-        var trimmed = line.TrimStart();
+        var isIndented = trimmedSpan.Length != line.Length;
+        var trimmed = isIndented ? trimmedSpan.ToString() : line;
         if (trimmed.StartsWith("namespace ", StringComparison.Ordinal))
         {
             var equalsIndex = trimmed.IndexOf('=');
@@ -225,7 +230,7 @@ public static partial class SymbolExtractor
             }
         }
 
-        if (line.Length == line.TrimStart().Length)
+        if (!isIndented)
             return false;
 
         if (trimmed.StartsWith("using ", StringComparison.Ordinal)
@@ -326,7 +331,7 @@ public static partial class SymbolExtractor
 
     private static string NormalizeCppUsingNamespaceTarget(string text)
     {
-        var target = text.Trim();
+        var target = text.AsSpan().Trim();
         var commentIndex = target.IndexOf("//", StringComparison.Ordinal);
         if (commentIndex < 0)
             commentIndex = target.IndexOf("/*", StringComparison.Ordinal);
@@ -334,10 +339,10 @@ public static partial class SymbolExtractor
         if (commentIndex >= 0)
             target = target[..commentIndex].TrimEnd();
 
-        if (target.EndsWith(';'))
+        if (target.Length > 0 && target[^1] == ';')
             target = target[..^1].TrimEnd();
 
-        return target;
+        return target.ToString();
     }
 
 }

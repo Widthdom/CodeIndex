@@ -88,16 +88,26 @@ public static partial class SymbolExtractor
     private static bool IsPythonClassHook(string name) =>
         name is "__init_subclass__" or "__class_getitem__" or "__set_name__" or "__class_subclasses__";
 
-    private static string TrimPythonLogicalHeaderContinuationEnd(string fragment)
+    private static (int Start, int Length) GetPythonLogicalHeaderFragmentRange(string line, int column)
     {
-        var end = fragment.Length;
-        while (end > 0 && fragment[end - 1] == '\\')
+        if (column >= line.Length)
+            return (line.Length, 0);
+
+        var start = column;
+        while (start < line.Length && char.IsWhiteSpace(line[start]))
+            start++;
+
+        var end = line.Length;
+        while (end > start && char.IsWhiteSpace(line[end - 1]))
             end--;
 
-        while (end > 0 && char.IsWhiteSpace(fragment[end - 1]))
+        while (end > start && line[end - 1] == '\\')
             end--;
 
-        return end == fragment.Length ? fragment : fragment[..end];
+        while (end > start && char.IsWhiteSpace(line[end - 1]))
+            end--;
+
+        return (start, end - start);
     }
 
     private static bool EndsWithPythonLineContinuation(string line)
@@ -211,7 +221,7 @@ public static partial class SymbolExtractor
 
     private static string BuildPythonLogicalHeaderSignature(string[] lines, int startLineIndex, int startColumn)
     {
-        var builder = new StringBuilder();
+        var builder = new StringBuilder(Math.Max(0, lines[startLineIndex].Length - startColumn));
         var parenDepth = 0;
         var bracketDepth = 0;
         var inString = false;
@@ -221,12 +231,12 @@ public static partial class SymbolExtractor
         {
             var line = lines[i];
             var column = i == startLineIndex ? startColumn : FindFirstNonWhitespaceColumn(line);
-            var fragment = column < line.Length ? line[column..].Trim() : string.Empty;
-            if (fragment.Length > 0)
+            var (fragmentStart, fragmentLength) = GetPythonLogicalHeaderFragmentRange(line, column);
+            if (fragmentLength > 0)
             {
                 if (builder.Length > 0)
                     builder.Append(' ');
-                builder.Append(TrimPythonLogicalHeaderContinuationEnd(fragment));
+                builder.Append(line, fragmentStart, fragmentLength);
             }
 
             for (var j = column; j < line.Length; j++)

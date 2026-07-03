@@ -2,7 +2,6 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Regex = CodeIndex.Indexer.BoundedRegex;
-using System.Runtime.CompilerServices;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
 
@@ -22,6 +21,27 @@ public static partial class SymbolExtractor
     public const int FunctionalLanguageContractVersion = 2;
     public const int DynamicLanguageContractVersion = 2;
     public const int SystemsLanguageContractVersion = 2;
+    private static readonly string[] AdditionalSymbolLanguages =
+    [
+        "app_manifest",
+        "commonlisp",
+        "racket",
+        "vue",
+        "svelte",
+        "markdown",
+        "json",
+        "yaml",
+        "xml",
+        "razor",
+        "blazor",
+        "cshtml",
+        "solidity",
+        "solution",
+        "cuda",
+        "dependency_manifest",
+        "dependency_lock",
+    ];
+
     public static int GetContractVersion(string? lang)
     {
         return lang switch
@@ -38,9 +58,9 @@ public static partial class SymbolExtractor
         };
     }
 
-    private static List<SymbolRecord> BuildEnumDeclarationSnapshot(IReadOnlyList<SymbolRecord> symbols, long? fileId = null)
+    private static IReadOnlyList<SymbolRecord> BuildEnumDeclarationSnapshot(IReadOnlyList<SymbolRecord> symbols, long? fileId = null)
     {
-        var candidates = new List<(SymbolRecord Symbol, int OriginalIndex)>();
+        List<(SymbolRecord Symbol, int OriginalIndex)>? candidates = null;
         for (var index = 0; index < symbols.Count; index++)
         {
             var symbol = symbols[index];
@@ -48,8 +68,14 @@ public static partial class SymbolExtractor
                 continue;
 
             if (symbol.Kind == "enum" && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
-                candidates.Add((symbol, index));
+                (candidates ??= []).Add((symbol, index));
         }
+
+        if (candidates is null)
+            return Array.Empty<SymbolRecord>();
+
+        if (candidates.Count == 1)
+            return [candidates[0].Symbol];
 
         candidates.Sort(static (left, right) =>
         {
@@ -64,9 +90,9 @@ public static partial class SymbolExtractor
             return left.OriginalIndex.CompareTo(right.OriginalIndex);
         });
 
-        var snapshot = new List<SymbolRecord>(candidates.Count);
-        foreach (var candidate in candidates)
-            snapshot.Add(candidate.Symbol);
+        var snapshot = new SymbolRecord[candidates.Count];
+        for (var i = 0; i < candidates.Count; i++)
+            snapshot[i] = candidates[i].Symbol;
         return snapshot;
     }
 
@@ -2292,34 +2318,85 @@ public static partial class SymbolExtractor
         ],
     };
 
+    private static readonly string[] BuiltInSymbolLanguages = PatternCache.Keys.ToArray();
+
     /// <summary>
     /// Return the set of languages that have symbol-extraction patterns.
     /// シンボル抽出パターンを持つ言語のセットを返す。
     /// </summary>
     public static IReadOnlyCollection<string> GetSupportedLanguages()
-      => PatternCache.Keys
-          .Concat(new[] { "app_manifest", "commonlisp", "racket", "vue", "svelte", "markdown", "json", "yaml", "xml", "razor", "blazor", "cshtml", "solidity", "solution", "cuda", "dependency_manifest", "dependency_lock" })
-          .Concat(ExtractorPluginRegistry.SymbolLanguages)
-          .Distinct(StringComparer.Ordinal)
-          .ToArray();
+    {
+        var pluginLanguages = ExtractorPluginRegistry.SymbolLanguages;
+        var capacity = BuiltInSymbolLanguages.Length + AdditionalSymbolLanguages.Length + pluginLanguages.Count;
+        var languages = new List<string>(capacity);
+        var seen = new HashSet<string>(capacity, StringComparer.Ordinal);
+
+        AddSupportedLanguages(BuiltInSymbolLanguages, languages, seen);
+        AddSupportedLanguages(AdditionalSymbolLanguages, languages, seen);
+        AddSupportedLanguages(pluginLanguages, languages, seen);
+        return languages.ToArray();
+    }
+
+    private static void AddSupportedLanguages(
+        IEnumerable<string> candidates,
+        List<string> languages,
+        HashSet<string> seen)
+    {
+        foreach (var language in candidates)
+        {
+            if (seen.Add(language))
+                languages.Add(language);
+        }
+    }
 
     private static string? NormalizeLanguage(string? lang)
     {
-        if (string.IsNullOrWhiteSpace(lang))
+        if (lang is null)
             return null;
 
-        lang = lang.Trim().ToLowerInvariant();
-        return lang is "vue" or "svelte"
-            ? "typescript"
-            : lang is "razor" or "blazor" or "cshtml"
-                ? "csharp"
-                : lang == "cuda"
-                    ? "cpp"
-                    : lang;
+        var trimmed = lang.AsSpan().Trim();
+        if (trimmed.IsEmpty)
+            return null;
+
+        if (trimmed.Equals("vue", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("svelte", StringComparison.OrdinalIgnoreCase))
+        {
+            return "typescript";
+        }
+
+        if (trimmed.Equals("razor", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("blazor", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("cshtml", StringComparison.OrdinalIgnoreCase))
+        {
+            return "csharp";
+        }
+
+        return trimmed.Equals("cuda", StringComparison.OrdinalIgnoreCase)
+            ? "cpp"
+            : NormalizeLanguageKey(lang, trimmed);
     }
 
     private static string? NormalizePluginLanguage(string? lang)
-        => string.IsNullOrWhiteSpace(lang) ? null : lang.Trim().ToLowerInvariant();
+    {
+        if (lang is null)
+            return null;
+
+        var trimmed = lang.AsSpan().Trim();
+        return trimmed.IsEmpty ? null : NormalizeLanguageKey(lang, trimmed);
+    }
+
+    private static string NormalizeLanguageKey(string original, ReadOnlySpan<char> trimmed)
+    {
+        for (var i = 0; i < trimmed.Length; i++)
+        {
+            if (char.ToLowerInvariant(trimmed[i]) != trimmed[i])
+                return trimmed.ToString().ToLowerInvariant();
+        }
+
+        return trimmed.Length == original.Length && trimmed.SequenceEqual(original.AsSpan())
+            ? original
+            : trimmed.ToString();
+    }
 
 
     private static readonly HashSet<string> ContainerKinds =
@@ -2550,12 +2627,13 @@ public static partial class SymbolExtractor
         // 損なう。続いて行頭 U+FEFF のみ剥がし、1 行目と mid-file の行頭 BOM 両方
         // で `^\s*` 固定パターンを成立させる。行頭以外の U+FEFF (文字列リテラル中
         // の意図的な ZWNBSP 等) はそのまま保持する。Closes #183.
+        var usesLineBasedExtractor = lang is "commonlisp" or "racket" or "solidity" or "html" or "assembly"
+            || (lang is not null && PatternCache.ContainsKey(lang));
+        if (!usesLineBasedExtractor)
+            return [];
+
         var lines = content.Split('\n');
         cancellationToken.ThrowIfCancellationRequested();
-        var pythonModulePrefix = lang == "python"
-            ? GetPythonModulePrefix(filePath)
-            : null;
-
         if (lang is "commonlisp" or "racket")
             return ExtractLispSymbols(fileId, lang, lines);
 
@@ -2564,6 +2642,10 @@ public static partial class SymbolExtractor
 
         if (lang == null || !PatternCache.TryGetValue(lang, out var patterns))
             return [];
+
+        var pythonModulePrefix = lang == "python"
+            ? GetPythonModulePrefix(filePath)
+            : null;
 
         // HTML has no brace/indent-scoped bodies, so the generic pattern loop's
         // "first match per line" semantics drop every additional symbol on the
@@ -2616,13 +2698,15 @@ public static partial class SymbolExtractor
             ? BuildCSharpCallableParameterScope(structuralLines, csharpInsideTypeBody!)
             : null;
         var csharpSwitchExpressionLines = lang == "csharp"
+            && LinesContain(structuralLines, "switch", StringComparison.Ordinal)
             ? FindCSharpSwitchExpressionLines(structuralLines)
             : null;
         var cssQualifiedRuleAncestors = lang == "css"
             ? FindCssQualifiedRuleAncestors(cssScannerLines!)
             : null;
         var fsharpTypeBodyState = FSharpTypeBodyState.None;
-        var symbols = new List<SymbolRecord>();
+        var symbols = new SymbolExtractionList();
+        var extractionState = symbols.ExtractionState;
         var pendingRecordPrimaryComponents = new List<PendingRecordPrimaryComponents>();
         var cssSeenSymbols = lang == "css"
             ? new HashSet<string>(StringComparer.Ordinal)
@@ -2646,13 +2730,13 @@ public static partial class SymbolExtractor
                 continue;
 
             if (lang == "go"
-                && TryHandleGoBlockLine(fileId, line, i, symbols, ref goImportBlock))
+                && TryHandleGoBlockLine(fileId, line, i, symbols, extractionState, ref goImportBlock))
             {
                 continue;
             }
             if (lang == "go")
-                TryAddGoLabelSymbol(fileId, line, i, symbols);
-            if (lang == "r" && TryAddRPacmanPackageLoaderSymbols(fileId, line, i + 1, symbols))
+                TryAddGoLabelSymbol(fileId, line, i, symbols, extractionState);
+            if (lang == "r" && TryAddRPacmanPackageLoaderSymbols(fileId, line, i + 1, symbols, extractionState))
                 continue;
 
             if (lang == "dockerfile")
@@ -3176,8 +3260,8 @@ public static partial class SymbolExtractor
                         }
 
                         var name = match.Groups["name"].Success
-                            ? match.Groups["name"].Value.Trim()
-                            : match.Value.Trim();
+                            ? match.Groups["name"].ValueSpan.Trim().ToString()
+                            : match.ValueSpan.Trim().ToString();
                         name = NormalizeExtractedSymbolName(lang, name, match, matchLine);
                         if (pattern.Kind == "import" && lang is "javascript" or "typescript")
                             name = ResolveJavaScriptTypeScriptModuleSpecifier(lang, filePath, projectRoot, name);
@@ -3673,6 +3757,7 @@ public static partial class SymbolExtractor
                                 {
                                     AddSymbolRecord(
                                         symbols,
+                                        extractionState,
                                         cssSeenSymbols,
                                         startLine,
                                         new SymbolRecord
@@ -3699,6 +3784,7 @@ public static partial class SymbolExtractor
                                 {
                                     AddSymbolRecord(
                                         symbols,
+                                        extractionState,
                                         cssSeenSymbols,
                                         startLine,
                                         new SymbolRecord
@@ -3727,6 +3813,7 @@ public static partial class SymbolExtractor
                                 {
                                     AddSymbolRecord(
                                         symbols,
+                                        extractionState,
                                         cssSeenSymbols,
                                         startLine,
                                         new SymbolRecord
@@ -3753,6 +3840,7 @@ public static partial class SymbolExtractor
                                 {
                                     AddSymbolRecord(
                                         symbols,
+                                        extractionState,
                                         cssSeenSymbols,
                                         startLine,
                                         new SymbolRecord
@@ -3779,6 +3867,7 @@ public static partial class SymbolExtractor
                                 {
                                     AddSymbolRecord(
                                         symbols,
+                                        extractionState,
                                         cssSeenSymbols,
                                         startLine,
                                         new SymbolRecord
@@ -3805,6 +3894,7 @@ public static partial class SymbolExtractor
                                 {
                                     AddSymbolRecord(
                                         symbols,
+                                        extractionState,
                                         cssSeenSymbols,
                                         startLine,
                                         new SymbolRecord
@@ -3842,6 +3932,7 @@ public static partial class SymbolExtractor
 
                                     AddSymbolRecord(
                                         symbols,
+                                        extractionState,
                                         cssSeenSymbols,
                                         startLine,
                                         new SymbolRecord
@@ -3868,6 +3959,7 @@ public static partial class SymbolExtractor
                             {
                                 AddSymbolRecord(
                                     symbols,
+                                    extractionState,
                                     cssSeenSymbols,
                                     startLine,
                                         new SymbolRecord
@@ -3906,6 +3998,7 @@ public static partial class SymbolExtractor
                                 {
                                     AddSymbolRecord(
                                         symbols,
+                                        extractionState,
                                         cssSeenSymbols,
                                         startLine,
                                         new SymbolRecord
@@ -4324,12 +4417,13 @@ public static partial class SymbolExtractor
                 {
                     foreach (Match match in CssInlineCustomPropertyRegex.Matches(cssScannerLine))
                     {
-                        var propertyName = match.Groups["name"].Value.Trim();
+                        var propertyName = match.Groups["name"].ValueSpan.Trim().ToString();
                         if (propertyName.Length == 0)
                             continue;
 
                         AddSymbolRecord(
                             symbols,
+                            extractionState,
                             cssSeenSymbols,
                             i + 1,
                             new SymbolRecord
@@ -4367,29 +4461,29 @@ public static partial class SymbolExtractor
         {
             ExtractJavaEnumMembers(fileId, lines, symbols);
             ExtractJavaCompactConstructors(fileId, lines, symbols);
-            ExtractJavaModuleDirectiveSymbols(fileId, lines, structuralLines, symbols);
+            ExtractJavaModuleDirectiveSymbols(fileId, lines, structuralLines, symbols, extractionState);
         }
         else if (lang == "vb")
             ExtractVisualBasicEnumMembers(fileId, lines, symbols);
         if (lang == "cobol")
-            ExtractCobolParagraphSymbols(fileId, lines, symbols);
+            ExtractCobolParagraphSymbols(fileId, lines, symbols, extractionState);
 
         if (string.Equals(originalLang, "svelte", StringComparison.Ordinal))
             ExtractSvelteReactiveSymbols(fileId, lines, symbols);
         if (lang == "rust")
-            ExtractRustUseSymbols(fileId, lines, symbols);
+            ExtractRustUseSymbols(fileId, lines, symbols, extractionState);
         if (lang == "rust")
-            ExtractRustMultilineImplSymbols(fileId, lines, symbols);
+            ExtractRustMultilineImplSymbols(fileId, lines, symbols, extractionState);
         if (lang == "rust")
             ExtractRustAssociatedTypeDefaultSymbols(fileId, lines, structuralLines, symbols);
         if (lang == "go")
-            ExtractGoGroupedDeclarations(fileId, lines, symbols);
+            ExtractGoGroupedDeclarations(fileId, lines, symbols, extractionState);
         if (lang == "cpp")
             ExtractCppSameLineClassBodyMembers(fileId, lines, symbols);
         if (lang == "cpp")
-            ExtractCppFriendDeclarationSymbols(fileId, lines, symbols);
+            ExtractCppFriendDeclarationSymbols(fileId, lines, symbols, extractionState);
         if (lang is "verilog" or "systemverilog")
-            ExtractHdlInlineParameterSymbols(fileId, lines, symbols);
+            ExtractHdlInlineParameterSymbols(fileId, lines, symbols, extractionState);
         if (string.Equals(NormalizePluginLanguage(originalLang), "cuda", StringComparison.Ordinal))
             ClassifyCudaFunctionSubKinds(symbols);
         if (lang == "python")
@@ -4399,7 +4493,7 @@ public static partial class SymbolExtractor
         if (lang == "python")
             ExtractPythonWalrusSymbols(fileId, lines, symbols);
         if (lang == "perl")
-            ExtractPerlHashConstantSymbols(fileId, lines, symbols);
+            ExtractPerlHashConstantSymbols(fileId, lines, symbols, extractionState);
         if (lang == "php")
             ExtractPhpAdditionalPropertySymbols(fileId, lines, symbols);
         if (lang == "php")
@@ -4421,10 +4515,10 @@ public static partial class SymbolExtractor
         if (lang == "sql")
         {
             var sqlSyntheticSymbolLines = MaskSqlSyntheticSymbolLines(lines);
-            ExtractSqlCteSymbols(fileId, lines, symbols);
-            ExtractSqlDefinerSymbols(fileId, lines, sqlSyntheticSymbolLines, symbols);
-            ExtractSqlRoutineResultColumnSymbols(fileId, lines, sqlSyntheticSymbolLines, symbols);
-            ExtractSqlGeneratedColumnSymbols(fileId, lines, sqlSyntheticSymbolLines, symbols);
+            ExtractSqlCteSymbols(fileId, lines, symbols, extractionState);
+            ExtractSqlDefinerSymbols(fileId, lines, sqlSyntheticSymbolLines, symbols, extractionState);
+            ExtractSqlRoutineResultColumnSymbols(fileId, lines, sqlSyntheticSymbolLines, symbols, extractionState);
+            ExtractSqlGeneratedColumnSymbols(fileId, lines, sqlSyntheticSymbolLines, symbols, extractionState);
         }
         if (lang == "graphql")
             ExtractGraphQLMemberSymbols(fileId, lines, symbols);
@@ -4446,12 +4540,16 @@ public static partial class SymbolExtractor
             ClassifyScalaCompanions(symbols);
         KotlinSymbolNameNormalizer.NormalizeSecondaryConstructorNames(symbols);
         if (lang == "shell")
-            ExpandShellAliasSymbols(fileId, lines, symbols);
+            ExpandShellAliasSymbols(fileId, lines, symbols, extractionState);
         PopulateDeclaredContainerQualifiedNames(symbols);
         return symbols;
     }
 
-    private static void ExtractHdlInlineParameterSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    private static void ExtractHdlInlineParameterSymbols(
+        long fileId,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        SymbolExtractionState extractionState)
     {
         for (var index = 0; index < lines.Length; index++)
         {
@@ -4461,12 +4559,12 @@ public static partial class SymbolExtractor
 
             foreach (Match match in HdlInlineParameterRegex.Matches(line))
             {
-                var name = match.Groups["name"].Value.Trim();
+                var name = match.Groups["name"].ValueSpan.Trim().ToString();
                 if (name.Length == 0)
                     continue;
 
                 var lineNumber = index + 1;
-                if (HasSymbolLineIdentity(symbols, fileId, lineNumber, "property", name))
+                if (HasSymbolLineIdentity(extractionState, symbols, fileId, lineNumber, "property", name))
                     continue;
 
                 symbols.Add(new SymbolRecord
@@ -4637,7 +4735,7 @@ public static partial class SymbolExtractor
 
     private static void ClassifyScalaCompanions(List<SymbolRecord> symbols)
     {
-        var topLevelClasses = new Dictionary<string, List<SymbolRecord>>(StringComparer.Ordinal);
+        Dictionary<string, List<SymbolRecord>>? topLevelClasses = null;
         foreach (var symbol in symbols)
         {
             if (symbol.Kind != "class"
@@ -4647,6 +4745,7 @@ public static partial class SymbolExtractor
                 continue;
             }
 
+            topLevelClasses ??= new Dictionary<string, List<SymbolRecord>>(StringComparer.Ordinal);
             if (!topLevelClasses.TryGetValue(symbol.Name, out var companionClasses))
             {
                 companionClasses = new List<SymbolRecord>();
@@ -4655,6 +4754,9 @@ public static partial class SymbolExtractor
 
             companionClasses.Add(symbol);
         }
+
+        if (topLevelClasses is not { Count: > 0 })
+            return;
 
         foreach (var scalaObject in symbols)
         {
@@ -4683,13 +4785,19 @@ public static partial class SymbolExtractor
         }
     }
 
-    private static void ExtractSqlCteSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    private static void ExtractSqlCteSymbols(
+        long fileId,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        SymbolExtractionState extractionState)
     {
         if (!LinesContain(lines, "WITH", StringComparison.OrdinalIgnoreCase))
             return;
+        if (!LinesContain(lines, "AS", StringComparison.OrdinalIgnoreCase))
+            return;
 
         var content = string.Join('\n', lines);
-        var lineStarts = BuildLineStarts(content);
+        List<int>? lineStarts = null;
         foreach (Match match in SqlCteDefinitionRegex.Matches(content))
         {
             var nameGroup = match.Groups["name"];
@@ -4697,9 +4805,11 @@ public static partial class SymbolExtractor
             if (string.IsNullOrWhiteSpace(name))
                 continue;
 
-            var lineNumber = GetLineNumberFromOffset(lineStarts, nameGroup.Index);
+            var currentLineStarts = lineStarts ??= BuildLineStartList(lines);
+            var lineNumber = GetLineNumberFromOffset(currentLineStarts, nameGroup.Index);
             AddSymbolRecord(
                 symbols,
+                extractionState,
                 null,
                 lineNumber,
                 new SymbolRecord
@@ -4709,7 +4819,7 @@ public static partial class SymbolExtractor
                     Name = name,
                     Line = lineNumber,
                     StartLine = lineNumber,
-                    StartColumn = nameGroup.Index - lineStarts[lineNumber - 1],
+                    StartColumn = nameGroup.Index - currentLineStarts[lineNumber - 1],
                     EndLine = lineNumber,
                     Signature = lines[lineNumber - 1].Trim(),
                 });
@@ -4748,13 +4858,17 @@ public static partial class SymbolExtractor
         return false;
     }
 
-    private static List<int> BuildLineStarts(string content)
+    private static List<int> BuildLineStartList(IReadOnlyList<string> lines)
     {
-        var starts = new List<int> { 0 };
-        for (var i = 0; i < content.Length; i++)
+        if (lines.Count <= 1)
+            return [0];
+
+        var starts = new List<int>(Math.Max(1, lines.Count)) { 0 };
+        var offset = 0;
+        for (var i = 0; i < lines.Count - 1; i++)
         {
-            if (content[i] == '\n')
-                starts.Add(i + 1);
+            offset += lines[i].Length + 1;
+            starts.Add(offset);
         }
 
         return starts;
@@ -4769,7 +4883,12 @@ public static partial class SymbolExtractor
         return ~index;
     }
 
-    private static void ExtractSqlGeneratedColumnSymbols(long fileId, string[] lines, string[] structuralLines, List<SymbolRecord> symbols)
+    private static void ExtractSqlGeneratedColumnSymbols(
+        long fileId,
+        string[] lines,
+        string[] structuralLines,
+        List<SymbolRecord> symbols,
+        SymbolExtractionState extractionState)
     {
         if (!LinesContainAny(
             structuralLines,
@@ -4781,29 +4900,35 @@ public static partial class SymbolExtractor
             return;
         }
 
+        if (!TryGetSqlGeneratedColumnContainerMarkers(
+            structuralLines,
+            out var hasAlterAdd,
+            out var hasCreateTable))
+        {
+            return;
+        }
+
         var structuralContent = string.Join('\n', structuralLines);
-        var lineStarts = BuildLineStarts(structuralContent);
-        if (structuralContent.Contains("ALTER", StringComparison.OrdinalIgnoreCase)
-            && structuralContent.Contains("ADD", StringComparison.OrdinalIgnoreCase))
+        List<int>? lineStarts = null;
+        if (hasAlterAdd)
         {
             foreach (Match match in SqlAlterTableAddGeneratedColumnRegex.Matches(structuralContent))
             {
                 var nameGroup = match.Groups["name"];
+                var currentLineStarts = lineStarts ??= BuildLineStartList(structuralLines);
                 AddSqlGeneratedColumnSymbol(
                     fileId,
                     lines,
-                    lineStarts,
+                    currentLineStarts,
                     new GroupProxy(nameGroup.Value, nameGroup.Index),
                     match.Groups["table"].Value,
-                    symbols);
+                    symbols,
+                    extractionState);
             }
         }
 
-        if (!structuralContent.Contains("CREATE", StringComparison.OrdinalIgnoreCase)
-            || !structuralContent.Contains("TABLE", StringComparison.OrdinalIgnoreCase))
-        {
+        if (!hasCreateTable)
             return;
-        }
 
         foreach (Match tableMatch in SqlCreateTableBodyRegex.Matches(structuralContent))
         {
@@ -4818,15 +4943,43 @@ public static partial class SymbolExtractor
                 if (!nameMatch.Success)
                     continue;
 
+                var currentLineStarts = lineStarts ??= BuildLineStartList(structuralLines);
                 AddSqlGeneratedColumnSymbol(
                     fileId,
                     lines,
-                    lineStarts,
+                    currentLineStarts,
                     new GroupProxy(nameMatch.Groups["name"].Value, column.StartIndex + nameMatch.Groups["name"].Index),
                     tableName,
-                    symbols);
+                    symbols,
+                    extractionState);
             }
         }
+    }
+
+    private static bool TryGetSqlGeneratedColumnContainerMarkers(
+        IReadOnlyList<string> lines,
+        out bool hasAlterAdd,
+        out bool hasCreateTable)
+    {
+        var hasAlter = false;
+        var hasAdd = false;
+        var hasCreate = false;
+        var hasTable = false;
+
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var line = lines[i];
+            hasAlter |= line.IndexOf("ALTER", StringComparison.OrdinalIgnoreCase) >= 0;
+            hasAdd |= line.IndexOf("ADD", StringComparison.OrdinalIgnoreCase) >= 0;
+            hasCreate |= line.IndexOf("CREATE", StringComparison.OrdinalIgnoreCase) >= 0;
+            hasTable |= line.IndexOf("TABLE", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (hasAlter && hasAdd && hasCreate && hasTable)
+                break;
+        }
+
+        hasAlterAdd = hasAlter && hasAdd;
+        hasCreateTable = hasCreate && hasTable;
+        return hasAlterAdd || hasCreateTable;
     }
 
     private static void AddSqlGeneratedColumnSymbol(
@@ -4835,7 +4988,8 @@ public static partial class SymbolExtractor
         List<int> lineStarts,
         IGroupLike nameGroup,
         string rawTableName,
-        List<SymbolRecord> symbols)
+        List<SymbolRecord> symbols,
+        SymbolExtractionState extractionState)
     {
         var name = NormalizeSqlIdentifierSegment(nameGroup.Value);
         if (string.IsNullOrWhiteSpace(name))
@@ -4844,6 +4998,7 @@ public static partial class SymbolExtractor
         var lineNumber = GetLineNumberFromOffset(lineStarts, nameGroup.Index);
         AddSymbolRecord(
             symbols,
+            extractionState,
             null,
             lineNumber,
             new SymbolRecord
@@ -4907,7 +5062,12 @@ public static partial class SymbolExtractor
         return value;
     }
 
-    private static void ExtractSqlDefinerSymbols(long fileId, string[] lines, string[] structuralLines, List<SymbolRecord> symbols)
+    private static void ExtractSqlDefinerSymbols(
+        long fileId,
+        string[] lines,
+        string[] structuralLines,
+        List<SymbolRecord> symbols,
+        SymbolExtractionState extractionState)
     {
         for (var i = 0; i < lines.Length; i++)
         {
@@ -4933,6 +5093,7 @@ public static partial class SymbolExtractor
             var lineNumber = i + 1;
             AddSymbolRecord(
                 symbols,
+                extractionState,
                 null,
                 lineNumber,
                 new SymbolRecord
@@ -4961,69 +5122,84 @@ public static partial class SymbolExtractor
 
     private static string MaskSqlSyntheticSymbolLine(string line, ref bool inBlockComment)
     {
-        var chars = line.ToCharArray();
+        char[]? chars = null;
+
+        void MaskAt(int index) =>
+            (chars ??= line.ToCharArray())[index] = ' ';
+
+        void MaskToEnd(int start)
+        {
+            var masked = chars ??= line.ToCharArray();
+            for (var index = start; index < line.Length; index++)
+                masked[index] = ' ';
+        }
+
         var inSingleQuote = false;
-        for (var i = 0; i < chars.Length; i++)
+        for (var i = 0; i < line.Length; i++)
         {
             if (inBlockComment)
             {
-                if (chars[i] == '*' && i + 1 < chars.Length && chars[i + 1] == '/')
+                if (line[i] == '*' && i + 1 < line.Length && line[i + 1] == '/')
                 {
-                    chars[i] = ' ';
-                    chars[i + 1] = ' ';
+                    MaskAt(i);
+                    MaskAt(i + 1);
                     i++;
                     inBlockComment = false;
                 }
                 else
                 {
-                    chars[i] = ' ';
+                    MaskAt(i);
                 }
                 continue;
             }
 
             if (inSingleQuote)
             {
-                if (chars[i] == '\'' && i + 1 < chars.Length && chars[i + 1] == '\'')
+                if (line[i] == '\'' && i + 1 < line.Length && line[i + 1] == '\'')
                 {
-                    chars[i] = ' ';
-                    chars[i + 1] = ' ';
+                    MaskAt(i);
+                    MaskAt(i + 1);
                     i++;
                     continue;
                 }
 
-                if (chars[i] == '\'')
+                if (line[i] == '\'')
                     inSingleQuote = false;
-                chars[i] = ' ';
+                MaskAt(i);
                 continue;
             }
 
-            if (chars[i] == '-' && i + 1 < chars.Length && chars[i + 1] == '-')
+            if (line[i] == '-' && i + 1 < line.Length && line[i + 1] == '-')
             {
-                for (; i < chars.Length; i++)
-                    chars[i] = ' ';
+                MaskToEnd(i);
                 break;
             }
 
-            if (chars[i] == '/' && i + 1 < chars.Length && chars[i + 1] == '*')
+            if (line[i] == '/' && i + 1 < line.Length && line[i + 1] == '*')
             {
-                chars[i] = ' ';
-                chars[i + 1] = ' ';
+                MaskAt(i);
+                MaskAt(i + 1);
                 i++;
                 inBlockComment = true;
                 continue;
             }
 
-            if (chars[i] == '\'')
+            if (line[i] == '\'')
             {
-                chars[i] = ' ';
+                MaskAt(i);
                 inSingleQuote = true;
             }
         }
 
-        return new string(chars);
+        return chars is null ? line : new string(chars);
     }
 
-    private static void ExtractSqlRoutineResultColumnSymbols(long fileId, string[] lines, string[] structuralLines, List<SymbolRecord> symbols)
+    private static void ExtractSqlRoutineResultColumnSymbols(
+        long fileId,
+        string[] lines,
+        string[] structuralLines,
+        List<SymbolRecord> symbols,
+        SymbolExtractionState extractionState)
     {
         for (var i = 0; i < lines.Length; i++)
         {
@@ -5047,7 +5223,7 @@ public static partial class SymbolExtractor
                 foreach (Match match in SqlReturnsTableRegex.Matches(header))
                 {
                     foreach (var column in EnumerateSqlColumnDefinitions(match.Groups["columns"].Value))
-                        AddSqlRoutineFieldSymbol(fileId, lines, symbols, lineNumber, column.Name, column.Type, ownerName, ownerBodyStart, ownerBodyEnd);
+                        AddSqlRoutineFieldSymbol(fileId, lines, symbols, extractionState, lineNumber, column.Name, column.Type, ownerName, ownerBodyStart, ownerBodyEnd);
                 }
             }
 
@@ -5060,7 +5236,7 @@ public static partial class SymbolExtractor
                     var rawName = match.Groups["name"].Value;
                     var name = NormalizeSqlSymbolSegment(rawName);
                     if (name.Length > 0)
-                        AddSqlRoutineFieldSymbol(fileId, lines, symbols, lineNumber, name, null, ownerName, ownerBodyStart, ownerBodyEnd);
+                        AddSqlRoutineFieldSymbol(fileId, lines, symbols, extractionState, lineNumber, name, null, ownerName, ownerBodyStart, ownerBodyEnd);
                 }
             }
         }
@@ -5223,6 +5399,7 @@ public static partial class SymbolExtractor
         long fileId,
         string[] lines,
         List<SymbolRecord> symbols,
+        SymbolExtractionState extractionState,
         int lineNumber,
         string name,
         string? returnType,
@@ -5232,6 +5409,7 @@ public static partial class SymbolExtractor
     {
         AddSymbolRecord(
             symbols,
+            extractionState,
             null,
             lineNumber,
             new SymbolRecord
@@ -5272,7 +5450,7 @@ public static partial class SymbolExtractor
 
     private static HashSet<string> BuildSymbolLineKeySet(IReadOnlyList<SymbolRecord> symbols)
     {
-        var existing = new HashSet<string>(StringComparer.Ordinal);
+        var existing = new HashSet<string>(symbols.Count, StringComparer.Ordinal);
         foreach (var symbol in symbols)
             existing.Add($"{symbol.Kind}:{symbol.Name}:{symbol.Line}");
         return existing;
@@ -5286,18 +5464,21 @@ public static partial class SymbolExtractor
         return existing;
     }
 
-    private static List<SymbolRecord> BuildPropertySymbolSnapshot(IReadOnlyList<SymbolRecord> symbols, int lineCount)
+    private static IReadOnlyList<SymbolRecord> BuildPropertySymbolSnapshot(IReadOnlyList<SymbolRecord> symbols, int lineCount)
     {
-        var properties = new List<SymbolRecord>();
+        List<SymbolRecord>? properties = null;
         foreach (var symbol in symbols)
         {
             if (symbol.Kind == "property"
                 && symbol.Line >= 1
                 && symbol.Line <= lineCount)
             {
-                properties.Add(symbol);
+                (properties ??= []).Add(symbol);
             }
         }
+
+        if (properties is null)
+            return Array.Empty<SymbolRecord>();
 
         return properties;
     }
@@ -5308,9 +5489,13 @@ public static partial class SymbolExtractor
         string[] structuralLines,
         List<SymbolRecord> symbols)
     {
+        var properties = BuildPropertySymbolSnapshot(symbols, lines.Length);
+        if (properties.Count == 0)
+            return;
+
         var existing = BuildSymbolLineKeySet(symbols);
 
-        foreach (var property in BuildPropertySymbolSnapshot(symbols, lines.Length))
+        foreach (var property in properties)
         {
             var lineIndex = property.Line - 1;
             var openBraceColumn = structuralLines[lineIndex].IndexOf('{', StringComparison.Ordinal);
@@ -5379,9 +5564,13 @@ public static partial class SymbolExtractor
         string[] structuralLines,
         List<SymbolRecord> symbols)
     {
+        var properties = BuildPropertySymbolSnapshot(symbols, lines.Length);
+        if (properties.Count == 0)
+            return;
+
         var existing = BuildSymbolLineKeySet(symbols);
 
-        foreach (var property in BuildPropertySymbolSnapshot(symbols, lines.Length))
+        foreach (var property in properties)
         {
             var lineIndex = property.Line - 1;
             var propertyLine = lines[lineIndex];
@@ -5591,8 +5780,15 @@ public static partial class SymbolExtractor
         return false;
     }
 
-    private static void ExtractCppFriendDeclarationSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    private static void ExtractCppFriendDeclarationSymbols(
+        long fileId,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        SymbolExtractionState extractionState)
     {
+        if (!LinesContain(lines, "friend", StringComparison.Ordinal))
+            return;
+
         var declared = BuildSymbolKindNameKeySet(symbols);
         var inBlockComment = false;
 
@@ -5617,29 +5813,40 @@ public static partial class SymbolExtractor
                 var kind = NormalizeCppFriendTypeKind(match.Groups["kind"].Value);
                 var group = match.Groups["name"];
                 var name = LastCppDeclarationSegment(group.Value);
-                AddCppFriendDeclarationSymbol(fileId, symbols, declared, kind, name, lineNumber, group.Index, line);
+                AddCppFriendDeclarationSymbol(fileId, symbols, extractionState, declared, kind, name, lineNumber, group.Index, line);
             }
 
             foreach (Match match in CppFriendFunctionDeclarationRegex.Matches(matchLine))
             {
                 var group = match.Groups["name"];
                 var name = LastCppDeclarationSegment(group.Value);
-                AddCppFriendDeclarationSymbol(fileId, symbols, declared, "function", name, lineNumber, group.Index, line);
+                AddCppFriendDeclarationSymbol(fileId, symbols, extractionState, declared, "function", name, lineNumber, group.Index, line);
             }
         }
     }
 
     private static string MaskCppFriendDeclarationLine(string line, ref bool inBlockComment)
     {
-        var chars = line.ToCharArray();
-        for (var cursor = 0; cursor < chars.Length; cursor++)
+        char[]? chars = null;
+
+        void MaskAt(int index) =>
+            (chars ??= line.ToCharArray())[index] = ' ';
+
+        void MaskToEnd(int start)
+        {
+            var masked = chars ??= line.ToCharArray();
+            for (var index = start; index < line.Length; index++)
+                masked[index] = ' ';
+        }
+
+        for (var cursor = 0; cursor < line.Length; cursor++)
         {
             if (inBlockComment)
             {
-                chars[cursor] = ' ';
+                MaskAt(cursor);
                 if (cursor + 1 < line.Length && line[cursor] == '*' && line[cursor + 1] == '/')
                 {
-                    chars[++cursor] = ' ';
+                    MaskAt(++cursor);
                     inBlockComment = false;
                 }
 
@@ -5648,15 +5855,14 @@ public static partial class SymbolExtractor
 
             if (cursor + 1 < line.Length && line[cursor] == '/' && line[cursor + 1] == '/')
             {
-                while (cursor < chars.Length)
-                    chars[cursor++] = ' ';
+                MaskToEnd(cursor);
                 break;
             }
 
             if (cursor + 1 < line.Length && line[cursor] == '/' && line[cursor + 1] == '*')
             {
-                chars[cursor++] = ' ';
-                chars[cursor] = ' ';
+                MaskAt(cursor++);
+                MaskAt(cursor);
                 inBlockComment = true;
                 continue;
             }
@@ -5664,19 +5870,19 @@ public static partial class SymbolExtractor
             if (line[cursor] is '"' or '\'')
             {
                 var quote = line[cursor];
-                chars[cursor++] = ' ';
-                while (cursor < chars.Length)
+                MaskAt(cursor++);
+                while (cursor < line.Length)
                 {
                     if (line[cursor] == '\\' && cursor + 1 < line.Length)
                     {
-                        chars[cursor++] = ' ';
-                        chars[cursor] = ' ';
+                        MaskAt(cursor++);
+                        MaskAt(cursor);
                         cursor++;
                         continue;
                     }
 
                     var closes = line[cursor] == quote;
-                    chars[cursor++] = ' ';
+                    MaskAt(cursor++);
                     if (closes)
                         break;
                 }
@@ -5685,7 +5891,7 @@ public static partial class SymbolExtractor
             }
         }
 
-        return new string(chars);
+        return chars is null ? line : new string(chars);
     }
 
     private static bool IsCSharpTestMethod(string[] lines, int declarationLineIndex)
@@ -5745,6 +5951,7 @@ public static partial class SymbolExtractor
     private static void AddCppFriendDeclarationSymbol(
         long fileId,
         List<SymbolRecord> symbols,
+        SymbolExtractionState extractionState,
         HashSet<string> declared,
         string kind,
         string name,
@@ -5757,6 +5964,7 @@ public static partial class SymbolExtractor
 
         AddSymbolRecord(
             symbols,
+            extractionState,
             cssSeenSymbols: null,
             lineNumber,
             new SymbolRecord
@@ -5780,8 +5988,8 @@ public static partial class SymbolExtractor
     {
         var text = value.Trim();
         var qualifierIndex = text.LastIndexOf("::", StringComparison.Ordinal);
-        var leaf = qualifierIndex >= 0 ? text[(qualifierIndex + 2)..].Trim() : text;
-        if (!leaf.StartsWith("operator", StringComparison.Ordinal))
+        var leaf = qualifierIndex >= 0 ? text.AsSpan(qualifierIndex + 2).Trim() : text.AsSpan();
+        if (!leaf.StartsWith("operator".AsSpan(), StringComparison.Ordinal))
         {
             var genericIndex = text.IndexOf('<');
             if (genericIndex >= 0)
@@ -5817,7 +6025,39 @@ public static partial class SymbolExtractor
         }
     }
 
-    private static readonly ConditionalWeakTable<List<SymbolRecord>, SymbolAddState> SymbolAddStates = new();
+    private sealed class SymbolExtractionState
+    {
+        private readonly SymbolAddState _symbolAddState = new();
+        private readonly SymbolLineIdentityState _symbolLineIdentityState = new();
+
+        public static SymbolExtractionState FromSymbols(List<SymbolRecord> symbols)
+        {
+            var state = new SymbolExtractionState();
+            foreach (var symbol in symbols)
+                state.Record(symbol);
+            return state;
+        }
+
+        public int GetExactDuplicateCount(SymbolRecord symbol) =>
+            _symbolAddState.GetExactDuplicateCount(symbol);
+
+        public int? GetSameLineSignatureOccurrenceIndex(SymbolRecord symbol) =>
+            _symbolAddState.GetSameLineSignatureOccurrenceIndex(symbol);
+
+        public bool HasSymbolLineIdentity(List<SymbolRecord> symbols, SymbolLineIdentity identity) =>
+            _symbolLineIdentityState.Contains(symbols, identity);
+
+        public void Record(SymbolRecord symbol) =>
+            _symbolAddState.Record(symbol);
+
+        public void Remove(SymbolRecord symbol) =>
+            _symbolAddState.Remove(symbol);
+    }
+
+    private sealed class SymbolExtractionList : List<SymbolRecord>
+    {
+        public SymbolExtractionState ExtractionState { get; } = new();
+    }
 
     private sealed class SymbolAddState
     {
@@ -5909,8 +6149,6 @@ public static partial class SymbolExtractor
 
     private readonly record struct SymbolLineIdentity(long FileId, int Line, string Kind, string Name);
 
-    private static readonly ConditionalWeakTable<List<SymbolRecord>, SymbolLineIdentityState> SymbolLineIdentityStates = new();
-
     private sealed class SymbolLineIdentityState
     {
         private readonly HashSet<SymbolLineIdentity> _identities = [];
@@ -5937,7 +6175,9 @@ public static partial class SymbolExtractor
 
     private static HashSet<SymbolLineIdentity> BuildSymbolLineIdentities(IEnumerable<SymbolRecord> symbols)
     {
-        var identities = new HashSet<SymbolLineIdentity>();
+        var identities = symbols is ICollection<SymbolRecord> collection
+            ? new HashSet<SymbolLineIdentity>(collection.Count)
+            : new HashSet<SymbolLineIdentity>();
         foreach (var symbol in symbols)
             identities.Add(GetSymbolLineIdentity(symbol));
         return identities;
@@ -5955,13 +6195,13 @@ public static partial class SymbolExtractor
         => identities.Contains(new SymbolLineIdentity(fileId, lineNumber, kind, name));
 
     private static bool HasSymbolLineIdentity(
+        SymbolExtractionState extractionState,
         List<SymbolRecord> symbols,
         long fileId,
         int lineNumber,
         string kind,
         string name)
-        => SymbolLineIdentityStates.GetValue(symbols, _ => new SymbolLineIdentityState())
-            .Contains(symbols, new SymbolLineIdentity(fileId, lineNumber, kind, name));
+        => extractionState.HasSymbolLineIdentity(symbols, new SymbolLineIdentity(fileId, lineNumber, kind, name));
 
     private static void RecordSymbolLineIdentity(HashSet<SymbolLineIdentity> identities, SymbolRecord symbol)
         => identities.Add(GetSymbolLineIdentity(symbol));
@@ -5971,7 +6211,8 @@ public static partial class SymbolExtractor
         long fileId,
         string line,
         int lineNumber,
-        List<SymbolRecord> symbols)
+        List<SymbolRecord> symbols,
+        SymbolExtractionState extractionState)
     {
         var codeLine = StripRCommentForPackageLoader(line);
         var startMatch = RPacmanPackageLoaderStartRegex.Match(codeLine);
@@ -5990,6 +6231,7 @@ public static partial class SymbolExtractor
 
             AddSymbolRecord(
                 symbols,
+                extractionState,
                 cssSeenSymbols: null,
                 lineNumber,
                 new SymbolRecord
@@ -6070,8 +6312,22 @@ public static partial class SymbolExtractor
         return false;
     }
 
+    private static SymbolExtractionState ResolveExtractionState(List<SymbolRecord> symbols) =>
+        symbols is SymbolExtractionList extractionSymbols
+            ? extractionSymbols.ExtractionState
+            : SymbolExtractionState.FromSymbols(symbols);
+
     private static void AddSymbolRecord(
         List<SymbolRecord> symbols,
+        HashSet<string>? cssSeenSymbols,
+        int lineNumber,
+        SymbolRecord symbol,
+        string? rawLine = null) =>
+        AddSymbolRecord(symbols, ResolveExtractionState(symbols), cssSeenSymbols, lineNumber, symbol, rawLine);
+
+    private static void AddSymbolRecord(
+        List<SymbolRecord> symbols,
+        SymbolExtractionState extractionState,
         HashSet<string>? cssSeenSymbols,
         int lineNumber,
         SymbolRecord symbol,
@@ -6079,8 +6335,6 @@ public static partial class SymbolExtractor
     {
         if (string.IsNullOrWhiteSpace(symbol.Name))
             return;
-
-        var state = SymbolAddStates.GetValue(symbols, _ => new SymbolAddState());
 
         if (cssSeenSymbols != null)
         {
@@ -6092,10 +6346,10 @@ public static partial class SymbolExtractor
         if (symbol.Kind == "function"
             && (symbol.BodyStartLine != null || symbol.BodyEndLine != null))
         {
-            RemoveTrailingSameNameDeclarationOnlyFunctions(symbols, symbol);
+            RemoveTrailingSameNameDeclarationOnlyFunctions(symbols, extractionState, symbol);
         }
 
-        symbol.SameLineSignatureOccurrenceIndex = state.GetSameLineSignatureOccurrenceIndex(symbol);
+        symbol.SameLineSignatureOccurrenceIndex = extractionState.GetSameLineSignatureOccurrenceIndex(symbol);
 
         // Same-line restart paths can legitimately revisit the same declaration from a
         // different regex row or restart offset. Suppress only exact duplicate symbol
@@ -6106,19 +6360,22 @@ public static partial class SymbolExtractor
         // 再訪しうる。ここでは exact duplicate の `SymbolRecord` だけを抑止し、
         // mixed-kind 回復で同じ宣言が二重出力されるのを防ぎつつ、範囲や signature が
         // 異なる正当な overload / sibling はそのまま残す。Closes #472 / #473 follow-up.
-        var duplicateCount = state.GetExactDuplicateCount(symbol);
+        var duplicateCount = extractionState.GetExactDuplicateCount(symbol);
         if (duplicateCount > 0
             && !HasRemainingSameLineSignatureOccurrence(symbol, rawLine, duplicateCount))
         {
             return;
         }
 
-        state.Record(symbol);
+        extractionState.Record(symbol);
         symbols.Add(symbol);
     }
 
 
-    private static void RemoveTrailingSameNameDeclarationOnlyFunctions(List<SymbolRecord> symbols, SymbolRecord symbol)
+    private static void RemoveTrailingSameNameDeclarationOnlyFunctions(
+        List<SymbolRecord> symbols,
+        SymbolExtractionState extractionState,
+        SymbolRecord symbol)
     {
         for (var index = symbols.Count - 1; index >= 0; index--)
         {
@@ -6144,6 +6401,7 @@ public static partial class SymbolExtractor
                 break;
             }
 
+            extractionState.Remove(prior);
             symbols.RemoveAt(index);
         }
     }
@@ -6563,10 +6821,12 @@ public static partial class SymbolExtractor
 
     private sealed class CSharpCallableParameterScope
     {
-        private readonly bool[] _lineStartInsideParameterList;
-        private readonly List<(int Column, bool IsInsideParameterList)>?[] _transitions;
+        public static readonly CSharpCallableParameterScope Empty = new(null, null);
 
-        public CSharpCallableParameterScope(bool[] lineStartInsideParameterList, List<(int Column, bool IsInsideParameterList)>?[] transitions)
+        private readonly bool[]? _lineStartInsideParameterList;
+        private readonly List<(int Column, bool IsInsideParameterList)>?[]? _transitions;
+
+        public CSharpCallableParameterScope(bool[]? lineStartInsideParameterList, List<(int Column, bool IsInsideParameterList)>?[]? transitions)
         {
             _lineStartInsideParameterList = lineStartInsideParameterList;
             _transitions = transitions;
@@ -6574,8 +6834,8 @@ public static partial class SymbolExtractor
 
         public bool IsInsideParameterListAt(int lineIndex, int column)
         {
-            var state = _lineStartInsideParameterList[lineIndex];
-            var transitions = _transitions[lineIndex];
+            var state = _lineStartInsideParameterList?[lineIndex] ?? false;
+            var transitions = _transitions?[lineIndex];
             if (transitions == null)
                 return state;
 
@@ -6594,14 +6854,18 @@ public static partial class SymbolExtractor
         string[] structuralLines,
         CSharpTypeBodyScope typeBodyScope)
     {
-        var lineStartInsideParameterList = new bool[structuralLines.Length];
-        var transitions = new List<(int Column, bool IsInsideParameterList)>?[structuralLines.Length];
-        var declarationBuffer = new StringBuilder();
+        if (!LinesContain(structuralLines, "(", StringComparison.Ordinal))
+            return CSharpCallableParameterScope.Empty;
+
+        bool[]? lineStartInsideParameterList = null;
+        List<(int Column, bool IsInsideParameterList)>?[]? transitions = null;
+        var declarationBuffer = new StringBuilder(256);
         var parameterParenDepth = 0;
 
         for (int lineIndex = 0; lineIndex < structuralLines.Length; lineIndex++)
         {
-            lineStartInsideParameterList[lineIndex] = parameterParenDepth > 0;
+            if (parameterParenDepth > 0)
+                (lineStartInsideParameterList ??= new bool[structuralLines.Length])[lineIndex] = true;
             var line = structuralLines[lineIndex];
 
             for (int cursor = 0; cursor < line.Length; cursor++)
@@ -6617,7 +6881,7 @@ public static partial class SymbolExtractor
                     {
                         parameterParenDepth--;
                         if (parameterParenDepth == 0)
-                            (transitions[lineIndex] ??= new List<(int, bool)>()).Add((cursor, false));
+                            AddCSharpCallableParameterTransition(ref transitions, structuralLines.Length, lineIndex, cursor, false);
                     }
 
                     declarationBuffer.Append(ch);
@@ -6629,7 +6893,7 @@ public static partial class SymbolExtractor
                     && IsCSharpCallableHeaderBeforeParameterList(declarationBuffer.ToString()))
                 {
                     parameterParenDepth = 1;
-                    (transitions[lineIndex] ??= new List<(int, bool)>()).Add((cursor, true));
+                    AddCSharpCallableParameterTransition(ref transitions, structuralLines.Length, lineIndex, cursor, true);
                     declarationBuffer.Append(ch);
                     continue;
                 }
@@ -6645,6 +6909,17 @@ public static partial class SymbolExtractor
         }
 
         return new CSharpCallableParameterScope(lineStartInsideParameterList, transitions);
+    }
+
+    private static void AddCSharpCallableParameterTransition(
+        ref List<(int Column, bool IsInsideParameterList)>?[]? transitions,
+        int lineCount,
+        int lineIndex,
+        int column,
+        bool isInsideParameterList)
+    {
+        var transitionsByLine = transitions ??= new List<(int, bool)>?[lineCount];
+        (transitionsByLine[lineIndex] ??= []).Add((column, isInsideParameterList));
     }
 
     private static bool IsCSharpCallableHeaderBeforeParameterList(string header)
@@ -6793,22 +7068,29 @@ public static partial class SymbolExtractor
 
     private sealed class DartClassBodyScope
     {
-        private readonly bool[] _lineStartInsideClassBody;
+        public static readonly DartClassBodyScope Empty = new(null);
 
-        public DartClassBodyScope(bool[] lineStartInsideClassBody)
+        private readonly bool[]? _lineStartInsideClassBody;
+
+        public DartClassBodyScope(bool[]? lineStartInsideClassBody)
         {
             _lineStartInsideClassBody = lineStartInsideClassBody;
         }
 
-        public bool IsInsideClassBodyAt(int lineIndex) => _lineStartInsideClassBody[lineIndex];
+        public bool IsInsideClassBodyAt(int lineIndex) => _lineStartInsideClassBody?[lineIndex] ?? false;
     }
 
     private static DartClassBodyScope BuildDartClassBodyScope(string[] structuralLines)
     {
+        if (!LinesContain(structuralLines, "class", StringComparison.Ordinal))
+            return DartClassBodyScope.Empty;
+        if (!LinesContain(structuralLines, "{", StringComparison.Ordinal))
+            return DartClassBodyScope.Empty;
+
         var lineStartInsideClassBody = new bool[structuralLines.Length];
         var scopeStack = new Stack<bool>();
         scopeStack.Push(false);
-        var declBuffer = new StringBuilder();
+        var declBuffer = new StringBuilder(256);
 
         for (int lineIndex = 0; lineIndex < structuralLines.Length; lineIndex++)
         {
@@ -6847,7 +7129,7 @@ public static partial class SymbolExtractor
     private static bool[] FindCSharpSwitchExpressionLines(string[] structuralLines)
     {
         var switchExpressionLines = new bool[structuralLines.Length];
-        var braceKinds = new Stack<bool>();
+        Stack<bool>? braceKinds = null;
         var activeSwitchExpressionDepth = 0;
         var pendingSwitchExpression = 0;
         var pendingSwitchKeyword = false;
@@ -6912,7 +7194,7 @@ public static partial class SymbolExtractor
                 if (line[cursor] == '{')
                 {
                     var startsSwitchExpression = pendingSwitchExpression > 0;
-                    braceKinds.Push(startsSwitchExpression);
+                    (braceKinds ??= new Stack<bool>()).Push(startsSwitchExpression);
                     if (startsSwitchExpression)
                     {
                         pendingSwitchExpression--;
@@ -6922,7 +7204,7 @@ public static partial class SymbolExtractor
                     continue;
                 }
 
-                if (line[cursor] == '}' && braceKinds.Count > 0)
+                if (line[cursor] == '}' && braceKinds != null && braceKinds.Count > 0)
                 {
                     if (braceKinds.Pop())
                         activeSwitchExpressionDepth--;
@@ -7545,9 +7827,8 @@ public static partial class SymbolExtractor
         return -1;
     }
 
-    private static List<RecordPrimaryComponentSlice> SplitTopLevelRecordPrimaryComponents(string parameterList, int firstLineNumber)
+    private static IEnumerable<RecordPrimaryComponentSlice> SplitTopLevelRecordPrimaryComponents(string parameterList, int firstLineNumber)
     {
-        var components = new List<RecordPrimaryComponentSlice>();
         var builder = new System.Text.StringBuilder();
         var parenDepth = 0;
         var angleDepth = 0;
@@ -7651,7 +7932,7 @@ public static partial class SymbolExtractor
                 case ',' when parenDepth == 0 && angleDepth == 0 && bracketDepth == 0 && braceDepth == 0:
                     var component = builder.ToString().Trim();
                     if (component.Length > 0)
-                        components.Add(new RecordPrimaryComponentSlice(component, componentLineNumber));
+                        yield return new RecordPrimaryComponentSlice(component, componentLineNumber);
                     builder.Clear();
                     componentHasToken = false;
                     componentLineNumber = currentLineNumber;
@@ -7666,9 +7947,7 @@ public static partial class SymbolExtractor
 
         var trailingComponent = builder.ToString().Trim();
         if (trailingComponent.Length > 0)
-            components.Add(new RecordPrimaryComponentSlice(trailingComponent, componentLineNumber));
-
-        return components;
+            yield return new RecordPrimaryComponentSlice(trailingComponent, componentLineNumber);
     }
 
     private static string StripRecordComponentComments(string text)
@@ -7917,7 +8196,7 @@ public static partial class SymbolExtractor
                         braceDepth--;
                     continue;
                 case '=' when parenDepth == 0 && angleDepth == 0 && bracketDepth == 0 && braceDepth == 0:
-                    return text[..i].TrimEnd();
+                    return SliceCSharpTrimEnd(text, i);
             }
         }
 
@@ -8665,6 +8944,12 @@ public static partial class SymbolExtractor
 
     private static List<ContainerAssignmentSortEntry> BuildContainerAssignmentOrder(IReadOnlyList<SymbolRecord> symbols)
     {
+        if (symbols.Count == 0)
+            return [];
+
+        if (symbols.Count == 1)
+            return [new ContainerAssignmentSortEntry(symbols[0], 0)];
+
         var ordered = new List<ContainerAssignmentSortEntry>(symbols.Count);
         for (var i = 0; i < symbols.Count; i++)
             ordered.Add(new ContainerAssignmentSortEntry(symbols[i], i));
@@ -8708,6 +8993,14 @@ public static partial class SymbolExtractor
     {
         if (containers.Count == 0)
             return [];
+
+        if (containers.Count == 1)
+        {
+            var container = containers.Peek();
+            return ContainsSymbol(container, symbol, rawLines, csharpLineStartStates)
+                ? [container]
+                : [];
+        }
 
         var orderedContainers = containers.ToArray();
         var containingContainers = new List<SymbolRecord>(orderedContainers.Length);
@@ -8807,7 +9100,7 @@ public static partial class SymbolExtractor
             return false;
         }
 
-        var categoryName = match.Groups["category"].Value.Trim();
+        var categoryName = match.Groups["category"].ValueSpan.Trim().ToString();
         if (categoryName.Length == 0)
         {
             displayName = string.Empty;
@@ -9166,10 +9459,14 @@ public static partial class SymbolExtractor
 
     private static string? NormalizeMetadata(string? value)
     {
-        if (string.IsNullOrWhiteSpace(value))
+        if (value is null)
             return null;
 
-        return value.Trim();
+        var trimmed = value.AsSpan().Trim();
+        if (trimmed.IsEmpty)
+            return null;
+
+        return trimmed.Length == value.Length ? value : trimmed.ToString();
     }
 
     private static string NormalizeExtractedSymbolName(string? lang, string name, Match match, string matchLine)
@@ -9314,7 +9611,7 @@ public static partial class SymbolExtractor
                             ContainerName = trait.Name,
                             ContainerQualifiedName = trait.ContainerQualifiedName,
                             Visibility = match.Groups["visibility"].Success ? match.Groups["visibility"].Value : null,
-                            ReturnType = match.Groups["returnType"].Value.Trim(),
+                            ReturnType = match.Groups["returnType"].ValueSpan.Trim().ToString(),
                         });
                     }
                 }
@@ -9324,9 +9621,9 @@ public static partial class SymbolExtractor
         }
     }
 
-    private static List<SymbolRecord> BuildRustAssociatedTypeContainerSnapshot(IReadOnlyList<SymbolRecord> symbols)
+    private static IReadOnlyList<SymbolRecord> BuildRustAssociatedTypeContainerSnapshot(IReadOnlyList<SymbolRecord> symbols)
     {
-        var candidates = new List<(SymbolRecord Symbol, int OriginalIndex)>();
+        List<(SymbolRecord Symbol, int OriginalIndex)>? candidates = null;
         for (var index = 0; index < symbols.Count; index++)
         {
             var symbol = symbols[index];
@@ -9334,9 +9631,15 @@ public static partial class SymbolExtractor
                 && symbol.BodyStartLine is > 0
                 && symbol.BodyEndLine is > 0)
             {
-                candidates.Add((symbol, index));
+                (candidates ??= []).Add((symbol, index));
             }
         }
+
+        if (candidates is null)
+            return Array.Empty<SymbolRecord>();
+
+        if (candidates.Count == 1)
+            return [candidates[0].Symbol];
 
         candidates.Sort(static (left, right) =>
         {
@@ -9346,9 +9649,9 @@ public static partial class SymbolExtractor
                 : left.OriginalIndex.CompareTo(right.OriginalIndex);
         });
 
-        var snapshot = new List<SymbolRecord>(candidates.Count);
-        foreach (var candidate in candidates)
-            snapshot.Add(candidate.Symbol);
+        var snapshot = new SymbolRecord[candidates.Count];
+        for (var i = 0; i < candidates.Count; i++)
+            snapshot[i] = candidates[i].Symbol;
         return snapshot;
     }
 

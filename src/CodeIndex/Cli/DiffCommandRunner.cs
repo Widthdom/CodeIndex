@@ -808,7 +808,7 @@ public static class DiffCommandRunner
             return value;
 
         var sample = value[..MaxDiffEncodedFieldSampleLength];
-        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+        var hash = HexEncoding.ToLowerHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
         return sample
             + "...[truncated original_length="
             + value.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)

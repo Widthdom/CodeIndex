@@ -34,7 +34,7 @@ internal static class CSharpSymbolNameNormalizer
     {
         name = string.Empty;
 
-        var conversionKind = match.Groups["conversionKind"].Value.Trim();
+        var conversionKind = match.Groups["conversionKind"].ValueSpan.Trim().ToString();
         if (conversionKind.Length == 0)
             return false;
 
@@ -64,7 +64,7 @@ internal static class CSharpSymbolNameNormalizer
     private static bool TryReadTypeUntilParameterList(string line, int startIndex, out string typeName)
     {
         typeName = string.Empty;
-        var builder = new StringBuilder();
+        var builder = new StringBuilder(Math.Max(0, line.Length - startIndex));
         var angleDepth = 0;
         var bracketDepth = 0;
         var parenDepth = 0;
@@ -168,6 +168,14 @@ internal static class CSharpSymbolNameNormalizer
     }
 
     internal static bool IsVerbatimIdentifierPrefix(string value, int index)
+    {
+        if (value[index] != '@' || index + 1 >= value.Length || !IsIdentifierStart(value[index + 1]))
+            return false;
+
+        return index == 0 || !IsIdentifierChar(value[index - 1]);
+    }
+
+    internal static bool IsVerbatimIdentifierPrefix(ReadOnlySpan<char> value, int index)
     {
         if (value[index] != '@' || index + 1 >= value.Length || !IsIdentifierStart(value[index + 1]))
             return false;

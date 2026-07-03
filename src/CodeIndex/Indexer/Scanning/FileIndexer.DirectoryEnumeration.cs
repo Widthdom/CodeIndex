@@ -94,7 +94,7 @@ public partial class FileIndexer
         var seenFilePaths = !passthrough && directoryIgnoreCase
             ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             : null;
-        var subdirectories = new List<string>();
+        List<ScannedSubdirectory>? subdirectories = null;
         var danglingCandidateLimit = _maxDanglingFileSystemEntryScanCandidates;
         var danglingCandidateCount = 0;
         var danglingScanTruncated = false;
@@ -117,20 +117,30 @@ public partial class FileIndexer
 
             if ((attributes & FileAttributes.Directory) != 0)
             {
-                subdirectories.Add(entry);
+                (subdirectories ??= new List<ScannedSubdirectory>())
+                    .Add(new ScannedSubdirectory(entry, attributes));
                 continue;
             }
 
             if (passthrough)
                 continue;
 
-            if (TryAcceptScannedFile(entry, scanState, activeIgnoreRules, seenFilePaths, attributes))
+            if (TryAcceptScannedFile(
+                    entry,
+                    scanState,
+                    activeIgnoreRules,
+                    seenFilePaths,
+                    knownAttributes: attributes,
+                    filePathCameFromDirectoryEnumeration: true))
                 scanState.Results.Add(entry);
         }
 
         // A successful immediate-child listing proves this directory for sibling-file purge.
         // Child recursion happens after that authority has been captured.
         scanState.ListedDirectories.Add(relativeDir);
+        if (subdirectories == null)
+            return true;
+
         return ProcessSubdirectories(
             subdirectories,
             scanState,

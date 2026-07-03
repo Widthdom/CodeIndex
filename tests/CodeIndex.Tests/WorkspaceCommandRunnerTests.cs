@@ -258,16 +258,20 @@ public class WorkspaceCommandRunnerTests
                 }
                 """);
 
-            PathCasing.ResetCacheForTests();
-            PathCasing.SeedFromWorkspace(root, ignoreCase: false);
+            lock (PathCasingTestLock.Gate)
+            {
+                PathCasing.ResetCacheForTests();
+                PathCasing.SeedFromWorkspace(root, ignoreCase: false);
 
-            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+                var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
 
-            Assert.Contains("member path escapes the manifest root", ex.Message);
+                Assert.Contains("member path escapes the manifest root", ex.Message);
+            }
         }
         finally
         {
-            PathCasing.ResetCacheForTests();
+            lock (PathCasingTestLock.Gate)
+                PathCasing.ResetCacheForTests();
             TestProjectHelper.DeleteDirectory(root);
         }
     }
@@ -1371,40 +1375,43 @@ public class WorkspaceCommandRunnerTests
     [Fact]
     public void WorkspaceUse_CaseSensitiveMemberSelectionDistinguishesCaseOnlyBasenames_Issue3805()
     {
-        PathCasing.ResetCacheForTests();
         var root = TestProjectHelper.CreateTempProject("cdidx_workspace_use_case_sensitive");
         var configHome = TestProjectHelper.CreateTempProject("cdidx_workspace_use_case_sensitive_config");
         try
         {
-            Directory.CreateDirectory(Path.Combine(root, "src", "App"));
-            Directory.CreateDirectory(Path.Combine(root, "src", "app"));
-            File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """{ "members": ["src/App", "src/app"] }""");
-            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
-            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
-            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
-            PathCasing.SeedFromWorkspace(root, ignoreCase: false);
-
-            var previous = Environment.CurrentDirectory;
-            try
+            lock (PathCasingTestLock.Gate)
             {
-                Environment.CurrentDirectory = root;
-                var (exitCode, _, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["use", "App"], _jsonOptions));
+                PathCasing.ResetCacheForTests();
+                Directory.CreateDirectory(Path.Combine(root, "src", "App"));
+                Directory.CreateDirectory(Path.Combine(root, "src", "app"));
+                File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """{ "members": ["src/App", "src/app"] }""");
+                using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+                Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+                Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+                PathCasing.SeedFromWorkspace(root, ignoreCase: false);
 
-                Assert.Equal(CommandExitCodes.Success, exitCode);
-                Assert.Equal(string.Empty, stderr);
-                var state = ActiveWorkspace.Load();
-                Assert.NotNull(state);
-                Assert.Equal("App", state.Name);
-                Assert.Equal(Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, "src", "App")), state.Root);
-            }
-            finally
-            {
-                Environment.CurrentDirectory = previous;
+                var previous = Environment.CurrentDirectory;
+                try
+                {
+                    Environment.CurrentDirectory = root;
+                    var (exitCode, _, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["use", "App"], _jsonOptions));
+
+                    Assert.Equal(CommandExitCodes.Success, exitCode);
+                    Assert.Equal(string.Empty, stderr);
+                    var state = ActiveWorkspace.Load();
+                    Assert.NotNull(state);
+                    Assert.Equal("App", state.Name);
+                    Assert.Equal(Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, "src", "App")), state.Root);
+                }
+                finally
+                {
+                    Environment.CurrentDirectory = previous;
+                    PathCasing.ResetCacheForTests();
+                }
             }
         }
         finally
         {
-            PathCasing.ResetCacheForTests();
             TestProjectHelper.DeleteDirectory(root);
             TestProjectHelper.DeleteDirectory(configHome);
         }

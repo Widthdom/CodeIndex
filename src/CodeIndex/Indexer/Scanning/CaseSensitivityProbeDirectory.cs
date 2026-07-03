@@ -186,8 +186,7 @@ internal static class CaseSensitivityProbeDirectory
         }
 
         private static string NormalizeRelativePath(string path)
-            => path.Replace(System.IO.Path.DirectorySeparatorChar, '/')
-                .Replace(System.IO.Path.AltDirectorySeparatorChar, '/');
+            => FileIndexer.NormalizePathSeparators(path);
     }
 
     internal readonly record struct ProbeDirectoryScope(

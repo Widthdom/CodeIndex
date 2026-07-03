@@ -8,9 +8,19 @@ namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
-    private static void ExtractJavaModuleDirectiveSymbols(long fileId, string[] rawLines, string[] structuralLines, List<SymbolRecord> symbols)
+    private static void ExtractJavaModuleDirectiveSymbols(
+        long fileId,
+        string[] rawLines,
+        string[] structuralLines,
+        List<SymbolRecord> symbols,
+        SymbolExtractionState extractionState)
     {
+        if (!LinesContain(structuralLines, "module", StringComparison.Ordinal))
+            return;
+
         var moduleDeclarations = BuildJavaModuleDeclarationSnapshot(symbols);
+        if (moduleDeclarations is null)
+            return;
 
         foreach (var moduleDeclaration in moduleDeclarations)
         {
@@ -21,6 +31,7 @@ public static partial class SymbolExtractor
 
                 AddSymbolRecord(
                     symbols,
+                    extractionState,
                     cssSeenSymbols: null,
                     statement.StartLine,
                     new SymbolRecord
@@ -39,15 +50,21 @@ public static partial class SymbolExtractor
         }
     }
 
-    private static List<SymbolRecord> BuildJavaModuleDeclarationSnapshot(IReadOnlyList<SymbolRecord> symbols)
+    private static IReadOnlyList<SymbolRecord>? BuildJavaModuleDeclarationSnapshot(IReadOnlyList<SymbolRecord> symbols)
     {
-        var candidates = new List<(SymbolRecord Symbol, int OriginalIndex)>();
+        List<(SymbolRecord Symbol, int OriginalIndex)>? candidates = null;
         for (var index = 0; index < symbols.Count; index++)
         {
             var symbol = symbols[index];
             if (symbol.Kind == "namespace" && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
-                candidates.Add((symbol, index));
+                (candidates ??= []).Add((symbol, index));
         }
+
+        if (candidates is not { Count: > 0 })
+            return null;
+
+        if (candidates.Count == 1)
+            return [candidates[0].Symbol];
 
         candidates.Sort(static (left, right) =>
         {
@@ -83,7 +100,7 @@ public static partial class SymbolExtractor
         if (startLineIndex < 0 || startLineIndex >= rawLines.Length || endLineIndex < startLineIndex)
             yield break;
 
-        var rawBuilder = new StringBuilder();
+        var rawBuilder = new StringBuilder(rawLines[startLineIndex].Length);
         var statementStartLine = -1;
         var statementStartColumn = -1;
 
@@ -168,7 +185,7 @@ public static partial class SymbolExtractor
         if (!match.Success)
             return false;
 
-        name = match.Groups["name"].Value.Trim();
+        name = match.Groups["name"].ValueSpan.Trim().ToString();
         return name.Length > 0;
     }
 
@@ -284,6 +301,9 @@ public static partial class SymbolExtractor
 
     private static void ExtractJavaEnumMembers(long fileId, string[] rawLines, List<SymbolRecord> symbols)
     {
+        if (!LinesContain(rawLines, "enum", StringComparison.Ordinal))
+            return;
+
         // Snapshot enum declarations first — we mutate the list during iteration.
         // 反復中に list を書き換えるため、先に enum 宣言を snapshot しておく。
         var enumDeclarations = BuildEnumDeclarationSnapshot(symbols);
@@ -307,6 +327,9 @@ public static partial class SymbolExtractor
 
     private static void ExtractJavaCompactConstructors(long fileId, string[] rawLines, List<SymbolRecord> symbols)
     {
+        if (!LinesContain(rawLines, "record", StringComparison.Ordinal))
+            return;
+
         var recordDeclarations = BuildJavaRecordDeclarationSnapshot(fileId, rawLines, symbols);
 
         foreach (var recordSymbol in recordDeclarations)
@@ -415,7 +438,7 @@ public static partial class SymbolExtractor
 
     private static List<SymbolRecord> BuildJavaRecordDeclarationSnapshot(long fileId, string[] rawLines, IReadOnlyList<SymbolRecord> symbols)
     {
-        var candidates = new List<(SymbolRecord Symbol, int OriginalIndex)>();
+        List<(SymbolRecord Symbol, int OriginalIndex)>? candidates = null;
         for (var index = 0; index < symbols.Count; index++)
         {
             var symbol = symbols[index];
@@ -425,9 +448,15 @@ public static partial class SymbolExtractor
                 && symbol.BodyEndLine != null
                 && IsJavaRecordSymbol(rawLines, symbol))
             {
-                candidates.Add((symbol, index));
+                (candidates ??= []).Add((symbol, index));
             }
         }
+
+        if (candidates is not { Count: > 0 })
+            return [];
+
+        if (candidates.Count == 1)
+            return [candidates[0].Symbol];
 
         candidates.Sort(static (left, right) =>
         {
@@ -454,7 +483,7 @@ public static partial class SymbolExtractor
         SymbolRecord recordSymbol,
         int lineNumber)
     {
-        var existingSymbols = new List<SymbolRecord>();
+        List<SymbolRecord>? existingSymbols = null;
         foreach (var symbol in symbols)
         {
             if (symbol.FileId == fileId
@@ -464,11 +493,11 @@ public static partial class SymbolExtractor
                 && (symbol.ContainerName == null || symbol.ContainerName == recordSymbol.Name)
                 && (symbol.ContainerKind == null || symbol.ContainerKind == "class"))
             {
-                existingSymbols.Add(symbol);
+                (existingSymbols ??= []).Add(symbol);
             }
         }
 
-        return existingSymbols;
+        return existingSymbols ?? [];
     }
 
     private static bool LooksLikeJavaCompactConstructorSymbol(SymbolRecord symbol, string recordName)

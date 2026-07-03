@@ -17,7 +17,11 @@ public static partial class SymbolExtractor
         @"(?:^|,)\s*(?:""(?<quoted>(?:\\x\{[0-9A-Fa-f]+\}|\\x[0-9A-Fa-f]{2}|\\.|[^""])*)""|'(?<quoted>(?:\\x\{[0-9A-Fa-f]+\}|\\x[0-9A-Fa-f]{2}|\\.|[^'])*)'|(?<bare>[\p{L}_][\p{L}\p{Nd}_]*))\s*=>",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    private static void ExtractPerlHashConstantSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    private static void ExtractPerlHashConstantSymbols(
+        long fileId,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        SymbolExtractionState extractionState)
     {
         for (var i = 0; i < lines.Length; i++)
         {
@@ -33,7 +37,8 @@ public static partial class SymbolExtractor
                 continue;
             }
 
-            var seenConstantNames = new HashSet<string>(StringComparer.Ordinal);
+            string? firstConstantName = null;
+            HashSet<string>? seenConstantNames = null;
             foreach (Match keyMatch in PerlHashConstantKeyRegex.Matches(body))
             {
                 var nameGroup = keyMatch.Groups["bare"].Success
@@ -42,12 +47,23 @@ public static partial class SymbolExtractor
                 if (!nameGroup.Success)
                     continue;
                 var name = NormalizePerlConstantName(nameGroup.Value);
-                if (name.Length == 0 || !seenConstantNames.Add(name))
+                if (name.Length == 0)
                     continue;
+                if (firstConstantName is null)
+                {
+                    firstConstantName = name;
+                }
+                else
+                {
+                    seenConstantNames ??= new HashSet<string>(StringComparer.Ordinal) { firstConstantName };
+                    if (!seenConstantNames.Add(name))
+                        continue;
+                }
 
                 var (lineIndex, column) = ResolvePerlHashConstantBodyPosition(lineSegments, nameGroup.Index);
                 AddSymbolRecord(
                     symbols,
+                    extractionState,
                     cssSeenSymbols: null,
                     lineIndex + 1,
                     new SymbolRecord

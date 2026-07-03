@@ -3502,7 +3502,7 @@ public partial class McpServer : IDisposable
     private static string ShortStableHash(string value)
     {
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(value));
-        return Convert.ToHexString(bytes.AsSpan(0, 4)).ToLowerInvariant();
+        return HexEncoding.ToLowerHexString(bytes, 0, 4);
     }
 
     private static void AddArgKeyMetadata(

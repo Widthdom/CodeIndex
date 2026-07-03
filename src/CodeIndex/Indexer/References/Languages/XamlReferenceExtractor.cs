@@ -60,13 +60,14 @@ internal static class XamlReferenceExtractor
 
     public static string StripXmlComments(string line, ref bool inComment)
     {
-        var builder = new StringBuilder(line.Length);
+        StringBuilder? builder = null;
         var index = 0;
 
         while (index < line.Length)
         {
             if (inComment)
             {
+                builder ??= new StringBuilder(line.Length);
                 var commentEnd = line.IndexOf("-->", index, StringComparison.Ordinal);
                 if (commentEnd < 0)
                 {
@@ -83,10 +84,14 @@ internal static class XamlReferenceExtractor
             var commentStart = line.IndexOf("<!--", index, StringComparison.Ordinal);
             if (commentStart < 0)
             {
+                if (builder == null)
+                    return line;
+
                 builder.Append(line, index, line.Length - index);
                 return builder.ToString();
             }
 
+            builder ??= new StringBuilder(line.Length);
             if (commentStart > index)
                 builder.Append(line, index, commentStart - index);
 
@@ -102,7 +107,7 @@ internal static class XamlReferenceExtractor
             index = sameLineCommentEnd + 3;
         }
 
-        return builder.ToString();
+        return builder?.ToString() ?? line;
     }
 
     public static void Emit(
@@ -797,54 +802,54 @@ internal static class XamlReferenceExtractor
 
     private static string NormalizeXamlMarkupArgument(string value)
     {
-        value = value.Trim().Trim('"', '\'');
+        value = TrimXamlQuotedArgumentBoundary(value);
         if (value.Length == 0)
             return "";
 
         if (value.StartsWith("ResourceKey=", StringComparison.Ordinal))
-            value = value["ResourceKey=".Length..].Trim();
+            value = TrimXamlArgumentValue(value, "ResourceKey=".Length);
         if (TryNormalizeXStaticMarkup(value, out var staticMember))
             return staticMember;
 
         var equalsIndex = value.IndexOf('=');
         if (equalsIndex >= 0)
-            value = value[(equalsIndex + 1)..].Trim();
+            value = TrimXamlArgumentValue(value, equalsIndex + 1);
 
         if (TryNormalizeXStaticMarkup(value, out staticMember))
             return staticMember;
 
         if (value.StartsWith("{x:Type ", StringComparison.Ordinal))
-            value = value["{x:Type ".Length..].TrimEnd('}', ' ');
+            value = TrimXamlMarkupExtensionBody(value, "{x:Type ".Length);
         else if (value.StartsWith("{x:TypeExtension ", StringComparison.Ordinal))
-            value = value["{x:TypeExtension ".Length..].TrimEnd('}', ' ');
+            value = TrimXamlMarkupExtensionBody(value, "{x:TypeExtension ".Length);
         else if (value.StartsWith("{x:Static ", StringComparison.Ordinal))
-            value = value["{x:Static ".Length..].TrimEnd('}', ' ');
+            value = TrimXamlMarkupExtensionBody(value, "{x:Static ".Length);
 
         if (value.StartsWith("TypeName=", StringComparison.Ordinal))
-            value = value["TypeName=".Length..].Trim();
+            value = TrimXamlArgumentValue(value, "TypeName=".Length);
         if (value.StartsWith("Member=", StringComparison.Ordinal))
-            value = value["Member=".Length..].Trim();
+            value = TrimXamlArgumentValue(value, "Member=".Length);
         if (value.StartsWith("Name=", StringComparison.Ordinal))
-            value = value["Name=".Length..].Trim();
+            value = TrimXamlArgumentValue(value, "Name=".Length);
         if (value.StartsWith("ResourceKey=", StringComparison.Ordinal))
-            value = value["ResourceKey=".Length..].Trim();
+            value = TrimXamlArgumentValue(value, "ResourceKey=".Length);
 
         var memberTypeEnd = value.IndexOf("}.", StringComparison.Ordinal);
         if (memberTypeEnd >= 0 && memberTypeEnd + 2 < value.Length)
         {
-            var typeExpression = value[..(memberTypeEnd + 1)].Trim();
+            var typeExpression = TrimXamlRange(value, 0, memberTypeEnd + 1);
             var typeName = NormalizeXamlMarkupArgument(typeExpression);
-            var memberName = value[(memberTypeEnd + 2)..].Trim();
+            var memberName = TrimXamlRange(value, memberTypeEnd + 2, value.Length - memberTypeEnd - 2);
             if (typeName.Length > 0 && memberName.Length > 0)
                 return $"{typeName}.{memberName}";
         }
 
         if (value.StartsWith("{x:Type ", StringComparison.Ordinal))
-            value = value["{x:Type ".Length..].TrimEnd('}', ' ');
+            value = TrimXamlMarkupExtensionBody(value, "{x:Type ".Length);
         if (value.StartsWith("{x:TypeExtension ", StringComparison.Ordinal))
-            value = value["{x:TypeExtension ".Length..].TrimEnd('}', ' ');
+            value = TrimXamlMarkupExtensionBody(value, "{x:TypeExtension ".Length);
 
-        return value.Trim().TrimEnd('}', '/', '>');
+        return TrimXamlMarkupArgumentTail(value);
     }
 
     private static bool TryNormalizeXStaticMarkup(string value, out string normalized)
@@ -853,16 +858,16 @@ internal static class XamlReferenceExtractor
         if (!value.StartsWith("{x:Static ", StringComparison.Ordinal))
             return false;
 
-        value = value["{x:Static ".Length..].TrimEnd('}', ' ');
+        value = TrimXamlMarkupExtensionBody(value, "{x:Static ".Length);
         if (value.StartsWith("Member=", StringComparison.Ordinal))
-            value = value["Member=".Length..].Trim();
+            value = TrimXamlArgumentValue(value, "Member=".Length);
 
         var memberTypeEnd = value.IndexOf("}.", StringComparison.Ordinal);
         if (memberTypeEnd >= 0 && memberTypeEnd + 2 < value.Length)
         {
-            var typeExpression = value[..(memberTypeEnd + 1)].Trim();
+            var typeExpression = TrimXamlRange(value, 0, memberTypeEnd + 1);
             var typeName = NormalizeXamlMarkupArgument(typeExpression);
-            var memberName = value[(memberTypeEnd + 2)..].Trim().TrimEnd('}');
+            var memberName = TrimXamlStaticMemberName(value, memberTypeEnd + 2);
             if (typeName.Length > 0 && memberName.Length > 0)
             {
                 normalized = $"{typeName}.{memberName}";
@@ -870,8 +875,52 @@ internal static class XamlReferenceExtractor
             }
         }
 
-        normalized = value.Trim().TrimEnd('}');
+        normalized = TrimXamlStaticMemberName(value, 0);
         return normalized.Length > 0;
+    }
+
+    private static string TrimXamlRange(string value, int start, int length)
+    {
+        return value.AsSpan(start, length).Trim().ToString();
+    }
+
+    private static string TrimXamlQuotedArgumentBoundary(string value)
+    {
+        var span = value.AsSpan().Trim();
+        while (span.Length > 0 && span[0] is '"' or '\'')
+            span = span[1..];
+        while (span.Length > 0 && span[^1] is '"' or '\'')
+            span = span[..^1];
+        return span.ToString();
+    }
+
+    private static string TrimXamlMarkupArgumentTail(string value)
+    {
+        var span = value.AsSpan().Trim();
+        while (span.Length > 0 && span[^1] is '}' or '/' or '>')
+            span = span[..^1];
+        return span.ToString();
+    }
+
+    private static string TrimXamlStaticMemberName(string value, int start)
+    {
+        var span = value.AsSpan(start).Trim();
+        while (span.Length > 0 && span[^1] == '}')
+            span = span[..^1];
+        return span.ToString();
+    }
+
+    private static string TrimXamlArgumentValue(string value, int start)
+    {
+        return value.AsSpan(start).Trim().ToString();
+    }
+
+    private static string TrimXamlMarkupExtensionBody(string value, int start)
+    {
+        var span = value.AsSpan(start);
+        while (span.Length > 0 && (span[^1] == '}' || span[^1] == ' '))
+            span = span[..^1];
+        return span.ToString();
     }
 
     private static IEnumerable<string> SplitMarkupArguments(string content)
@@ -913,9 +962,9 @@ internal static class XamlReferenceExtractor
                     continue;
             }
 
-            var segment = content[start..i].Trim();
+            var segment = content.AsSpan(start, i - start).Trim();
             if (segment.Length > 0)
-                yield return segment;
+                yield return segment.ToString();
             start = i + 1;
         }
     }

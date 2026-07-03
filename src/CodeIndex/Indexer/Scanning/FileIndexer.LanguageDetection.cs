@@ -212,6 +212,8 @@ public partial class FileIndexer
     [
         (".S", "assembly"),
     ];
+    private static readonly IReadOnlyDictionary<string, string> EmptyLanguageMapOverrides =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Return all file patterns (extensions and filenames) mapped to their language names.
@@ -219,9 +221,18 @@ public partial class FileIndexer
     /// </summary>
     public static IReadOnlyDictionary<string, string> GetLanguageExtensions()
     {
+        var pluginExtensions = ExtractorPluginRegistry.LanguageExtensions;
+        var languageMapOverrides = LanguageMapOverrides.LoadEffectiveMap();
+        var capacity = LangMap.Count
+            + DisplayOnlyLanguageExtensions.Length
+            + FileNameMap.Count
+            + FileNamePrefixMap.Length
+            + pluginExtensions.Count
+            + languageMapOverrides.Count;
+
         // Merge extension map and filename map for a complete view
         // 完全な一覧のため拡張子マップとファイル名マップを統合
-        var merged = new Dictionary<string, string>(StringComparer.Ordinal);
+        var merged = new Dictionary<string, string>(capacity, StringComparer.Ordinal);
         foreach (var (pattern, lang) in LangMap)
             merged.TryAdd(pattern, lang);
         // Keep display-only case variants that collapse in the case-insensitive detection map.
@@ -236,9 +247,9 @@ public partial class FileIndexer
         // 露出させ、`cdidx languages` や MCP の一覧が TryDetectLanguage の実挙動と一致するようにする。
         foreach (var (prefix, lang) in FileNamePrefixMap)
             merged.TryAdd($"{prefix}<suffix>", lang);
-        foreach (var (extension, lang) in ExtractorPluginRegistry.LanguageExtensions)
+        foreach (var (extension, lang) in pluginExtensions)
             merged.TryAdd(extension, lang);
-        foreach (var (extension, lang) in LanguageMapOverrides.LoadEffectiveMap())
+        foreach (var (extension, lang) in languageMapOverrides)
             merged[extension] = lang;
         return merged;
     }
@@ -247,13 +258,82 @@ public partial class FileIndexer
         => TryDetectLanguage(filePath).Language;
 
     internal static bool IsIgnoreFilePath(string path)
-        => IgnoreFileNames.Contains(Path.GetFileName(path), StringComparer.OrdinalIgnoreCase);
+    {
+        var fileName = Path.GetFileName(path.AsSpan());
+        return fileName.Equals(".gitignore".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals(".cdidxignore".AsSpan(), StringComparison.OrdinalIgnoreCase);
+    }
 
     internal LanguageDetectionResult TryDetectLanguageForIndexing(
         string filePath,
         string? content = null,
         FileProbeStatus? knownIndexability = null)
-        => TryDetectLanguage(filePath, content, _symlinkPolicy, _projectRoot, knownIndexability);
+        => TryDetectLanguage(
+            filePath,
+            content,
+            _symlinkPolicy,
+            _projectRoot,
+            knownIndexability,
+            LoadLanguageMapOverridesForIndexing);
+
+    private IReadOnlyDictionary<string, string> LoadLanguageMapOverridesForIndexing(string? startDirectory)
+    {
+        startDirectory = LanguageMapOverrides.NormalizeStartDirectory(startDirectory);
+        var lastLookup = _lastLanguageMapOverrideLookup;
+        if (lastLookup != null && string.Equals(lastLookup.StartDirectory, startDirectory, StringComparison.Ordinal))
+            return lastLookup.Overrides;
+
+        lock (_languageMapOverrideCache)
+        {
+            if (_languageMapOverrideCache.TryGetValue(startDirectory, out var cached))
+                return CacheLastLanguageMapOverrideLookup(startDirectory, cached);
+
+            if (TryReuseParentLanguageMapOverrides(startDirectory, out cached))
+                return CacheLastLanguageMapOverrideLookup(startDirectory, cached);
+
+            var loaded = LanguageMapOverrides.LoadEffectiveMapFromDirectory(startDirectory);
+            _languageMapOverrideCache[startDirectory] = loaded;
+            return CacheLastLanguageMapOverrideLookup(startDirectory, loaded);
+        }
+    }
+
+    private IReadOnlyDictionary<string, string> CacheLastLanguageMapOverrideLookup(
+        string startDirectory,
+        IReadOnlyDictionary<string, string> overrides)
+    {
+        _lastLanguageMapOverrideLookup = new LanguageMapOverrideLookupCache(startDirectory, overrides);
+        return overrides;
+    }
+
+    private bool TryReuseParentLanguageMapOverrides(
+        string startDirectory,
+        out IReadOnlyDictionary<string, string> overrides)
+    {
+        overrides = EmptyLanguageMapOverrides;
+        var parent = Directory.GetParent(startDirectory)?.FullName;
+        if (string.IsNullOrEmpty(parent)
+            || !_languageMapOverrideCache.TryGetValue(parent, out var parentOverrides)
+            || LanguageMapOverrideFileExists(startDirectory))
+        {
+            return false;
+        }
+
+        overrides = parentOverrides;
+        _languageMapOverrideCache[startDirectory] = overrides;
+        return true;
+    }
+
+    private static bool LanguageMapOverrideFileExists(string directory)
+    {
+        try
+        {
+            return File.Exists(Path.Combine(directory, LanguageMapOverrides.WorkspaceFileName));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            return false;
+        }
+    }
 
     internal static string? GetReusableDetectedLanguage(
         string filePath,
@@ -272,22 +352,18 @@ public partial class FileIndexer
         if (string.IsNullOrEmpty(language))
             return false;
 
+        var extension = Path.GetExtension(filePath);
+        if (!string.IsNullOrEmpty(extension))
+            return !string.Equals(extension, ".h", StringComparison.OrdinalIgnoreCase);
+
         var fileName = Path.GetFileName(filePath);
         if (FileNameMap.TryGetValue(fileName, out var nameLanguage))
             return string.Equals(language, nameLanguage, StringComparison.Ordinal);
 
-        foreach (var (prefix, prefixLanguage) in FileNamePrefixMap)
-        {
-            if (fileName.Length > prefix.Length &&
-                fileName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            {
-                return string.Equals(language, prefixLanguage, StringComparison.Ordinal);
-            }
-        }
+        if (TryGetFileNamePrefixLanguage(fileName, out var prefixLanguage))
+            return string.Equals(language, prefixLanguage, StringComparison.Ordinal);
 
-        var extension = Path.GetExtension(fileName);
-        return !string.IsNullOrEmpty(extension)
-            && !string.Equals(extension, ".h", StringComparison.OrdinalIgnoreCase);
+        return false;
     }
 
     internal static LanguageDetectionResult TryDetectLanguage(string filePath, string? content = null)
@@ -298,7 +374,8 @@ public partial class FileIndexer
         string? content,
         SymlinkPolicy symlinkPolicy,
         string? projectRoot,
-        FileProbeStatus? knownIndexability = null)
+        FileProbeStatus? knownIndexability = null,
+        Func<string?, IReadOnlyDictionary<string, string>>? languageMapOverrideResolver = null)
     {
         // Exact filename matching beats extension lookup so manifest-style filenames like
         // `pyproject.toml` can map to a dependency category instead of the generic file type.
@@ -312,17 +389,11 @@ public partial class FileIndexer
         // The suffix must be non-empty so a bare `Dockerfile.` with trailing dot does not match.
         // Dockerfile.dev や Makefile.am のようなサフィックス付き変種を検出する。
         // `Dockerfile.` のような末尾ドットだけの形には一致させないため、サフィックスは1文字以上必須。
-        foreach (var (prefix, prefixLang) in FileNamePrefixMap)
-        {
-            if (fileName.Length > prefix.Length &&
-                fileName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            {
-                return new LanguageDetectionResult(FileProbeStatus.Supported, prefixLang);
-            }
-        }
+        if (TryGetFileNamePrefixLanguage(fileName, out var prefixLang))
+            return new LanguageDetectionResult(FileProbeStatus.Supported, prefixLang);
 
         var ext = Path.GetExtension(fileName);
-        if (TryDetectLanguageOverride(filePath, fileName, out var overrideLang))
+        if (TryDetectLanguageOverride(filePath, fileName, languageMapOverrideResolver, out var overrideLang))
             return new LanguageDetectionResult(FileProbeStatus.Supported, overrideLang);
 
         if (LangMap.TryGetValue(ext, out var lang))
@@ -337,13 +408,13 @@ public partial class FileIndexer
             return new LanguageDetectionResult(FileProbeStatus.Supported, lang);
         }
 
-        if (ExtractorPluginRegistry.LanguageExtensions.TryGetValue(ext, out var pluginLang))
+        if (ExtractorPluginRegistry.TryGetLanguageForExtension(ext, out var pluginLang))
             return new LanguageDetectionResult(FileProbeStatus.Supported, pluginLang);
 
         if (!string.IsNullOrEmpty(ext))
         {
             ExtractorPluginRegistry.LoadPatternConfigsForPath(filePath);
-            if (ExtractorPluginRegistry.LanguageExtensions.TryGetValue(ext, out pluginLang))
+            if (ExtractorPluginRegistry.TryGetLanguageForExtension(ext, out pluginLang))
                 return new LanguageDetectionResult(FileProbeStatus.Supported, pluginLang);
 
             return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
@@ -352,14 +423,47 @@ public partial class FileIndexer
         return TryDetectLanguageFromShebang(filePath, symlinkPolicy, projectRoot, knownIndexability);
     }
 
-    private static bool TryDetectLanguageOverride(string filePath, string fileName, out string language)
+    private static bool TryGetFileNamePrefixLanguage(string fileName, out string language)
+    {
+        language = string.Empty;
+        if (!CouldMatchFileNamePrefix(fileName))
+            return false;
+
+        foreach (var (prefix, prefixLanguage) in FileNamePrefixMap)
+        {
+            if (fileName.Length > prefix.Length &&
+                fileName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                language = prefixLanguage;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool CouldMatchFileNamePrefix(string fileName)
+    {
+        if (fileName.Length <= "Makefile.".Length)
+            return false;
+
+        return fileName[0] is 'D' or 'd' or 'C' or 'c' or 'M' or 'm' or 'G' or 'g';
+    }
+
+    private static bool TryDetectLanguageOverride(
+        string filePath,
+        string fileName,
+        Func<string?, IReadOnlyDictionary<string, string>>? languageMapOverrideResolver,
+        out string language)
     {
         language = string.Empty;
         if (!fileName.Contains('.', StringComparison.Ordinal))
             return false;
 
-        var startDirectory = Path.GetDirectoryName(Path.GetFullPath(filePath));
-        var overrides = LanguageMapOverrides.LoadEffectiveMapFromDirectory(startDirectory);
+        var startDirectory = Path.GetDirectoryName(filePath);
+        var overrides = languageMapOverrideResolver == null
+            ? LanguageMapOverrides.LoadEffectiveMapFromDirectory(startDirectory)
+            : languageMapOverrideResolver(startDirectory);
         if (overrides.Count == 0)
             return false;
 

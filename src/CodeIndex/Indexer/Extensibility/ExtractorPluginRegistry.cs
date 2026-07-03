@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.Runtime.Loader;
 using CodeIndex.Cli;
 
@@ -29,6 +30,8 @@ public static partial class ExtractorPluginRegistry
     private static readonly HashSet<string> LoadedPatternConfigPaths = new(StringComparer.OrdinalIgnoreCase);
     private static readonly List<AssemblyLoadContext> LoadedPluginAssemblyContexts = [];
     private static readonly IReadOnlyList<string> PatternConfigSearchPatterns = ["*.yaml", "*.yml"];
+    private static readonly IReadOnlyDictionary<string, string> EmptyLanguageExtensions =
+        new ReadOnlyDictionary<string, string>(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
     private static readonly List<ExtractorRegistryDiagnostic> Diagnostics = [];
     private const int DiagnosticLimit = 20;
     private static int pluginAssemblyCount;
@@ -45,7 +48,9 @@ public static partial class ExtractorPluginRegistry
         {
             EnsurePluginsLoaded();
             lock (Gate)
-                return SymbolExtractors.Keys.Order(StringComparer.Ordinal).ToArray();
+                return SymbolExtractors.Count == 0
+                    ? Array.Empty<string>()
+                    : SymbolExtractors.Keys.Order(StringComparer.Ordinal).ToArray();
         }
     }
 
@@ -55,7 +60,9 @@ public static partial class ExtractorPluginRegistry
         {
             EnsurePluginsLoaded();
             lock (Gate)
-                return ReferenceExtractors.Keys.Order(StringComparer.Ordinal).ToArray();
+                return ReferenceExtractors.Count == 0
+                    ? Array.Empty<string>()
+                    : ReferenceExtractors.Keys.Order(StringComparer.Ordinal).ToArray();
         }
     }
 
@@ -66,11 +73,31 @@ public static partial class ExtractorPluginRegistry
             EnsurePluginsLoaded();
             lock (Gate)
             {
+                if (SymbolExtractors.Count == 0 && ReferenceExtractors.Count == 0)
+                    return EmptyLanguageExtensions;
+
                 var extensions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 AddLanguageExtensions(extensions, SymbolExtractors.Values.Select(extractor => (extractor.Language, extractor.FileExtensions)));
                 AddLanguageExtensions(extensions, ReferenceExtractors.Values.Select(extractor => (extractor.Language, extractor.FileExtensions)));
-                return extensions;
+                return extensions.Count == 0 ? EmptyLanguageExtensions : extensions;
             }
+        }
+    }
+
+    internal static bool TryGetLanguageForExtension(string extension, out string language)
+    {
+        language = "";
+        if (string.IsNullOrWhiteSpace(extension))
+            return false;
+
+        EnsurePluginsLoaded();
+        lock (Gate)
+        {
+            if (SymbolExtractors.Count == 0 && ReferenceExtractors.Count == 0)
+                return false;
+
+            return TryGetLanguageForExtension(extension, SymbolExtractors.Values, out language)
+                   || TryGetLanguageForExtension(extension, ReferenceExtractors.Values, out language);
         }
     }
 
@@ -278,6 +305,57 @@ public static partial class ExtractorPluginRegistry
                     target.TryAdd(normalizedExtension, normalizedLanguage);
             }
         }
+    }
+
+    private static bool TryGetLanguageForExtension(
+        string extension,
+        IEnumerable<ISymbolExtractor> plugins,
+        out string language)
+    {
+        foreach (var plugin in plugins)
+        {
+            if (TryMatchPluginExtension(extension, plugin.Language, plugin.FileExtensions, out language))
+                return true;
+        }
+
+        language = "";
+        return false;
+    }
+
+    private static bool TryGetLanguageForExtension(
+        string extension,
+        IEnumerable<IReferenceExtractor> plugins,
+        out string language)
+    {
+        foreach (var plugin in plugins)
+        {
+            if (TryMatchPluginExtension(extension, plugin.Language, plugin.FileExtensions, out language))
+                return true;
+        }
+
+        language = "";
+        return false;
+    }
+
+    private static bool TryMatchPluginExtension(
+        string extension,
+        string pluginLanguage,
+        IReadOnlyCollection<string> pluginExtensions,
+        out string language)
+    {
+        foreach (var pluginExtension in pluginExtensions)
+        {
+            var normalizedExtension = NormalizePluginExtension(pluginExtension);
+            if (normalizedExtension != null
+                && string.Equals(normalizedExtension, extension, StringComparison.OrdinalIgnoreCase))
+            {
+                language = NormalizePluginLanguage(pluginLanguage);
+                return true;
+            }
+        }
+
+        language = "";
+        return false;
     }
 
     private static string NormalizePluginLanguage(string language)

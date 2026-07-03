@@ -8,10 +8,12 @@ public static partial class ReferenceExtractor
         long fileId,
         string language,
         string content,
+        IReadOnlyList<SymbolRecord> symbols,
         string? path,
         bool contentIsNormalized,
         bool? hasOversizeLine,
         int? conflictMarkerLine,
+        int? maxReferenceCount,
         CancellationToken cancellationToken,
         out List<ReferenceRecord> references)
     {
@@ -30,8 +32,8 @@ public static partial class ReferenceExtractor
         cancellationToken.ThrowIfCancellationRequested();
 
         references = language == "solution"
-            ? ExtractSolutionReferences(fileId, lines)
-            : DependencyPackageExtractor.ExtractReferences(fileId, normalizedContent, lines, path, language);
+            ? ExtractSolutionReferences(fileId, lines, maxReferenceCount)
+            : DependencyPackageExtractor.ExtractReferences(fileId, normalizedContent, lines, symbols, path, language, maxReferenceCount);
         return true;
     }
 
@@ -65,9 +67,9 @@ public static partial class ReferenceExtractor
         return true;
     }
 
-    private static List<ReferenceRecord> ExtractSolutionReferences(long fileId, string[] lines)
+    private static List<ReferenceRecord> ExtractSolutionReferences(long fileId, string[] lines, int? maxReferenceCount)
     {
-        var references = CreateReferenceList(null);
+        var references = CreateReferenceList(maxReferenceCount);
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var project in SolutionFileParser.ExtractProjects(lines))
         {
@@ -86,6 +88,8 @@ public static partial class ReferenceExtractor
                     Name = project.Name,
                 },
                 "solution");
+            if (ReferenceLimitReached(references))
+                break;
         }
 
         return references;

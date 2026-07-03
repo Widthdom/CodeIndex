@@ -24,6 +24,18 @@ public static partial class ReferenceExtractor
     internal const int MaxReferenceLookupNamesPerLine = 512;
     internal const int MaxReferenceContainerCandidates = 20_000;
     internal const int MaxSwiftPropertyDefinitionsPerLine = 256;
+    private static readonly IReadOnlySet<string> EmptyDefinitionNameSet = new HashSet<string>(StringComparer.Ordinal);
+    private static readonly IReadOnlyDictionary<int, HashSet<string>> EmptyDefinitionNamesByLine =
+        new Dictionary<int, HashSet<string>>();
+    private static readonly string[] AdditionalReferenceLanguages =
+    [
+        "vue",
+        "svelte",
+        "razor",
+        "blazor",
+        "cshtml",
+    ];
+
     // THREAD-SAFETY: Reference extraction is stateless per call. Shared Regex instances and
     // lookup tables are initialized once and then read concurrently; language-specific state
     // must be created per extraction call (for example via CreateState helpers) rather than
@@ -779,33 +791,82 @@ public static partial class ReferenceExtractor
     };
 
     public static IReadOnlyCollection<string> GetSupportedLanguages()
-        => RegisteredLanguages
-            .Concat(new[] { "vue", "svelte", "razor", "blazor", "cshtml" })
-            .Concat(ExtractorPluginRegistry.ReferenceLanguages)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
+    {
+        var pluginLanguages = ExtractorPluginRegistry.ReferenceLanguages;
+        var capacity = RegisteredLanguages.Count + AdditionalReferenceLanguages.Length + pluginLanguages.Count;
+        var languages = new List<string>(capacity);
+        var seen = new HashSet<string>(capacity, StringComparer.Ordinal);
+
+        AddSupportedLanguages(RegisteredLanguages, languages, seen);
+        AddSupportedLanguages(AdditionalReferenceLanguages, languages, seen);
+        AddSupportedLanguages(pluginLanguages, languages, seen);
+        return languages.ToArray();
+    }
+
+    private static void AddSupportedLanguages(
+        IEnumerable<string> candidates,
+        List<string> languages,
+        HashSet<string> seen)
+    {
+        foreach (var language in candidates)
+        {
+            if (seen.Add(language))
+                languages.Add(language);
+        }
+    }
 
     /// <summary>
     /// Registered language keys for reference extraction.
     /// 参照抽出に登録されている言語キー。
     /// </summary>
-    public static IReadOnlyCollection<string> RegisteredLanguages => Extractors.Keys.ToArray();
+    public static IReadOnlyCollection<string> RegisteredLanguages => BuiltInLanguages;
 
     private static string? NormalizeLanguage(string? lang)
     {
-        if (string.IsNullOrWhiteSpace(lang))
+        if (lang is null)
             return null;
 
-        lang = lang.Trim().ToLowerInvariant();
-        return lang is "vue" or "svelte"
-            ? "typescript"
-            : lang is "razor" or "blazor" or "cshtml"
-                ? "csharp"
-                : lang;
+        var trimmed = lang.AsSpan().Trim();
+        if (trimmed.IsEmpty)
+            return null;
+
+        if (trimmed.Equals("vue", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("svelte", StringComparison.OrdinalIgnoreCase))
+        {
+            return "typescript";
+        }
+
+        if (trimmed.Equals("razor", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("blazor", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("cshtml", StringComparison.OrdinalIgnoreCase))
+        {
+            return "csharp";
+        }
+
+        return NormalizeLanguageKey(lang, trimmed);
     }
 
     private static string? NormalizePluginLanguage(string? lang)
-        => string.IsNullOrWhiteSpace(lang) ? null : lang.Trim().ToLowerInvariant();
+    {
+        if (lang is null)
+            return null;
+
+        var trimmed = lang.AsSpan().Trim();
+        return trimmed.IsEmpty ? null : NormalizeLanguageKey(lang, trimmed);
+    }
+
+    private static string NormalizeLanguageKey(string original, ReadOnlySpan<char> trimmed)
+    {
+        for (var i = 0; i < trimmed.Length; i++)
+        {
+            if (char.ToLowerInvariant(trimmed[i]) != trimmed[i])
+                return trimmed.ToString().ToLowerInvariant();
+        }
+
+        return trimmed.Length == original.Length && trimmed.SequenceEqual(original.AsSpan())
+            ? original
+            : trimmed.ToString();
+    }
 
     public static bool SupportsLanguage(string? lang)
     {
@@ -1102,11 +1163,14 @@ public static partial class ReferenceExtractor
         return true;
     }
 
-    private static Dictionary<int, HashSet<string>> BuildDefinitionNamesByLine(
+    private static IReadOnlyDictionary<int, HashSet<string>> BuildDefinitionNamesByLine(
         string language,
         IReadOnlyList<SymbolRecord> symbols,
         Action<ReferenceExtractionDiagnostic>? reportDiagnostic)
     {
+        if (symbols.Count == 0)
+            return EmptyDefinitionNamesByLine;
+
         var definitionNamesComparer = GetDefinitionNamesComparer(language);
         var namesByLine = new Dictionary<int, HashSet<string>>();
         var lineBudgetReported = false;
@@ -1165,11 +1229,14 @@ public static partial class ReferenceExtractor
         return namesByLine;
     }
 
-    private static HashSet<string> BuildAllDefinitionNames(
+    private static IReadOnlySet<string> BuildAllDefinitionNames(
         string language,
         IReadOnlyList<SymbolRecord> symbols,
         Action<ReferenceExtractionDiagnostic>? reportDiagnostic)
     {
+        if (symbols.Count == 0)
+            return EmptyDefinitionNameSet;
+
         var names = new HashSet<string>(GetDefinitionNamesComparer(language));
         for (var index = 0; index < symbols.Count; index++)
         {
@@ -1191,23 +1258,29 @@ public static partial class ReferenceExtractor
         return names;
     }
 
-    private static HashSet<string> BuildFileDefinitionNames(IReadOnlyList<SymbolRecord> symbols)
+    private static IReadOnlySet<string> BuildFileDefinitionNames(IReadOnlyList<SymbolRecord> symbols)
     {
+        if (symbols.Count == 0)
+            return EmptyDefinitionNameSet;
+
         var names = new HashSet<string>(symbols.Count, StringComparer.Ordinal);
         foreach (var symbol in symbols)
             names.Add(symbol.Name);
         return names;
     }
 
-    private static List<SymbolRecord> BuildCobolCallableSymbols(IReadOnlyList<SymbolRecord> symbols)
+    private static IReadOnlyList<SymbolRecord>? BuildCobolCallableSymbols(IReadOnlyList<SymbolRecord> symbols)
     {
-        var callableSymbols = new List<(SymbolRecord Symbol, int OriginalIndex)>();
+        List<(SymbolRecord Symbol, int OriginalIndex)>? callableSymbols = null;
         for (var index = 0; index < symbols.Count; index++)
         {
             var symbol = symbols[index];
             if (symbol.Kind == "function")
-                callableSymbols.Add((symbol, index));
+                (callableSymbols ??= []).Add((symbol, index));
         }
+
+        if (callableSymbols is not { Count: > 0 })
+            return null;
 
         callableSymbols.Sort(CompareCobolCallableSymbolEntries);
 
@@ -1235,15 +1308,18 @@ public static partial class ReferenceExtractor
             : left.OriginalIndex.CompareTo(right.OriginalIndex);
     }
 
-    private static List<SymbolRecord> BuildRustEnumCandidates(IReadOnlyList<SymbolRecord> symbols)
+    private static IReadOnlyList<SymbolRecord>? BuildRustEnumCandidates(IReadOnlyList<SymbolRecord> symbols)
     {
-        var candidates = new List<(SymbolRecord Symbol, int OriginalIndex)>();
+        List<(SymbolRecord Symbol, int OriginalIndex)>? candidates = null;
         for (var index = 0; index < symbols.Count; index++)
         {
             var symbol = symbols[index];
             if (symbol.Kind == "enum" && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
-                candidates.Add((symbol, index));
+                (candidates ??= []).Add((symbol, index));
         }
+
+        if (candidates is not { Count: > 0 })
+            return null;
 
         candidates.Sort(CompareRustEnumCandidateEntries);
 
@@ -1271,7 +1347,7 @@ public static partial class ReferenceExtractor
             ? StringComparer.OrdinalIgnoreCase
             : StringComparer.Ordinal;
 
-    private static List<SymbolRecord> BuildReferenceContainerCandidates(
+    private static IReadOnlyList<SymbolRecord> BuildReferenceContainerCandidates(
         IReadOnlyList<SymbolRecord> symbols,
         Action<ReferenceExtractionDiagnostic>? reportDiagnostic)
         => BuildBoundedContainerCandidates(
@@ -1284,7 +1360,7 @@ public static partial class ReferenceExtractor
             "Reference container lookup retained the highest-priority bounded candidate set and skipped additional candidates.",
             reportDiagnostic);
 
-    private static List<SymbolRecord>? BuildCSharpXmlDocAttachmentScopeCandidates(
+    private static IReadOnlyList<SymbolRecord>? BuildCSharpXmlDocAttachmentScopeCandidates(
         string language,
         IReadOnlyList<SymbolRecord> symbols,
         Action<ReferenceExtractionDiagnostic>? reportDiagnostic)
@@ -1298,7 +1374,7 @@ public static partial class ReferenceExtractor
                 reportDiagnostic)
             : null;
 
-    private static List<SymbolRecord> BuildEnclosingTypeCandidates(
+    private static IReadOnlyList<SymbolRecord> BuildEnclosingTypeCandidates(
         IReadOnlyList<SymbolRecord> symbols,
         Action<ReferenceExtractionDiagnostic>? reportDiagnostic)
         => BuildBoundedContainerCandidates(
@@ -1309,7 +1385,7 @@ public static partial class ReferenceExtractor
             "Reference enclosing-type lookup retained the highest-priority bounded candidate set and skipped additional candidates.",
             reportDiagnostic);
 
-    private static Dictionary<int, SymbolRecord[]>? BuildSwiftPropertyDefinitionsByLine(
+    private static IReadOnlyDictionary<int, SymbolRecord[]>? BuildSwiftPropertyDefinitionsByLine(
         string language,
         IReadOnlyList<SymbolRecord> symbols,
         Action<ReferenceExtractionDiagnostic>? reportDiagnostic)
@@ -1317,7 +1393,7 @@ public static partial class ReferenceExtractor
         if (language != "swift")
             return null;
 
-        var byLine = new Dictionary<int, List<SymbolRecord>>();
+        Dictionary<int, List<SymbolRecord>>? byLine = null;
         var lineBudgetReported = false;
         var perLineBudgetReported = false;
         for (var index = 0; index < symbols.Count && index < MaxReferenceLookupSymbols; index++)
@@ -1326,9 +1402,10 @@ public static partial class ReferenceExtractor
             if (symbol.Kind != "property")
                 continue;
 
-            if (!byLine.TryGetValue(symbol.Line, out var lineSymbols))
+            var lookup = byLine ??= new Dictionary<int, List<SymbolRecord>>();
+            if (!lookup.TryGetValue(symbol.Line, out var lineSymbols))
             {
-                if (byLine.Count >= MaxReferenceLookupLines)
+                if (lookup.Count >= MaxReferenceLookupLines)
                 {
                     if (!lineBudgetReported)
                     {
@@ -1343,7 +1420,7 @@ public static partial class ReferenceExtractor
                 }
 
                 lineSymbols = [];
-                byLine[symbol.Line] = lineSymbols;
+                lookup[symbol.Line] = lineSymbols;
             }
 
             if (lineSymbols.Count >= MaxSwiftPropertyDefinitionsPerLine)
@@ -1371,6 +1448,9 @@ public static partial class ReferenceExtractor
                 $"Swift property lookup used the first {MaxReferenceLookupSymbols:N0} symbols and skipped additional symbols.");
         }
 
+        if (byLine is not { Count: > 0 })
+            return null;
+
         var result = new Dictionary<int, SymbolRecord[]>(byLine.Count);
         foreach (var pair in byLine)
             result.Add(pair.Key, SortSwiftPropertyDefinitionCandidates(pair.Value));
@@ -1380,6 +1460,9 @@ public static partial class ReferenceExtractor
 
     private static SymbolRecord[] SortSwiftPropertyDefinitionCandidates(IReadOnlyList<SymbolRecord> candidates)
     {
+        if (candidates.Count == 1)
+            return [candidates[0]];
+
         var entries = new List<(SymbolRecord Symbol, int OriginalIndex)>(candidates.Count);
         for (var index = 0; index < candidates.Count; index++)
             entries.Add((candidates[index], index));
@@ -1402,14 +1485,14 @@ public static partial class ReferenceExtractor
             : left.OriginalIndex.CompareTo(right.OriginalIndex);
     }
 
-    private static List<SymbolRecord> BuildBoundedContainerCandidates(
+    private static IReadOnlyList<SymbolRecord> BuildBoundedContainerCandidates(
         IReadOnlyList<SymbolRecord> symbols,
         Func<SymbolRecord, bool> predicate,
         string diagnosticKind,
         string diagnosticMessage,
         Action<ReferenceExtractionDiagnostic>? reportDiagnostic)
     {
-        var candidates = new List<ReferenceContainerCandidateSortEntry>(Math.Min(symbols.Count, MaxReferenceContainerCandidates));
+        List<ReferenceContainerCandidateSortEntry>? candidates = null;
         var truncated = false;
         for (var symbolIndex = 0; symbolIndex < symbols.Count; symbolIndex++)
         {
@@ -1417,13 +1500,14 @@ public static partial class ReferenceExtractor
             if (!predicate(symbol))
                 continue;
 
-            if (candidates.Count >= MaxReferenceContainerCandidates)
+            if ((candidates?.Count ?? 0) >= MaxReferenceContainerCandidates)
             {
                 truncated = true;
                 continue;
             }
 
-            candidates.Add(new ReferenceContainerCandidateSortEntry(
+            (candidates ??= new List<ReferenceContainerCandidateSortEntry>(
+                Math.Min(symbols.Count, MaxReferenceContainerCandidates))).Add(new ReferenceContainerCandidateSortEntry(
                 symbol,
                 GetReferenceContainerCandidateSpanLength(symbol),
                 symbolIndex));
@@ -1432,11 +1516,14 @@ public static partial class ReferenceExtractor
         if (truncated)
             ReportReferenceLookupBudgetHit(reportDiagnostic, diagnosticKind, diagnosticMessage);
 
+        if (candidates is not { Count: > 0 })
+            return Array.Empty<SymbolRecord>();
+
         candidates.Sort(CompareReferenceContainerCandidateSortEntries);
 
-        var sorted = new List<SymbolRecord>(candidates.Count);
-        foreach (var candidate in candidates)
-            sorted.Add(candidate.Symbol);
+        var sorted = new SymbolRecord[candidates.Count];
+        for (var index = 0; index < candidates.Count; index++)
+            sorted[index] = candidates[index].Symbol;
 
         return sorted;
     }
@@ -1493,7 +1580,7 @@ public static partial class ReferenceExtractor
         {
             inDocblock = true;
             docblockContainer = getLineContainer();
-            docblockPropertyNames = new HashSet<string>(StringComparer.Ordinal);
+            docblockPropertyNames = null;
         }
 
         var docblockContext = originalLine.Trim();
@@ -1593,7 +1680,8 @@ public static partial class ReferenceExtractor
                     docblockContext,
                     lineNumber,
                     ResolvePhpDocblockContainer(inDocblock, docblockContainer, getLineContainer),
-                    docblockPropertyNames);
+                    inDocblock,
+                    ref docblockPropertyNames);
             }
 
             if (originalLine.Contains("@method", StringComparison.OrdinalIgnoreCase))
@@ -1894,7 +1982,12 @@ public static partial class ReferenceExtractor
 
     private const int MaxPythonLogicalReferenceLineLength = 32_768;
 
-    private readonly record struct PythonLogicalHeaderReferenceLine(string Text, int[] PhysicalLines, int[] PhysicalColumns);
+    private readonly record struct PythonLogicalHeaderReferenceLine(
+        string Text,
+        int SinglePhysicalLine,
+        int SinglePhysicalColumn,
+        int[]? PhysicalLines,
+        int[]? PhysicalColumns);
 
     private static bool TryBuildPythonLogicalHeaderReferenceLine(
         string[] lines,
@@ -1902,9 +1995,11 @@ public static partial class ReferenceExtractor
         int startColumn,
         out PythonLogicalHeaderReferenceLine header)
     {
-        var builder = new StringBuilder();
-        var physicalLines = new List<int>();
-        var physicalColumns = new List<int>();
+        var builder = new StringBuilder(GetPythonLogicalLineInitialCapacity(lines, startLineIndex, startColumn));
+        List<int>? physicalLines = null;
+        List<int>? physicalColumns = null;
+        var singlePhysicalLine = -1;
+        var singlePhysicalColumn = 0;
         var parenDepth = 0;
         var bracketDepth = 0;
         var inString = false;
@@ -1919,7 +2014,7 @@ public static partial class ReferenceExtractor
             {
                 if (builder.Length > 0)
                 {
-                    if (!TryAppendPythonLogicalReferenceChar(builder, physicalLines, physicalColumns, ' ', lineIndex, column, out header))
+                    if (!TryAppendPythonLogicalReferenceChar(builder, ref singlePhysicalLine, ref singlePhysicalColumn, ref physicalLines, ref physicalColumns, ' ', lineIndex, column, out header))
                         return false;
                 }
 
@@ -1929,7 +2024,7 @@ public static partial class ReferenceExtractor
                     if (fragmentChar == '\\' && fragmentColumn == fragmentEndColumn - 1)
                         break;
 
-                    if (!TryAppendPythonLogicalReferenceChar(builder, physicalLines, physicalColumns, fragmentChar, lineIndex, fragmentColumn, out header))
+                    if (!TryAppendPythonLogicalReferenceChar(builder, ref singlePhysicalLine, ref singlePhysicalColumn, ref physicalLines, ref physicalColumns, fragmentChar, lineIndex, fragmentColumn, out header))
                         return false;
                 }
             }
@@ -1969,16 +2064,16 @@ public static partial class ReferenceExtractor
                     bracketDepth--;
                 else if (ch == ':' && parenDepth == 0 && bracketDepth == 0)
                 {
-                    header = new PythonLogicalHeaderReferenceLine(builder.ToString(), physicalLines.ToArray(), physicalColumns.ToArray());
+                    header = CreatePythonLogicalHeaderReferenceLine(builder, singlePhysicalLine, singlePhysicalColumn, physicalLines, physicalColumns);
                     return header.Text.Length > 0;
                 }
             }
 
-            if (parenDepth == 0 && bracketDepth == 0 && !line.TrimEnd().EndsWith('\\'))
+            if (parenDepth == 0 && bracketDepth == 0 && !HasPythonLineContinuationBackslash(line))
                 break;
         }
 
-        header = new PythonLogicalHeaderReferenceLine(builder.ToString(), physicalLines.ToArray(), physicalColumns.ToArray());
+        header = CreatePythonLogicalHeaderReferenceLine(builder, singlePhysicalLine, singlePhysicalColumn, physicalLines, physicalColumns);
         return header.Text.Length > 0;
     }
 
@@ -1988,9 +2083,11 @@ public static partial class ReferenceExtractor
         int startColumn,
         out PythonLogicalHeaderReferenceLine header)
     {
-        var builder = new StringBuilder();
-        var physicalLines = new List<int>();
-        var physicalColumns = new List<int>();
+        var builder = new StringBuilder(GetPythonLogicalLineInitialCapacity(lines, startLineIndex, startColumn));
+        List<int>? physicalLines = null;
+        List<int>? physicalColumns = null;
+        var singlePhysicalLine = -1;
+        var singlePhysicalColumn = 0;
         var parenDepth = 0;
         var bracketDepth = 0;
         var inString = false;
@@ -2005,7 +2102,7 @@ public static partial class ReferenceExtractor
             {
                 if (builder.Length > 0)
                 {
-                    if (!TryAppendPythonLogicalReferenceChar(builder, physicalLines, physicalColumns, ' ', lineIndex, column, out header))
+                    if (!TryAppendPythonLogicalReferenceChar(builder, ref singlePhysicalLine, ref singlePhysicalColumn, ref physicalLines, ref physicalColumns, ' ', lineIndex, column, out header))
                         return false;
                 }
 
@@ -2015,7 +2112,7 @@ public static partial class ReferenceExtractor
                     if (fragmentChar == '\\' && fragmentColumn == fragmentEndColumn - 1)
                         break;
 
-                    if (!TryAppendPythonLogicalReferenceChar(builder, physicalLines, physicalColumns, fragmentChar, lineIndex, fragmentColumn, out header))
+                    if (!TryAppendPythonLogicalReferenceChar(builder, ref singlePhysicalLine, ref singlePhysicalColumn, ref physicalLines, ref physicalColumns, fragmentChar, lineIndex, fragmentColumn, out header))
                         return false;
                 }
             }
@@ -2055,18 +2152,59 @@ public static partial class ReferenceExtractor
                     bracketDepth--;
             }
 
-            if (parenDepth == 0 && bracketDepth == 0 && !line.TrimEnd().EndsWith('\\'))
+            if (parenDepth == 0 && bracketDepth == 0 && !HasPythonLineContinuationBackslash(line))
                 break;
         }
 
-        header = new PythonLogicalHeaderReferenceLine(builder.ToString(), physicalLines.ToArray(), physicalColumns.ToArray());
+        header = CreatePythonLogicalHeaderReferenceLine(builder, singlePhysicalLine, singlePhysicalColumn, physicalLines, physicalColumns);
         return header.Text.Length > 0;
+    }
+
+    private static PythonLogicalHeaderReferenceLine CreatePythonLogicalHeaderReferenceLine(
+        StringBuilder builder,
+        int singlePhysicalLine,
+        int singlePhysicalColumn,
+        List<int>? physicalLines,
+        List<int>? physicalColumns)
+    {
+        if (physicalLines == null || physicalColumns == null)
+            return new PythonLogicalHeaderReferenceLine(builder.ToString(), singlePhysicalLine, singlePhysicalColumn, null, null);
+
+        return new PythonLogicalHeaderReferenceLine(
+            builder.ToString(),
+            singlePhysicalLine,
+            singlePhysicalColumn,
+            physicalLines.ToArray(),
+            physicalColumns.ToArray());
+    }
+
+    private static int GetPythonLogicalLineInitialCapacity(string[] lines, int startLineIndex, int startColumn)
+    {
+        if (startLineIndex < 0 || startLineIndex >= lines.Length)
+            return 0;
+
+        return Math.Min(256, Math.Max(0, lines[startLineIndex].Length - startColumn));
+    }
+
+    private static bool HasPythonLineContinuationBackslash(string line)
+    {
+        for (var index = line.Length - 1; index >= 0; index--)
+        {
+            if (char.IsWhiteSpace(line[index]))
+                continue;
+
+            return line[index] == '\\';
+        }
+
+        return false;
     }
 
     private static bool TryAppendPythonLogicalReferenceChar(
         StringBuilder builder,
-        List<int> physicalLines,
-        List<int> physicalColumns,
+        ref int singlePhysicalLine,
+        ref int singlePhysicalColumn,
+        ref List<int>? physicalLines,
+        ref List<int>? physicalColumns,
         char value,
         int physicalLine,
         int physicalColumn,
@@ -2078,9 +2216,31 @@ public static partial class ReferenceExtractor
             return false;
         }
 
+        if (builder.Length == 0)
+        {
+            singlePhysicalLine = physicalLine;
+            singlePhysicalColumn = physicalColumn;
+        }
+        else if (physicalLines == null
+            && (physicalLine != singlePhysicalLine
+                || physicalColumn != singlePhysicalColumn + builder.Length))
+        {
+            physicalLines = new List<int>(builder.Length + 1);
+            physicalColumns = new List<int>(builder.Length + 1);
+            for (var index = 0; index < builder.Length; index++)
+            {
+                physicalLines.Add(singlePhysicalLine);
+                physicalColumns.Add(singlePhysicalColumn + index);
+            }
+        }
+
         builder.Append(value);
-        physicalLines.Add(physicalLine);
-        physicalColumns.Add(physicalColumn);
+        if (physicalLines != null)
+        {
+            physicalLines.Add(physicalLine);
+            physicalColumns!.Add(physicalColumn);
+        }
+
         header = default;
         return true;
     }
@@ -2136,28 +2296,46 @@ public static partial class ReferenceExtractor
         for (var i = startIndex; i < references.Count; i++)
         {
             var logicalIndex = references[i].Column - 1;
-            if (logicalIndex < 0 || logicalIndex >= header.PhysicalLines.Length)
+            var logicalLength = header.PhysicalLines?.Length ?? header.Text.Length;
+            if (logicalIndex < 0 || logicalIndex >= logicalLength)
                 continue;
 
-            var physicalLineIndex = header.PhysicalLines[logicalIndex];
+            var physicalLineIndex = header.SinglePhysicalLine;
+            var physicalColumn = header.SinglePhysicalColumn + logicalIndex;
+            if (header.PhysicalLines is { } physicalLines && header.PhysicalColumns is { } physicalColumns)
+            {
+                physicalLineIndex = physicalLines[logicalIndex];
+                physicalColumn = physicalColumns[logicalIndex];
+            }
+
+            if (physicalLineIndex < 0)
+                continue;
+
             references[i].Line = physicalLineIndex + 1;
-            references[i].Column = header.PhysicalColumns[logicalIndex] + 1;
+            references[i].Column = physicalColumn + 1;
             references[i].Context = lines[physicalLineIndex].Trim();
         }
     }
 
-    private static Dictionary<(int Line, string Kind), SymbolRecord> BuildPythonDefinitionContainersByLineAndKind(IReadOnlyList<SymbolRecord> symbols)
+    private static (
+        IReadOnlyDictionary<(int Line, string Kind), SymbolRecord>? DefinitionContainersByLineAndKind,
+        IReadOnlyDictionary<int, SymbolRecord>? HeaderSymbolsByLine) BuildPythonSymbolLookups(IReadOnlyList<SymbolRecord> symbols)
     {
-        var containers = new Dictionary<(int Line, string Kind), SymbolRecord>();
+        Dictionary<(int Line, string Kind), SymbolRecord>? containers = null;
+        Dictionary<int, SymbolRecord>? symbolsByLine = null;
         foreach (var symbol in symbols)
         {
-            if (symbol.Kind is not ("class" or "function"))
+            if (symbol.Kind is "class" or "function")
+                (containers ??= []).TryAdd((symbol.Line, symbol.Kind), symbol);
+
+            if (symbol.Signature == null
+                || symbol.Kind is not ("function" or "class" or "property" or "class_hook"))
                 continue;
 
-            containers.TryAdd((symbol.Line, symbol.Kind), symbol);
+            (symbolsByLine ??= []).TryAdd(symbol.Line, symbol);
         }
 
-        return containers;
+        return (containers, symbolsByLine);
     }
 
     private static bool IsJsxFilePath(string? path)
@@ -2165,7 +2343,7 @@ public static partial class ReferenceExtractor
         if (string.IsNullOrWhiteSpace(path))
             return false;
 
-        var extension = Path.GetExtension(Path.GetFileName(path.AsSpan()));
+        var extension = Path.GetExtension(path.AsSpan());
         return extension.Equals(".jsx".AsSpan(), StringComparison.OrdinalIgnoreCase)
             || extension.Equals(".tsx".AsSpan(), StringComparison.OrdinalIgnoreCase);
     }
@@ -2225,7 +2403,7 @@ public static partial class ReferenceExtractor
         if (string.IsNullOrWhiteSpace(path))
             return false;
 
-        var extension = Path.GetExtension(Path.GetFileName(path.AsSpan()));
+        var extension = Path.GetExtension(path.AsSpan());
         return extension.Equals(".razor".AsSpan(), StringComparison.OrdinalIgnoreCase)
             || extension.Equals(".cshtml".AsSpan(), StringComparison.OrdinalIgnoreCase);
     }
@@ -2501,7 +2679,7 @@ public static partial class ReferenceExtractor
     {
         symbolName = string.Empty;
         nameIndex = -1;
-        var builder = new StringBuilder();
+        var builder = new StringBuilder(Math.Min(256, Math.Max(0, line.Length - startIndex)));
         var i = startIndex;
         var sawLiteral = false;
         var firstLiteralIndex = -1;
@@ -2674,7 +2852,7 @@ public static partial class ReferenceExtractor
 
         contentIndex = index + 1;
         index++;
-        var builder = new StringBuilder();
+        var builder = new StringBuilder(Math.Min(256, line.Length - contentIndex));
         while (index < line.Length)
         {
             var c = line[index];

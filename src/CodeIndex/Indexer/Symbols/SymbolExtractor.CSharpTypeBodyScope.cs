@@ -15,10 +15,12 @@ public static partial class SymbolExtractor
     /// </summary>
     private sealed class CSharpTypeBodyScope
     {
-        private readonly bool[] _lineStartInsideTypeBody;
-        private readonly List<(int Column, bool IsTypeBody)>?[] _transitions;
+        public static readonly CSharpTypeBodyScope Empty = new(null, null);
 
-        public CSharpTypeBodyScope(bool[] lineStartInsideTypeBody, List<(int Column, bool IsTypeBody)>?[] transitions)
+        private readonly bool[]? _lineStartInsideTypeBody;
+        private readonly List<(int Column, bool IsTypeBody)>?[]? _transitions;
+
+        public CSharpTypeBodyScope(bool[]? lineStartInsideTypeBody, List<(int Column, bool IsTypeBody)>?[]? transitions)
         {
             _lineStartInsideTypeBody = lineStartInsideTypeBody;
             _transitions = transitions;
@@ -34,6 +36,9 @@ public static partial class SymbolExtractor
         /// </summary>
         public bool IsInsideTypeBodyAt(int lineIndex, int column)
         {
+            if (_lineStartInsideTypeBody is null || _transitions is null)
+                return false;
+
             var state = _lineStartInsideTypeBody[lineIndex];
             var transitions = _transitions[lineIndex];
             if (transitions == null)
@@ -50,11 +55,19 @@ public static partial class SymbolExtractor
 
     private static CSharpTypeBodyScope BuildCSharpTypeBodyScope(string[] structuralLines)
     {
+        if (!LinesContain(structuralLines, "{", StringComparison.Ordinal))
+            return CSharpTypeBodyScope.Empty;
+        if (!LinesContainAny(structuralLines, "class", "struct", "interface", StringComparison.Ordinal)
+            && !LinesContain(structuralLines, "record", StringComparison.Ordinal))
+        {
+            return CSharpTypeBodyScope.Empty;
+        }
+
         var lineStartInsideTypeBody = new bool[structuralLines.Length];
         var transitions = new List<(int Column, bool IsTypeBody)>?[structuralLines.Length];
         var scopeStack = new Stack<bool>();
         scopeStack.Push(false);
-        var declBuffer = new StringBuilder();
+        var declBuffer = new StringBuilder(256);
 
         for (int lineIndex = 0; lineIndex < structuralLines.Length; lineIndex++)
         {

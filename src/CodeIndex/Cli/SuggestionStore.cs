@@ -141,7 +141,7 @@ public class SuggestionStore
         var externallyVisibleTitle = GitHubIssueReporter.BuildIssueTitle(category, description);
         var normalized = $"{category}|{(language ?? "").ToLowerInvariant()}|{externallyVisibleTitle.ToLowerInvariant()}|{externallyVisibleDescription.Trim().ToLowerInvariant()}";
         var hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(normalized));
-        return Convert.ToHexString(hashBytes).ToLowerInvariant();
+        return HexEncoding.ToLowerHexString(hashBytes);
     }
 
     /// <summary>

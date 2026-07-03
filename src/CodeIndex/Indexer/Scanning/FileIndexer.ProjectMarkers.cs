@@ -9,20 +9,22 @@ public partial class FileIndexer
 {
     public string GetFamilyScopeKey(string absolutePath, string? lang)
     {
+        var fullPath = GetProjectMarkerScopeFullPath(absolutePath);
         var projectMarkerPatterns = GetProjectMarkerPatterns(lang);
         if (projectMarkerPatterns != null)
         {
             var primaryProjectMarkerPatterns = GetPrimaryProjectMarkerPatterns(lang) ?? projectMarkerPatterns;
-            var currentDir = Path.GetDirectoryName(Path.GetFullPath(absolutePath));
+            var primaryPatternsCoverAllMarkers = ProjectMarkerPatternListsEqual(primaryProjectMarkerPatterns, projectMarkerPatterns);
+            var currentDir = Path.GetDirectoryName(fullPath);
             while (!string.IsNullOrEmpty(currentDir))
             {
                 var markerCount = CountProjectMarkerFiles(currentDir, primaryProjectMarkerPatterns);
                 if (markerCount == 1)
-                    return NormalizeScopeKey(Path.GetRelativePath(_projectRoot, currentDir));
+                    return NormalizeScopeKey(ToRelativePath(currentDir));
                 if (markerCount > 1)
-                    return DeriveAmbiguousProjectScopeKey(Path.GetFullPath(absolutePath), currentDir);
-                if (CountProjectMarkerFiles(currentDir, projectMarkerPatterns) > 0)
-                    return NormalizeScopeKey(Path.GetRelativePath(_projectRoot, currentDir));
+                    return DeriveAmbiguousProjectScopeKey(fullPath, currentDir);
+                if (!primaryPatternsCoverAllMarkers && CountProjectMarkerFiles(currentDir, projectMarkerPatterns) > 0)
+                    return NormalizeScopeKey(ToRelativePath(currentDir));
 
                 if (PathsEqual(currentDir, _projectRoot))
                     break;
@@ -31,7 +33,7 @@ public partial class FileIndexer
             }
         }
 
-        var relativePath = Path.GetRelativePath(_projectRoot, absolutePath);
+        var relativePath = ToRelativePath(fullPath);
         return DeriveFallbackFamilyScopeKey(relativePath);
     }
 
@@ -104,15 +106,81 @@ public partial class FileIndexer
 
         projectMarkers.Sort(StringComparer.Ordinal);
 
-        var payload = string.Join('\n', projectMarkers);
         return new ProjectMarkerFingerprintResult(
-            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload))).ToLowerInvariant(),
+            ComputeProjectMarkerFingerprint(projectMarkers),
             !traversalState.Truncated)
         {
-            Warnings = errors
-                .Where(static error => !error.IsFatal)
-                .ToArray(),
+            Warnings = GetNonFatalScanErrors(errors),
         };
+    }
+
+    private static string ComputeProjectMarkerFingerprint(IReadOnlyList<string> projectMarkers)
+    {
+        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        Span<byte> separator = stackalloc byte[1];
+        separator[0] = (byte)'\n';
+        for (var i = 0; i < projectMarkers.Count; i++)
+        {
+            if (i > 0)
+                hasher.AppendData(separator);
+
+            AppendUtf8StringToHash(hasher, projectMarkers[i]);
+        }
+
+        var hash = hasher.GetHashAndReset();
+        if (hash.Length != SHA256.HashSizeInBytes)
+            throw new InvalidOperationException("SHA256 produced an unexpected hash length");
+        return HexEncoding.ToLowerHexString(hash);
+    }
+
+    private static void AppendUtf8StringToHash(IncrementalHash hasher, string value)
+    {
+        Span<byte> buffer = stackalloc byte[4096];
+        const int MaxCharsPerChunk = 1024;
+        for (var offset = 0; offset < value.Length;)
+        {
+            var charCount = Math.Min(MaxCharsPerChunk, value.Length - offset);
+            if (offset + charCount < value.Length
+                && charCount > 0
+                && char.IsHighSurrogate(value[offset + charCount - 1])
+                && char.IsLowSurrogate(value[offset + charCount]))
+            {
+                charCount--;
+            }
+
+            if (charCount == 0)
+                charCount = 1;
+
+            var written = Encoding.UTF8.GetBytes(value.AsSpan(offset, charCount), buffer);
+            if (written > 0)
+                hasher.AppendData(buffer[..written]);
+            offset += charCount;
+        }
+    }
+
+    private static ScanError[] GetNonFatalScanErrors(List<ScanError> errors)
+    {
+        var warningCount = 0;
+        foreach (var error in errors)
+        {
+            if (!error.IsFatal)
+                warningCount++;
+        }
+
+        if (warningCount == 0)
+            return [];
+        if (warningCount == errors.Count)
+            return errors.ToArray();
+
+        var warnings = new ScanError[warningCount];
+        var index = 0;
+        foreach (var error in errors)
+        {
+            if (!error.IsFatal)
+                warnings[index++] = error;
+        }
+
+        return warnings;
     }
 
     public static string DeriveFallbackFamilyScopeKey(string relativePath)
@@ -130,16 +198,34 @@ public partial class FileIndexer
 
     private static string NormalizeScopeKey(string relativePath)
     {
-        var normalized = relativePath.Replace('\\', '/').Trim('/');
-        return string.IsNullOrEmpty(normalized) || normalized == "."
-            ? "."
-            : normalized;
+        var start = 0;
+        var end = relativePath.Length;
+        while (start < end && IsScopeKeySeparator(relativePath[start]))
+            start++;
+        while (end > start && IsScopeKeySeparator(relativePath[end - 1]))
+            end--;
+
+        if (start == end)
+            return ".";
+
+        var span = relativePath.AsSpan(start, end - start);
+        if (span.Length == 1 && span[0] == '.')
+            return ".";
+
+        if (span.IndexOf('\\') >= 0)
+            return span.ToString().Replace('\\', '/');
+
+        return start == 0 && end == relativePath.Length
+            ? relativePath
+            : relativePath[start..end];
     }
+
+    private static bool IsScopeKeySeparator(char value) => value is '/' or '\\';
 
     private string DeriveAmbiguousProjectScopeKey(string absolutePath, string anchorDir)
     {
-        var anchorScope = NormalizeScopeKey(Path.GetRelativePath(_projectRoot, anchorDir));
-        var relativeFromAnchor = NormalizeScopeKey(Path.GetRelativePath(anchorDir, absolutePath));
+        var anchorScope = NormalizeScopeKey(ToRelativePath(anchorDir));
+        var relativeFromAnchor = NormalizeScopeKey(GetRelativePathFromDirectory(anchorDir, absolutePath));
         if (relativeFromAnchor == ".")
             return anchorScope;
 
@@ -158,36 +244,44 @@ public partial class FileIndexer
         return $"{left}/{right}";
     }
 
+    private static string GetProjectMarkerScopeFullPath(string path) =>
+        Path.IsPathFullyQualified(path) ? path : Path.GetFullPath(path);
+
+    private static bool ProjectMarkerPatternListsEqual(IReadOnlyList<string> left, IReadOnlyList<string> right)
+    {
+        if (ReferenceEquals(left, right))
+            return true;
+
+        if (left.Count != right.Count)
+            return false;
+
+        for (var i = 0; i < left.Count; i++)
+        {
+            if (!string.Equals(left[i], right[i], StringComparison.Ordinal))
+                return false;
+        }
+
+        return true;
+    }
+
     private int CountProjectMarkerFiles(string dir, IReadOnlyList<string> patterns)
     {
         var count = 0;
-        foreach (var markerFile in EnumerateProjectMarkerFiles(dir, patterns))
-        {
-            if (!IsProjectMarkerVisible(markerFile, activeIgnoreRules: null))
-                continue;
-
-            count++;
-            if (count > 1)
-                return count;
-        }
-
-        return count;
-    }
-
-    private IEnumerable<string> EnumerateProjectMarkerFiles(
-        string dir,
-        IReadOnlyList<string> patterns,
-        CancellationToken cancellationToken = default)
-    {
         var prefixedDir = LongPath.EnsureWindowsPrefix(dir);
         foreach (var pattern in patterns)
         {
-            foreach (var file in CodeIndex.FileSystemTraversalPolicy.EnumerateFiles(prefixedDir, pattern))
+            foreach (var markerFile in CodeIndex.FileSystemTraversalPolicy.EnumerateFiles(prefixedDir, pattern))
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                yield return LongPath.RemoveWindowsPrefix(file);
+                if (!IsProjectMarkerVisible(LongPath.RemoveWindowsPrefix(markerFile), activeIgnoreRules: null))
+                    continue;
+
+                count++;
+                if (count > 1)
+                    return count;
             }
         }
+
+        return count;
     }
 
     private bool IsProjectMarkerVisible(string markerFile, IgnoreRuleSet? activeIgnoreRules)
@@ -196,7 +290,7 @@ public partial class FileIndexer
             return false;
 
         return activeIgnoreRules is null
-            ? !EvaluatePathFilter(markerFile).ShouldSkip
+            ? !ShouldSkipPath(markerFile)
             : !activeIgnoreRules.IsIgnored(markerFile, isDirectory: false);
     }
 
@@ -251,24 +345,29 @@ public partial class FileIndexer
                 }
 
                 var activeIgnoreRules = loadResult.Rules;
-                foreach (var markerFile in EnumerateProjectMarkerFiles(currentDirectory, patterns, cancellationToken))
+                var prefixedCurrentDirectory = LongPath.EnsureWindowsPrefix(currentDirectory);
+                foreach (var pattern in patterns)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    if (!IsProjectMarkerVisible(markerFile, activeIgnoreRules))
-                        continue;
-
-                    if (traversalState.MarkerFilesCollected >= maxMarkerFiles)
+                    foreach (var enumeratedMarkerFile in CodeIndex.FileSystemTraversalPolicy.EnumerateFiles(prefixedCurrentDirectory, pattern))
                     {
-                        TruncateProjectMarkerTraversal(
-                            traversalState,
-                            errors,
-                            currentDirectory,
-                            $"marker file budget {maxMarkerFiles:N0} exhausted after collecting {traversalState.MarkerFilesCollected:N0} marker files");
-                        return;
-                    }
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var markerFile = LongPath.RemoveWindowsPrefix(enumeratedMarkerFile);
+                        if (!IsProjectMarkerVisible(markerFile, activeIgnoreRules))
+                            continue;
 
-                    projectMarkers.Add(NormalizeScopeKey(Path.GetRelativePath(_projectRoot, markerFile)));
-                    traversalState.MarkerFilesCollected++;
+                        if (traversalState.MarkerFilesCollected >= maxMarkerFiles)
+                        {
+                            TruncateProjectMarkerTraversal(
+                                traversalState,
+                                errors,
+                                currentDirectory,
+                                $"marker file budget {maxMarkerFiles:N0} exhausted after collecting {traversalState.MarkerFilesCollected:N0} marker files");
+                            return;
+                        }
+
+                        projectMarkers.Add(NormalizeScopeKey(ToRelativePath(markerFile)));
+                        traversalState.MarkerFilesCollected++;
+                    }
                 }
 
                 var passthrough = IsSubmoduleAncestorPassthrough(current.RelativePath);
@@ -340,13 +439,10 @@ public partial class FileIndexer
 
     private void AddProjectMarkerTraversalWarning(List<ScanError> errors, string directory, string exceptionType)
     {
-        if (errors.Count(static error => error.Message.StartsWith("Project marker discovery skipped", StringComparison.Ordinal))
-            >= MaxProjectMarkerTraversalWarnings)
-        {
+        if (HasReachedProjectMarkerWarningLimit(errors, "Project marker discovery skipped"))
             return;
-        }
 
-        var relativePath = NormalizeIgnorePath(Path.GetRelativePath(_projectRoot, directory));
+        var relativePath = NormalizeIgnorePath(ToRelativePath(directory));
         if (string.IsNullOrEmpty(relativePath))
             relativePath = ".";
 
@@ -358,13 +454,10 @@ public partial class FileIndexer
 
     private void AddProjectMarkerBudgetWarning(List<ScanError> errors, string directory, string reason)
     {
-        if (errors.Count(static error => error.Message.StartsWith("Project marker discovery truncated", StringComparison.Ordinal))
-            >= MaxProjectMarkerTraversalWarnings)
-        {
+        if (HasReachedProjectMarkerWarningLimit(errors, "Project marker discovery truncated"))
             return;
-        }
 
-        var relativePath = NormalizeIgnorePath(Path.GetRelativePath(_projectRoot, directory));
+        var relativePath = NormalizeIgnorePath(ToRelativePath(directory));
         if (string.IsNullOrEmpty(relativePath))
             relativePath = ".";
 
@@ -374,21 +467,43 @@ public partial class FileIndexer
             ScanIssueSeverity.Warning));
     }
 
+    private static bool HasReachedProjectMarkerWarningLimit(List<ScanError> errors, string messagePrefix)
+    {
+        var matchingWarningCount = 0;
+        foreach (var error in errors)
+        {
+            if (!error.Message.StartsWith(messagePrefix, StringComparison.Ordinal))
+                continue;
+
+            matchingWarningCount++;
+            if (matchingWarningCount >= MaxProjectMarkerTraversalWarnings)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static readonly string[] CSharpProjectMarkerPatterns = ["*.csproj"];
+    private static readonly string[] VisualBasicProjectMarkerPatterns = ["*.vbproj"];
+    private static readonly string[] FSharpProjectMarkerPatterns = ["*.fsproj"];
+    private static readonly string[] MsbuildProjectMarkerPatterns = ["*.csproj", "*.fsproj", "*.vbproj", "*.props", "*.targets"];
+    private static readonly string[] MsbuildPrimaryProjectMarkerPatterns = ["*.csproj", "*.fsproj", "*.vbproj"];
+
     private static IReadOnlyList<string>? GetProjectMarkerPatterns(string? lang) => lang switch
     {
-        "csharp" => ["*.csproj"],
-        "vb" => ["*.vbproj"],
-        "fsharp" => ["*.fsproj"],
-        "msbuild" => ["*.csproj", "*.fsproj", "*.vbproj", "*.props", "*.targets"],
+        "csharp" => CSharpProjectMarkerPatterns,
+        "vb" => VisualBasicProjectMarkerPatterns,
+        "fsharp" => FSharpProjectMarkerPatterns,
+        "msbuild" => MsbuildProjectMarkerPatterns,
         _ => null,
     };
 
     private static IReadOnlyList<string>? GetPrimaryProjectMarkerPatterns(string? lang) => lang switch
     {
-        "csharp" => ["*.csproj"],
-        "vb" => ["*.vbproj"],
-        "fsharp" => ["*.fsproj"],
-        "msbuild" => ["*.csproj", "*.fsproj", "*.vbproj"],
+        "csharp" => CSharpProjectMarkerPatterns,
+        "vb" => VisualBasicProjectMarkerPatterns,
+        "fsharp" => FSharpProjectMarkerPatterns,
+        "msbuild" => MsbuildPrimaryProjectMarkerPatterns,
         _ => null,
     };
 }

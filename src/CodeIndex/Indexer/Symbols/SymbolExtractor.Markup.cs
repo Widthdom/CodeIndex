@@ -8,9 +8,16 @@ namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
+    private static readonly string[] WrappedXamlTypeBearingAttributeNames = ["x:Class", "x:DataType", "TargetType"];
+    private static readonly IReadOnlyDictionary<string, string> EmptyMarkdownReferenceDefinitionTargets =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
     private static List<SymbolRecord> ExtractHtmlSymbols(long fileId, string[] lines)
     {
         const string defaultSlotSymbolName = "(default)";
+
+        if (!LinesContain(lines, "<", StringComparison.Ordinal))
+            return [];
 
         // HTML needs proper tag-structure awareness so attribute lookalikes inside
         // other attributes' quoted values (e.g. `<link title="href=evil.css" href="/real.css">`)
@@ -27,21 +34,13 @@ public static partial class SymbolExtractor
         var rawText = string.Join('\n', lines);
         var maskedText = MaskHtmlRawTextRegions(rawText);
 
-        // Precompute per-line absolute offsets for O(log n) line lookup via binary
-        // search. Each lines[i] does not include the joining '\n', so lineStarts[i]
-        // points at the first character of line i.
-        // 各シンボルの行番号を O(log n) で引けるように行ごとの絶対 offset を事前計算。
-        // lines[i] 自体は連結に使う '\n' を含まないため、lineStarts[i] は i 行目の
-        // 先頭文字位置を指す。
-        var lineStarts = new int[lines.Length];
-        var lineCursor = 0;
-        for (var i = 0; i < lines.Length; i++)
-        {
-            lineStarts[i] = lineCursor;
-            lineCursor += lines[i].Length + 1;
-        }
+        // Build per-line absolute offsets only once a symbol needs O(log n)
+        // offset-to-line lookup. Plain markup with no emitted symbols can skip it.
+        // シンボルが offset-to-line lookup を必要とする時だけ行ごとの絶対 offset を作る。
+        // emit 対象のない plain markup では確保を避ける。
+        int[]? lineStarts = null;
 
-        var symbols = new List<SymbolRecord>();
+        List<SymbolRecord>? symbols = null;
         var pos = 0;
         while (pos < maskedText.Length)
         {
@@ -90,9 +89,9 @@ public static partial class SymbolExtractor
             // ファイルで `symbols` / `definition` / `outline` が汚染されるのを防ぐ。
             if (tagName.Contains('-') && !HtmlReservedHyphenatedTags.Contains(tagNameLower))
             {
-                var startLine = FindHtmlLineNumber(lineStarts, pos);
+                var startLine = FindHtmlLineNumber(lineStarts ??= BuildLineStarts(lines), pos);
                 var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
-                symbols.Add(new SymbolRecord
+                (symbols ??= []).Add(new SymbolRecord
                 {
                     FileId = fileId,
                     Kind = "class",
@@ -192,9 +191,9 @@ public static partial class SymbolExtractor
 
                 if (IsHtmlSemanticStateAttributeName(attrNameLower))
                 {
-                    var attrStartLine = FindHtmlLineNumber(lineStarts, attrNameStart);
+                    var attrStartLine = FindHtmlLineNumber(lineStarts ??= BuildLineStarts(lines), attrNameStart);
                     var attrSignatureIndex = Math.Clamp(attrStartLine - 1, 0, lines.Length - 1);
-                    symbols.Add(new SymbolRecord
+                    (symbols ??= []).Add(new SymbolRecord
                     {
                         FileId = fileId,
                         Kind = "property",
@@ -276,12 +275,12 @@ public static partial class SymbolExtractor
                 // 属性値の位置でシンボルを固定し、属性が折り返されたタグでも値が書かれた
                 // 行にジャンプできるようにする。
                 var anchor = attrValueStart >= 0 ? attrValueStart : pos;
-                var startLine = FindHtmlLineNumber(lineStarts, anchor);
+                var startLine = FindHtmlLineNumber(lineStarts ??= BuildLineStarts(lines), anchor);
                 var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
 
                 void AddEmittedName(string emittedName)
                 {
-                    symbols.Add(new SymbolRecord
+                    (symbols ??= []).Add(new SymbolRecord
                     {
                         FileId = fileId,
                         Kind = emitKind!,
@@ -308,9 +307,9 @@ public static partial class SymbolExtractor
 
             if (tagNameLower == "slot" && !sawNamedSlotDeclaration)
             {
-                var startLine = FindHtmlLineNumber(lineStarts, pos);
+                var startLine = FindHtmlLineNumber(lineStarts ??= BuildLineStarts(lines), pos);
                 var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
-                symbols.Add(new SymbolRecord
+                (symbols ??= []).Add(new SymbolRecord
                 {
                     FileId = fileId,
                     Kind = "property",
@@ -324,6 +323,9 @@ public static partial class SymbolExtractor
 
             pos = cursor < maskedText.Length ? cursor + 1 : cursor;
         }
+
+        if (symbols is null)
+            return [];
 
         AssignContainers(symbols, lines, null);
         PopulateDeclaredContainerQualifiedNames(symbols);
@@ -362,9 +364,9 @@ public static partial class SymbolExtractor
     {
         // Markdown headings are the closest thing to navigable symbols in docs files.
         // Markdown の見出しは、ドキュメント内でナビゲート可能な symbol に最も近い。
-        var referenceTargets = BuildMarkdownReferenceDefinitionTargets(lines);
-        var symbols = new List<SymbolRecord>();
-        var headingStack = new Stack<(int Level, int SymbolIndex)>();
+        IReadOnlyDictionary<string, string>? referenceTargets = null;
+        List<SymbolRecord>? symbols = null;
+        Stack<(int Level, int SymbolIndex)>? headingStack = null;
         var inFence = false;
         var fenceChar = '\0';
         var fenceLength = 0;
@@ -389,19 +391,19 @@ public static partial class SymbolExtractor
                         Signature = lines[i].Trim(),
                     };
 
-                    if (headingStack.Count > 0)
+                    if (headingStack is { Count: > 0 })
                     {
-                        var parent = symbols[headingStack.Peek().SymbolIndex];
+                        var parent = symbols![headingStack.Peek().SymbolIndex];
                         codeSymbol.ContainerKind = "heading";
                         codeSymbol.ContainerName = parent.Name;
                     }
 
-                    symbols.Add(codeSymbol);
+                    (symbols ??= []).Add(codeSymbol);
                     fenceSymbolIndex = symbols.Count - 1;
                 }
                 else if (fenceSymbolIndex >= 0)
                 {
-                    symbols[fenceSymbolIndex].EndLine = i + 1;
+                    symbols![fenceSymbolIndex].EndLine = i + 1;
                     symbols[fenceSymbolIndex].BodyEndLine = Math.Max(symbols[fenceSymbolIndex].BodyStartLine ?? i + 1, i);
                     fenceSymbolIndex = -1;
                 }
@@ -418,10 +420,10 @@ public static partial class SymbolExtractor
             if (i + 1 < lines.Length
                 && TryParseMarkdownSetextHeading(lines[i], lines[i + 1], out var setextLevel, out var setextHeadingText))
             {
-                while (headingStack.Count > 0 && headingStack.Peek().Level >= setextLevel)
+                while (headingStack is { Count: > 0 } && headingStack.Peek().Level >= setextLevel)
                 {
                     var closedHeading = headingStack.Pop();
-                    symbols[closedHeading.SymbolIndex].EndLine = i;
+                    symbols![closedHeading.SymbolIndex].EndLine = i;
                     symbols[closedHeading.SymbolIndex].BodyEndLine = i;
                 }
 
@@ -438,30 +440,30 @@ public static partial class SymbolExtractor
                     Signature = lines[i].TrimEnd(),
                 };
 
-                if (headingStack.Count > 0)
+                if (headingStack is { Count: > 0 })
                 {
-                    var parent = symbols[headingStack.Peek().SymbolIndex];
+                    var parent = symbols![headingStack.Peek().SymbolIndex];
                     setextSymbol.ContainerKind = "heading";
                     setextSymbol.ContainerName = parent.Name;
                 }
 
-                symbols.Add(setextSymbol);
-                headingStack.Push((setextLevel, symbols.Count - 1));
-                AddMarkdownReferenceSymbols(fileId, lines[i], i + 1, symbols, referenceTargets);
+                (symbols ??= []).Add(setextSymbol);
+                (headingStack ??= new Stack<(int Level, int SymbolIndex)>()).Push((setextLevel, symbols.Count - 1));
+                AddMarkdownReferenceSymbols(fileId, lines[i], i + 1, ref symbols, lines, ref referenceTargets);
                 i++;
                 continue;
             }
 
             if (!TryParseMarkdownHeading(lines[i], out var level, out var headingText))
             {
-                AddMarkdownReferenceSymbols(fileId, lines[i], i + 1, symbols, referenceTargets);
+                AddMarkdownReferenceSymbols(fileId, lines[i], i + 1, ref symbols, lines, ref referenceTargets);
                 continue;
             }
 
-            while (headingStack.Count > 0 && headingStack.Peek().Level >= level)
+            while (headingStack is { Count: > 0 } && headingStack.Peek().Level >= level)
             {
                 var closedHeading = headingStack.Pop();
-                symbols[closedHeading.SymbolIndex].EndLine = i;
+                symbols![closedHeading.SymbolIndex].EndLine = i;
                 symbols[closedHeading.SymbolIndex].BodyEndLine = i;
             }
 
@@ -478,31 +480,34 @@ public static partial class SymbolExtractor
                 Signature = lines[i].Trim(),
             };
 
-            if (headingStack.Count > 0)
+            if (headingStack is { Count: > 0 })
             {
-                var parent = symbols[headingStack.Peek().SymbolIndex];
+                var parent = symbols![headingStack.Peek().SymbolIndex];
                 symbol.ContainerKind = "heading";
                 symbol.ContainerName = parent.Name;
             }
 
-            symbols.Add(symbol);
-            headingStack.Push((level, symbols.Count - 1));
-            AddMarkdownReferenceSymbols(fileId, lines[i], i + 1, symbols, referenceTargets);
+            (symbols ??= []).Add(symbol);
+            (headingStack ??= new Stack<(int Level, int SymbolIndex)>()).Push((level, symbols.Count - 1));
+            AddMarkdownReferenceSymbols(fileId, lines[i], i + 1, ref symbols, lines, ref referenceTargets);
         }
 
-        while (headingStack.Count > 0)
+        while (headingStack is { Count: > 0 })
         {
             var closedHeading = headingStack.Pop();
-            symbols[closedHeading.SymbolIndex].EndLine = lines.Length;
+            symbols![closedHeading.SymbolIndex].EndLine = lines.Length;
             symbols[closedHeading.SymbolIndex].BodyEndLine = lines.Length;
         }
 
-        return symbols;
+        return symbols ?? [];
     }
 
-    private static Dictionary<string, string> BuildMarkdownReferenceDefinitionTargets(string[] lines)
+    private static IReadOnlyDictionary<string, string> BuildMarkdownReferenceDefinitionTargets(string[] lines)
     {
-        var targets = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (!LinesContain(lines, "]:", StringComparison.Ordinal))
+            return EmptyMarkdownReferenceDefinitionTargets;
+
+        Dictionary<string, string>? targets = null;
         var inFence = false;
         var fenceChar = '\0';
         var fenceLength = 0;
@@ -523,25 +528,34 @@ public static partial class SymbolExtractor
             if (line.Contains("]:", StringComparison.Ordinal))
             {
                 foreach (Match match in MarkdownReferenceDefinitionRegex.Matches(line))
-                    targets[match.Groups["label"].Value.Trim()] = match.Groups["target"].Value.Trim();
+                {
+                    targets ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    targets[match.Groups["label"].ValueSpan.Trim().ToString()] = match.Groups["target"].ValueSpan.Trim().ToString();
+                }
             }
         }
 
-        return targets;
+        return targets ?? EmptyMarkdownReferenceDefinitionTargets;
     }
 
-    private static void AddMarkdownReferenceSymbols(long fileId, string line, int lineNumber, List<SymbolRecord> symbols, IReadOnlyDictionary<string, string> referenceTargets)
+    private static void AddMarkdownReferenceSymbols(
+        long fileId,
+        string line,
+        int lineNumber,
+        ref List<SymbolRecord>? symbols,
+        string[] allLines,
+        ref IReadOnlyDictionary<string, string>? referenceTargets)
     {
         if (line.Contains("](", StringComparison.Ordinal))
         {
             foreach (Match match in MarkdownLocalAnchorLinkRegex.Matches(line))
-                AddMarkdownReferenceSymbol(fileId, match.Groups["target"].Value, line, lineNumber, symbols);
+                AddMarkdownReferenceSymbol(fileId, match.Groups["target"].Value, line, lineNumber, ref symbols);
         }
 
         if (line.Contains("]:", StringComparison.Ordinal))
         {
             foreach (Match match in MarkdownLocalAnchorReferenceRegex.Matches(line))
-                AddMarkdownReferenceSymbol(fileId, match.Groups["target"].Value, line, lineNumber, symbols);
+                AddMarkdownReferenceSymbol(fileId, match.Groups["target"].Value, line, lineNumber, ref symbols);
         }
 
         if (!line.Contains("][", StringComparison.Ordinal))
@@ -549,22 +563,23 @@ public static partial class SymbolExtractor
 
         foreach (Match match in MarkdownReferenceLinkRegex.Matches(line))
         {
-            var label = match.Groups["label"].Value.Trim();
+            var label = match.Groups["label"].ValueSpan.Trim().ToString();
             if (label.Length == 0)
                 continue;
 
+            referenceTargets ??= BuildMarkdownReferenceDefinitionTargets(allLines);
             if (referenceTargets.TryGetValue(label, out var target) && target.TrimStart().StartsWith("#", StringComparison.Ordinal))
-                AddMarkdownReferenceSymbol(fileId, target, line, lineNumber, symbols);
+                AddMarkdownReferenceSymbol(fileId, target, line, lineNumber, ref symbols);
         }
     }
 
-    private static void AddMarkdownReferenceSymbol(long fileId, string target, string line, int lineNumber, List<SymbolRecord> symbols)
+    private static void AddMarkdownReferenceSymbol(long fileId, string target, string line, int lineNumber, ref List<SymbolRecord>? symbols)
     {
         var normalizedTarget = NormalizeMarkdownAnchorTarget(target);
         if (normalizedTarget.Length == 0)
             return;
 
-        symbols.Add(new SymbolRecord
+        (symbols ??= []).Add(new SymbolRecord
         {
             FileId = fileId,
             Kind = "reference",
@@ -723,18 +738,14 @@ public static partial class SymbolExtractor
     {
         if (!XamlReferenceExtractor.IsXaml(lines))
             return [];
+        if (!MayContainXamlSymbolMarkers(lines))
+            return [];
 
         var rawText = string.Join('\n', lines);
         if (TryGetXmlStructureIssue(rawText, out _))
             return [];
 
-        var lineStarts = new int[lines.Length];
-        var lineCursor = 0;
-        for (var i = 0; i < lines.Length; i++)
-        {
-            lineStarts[i] = lineCursor;
-            lineCursor += lines[i].Length + 1;
-        }
+        int[]? lineStarts = null;
 
         var symbols = new List<SymbolRecord>();
         for (var i = 0; i < lines.Length; i++)
@@ -745,7 +756,7 @@ public static partial class SymbolExtractor
             {
                 foreach (Match classMatch in XamlClassRegex.Matches(line))
                 {
-                    var value = classMatch.Groups["value"].Value.Trim();
+                    var value = classMatch.Groups["value"].ValueSpan.Trim().ToString();
                     if (value.Length == 0)
                         continue;
                     symbols.Add(new SymbolRecord
@@ -825,7 +836,7 @@ public static partial class SymbolExtractor
             {
                 foreach (Match nameMatch in XamlNameRegex.Matches(line))
                 {
-                    var value = nameMatch.Groups["value"].Value.Trim();
+                    var value = nameMatch.Groups["value"].ValueSpan.Trim().ToString();
                     if (value.Length == 0)
                         continue;
                     symbols.Add(new SymbolRecord
@@ -865,7 +876,7 @@ public static partial class SymbolExtractor
             {
                 foreach (Match handlerMatch in XamlEventHandlerRegex.Matches(line))
                 {
-                    var value = handlerMatch.Groups["value"].Value.Trim();
+                    var value = handlerMatch.Groups["value"].ValueSpan.Trim().ToString();
                     if (value.Length == 0)
                         continue;
                     symbols.Add(new SymbolRecord
@@ -885,34 +896,59 @@ public static partial class SymbolExtractor
         if (symbols.Count < StructuredDataMaxSymbols
             && rawText.Contains("x:TypeArguments", StringComparison.Ordinal))
         {
-            AddWrappedXamlTypeArgumentSymbols(fileId, rawText, lines, lineStarts, symbols);
+            AddWrappedXamlTypeArgumentSymbols(fileId, rawText, lines, lineStarts ??= BuildLineStarts(lines), symbols);
         }
         if (symbols.Count < StructuredDataMaxSymbols
             && MayContainWrappedXamlTypeBearingAttribute(rawText))
         {
-            AddWrappedXamlTypeBearingAttributeSymbols(fileId, rawText, lines, lineStarts, symbols);
+            AddWrappedXamlTypeBearingAttributeSymbols(fileId, rawText, lines, lineStarts ??= BuildLineStarts(lines), symbols);
         }
         if (symbols.Count < StructuredDataMaxSymbols
             && MayContainWrappedXamlSearchAttribute(rawText))
         {
-            AddWrappedXamlSearchAttributeSymbols(fileId, rawText, lines, lineStarts, symbols);
+            AddWrappedXamlSearchAttributeSymbols(fileId, rawText, lines, lineStarts ??= BuildLineStarts(lines), symbols);
         }
-        if (symbols.Count < StructuredDataMaxSymbols)
-            AddXamlTypeObjectElementSymbols(fileId, rawText, lines, lineStarts, symbols);
-        if (symbols.Count < StructuredDataMaxSymbols)
-            AddXamlTypePropertyElementSymbols(fileId, rawText, lines, lineStarts, symbols);
-        if (symbols.Count < StructuredDataMaxSymbols)
-            AddXamlTypeMarkupSymbols(fileId, rawText, lines, lineStarts, symbols);
-        if (symbols.Count < StructuredDataMaxSymbols)
-            AddXamlStaticMemberTypeSymbols(fileId, rawText, lines, lineStarts, symbols);
-        if (symbols.Count < StructuredDataMaxSymbols)
-            AddXamlReferenceSymbols(fileId, rawText, lines, lineStarts, symbols);
-        if (symbols.Count < StructuredDataMaxSymbols)
-            AddXamlResourceReferenceSymbols(fileId, rawText, lines, lineStarts, symbols);
-        if (symbols.Count < StructuredDataMaxSymbols)
-            AddXamlBindingElementNameSymbols(fileId, rawText, lines, lineStarts, symbols);
-        if (symbols.Count < StructuredDataMaxSymbols)
-            AddXamlBindingObjectElementSymbols(fileId, rawText, lines, lineStarts, symbols);
+        if (symbols.Count < StructuredDataMaxSymbols
+            && rawText.Contains("x:Type", StringComparison.Ordinal)
+            && rawText.Contains("TypeName", StringComparison.Ordinal))
+        {
+            AddXamlTypeObjectElementSymbols(fileId, rawText, lines, lineStarts ??= BuildLineStarts(lines), symbols);
+        }
+        if (symbols.Count < StructuredDataMaxSymbols
+            && rawText.Contains(".TypeName", StringComparison.Ordinal))
+        {
+            AddXamlTypePropertyElementSymbols(fileId, rawText, lines, lineStarts ??= BuildLineStarts(lines), symbols);
+        }
+        if (symbols.Count < StructuredDataMaxSymbols
+            && rawText.Contains("{x:Type", StringComparison.Ordinal))
+        {
+            AddXamlTypeMarkupSymbols(fileId, rawText, lines, lineStarts ??= BuildLineStarts(lines), symbols);
+        }
+        if (symbols.Count < StructuredDataMaxSymbols
+            && rawText.Contains("{x:Static", StringComparison.Ordinal))
+        {
+            AddXamlStaticMemberTypeSymbols(fileId, rawText, lines, lineStarts ??= BuildLineStarts(lines), symbols);
+        }
+        if (symbols.Count < StructuredDataMaxSymbols
+            && MayContainXamlReferenceSymbol(rawText))
+        {
+            AddXamlReferenceSymbols(fileId, rawText, lines, lineStarts ??= BuildLineStarts(lines), symbols);
+        }
+        if (symbols.Count < StructuredDataMaxSymbols
+            && TextContainsAny(rawText, XamlResourceReferenceMarkupPrefixes))
+        {
+            AddXamlResourceReferenceSymbols(fileId, rawText, lines, lineStarts ??= BuildLineStarts(lines), symbols);
+        }
+        if (symbols.Count < StructuredDataMaxSymbols
+            && MayContainXamlBindingElementNameSymbol(rawText))
+        {
+            AddXamlBindingElementNameSymbols(fileId, rawText, lines, lineStarts ??= BuildLineStarts(lines), symbols);
+        }
+        if (symbols.Count < StructuredDataMaxSymbols
+            && MayContainXamlBindingObjectElementSymbol(rawText))
+        {
+            AddXamlBindingObjectElementSymbols(fileId, rawText, lines, lineStarts ??= BuildLineStarts(lines), symbols);
+        }
 
         if (MayContainXamlBindingMarkup(rawText))
         {
@@ -925,7 +961,8 @@ public static partial class SymbolExtractor
                 if (value.Length == 0)
                     continue;
 
-                var startLine = FindHtmlLineNumber(lineStarts, bindingMatch.Index);
+                var currentLineStarts = lineStarts ??= BuildLineStarts(lines);
+                var startLine = FindHtmlLineNumber(currentLineStarts, bindingMatch.Index);
                 var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
                 symbols.Add(new SymbolRecord
                 {
@@ -941,6 +978,25 @@ public static partial class SymbolExtractor
         }
 
         return TrimStructuredDataSymbols(symbols, fileId, "structured_data_xml_symbol_budget_exceeded", lines);
+    }
+
+    private static bool MayContainXamlSymbolMarkers(string[] lines)
+    {
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            if (line.IndexOf('=') >= 0
+                || line.Contains("x:", StringComparison.Ordinal)
+                || line.Contains("{", StringComparison.Ordinal)
+                || line.Contains(".TypeName", StringComparison.Ordinal)
+                || line.Contains("Binding", StringComparison.Ordinal)
+                || line.Contains("Resource", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool MayContainXamlEventHandlerAttribute(string line)
@@ -963,6 +1019,34 @@ public static partial class SymbolExtractor
         || rawText.Contains("{TemplateBinding", StringComparison.Ordinal)
         || rawText.Contains("{CompiledBinding", StringComparison.Ordinal)
         || rawText.Contains("{ReflectionBinding", StringComparison.Ordinal);
+
+    private static bool MayContainXamlReferenceSymbol(string rawText)
+        => TextContainsAny(rawText, XamlReferenceMarkupPrefixes)
+        || TextContainsAny(rawText, XamlReferenceObjectElementPrefixes)
+        || (rawText.Contains("x:Reference", StringComparison.Ordinal)
+            && rawText.Contains(".Name", StringComparison.Ordinal));
+
+    private static bool MayContainXamlBindingElementNameSymbol(string rawText)
+        => rawText.Contains("ElementName", StringComparison.Ordinal)
+        && (MayContainXamlBindingMarkup(rawText)
+            || rawText.Contains("<Binding", StringComparison.Ordinal)
+            || rawText.Contains("Binding.ElementName", StringComparison.Ordinal));
+
+    private static bool MayContainXamlBindingObjectElementSymbol(string rawText)
+        => (rawText.Contains("<Binding", StringComparison.Ordinal)
+            && rawText.Contains("Path", StringComparison.Ordinal))
+        || rawText.Contains("Binding.Path", StringComparison.Ordinal);
+
+    private static bool TextContainsAny(string text, IReadOnlyList<string> values)
+    {
+        for (var i = 0; i < values.Count; i++)
+        {
+            if (text.Contains(values[i], StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
 
     private static bool MayContainWrappedXamlTypeBearingAttribute(string rawText) =>
         rawText.Contains("x:Class", StringComparison.Ordinal)
@@ -1072,7 +1156,7 @@ public static partial class SymbolExtractor
         // Handle XAML values that are split away from `=` onto later lines.
         // `x:Class`, `x:DataType`, and `TargetType` are intentionally kept on the
         // same normalization path as the line-based extractor so search results stay consistent.
-        foreach (var attributeName in new[] { "x:Class", "x:DataType", "TargetType" })
+        foreach (var attributeName in WrappedXamlTypeBearingAttributeNames)
         {
             var cursor = 0;
             while (cursor < rawText.Length)
@@ -1151,7 +1235,7 @@ public static partial class SymbolExtractor
         if (rawText.Contains("x:Name", StringComparison.Ordinal))
         {
             foreach (var occurrence in EnumerateWrappedXamlAttributeValues(rawText, lineStarts, "x:Name"))
-                AddXamlAttributeSymbol(fileId, lines, lineStarts, symbols, occurrence.AttributeIndex, "property", occurrence.Value.Trim());
+                AddXamlAttributeSymbol(fileId, lines, lineStarts, symbols, occurrence.AttributeIndex, "property", occurrence.Value);
         }
 
         if (rawText.Contains("x:Key", StringComparison.Ordinal))
@@ -1166,7 +1250,7 @@ public static partial class SymbolExtractor
                 continue;
 
             foreach (var occurrence in EnumerateWrappedXamlAttributeValues(rawText, lineStarts, attributeName))
-                AddXamlAttributeSymbol(fileId, lines, lineStarts, symbols, occurrence.AttributeIndex, "function", occurrence.Value.Trim());
+                AddXamlAttributeSymbol(fileId, lines, lineStarts, symbols, occurrence.AttributeIndex, "function", occurrence.Value);
         }
     }
 
@@ -1375,8 +1459,7 @@ public static partial class SymbolExtractor
 
     private static string NormalizeXamlElementReferenceValue(string value)
     {
-        value = NormalizeXamlMarkupValue(value);
-        return value.Trim();
+        return NormalizeXamlMarkupValue(value);
     }
 
     private static void AddXamlBindingObjectElementSymbols(
@@ -2150,7 +2233,7 @@ public static partial class SymbolExtractor
 
         var equalsIndex = IndexOfTopLevelEquals(value);
         if (equalsIndex >= 0)
-            return NormalizeXamlMarkupValue(value[(equalsIndex + 1)..].Trim());
+            return NormalizeXamlMarkupValue(value[(equalsIndex + 1)..]);
 
         return NormalizeXamlMarkupValue(value);
     }

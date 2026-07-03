@@ -28,18 +28,21 @@ public sealed class PathCompatibilityMatrixTests
     {
         _ = scenario;
         using var workspace = MatrixWorkspace.Create("cdidx_path_matrix");
-        PathCasing.ResetCacheForTests();
-        try
-        {
-            PathCasing.SeedFromWorkspace(workspace.Root, ignoreCase);
-
-            Assert.Equal(expected, PathCasing.IsFullPathEqualOrParent(
-                workspace.FullPath(parentSegment),
-                workspace.FullPath(childSegments)));
-        }
-        finally
+        lock (PathCasingTestLock.Gate)
         {
             PathCasing.ResetCacheForTests();
+            try
+            {
+                PathCasing.SeedFromWorkspace(workspace.Root, ignoreCase);
+
+                Assert.Equal(expected, PathCasing.IsFullPathEqualOrParent(
+                    workspace.FullPath(parentSegment),
+                    workspace.FullPath(childSegments)));
+            }
+            finally
+            {
+                PathCasing.ResetCacheForTests();
+            }
         }
     }
 

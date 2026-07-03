@@ -884,13 +884,13 @@ public static partial class IndexCommandRunner
 
     private static bool IsJavaScriptTypeScriptConfigPath(string path)
     {
-        var fileName = Path.GetFileName(path);
-        return string.Equals(fileName, "jsconfig.json", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(fileName, "tsconfig.json", StringComparison.OrdinalIgnoreCase)
-            || (fileName.StartsWith("jsconfig.", StringComparison.OrdinalIgnoreCase)
-                && fileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
-            || (fileName.StartsWith("tsconfig.", StringComparison.OrdinalIgnoreCase)
-                && fileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase));
+        var fileName = Path.GetFileName(path.AsSpan());
+        return fileName.Equals("jsconfig.json".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals("tsconfig.json".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || (fileName.StartsWith("jsconfig.".AsSpan(), StringComparison.OrdinalIgnoreCase)
+                && fileName.EndsWith(".json".AsSpan(), StringComparison.OrdinalIgnoreCase))
+            || (fileName.StartsWith("tsconfig.".AsSpan(), StringComparison.OrdinalIgnoreCase)
+                && fileName.EndsWith(".json".AsSpan(), StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool ContainsRelevantIgnoreFileUpdate(string projectRoot, IEnumerable<string> updateFiles)
@@ -921,7 +921,8 @@ public static partial class IndexCommandRunner
             if (FileIndexer.IsIgnoreFilePath(absolutePath) && IsRelevantIgnoreFileForProjectRoot(projectRoot, absolutePath))
                 relevantIgnoreFileChanged = true;
 
-            var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, absolutePath));
+            var relativePath = FileIndexer.NormalizePathSeparators(
+                FileIndexer.GetRelativePathFromProjectRoot(projectRoot, absolutePath));
             if (IsOutsideProjectRoot(relativePath))
                 continue;
 
@@ -958,7 +959,8 @@ public static partial class IndexCommandRunner
         foreach (var file in updateFiles)
         {
             var absPath = Path.IsPathRooted(file) ? file : Path.GetFullPath(Path.Combine(projectRoot, file));
-            var relPath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, absPath));
+            var relPath = FileIndexer.NormalizePathSeparators(
+                FileIndexer.GetRelativePathFromProjectRoot(projectRoot, absPath));
             if (IsOutsideProjectRoot(relPath))
             {
                 if (!json)
@@ -1228,13 +1230,13 @@ public static partial class IndexCommandRunner
         {
             var filePath = Path.IsPathRooted(path)
                 ? path
-                : Path.Combine(projectRoot, path.Replace('/', Path.DirectorySeparatorChar));
+                : Path.Combine(projectRoot, FileIndexer.NormalizeRelativePathForCurrentPlatform(path));
             return Create(projectRoot, filePath);
         }
 
         public static FullScanFileTarget Create(string projectRoot, string filePath, string? language = null)
         {
-            var relativePath = Path.GetRelativePath(projectRoot, filePath);
+            var relativePath = FileIndexer.GetRelativePathFromProjectRoot(projectRoot, filePath);
             return new FullScanFileTarget(
                 filePath,
                 relativePath,

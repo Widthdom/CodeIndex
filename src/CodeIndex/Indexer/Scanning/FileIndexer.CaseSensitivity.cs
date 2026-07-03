@@ -88,7 +88,7 @@ public partial class FileIndexer
     {
         try
         {
-            var normalizedDirectory = Path.GetFullPath(directory);
+            var normalizedDirectory = NormalizeDirectoryCaseProbePath(directory);
             return TryCreateCaseVariant(normalizedDirectory, out var variant)
                 ? Directory.Exists(LongPath.EnsureWindowsPrefix(variant))
                 : null;
@@ -99,9 +99,12 @@ public partial class FileIndexer
         }
     }
 
+    private static string NormalizeDirectoryCaseProbePath(string directory)
+        => Path.IsPathFullyQualified(directory) ? directory : Path.GetFullPath(directory);
+
     private bool DirectoryUsesIgnoreCase(string directory)
     {
-        var fullPath = Path.GetFullPath(directory);
+        var fullPath = NormalizeDirectoryCaseProbePath(directory);
         if (_directoryIgnoreCaseCache.TryGetValue(fullPath, out var ignoreCase))
             return ignoreCase;
 

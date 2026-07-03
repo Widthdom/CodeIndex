@@ -9,6 +9,7 @@ namespace CodeIndex.Indexer;
 internal static partial class SqlReferenceExtractor
 {
     private readonly record struct CteBodySpan(int StartIndex, int EndIndexExclusive);
+    private readonly record struct DefinitionLeafPattern(string LeafName, string Pattern);
     public static State CreateState() => new();
 
     public static void AddDefinitionNameAliases(HashSet<string> names, SymbolRecord symbol)
@@ -18,18 +19,21 @@ internal static partial class SqlReferenceExtractor
             names.Add(leafName);
     }
 
-    public static Dictionary<int, List<DefinitionLeafSpan>> BuildDefinitionLeafSpansByLine(
+    public static Dictionary<int, List<DefinitionLeafSpan>>? BuildDefinitionLeafSpansByLine(
         string[] lines,
         IReadOnlyList<SymbolRecord> symbols)
     {
-        var spansByLine = new Dictionary<int, List<DefinitionLeafSpan>>();
+        Dictionary<int, List<DefinitionLeafSpan>>? spansByLine = null;
+        Dictionary<string, DefinitionLeafPattern>? patternCache = null;
         foreach (var symbol in symbols)
         {
             if (symbol.Line < 1 || symbol.Line > lines.Length)
                 continue;
-            if (!TryFindDefinitionLeafSpan(lines[symbol.Line - 1], symbol.Name, out var span))
+            patternCache ??= new Dictionary<string, DefinitionLeafPattern>(StringComparer.Ordinal);
+            if (!TryFindDefinitionLeafSpan(lines[symbol.Line - 1], symbol.Name, patternCache, out var span))
                 continue;
 
+            spansByLine ??= new Dictionary<int, List<DefinitionLeafSpan>>();
             if (!spansByLine.TryGetValue(symbol.Line, out var spans))
             {
                 spans = [];
@@ -42,14 +46,28 @@ internal static partial class SqlReferenceExtractor
         return spansByLine;
     }
 
-    public static HashSet<(int LineNumber, int ColumnIndex)> BuildWindowFunctionCallSiteSuppressions(string[] lines)
+    public static HashSet<(int LineNumber, int ColumnIndex)>? BuildWindowFunctionCallSiteSuppressions(string[] lines)
     {
-        var suppressed = new HashSet<(int LineNumber, int ColumnIndex)>();
         if (lines.Length == 0)
-            return suppressed;
+            return null;
+
+        var hasWindowClauseKeyword = false;
+        long joinedLength = lines.Length - 1;
+        foreach (var line in lines)
+        {
+            joinedLength = Math.Min((long)int.MaxValue, joinedLength + line.Length);
+            if (line.IndexOf("OVER", StringComparison.OrdinalIgnoreCase) < 0)
+                continue;
+
+            hasWindowClauseKeyword = true;
+            break;
+        }
+
+        if (!hasWindowClauseKeyword)
+            return null;
 
         var lineStarts = new int[lines.Length];
-        var textBuilder = new StringBuilder();
+        var textBuilder = new StringBuilder((int)joinedLength);
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
             if (lineIndex > 0)
@@ -59,9 +77,7 @@ internal static partial class SqlReferenceExtractor
         }
 
         var text = textBuilder.ToString();
-        if (text.IndexOf("OVER", StringComparison.OrdinalIgnoreCase) < 0)
-            return suppressed;
-
+        HashSet<(int LineNumber, int ColumnIndex)>? suppressed = null;
         var searchStart = 0;
         while (TryFindNextWindowClause(
             text,
@@ -73,7 +89,7 @@ internal static partial class SqlReferenceExtractor
             if (TryFindWindowFunctionNameIndex(text, overKeywordIndex, out var functionNameIndex)
                 && TryMapJoinedOffsetToLine(lineStarts, text, functionNameIndex, out var lineNumber, out var columnIndex))
             {
-                suppressed.Add((lineNumber, columnIndex));
+                (suppressed ??= []).Add((lineNumber, columnIndex));
             }
 
             searchStart = closeParenIndex + 1;
@@ -2517,9 +2533,8 @@ internal static partial class SqlReferenceExtractor
         return leafStart;
     }
 
-    private static List<TextSegment> SplitTopLevelCommaSegments(string text, int textStart)
+    private static IEnumerable<TextSegment> SplitTopLevelCommaSegments(string text, int textStart)
     {
-        var segments = new List<TextSegment>();
         var segmentStart = 0;
         var depth = 0;
         var quote = '\0';
@@ -2569,12 +2584,11 @@ internal static partial class SqlReferenceExtractor
             if (ch != ',' || depth != 0)
                 continue;
 
-            segments.Add(new TextSegment(text[segmentStart..i], textStart + segmentStart));
+            yield return new TextSegment(text[segmentStart..i], textStart + segmentStart);
             segmentStart = i + 1;
         }
 
-        segments.Add(new TextSegment(text[segmentStart..], textStart + segmentStart));
-        return segments;
+        yield return new TextSegment(text[segmentStart..], textStart + segmentStart);
     }
 
     private static int IndexOfTopLevelChar(string text, char value)
@@ -3595,34 +3609,20 @@ internal static partial class SqlReferenceExtractor
         }
     }
 
-    private static bool TryFindDefinitionLeafSpan(string line, string qualifiedName, out DefinitionLeafSpan span)
+    private static bool TryFindDefinitionLeafSpan(
+        string line,
+        string qualifiedName,
+        Dictionary<string, DefinitionLeafPattern> patternCache,
+        out DefinitionLeafSpan span)
     {
         span = default;
         if (string.IsNullOrWhiteSpace(line) || string.IsNullOrWhiteSpace(qualifiedName))
             return false;
 
-        var leafName = SqlNameResolver.GetLeafName(qualifiedName);
-        if (string.IsNullOrWhiteSpace(leafName))
+        if (!TryGetDefinitionLeafPattern(qualifiedName, patternCache, out var leafPattern))
             return false;
 
-        var rawSegments = SplitQualifiedNameSourceSegments(qualifiedName);
-        if (rawSegments.Count == 0)
-            return false;
-
-        var pattern = new StringBuilder();
-        for (var i = 0; i < rawSegments.Count; i++)
-        {
-            if (i > 0)
-                pattern.Append(@"\s*\.\s*");
-
-            var escaped = Regex.Escape(rawSegments[i]);
-            if (i == rawSegments.Count - 1)
-                pattern.Append("(?<leaf>").Append(escaped).Append(')');
-            else
-                pattern.Append(escaped);
-        }
-
-        var match = BoundedRegex.Match(line, pattern.ToString(), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        var match = BoundedRegex.Match(line, leafPattern.Pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         if (!match.Success)
             return false;
 
@@ -3630,15 +3630,40 @@ internal static partial class SqlReferenceExtractor
         if (!leafGroup.Success)
             return false;
 
-        span = new DefinitionLeafSpan(leafName, leafGroup.Index, leafGroup.Index + leafGroup.Length);
+        span = new DefinitionLeafSpan(leafPattern.LeafName, leafGroup.Index, leafGroup.Index + leafGroup.Length);
         return true;
     }
 
-    private static List<string> SplitQualifiedNameSourceSegments(string qualifiedName)
+    private static bool TryGetDefinitionLeafPattern(
+        string qualifiedName,
+        Dictionary<string, DefinitionLeafPattern> patternCache,
+        out DefinitionLeafPattern leafPattern)
     {
+        if (patternCache.TryGetValue(qualifiedName, out leafPattern))
+            return true;
+
+        var leafName = SqlNameResolver.GetLeafName(qualifiedName);
+        if (string.IsNullOrWhiteSpace(leafName))
+            return false;
+
+        if (!TryBuildQualifiedNameSourcePattern(qualifiedName, out var pattern))
+            return false;
+
+        leafPattern = new DefinitionLeafPattern(leafName, pattern);
+        patternCache[qualifiedName] = leafPattern;
+        return true;
+    }
+
+    private static bool TryBuildQualifiedNameSourcePattern(string qualifiedName, out string pattern)
+    {
+        pattern = string.Empty;
         var trimmed = qualifiedName.Trim();
-        var segments = new List<string>();
-        var current = new StringBuilder();
+        if (trimmed.Length == 0)
+            return false;
+
+        var builder = new StringBuilder(trimmed.Length + "(?<leaf>)".Length);
+        string? pendingSegment = null;
+        var segmentStart = 0;
         char quote = '\0';
 
         for (var i = 0; i < trimmed.Length; i++)
@@ -3646,20 +3671,14 @@ internal static partial class SqlReferenceExtractor
             var ch = trimmed[i];
             if (quote != '\0')
             {
-                current.Append(ch);
                 if (quote == '[')
                 {
                     if (ch == ']')
                     {
                         if (i + 1 < trimmed.Length && trimmed[i + 1] == ']')
-                        {
-                            current.Append(trimmed[i + 1]);
                             i++;
-                        }
                         else
-                        {
                             quote = '\0';
-                        }
                     }
 
                     continue;
@@ -3668,14 +3687,9 @@ internal static partial class SqlReferenceExtractor
                 if (ch == quote)
                 {
                     if (i + 1 < trimmed.Length && trimmed[i + 1] == quote)
-                    {
-                        current.Append(trimmed[i + 1]);
                         i++;
-                    }
                     else
-                    {
                         quote = '\0';
-                    }
                 }
 
                 continue;
@@ -3684,29 +3698,57 @@ internal static partial class SqlReferenceExtractor
             if (ch is '[' or '"' or '`')
             {
                 quote = ch;
-                current.Append(ch);
                 continue;
             }
 
             if (ch == '.')
             {
-                AppendQualifiedNameSourceSegment(segments, current);
+                QueueQualifiedNameSourcePatternSegment(builder, trimmed, segmentStart, i, ref pendingSegment);
+                segmentStart = i + 1;
                 continue;
             }
 
-            current.Append(ch);
         }
 
-        AppendQualifiedNameSourceSegment(segments, current);
-        return segments;
+        QueueQualifiedNameSourcePatternSegment(builder, trimmed, segmentStart, trimmed.Length, ref pendingSegment);
+        if (pendingSegment is null)
+            return false;
+
+        AppendQualifiedNameSourcePatternSegment(builder, pendingSegment, isLeaf: true);
+        pattern = builder.ToString();
+        return true;
     }
 
-    private static void AppendQualifiedNameSourceSegment(List<string> segments, StringBuilder current)
+    private static void QueueQualifiedNameSourcePatternSegment(
+        StringBuilder builder,
+        string text,
+        int segmentStart,
+        int segmentEnd,
+        ref string? pendingSegment)
     {
-        var value = current.ToString().Trim();
-        if (value.Length > 0)
-            segments.Add(value);
-        current.Clear();
+        while (segmentStart < segmentEnd && char.IsWhiteSpace(text[segmentStart]))
+            segmentStart++;
+        while (segmentEnd > segmentStart && char.IsWhiteSpace(text[segmentEnd - 1]))
+            segmentEnd--;
+        if (segmentStart >= segmentEnd)
+            return;
+
+        if (pendingSegment is not null)
+            AppendQualifiedNameSourcePatternSegment(builder, pendingSegment, isLeaf: false);
+
+        pendingSegment = text[segmentStart..segmentEnd];
+    }
+
+    private static void AppendQualifiedNameSourcePatternSegment(StringBuilder builder, string segment, bool isLeaf)
+    {
+        if (builder.Length > 0)
+            builder.Append(@"\s*\.\s*");
+
+        var escaped = Regex.Escape(segment);
+        if (isLeaf)
+            builder.Append("(?<leaf>").Append(escaped).Append(')');
+        else
+            builder.Append(escaped);
     }
 
     private static string PrepareLineForIdentifierScan(
@@ -3723,7 +3765,7 @@ internal static partial class SqlReferenceExtractor
             return line;
         }
 
-        var sanitized = line.ToCharArray();
+        char[]? sanitized = null;
         bool inBlockComment = state.InBlockComment;
         string? dollarQuoteDelimiter = state.DollarQuoteDelimiter;
         bool inSingleQuotedString = state.InSingleQuotedString;
@@ -3731,7 +3773,8 @@ internal static partial class SqlReferenceExtractor
         void BlankRange(int start, int endExclusive)
         {
             start = Math.Max(0, start);
-            endExclusive = Math.Min(sanitized.Length, endExclusive);
+            endExclusive = Math.Min(line.Length, endExclusive);
+            sanitized ??= line.ToCharArray();
             for (int blankIndex = start; blankIndex < endExclusive; blankIndex++)
                 sanitized[blankIndex] = ' ';
         }
@@ -3868,7 +3911,7 @@ internal static partial class SqlReferenceExtractor
         }
 
         nextState = new IdentifierScanState(inBlockComment, dollarQuoteDelimiter, inSingleQuotedString);
-        return new string(sanitized);
+        return sanitized is null ? line : new string(sanitized);
     }
 
     private static bool ShouldTreatHashAsComment(string line, int hashIndex, string? statementPrefix)

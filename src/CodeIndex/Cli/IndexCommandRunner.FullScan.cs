@@ -871,24 +871,20 @@ public static partial class IndexCommandRunner
         var files = discovery.Files;
         var fileTargets = new FullScanFileTarget[files.Count];
         var languageCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var hasGeneratedCodeExtractionSuppressionPatterns = indexer.HasGeneratedCodeExtractionSuppressionPatterns;
         for (var i = 0; i < files.Count; i++)
         {
             var filePath = files[i];
             var language = FileIndexer.GetReusableDetectedLanguage(filePath, scanResult.FileLanguages);
             var target = FullScanFileTarget.Create(projectRoot, filePath, language);
-            fileTargets[i] = target with
-            {
-                GeneratedExtractionSuppressed = indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath),
-            };
+            fileTargets[i] = hasGeneratedCodeExtractionSuppressionPatterns
+                ? target with { GeneratedExtractionSuppressed = indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath) }
+                : target;
             if (language == null)
                 continue;
 
             languageCounts[language] = languageCounts.TryGetValue(language, out var count) ? count + 1 : 1;
         }
-        var generatedExtractionSuppressedByIndexPath = fileTargets.ToDictionary(
-            target => target.IndexPath,
-            target => target.GeneratedExtractionSuppressed,
-            StringComparer.Ordinal);
         var knownReadableFileSizes = new Dictionary<string, long>(StringComparer.Ordinal);
         var errorList = discovery.ErrorList;
         var warningList = discovery.WarningList;
@@ -938,9 +934,6 @@ public static partial class IndexCommandRunner
             foreach (var relPath in scanResult.NonIndexablePaths)
             {
                 var dbPath = FileIndexer.NormalizeIndexPath(relPath);
-                if (!writer.HasFileAtPath(dbPath))
-                    continue;
-
                 if (writer.DeleteFileByPath(dbPath))
                     purged++;
             }
@@ -1235,8 +1228,7 @@ public static partial class IndexCommandRunner
                 target.Language,
                 options.MaxSymbolsPerFile,
                 options.MaxReferencesPerFile,
-                generatedExtractionSuppressedByIndexPath.TryGetValue(target.IndexPath, out var generatedExtractionSuppressed)
-                    && generatedExtractionSuppressed,
+                target.GeneratedExtractionSuppressed,
                 allowReuse: true);
             if (existingFile == null)
             {
@@ -1275,7 +1267,8 @@ public static partial class IndexCommandRunner
                         target.RelativePath,
                         target.DisplayRelativePath,
                         target.IndexPath,
-                        target.Language));
+                        target.Language,
+                        target.GeneratedExtractionSuppressed));
                 }
 
                 if (csharpPrepassTargets.Count == 0)
@@ -1291,9 +1284,6 @@ public static partial class IndexCommandRunner
                         csharpPrepassTargets,
                         includeExistingSymbols: !options.Rebuild && !startedWithNoIndexedFiles,
                         canReuseExistingSymbolsWithoutRead: CanReuseCSharpPrepassTargetWithoutRead,
-                        isGeneratedCodeExtractionSuppressed: target =>
-                            generatedExtractionSuppressedByIndexPath.TryGetValue(target.IndexPath, out var generatedExtractionSuppressed)
-                            && generatedExtractionSuppressed,
                         reportCurrentFile: path => currentCSharpWorkspaceFile = path,
                         cancellationToken: cancellationToken);
                 }

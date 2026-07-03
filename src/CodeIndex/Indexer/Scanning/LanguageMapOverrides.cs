@@ -18,6 +18,7 @@ internal static class LanguageMapOverrides
     private static readonly Dictionary<string, EffectiveMapCacheEntry> EffectiveMapCache = new(StringComparer.Ordinal);
 
     internal static Func<string, Stream>? OpenOverrideFileForTesting { get; set; }
+    internal static Action<string>? ConfigPathStampProbeForTesting { get; set; }
 
     private readonly record struct ConfigPathCandidate(string Path, bool IsUserConfig);
 
@@ -39,9 +40,7 @@ internal static class LanguageMapOverrides
 
     internal static IReadOnlyDictionary<string, string> LoadEffectiveMapFromDirectory(string? startDirectory)
     {
-        startDirectory = string.IsNullOrWhiteSpace(startDirectory)
-            ? Environment.CurrentDirectory
-            : Path.GetFullPath(startDirectory);
+        startDirectory = NormalizeStartDirectory(startDirectory);
         EffectiveMapCacheEntry? cached;
 
         lock (EffectiveMapCacheLock)
@@ -56,9 +55,9 @@ internal static class LanguageMapOverrides
                 return cached.Map;
         }
 
-        var candidates = EnumerateConfigPathCandidates(startDirectory).ToArray();
+        var candidates = CreateConfigPathCandidates(startDirectory);
         var stamps = GetConfigPathStamps(candidates);
-        var map = LoadEffectiveMapFromPaths(SelectEffectiveConfigPaths(stamps), ReportWarningOnce);
+        var map = LoadEffectiveMapFromStamps(stamps, ReportWarningOnce);
 
         lock (EffectiveMapCacheLock)
         {
@@ -68,6 +67,15 @@ internal static class LanguageMapOverrides
         }
 
         return map;
+    }
+
+    internal static string NormalizeStartDirectory(string? startDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(startDirectory))
+            return Environment.CurrentDirectory;
+        return Path.IsPathFullyQualified(startDirectory)
+            ? startDirectory
+            : Path.GetFullPath(startDirectory);
     }
 
     internal static void ClearEffectiveMapCacheForTesting()
@@ -93,20 +101,47 @@ internal static class LanguageMapOverrides
         return map;
     }
 
-    private static IEnumerable<ConfigPathCandidate> EnumerateConfigPathCandidates(string startDirectory)
+    private static IReadOnlyDictionary<string, string> LoadEffectiveMapFromStamps(
+        IReadOnlyList<ConfigPathStamp> stamps,
+        Action<string, string?>? reportWarning)
     {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var stamp in stamps)
+        {
+            if (stamp.IsUserConfig)
+            {
+                if (stamp.Exists)
+                    LoadInto(stamp.Path, map, reportWarning);
+                continue;
+            }
+
+            if (!stamp.Exists)
+                continue;
+
+            LoadInto(stamp.Path, map, reportWarning);
+            break;
+        }
+
+        return map;
+    }
+
+    private static List<ConfigPathCandidate> CreateConfigPathCandidates(string startDirectory)
+    {
+        var candidates = new List<ConfigPathCandidate>();
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         if (!string.IsNullOrWhiteSpace(home))
-            yield return new ConfigPathCandidate(Path.Combine(home, ".config", "cdidx", "langmap.yaml"), IsUserConfig: true);
+            candidates.Add(new ConfigPathCandidate(Path.Combine(home, ".config", "cdidx", "langmap.yaml"), IsUserConfig: true));
 
         var directory = startDirectory;
         while (!string.IsNullOrEmpty(directory))
         {
             var candidate = Path.Combine(directory, WorkspaceFileName);
-            yield return new ConfigPathCandidate(candidate, IsUserConfig: false);
+            candidates.Add(new ConfigPathCandidate(candidate, IsUserConfig: false));
 
             directory = Directory.GetParent(directory)?.FullName ?? string.Empty;
         }
+
+        return candidates;
     }
 
     private static ConfigPathStamp[] GetConfigPathStamps(IReadOnlyList<ConfigPathCandidate> candidates)
@@ -133,6 +168,7 @@ internal static class LanguageMapOverrides
     {
         try
         {
+            ConfigPathStampProbeForTesting?.Invoke(candidate.Path);
             var info = new FileInfo(candidate.Path);
             return info.Exists
                 ? new ConfigPathStamp(candidate.Path, candidate.IsUserConfig, Exists: true, info.LastWriteTimeUtc, info.Length)
@@ -141,25 +177,6 @@ internal static class LanguageMapOverrides
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
         {
             return new ConfigPathStamp(candidate.Path, candidate.IsUserConfig, Exists: false, DateTime.MinValue, 0);
-        }
-    }
-
-    private static IEnumerable<string> SelectEffectiveConfigPaths(IReadOnlyList<ConfigPathStamp> stamps)
-    {
-        foreach (var stamp in stamps)
-        {
-            if (stamp.IsUserConfig)
-            {
-                if (stamp.Exists)
-                    yield return stamp.Path;
-                continue;
-            }
-
-            if (stamp.Exists)
-            {
-                yield return stamp.Path;
-                yield break;
-            }
         }
     }
 

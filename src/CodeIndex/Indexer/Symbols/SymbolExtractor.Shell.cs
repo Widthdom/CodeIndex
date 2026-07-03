@@ -8,8 +8,15 @@ namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
-    private static void ExpandShellAliasSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    private static void ExpandShellAliasSymbols(
+        long fileId,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        SymbolExtractionState extractionState)
     {
+        if (!LinesContain(lines, "alias", StringComparison.Ordinal))
+            return;
+
         var symbolLineIdentities = BuildSymbolLineIdentities(symbols);
         for (var i = 0; i < lines.Length; i++)
         {
@@ -40,6 +47,7 @@ public static partial class SymbolExtractor
                 };
                 AddSymbolRecord(
                     symbols,
+                    extractionState,
                     cssSeenSymbols: null,
                     i + 1,
                     symbol,

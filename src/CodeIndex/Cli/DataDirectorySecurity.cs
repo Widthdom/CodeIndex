@@ -58,7 +58,7 @@ internal static class DataDirectorySecurity
     {
         var identity = $"{Environment.UserName}\0{Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)}";
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(identity));
-        var scope = "cdidx-u" + Convert.ToHexString(hash, 0, 8).ToLowerInvariant();
+        var scope = "cdidx-u" + HexEncoding.ToLowerHexString(hash, 0, 8);
         return Path.GetFullPath(Path.Combine(GetTempPath(), scope));
     }
 

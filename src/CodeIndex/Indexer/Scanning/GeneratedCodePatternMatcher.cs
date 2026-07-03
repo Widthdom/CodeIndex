@@ -14,6 +14,8 @@ internal sealed class GeneratedCodePatternMatcher
         _rules = rules;
     }
 
+    internal bool IsEmpty => _rules.Length == 0;
+
     internal static GeneratedCodePatternMatcher FromPatterns(IEnumerable<string>? patterns, bool ignoreCase)
     {
         if (patterns == null)

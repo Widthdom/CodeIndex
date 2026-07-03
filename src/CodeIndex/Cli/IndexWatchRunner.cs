@@ -114,13 +114,12 @@ internal static class IndexWatchRunner
 
                 try
                 {
-                    // The watcher root encloses .git / .cdidx / build outputs; EvaluatePathFilter
+                    // The watcher root encloses .git / .cdidx / build outputs; ShouldSkipPath
                     // honors .gitignore / .cdidxignore / built-in SkipDirs, so we drop noisy
                     // events at the source instead of paying for a full sub-update every save.
-                    // root は .git / .cdidx / ビルド出力も含むため、EvaluatePathFilter で除外して
+                    // root は .git / .cdidx / ビルド出力も含むため、ShouldSkipPath で除外して
                     // 余計なサブ更新を防ぐ。
-                    var filter = fileIndexer.EvaluatePathFilter(fullPath);
-                    if (filter.ShouldSkip)
+                    if (fileIndexer.ShouldSkipPath(fullPath))
                         return;
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException or NotSupportedException)

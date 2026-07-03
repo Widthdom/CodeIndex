@@ -256,12 +256,14 @@ public sealed class PostExtractionHookRunner : IDisposable
         return runner;
     }
 
-    public IReadOnlyList<PostExtractionHookInfo> Hooks => hooks.Select(hook => hook.Info).ToList();
+    public IReadOnlyList<PostExtractionHookInfo> Hooks
+        => hooks.Count == 0 ? [] : hooks.Select(hook => hook.Info).ToList();
 
     internal IReadOnlyList<AssemblyLoadContext?> LoadContextsForTests
-        => hooks.Select(hook => hook.LoadContext).ToList();
+        => hooks.Count == 0 ? [] : hooks.Select(hook => hook.LoadContext).ToList();
 
-    public IReadOnlyList<PostExtractionHookDiagnostic> Diagnostics => diagnostics.ToList();
+    public IReadOnlyList<PostExtractionHookDiagnostic> Diagnostics
+        => diagnostics.Count == 0 ? [] : diagnostics.ToList();
 
     public TimeSpan CallbackBudget => callbackBudget;
 
@@ -619,6 +621,9 @@ public sealed class PostExtractionHookRunner : IDisposable
             return;
 
         disposed = true;
+        if (hooks.Count == 0)
+            return;
+
         foreach (var hook in hooks)
         {
             hook.Worker.Dispose();

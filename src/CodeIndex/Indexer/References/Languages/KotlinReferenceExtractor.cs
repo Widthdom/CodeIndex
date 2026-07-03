@@ -37,60 +37,61 @@ internal static class KotlinReferenceExtractor
     {
         "and", "downTo", "or", "shl", "shr", "step", "to", "until", "ushr", "xor",
     };
+    private static readonly HashSet<string> EmptyKotlinNameSet = new(StringComparer.Ordinal);
+    private static readonly IReadOnlySet<string> EmptyGenericParameterNames = new HashSet<string>(StringComparer.Ordinal);
 
-    public static HashSet<string> BuildConstructorTypeNames(string language, IReadOnlyList<SymbolRecord> symbols)
+    public static (HashSet<string> ConstructorTypeNames, HashSet<string> InfixFunctionNames) BuildNameSets(
+        string language,
+        IReadOnlyList<SymbolRecord> symbols)
     {
-        var names = new HashSet<string>(StringComparer.Ordinal);
         if (language != "kotlin")
-            return names;
+            return (EmptyKotlinNameSet, EmptyKotlinNameSet);
+
+        var constructorTypeNames = new HashSet<string>(StringComparer.Ordinal);
+        var infixFunctionNames = new HashSet<string>(BuiltInInfixFunctionNames, StringComparer.Ordinal);
 
         var callableNames = new HashSet<string>(StringComparer.Ordinal);
+        List<string>? constructableClassNames = null;
         foreach (var symbol in symbols)
         {
             if (symbol.Kind == "function" && !string.IsNullOrWhiteSpace(symbol.Name))
+            {
                 callableNames.Add(symbol.Name);
+                if (!string.IsNullOrWhiteSpace(symbol.Signature)
+                    && InfixFunctionDeclarationRegex.IsMatch(symbol.Signature))
+                {
+                    infixFunctionNames.Add(symbol.Name);
+                    var dotIndex = symbol.Name.LastIndexOf('.');
+                    if (dotIndex >= 0 && dotIndex + 1 < symbol.Name.Length)
+                        infixFunctionNames.Add(symbol.Name[(dotIndex + 1)..]);
+                }
+
+                continue;
+            }
+
+            if (symbol.Kind != "class"
+                || string.IsNullOrWhiteSpace(symbol.Name)
+                || !IsConstructableClassSymbol(symbol))
+            {
+                continue;
+            }
+
+            constructableClassNames ??= [];
+            constructableClassNames.Add(symbol.Name);
         }
 
-        foreach (var symbol in symbols)
+        if (constructableClassNames != null)
         {
-            if (symbol.Kind != "class" || string.IsNullOrWhiteSpace(symbol.Name))
-                continue;
-            if (!IsConstructableClassSymbol(symbol))
-                continue;
-            if (callableNames.Contains(symbol.Name))
-                continue;
-
-            names.Add(symbol.Name);
+            foreach (var name in constructableClassNames)
+                if (!callableNames.Contains(name))
+                    constructorTypeNames.Add(name);
         }
 
-        return names;
+        return (constructorTypeNames, infixFunctionNames);
     }
 
     public static bool IsConstructorCallName(string name, IReadOnlySet<string> constructorTypeNames)
         => constructorTypeNames.Contains(name);
-
-    public static HashSet<string> BuildInfixFunctionNames(string language, IReadOnlyList<SymbolRecord> symbols)
-    {
-        var names = new HashSet<string>(BuiltInInfixFunctionNames, StringComparer.Ordinal);
-        if (language != "kotlin")
-            return names;
-
-        foreach (var symbol in symbols)
-        {
-            if (symbol.Kind != "function" || string.IsNullOrWhiteSpace(symbol.Name) || string.IsNullOrWhiteSpace(symbol.Signature))
-                continue;
-
-            if (InfixFunctionDeclarationRegex.IsMatch(symbol.Signature))
-            {
-                names.Add(symbol.Name);
-                var dotIndex = symbol.Name.LastIndexOf('.');
-                if (dotIndex >= 0 && dotIndex + 1 < symbol.Name.Length)
-                    names.Add(symbol.Name[(dotIndex + 1)..]);
-            }
-        }
-
-        return names;
-    }
 
     public static void AddDeclaredInfixFunctionNames(string language, IEnumerable<string> lines, HashSet<string> names)
     {
@@ -815,7 +816,7 @@ internal static class KotlinReferenceExtractor
             genericParameterNames);
     }
 
-    private static HashSet<string> CollectGenericParameterNames(string preparedLine)
+    private static IReadOnlySet<string> CollectGenericParameterNames(string preparedLine)
     {
         foreach (var funIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "fun"))
         {
@@ -839,25 +840,25 @@ internal static class KotlinReferenceExtractor
             }
         }
 
-        return [];
+        return EmptyGenericParameterNames;
     }
 
-    private static HashSet<string> CollectGenericParameterNamesFromClause(string preparedLine, int genericOpenIndex)
+    private static IReadOnlySet<string> CollectGenericParameterNamesFromClause(string preparedLine, int genericOpenIndex)
     {
-        var names = new HashSet<string>(StringComparer.Ordinal);
         var genericCloseIndex = ReferenceExtractor.FindMatchingChar(preparedLine, genericOpenIndex, '<', '>');
         if (genericCloseIndex <= genericOpenIndex)
-            return names;
+            return EmptyGenericParameterNames;
 
+        HashSet<string>? names = null;
         var clause = preparedLine.Substring(genericOpenIndex + 1, genericCloseIndex - genericOpenIndex - 1);
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(clause))
         {
             var fragment = clause.Substring(segmentStart, segmentLength);
             if (TryReadGenericParameterName(fragment, out var name))
-                names.Add(name);
+                (names ??= new HashSet<string>(StringComparer.Ordinal)).Add(name);
         }
 
-        return names;
+        return names ?? EmptyGenericParameterNames;
     }
 
     private static int ConsumeKotlinDeclarationName(string preparedLine, int startIndex)

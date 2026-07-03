@@ -24,6 +24,24 @@ public static partial class SymbolExtractor
     private const string TypeScriptPathAliasDiagnosticSizeLimit = "tsconfig_size_limit";
     private const string TypeScriptPathAliasDiagnosticDepthLimit = "path_alias_depth_limit";
     private const string TypeScriptPathAliasDiagnosticExpansionCandidateLimit = "path_alias_expansion_candidate_limit";
+    private static readonly string[] TypeScriptPathAliasConfigFileNames =
+    [
+        "tsconfig.json",
+        "jsconfig.json",
+    ];
+    private static readonly string[] TypeScriptModuleCandidateExtensions =
+    [
+        ".ts",
+        ".tsx",
+        ".mts",
+        ".cts",
+        ".js",
+        ".jsx",
+        ".mjs",
+        ".cjs",
+        ".d.ts",
+        ".json",
+    ];
     private static readonly object TypeScriptPathAliasWarningLock = new();
     private static readonly HashSet<string> TypeScriptPathAliasReportedWarnings = new(StringComparer.Ordinal);
     private sealed record TypeScriptPathAliasConfig(string ConfigPath, string ProjectDirectory, string BaseDirectory, bool HasBaseUrl, IReadOnlyList<TypeScriptPathAliasRule> Rules);
@@ -130,7 +148,7 @@ public static partial class SymbolExtractor
             : Path.GetDirectoryName(fullFilePath);
         while (!string.IsNullOrEmpty(directory))
         {
-            foreach (var configFileName in new[] { "tsconfig.json", "jsconfig.json" })
+            foreach (var configFileName in TypeScriptPathAliasConfigFileNames)
             {
                 var configPath = Path.Combine(directory, configFileName);
                 if (File.Exists(configPath) || Directory.Exists(configPath))
@@ -218,7 +236,9 @@ public static partial class SymbolExtractor
 
             var baseDirectory = inherited?.BaseDirectory ?? configDirectory;
             var hasBaseUrl = inherited?.HasBaseUrl ?? false;
-            var rules = inherited?.Rules.ToList() ?? [];
+            var rules = inherited == null
+                ? []
+                : new List<TypeScriptPathAliasRule>(inherited.Rules);
             if (document.RootElement.TryGetProperty("compilerOptions", out var compilerOptions)
                 && compilerOptions.ValueKind == JsonValueKind.Object)
             {
@@ -265,7 +285,9 @@ public static partial class SymbolExtractor
                             continue;
                         }
 
-                        var targets = new List<string>();
+                        var targets = new List<string>(Math.Min(
+                            property.Value.GetArrayLength(),
+                            MaxTypeScriptPathAliasTargetsPerRule));
                         foreach (var item in property.Value.EnumerateArray())
                         {
                             if (targets.Count >= MaxTypeScriptPathAliasTargetsPerRule
@@ -384,7 +406,7 @@ public static partial class SymbolExtractor
                 accumulator.Write(buffer, 0, read);
             }
 
-            text = Encoding.UTF8.GetString(accumulator.ToArray());
+            text = DecodeTypeScriptPathAliasConfigText(accumulator);
             if (text.Length > 0 && text[0] == '\uFEFF')
                 text = text[1..];
             return true;
@@ -394,6 +416,14 @@ public static partial class SymbolExtractor
             skippedReason = new(TypeScriptPathAliasDiagnosticReadFailed, "it could not be read");
             return false;
         }
+    }
+
+    private static string DecodeTypeScriptPathAliasConfigText(MemoryStream accumulator)
+    {
+        if (accumulator.TryGetBuffer(out var segment) && segment.Array is { } buffer)
+            return Encoding.UTF8.GetString(buffer, segment.Offset, segment.Count);
+
+        return Encoding.UTF8.GetString(accumulator.ToArray());
     }
 
     private static string FormatTypeScriptPathAliasConfigSkippedMessage(
@@ -433,6 +463,9 @@ public static partial class SymbolExtractor
 
     private static IReadOnlyList<TypeScriptPathAliasRule> SortTypeScriptPathAliasRules(IReadOnlyList<TypeScriptPathAliasRule> rules)
     {
+        if (rules.Count < 2)
+            return rules;
+
         var indexedRules = new List<(TypeScriptPathAliasRule Rule, int Index, int WildcardRank, int LiteralLength)>(rules.Count);
         for (var i = 0; i < rules.Count; i++)
         {
@@ -572,16 +605,16 @@ public static partial class SymbolExtractor
     {
         yield return candidate;
 
-        foreach (var extension in new[] { ".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".d.ts", ".json" })
+        foreach (var extension in TypeScriptModuleCandidateExtensions)
             yield return candidate + extension;
 
-        foreach (var extension in new[] { ".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".d.ts", ".json" })
+        foreach (var extension in TypeScriptModuleCandidateExtensions)
             yield return Path.Combine(candidate, "index" + extension);
     }
 
     private static string NormalizeTypeScriptResolvedModulePath(string projectDirectory, string resolvedPath)
     {
-        var relativePath = Path.GetRelativePath(projectDirectory, Path.GetFullPath(resolvedPath));
-        return relativePath.Replace(Path.DirectorySeparatorChar, '/').Replace(Path.AltDirectorySeparatorChar, '/');
+        var relativePath = FileIndexer.GetRelativePathFromDirectory(projectDirectory, Path.GetFullPath(resolvedPath));
+        return FileIndexer.NormalizePathSeparators(relativePath);
     }
 }

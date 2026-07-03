@@ -418,31 +418,34 @@ public class ExtractorPluginRegistryTests
         var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_path_casing_3790");
         lock (TestConsoleLock.Gate)
         {
-            var originalProbe = PathCasing.IgnoreCaseProbeForTesting;
-            try
+            lock (PathCasingTestLock.Gate)
             {
-                ExtractorPluginRegistry.ResetForTests();
-                PathCasing.ResetCacheForTests();
-                PathCasing.IgnoreCaseProbeForTesting = _ => true;
-                var pluginPath = Path.Combine(projectRoot, "Plugin.dll");
-                var caseVariant = Path.Combine(projectRoot, "plugin.dll");
+                var originalProbe = PathCasing.IgnoreCaseProbeForTesting;
+                try
+                {
+                    ExtractorPluginRegistry.ResetForTests();
+                    PathCasing.ResetCacheForTests();
+                    PathCasing.IgnoreCaseProbeForTesting = _ => true;
+                    var pluginPath = Path.Combine(projectRoot, "Plugin.dll");
+                    var caseVariant = Path.Combine(projectRoot, "plugin.dll");
 
-                Assert.True(ExtractorPluginRegistry.TryMarkPluginAssemblyPathLoadedForTests(pluginPath));
-                Assert.False(ExtractorPluginRegistry.TryMarkPluginAssemblyPathLoadedForTests(caseVariant));
+                    Assert.True(ExtractorPluginRegistry.TryMarkPluginAssemblyPathLoadedForTests(pluginPath));
+                    Assert.False(ExtractorPluginRegistry.TryMarkPluginAssemblyPathLoadedForTests(caseVariant));
 
-                ExtractorPluginRegistry.ResetForTests();
-                PathCasing.ResetCacheForTests();
-                PathCasing.IgnoreCaseProbeForTesting = _ => false;
+                    ExtractorPluginRegistry.ResetForTests();
+                    PathCasing.ResetCacheForTests();
+                    PathCasing.IgnoreCaseProbeForTesting = _ => false;
 
-                Assert.True(ExtractorPluginRegistry.TryMarkPluginAssemblyPathLoadedForTests(pluginPath));
-                Assert.True(ExtractorPluginRegistry.TryMarkPluginAssemblyPathLoadedForTests(caseVariant));
-            }
-            finally
-            {
-                PathCasing.IgnoreCaseProbeForTesting = originalProbe;
-                PathCasing.ResetCacheForTests();
-                ExtractorPluginRegistry.ResetForTests();
-                TestProjectHelper.DeleteDirectory(projectRoot);
+                    Assert.True(ExtractorPluginRegistry.TryMarkPluginAssemblyPathLoadedForTests(pluginPath));
+                    Assert.True(ExtractorPluginRegistry.TryMarkPluginAssemblyPathLoadedForTests(caseVariant));
+                }
+                finally
+                {
+                    PathCasing.IgnoreCaseProbeForTesting = originalProbe;
+                    PathCasing.ResetCacheForTests();
+                    ExtractorPluginRegistry.ResetForTests();
+                    TestProjectHelper.DeleteDirectory(projectRoot);
+                }
             }
         }
     }

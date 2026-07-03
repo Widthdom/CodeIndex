@@ -6,10 +6,10 @@ public partial class FileIndexer
 {
     private static bool HasUnknownExtension(string filePath)
     {
-        var extension = Path.GetExtension(Path.GetFileName(filePath));
+        var extension = Path.GetExtension(filePath);
         return !string.IsNullOrEmpty(extension)
             && !LangMap.ContainsKey(extension)
-            && !ExtractorPluginRegistry.LanguageExtensions.ContainsKey(extension);
+            && !ExtractorPluginRegistry.TryGetLanguageForExtension(extension, out _);
     }
 
     private static bool IsInternalIndexArtifactPath(string relativePath)
@@ -24,8 +24,8 @@ public partial class FileIndexer
     {
         if (!isProjectRoot)
         {
-            var dirName = Path.GetFileName(Path.TrimEndingDirectorySeparator(dir));
-            if (SkipDirs.Contains(dirName) && !IsSubmoduleOrAncestor(relativeDir))
+            var dirName = Path.GetFileName(Path.TrimEndingDirectorySeparator(dir.AsSpan()));
+            if (IsDefaultExcludedDirectoryName(dirName) && !IsSubmoduleOrAncestor(relativeDir))
                 return PathFilterKind.ExcludedByDefaultDirectory;
         }
 

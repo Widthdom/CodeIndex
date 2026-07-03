@@ -117,25 +117,28 @@ public partial class FileIndexer
             if (tokens[0] is { Value: '!', Escaped: false })
             {
                 negated = true;
-                tokens.RemoveAt(0);
             }
+            var firstTokenIndex = negated ? 1 : 0;
 
-            if (tokens.Count == 0)
+            if (firstTokenIndex == tokens.Count)
                 return false;
 
             var directoryOnly = tokens[^1] is { Value: '/', Escaped: false };
             if (directoryOnly)
                 tokens.RemoveAt(tokens.Count - 1);
 
-            if (tokens.Count == 0)
+            if (firstTokenIndex == tokens.Count)
                 return false;
 
-            var anchoredToSourceDirectory = tokens[0] is { Value: '/', Escaped: false };
+            var anchoredToSourceDirectory = tokens[firstTokenIndex] is { Value: '/', Escaped: false };
             if (anchoredToSourceDirectory)
-                tokens.RemoveAt(0);
+                firstTokenIndex++;
 
-            if (tokens.Count == 0)
+            if (firstTokenIndex == tokens.Count)
                 return false;
+
+            if (firstTokenIndex > 0)
+                tokens.RemoveRange(0, firstTokenIndex);
 
             var matchBasenameOnly = !anchoredToSourceDirectory && !ContainsUnescapedSlash(tokens);
             try
@@ -156,7 +159,7 @@ public partial class FileIndexer
 
         internal static string? GetRelativeCandidatePath(string sourceDirectory, string absolutePath)
         {
-            var relativePath = NormalizeIgnorePath(Path.GetRelativePath(sourceDirectory, absolutePath));
+            var relativePath = NormalizeIgnorePath(GetRelativePathFromDirectory(sourceDirectory, absolutePath));
             if (relativePath.Length == 0 ||
                 relativePath == "." ||
                 relativePath.StartsWith("../", StringComparison.Ordinal))
@@ -226,8 +229,12 @@ public partial class FileIndexer
 
             while (tokens.Count > 0 && tokens[^1] is { Value: ' ' or '\t', Escaped: false })
                 tokens.RemoveAt(tokens.Count - 1);
-            while (tokens.Count > 0 && tokens[0] is { Value: ' ' or '\t', Escaped: false })
-                tokens.RemoveAt(0);
+
+            var leadingTrimCount = 0;
+            while (leadingTrimCount < tokens.Count && tokens[leadingTrimCount] is { Value: ' ' or '\t', Escaped: false })
+                leadingTrimCount++;
+            if (leadingTrimCount > 0)
+                tokens.RemoveRange(0, leadingTrimCount);
 
             return tokens.Count > 0;
         }
@@ -268,7 +275,7 @@ public partial class FileIndexer
             if (TryBuildLiteralPattern(pattern, out var literal))
                 return new LiteralIgnoreMatcher(literal);
 
-            var builder = new StringBuilder();
+            var builder = new StringBuilder(Math.Max(16, pattern.Count * 2 + 2));
             builder.Append('^');
 
             for (var i = 0; i < pattern.Count; i++)
@@ -277,7 +284,7 @@ public partial class FileIndexer
                 var ch = token.Value;
                 if (token.Escaped)
                 {
-                    builder.Append(Regex.Escape(ch.ToString()));
+                    AppendRegexEscapedChar(builder, ch);
                     continue;
                 }
 
@@ -325,28 +332,47 @@ public partial class FileIndexer
                 if (ch == '[' && TryBuildCharacterClass(pattern, ref i, builder, ignoreCase))
                     continue;
 
-                builder.Append(Regex.Escape(ch.ToString()));
+                AppendRegexEscapedChar(builder, ch);
             }
 
             builder.Append('$');
             return new RegexIgnoreMatcher(RegexRegistry.CreateFileIgnorePatternRegex(builder.ToString()));
         }
 
+        private static void AppendRegexEscapedChar(StringBuilder builder, char ch)
+        {
+            if (IsOrdinaryRegexLiteralChar(ch))
+            {
+                builder.Append(ch);
+                return;
+            }
+
+            builder.Append(Regex.Escape(ch.ToString()));
+        }
+
+        private static bool IsOrdinaryRegexLiteralChar(char ch) =>
+            ch is not ('\\' or '*' or '+' or '?' or '|' or '{' or '[' or '(' or ')' or '^' or '$' or '.' or '#' or ' ' or '\t' or '\r' or '\n' or '\f');
+
         private static bool TryBuildLiteralPattern(IReadOnlyList<PatternToken> pattern, out string literal)
         {
-            var builder = new StringBuilder(pattern.Count);
-            foreach (var token in pattern)
+            for (var index = 0; index < pattern.Count; index++)
             {
+                var token = pattern[index];
                 if (!token.Escaped && token.Value is '*' or '?' or '[')
                 {
                     literal = string.Empty;
                     return false;
                 }
-
-                builder.Append(token.Value);
             }
 
-            literal = builder.ToString();
+            literal = string.Create(
+                pattern.Count,
+                pattern,
+                static (chars, tokens) =>
+                {
+                    for (var index = 0; index < tokens.Count; index++)
+                        chars[index] = tokens[index].Value;
+                });
             return true;
         }
 
@@ -459,7 +485,7 @@ public partial class FileIndexer
             if (!TryFindPosixCharacterClassEnd(pattern, index, out var posixEnd) || posixEnd >= closingIndex)
                 return false;
 
-            var nameChars = new StringBuilder();
+            var nameChars = new StringBuilder(Math.Max(0, posixEnd - index - 3));
             for (var i = index + 2; i < posixEnd - 1; i++)
                 nameChars.Append(pattern[i].Value);
 

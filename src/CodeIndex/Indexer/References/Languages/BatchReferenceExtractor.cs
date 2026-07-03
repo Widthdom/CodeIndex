@@ -30,8 +30,9 @@ internal static class BatchReferenceExtractor
                 segmentEnd++;
 
             ProcessJumpSegment(
-                preparedLine[segmentStart..segmentEnd],
                 segmentStart,
+                segmentEnd,
+                preparedLine,
                 references,
                 seen,
                 context,
@@ -39,12 +40,12 @@ internal static class BatchReferenceExtractor
                 lineNumber,
                 resolveContainerForCall);
 
-            var segment = preparedLine[segmentStart..segmentEnd].TrimStart();
-            if (segment.Length > 0)
+            var segment = preparedLine.AsSpan(segmentStart, segmentEnd - segmentStart).TrimStart();
+            if (!segment.IsEmpty)
             {
                 if (segment[0] == '@')
                     segment = segment[1..].TrimStart();
-                if (segment.Length > 0 && (segment.StartsWith("::", StringComparison.Ordinal) || IsRemKeyword(segment, 0)))
+                if (!segment.IsEmpty && (segment.StartsWith("::", StringComparison.Ordinal) || IsRemKeyword(segment)))
                     break;
             }
 
@@ -93,6 +94,22 @@ internal static class BatchReferenceExtractor
         return next == ' ' || next == '\t' || next == '\r' || next == '\n';
     }
 
+    private static bool IsRemKeyword(ReadOnlySpan<char> line)
+    {
+        if (line.Length < 3)
+            return false;
+        if ((line[0] | 0x20) != 'r')
+            return false;
+        if ((line[1] | 0x20) != 'e')
+            return false;
+        if ((line[2] | 0x20) != 'm')
+            return false;
+        if (line.Length == 3)
+            return true;
+        var next = line[3];
+        return next == ' ' || next == '\t' || next == '\r' || next == '\n';
+    }
+
     private static bool IsCommandSeparator(string line, int index)
     {
         var c = line[index];
@@ -107,8 +124,9 @@ internal static class BatchReferenceExtractor
     }
 
     private static void ProcessJumpSegment(
-        string segment,
         int segmentOffset,
+        int segmentEnd,
+        string preparedLine,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         string context,
@@ -116,18 +134,18 @@ internal static class BatchReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForCall)
     {
-        var trimmed = segment.TrimStart();
-        if (trimmed.Length == 0)
+        var trimmed = preparedLine.AsSpan(segmentOffset, segmentEnd - segmentOffset).TrimStart();
+        if (trimmed.IsEmpty)
             return;
 
         if (trimmed[0] == '@')
         {
             trimmed = trimmed[1..].TrimStart();
-            if (trimmed.Length == 0)
+            if (trimmed.IsEmpty)
                 return;
         }
 
-        if (trimmed.StartsWith("::", StringComparison.Ordinal) || IsRemKeyword(trimmed, 0))
+        if (trimmed.StartsWith("::", StringComparison.Ordinal) || IsRemKeyword(trimmed))
             return;
 
         if (StartsWithWord(trimmed, "else") || StartsWithWord(trimmed, "do"))
@@ -142,7 +160,8 @@ internal static class BatchReferenceExtractor
             trimmed = trimmed[keywordEnd..].TrimStart();
         }
 
-        var match = JumpTargetRegex.Match(trimmed);
+        var matchText = trimmed.ToString();
+        var match = JumpTargetRegex.Match(matchText);
         if (!match.Success)
             return;
 
@@ -155,7 +174,7 @@ internal static class BatchReferenceExtractor
         ReferenceExtractor.AddReference(references, seen, fileId, name, commandIndex, "call", context, lineNumber, callContainer);
     }
 
-    private static bool StartsWithWord(string text, string word)
+    private static bool StartsWithWord(ReadOnlySpan<char> text, string word)
     {
         if (!text.StartsWith(word, StringComparison.OrdinalIgnoreCase))
             return false;

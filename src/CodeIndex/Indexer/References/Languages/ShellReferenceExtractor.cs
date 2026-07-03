@@ -18,48 +18,41 @@ internal static class ShellReferenceExtractor
         @"^alias(?:\s+-[^\s=]+)*\s+-g\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
-    public static HashSet<string>? BuildCallableNames(string language, IReadOnlyList<SymbolRecord> symbols)
+    public static (HashSet<string>? CallableNames, HashSet<string>? GlobalAliasNames) BuildNameSets(
+        string language,
+        IReadOnlyList<SymbolRecord> symbols)
     {
         if (language != "shell")
-            return null;
+            return (null, null);
 
-        var names = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string>? callableNames = null;
+        HashSet<string>? globalAliasNames = null;
         foreach (var symbol in symbols)
         {
             if (symbol.Kind is not ("function" or "alias") || string.IsNullOrWhiteSpace(symbol.Name))
                 continue;
 
-            names.Add(symbol.Name);
-        }
-
-        return names;
-    }
-
-    public static HashSet<string>? BuildGlobalAliasNames(string language, IReadOnlyList<SymbolRecord> symbols)
-    {
-        if (language != "shell")
-            return null;
-
-        var names = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var symbol in symbols)
-        {
-            if (symbol.Kind != "alias" || string.IsNullOrWhiteSpace(symbol.Name))
+            (callableNames ??= new HashSet<string>(StringComparer.Ordinal)).Add(symbol.Name);
+            if (symbol.Kind != "alias")
                 continue;
 
-            var signature = symbol.Signature?.TrimStart();
-            if (string.IsNullOrWhiteSpace(signature))
+            if (symbol.Signature is not { } signatureText)
+                continue;
+
+            var signature = signatureText.AsSpan().TrimStart();
+            if (signature.IsEmpty)
                 continue;
 
             if (signature.IndexOf("-g", StringComparison.Ordinal) < 0)
                 continue;
 
-            if (!GlobalAliasSignatureRegex.IsMatch(signature))
+            if (!GlobalAliasSignatureRegex.IsMatch(signature.ToString()))
                 continue;
 
-            names.Add(symbol.Name);
+            (globalAliasNames ??= new HashSet<string>(StringComparer.Ordinal)).Add(symbol.Name);
         }
 
-        return names;
+        return (callableNames, globalAliasNames);
     }
 
     public static void EmitReferences(

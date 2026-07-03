@@ -323,7 +323,7 @@ internal static class SolutionProjectResolver
             if (!IsPathEqualOrParent(root, fullPath))
                 continue;
 
-            if (File.Exists(LongPath.EnsureWindowsPrefix(fullPath)) && !indexer.EvaluatePathFilter(fullPath).ShouldSkip)
+            if (File.Exists(LongPath.EnsureWindowsPrefix(fullPath)) && !indexer.ShouldSkipPath(fullPath))
                 projects.Add(BuildProjectInfo(fullPath, root, name));
         }
 
@@ -425,7 +425,7 @@ internal static class SolutionProjectResolver
                 return true;
             }
 
-            return indexer.EvaluatePathFilter(directory, isDirectory: true).ShouldSkip;
+            return indexer.ShouldSkipPath(directory, isDirectory: true);
         }
         catch (Exception ex) when (FileSystemTraversalFailure.IsExpected(ex))
         {
@@ -450,7 +450,7 @@ internal static class SolutionProjectResolver
     {
         try
         {
-            return !indexer.EvaluatePathFilter(file).ShouldSkip;
+            return !indexer.ShouldSkipPath(file);
         }
         catch (Exception ex) when (FileSystemTraversalFailure.IsExpected(ex))
         {

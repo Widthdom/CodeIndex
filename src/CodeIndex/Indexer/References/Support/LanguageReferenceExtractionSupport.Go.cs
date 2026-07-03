@@ -89,15 +89,26 @@ internal static partial class LanguageReferenceExtractionSupport
 
     private static string StripGoComments(string line, ref bool inBlockComment)
     {
-        var chars = line.ToCharArray();
+        char[]? chars = null;
+
+        void MaskAt(int index) =>
+            (chars ??= line.ToCharArray())[index] = ' ';
+
+        void MaskRange(int start)
+        {
+            var masked = chars ??= line.ToCharArray();
+            for (var index = start; index < line.Length; index++)
+                masked[index] = ' ';
+        }
+
         for (var i = 0; i < line.Length; i++)
         {
             if (inBlockComment)
             {
-                chars[i] = ' ';
+                MaskAt(i);
                 if (line[i] == '*' && i + 1 < line.Length && line[i + 1] == '/')
                 {
-                    chars[++i] = ' ';
+                    MaskAt(++i);
                     inBlockComment = false;
                 }
                 continue;
@@ -111,20 +122,19 @@ internal static partial class LanguageReferenceExtractionSupport
 
             if (line[i] == '/' && i + 1 < line.Length && line[i + 1] == '/')
             {
-                for (; i < chars.Length; i++)
-                    chars[i] = ' ';
+                MaskRange(i);
                 break;
             }
 
             if (line[i] == '/' && i + 1 < line.Length && line[i + 1] == '*')
             {
-                chars[i++] = ' ';
-                chars[i] = ' ';
+                MaskAt(i++);
+                MaskAt(i);
                 inBlockComment = true;
             }
         }
 
-        return new string(chars);
+        return chars is null ? line : new string(chars);
     }
 
     private static int SkipGoStringLiteral(string line, int start)
@@ -354,8 +364,7 @@ internal static partial class LanguageReferenceExtractionSupport
         while (typeEnd < line.Length && line[typeEnd] != '=' && line[typeEnd] != '{')
             typeEnd++;
 
-        var expression = line[typeStart..typeEnd].TrimEnd();
-        EmitGoTypeExpression(expression, typeStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitGoTypeExpression(line, typeStart, typeEnd, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
     }
 
     private static void EmitGoSingleNameValueDeclarationTypes(
@@ -396,8 +405,7 @@ internal static partial class LanguageReferenceExtractionSupport
         if (typeEnd <= typeStart)
             return;
 
-        var expression = line[typeStart..typeEnd].TrimEnd();
-        EmitGoTypeExpression(expression, typeStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitGoTypeExpression(line, typeStart, typeEnd, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
     }
 
     private static void EmitGoMultiNameFieldDeclarationTypes(
@@ -595,11 +603,7 @@ internal static partial class LanguageReferenceExtractionSupport
         if (typeStart >= line.Length || !IsGoTypeExpressionStart(line, typeStart))
             return;
 
-        var expression = line[typeStart..].TrimEnd();
-        if (expression.Length == 0)
-            return;
-
-        EmitGoTypeExpression(expression, typeStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitGoTypeExpression(line, typeStart, line.Length, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
     }
 
     private static bool TryReadGoIdentifierList(string line, ref int cursor, bool requireComma)
@@ -704,7 +708,7 @@ internal static partial class LanguageReferenceExtractionSupport
                 continue;
 
             var argumentList = line[(open + 1)..close];
-            var firstArgument = ReferenceExtractor.SplitTopLevelCommaSpans(argumentList).FirstOrDefault();
+            var firstArgument = ReferenceExtractor.GetFirstTopLevelCommaSpan(argumentList);
             if (firstArgument.Length <= 0)
                 continue;
 
@@ -1220,8 +1224,7 @@ internal static partial class LanguageReferenceExtractionSupport
             return;
         }
 
-        var expression = line[returnStart..end].TrimEnd();
-        EmitGoTypeExpression(expression, returnStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitGoTypeExpression(line, returnStart, end, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
     }
 
     private static void EmitGoMapCompositeLiteralTypeReferences(
@@ -1913,8 +1916,7 @@ internal static partial class LanguageReferenceExtractionSupport
         while (returnEnd < preparedLine.Length && preparedLine[returnEnd] != '{')
             returnEnd++;
 
-        var expression = preparedLine[returnStart..returnEnd].TrimEnd();
-        EmitGoTypeExpression(expression, returnStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitGoTypeExpression(preparedLine, returnStart, returnEnd, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
     }
 
     private static void EmitGoInterfaceMethodSignatureTypes(
@@ -2038,8 +2040,7 @@ internal static partial class LanguageReferenceExtractionSupport
         while (returnEnd < preparedLine.Length && preparedLine[returnEnd] != '{')
             returnEnd++;
 
-        var expression = preparedLine[returnStart..returnEnd].TrimEnd();
-        EmitGoTypeExpression(expression, returnStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitGoTypeExpression(preparedLine, returnStart, returnEnd, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
     }
 
     private static void EmitGoTypeParameterConstraints(
@@ -2155,11 +2156,71 @@ internal static partial class LanguageReferenceExtractionSupport
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        var normalized = expression.Trim();
-        var leading = expression.IndexOf(normalized, StringComparison.Ordinal);
-        if (normalized.Length == 0)
+        EmitGoTypeExpressionRange(
+            expression,
+            0,
+            expression.Length,
+            start,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn);
+    }
+
+    private static void EmitGoTypeExpression(
+        string source,
+        int start,
+        int endExclusive,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        EmitGoTypeExpressionRange(
+            source,
+            start,
+            endExclusive,
+            0,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn);
+    }
+
+    private static void EmitGoTypeExpressionRange(
+        string source,
+        int start,
+        int endExclusive,
+        int absoluteOffset,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        start = Math.Clamp(start, 0, source.Length);
+        endExclusive = Math.Clamp(endExclusive, start, source.Length);
+
+        while (start < endExclusive && char.IsWhiteSpace(source[start]))
+            start++;
+
+        while (endExclusive > start && char.IsWhiteSpace(source[endExclusive - 1]))
+            endExclusive--;
+
+        if (endExclusive <= start)
             return;
-        var absoluteStart = start + Math.Max(0, leading);
+
+        var normalized = start == 0 && endExclusive == source.Length
+            ? source
+            : source[start..endExclusive];
+        var absoluteStart = absoluteOffset + start;
         ReferenceExtractor.AddTypeExpressionSegments(references, seen, fileId, normalized, absoluteStart, context, lineNumber, resolveContainerForColumn(absoluteStart), "go");
     }
 }

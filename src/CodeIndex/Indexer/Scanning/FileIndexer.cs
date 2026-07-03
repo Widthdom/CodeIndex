@@ -39,6 +39,7 @@ public partial class FileIndexer
     // multi-MB の単一 byte[] を確保しない。
     public const long DefaultMaxFileSizeBytes = 4 * 1024 * 1024;
     private readonly string _projectRoot;
+    private readonly string _projectRootRelativePrefix;
     private readonly string _ignoreRuleRoot;
     private readonly IReadOnlyList<string> _ancestorIgnoreDirectories;
     private readonly bool _ignoreCase;
@@ -46,6 +47,9 @@ public partial class FileIndexer
     private readonly Func<string, IEnumerable<string>>? _enumerateFilesForTesting;
     private readonly Func<string, IEnumerable<string>> _enumerateFileSystemEntries;
     private readonly Dictionary<string, bool> _directoryIgnoreCaseCache;
+    private readonly Dictionary<string, IReadOnlyDictionary<string, string>> _languageMapOverrideCache;
+    private readonly Dictionary<string, bool> _nestedGitRepositoryCache;
+    private LanguageMapOverrideLookupCache? _lastLanguageMapOverrideLookup;
     private readonly long _maxFileSizeBytes;
     private readonly FileContentLoader _contentLoader;
     private readonly SymlinkPolicy _symlinkPolicy;
@@ -86,6 +90,10 @@ public partial class FileIndexer
         HashSet<FileIdentity> VisitedFileIdentities,
         HashSet<string> VisitedDirectories);
 
+    private sealed record LanguageMapOverrideLookupCache(
+        string StartDirectory,
+        IReadOnlyDictionary<string, string> Overrides);
+
     public FileIndexer(string projectRoot)
         : this(projectRoot, ignoreCase: ProbeFileSystemIgnoreCase(projectRoot), ignoreRuleRoot: null)
     {
@@ -119,6 +127,7 @@ public partial class FileIndexer
         IReadOnlyList<string>? generatedCodePatterns = null)
     {
         _projectRoot = Path.GetFullPath(projectRoot);
+        _projectRootRelativePrefix = CreateProjectRootRelativePrefix(_projectRoot);
         _ignoreRuleRoot = NormalizeIgnoreRuleRoot(ignoreRuleRoot);
         _ancestorIgnoreDirectories = BuildAncestorIgnoreDirectories(_ignoreRuleRoot, _projectRoot);
         _ignoreCase = ignoreCase;
@@ -126,6 +135,8 @@ public partial class FileIndexer
         _enumerateFilesForTesting = enumerateFiles;
         _enumerateFileSystemEntries = enumerateFileSystemEntries ?? (dir => CodeIndex.FileSystemTraversalPolicy.EnumerateFileSystemEntries(LongPath.EnsureWindowsPrefix(dir)));
         _directoryIgnoreCaseCache = new Dictionary<string, bool>(StringComparer.Ordinal);
+        _languageMapOverrideCache = new Dictionary<string, IReadOnlyDictionary<string, string>>(StringComparer.Ordinal);
+        _nestedGitRepositoryCache = new Dictionary<string, bool>(StringComparer.Ordinal);
         _maxFileSizeBytes = ResolveMaxFileSizeBytes(maxFileSizeBytes);
         _contentLoader = new FileContentLoader(_maxFileSizeBytes);
         _symlinkPolicy = symlinkPolicy;

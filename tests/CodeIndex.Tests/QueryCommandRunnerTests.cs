@@ -5013,32 +5013,35 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void BuildWorkspaceDependencyDatabaseList_DeduplicatesUsingFilesystemCaseSensitivity_Issue3834()
     {
-        var previousProbe = PathCasing.IgnoreCaseProbeForTesting;
-        PathCasing.ResetCacheForTests();
-        PathCasing.IgnoreCaseProbeForTesting = _ => true;
-        try
+        lock (PathCasingTestLock.Gate)
         {
-            var tempDir = Path.GetTempPath();
-            var dbPath = Path.Combine(tempDir, "CodeIndexCaseProbe.db");
-            var options = new QueryCommandOptions
+            var previousProbe = PathCasing.IgnoreCaseProbeForTesting;
+            PathCasing.ResetCacheForTests();
+            PathCasing.IgnoreCaseProbeForTesting = _ => true;
+            try
             {
-                DbPath = dbPath,
-                WorkspaceDbPaths =
+                var tempDir = Path.GetTempPath();
+                var dbPath = Path.Combine(tempDir, "CodeIndexCaseProbe.db");
+                var options = new QueryCommandOptions
+                {
+                    DbPath = dbPath,
+                    WorkspaceDbPaths =
                 [
                     Path.Combine(tempDir, "codeindexcaseprobe.db"),
                     Path.Combine(tempDir, "OtherCodeIndexCaseProbe.db"),
                 ],
-            };
+                };
 
-            var dbs = QueryCommandRunner.BuildWorkspaceDependencyDatabaseList(options);
+                var dbs = QueryCommandRunner.BuildWorkspaceDependencyDatabaseList(options);
 
-            Assert.Equal(2, dbs.Count);
-            Assert.Equal(Path.GetFullPath(dbPath), dbs[0]);
-        }
-        finally
-        {
-            PathCasing.IgnoreCaseProbeForTesting = previousProbe;
-            PathCasing.ResetCacheForTests();
+                Assert.Equal(2, dbs.Count);
+                Assert.Equal(Path.GetFullPath(dbPath), dbs[0]);
+            }
+            finally
+            {
+                PathCasing.IgnoreCaseProbeForTesting = previousProbe;
+                PathCasing.ResetCacheForTests();
+            }
         }
     }
 

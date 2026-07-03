@@ -691,6 +691,9 @@ internal static class MarkupSchemaReferenceExtractor
 
     private static string StripMarkdownInlineCode(string line)
     {
+        if (line.IndexOf('`') < 0)
+            return line;
+
         var chars = line.ToCharArray();
         var inCode = false;
         for (var i = 0; i < chars.Length; i++)
@@ -732,23 +735,35 @@ internal static class MarkupSchemaReferenceExtractor
         if (anchor.Length == 0)
             return string.Empty;
 
-        var chars = new List<char>(anchor.Length);
+        var chars = new char[anchor.Length];
+        var length = 0;
         var previousDash = false;
-        foreach (var ch in anchor.ToLowerInvariant())
+        foreach (var originalChar in anchor)
         {
+            var ch = char.ToLowerInvariant(originalChar);
             if (char.IsLetterOrDigit(ch) || ch == '_' || ch == '-')
             {
-                chars.Add(ch);
+                chars[length++] = ch;
                 previousDash = ch == '-';
             }
             else if (char.IsWhiteSpace(ch) && !previousDash)
             {
-                chars.Add('-');
+                chars[length++] = '-';
                 previousDash = true;
             }
         }
 
-        return new string(chars.ToArray()).Trim('-');
+        var start = 0;
+        while (start < length && chars[start] == '-')
+            start++;
+
+        var endExclusive = length;
+        while (endExclusive > start && chars[endExclusive - 1] == '-')
+            endExclusive--;
+
+        return start == endExclusive
+            ? string.Empty
+            : new string(chars, start, endExclusive - start);
     }
 
     private static void AddReference(

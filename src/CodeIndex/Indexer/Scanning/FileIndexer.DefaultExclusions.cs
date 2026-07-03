@@ -6,18 +6,27 @@ public partial class FileIndexer
     private static readonly string[] SkipDirNames =
     [
         ".git", ".svn", ".hg",
-        "node_modules", "__pycache__", ".pytest_cache",
+        "node_modules", ".pnpm-store", ".yarn", ".turbo", ".parcel-cache", ".svelte-kit", ".nx",
+        "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".nox", ".eggs", "htmlcov",
         "venv", ".venv", "env",
         "dist", "build", ".build", "out",
+        ".cache", "TestResults",
         "bin", "obj",                   // .NET build outputs / .NETビルド出力
         "target",                       // Rust/Java/Maven build output / Rust/Java/Mavenビルド出力
         ".gradle",                      // Gradle cache / Gradleキャッシュ
         ".next", ".nuxt",
+        ".cmake", "CMakeFiles",
+        "bazel-bin", "bazel-out", "bazel-testlogs", "buck-out", ".pants.d",
+        ".bloop", ".metals",
         ".idea", ".vscode",
         "coverage", "vendor",
         ".terraform",                   // Terraform state/plugin cache / Terraformステート・プラグインキャッシュ
         ".cargo",                       // Cargo registry cache / Cargoレジストリキャッシュ
         ".pub-cache",                   // Dart pub cache / Dart pubキャッシュ
+        ".dart_tool",                   // Dart/Flutter tool cache / Dart/Flutterツールキャッシュ
+        ".swiftpm", "DerivedData",       // SwiftPM/Xcode cache / SwiftPM/Xcodeキャッシュ
+        ".stack-work",                  // Haskell Stack build output / Haskell Stackビルド出力
+        ".bundle",                      // Ruby Bundler local state / Ruby Bundlerローカル状態
         "_build",                       // Elixir/Mix build output / Elixir/Mixビルド出力
     ];
 
@@ -25,10 +34,10 @@ public partial class FileIndexer
 
     // Files to skip (case-insensitive for cross-platform consistency with SkipDirs)
     // スキップするファイル名（SkipDirsと同様にクロスプラットフォーム対応で大文字小文字を区別しない）
-    private static readonly HashSet<string> SkipFiles = new(StringComparer.OrdinalIgnoreCase)
-    {
+    private static readonly string[] SkipFileNames =
+    [
         ".DS_Store", "Thumbs.db",
-    };
+    ];
 
     // macOS AppleDouble resource-fork prefix. Files written by HFS+/SMB-style metadata carriers
     // (e.g. archives unpacked on a non-HFS volume, or macOS-mounted SMB/NFS shares) appear as
@@ -53,9 +62,20 @@ public partial class FileIndexer
     {
         if (string.IsNullOrEmpty(fileName))
             return false;
-        if (SkipFiles.Contains(fileName))
-            return true;
-        return fileName.StartsWith(AppleDoublePrefix, StringComparison.Ordinal);
+        return IsDefaultExcludedFileName(fileName.AsSpan());
+    }
+
+    private static bool IsDefaultExcludedFileName(ReadOnlySpan<char> fileName)
+    {
+        if (fileName.IsEmpty)
+            return false;
+        foreach (var skipFile in SkipFileNames)
+        {
+            if (fileName.Equals(skipFile.AsSpan(), StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return fileName.StartsWith(AppleDoublePrefix.AsSpan(), StringComparison.Ordinal);
     }
 
     private static bool IsDefaultExcludedDirectoryName(ReadOnlySpan<char> directoryName)

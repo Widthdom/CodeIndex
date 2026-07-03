@@ -7,10 +7,10 @@ public partial class FileIndexer
     private IgnoreRuleLoadResult LoadIgnoreRulesForDirectory(
         string dir,
         IgnoreRuleSet inheritedIgnoreRules,
-        List<ScanError> errors,
+        List<ScanError>? errors,
         ref bool fullyScanned)
     {
-        var rules = new List<IgnoreRule>();
+        List<IgnoreRule>? rules = null;
         var ignoreRulesAvailable = true;
 
         foreach (var ignoreFileName in IgnoreFileNames)
@@ -20,7 +20,7 @@ public partial class FileIndexer
                     dir,
                     ignorePath,
                     ignoreFileName,
-                    rules,
+                    ref rules,
                     errors,
                     ref fullyScanned))
             {
@@ -30,13 +30,13 @@ public partial class FileIndexer
         }
 
         return ignoreRulesAvailable
-            ? new IgnoreRuleLoadResult(IgnoreRuleSet.CreateChild(inheritedIgnoreRules, rules), IgnoreRulesAvailable: true)
+            ? new IgnoreRuleLoadResult(IgnoreRuleSet.CreateChild(inheritedIgnoreRules, AsLoadedIgnoreRules(rules)), IgnoreRulesAvailable: true)
             : new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: false);
     }
 
     private IgnoreRuleLoadResult LoadWorkspaceConfigIgnoreRules(
         IgnoreRuleSet inheritedIgnoreRules,
-        List<ScanError> errors,
+        List<ScanError>? errors,
         ref bool fullyScanned)
     {
         var configIgnorePath = Path.Combine(_projectRoot, ".codeindex", ".cdidxignore");
@@ -49,14 +49,14 @@ public partial class FileIndexer
             ref fullyScanned);
     }
 
-    private IgnoreRuleLoadResult LoadAncestorIgnoreRules(List<ScanError> errors, ref bool fullyScanned)
+    private IgnoreRuleLoadResult LoadAncestorIgnoreRules(List<ScanError>? errors, ref bool fullyScanned)
     {
         var activeIgnoreRules = IgnoreRuleSet.Empty;
         foreach (var dir in _ancestorIgnoreDirectories)
         {
             if (!CanReadDirectory(dir, out var reason))
             {
-                errors.Add(new ScanError(ToRelativePath(dir), $"Could not read ancestor ignore directory: {reason}."));
+                errors?.Add(new ScanError(ToRelativePath(dir), $"Could not read ancestor ignore directory: {reason}."));
                 fullyScanned = false;
                 return new IgnoreRuleLoadResult(activeIgnoreRules, IgnoreRulesAvailable: false);
             }
@@ -75,15 +75,15 @@ public partial class FileIndexer
         string ignorePath,
         string ignoreFileName,
         IgnoreRuleSet inheritedIgnoreRules,
-        List<ScanError> errors,
+        List<ScanError>? errors,
         ref bool fullyScanned)
     {
-        var rules = new List<IgnoreRule>();
+        List<IgnoreRule>? rules = null;
         if (!TryAppendIgnoreRulesFromFile(
                 sourceDirectory,
                 ignorePath,
                 ignoreFileName,
-                rules,
+                ref rules,
                 errors,
                 ref fullyScanned))
         {
@@ -91,15 +91,18 @@ public partial class FileIndexer
             return new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: false);
         }
 
-        return new IgnoreRuleLoadResult(IgnoreRuleSet.CreateChild(inheritedIgnoreRules, rules), IgnoreRulesAvailable: true);
+        return new IgnoreRuleLoadResult(IgnoreRuleSet.CreateChild(inheritedIgnoreRules, AsLoadedIgnoreRules(rules)), IgnoreRulesAvailable: true);
     }
+
+    private static IReadOnlyList<IgnoreRule> AsLoadedIgnoreRules(List<IgnoreRule>? rules)
+        => rules is { Count: > 0 } ? rules : Array.Empty<IgnoreRule>();
 
     private bool TryAppendIgnoreRulesFromFile(
         string sourceDirectory,
         string ignorePath,
         string ignoreFileName,
-        List<IgnoreRule> rules,
-        List<ScanError> errors,
+        ref List<IgnoreRule>? rules,
+        List<ScanError>? errors,
         ref bool fullyScanned)
     {
         var prefixedIgnorePath = LongPath.EnsureWindowsPrefix(ignorePath);
@@ -122,11 +125,11 @@ public partial class FileIndexer
                     if (!File.Exists(prefixedIgnorePath))
                         throw new UnauthorizedAccessException(readFailure.Reason);
 
-                    errors.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName} due to permissions.", ScanIssueSeverity.Warning));
+                    errors?.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName} due to permissions.", ScanIssueSeverity.Warning));
                     return true;
                 }
 
-                errors.Add(new ScanError(
+                errors?.Add(new ScanError(
                     ToRelativePath(ignorePath),
                     $"Could not safely read {ignoreFileName} because {skippedReason}."));
                 fullyScanned = false;
@@ -142,19 +145,19 @@ public partial class FileIndexer
                 {
                     if (rulesInFile >= MaxIgnoreRulesPerFile)
                     {
-                        errors.Add(new ScanError(
+                        errors?.Add(new ScanError(
                             $"{ToRelativePath(ignorePath)}:{lineNumber}",
                             $"Stopped scanning because {ignoreFileName} exceeds {MaxIgnoreRulesPerFile} rules."));
                         fullyScanned = false;
                         return false;
                     }
 
-                    rules.Add(rule);
+                    (rules ??= []).Add(rule);
                     rulesInFile++;
                 }
                 else if (errorMessage != null)
                 {
-                    errors.Add(new ScanError($"{ToRelativePath(ignorePath)}:{lineNumber}", errorMessage, ScanIssueSeverity.Warning));
+                    errors?.Add(new ScanError($"{ToRelativePath(ignorePath)}:{lineNumber}", errorMessage, ScanIssueSeverity.Warning));
                 }
             }
         }
@@ -163,7 +166,7 @@ public partial class FileIndexer
             if (!File.Exists(prefixedIgnorePath))
                 throw;
 
-            errors.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName} due to permissions.", ScanIssueSeverity.Warning));
+            errors?.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName} due to permissions.", ScanIssueSeverity.Warning));
             return true;
         }
         catch (FileNotFoundException)
@@ -176,7 +179,7 @@ public partial class FileIndexer
         }
         catch (IOException)
         {
-            errors.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName}."));
+            errors?.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName}."));
             fullyScanned = false;
             return false;
         }

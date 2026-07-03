@@ -22,6 +22,7 @@ public partial class FileIndexer
         var prefixedGitmodulesPath = LongPath.EnsureWindowsPrefix(gitmodulesPath);
         if (!File.Exists(prefixedGitmodulesPath))
             return (submodulePaths, ancestorPaths, warnings);
+        var gitmodulesRelativePath = NormalizeIgnorePath(GetRelativePathFromProjectRoot(projectRoot, gitmodulesPath));
 
         try
         {
@@ -41,7 +42,7 @@ public partial class FileIndexer
                         out _))
                 {
                     warnings.Add(new ScanError(
-                        NormalizeIgnorePath(Path.GetRelativePath(projectRoot, gitmodulesPath)),
+                        gitmodulesRelativePath,
                         $"Skipped .gitmodules because {skippedReason}.",
                         ScanIssueSeverity.Warning));
                     return (submodulePaths, ancestorPaths, warnings);
@@ -49,8 +50,12 @@ public partial class FileIndexer
             }
 
             var submodulePathCount = 0;
-            foreach (var rawSubmodulePath in ParseSubmodulePathsFromGitmodules(lines))
+            var inSubmoduleSection = false;
+            foreach (var rawLine in lines)
             {
+                if (!TryParseSubmodulePathFromGitmodulesLine(rawLine, ref inSubmoduleSection, out var rawSubmodulePath))
+                    continue;
+
                 string absolute;
                 try
                 {
@@ -61,7 +66,7 @@ public partial class FileIndexer
                     continue;
                 }
 
-                var relativeToProject = NormalizeIgnorePath(Path.GetRelativePath(projectRoot, absolute));
+                var relativeToProject = NormalizeIgnorePath(GetRelativePathFromProjectRoot(projectRoot, absolute));
                 if (relativeToProject.Length == 0
                     || relativeToProject == "."
                     || relativeToProject.StartsWith("../", StringComparison.Ordinal))
@@ -72,7 +77,7 @@ public partial class FileIndexer
                 if (submodulePathCount >= MaxGitmodulesSubmodulePaths)
                 {
                     warnings.Add(new ScanError(
-                        NormalizeIgnorePath(Path.GetRelativePath(projectRoot, gitmodulesPath)),
+                        gitmodulesRelativePath,
                         $"Stopped parsing .gitmodules submodule paths after {MaxGitmodulesSubmodulePaths} entries.",
                         ScanIssueSeverity.Warning));
                     break;
@@ -80,33 +85,53 @@ public partial class FileIndexer
 
                 submodulePathCount++;
                 if (submodulePaths.Add(relativeToProject))
-                {
-                    var segments = relativeToProject.Split('/', StringSplitOptions.RemoveEmptyEntries);
-                    for (var i = 1; i < segments.Length; i++)
-                        ancestorPaths.Add(string.Join('/', segments, 0, i));
-                }
+                    AddSubmoduleAncestorPaths(relativeToProject, ancestorPaths);
             }
         }
         catch (IOException ex)
         {
-            AddGitmodulesDiscoveryWarning(warnings, projectRoot, gitmodulesPath, ex.GetType().Name);
+            AddGitmodulesDiscoveryWarning(warnings, gitmodulesRelativePath, ex.GetType().Name);
         }
         catch (UnauthorizedAccessException ex)
         {
-            AddGitmodulesDiscoveryWarning(warnings, projectRoot, gitmodulesPath, ex.GetType().Name);
+            AddGitmodulesDiscoveryWarning(warnings, gitmodulesRelativePath, ex.GetType().Name);
         }
 
         return (submodulePaths, ancestorPaths, warnings);
     }
 
+    private static void AddSubmoduleAncestorPaths(string relativeToProject, HashSet<string> ancestorPaths)
+    {
+        var segmentCount = 0;
+        var ancestorEnd = 0;
+        var segmentStart = 0;
+        while (segmentStart < relativeToProject.Length)
+        {
+            while (segmentStart < relativeToProject.Length && relativeToProject[segmentStart] == '/')
+                segmentStart++;
+            if (segmentStart >= relativeToProject.Length)
+                break;
+
+            var segmentEnd = relativeToProject.IndexOf('/', segmentStart);
+            if (segmentEnd < 0)
+                segmentEnd = relativeToProject.Length;
+
+            if (segmentCount > 0)
+                ancestorPaths.Add(relativeToProject[..ancestorEnd]);
+
+            segmentCount++;
+            ancestorEnd = segmentEnd;
+            segmentStart = segmentEnd + 1;
+        }
+    }
+
     private static void AddGitmodulesDiscoveryWarning(
         List<ScanError> warnings,
-        string projectRoot,
-        string gitmodulesPath,
+        string gitmodulesRelativePath,
         string exceptionType)
     {
         warnings.Add(new ScanError(
-            NormalizeIgnorePath(Path.GetRelativePath(projectRoot, gitmodulesPath)),
+            gitmodulesRelativePath,
             $"Skipped .gitmodules because it could not be read ({exceptionType}).",
             ScanIssueSeverity.Warning));
     }
@@ -130,63 +155,64 @@ public partial class FileIndexer
         return success;
     }
 
-    // Tolerant .gitmodules reader: yields each declared submodule's "path = ..." value.
+    // Tolerant .gitmodules parser: reads each declared submodule's "path = ..." value.
     // Supports comments (# / ;), inline comments, surrounding double quotes, and
     // ignores absolute or empty values. Quoted-string escapes are not expanded since
     // submodule paths in practice are plain relative filesystem paths.
-    // .gitmodules を寛容に読み、各 submodule の "path = ..." 値を返す。コメント(# / ;)、
+    // .gitmodules を寛容に解析し、各 submodule の "path = ..." 値を読む。コメント(# / ;)、
     // インラインコメント、両端のダブルクオート、絶対パス・空値の除外をサポート。実用上の
     // submodule パスは通常のファイル名なのでクォート内のエスケープは展開しない。
-    private static IEnumerable<string> ParseSubmodulePathsFromGitmodules(IEnumerable<string> lines)
+    private static bool TryParseSubmodulePathFromGitmodulesLine(
+        string rawLine,
+        ref bool inSubmoduleSection,
+        out string value)
     {
-        var inSubmoduleSection = false;
-        foreach (var rawLine in lines)
+        value = string.Empty;
+        var line = rawLine.AsSpan().Trim();
+        if (line.Length == 0)
+            return false;
+        if (line[0] == '#' || line[0] == ';')
+            return false;
+
+        if (line[0] == '[')
         {
-            var line = rawLine.Trim();
-            if (line.Length == 0)
-                continue;
-            if (line[0] == '#' || line[0] == ';')
-                continue;
-
-            if (line[0] == '[')
+            var endBracket = line.IndexOf(']');
+            if (endBracket < 0)
             {
-                var endBracket = line.IndexOf(']');
-                if (endBracket < 0)
-                {
-                    inSubmoduleSection = false;
-                    continue;
-                }
-
-                var sectionHeader = line.Substring(1, endBracket - 1).Trim();
-                inSubmoduleSection = sectionHeader.StartsWith("submodule", StringComparison.OrdinalIgnoreCase)
-                    && sectionHeader.Length > "submodule".Length
-                    && char.IsWhiteSpace(sectionHeader["submodule".Length]);
-                continue;
+                inSubmoduleSection = false;
+                return false;
             }
 
-            if (!inSubmoduleSection)
-                continue;
-
-            var equalsIndex = line.IndexOf('=');
-            if (equalsIndex < 0)
-                continue;
-            var key = line.Substring(0, equalsIndex).Trim();
-            if (!string.Equals(key, "path", StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            var value = StripGitmodulesInlineComment(line[(equalsIndex + 1)..]);
-            if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
-                value = value[1..^1];
-            if (value.Length == 0)
-                continue;
-            if (Path.IsPathRooted(value))
-                continue;
-
-            yield return value;
+            var sectionHeader = line[1..endBracket].Trim();
+            inSubmoduleSection = sectionHeader.StartsWith("submodule".AsSpan(), StringComparison.OrdinalIgnoreCase)
+                && sectionHeader.Length > "submodule".Length
+                && char.IsWhiteSpace(sectionHeader["submodule".Length]);
+            return false;
         }
+
+        if (!inSubmoduleSection)
+            return false;
+
+        var equalsIndex = line.IndexOf('=');
+        if (equalsIndex < 0)
+            return false;
+        var key = line[..equalsIndex].Trim();
+        if (!key.Equals("path".AsSpan(), StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var valueSpan = StripGitmodulesInlineComment(line[(equalsIndex + 1)..]);
+        if (valueSpan.Length >= 2 && valueSpan[0] == '"' && valueSpan[^1] == '"')
+            valueSpan = valueSpan[1..^1];
+        if (valueSpan.Length == 0)
+            return false;
+        if (Path.IsPathRooted(valueSpan))
+            return false;
+
+        value = valueSpan.ToString();
+        return true;
     }
 
-    private static string StripGitmodulesInlineComment(string value)
+    private static ReadOnlySpan<char> StripGitmodulesInlineComment(ReadOnlySpan<char> value)
     {
         var inQuotes = false;
         var escaping = false;

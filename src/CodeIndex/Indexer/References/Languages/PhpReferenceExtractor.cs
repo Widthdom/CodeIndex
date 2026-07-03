@@ -274,7 +274,8 @@ internal static class PhpReferenceExtractor
         string context,
         int lineNumber,
         SymbolRecord? container,
-        HashSet<string>? seenDocblockPropertyNames = null)
+        bool trackDocblockPropertyNames,
+        ref HashSet<string>? seenDocblockPropertyNames)
     {
         if (originalLine.IndexOf('@') < 0
             || originalLine.IndexOf("property", StringComparison.OrdinalIgnoreCase) < 0)
@@ -287,8 +288,9 @@ internal static class PhpReferenceExtractor
             return;
 
         var nameGroup = match.Groups["name"];
-        if (nameGroup.Success && seenDocblockPropertyNames != null
-            && !seenDocblockPropertyNames.Add(nameGroup.Value))
+        if (nameGroup.Success
+            && trackDocblockPropertyNames
+            && !TryAddPhpDocblockPropertyName(ref seenDocblockPropertyNames, nameGroup.Value))
         {
             return;
         }
@@ -303,6 +305,12 @@ internal static class PhpReferenceExtractor
             context,
             lineNumber,
             container);
+    }
+
+    private static bool TryAddPhpDocblockPropertyName(ref HashSet<string>? seenDocblockPropertyNames, string name)
+    {
+        seenDocblockPropertyNames ??= new HashSet<string>(StringComparer.Ordinal);
+        return seenDocblockPropertyNames.Add(name);
     }
 
     public static void EmitDocblockMethodReturnTypeReferences(

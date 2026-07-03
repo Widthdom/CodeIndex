@@ -31,12 +31,12 @@ public static partial class SymbolExtractor
 
     private static bool TryAddFSharpTypeMemberSymbols(List<SymbolRecord> symbols, long fileId, string line, int lineNumber, ref FSharpTypeBodyState state)
     {
-        var trimmed = line.TrimStart();
+        var trimmed = line.AsSpan().TrimStart();
         var lineIndent = line.Length - trimmed.Length;
 
         if (state.Kind == FSharpTypeBodyKind.Record)
         {
-            if (string.IsNullOrWhiteSpace(trimmed))
+            if (trimmed.IsEmpty)
                 return false;
 
             if (lineIndent <= state.DeclarationIndent && !trimmed.StartsWith("}", StringComparison.Ordinal))
@@ -46,14 +46,14 @@ public static partial class SymbolExtractor
             }
 
             var emitted = TryAddFSharpRecordFields(symbols, fileId, line, lineNumber);
-            if (trimmed.Contains('}'))
+            if (trimmed.IndexOf('}') >= 0)
                 state = FSharpTypeBodyState.None;
             return emitted;
         }
 
         if (state.Kind == FSharpTypeBodyKind.Union)
         {
-            if (string.IsNullOrWhiteSpace(trimmed))
+            if (trimmed.IsEmpty)
                 return false;
 
             if (lineIndent <= state.DeclarationIndent && !trimmed.StartsWith("|", StringComparison.Ordinal))
@@ -67,7 +67,7 @@ public static partial class SymbolExtractor
 
         if (state.Kind == FSharpTypeBodyKind.Pending)
         {
-            if (string.IsNullOrWhiteSpace(trimmed))
+            if (trimmed.IsEmpty)
                 return false;
 
             if (lineIndent <= state.DeclarationIndent)
@@ -79,10 +79,10 @@ public static partial class SymbolExtractor
             if (trimmed.StartsWith("{", StringComparison.Ordinal))
             {
                 state = new FSharpTypeBodyState(FSharpTypeBodyKind.Record, state.DeclarationIndent);
-                return TryAddFSharpRecordFields(symbols, fileId, trimmed, lineNumber);
+                return TryAddFSharpRecordFields(symbols, fileId, trimmed.ToString(), lineNumber);
             }
 
-            if (trimmed.StartsWith("|", StringComparison.Ordinal) || FSharpUnionCaseRegex.IsMatch(trimmed))
+            if (trimmed.StartsWith("|", StringComparison.Ordinal) || FSharpUnionCaseRegex.IsMatch(trimmed.ToString()))
             {
                 state = new FSharpTypeBodyState(FSharpTypeBodyKind.Union, state.DeclarationIndent);
                 return TryAddFSharpUnionCases(symbols, fileId, line, lineNumber);
@@ -103,7 +103,7 @@ public static partial class SymbolExtractor
             return false;
         }
 
-        var restTrimmed = rest.TrimStart();
+        var restTrimmed = rest.AsSpan().TrimStart();
         if (restTrimmed.StartsWith("{", StringComparison.Ordinal))
         {
             state = new FSharpTypeBodyState(FSharpTypeBodyKind.Record, lineIndent);
@@ -141,7 +141,7 @@ public static partial class SymbolExtractor
         var emittedAny = false;
         foreach (var segment in EnumerateTrimmedFSharpSegments(line, ';'))
         {
-            var candidate = segment.Trim().TrimStart('{').TrimEnd('}').TrimStart();
+            var candidate = TrimFSharpDelimitedSegmentCandidate(segment);
             if (candidate.Length == 0)
                 continue;
 
@@ -175,7 +175,7 @@ public static partial class SymbolExtractor
 
     private static bool TryAddFSharpRecordFieldsFromContext(List<SymbolRecord> symbols, long fileId, string[] lines, int lineIndex, string line, int lineNumber)
     {
-        var candidate = line.TrimStart().TrimStart('{').TrimEnd('}').TrimStart();
+        var candidate = TrimFSharpDelimitedContextCandidate(line);
         if (candidate.Length == 0 || candidate.IndexOf(':') < 0 || !FSharpRecordFieldRegex.IsMatch(candidate))
             return false;
 
@@ -210,7 +210,7 @@ public static partial class SymbolExtractor
         var emittedAny = false;
         foreach (var segment in EnumerateTrimmedFSharpSegments(line, '|'))
         {
-            var candidate = segment.Trim().TrimStart('{').TrimEnd('}').TrimStart();
+            var candidate = TrimFSharpDelimitedSegmentCandidate(segment);
             if (candidate.Length == 0)
                 continue;
 
@@ -288,6 +288,27 @@ public static partial class SymbolExtractor
         }
 
         return emittedAny;
+    }
+
+    private static string TrimFSharpDelimitedSegmentCandidate(string value)
+    {
+        var span = value.AsSpan().Trim();
+        return TrimFSharpDelimitedCandidate(span).ToString();
+    }
+
+    private static string TrimFSharpDelimitedContextCandidate(string value)
+    {
+        var span = value.AsSpan().TrimStart();
+        return TrimFSharpDelimitedCandidate(span).ToString();
+    }
+
+    private static ReadOnlySpan<char> TrimFSharpDelimitedCandidate(ReadOnlySpan<char> span)
+    {
+        while (span.Length > 0 && span[0] == '{')
+            span = span[1..];
+        while (span.Length > 0 && span[^1] == '}')
+            span = span[..^1];
+        return span.TrimStart();
     }
 
     private static IEnumerable<string> EnumerateTrimmedFSharpSegments(string value, char separator)

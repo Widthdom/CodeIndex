@@ -18,6 +18,7 @@ internal static class SwiftReferenceExtractor
 
     private static readonly string[] DeclarationKeywords = ["let", "var"];
     private static readonly string[] TypeOperatorKeywords = ["is", "as"];
+    private static readonly IReadOnlySet<string> EmptyTypeParameters = new HashSet<string>(StringComparer.Ordinal);
     private static readonly Regex PropertyWrapperDeclarationRegex = new(
         @"^\s*(?<attributes>(?:@[A-Z]\w*(?:\.[A-Z]\w*)?(?:\([^)]*\))?\s+)*)?(?:(?:public|private|internal|open|fileprivate|package)(?:\s*\(\s*set\s*\))?\s+)?(?:(?:lazy|weak|unowned|final|static|class|nonisolated)\s+)*(?:let|var)\s+",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -133,8 +134,11 @@ internal static class SwiftReferenceExtractor
     {
         foreach (var line in preparedLines)
         {
-            if (line.Contains("typealias", StringComparison.Ordinal))
+            if (line.Contains("typealias", StringComparison.Ordinal)
+                && line.IndexOf('=') >= 0)
+            {
                 return true;
+            }
         }
 
         return false;
@@ -158,11 +162,13 @@ internal static class SwiftReferenceExtractor
             return;
         }
 
-        var emittedAliases = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string>? emittedAliases = aliases.Count > 1
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : null;
         foreach (var bindingCandidate in aliases)
         {
             var alias = bindingCandidate.Alias;
-            if (!emittedAliases.Add(alias))
+            if (emittedAliases is not null && !emittedAliases.Add(alias))
                 continue;
 
             var searchStart = 0;
@@ -240,22 +246,22 @@ internal static class SwiftReferenceExtractor
         IReadOnlyList<int> braceDepths,
         string alias)
     {
-        var ranges = new List<LineRange>();
+        List<LineRange>? ranges = null;
         for (var index = 0; index < preparedLines.Count; index++)
         {
             var line = preparedLines[index];
             var typeDeclaration = TypeDeclarationShadowRegex.Match(line);
             if (typeDeclaration.Success && string.Equals(TrimSwiftBackticks(typeDeclaration.Groups["name"].Value), alias, StringComparison.Ordinal))
             {
-                ranges.Add(new LineRange(index + 1, FindScopedAliasEndLine(preparedLines, braceDepths, index) ?? preparedLines.Count));
+                (ranges ??= []).Add(new LineRange(index + 1, FindScopedAliasEndLine(preparedLines, braceDepths, index) ?? preparedLines.Count));
                 continue;
             }
 
             if (DeclaresGenericTypeParameter(line, alias))
-                ranges.Add(new LineRange(index + 1, FindScopedAliasEndLine(preparedLines, braceDepths, index) ?? index + 1));
+                (ranges ??= []).Add(new LineRange(index + 1, FindScopedAliasEndLine(preparedLines, braceDepths, index) ?? index + 1));
         }
 
-        return ranges;
+        return ranges is null ? Array.Empty<LineRange>() : ranges;
     }
 
     private static bool DeclaresGenericTypeParameter(string line, string alias)
@@ -292,20 +298,20 @@ internal static class SwiftReferenceExtractor
 
     private static IReadOnlySet<string> ExtractGenericTypeParameters(string parameters)
     {
-        var names = new HashSet<string>(StringComparer.Ordinal);
         var openAngle = parameters.IndexOf('<');
         var closeAngle = parameters.LastIndexOf('>');
         if (openAngle < 0 || closeAngle <= openAngle)
-            return names;
+            return EmptyTypeParameters;
 
+        HashSet<string>? names = null;
         var genericParameters = parameters.AsSpan(openAngle + 1, closeAngle - openAngle - 1);
         var start = 0;
         while (TryReadSwiftGenericParameterName(genericParameters, ref start, out var name))
         {
-            names.Add(name.ToString());
+            (names ??= new HashSet<string>(StringComparer.Ordinal)).Add(name.ToString());
         }
 
-        return names;
+        return names ?? EmptyTypeParameters;
     }
 
     private static bool TryReadSwiftGenericParameterName(

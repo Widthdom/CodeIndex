@@ -102,22 +102,21 @@ public static partial class ReferenceExtractor
         List<ReferenceRecord> references,
         HashSet<string> seen)
     {
-        var interfaceMembersByType = BuildCSharpStaticInterfaceMemberContractsByType(workspaceSymbols);
+        var staticInterfaceMemberLookups = BuildCSharpStaticInterfaceMemberLookups(workspaceSymbols);
+        var interfaceMembersByType = staticInterfaceMemberLookups.ContractsByType;
         if (interfaceMembersByType.Count == 0)
             return;
 
-        var interfaceGenericParameters = BuildCSharpInterfaceGenericParameterLookup(workspaceSymbols);
-        var staticMembersByContainer = BuildCSharpStaticMembersByContainer(symbols);
-
-        foreach (var typeSymbol in symbols)
+        var interfaceGenericParameters = staticInterfaceMemberLookups.InterfaceGenericParameters;
+        var implementationLookups = BuildCSharpStaticInterfaceImplementationLookups(symbols);
+        if (implementationLookups.TypeSymbols is not { Count: > 0 } typeSymbols
+            || implementationLookups.StaticMembersByContainer is not { Count: > 0 } staticMembersByContainer)
         {
-            if (typeSymbol.Kind is not ("class" or "struct")
-                || typeSymbol.BodyStartLine == null
-                || typeSymbol.BodyEndLine == null)
-            {
-                continue;
-            }
+            return;
+        }
 
+        foreach (var typeSymbol in typeSymbols)
+        {
             var implementedInterfaces = ExtractCSharpImplementedInterfaces(
                 CollectCSharpRecordHeader(structuralLines, typeSymbol.StartLine).Text,
                 interfaceGenericParameters);
@@ -160,12 +159,23 @@ public static partial class ReferenceExtractor
         }
     }
 
-    private static Dictionary<string, List<CSharpStaticInterfaceMemberContract>> BuildCSharpStaticInterfaceMemberContractsByType(
+    private static (
+        Dictionary<string, List<CSharpStaticInterfaceMemberContract>> ContractsByType,
+        Dictionary<string, List<string>> InterfaceGenericParameters) BuildCSharpStaticInterfaceMemberLookups(
         IReadOnlyList<SymbolRecord> workspaceSymbols)
     {
         var contractsByType = new Dictionary<string, List<CSharpStaticInterfaceMemberContract>>(StringComparer.Ordinal);
+        var interfaceGenericParameters = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var interfaceGenericParameterCandidates = new List<(string Name, string Signature)>();
         foreach (var symbol in workspaceSymbols)
         {
+            if (symbol.Kind == "interface"
+                && !string.IsNullOrWhiteSpace(symbol.Name)
+                && !string.IsNullOrWhiteSpace(symbol.Signature))
+            {
+                interfaceGenericParameterCandidates.Add((symbol.Name, symbol.Signature!));
+            }
+
             if (!IsCSharpStaticInterfaceMemberContract(symbol))
                 continue;
 
@@ -183,14 +193,54 @@ public static partial class ReferenceExtractor
                 NormalizeCSharpTypeArgumentShape(symbol.ReturnType ?? string.Empty)));
         }
 
-        return contractsByType;
+        if (contractsByType.Count > 0)
+        {
+            foreach (var candidate in interfaceGenericParameterCandidates)
+                AddCSharpInterfaceGenericParameters(interfaceGenericParameters, candidate.Name, candidate.Signature);
+        }
+
+        return (contractsByType, interfaceGenericParameters);
     }
 
-    private static Dictionary<string, List<SymbolRecord>> BuildCSharpStaticMembersByContainer(IReadOnlyList<SymbolRecord> symbols)
+    private static void AddCSharpInterfaceGenericParameters(
+        Dictionary<string, List<string>> lookup,
+        string interfaceName,
+        string signature)
     {
-        var staticMembersByContainer = new Dictionary<string, List<SymbolRecord>>(StringComparer.Ordinal);
+        var parameters = ExtractCSharpGenericArgumentList(signature, interfaceName);
+        var parameterCount = 0;
+        for (var index = 0; index < parameters.Count; index++)
+        {
+            var name = ExtractCSharpGenericParameterName(parameters[index]);
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            parameters[parameterCount] = name;
+            parameterCount++;
+        }
+
+        if (parameterCount < parameters.Count)
+            parameters.RemoveRange(parameterCount, parameters.Count - parameterCount);
+
+        if (parameters.Count > 0)
+            lookup[interfaceName] = parameters;
+    }
+
+    private static (
+        IReadOnlyList<SymbolRecord>? TypeSymbols,
+        IReadOnlyDictionary<string, List<SymbolRecord>>? StaticMembersByContainer) BuildCSharpStaticInterfaceImplementationLookups(IReadOnlyList<SymbolRecord> symbols)
+    {
+        List<SymbolRecord>? typeSymbols = null;
+        Dictionary<string, List<SymbolRecord>>? staticMembersByContainer = null;
         foreach (var symbol in symbols)
         {
+            if (symbol.Kind is ("class" or "struct")
+                && symbol.BodyStartLine != null
+                && symbol.BodyEndLine != null)
+            {
+                (typeSymbols ??= []).Add(symbol);
+            }
+
             if (symbol.Kind is not ("function" or "operator" or "property")
                 || string.IsNullOrWhiteSpace(symbol.ContainerName)
                 || string.IsNullOrWhiteSpace(symbol.Signature)
@@ -200,6 +250,7 @@ public static partial class ReferenceExtractor
             }
 
             var containerName = symbol.ContainerName!;
+            staticMembersByContainer ??= new Dictionary<string, List<SymbolRecord>>(StringComparer.Ordinal);
             if (!staticMembersByContainer.TryGetValue(containerName, out var staticMembers))
             {
                 staticMembers = new List<SymbolRecord>();
@@ -209,7 +260,7 @@ public static partial class ReferenceExtractor
             staticMembers.Add(symbol);
         }
 
-        return staticMembersByContainer;
+        return (typeSymbols, staticMembersByContainer);
     }
 
     private static bool AnyCSharpStaticInterfaceMemberContractMatches(
@@ -446,40 +497,6 @@ public static partial class ReferenceExtractor
             return false;
 
         return text.Length == word.Length || !IsCSharpIdentifierPart(text[word.Length]);
-    }
-
-    private static Dictionary<string, List<string>> BuildCSharpInterfaceGenericParameterLookup(IReadOnlyList<SymbolRecord> symbols)
-    {
-        var lookup = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        foreach (var symbol in symbols)
-        {
-            if (symbol.Kind != "interface"
-                || string.IsNullOrWhiteSpace(symbol.Name)
-                || string.IsNullOrWhiteSpace(symbol.Signature))
-            {
-                continue;
-            }
-
-            var parameters = ExtractCSharpGenericArgumentList(symbol.Signature!, symbol.Name);
-            var parameterCount = 0;
-            for (var index = 0; index < parameters.Count; index++)
-            {
-                var name = ExtractCSharpGenericParameterName(parameters[index]);
-                if (string.IsNullOrWhiteSpace(name))
-                    continue;
-
-                parameters[parameterCount] = name;
-                parameterCount++;
-            }
-
-            if (parameterCount < parameters.Count)
-                parameters.RemoveRange(parameterCount, parameters.Count - parameterCount);
-
-            if (parameters.Count > 0)
-                lookup[symbol.Name] = parameters;
-        }
-
-        return lookup;
     }
 
     private static List<CSharpImplementedInterface> ExtractCSharpImplementedInterfaces(
@@ -729,8 +746,8 @@ public static partial class ReferenceExtractor
     internal sealed class InnermostContainerResolver
     {
         private readonly IReadOnlyList<SymbolRecord> candidates;
-        private readonly List<(SymbolRecord Symbol, int SpanLength, int OriginalIndex)> candidatesByStart;
-        private readonly SortedSet<ActiveContainer> activeContainers = new();
+        private readonly List<(SymbolRecord Symbol, int SpanLength, int OriginalIndex)>? candidatesByStart;
+        private SortedSet<ActiveContainer>? activeContainers;
         private int nextCandidateIndex;
         private int currentLine;
         private int? cachedLine;
@@ -739,6 +756,9 @@ public static partial class ReferenceExtractor
         internal InnermostContainerResolver(IReadOnlyList<SymbolRecord> candidates)
         {
             this.candidates = candidates;
+            if (candidates.Count == 0)
+                return;
+
             candidatesByStart = new List<(SymbolRecord Symbol, int SpanLength, int OriginalIndex)>(candidates.Count);
             for (var index = 0; index < candidates.Count; index++)
             {
@@ -754,24 +774,33 @@ public static partial class ReferenceExtractor
             if (cachedLine == lineNumber)
                 return cachedContainer;
 
+            if (candidatesByStart == null)
+                return Cache(lineNumber, null);
+
             if (lineNumber < currentLine)
                 return Cache(lineNumber, FindInnermostContainer(candidates, lineNumber));
 
             AdvanceTo(lineNumber);
-            return Cache(lineNumber, activeContainers.Count == 0 ? null : activeContainers.Min.Symbol);
+            return Cache(lineNumber, activeContainers is not { Count: > 0 } ? null : activeContainers.Min.Symbol);
         }
 
         private void AdvanceTo(int lineNumber)
         {
+            if (candidatesByStart == null)
+            {
+                currentLine = lineNumber;
+                return;
+            }
+
             while (nextCandidateIndex < candidatesByStart.Count
                    && candidatesByStart[nextCandidateIndex].Symbol.BodyStartLine!.Value <= lineNumber)
             {
                 var candidate = candidatesByStart[nextCandidateIndex];
-                activeContainers.Add(new ActiveContainer(candidate.Symbol, candidate.SpanLength, candidate.OriginalIndex));
+                (activeContainers ??= []).Add(new ActiveContainer(candidate.Symbol, candidate.SpanLength, candidate.OriginalIndex));
                 nextCandidateIndex++;
             }
 
-            activeContainers.RemoveWhere(active => active.Symbol.BodyEndLine!.Value < lineNumber);
+            activeContainers?.RemoveWhere(active => active.Symbol.BodyEndLine!.Value < lineNumber);
             currentLine = lineNumber;
         }
 
@@ -820,7 +849,7 @@ public static partial class ReferenceExtractor
     private static bool CanAttachCSharpXmlDocCommentToNextDeclaration(
         SymbolRecord? innermostContainer,
         IReadOnlyList<SymbolRecord>? scopeCandidates,
-        List<List<(int start, int end)>>? csharpAttrRanges,
+        IReadOnlyList<List<(int start, int end)>?>? csharpAttrRanges,
         string[] preparedLines,
         int lineNumber,
         SymbolRecord documentedContainer)
@@ -850,7 +879,7 @@ public static partial class ReferenceExtractor
     }
 
     private static bool HasOnlyCSharpWhitespaceOrAttributesBetweenCommentAndDeclaration(
-        List<List<(int start, int end)>>? csharpAttrRanges,
+        IReadOnlyList<List<(int start, int end)>?>? csharpAttrRanges,
         string[] preparedLines,
         int commentLineNumber,
         int declarationLineNumber)
@@ -872,7 +901,7 @@ public static partial class ReferenceExtractor
         return true;
     }
 
-    private static bool IsCSharpAttributeOnlyLine(string preparedLine, List<(int start, int end)>? ranges)
+    private static bool IsCSharpAttributeOnlyLine(string preparedLine, IReadOnlyList<(int start, int end)>? ranges)
     {
         if (ranges == null || ranges.Count == 0)
             return false;
@@ -1200,7 +1229,7 @@ public static partial class ReferenceExtractor
 
     private static bool HasOnlyCSharpWhitespaceOrAttributesAfterColumn(
         string preparedLine,
-        List<(int start, int end)>? ranges,
+        IReadOnlyList<(int start, int end)>? ranges,
         int startColumn)
     {
         if (startColumn < 0 || startColumn >= preparedLine.Length)
@@ -1379,7 +1408,7 @@ public static partial class ReferenceExtractor
         IReadOnlyList<SymbolRecord> candidates,
         string structuralLine,
         string preparedLine,
-        List<(int start, int end)>? csharpAttrRangesOnLine,
+        IReadOnlyList<(int start, int end)>? csharpAttrRangesOnLine,
         int lineNumber,
         int sameLineDeclarationStartColumn)
     {
@@ -2054,19 +2083,32 @@ public static partial class ReferenceExtractor
         for (int i = startIdx; i < structuralLines.Length; i++)
         {
             var line = structuralLines[i];
-            var masked = line.ToCharArray();
+            char[]? masked = null;
             var terminatorIdx = -1;
+            void MaskChar(int index)
+            {
+                masked ??= line.ToCharArray();
+                masked[index] = ' ';
+            }
+
+            void MaskRange(int start, int endExclusive)
+            {
+                masked ??= line.ToCharArray();
+                for (int k = start; k < endExclusive; k++)
+                    masked[k] = ' ';
+            }
+
             for (int j = 0; j < line.Length; j++)
             {
                 var c = line[j];
 
                 if (inBlockComment)
                 {
-                    masked[j] = ' ';
+                    MaskChar(j);
                     if (c == '*' && j + 1 < line.Length && line[j + 1] == '/')
                     {
                         inBlockComment = false;
-                        masked[j + 1] = ' ';
+                        MaskChar(j + 1);
                         j++;
                     }
                     continue;
@@ -2074,10 +2116,10 @@ public static partial class ReferenceExtractor
 
                 if (inString)
                 {
-                    masked[j] = ' ';
+                    MaskChar(j);
                     if (c == '\\' && j + 1 < line.Length)
                     {
-                        masked[j + 1] = ' ';
+                        MaskChar(j + 1);
                         j++;
                         continue;
                     }
@@ -2090,15 +2132,14 @@ public static partial class ReferenceExtractor
                 {
                     if (line[j + 1] == '/')
                     {
-                        for (int k = j; k < line.Length; k++)
-                            masked[k] = ' ';
+                        MaskRange(j, line.Length);
                         break;
                     }
                     if (line[j + 1] == '*')
                     {
                         inBlockComment = true;
-                        masked[j] = ' ';
-                        masked[j + 1] = ' ';
+                        MaskChar(j);
+                        MaskChar(j + 1);
                         j++;
                         continue;
                     }
@@ -2107,7 +2148,7 @@ public static partial class ReferenceExtractor
                 if (c == '"')
                 {
                     inString = true;
-                    masked[j] = ' ';
+                    MaskChar(j);
                     continue;
                 }
 
@@ -2133,8 +2174,7 @@ public static partial class ReferenceExtractor
                     }
                     if (closeIdx > 0)
                     {
-                        for (int k = j; k <= closeIdx; k++)
-                            masked[k] = ' ';
+                        MaskRange(j, closeIdx + 1);
                         j = closeIdx;
                     }
                     continue;
@@ -2151,14 +2191,19 @@ public static partial class ReferenceExtractor
                 }
             }
 
-            var maskedLine = new string(masked);
             if (terminatorIdx >= 0)
             {
-                sb.Append(maskedLine, 0, terminatorIdx);
+                if (masked == null)
+                    sb.Append(line, 0, terminatorIdx);
+                else
+                    sb.Append(masked, 0, terminatorIdx);
                 return (i + 1, terminatorIdx, sb.ToString());
             }
 
-            sb.Append(maskedLine);
+            if (masked == null)
+                sb.Append(line);
+            else
+                sb.Append(masked);
             sb.Append('\n');
         }
 
@@ -2771,30 +2816,31 @@ public static partial class ReferenceExtractor
         if (quoteIndex < 0)
             return line;
 
-        var chars = line.ToCharArray();
-        for (var index = quoteIndex; index + 1 < chars.Length; index++)
+        char[]? chars = null;
+        for (var index = quoteIndex; index + 1 < line.Length; index++)
         {
-            if (chars[index] != '\'')
+            if (line[index] != '\'')
                 continue;
 
-            var next = chars[index + 1];
+            var next = line[index + 1];
             if (next != '_' && !char.IsLetter(next))
                 continue;
 
             var end = index + 2;
-            while (end < chars.Length && IsJavaIdentifierPart(chars[end]))
+            while (end < line.Length && IsJavaIdentifierPart(line[end]))
                 end++;
 
-            if (end == index + 2 && end < chars.Length && chars[end] == '\'')
+            if (end == index + 2 && end < line.Length && line[end] == '\'')
                 continue;
 
+            chars ??= line.ToCharArray();
             for (var maskIndex = index; maskIndex < end; maskIndex++)
                 chars[maskIndex] = ' ';
 
             index = end - 1;
         }
 
-        return new string(chars);
+        return chars is null ? line : new string(chars);
     }
 
     private static string[] MaskPascalBlockCommentLines(IReadOnlyList<string> lines)
@@ -2809,15 +2855,19 @@ public static partial class ReferenceExtractor
         for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
         {
             var line = lines[lineIndex];
-            var chars = line.ToCharArray();
+            char[]? chars = null;
+
+            void MaskAt(int index) =>
+                (chars ??= line.ToCharArray())[index] = ' ';
+
             var cursor = 0;
 
-            while (cursor < chars.Length)
+            while (cursor < line.Length)
             {
                 if (inBraceComment)
                 {
-                    var closes = chars[cursor] == '}';
-                    chars[cursor++] = ' ';
+                    var closes = line[cursor] == '}';
+                    MaskAt(cursor++);
                     if (closes)
                         inBraceComment = false;
                     continue;
@@ -2825,27 +2875,27 @@ public static partial class ReferenceExtractor
 
                 if (inParenStarComment)
                 {
-                    if (chars[cursor] == '*' && cursor + 1 < chars.Length && chars[cursor + 1] == ')')
+                    if (line[cursor] == '*' && cursor + 1 < line.Length && line[cursor + 1] == ')')
                     {
-                        chars[cursor++] = ' ';
-                        chars[cursor++] = ' ';
+                        MaskAt(cursor++);
+                        MaskAt(cursor++);
                         inParenStarComment = false;
                         continue;
                     }
 
-                    chars[cursor++] = ' ';
+                    MaskAt(cursor++);
                     continue;
                 }
 
-                if (chars[cursor] == '\'')
+                if (line[cursor] == '\'')
                 {
                     cursor++;
-                    while (cursor < chars.Length)
+                    while (cursor < line.Length)
                     {
-                        if (chars[cursor] == '\'')
+                        if (line[cursor] == '\'')
                         {
                             cursor++;
-                            if (cursor < chars.Length && chars[cursor] == '\'')
+                            if (cursor < line.Length && line[cursor] == '\'')
                             {
                                 cursor++;
                                 continue;
@@ -2858,17 +2908,17 @@ public static partial class ReferenceExtractor
                     continue;
                 }
 
-                if (chars[cursor] == '{')
+                if (line[cursor] == '{')
                 {
-                    chars[cursor++] = ' ';
+                    MaskAt(cursor++);
                     inBraceComment = true;
                     continue;
                 }
 
-                if (chars[cursor] == '(' && cursor + 1 < chars.Length && chars[cursor + 1] == '*')
+                if (line[cursor] == '(' && cursor + 1 < line.Length && line[cursor + 1] == '*')
                 {
-                    chars[cursor++] = ' ';
-                    chars[cursor++] = ' ';
+                    MaskAt(cursor++);
+                    MaskAt(cursor++);
                     inParenStarComment = true;
                     continue;
                 }
@@ -2876,7 +2926,7 @@ public static partial class ReferenceExtractor
                 cursor++;
             }
 
-            result[lineIndex] = new string(chars);
+            result[lineIndex] = chars is null ? line : new string(chars);
         }
 
         return result;
@@ -2910,16 +2960,27 @@ public static partial class ReferenceExtractor
         for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
         {
             var line = lines[lineIndex];
-            var chars = line.ToCharArray();
+            char[]? chars = null;
+
+            void MaskAt(int index) =>
+                (chars ??= line.ToCharArray())[index] = ' ';
+
+            void MaskRange(int start, int endExclusive)
+            {
+                var masked = chars ??= line.ToCharArray();
+                for (var index = start; index < endExclusive; index++)
+                    masked[index] = ' ';
+            }
+
             var cursor = 0;
-            while (cursor < chars.Length)
+            while (cursor < line.Length)
             {
                 if (inBlockComment)
                 {
-                    chars[cursor] = ' ';
-                    if (line[cursor] == '*' && cursor + 1 < chars.Length && line[cursor + 1] == '/')
+                    MaskAt(cursor);
+                    if (line[cursor] == '*' && cursor + 1 < line.Length && line[cursor + 1] == '/')
                     {
-                        chars[cursor + 1] = ' ';
+                        MaskAt(cursor + 1);
                         inBlockComment = false;
                         cursor += 2;
                         continue;
@@ -2931,7 +2992,7 @@ public static partial class ReferenceExtractor
 
                 if (inGoRawString)
                 {
-                    chars[cursor] = ' ';
+                    MaskAt(cursor);
                     if (line[cursor] == '`')
                         inGoRawString = false;
                     cursor++;
@@ -2942,13 +3003,13 @@ public static partial class ReferenceExtractor
                 {
                     if (IsTripleQuoteAt(line, cursor, dartTripleQuote))
                     {
-                        ReplaceWithSpaces(chars, cursor, 3);
+                        MaskRange(cursor, cursor + 3);
                         dartTripleQuote = '\0';
                         cursor += 3;
                         continue;
                     }
 
-                    chars[cursor] = ' ';
+                    MaskAt(cursor);
                     cursor++;
                     continue;
                 }
@@ -2958,22 +3019,22 @@ public static partial class ReferenceExtractor
                     var closeIndex = line.IndexOf(cppRawStringTerminator, cursor, StringComparison.Ordinal);
                     if (closeIndex < 0)
                     {
-                        ReplaceWithSpaces(chars, cursor, chars.Length - cursor);
+                        MaskRange(cursor, line.Length);
                         break;
                     }
 
-                    ReplaceWithSpaces(chars, cursor, closeIndex + cppRawStringTerminator.Length - cursor);
+                    MaskRange(cursor, closeIndex + cppRawStringTerminator.Length);
                     cursor = closeIndex + cppRawStringTerminator.Length;
                     cppRawStringTerminator = null;
                     continue;
                 }
 
-                if (line[cursor] == '/' && cursor + 1 < chars.Length && line[cursor + 1] == '/')
+                if (line[cursor] == '/' && cursor + 1 < line.Length && line[cursor + 1] == '/')
                     break;
 
                 if (language == "go" && line[cursor] == '`')
                 {
-                    chars[cursor] = ' ';
+                    MaskAt(cursor);
                     inGoRawString = true;
                     cursor++;
                     continue;
@@ -2984,12 +3045,12 @@ public static partial class ReferenceExtractor
                     var closeIndex = IndexOfTripleQuote(line, cursor + dartOpeningLength, dartQuote);
                     if (closeIndex < 0)
                     {
-                        ReplaceWithSpaces(chars, cursor, chars.Length - cursor);
+                        MaskRange(cursor, line.Length);
                         dartTripleQuote = dartQuote;
                         break;
                     }
 
-                    ReplaceWithSpaces(chars, cursor, closeIndex + 3 - cursor);
+                    MaskRange(cursor, closeIndex + 3);
                     cursor = closeIndex + 3;
                     continue;
                 }
@@ -2999,12 +3060,12 @@ public static partial class ReferenceExtractor
                     var closeIndex = line.IndexOf(rawTerminator, cursor + rawOpeningLength, StringComparison.Ordinal);
                     if (closeIndex < 0)
                     {
-                        ReplaceWithSpaces(chars, cursor, chars.Length - cursor);
+                        MaskRange(cursor, line.Length);
                         cppRawStringTerminator = rawTerminator;
                         break;
                     }
 
-                    ReplaceWithSpaces(chars, cursor, closeIndex + rawTerminator.Length - cursor);
+                    MaskRange(cursor, closeIndex + rawTerminator.Length);
                     cursor = closeIndex + rawTerminator.Length;
                     continue;
                 }
@@ -3015,11 +3076,11 @@ public static partial class ReferenceExtractor
                     continue;
                 }
 
-                if (line[cursor] == '/' && cursor + 1 < chars.Length && line[cursor + 1] == '*')
+                if (line[cursor] == '/' && cursor + 1 < line.Length && line[cursor + 1] == '*')
                 {
-                    chars[cursor] = ' ';
+                    MaskAt(cursor);
                     cursor++;
-                    chars[cursor] = ' ';
+                    MaskAt(cursor);
                     inBlockComment = true;
                     cursor++;
                     continue;
@@ -3028,7 +3089,7 @@ public static partial class ReferenceExtractor
                 cursor++;
             }
 
-            result[lineIndex] = new string(chars);
+            result[lineIndex] = chars is null ? line : new string(chars);
         }
 
         return result;
@@ -3131,32 +3192,36 @@ public static partial class ReferenceExtractor
         for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
         {
             var line = lines[lineIndex];
-            var chars = line.ToCharArray();
+            char[]? chars = null;
+
+            void MaskAt(int index) =>
+                (chars ??= line.ToCharArray())[index] = ' ';
+
             var cursor = 0;
 
-            while (cursor < chars.Length)
+            while (cursor < line.Length)
             {
                 if (blockDepth > 0)
                 {
-                    if (line[cursor] == '{' && cursor + 1 < chars.Length && line[cursor + 1] == '-')
+                    if (line[cursor] == '{' && cursor + 1 < line.Length && line[cursor + 1] == '-')
                     {
-                        chars[cursor] = ' ';
-                        chars[cursor + 1] = ' ';
+                        MaskAt(cursor);
+                        MaskAt(cursor + 1);
                         blockDepth++;
                         cursor += 2;
                         continue;
                     }
 
-                    if (line[cursor] == '-' && cursor + 1 < chars.Length && line[cursor + 1] == '}')
+                    if (line[cursor] == '-' && cursor + 1 < line.Length && line[cursor + 1] == '}')
                     {
-                        chars[cursor] = ' ';
-                        chars[cursor + 1] = ' ';
+                        MaskAt(cursor);
+                        MaskAt(cursor + 1);
                         blockDepth--;
                         cursor += 2;
                         continue;
                     }
 
-                    chars[cursor++] = ' ';
+                    MaskAt(cursor++);
                     continue;
                 }
 
@@ -3166,13 +3231,13 @@ public static partial class ReferenceExtractor
                     continue;
                 }
 
-                if (line[cursor] == '-' && cursor + 1 < chars.Length && line[cursor + 1] == '-')
+                if (line[cursor] == '-' && cursor + 1 < line.Length && line[cursor + 1] == '-')
                     break;
 
-                if (line[cursor] == '{' && cursor + 1 < chars.Length && line[cursor + 1] == '-')
+                if (line[cursor] == '{' && cursor + 1 < line.Length && line[cursor + 1] == '-')
                 {
-                    chars[cursor] = ' ';
-                    chars[cursor + 1] = ' ';
+                    MaskAt(cursor);
+                    MaskAt(cursor + 1);
                     blockDepth = 1;
                     cursor += 2;
                     continue;
@@ -3181,7 +3246,7 @@ public static partial class ReferenceExtractor
                 cursor++;
             }
 
-            result[lineIndex] = new string(chars);
+            result[lineIndex] = chars is null ? line : new string(chars);
         }
 
         return result;
@@ -3229,7 +3294,7 @@ public static partial class ReferenceExtractor
         if (line.IndexOf('f') < 0 && line.IndexOf('F') < 0)
             return line;
 
-        var masked = line.ToCharArray();
+        char[]? masked = null;
         for (var i = 0; i < line.Length; i++)
         {
             if (!TryOpenPythonSingleLineString(line, i, out var prefixLength, out var quoteChar, out var isRaw, out var isFString))
@@ -3241,9 +3306,10 @@ public static partial class ReferenceExtractor
                 continue;
             }
 
+            var chars = masked ??= line.ToCharArray();
             var quoteStart = i + prefixLength;
             var openingLength = prefixLength + 1;
-            ReplaceWithSpaces(masked, i, openingLength);
+            ReplaceWithSpaces(chars, i, openingLength);
             i += openingLength;
 
             var inExpression = false;
@@ -3254,28 +3320,28 @@ public static partial class ReferenceExtractor
                 {
                     if (!isRaw && line[i] == '\\' && i + 1 < line.Length)
                     {
-                        ReplaceWithSpaces(masked, i, 2);
+                        ReplaceWithSpaces(chars, i, 2);
                         i += 2;
                         continue;
                     }
 
                     if (line[i] == '{' && i + 1 < line.Length && line[i + 1] == '{')
                     {
-                        ReplaceWithSpaces(masked, i, 2);
+                        ReplaceWithSpaces(chars, i, 2);
                         i += 2;
                         continue;
                     }
 
                     if (line[i] == '}' && i + 1 < line.Length && line[i + 1] == '}')
                     {
-                        ReplaceWithSpaces(masked, i, 2);
+                        ReplaceWithSpaces(chars, i, 2);
                         i += 2;
                         continue;
                     }
 
                     if (line[i] == '{')
                     {
-                        masked[i] = ' ';
+                        chars[i] = ' ';
                         inExpression = true;
                         expressionDepth = 1;
                         i++;
@@ -3284,12 +3350,12 @@ public static partial class ReferenceExtractor
 
                     if (line[i] == quoteChar)
                     {
-                        masked[i] = ' ';
+                        chars[i] = ' ';
                         i++;
                         break;
                     }
 
-                    masked[i] = ' ';
+                    chars[i] = ' ';
                     i++;
                     continue;
                 }
@@ -3304,7 +3370,7 @@ public static partial class ReferenceExtractor
                 if (line[i] == '}')
                 {
                     expressionDepth--;
-                    masked[i] = ' ';
+                    chars[i] = ' ';
                     i++;
                     if (expressionDepth == 0)
                         inExpression = false;
@@ -3341,7 +3407,7 @@ public static partial class ReferenceExtractor
 
                 if (line[i] == '#')
                 {
-                    masked[i] = ' ';
+                    chars[i] = ' ';
                     i++;
                     continue;
                 }
@@ -3352,7 +3418,7 @@ public static partial class ReferenceExtractor
             i = Math.Max(i - 1, quoteStart);
         }
 
-        return new string(masked);
+        return masked is null ? line : new string(masked);
     }
 
     private static string[] MaskPythonFStrings(IReadOnlyList<string> lines)
@@ -3370,8 +3436,6 @@ public static partial class ReferenceExtractor
             if (line.IndexOf('f') < 0 && line.IndexOf('F') < 0)
                 continue;
 
-            var chars = line.ToCharArray();
-            var changed = false;
             for (var column = 0; column < line.Length; column++)
             {
                 if (!TryOpenPythonString(line, column, out var prefixLength, out var quoteChar, out var isRaw, out var isFString, out var isTripleQuoted))
@@ -3386,21 +3450,14 @@ public static partial class ReferenceExtractor
                 if (!isTripleQuoted)
                 {
                     result[lineIndex] = MaskPythonSingleLineFStrings(line);
-                    chars = result[lineIndex].ToCharArray();
-                    changed = true;
                     break;
                 }
 
                 MaskPythonTripleQuotedFString(result, lineIndex, column, prefixLength, quoteChar, isRaw, out var endLineIndex, out var endColumn);
                 lineIndex = endLineIndex;
                 line = result[lineIndex];
-                chars = line.ToCharArray();
                 column = endColumn;
-                changed = true;
             }
-
-            if (changed)
-                result[lineIndex] = new string(chars);
         }
 
         return result;
@@ -4270,15 +4327,10 @@ public static partial class ReferenceExtractor
     /// `(開始列, 終端列 (exclusive))` のレンジを保持し、呼び出し名の列がどれかのレンジに含まれる場合に
     /// `call` ではなく `attribute` へ再分類する。
     /// </summary>
-    private static (List<List<(int start, int end)>>, List<List<(int start, int end)>>) BuildCSharpAttributeRanges(string[] preparedLines)
+    private static (List<(int start, int end)>?[] Ranges, List<(int start, int end)>?[] TopLevelRanges) BuildCSharpAttributeRanges(string[] preparedLines)
     {
-        var perLine = new List<List<(int, int)>>(preparedLines.Length);
-        var perLineTopLevel = new List<List<(int, int)>>(preparedLines.Length);
-        for (var i = 0; i < preparedLines.Length; i++)
-        {
-            perLine.Add(new List<(int, int)>());
-            perLineTopLevel.Add(new List<(int, int)>());
-        }
+        var perLine = new List<(int start, int end)>?[preparedLines.Length];
+        var perLineTopLevel = new List<(int start, int end)>?[preparedLines.Length];
 
         // Stack entries capture the opening `[` position, whether that bracket was at
         // a C# declaration (attribute) position, and a snapshot of the global paren depth
@@ -4316,7 +4368,7 @@ public static partial class ReferenceExtractor
                 int s = (l == topZoneStartLi) ? topZoneStartCi : 0;
                 int e = (l == endLi) ? endCi : preparedLines[l].Length;
                 if (e > s)
-                    perLineTopLevel[l].Add((s, e));
+                    AddCSharpAttributeRange(perLineTopLevel, l, s, e);
             }
             topZoneStartLi = -1;
         }
@@ -4410,7 +4462,7 @@ public static partial class ReferenceExtractor
                             {
                                 int s = (l == opened.li) ? opened.ci : 0;
                                 int e = (l == li) ? ci + 1 : preparedLines[l].Length;
-                                perLine[l].Add((s, e));
+                                AddCSharpAttributeRange(perLine, l, s, e);
                             }
                             // Close the top-level zone at the `]`. Section-local depth should
                             // be 0 here (we are at the closing bracket of this section) — if
@@ -4441,6 +4493,15 @@ public static partial class ReferenceExtractor
         }
 
         return (perLine, perLineTopLevel);
+    }
+
+    private static void AddCSharpAttributeRange(
+        List<(int start, int end)>?[] rangesByLine,
+        int lineIndex,
+        int start,
+        int end)
+    {
+        (rangesByLine[lineIndex] ??= []).Add((start, end));
     }
 
     /// <summary>

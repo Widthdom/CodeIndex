@@ -44,8 +44,7 @@ internal static class ExtensionLoadDiagnosticClassifier
             .Where(exception => exception != null)
             .Select(exception => FormatException("loader_exception", exception!))
             .Distinct(StringComparer.Ordinal)
-            .Take(MaxLoaderExceptionDetails)
-            .ToList();
+            .Take(MaxLoaderExceptionDetails);
 
         return string.Join(", ", details);
     }

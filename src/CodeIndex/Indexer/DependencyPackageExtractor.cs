@@ -79,20 +79,82 @@ internal static class DependencyPackageExtractor
     public static List<ReferenceRecord> ExtractReferences(long fileId, string content, string[] lines, string? path, string language)
     {
         var packages = ExtractPackages(content, lines, path, language);
-        var references = new List<ReferenceRecord>(packages.Count);
+        return CreateReferencesFromPackages(fileId, lines, packages, maxReferenceCount: null);
+    }
+
+    private static List<ReferenceRecord> CreateReferencesFromPackages(
+        long fileId,
+        string[] lines,
+        IReadOnlyList<DependencyPackageInfo> packages,
+        int? maxReferenceCount)
+    {
+        var references = maxReferenceCount is > 0
+            ? ReferenceExtractor.CreateReferenceList(maxReferenceCount)
+            : new List<ReferenceRecord>(packages.Count);
         foreach (var package in packages)
         {
-            references.Add(new ReferenceRecord
-            {
-                FileId = fileId,
-                SymbolName = package.Name,
-                ReferenceKind = "dependency",
-                Line = package.Line,
-                Column = package.Column,
-                Context = GetContext(lines, package.Line),
-                ContainerKind = package.Scope == null ? null : "project",
-                ContainerName = package.Scope,
-            });
+            if (!ReferenceExtractor.TryAddReference(
+                    references,
+                    new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = package.Name,
+                        ReferenceKind = "dependency",
+                        Line = package.Line,
+                        Column = package.Column,
+                        Context = GetContext(lines, package.Line),
+                        ContainerKind = package.Scope == null ? null : "project",
+                        ContainerName = package.Scope,
+                    }))
+                break;
+        }
+
+        return references;
+    }
+
+    public static List<ReferenceRecord> ExtractReferences(
+        long fileId,
+        string content,
+        string[] lines,
+        IReadOnlyList<SymbolRecord> symbols,
+        string? path,
+        string language,
+        int? maxReferenceCount)
+    {
+        var references = ExtractReferencesFromPackageSymbols(fileId, lines, symbols, maxReferenceCount);
+        if (references.Count > 0)
+            return references;
+
+        var packages = ExtractPackages(content, lines, path, language);
+        return CreateReferencesFromPackages(fileId, lines, packages, maxReferenceCount);
+    }
+
+    private static List<ReferenceRecord> ExtractReferencesFromPackageSymbols(
+        long fileId,
+        string[] lines,
+        IReadOnlyList<SymbolRecord> symbols,
+        int? maxReferenceCount)
+    {
+        var references = ReferenceExtractor.CreateReferenceList(maxReferenceCount);
+        foreach (var symbol in symbols)
+        {
+            if (!string.Equals(symbol.Kind, "package", StringComparison.Ordinal))
+                continue;
+
+            if (!ReferenceExtractor.TryAddReference(
+                    references,
+                    new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = symbol.Name,
+                        ReferenceKind = "dependency",
+                        Line = Math.Max(1, symbol.Line),
+                        Column = Math.Max(1, (symbol.StartColumn ?? 0) + 1),
+                        Context = GetContext(lines, symbol.Line),
+                        ContainerKind = symbol.ContainerKind,
+                        ContainerName = symbol.ContainerName,
+                    }))
+                break;
         }
 
         return references;
@@ -454,21 +516,27 @@ internal static class DependencyPackageExtractor
     {
         name = string.Empty;
         version = null;
-        var markerIndex = spec.IndexOf(';');
-        var normalized = (markerIndex >= 0 ? spec[..markerIndex] : spec).Trim();
-        if (normalized.Length == 0)
+        var normalizedSpan = spec.AsSpan();
+        var markerIndex = normalizedSpan.IndexOf(';');
+        if (markerIndex >= 0)
+            normalizedSpan = normalizedSpan[..markerIndex];
+
+        normalizedSpan = normalizedSpan.Trim();
+        if (normalizedSpan.IsEmpty)
             return false;
 
+        var normalized = TrimDependencyField(spec, normalizedSpan);
         var match = RequirementNameRegex.Match(normalized);
         if (!match.Success)
             return false;
 
-        name = match.Groups["name"].Value.Trim();
-        if (string.IsNullOrWhiteSpace(name))
+        var nameSpan = match.Groups["name"].ValueSpan.Trim();
+        if (nameSpan.IsEmpty)
             return false;
 
+        name = TrimDependencyField(normalized, nameSpan);
         version = match.Groups["version"].Success
-            ? match.Groups["version"].Value.Trim()
+            ? TrimDependencyField(normalized, match.Groups["version"].ValueSpan.Trim())
             : null;
         return true;
     }
@@ -486,10 +554,11 @@ internal static class DependencyPackageExtractor
         int line,
         int column)
     {
-        name = name.Trim();
-        if (name.Length == 0)
+        var trimmedName = name.AsSpan().Trim();
+        if (trimmedName.IsEmpty)
             return;
 
+        name = TrimDependencyField(name, trimmedName);
         line = Math.Max(1, line);
         column = Math.Max(1, column);
         version = NormalizeEmpty(version);
@@ -554,15 +623,20 @@ internal static class DependencyPackageExtractor
 
     private static string? ExtractPoetryVersion(string value)
     {
-        value = value.Trim();
-        if ((value.StartsWith("\"", StringComparison.Ordinal) && value.EndsWith("\"", StringComparison.Ordinal))
-            || (value.StartsWith("'", StringComparison.Ordinal) && value.EndsWith("'", StringComparison.Ordinal)))
+        var trimmed = value.AsSpan().Trim();
+        if (trimmed.IsEmpty)
+            return null;
+
+        if (trimmed.Length >= 2
+            && ((trimmed[0] == '"' && trimmed[^1] == '"')
+                || (trimmed[0] == '\'' && trimmed[^1] == '\'')))
         {
-            return value[1..^1].Trim();
+            return TrimDependencyField(value, trimmed[1..^1].Trim());
         }
 
-        var match = TomlVersionRegex.Match(value);
-        return match.Success ? match.Groups["version"].Value.Trim() : null;
+        var normalized = TrimDependencyField(value, trimmed);
+        var match = TomlVersionRegex.Match(normalized);
+        return match.Success ? TrimDependencyField(normalized, match.Groups["version"].ValueSpan.Trim()) : null;
     }
 
     private static (int Line, int Column) FindJsonProperty(string[] lines, string propertyName)
@@ -602,10 +676,33 @@ internal static class DependencyPackageExtractor
         => line > 0 && line <= lines.Length ? lines[line - 1].Trim() : string.Empty;
 
     private static string NormalizePackageName(string name)
-        => name.Trim().ToLowerInvariant();
+    {
+        var trimmed = name.AsSpan().Trim();
+        return trimmed.IsEmpty ? string.Empty : NormalizeLowerInvariantKey(name, trimmed);
+    }
 
     private static string? NormalizeEmpty(string? value)
-        => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    {
+        if (value is null)
+            return null;
+
+        var trimmed = value.AsSpan().Trim();
+        return trimmed.IsEmpty ? null : TrimDependencyField(value, trimmed);
+    }
+
+    private static string TrimDependencyField(string original, ReadOnlySpan<char> trimmed)
+        => trimmed.Length == original.Length && trimmed.SequenceEqual(original.AsSpan()) ? original : trimmed.ToString();
+
+    private static string NormalizeLowerInvariantKey(string original, ReadOnlySpan<char> trimmed)
+    {
+        for (var i = 0; i < trimmed.Length; i++)
+        {
+            if (char.ToLowerInvariant(trimmed[i]) != trimmed[i])
+                return trimmed.ToString().ToLowerInvariant();
+        }
+
+        return TrimDependencyField(original, trimmed);
+    }
 
     private static bool LooksLikeVersionConstraint(string version)
         => version.StartsWith("=", StringComparison.Ordinal)

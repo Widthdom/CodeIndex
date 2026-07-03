@@ -118,13 +118,14 @@ internal static class RustReferenceExtractor
         int startLineIndex,
         int openBracket)
     {
-        var parts = new List<string>();
+        string? firstPart = null;
+        StringBuilder? builder = null;
         var depth = 0;
         for (var lineIndex = startLineIndex; lineIndex < lines.Length; lineIndex++)
         {
             var line = lines[lineIndex];
             var startColumn = lineIndex == startLineIndex ? openBracket : 0;
-            parts.Add(line[startColumn..]);
+            AppendAttributeLine(line[startColumn..]);
 
             for (var column = startColumn; column < line.Length; column++)
             {
@@ -156,11 +157,31 @@ internal static class RustReferenceExtractor
 
                 depth--;
                 if (c == ']' && depth == 0)
-                    return (string.Join('\n', parts), lineIndex, column);
+                    return (BuildAttributeText(), lineIndex, column);
             }
         }
 
-        return (string.Join('\n', parts), lines.Length - 1, lines[^1].Length);
+        return (BuildAttributeText(), lines.Length - 1, lines[^1].Length);
+
+        void AppendAttributeLine(string part)
+        {
+            if (firstPart == null)
+            {
+                firstPart = part;
+                return;
+            }
+
+            if (builder == null)
+            {
+                builder = new StringBuilder(firstPart.Length + 1 + part.Length);
+                builder.Append(firstPart);
+            }
+
+            builder.Append('\n');
+            builder.Append(part);
+        }
+
+        string BuildAttributeText() => builder?.ToString() ?? firstPart ?? string.Empty;
     }
 
     private static void EmitDeriveReferencesFromAttribute(
@@ -844,13 +865,25 @@ internal static class RustReferenceExtractor
 
     private static string CombineUsePath(string? prefix, string name)
     {
-        var cleanedPrefix = prefix?.Trim().TrimEnd(':');
-        var cleanedName = name.Trim().TrimEnd(':');
-        if (string.IsNullOrWhiteSpace(cleanedPrefix))
+        var cleanedPrefix = TrimRustUsePathSegment(prefix);
+        var cleanedName = TrimRustUsePathSegment(name);
+        if (cleanedPrefix.Length == 0)
             return cleanedName;
-        if (string.IsNullOrWhiteSpace(cleanedName))
+        if (cleanedName.Length == 0)
             return cleanedPrefix;
         return $"{cleanedPrefix}::{cleanedName}";
+    }
+
+    private static string TrimRustUsePathSegment(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        var span = value.AsSpan().Trim();
+        while (span.Length > 0 && span[^1] == ':')
+            span = span[..^1];
+
+        return span.ToString();
     }
 
     private static void EmitExternCrateReferences(
@@ -2550,7 +2583,7 @@ internal static class RustReferenceExtractor
         if (callIndex <= 0)
             return false;
 
-        var prefix = line[..callIndex].TrimEnd();
+        var prefix = line.AsSpan(0, callIndex).TrimEnd();
         return prefix.EndsWith("fn", StringComparison.Ordinal);
     }
 

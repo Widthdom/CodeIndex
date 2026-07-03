@@ -1402,8 +1402,8 @@ public partial class DbReader : IDisposable
 
     private static IReadOnlyDictionary<string, string> BuildQueryLanguageAliases()
     {
-        var aliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var languageExtensions = FileIndexer.GetLanguageExtensions();
+        var aliases = new Dictionary<string, string>(languageExtensions.Count * 2 + 32, StringComparer.OrdinalIgnoreCase);
 
         foreach (var (pattern, lang) in languageExtensions)
             AddQueryLanguageAlias(aliases, pattern, lang);

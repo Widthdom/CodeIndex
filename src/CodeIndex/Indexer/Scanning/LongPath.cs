@@ -19,12 +19,13 @@ internal static class LongPath
     internal const int LongPathThreshold = 248;
     internal const string ExtendedLengthPrefix = @"\\?\";
     internal const string ExtendedUncPrefix = @"\\?\UNC\";
+    private static readonly bool IsWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
 
     public static string EnsureWindowsPrefix(string path)
-        => EnsureWindowsPrefixCore(path, RuntimeInformation.IsOSPlatform(OSPlatform.Windows));
+        => EnsureWindowsPrefixCore(path, IsWindows);
 
     public static string RemoveWindowsPrefix(string path)
-        => RemoveWindowsPrefixCore(path, RuntimeInformation.IsOSPlatform(OSPlatform.Windows));
+        => RemoveWindowsPrefixCore(path, IsWindows);
 
     // Internal overloads take an explicit isWindows flag so unit tests can exercise
     // the Windows prefix logic on POSIX CI without depending on RuntimeInformation.

@@ -8,6 +8,9 @@ public partial class FileIndexer
     // byte cap. NUL bytes or a line that reaches the cap without LF/CR are treated as
     // unsupported so binary executables and minified data are not parsed as scripts.
     private const int ShebangProbeByteLimit = 256;
+    private static readonly UTF8Encoding StrictShebangUtf8Encoding = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+    private static readonly UnicodeEncoding StrictShebangUtf16LittleEndianEncoding = new(bigEndian: false, byteOrderMark: false, throwOnInvalidBytes: true);
+    private static readonly UnicodeEncoding StrictShebangUtf16BigEndianEncoding = new(bigEndian: true, byteOrderMark: false, throwOnInvalidBytes: true);
 
     /// <summary>
     /// Try to infer a language from an extensionless script shebang.
@@ -207,11 +210,9 @@ public partial class FileIndexer
 
     private static string DecodeShebangLine(ReadOnlySpan<byte> bytes, ShebangEncoding encoding) => encoding switch
     {
-        ShebangEncoding.Utf16LittleEndian => new UnicodeEncoding(bigEndian: false, byteOrderMark: false, throwOnInvalidBytes: true)
-            .GetString(bytes),
-        ShebangEncoding.Utf16BigEndian => new UnicodeEncoding(bigEndian: true, byteOrderMark: false, throwOnInvalidBytes: true)
-            .GetString(bytes),
-        _ => new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(bytes),
+        ShebangEncoding.Utf16LittleEndian => StrictShebangUtf16LittleEndianEncoding.GetString(bytes),
+        ShebangEncoding.Utf16BigEndian => StrictShebangUtf16BigEndianEncoding.GetString(bytes),
+        _ => StrictShebangUtf8Encoding.GetString(bytes),
     };
 
     private static IReadOnlyList<string> TokenizeShebangCommandLine(string commandLine)

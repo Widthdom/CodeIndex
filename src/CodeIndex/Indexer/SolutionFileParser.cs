@@ -18,12 +18,6 @@ internal static class SolutionFileParser
         @"^\s*Project\(""(?<typeGuid>[^""]+)""\)\s*=\s*""(?<name>[^""]+)""\s*,\s*""(?<path>[^""]+)""\s*,\s*""(?<projectGuid>[^""]+)""",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    private static readonly HashSet<string> SolutionFolderTypeGuids = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "2150E333-8FDC-42A3-9474-1A3956D46DE8",
-        "66A26720-8FB5-11D2-AA7E-00C04F688DDE",
-    };
-
     internal static List<SolutionProjectEntry> ExtractProjects(string[] lines)
     {
         var entries = new List<SolutionProjectEntry>();
@@ -34,21 +28,21 @@ internal static class SolutionFileParser
             if (!match.Success)
                 continue;
 
-            var typeGuid = NormalizeGuid(match.Groups["typeGuid"].Value);
-            if (SolutionFolderTypeGuids.Contains(typeGuid))
+            if (IsSolutionFolderTypeGuid(match.Groups["typeGuid"].ValueSpan))
                 continue;
 
-            var name = match.Groups["name"].Value.Trim();
-            var projectPath = match.Groups["path"].Value.Trim();
-            if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(projectPath))
+            var nameSpan = match.Groups["name"].ValueSpan.Trim();
+            var projectPathSpan = match.Groups["path"].ValueSpan.Trim();
+            if (nameSpan.IsEmpty || projectPathSpan.IsEmpty)
                 continue;
 
+            var projectPath = projectPathSpan.ToString();
             var normalizedPath = NormalizeProjectPath(projectPath);
             if (!IsProjectPath(normalizedPath))
                 continue;
 
             entries.Add(new SolutionProjectEntry(
-                name,
+                nameSpan.ToString(),
                 projectPath,
                 normalizedPath,
                 i + 1,
@@ -61,10 +55,19 @@ internal static class SolutionFileParser
     }
 
     private static string NormalizeProjectPath(string projectPath)
-        => projectPath.Replace('\\', '/').Trim();
+        => projectPath.IndexOf('\\') >= 0 ? projectPath.Replace('\\', '/') : projectPath;
 
-    private static string NormalizeGuid(string guid)
-        => guid.Trim().Trim('{', '}');
+    private static bool IsSolutionFolderTypeGuid(ReadOnlySpan<char> guid)
+    {
+        guid = guid.Trim();
+        while (!guid.IsEmpty && guid[0] == '{')
+            guid = guid[1..];
+        while (!guid.IsEmpty && guid[^1] == '}')
+            guid = guid[..^1];
+
+        return guid.Equals("2150E333-8FDC-42A3-9474-1A3956D46DE8", StringComparison.OrdinalIgnoreCase)
+            || guid.Equals("66A26720-8FB5-11D2-AA7E-00C04F688DDE", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static bool IsProjectPath(string projectPath)
     {

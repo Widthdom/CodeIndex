@@ -38,8 +38,11 @@ public static partial class SymbolExtractor
         string[] lines,
         JavaScriptScopePrivacyFlags[][] privateScopeColumns)
     {
-        var targets = new List<JavaScriptClassScanTarget>();
-        var targetIdentities = new HashSet<(int StartIndex, int ScanStartIndex, int ScanEndExclusive, string ContainerName)>();
+        if (!LinesContain(lines, "{", StringComparison.Ordinal))
+            return [];
+
+        List<JavaScriptClassScanTarget>? targets = null;
+        HashSet<(int StartIndex, int ScanStartIndex, int ScanEndExclusive, string ContainerName)>? targetIdentities = null;
         var lexState = new JavaScriptLexState();
         for (int i = 0; i < lines.Length; i++)
         {
@@ -124,9 +127,12 @@ public static partial class SymbolExtractor
                 isExported: isExported);
 
             var targetIdentity = (candidate.StartIndex, candidate.ScanStartIndex, candidate.ScanEndExclusive, candidate.ContainerName);
-            if (targetIdentities.Add(targetIdentity))
-                targets.Add(candidate);
+            if ((targetIdentities ??= []).Add(targetIdentity))
+                (targets ??= []).Add(candidate);
         }
+
+        if (targets is null)
+            return [];
 
         SortJavaScriptTypeScriptClassScanTargets(targets);
         return targets;
@@ -140,6 +146,9 @@ public static partial class SymbolExtractor
         JavaScriptScopePrivacyFlags[][] privateScopeColumns,
         List<JavaScriptClassScanTarget> objectLiteralTargets)
     {
+        if (!LinesContain(lines, "export", StringComparison.Ordinal))
+            return;
+
         var sanitizedLines = BuildJavaScriptTypeScriptSanitizedLines(lines);
         ExtractJavaScriptTypeScriptReExportSymbols(fileId, lang, lines, sanitizedLines, symbols);
         ExtractJavaScriptTypeScriptLocalNamedExportSymbols(fileId, lines, sanitizedLines, symbols);
@@ -368,12 +377,15 @@ public static partial class SymbolExtractor
         if (requireIndex <= 0 || requireIndex > sanitizedLine.Length)
             return false;
 
-        var prefix = sanitizedLine[..requireIndex].TrimEnd();
-        if (prefix.Length == 0 || prefix[^1] != '=')
+        var prefixEnd = FindJavaScriptTypeScriptTrimmedEndExclusive(sanitizedLine, requireIndex);
+        if (prefixEnd == 0 || sanitizedLine[prefixEnd - 1] != '=')
             return false;
 
-        var beforeEquals = prefix[..^1].TrimStart();
-        return IsJavaScriptTypeScriptKeywordAt(beforeEquals, 0, "import");
+        var importStart = 0;
+        while (importStart < prefixEnd - 1 && char.IsWhiteSpace(sanitizedLine[importStart]))
+            importStart++;
+
+        return IsJavaScriptTypeScriptKeywordAt(sanitizedLine, importStart, "import");
     }
 
     private static bool TryReadJavaScriptTypeScriptRequireResolveModule(
@@ -1854,10 +1866,13 @@ public static partial class SymbolExtractor
         List<SymbolRecord> symbols,
         JavaScriptScopePrivacyFlags[][] privateScopeColumns)
     {
+        if (!LinesContain(lines, "=", StringComparison.Ordinal))
+            return;
+
         var sanitizedLines = BuildJavaScriptTypeScriptSanitizedLines(lines);
-        var syntheticClassTargets = new List<JavaScriptClassScanTarget>();
-        var symbolLineIdentities = BuildSymbolLineIdentities(symbols);
-        var targetIdentities = new HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)>();
+        List<JavaScriptClassScanTarget>? syntheticClassTargets = null;
+        HashSet<SymbolLineIdentity>? symbolLineIdentities = null;
+        HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)>? targetIdentities = null;
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -1948,9 +1963,9 @@ public static partial class SymbolExtractor
                         lang,
                         lines,
                         symbols,
-                        syntheticClassTargets,
-                        symbolLineIdentities,
-                        targetIdentities,
+                        syntheticClassTargets ??= [],
+                        symbolLineIdentities ??= BuildSymbolLineIdentities(symbols),
+                        targetIdentities ??= [],
                         i,
                         absoluteMatchIndex,
                         classTokenLineIndex,
@@ -2011,7 +2026,7 @@ public static partial class SymbolExtractor
             }
         }
 
-        if (syntheticClassTargets.Count > 0)
+        if (syntheticClassTargets is { Count: > 0 })
             ExtractJavaScriptTypeScriptBareMethodsInTargets(fileId, lang, lines, symbols, syntheticClassTargets);
     }
 
@@ -2534,7 +2549,7 @@ public static partial class SymbolExtractor
 
         startColumnText = startColumn + startLineSlice.IndexOf("export", StringComparison.Ordinal);
 
-        var specifierBuilder = new StringBuilder();
+        var specifierBuilder = new StringBuilder(EstimateJavaScriptTypeScriptStatementCapacity(sanitizedLines, startLineIndex));
         var sawOpenBrace = false;
         var braceDepth = 0;
         var scanEndExclusive = Math.Min(sanitizedLines.Length, startLineIndex + 16);
@@ -2837,10 +2852,10 @@ public static partial class SymbolExtractor
                 && braceDepth == 0
                 && variableNames.Count > 0
                 && !expectingName
-                && CanStopJavaScriptTypeScriptExportedVariableDeclarationAtLineEnd(line))
+                && CanStopJavaScriptTypeScriptExportedVariableDeclarationAtLineEnd(line, out var lastContentColumn))
             {
                 endLineIndex = lineIndex;
-                endColumn = Math.Max(0, line.TrimEnd().Length - 1);
+                endColumn = lastContentColumn;
                 break;
             }
 
@@ -2851,13 +2866,25 @@ public static partial class SymbolExtractor
         return variableNames.Count > 0;
     }
 
-    private static bool CanStopJavaScriptTypeScriptExportedVariableDeclarationAtLineEnd(string sanitizedLine)
+    private static bool CanStopJavaScriptTypeScriptExportedVariableDeclarationAtLineEnd(
+        string sanitizedLine,
+        out int lastContentColumn)
     {
-        var trimmed = sanitizedLine.TrimEnd();
-        if (trimmed.Length == 0)
+        var endExclusive = FindJavaScriptTypeScriptTrimmedEndExclusive(sanitizedLine, sanitizedLine.Length);
+        lastContentColumn = endExclusive - 1;
+        if (endExclusive == 0)
             return false;
 
-        return trimmed[^1] is not (',' or '=' or '(' or '[' or '{' or '.' or '?' or ':' or '+' or '-' or '*' or '%' or '&' or '|' or '^' or '!' or '<' or '>');
+        return sanitizedLine[lastContentColumn] is not (',' or '=' or '(' or '[' or '{' or '.' or '?' or ':' or '+' or '-' or '*' or '%' or '&' or '|' or '^' or '!' or '<' or '>');
+    }
+
+    private static int FindJavaScriptTypeScriptTrimmedEndExclusive(string text, int endExclusive)
+    {
+        endExclusive = Math.Clamp(endExclusive, 0, text.Length);
+        while (endExclusive > 0 && char.IsWhiteSpace(text[endExclusive - 1]))
+            endExclusive--;
+
+        return endExclusive;
     }
 
     private readonly record struct JavaScriptTypeScriptExportedVariableName(string Name, int LineIndex, int Column);
@@ -2954,8 +2981,9 @@ public static partial class SymbolExtractor
         pattern = string.Empty;
         signature = string.Empty;
 
-        var patternBuilder = new System.Text.StringBuilder();
-        var signatureBuilder = new System.Text.StringBuilder();
+        var builderCapacity = EstimateJavaScriptTypeScriptStatementCapacity(sanitizedLines, startLineIndex);
+        var patternBuilder = new System.Text.StringBuilder(builderCapacity);
+        var signatureBuilder = new System.Text.StringBuilder(builderCapacity);
         var braceDepth = 0;
 
         for (int lineIndex = startLineIndex; lineIndex < sanitizedLines.Length; lineIndex++)
@@ -2986,12 +3014,11 @@ public static partial class SymbolExtractor
                     if (braceDepth == 0)
                     {
                         var rawSliceEnd = Math.Min(rawLine.Length, column + 1);
-                        if (rawSliceEnd > signatureSliceStart)
-                        {
-                            if (signatureBuilder.Length > 0)
-                                signatureBuilder.Append(' ');
-                            signatureBuilder.Append(rawLine[signatureSliceStart..rawSliceEnd].Trim());
-                        }
+                        AppendTrimmedJavaScriptTypeScriptSignatureSlice(
+                            signatureBuilder,
+                            rawLine,
+                            signatureSliceStart,
+                            rawSliceEnd);
 
                         if (!HasJavaScriptTypeScriptDestructuredExportInitializer(
                                 sanitizedLines,
@@ -3005,7 +3032,7 @@ public static partial class SymbolExtractor
                         endLineIndex = lineIndex;
                         closeBraceColumn = column;
                         pattern = patternBuilder.ToString();
-                        signature = signatureBuilder.ToString().Trim();
+                        signature = signatureBuilder.ToString();
                         return true;
                     }
 
@@ -3023,16 +3050,37 @@ public static partial class SymbolExtractor
             if (braceDepth > 0)
                 patternBuilder.Append('\n');
 
-            var rawSlice = rawLine[signatureSliceStart..].Trim();
-            if (rawSlice.Length > 0)
-            {
-                if (signatureBuilder.Length > 0)
-                    signatureBuilder.Append(' ');
-                signatureBuilder.Append(rawSlice);
-            }
+            AppendTrimmedJavaScriptTypeScriptSignatureSlice(
+                signatureBuilder,
+                rawLine,
+                signatureSliceStart,
+                rawLine.Length);
         }
 
         return false;
+    }
+
+    private static void AppendTrimmedJavaScriptTypeScriptSignatureSlice(
+        StringBuilder builder,
+        string line,
+        int start,
+        int endExclusive)
+    {
+        start = Math.Clamp(start, 0, line.Length);
+        endExclusive = Math.Clamp(endExclusive, start, line.Length);
+
+        while (start < endExclusive && char.IsWhiteSpace(line[start]))
+            start++;
+
+        while (endExclusive > start && char.IsWhiteSpace(line[endExclusive - 1]))
+            endExclusive--;
+
+        if (endExclusive <= start)
+            return;
+
+        if (builder.Length > 0)
+            builder.Append(' ');
+        builder.Append(line, start, endExclusive - start);
     }
 
     private static bool HasJavaScriptTypeScriptDestructuredExportInitializer(
@@ -5350,9 +5398,15 @@ public static partial class SymbolExtractor
         return index;
     }
 
+    private static string TrimJavaScriptTypeScriptStart(string text, int startIndex = 0)
+    {
+        var trimmed = text.AsSpan(startIndex).TrimStart();
+        return startIndex == 0 && trimmed.Length == text.Length ? text : trimmed.ToString();
+    }
+
     private static bool StartsJavaScriptTypeScriptArrowFunctionAssignmentValue(string rhs)
     {
-        rhs = rhs.TrimStart();
+        rhs = TrimJavaScriptTypeScriptStart(rhs);
         while (rhs.Length > 0)
         {
             if (StartsJavaScriptTypeScriptGenericArrowAssignmentValue(rhs)
@@ -5364,7 +5418,7 @@ public static partial class SymbolExtractor
             if (rhs[0] != '(')
                 return false;
 
-            rhs = rhs[1..].TrimStart();
+            rhs = TrimJavaScriptTypeScriptStart(rhs, 1);
         }
 
         return false;
@@ -5372,7 +5426,7 @@ public static partial class SymbolExtractor
 
     private static bool StartsJavaScriptTypeScriptLambdaAssignmentValue(string rhs)
     {
-        rhs = rhs.TrimStart();
+        rhs = TrimJavaScriptTypeScriptStart(rhs);
         while (rhs.Length > 0)
         {
             if (StartsJavaScriptTypeScriptArrowFunctionAssignmentValue(rhs)
@@ -5384,7 +5438,7 @@ public static partial class SymbolExtractor
             if (rhs[0] != '(')
                 return false;
 
-            rhs = rhs[1..].TrimStart();
+            rhs = TrimJavaScriptTypeScriptStart(rhs, 1);
         }
 
         return false;
@@ -5392,7 +5446,7 @@ public static partial class SymbolExtractor
 
     private static bool StartsJavaScriptTypeScriptClassAssignmentValue(string rhs)
     {
-        rhs = rhs.TrimStart();
+        rhs = TrimJavaScriptTypeScriptStart(rhs);
         while (rhs.Length > 0)
         {
             if (IsJavaScriptTypeScriptKeywordAt(rhs, 0, "class"))
@@ -5401,7 +5455,7 @@ public static partial class SymbolExtractor
             if (rhs[0] != '(')
                 return false;
 
-            rhs = rhs[1..].TrimStart();
+            rhs = TrimJavaScriptTypeScriptStart(rhs, 1);
         }
 
         return false;
@@ -5409,16 +5463,16 @@ public static partial class SymbolExtractor
 
     private static bool StartsJavaScriptTypeScriptAnonymousFunctionAssignmentValue(string rhs)
     {
-        rhs = rhs.TrimStart();
+        rhs = TrimJavaScriptTypeScriptStart(rhs);
         if (IsJavaScriptTypeScriptKeywordAt(rhs, 0, "async"))
-            rhs = rhs["async".Length..].TrimStart();
+            rhs = TrimJavaScriptTypeScriptStart(rhs, "async".Length);
 
         if (!IsJavaScriptTypeScriptKeywordAt(rhs, 0, "function"))
             return false;
 
-        rhs = rhs["function".Length..].TrimStart();
+        rhs = TrimJavaScriptTypeScriptStart(rhs, "function".Length);
         if (rhs.StartsWith('*'))
-            rhs = rhs[1..].TrimStart();
+            rhs = TrimJavaScriptTypeScriptStart(rhs, 1);
 
         return rhs.StartsWith('(');
     }
@@ -5428,15 +5482,15 @@ public static partial class SymbolExtractor
         if (!IsJavaScriptTypeScriptKeywordAt(rhs, 0, "async"))
             return false;
 
-        var asyncRemainder = rhs["async".Length..].TrimStart();
+        var asyncRemainder = TrimJavaScriptTypeScriptStart(rhs, "async".Length);
         return IsJavaScriptTypeScriptKeywordAt(asyncRemainder, 0, "function");
     }
 
     private static bool StartsJavaScriptTypeScriptPotentialGenericArrowAssignmentValue(string rhs)
     {
-        rhs = rhs.TrimStart();
+        rhs = TrimJavaScriptTypeScriptStart(rhs);
         if (IsJavaScriptTypeScriptKeywordAt(rhs, 0, "async"))
-            rhs = rhs["async".Length..].TrimStart();
+            rhs = TrimJavaScriptTypeScriptStart(rhs, "async".Length);
 
         return rhs.Length > 0 && rhs[0] == '<';
     }
@@ -5552,9 +5606,9 @@ public static partial class SymbolExtractor
 
     private static bool StartsJavaScriptTypeScriptGenericArrowAssignmentValue(string rhs)
     {
-        rhs = rhs.TrimStart();
+        rhs = TrimJavaScriptTypeScriptStart(rhs);
         if (IsJavaScriptTypeScriptKeywordAt(rhs, 0, "async"))
-            rhs = rhs["async".Length..].TrimStart();
+            rhs = TrimJavaScriptTypeScriptStart(rhs, "async".Length);
 
         if (rhs.Length == 0 || rhs[0] != '<')
             return false;
@@ -5563,7 +5617,7 @@ public static partial class SymbolExtractor
         if (genericEnd < 0)
             return false;
 
-        var remainder = rhs[(genericEnd + 1)..].TrimStart();
+        var remainder = TrimJavaScriptTypeScriptStart(rhs, genericEnd + 1);
         if (remainder.Length == 0)
             return false;
 
@@ -5573,7 +5627,7 @@ public static partial class SymbolExtractor
             if (parameterListEnd < 0)
                 return false;
 
-            remainder = remainder[(parameterListEnd + 1)..].TrimStart();
+            remainder = TrimJavaScriptTypeScriptStart(remainder, parameterListEnd + 1);
         }
         else
         {
@@ -5581,7 +5635,7 @@ public static partial class SymbolExtractor
             if (parameterNameLength <= 0)
                 return false;
 
-            remainder = remainder[parameterNameLength..].TrimStart();
+            remainder = TrimJavaScriptTypeScriptStart(remainder, parameterNameLength);
         }
 
         return remainder.StartsWith("=>", StringComparison.Ordinal);
@@ -6222,7 +6276,7 @@ public static partial class SymbolExtractor
                 continue;
 
             if (specifier.StartsWith("type ", StringComparison.Ordinal))
-                specifier = specifier["type ".Length..].TrimStart();
+                specifier = TrimJavaScriptTypeScriptStart(specifier, "type ".Length);
 
             var asIndex = specifier.LastIndexOf(" as ", StringComparison.Ordinal);
             var exportedName = asIndex >= 0
@@ -6490,12 +6544,32 @@ public static partial class SymbolExtractor
 
     private static List<JavaScriptClassScanTarget> GetJavaScriptTypeScriptExistingClassScanTargets(string lang, string[] lines, List<SymbolRecord> symbols)
     {
-        var classSymbols = new List<(SymbolRecord Symbol, int OriginalIndex)>();
+        List<(SymbolRecord Symbol, int OriginalIndex)>? classSymbols = null;
         for (var index = 0; index < symbols.Count; index++)
         {
             var symbol = symbols[index];
             if (symbol.Kind is "class" or "interface" && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
-                classSymbols.Add((symbol, index));
+                (classSymbols ??= []).Add((symbol, index));
+        }
+
+        if (classSymbols is not { Count: > 0 })
+            return [];
+
+        if (classSymbols.Count == 1)
+        {
+            var symbol = classSymbols[0].Symbol;
+            return
+            [
+                CreateJavaScriptClassScanTarget(
+                    lines,
+                    lang,
+                    symbol.StartLine - 1,
+                    FindJavaScriptTypeScriptSymbolStartColumn(lines[symbol.StartLine - 1], symbol.Signature),
+                    symbol.BodyStartLine,
+                    symbol.BodyEndLine,
+                    symbol.Kind,
+                    symbol.Name),
+            ];
         }
 
         classSymbols.Sort(CompareJavaScriptTypeScriptClassSymbolEntries);
@@ -6520,9 +6594,12 @@ public static partial class SymbolExtractor
 
     private static List<JavaScriptClassScanTarget> CollectJavaScriptTypeScriptSyntheticClassScanTargets(long fileId, string lang, string[] lines, List<SymbolRecord> symbols, JavaScriptScopePrivacyFlags[][] privateScopeColumns)
     {
-        var targets = new List<JavaScriptClassScanTarget>();
-        var symbolLineIdentities = BuildSymbolLineIdentities(symbols);
-        var targetIdentities = new HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)>();
+        if (!LinesContain(lines, "class", StringComparison.Ordinal))
+            return [];
+
+        List<JavaScriptClassScanTarget>? targets = null;
+        HashSet<SymbolLineIdentity>? symbolLineIdentities = null;
+        HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)>? targetIdentities = null;
         var lexState = new JavaScriptLexState();
         for (int i = 0; i < lines.Length; i++)
         {
@@ -6532,10 +6609,13 @@ public static partial class SymbolExtractor
             var lineOffset = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, 0);
             while (lineOffset >= 0 && lineOffset < sanitizedLine.Length)
             {
-                TryAddJavaScriptTypeScriptSyntheticClassTarget(fileId, lang, lines, symbols, targets, symbolLineIdentities, targetIdentities, i, lineOffset, sanitizedLine, privateScopeColumns);
+                TryAddJavaScriptTypeScriptSyntheticClassTarget(fileId, lang, lines, symbols, ref targets, ref symbolLineIdentities, ref targetIdentities, i, lineOffset, sanitizedLine, privateScopeColumns);
                 lineOffset = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, lineOffset + 1);
             }
         }
+
+        if (targets is null)
+            return [];
 
         SortJavaScriptTypeScriptClassScanTargets(targets);
         return targets;
@@ -6828,6 +6908,12 @@ public static partial class SymbolExtractor
 
     private static JavaScriptScopePrivacyFlags[][] BuildJavaScriptTypeScriptPrivateScopeColumns(string[] lines, string lang)
     {
+        if (!LinesContain(lines, "{", StringComparison.Ordinal)
+            && !LinesContain(lines, "=>", StringComparison.Ordinal))
+        {
+            return BuildEmptyJavaScriptTypeScriptPrivateScopeColumns(lines.Length);
+        }
+
         var privateColumns = new JavaScriptScopePrivacyFlags[lines.Length][];
         var lexState = new JavaScriptLexState();
         var scopeStack = new Stack<JavaScriptScopeKind>();
@@ -7353,6 +7439,16 @@ public static partial class SymbolExtractor
         return privateColumns;
     }
 
+    private static JavaScriptScopePrivacyFlags[][] BuildEmptyJavaScriptTypeScriptPrivateScopeColumns(int lineCount)
+    {
+        var privateColumns = new JavaScriptScopePrivacyFlags[lineCount][];
+        var emptyLine = Array.Empty<JavaScriptScopePrivacyFlags>();
+        for (var i = 0; i < privateColumns.Length; i++)
+            privateColumns[i] = emptyLine;
+
+        return privateColumns;
+    }
+
     private static bool CanStartJavaScriptTypeScriptObjectLiteral(
         JavaScriptPrevTokenKind previousTokenKind,
         string? previousIdentifier,
@@ -7678,9 +7774,9 @@ public static partial class SymbolExtractor
         string lang,
         string[] lines,
         List<SymbolRecord> symbols,
-        List<JavaScriptClassScanTarget> targets,
-        HashSet<SymbolLineIdentity> symbolLineIdentities,
-        HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)> targetIdentities,
+        ref List<JavaScriptClassScanTarget>? targets,
+        ref HashSet<SymbolLineIdentity>? symbolLineIdentities,
+        ref HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)>? targetIdentities,
         int startIndex,
         int startColumn,
         string sanitizedLine,
@@ -7708,6 +7804,9 @@ public static partial class SymbolExtractor
                 return;
             }
 
+            targets ??= [];
+            symbolLineIdentities ??= BuildSymbolLineIdentities(symbols);
+            targetIdentities ??= new HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)>();
             AddJavaScriptTypeScriptSyntheticClassTarget(
                 fileId,
                 lang,
@@ -7751,6 +7850,9 @@ public static partial class SymbolExtractor
                 if (IsJavaScriptTypeScriptMatchInNamespaceScope(privateScopeColumns, startIndex, startColumn + exportEqualsMatch.Index, sanitizedLine))
                     return;
 
+                targets ??= [];
+                symbolLineIdentities ??= BuildSymbolLineIdentities(symbols);
+                targetIdentities ??= new HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)>();
                 AddJavaScriptTypeScriptSyntheticClassTarget(
                     fileId,
                     lang,
@@ -7804,6 +7906,9 @@ public static partial class SymbolExtractor
             ?? TryGetGroup(classExpressionBindingMatch, "moduleExportsAlias")
             ?? (classExpressionBindingMatch.Groups["moduleExports"].Success ? "default" : null)
             ?? "class";
+        targets ??= [];
+        symbolLineIdentities ??= BuildSymbolLineIdentities(symbols);
+        targetIdentities ??= new HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)>();
         AddJavaScriptTypeScriptSyntheticClassTarget(
             fileId,
             lang,
@@ -9160,7 +9265,9 @@ public static partial class SymbolExtractor
                 && parenDepth == 0
                 && bracketDepth == 0
                 && angleDepth == 0
-                && scanLine.TrimEnd().EndsWith(';'))
+                && FindJavaScriptTypeScriptTrimmedEndExclusive(scanLine, scanLine.Length) is var trimmedEnd
+                && trimmedEnd > 0
+                && scanLine[trimmedEnd - 1] == ';')
                 return (startIndex + 1, null, null);
         }
 

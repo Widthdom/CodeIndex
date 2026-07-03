@@ -5,10 +5,11 @@ namespace CodeIndex.Indexer;
 
 internal static class CSharpStaticInterfacePrepass
 {
-    private static readonly byte[] CSharpInterfaceKeywordBytes = "interface"u8.ToArray();
-    private static readonly byte[] CSharpStaticKeywordBytes = "static"u8.ToArray();
-    private static readonly byte[] CSharpAbstractKeywordBytes = "abstract"u8.ToArray();
-    private static readonly byte[] CSharpVirtualKeywordBytes = "virtual"u8.ToArray();
+    private static readonly bool IsWindowsPlatform = OperatingSystem.IsWindows();
+    private static ReadOnlySpan<byte> CSharpInterfaceKeywordBytes => "interface"u8;
+    private static ReadOnlySpan<byte> CSharpStaticKeywordBytes => "static"u8;
+    private static ReadOnlySpan<byte> CSharpAbstractKeywordBytes => "abstract"u8;
+    private static ReadOnlySpan<byte> CSharpVirtualKeywordBytes => "virtual"u8;
 
     internal static CSharpStaticInterfaceWorkspaceSymbols BuildWorkspaceSymbols(
         DbWriter writer,
@@ -50,6 +51,7 @@ internal static class CSharpStaticInterfacePrepass
 
                 reportCurrentFile?.Invoke(relativePath);
                 var generatedExtractionSuppressed = isGeneratedCodeExtractionSuppressed?.Invoke(target)
+                    ?? target.GeneratedExtractionSuppressed
                     ?? indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath);
                 if (generatedExtractionSuppressed)
                     continue;
@@ -620,19 +622,20 @@ internal static class CSharpStaticInterfacePrepass
         string RelativePath,
         string DisplayRelativePath,
         string IndexPath,
-        string? Language)
+        string? Language,
+        bool? GeneratedExtractionSuppressed = null)
     {
         public static FileTarget CreateFromPath(string projectRoot, string path)
         {
             var filePath = Path.IsPathRooted(path)
                 ? path
-                : Path.Combine(projectRoot, path.Replace('/', Path.DirectorySeparatorChar));
+                : Path.Combine(projectRoot, FileIndexer.NormalizeRelativePathForCurrentPlatform(path));
             return Create(projectRoot, filePath);
         }
 
         public static FileTarget Create(string projectRoot, string filePath, string? language = null)
         {
-            var relativePath = Path.GetRelativePath(projectRoot, filePath);
+            var relativePath = FileIndexer.GetRelativePathFromProjectRoot(projectRoot, filePath);
             return new FileTarget(
                 filePath,
                 relativePath,
@@ -647,7 +650,7 @@ internal static class CSharpStaticInterfacePrepass
         if (Path.IsPathRooted(relativePath))
             return true;
 
-        var normalized = OperatingSystem.IsWindows()
+        var normalized = IsWindowsPlatform
             ? relativePath.Replace('\\', '/')
             : relativePath;
         return normalized == ".." || normalized.StartsWith("../", StringComparison.Ordinal);

@@ -23,6 +23,9 @@ internal static class PowerShellReferenceExtractor
     private static readonly Regex HashtableKeyRegex = new(
         @"(?<![$@])(?:'(?<quoted>[A-Za-z_][A-Za-z0-9_]*)'|""(?<quoted>[A-Za-z_][A-Za-z0-9_]*)""|(?<bare>[A-Za-z_][A-Za-z0-9_]*))\s*=",
         RegexOptions.Compiled | RegexOptions.Multiline);
+    private static readonly IReadOnlyDictionary<string, List<SplatAssignment>> EmptySplatAssignments =
+        new Dictionary<string, List<SplatAssignment>>(StringComparer.OrdinalIgnoreCase);
+    private static readonly IReadOnlyList<string> EmptyHashtableKeys = Array.Empty<string>();
 
     public static void EmitCallReferences(string preparedLine, Action<string, int> addCallLikeReference)
     {
@@ -41,9 +44,9 @@ internal static class PowerShellReferenceExtractor
         }
     }
 
-    public static Dictionary<string, List<SplatAssignment>> BuildSplatAssignments(string[] preparedLines)
+    public static IReadOnlyDictionary<string, List<SplatAssignment>> BuildSplatAssignments(string[] preparedLines)
     {
-        var assignments = new Dictionary<string, List<SplatAssignment>>(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, List<SplatAssignment>>? assignments = null;
         for (var index = 0; index < preparedLines.Length; index++)
         {
             var line = preparedLines[index];
@@ -57,7 +60,7 @@ internal static class PowerShellReferenceExtractor
             foreach (Match match in SplatAssignmentStartRegex.Matches(line))
             {
                 var start = match.Index + match.Length;
-                var builder = new System.Text.StringBuilder();
+                var builder = new System.Text.StringBuilder(Math.Max(0, line.Length - start));
                 var endLine = index;
                 var depth = 1;
                 var firstFragment = true;
@@ -95,6 +98,7 @@ internal static class PowerShellReferenceExtractor
                     continue;
 
                 var name = match.Groups["name"].Value;
+                assignments ??= new Dictionary<string, List<SplatAssignment>>(StringComparer.OrdinalIgnoreCase);
                 if (!assignments.TryGetValue(name, out var namedAssignments))
                 {
                     namedAssignments = [];
@@ -105,12 +109,12 @@ internal static class PowerShellReferenceExtractor
             }
         }
 
-        return assignments;
+        return assignments ?? EmptySplatAssignments;
     }
 
     public static void EmitSplatParameterReferences(
         string preparedLine,
-        Dictionary<string, List<SplatAssignment>> splatAssignments,
+        IReadOnlyDictionary<string, List<SplatAssignment>> splatAssignments,
         int lineNumber,
         Action<string, int> addParameterReference)
     {
@@ -140,23 +144,40 @@ internal static class PowerShellReferenceExtractor
         }
     }
 
-    private static List<string> ExtractHashtableKeys(string text)
+    private static IReadOnlyList<string> ExtractHashtableKeys(string text)
     {
-        var keys = new List<string>();
         if (text.IndexOf('=') < 0)
-            return keys;
+            return EmptyHashtableKeys;
 
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        List<string>? keys = null;
         foreach (Match match in HashtableKeyRegex.Matches(text))
         {
             var key = match.Groups["quoted"].Success
                 ? match.Groups["quoted"].Value
                 : match.Groups["bare"].Value;
-            if (seen.Add(key))
+
+            if (keys == null)
+            {
+                keys = [key];
+            }
+            else if (!ContainsPowerShellHashtableKey(keys, key))
+            {
                 keys.Add(key);
+            }
         }
 
-        return keys;
+        return keys ?? EmptyHashtableKeys;
+    }
+
+    private static bool ContainsPowerShellHashtableKey(List<string> keys, string key)
+    {
+        foreach (var existing in keys)
+        {
+            if (string.Equals(existing, key, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
     }
 
     private static bool HasCallStartCandidate(string line)

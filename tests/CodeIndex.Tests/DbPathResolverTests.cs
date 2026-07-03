@@ -496,7 +496,6 @@ public class DbPathResolverTests
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_case_stamp");
         var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-        var previousProbe = PathCasing.IgnoreCaseProbeForTesting;
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
@@ -508,18 +507,28 @@ public class DbPathResolverTests
                 writer.SetMeta(DbContext.WorkspacePathCaseSensitiveMetaKey, "true");
             }
 
-            PathCasing.ResetCacheForTests();
-            PathCasing.IgnoreCaseProbeForTesting = _ => throw new IOException("path casing probe should not run");
+            lock (PathCasingTestLock.Gate)
+            {
+                var previousProbe = PathCasing.IgnoreCaseProbeForTesting;
+                try
+                {
+                    PathCasing.ResetCacheForTests();
+                    PathCasing.IgnoreCaseProbeForTesting = _ => throw new IOException("path casing probe should not run");
 
-            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
-            var resolved = DbPathResolver.ResolveProjectRootForQuery(readOnlyUri, dbPathExplicit: true);
+                    var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+                    var resolved = DbPathResolver.ResolveProjectRootForQuery(readOnlyUri, dbPathExplicit: true);
 
-            Assert.Equal(projectRoot, resolved);
+                    Assert.Equal(projectRoot, resolved);
+                }
+                finally
+                {
+                    PathCasing.IgnoreCaseProbeForTesting = previousProbe;
+                    PathCasing.ResetCacheForTests();
+                }
+            }
         }
         finally
         {
-            PathCasing.IgnoreCaseProbeForTesting = previousProbe;
-            PathCasing.ResetCacheForTests();
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }

@@ -8,8 +8,15 @@ namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
-    private static void ExtractRustUseSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    private static void ExtractRustUseSymbols(
+        long fileId,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        SymbolExtractionState extractionState)
     {
+        if (!LinesContain(lines, "use", StringComparison.Ordinal))
+            return;
+
         var symbolLineIdentities = BuildSymbolLineIdentities(symbols);
         for (var i = 0; i < lines.Length; i++)
         {
@@ -23,23 +30,36 @@ public static partial class SymbolExtractor
             if (useIndex < 0)
                 continue;
 
-            var body = statement[(useIndex + 4)..].Trim();
-            if (body.Length == 0)
+            var bodyOffset = useIndex + 4;
+            while (bodyOffset < statement.Length && char.IsWhiteSpace(statement[bodyOffset]))
+                bodyOffset++;
+
+            var bodySpan = statement.AsSpan(bodyOffset).TrimEnd();
+            if (bodySpan.IsEmpty)
                 continue;
 
-            var semicolonIndex = body.LastIndexOf(';');
+            var semicolonIndex = bodySpan.LastIndexOf(';');
             if (semicolonIndex < 0)
                 continue;
-            body = body[..semicolonIndex].Trim();
-            if (body.Length == 0)
+            bodySpan = bodySpan[..semicolonIndex].TrimEnd();
+            if (bodySpan.IsEmpty)
                 continue;
 
+            var body = bodySpan.ToString();
             var occurrences = new List<RustUseSymbolOccurrence>();
-            var bodyOffset = useIndex + 4;
-            var trimmedBodyOffset = statement[(useIndex + 4)..].IndexOf(body, StringComparison.Ordinal);
-            if (trimmedBodyOffset >= 0)
-                bodyOffset += trimmedBodyOffset;
             CollectRustUseSymbolOccurrences(body, bodyOffset, lineStarts, i + 1, occurrences);
+            if (occurrences.Count == 0)
+            {
+                i = endLineIndex;
+                continue;
+            }
+
+            if (occurrences.Count == 1)
+            {
+                AddRustUseSymbolOccurrence(fileId, lines, symbols, extractionState, symbolLineIdentities, statement, occurrences[0]);
+                i = endLineIndex;
+                continue;
+            }
 
             var seen = new HashSet<string>(StringComparer.Ordinal);
             foreach (var occurrence in occurrences)
@@ -47,36 +67,56 @@ public static partial class SymbolExtractor
                 if (!seen.Add($"{occurrence.Name}@{occurrence.Line}:{occurrence.Column}"))
                     continue;
 
-                var name = occurrence.Name;
-                if (HasSymbolLineIdentity(symbolLineIdentities, fileId, occurrence.Line, "import", name))
-                    continue;
-
-                var symbol = new SymbolRecord
-                {
-                    FileId = fileId,
-                    Kind = "import",
-                    Name = name,
-                    Line = occurrence.Line,
-                    StartLine = occurrence.Line,
-                    StartColumn = occurrence.Column,
-                    EndLine = occurrence.Line,
-                    Signature = statement.Trim(),
-                };
-                AddSymbolRecord(
-                    symbols,
-                    cssSeenSymbols: null,
-                    occurrence.Line,
-                    symbol,
-                    lines[occurrence.Line - 1]);
-                RecordSymbolLineIdentity(symbolLineIdentities, symbol);
+                AddRustUseSymbolOccurrence(fileId, lines, symbols, extractionState, symbolLineIdentities, statement, occurrence);
             }
 
             i = endLineIndex;
         }
     }
 
-    private static void ExtractRustMultilineImplSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    private static void AddRustUseSymbolOccurrence(
+        long fileId,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        SymbolExtractionState extractionState,
+        HashSet<SymbolLineIdentity> symbolLineIdentities,
+        string statement,
+        RustUseSymbolOccurrence occurrence)
     {
+        var name = occurrence.Name;
+        if (HasSymbolLineIdentity(symbolLineIdentities, fileId, occurrence.Line, "import", name))
+            return;
+
+        var symbol = new SymbolRecord
+        {
+            FileId = fileId,
+            Kind = "import",
+            Name = name,
+            Line = occurrence.Line,
+            StartLine = occurrence.Line,
+            StartColumn = occurrence.Column,
+            EndLine = occurrence.Line,
+            Signature = statement.Trim(),
+        };
+        AddSymbolRecord(
+            symbols,
+            extractionState,
+            cssSeenSymbols: null,
+            occurrence.Line,
+            symbol,
+            lines[occurrence.Line - 1]);
+        RecordSymbolLineIdentity(symbolLineIdentities, symbol);
+    }
+
+    private static void ExtractRustMultilineImplSymbols(
+        long fileId,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        SymbolExtractionState extractionState)
+    {
+        if (!LinesContain(lines, "impl", StringComparison.Ordinal))
+            return;
+
         var symbolLineIdentities = BuildSymbolLineIdentities(symbols);
         for (var i = 0; i < lines.Length; i++)
         {
@@ -95,7 +135,7 @@ public static partial class SymbolExtractor
             if (!match.Success)
                 continue;
 
-            var name = match.Groups["name"].Value.Trim();
+            var name = match.Groups["name"].ValueSpan.Trim().ToString();
             if (name.Length == 0)
                 continue;
 
@@ -116,6 +156,7 @@ public static partial class SymbolExtractor
             };
             AddSymbolRecord(
                 symbols,
+                extractionState,
                 cssSeenSymbols: null,
                 position.Line,
                 symbol,
@@ -181,8 +222,12 @@ public static partial class SymbolExtractor
         endIndex = startIndex;
 
         var firstLine = lines[startIndex];
-        if (!firstLine.TrimStart().StartsWith("impl", StringComparison.Ordinal) && !firstLine.TrimStart().StartsWith("unsafe impl", StringComparison.Ordinal))
+        var trimmedFirstLine = firstLine.AsSpan().TrimStart();
+        if (!trimmedFirstLine.StartsWith("impl", StringComparison.Ordinal)
+            && !trimmedFirstLine.StartsWith("unsafe impl", StringComparison.Ordinal))
+        {
             return false;
+        }
 
         var builder = new StringBuilder(firstLine.Length + 32);
         lineStarts.Add(0);

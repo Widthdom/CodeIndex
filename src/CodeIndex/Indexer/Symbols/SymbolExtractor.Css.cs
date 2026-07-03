@@ -56,9 +56,8 @@ public static partial class SymbolExtractor
 
             if (ch == '{')
             {
-                var maskedSegment = maskedLine[segmentStart..i].Trim();
-                var rawSegment = rawLine[segmentStart..i].Trim();
-                var isGroupingAtRule = maskedSegment.StartsWith('@');
+                var maskedSegment = maskedLine.AsSpan(segmentStart, i - segmentStart).Trim();
+                var isGroupingAtRule = !maskedSegment.IsEmpty && maskedSegment[0] == '@';
 
                 if (isGroupingAtRule)
                     groupingDepth++;
@@ -106,8 +105,8 @@ public static partial class SymbolExtractor
                 continue;
 
             var name = match.Groups["name"].Success
-                ? match.Groups["name"].Value.Trim()
-                : match.Value.Trim();
+                ? match.Groups["name"].ValueSpan.Trim().ToString()
+                : match.ValueSpan.Trim().ToString();
             if (string.IsNullOrWhiteSpace(name))
                 return;
 
@@ -167,12 +166,12 @@ public static partial class SymbolExtractor
         List<SymbolRecord> symbols,
         HashSet<string>? cssSeenSymbols)
     {
-        var trimmedMaskedSegment = maskedSegment.TrimStart();
+        var trimmedMaskedSegment = maskedSegment.AsSpan().TrimStart();
         if (!trimmedMaskedSegment.StartsWith("@layer", StringComparison.OrdinalIgnoreCase))
             return;
 
-        var trimmedRawSegment = rawSegment.Trim();
-        if (trimmedRawSegment.Length == 0)
+        var trimmedRawSegment = rawSegment.AsSpan().Trim();
+        if (trimmedRawSegment.IsEmpty)
             return;
 
         const string atLayerPrefix = "@layer";
@@ -181,10 +180,11 @@ public static partial class SymbolExtractor
 
         var rawNames = trimmedRawSegment[atLayerPrefix.Length..].Trim();
         var maskedNames = trimmedMaskedSegment[atLayerPrefix.Length..].Trim();
-        if (rawNames.Length == 0 || maskedNames.Length == 0)
+        if (rawNames.IsEmpty || maskedNames.IsEmpty)
             return;
 
-        foreach (var (rawName, maskedName) in EnumerateCssCommaSeparatedSegments(rawNames, maskedNames))
+        var trimmedRawText = trimmedRawSegment.Length == rawSegment.Length ? rawSegment : trimmedRawSegment.ToString();
+        foreach (var (rawName, maskedName) in EnumerateCssCommaSeparatedSegments(rawNames.ToString(), maskedNames.ToString()))
         {
             var name = rawName.Trim();
             if (name.Length == 0 || maskedName.Length == 0)
@@ -202,7 +202,7 @@ public static partial class SymbolExtractor
                     Line = lineIndex + 1,
                     StartLine = lineIndex + 1,
                     EndLine = lineIndex + 1,
-                    Signature = trimmedRawSegment,
+                    Signature = trimmedRawText,
                 });
         }
     }
@@ -242,17 +242,21 @@ public static partial class SymbolExtractor
 
             if (ch == ',' && parenDepth == 0 && bracketDepth == 0)
             {
-                yield return (rawText[segmentStart..index].Trim(), maskedText[segmentStart..index].Trim());
+                yield return (
+                    rawText.AsSpan(segmentStart, index - segmentStart).Trim().ToString(),
+                    maskedText.AsSpan(segmentStart, index - segmentStart).Trim().ToString());
                 segmentStart = index + 1;
             }
         }
 
-        yield return (rawText[segmentStart..].Trim(), maskedText[segmentStart..].Trim());
+        yield return (
+            rawText.AsSpan(segmentStart).Trim().ToString(),
+            maskedText.AsSpan(segmentStart).Trim().ToString());
     }
 
     private static int FindCssSameLineBraceEndColumn(string line, int startColumn)
     {
-        var maskedLine = MaskCssScannerLines([line])[0];
+        var maskedLine = MaskCssScannerLine(line);
         var depth = 0;
         var opened = false;
 
@@ -369,8 +373,8 @@ public static partial class SymbolExtractor
         if (!CssBlockContains(lines, startIndex, blockLineCount, "font-family", StringComparison.OrdinalIgnoreCase))
             return false;
 
-        var blockLines = lines.Skip(startIndex).Take(blockLineCount).ToArray();
-        var maskedBlockText = string.Join('\n', MaskCssScannerLines(blockLines));
+        var maskedBlockLines = MaskCssScannerLines(lines, startIndex, blockLineCount);
+        var maskedBlockText = JoinCssLineRange(maskedBlockLines, 0, maskedBlockLines.Length);
         var match = CssFontFaceDeclarationRegex.Match(maskedBlockText);
         if (!match.Success)
             return false;
@@ -395,7 +399,7 @@ public static partial class SymbolExtractor
         if (valueEnd == valueStart)
             return false;
 
-        var rawBlockText = string.Join('\n', blockLines);
+        var rawBlockText = JoinCssLineRange(lines, startIndex, blockLineCount);
         var rawName = valueEnd <= rawBlockText.Length
             ? rawBlockText[valueStart..valueEnd]
             : rawBlockText[valueStart..];
@@ -411,6 +415,32 @@ public static partial class SymbolExtractor
 
         fontFamily = rawName;
         return true;
+    }
+
+    private static string JoinCssLineRange(IReadOnlyList<string> lines, int startIndex, int lineCount)
+    {
+        var start = Math.Max(0, startIndex);
+        var end = Math.Min(lines.Count, start + Math.Max(0, lineCount));
+        var count = end - start;
+        if (count <= 0)
+            return string.Empty;
+
+        if (count == 1)
+            return lines[start];
+
+        var capacity = count - 1;
+        for (var index = start; index < end; index++)
+            capacity += lines[index].Length;
+
+        var builder = new StringBuilder(capacity);
+        builder.Append(lines[start]);
+        for (var index = start + 1; index < end; index++)
+        {
+            builder.Append('\n');
+            builder.Append(lines[index]);
+        }
+
+        return builder.ToString();
     }
 
     private static bool CssBlockContains(
@@ -433,6 +463,9 @@ public static partial class SymbolExtractor
     private static string RemoveCssBlockComments(string value)
     {
         if (value.Length == 0)
+            return value;
+
+        if (!value.Contains("/*", StringComparison.Ordinal))
             return value;
 
         var builder = new System.Text.StringBuilder(value.Length);

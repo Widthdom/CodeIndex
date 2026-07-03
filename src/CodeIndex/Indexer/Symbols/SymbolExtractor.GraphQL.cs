@@ -27,15 +27,13 @@ public static partial class SymbolExtractor
 
     private static void ExtractGraphQLMemberSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
     {
-        var hasInputBlocks = LinesContain(lines, "input", StringComparison.Ordinal);
-        var hasUnions = LinesContain(lines, "union", StringComparison.Ordinal);
-        if (!hasInputBlocks && !hasUnions)
+        if (!TryGetGraphQLMemberMarkers(lines, out var hasInputBlocks, out var hasUnions))
             return;
 
-        if (hasInputBlocks)
+        if (hasInputBlocks && LinesContain(lines, "{", StringComparison.Ordinal))
         {
             var content = string.Join('\n', lines);
-            var lineStarts = BuildLineStarts(content);
+            List<int>? lineStarts = null;
             foreach (Match inputMatch in GraphQLInputBlockRegex.Matches(content))
             {
                 var inputName = inputMatch.Groups["name"].Value;
@@ -47,7 +45,8 @@ public static partial class SymbolExtractor
                 {
                     var fieldGroup = fieldMatch.Groups["name"];
                     var absoluteIndex = body.Index + fieldGroup.Index;
-                    var lineNumber = GetLineNumberFromOffset(lineStarts, absoluteIndex);
+                    var currentLineStarts = lineStarts ??= BuildLineStartList(lines);
+                    var lineNumber = GetLineNumberFromOffset(currentLineStarts, absoluteIndex);
                     AddSymbolRecord(
                         symbols,
                         null,
@@ -59,7 +58,7 @@ public static partial class SymbolExtractor
                             Name = fieldGroup.Value,
                             Line = lineNumber,
                             StartLine = lineNumber,
-                            StartColumn = absoluteIndex - lineStarts[lineNumber - 1],
+                            StartColumn = absoluteIndex - currentLineStarts[lineNumber - 1],
                             EndLine = lineNumber,
                             Signature = lines[lineNumber - 1].Trim(),
                             ContainerKind = "class",
@@ -125,6 +124,26 @@ public static partial class SymbolExtractor
                 }
             }
         }
+    }
+
+    private static bool TryGetGraphQLMemberMarkers(
+        IReadOnlyList<string> lines,
+        out bool hasInputBlocks,
+        out bool hasUnions)
+    {
+        hasInputBlocks = false;
+        hasUnions = false;
+
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var line = lines[i];
+            hasInputBlocks |= line.IndexOf("input", StringComparison.Ordinal) >= 0;
+            hasUnions |= line.IndexOf("union", StringComparison.Ordinal) >= 0;
+            if (hasInputBlocks && hasUnions)
+                break;
+        }
+
+        return hasInputBlocks || hasUnions;
     }
 
     private static void AddGraphQLUnionVariantSymbols(

@@ -28,12 +28,16 @@ public static partial class ReferenceExtractor
                 return;
 
             var scopeStart = GetLineColumnFromOffset(bodyText, openParenIndex, startLineNumber);
-            var parameters = bodyText[(openParenIndex + 1)..leftIndex];
-            foreach (var segment in SplitTopLevelCSharpParameterSegments(parameters))
-            {
-                if (TryExtractTrailingCSharpParameterName(segment, out var parameterName))
-                    AddCSharpFunctionValueReceiverName(names, parameterName, scopeStart.Line, scopeStart.Column, scopeEnd.Line, scopeEnd.Column, seenNames);
-            }
+            var parameters = bodyText.AsSpan(openParenIndex + 1, leftIndex - openParenIndex - 1);
+            if (parameters.Trim().Length > 0)
+                AddTopLevelCSharpParameterNames(
+                    names,
+                    parameters,
+                    scopeStart.Line,
+                    scopeStart.Column,
+                    scopeEnd.Line,
+                    scopeEnd.Column,
+                    seenNames);
 
             return;
         }
@@ -1208,7 +1212,7 @@ public static partial class ReferenceExtractor
     private static CSharpCastTypeShape AnalyzeCSharpCastTypeShape(string text)
     {
         var segments = new List<string>();
-        var simpleQualifiedName = new System.Text.StringBuilder();
+        var simpleQualifiedName = new System.Text.StringBuilder(text.Length);
         var hasTypeOnlySyntax = false;
         var allIdentifiersTypeLike = true;
         var simpleQualifiedCandidate = true;
@@ -1749,7 +1753,25 @@ public static partial class ReferenceExtractor
         int endLineIndex,
         int endColumn)
     {
-        var builder = new System.Text.StringBuilder();
+        if (startLineIndex == endLineIndex)
+        {
+            var line = structuralLines[startLineIndex];
+            var segmentStart = Math.Max(0, startColumn);
+            var segmentEnd = Math.Min(endColumn, line.Length);
+            return segmentStart < segmentEnd ? line.Substring(segmentStart, segmentEnd - segmentStart) : string.Empty;
+        }
+
+        var capacity = endLineIndex - startLineIndex;
+        for (var lineIndex = startLineIndex; lineIndex <= endLineIndex; lineIndex++)
+        {
+            var line = structuralLines[lineIndex];
+            var segmentStart = lineIndex == startLineIndex ? Math.Max(0, startColumn) : 0;
+            var segmentEnd = lineIndex == endLineIndex ? Math.Min(endColumn, line.Length) : line.Length;
+            if (segmentStart < segmentEnd)
+                capacity += segmentEnd - segmentStart;
+        }
+
+        var builder = new System.Text.StringBuilder(capacity);
         for (var lineIndex = startLineIndex; lineIndex <= endLineIndex; lineIndex++)
         {
             var line = structuralLines[lineIndex];

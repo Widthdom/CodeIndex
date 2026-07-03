@@ -15,8 +15,20 @@ public static partial class ReferenceExtractor
     private sealed record CSharpCastTypeShape(IReadOnlyList<string> IdentifierSegments, string? SimpleQualifiedName, bool HasTypeOnlySyntax, bool AllIdentifiersTypeLike);
     internal sealed record CSharpContainingTypeValueReceiverNames(HashSet<string> InstanceNames, HashSet<string> StaticNames);
     internal sealed record CSharpFunctionValueReceiverNameRecord(string Name, int ScopeStartLine, int ScopeStartColumn, int ScopeEndLine, int ScopeEndColumn);
+    private static readonly IReadOnlySet<string> EmptyCSharpStringSet = new HashSet<string>(StringComparer.Ordinal);
+    private static readonly IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames> EmptyCSharpValueReceiverNamesByContainingType =
+        new Dictionary<string, CSharpContainingTypeValueReceiverNames>(StringComparer.Ordinal);
+    private static readonly IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> EmptyCSharpValueReceiverNamesByFunctionStartLine =
+        new Dictionary<int, List<CSharpFunctionValueReceiverNameRecord>>();
+    private static readonly IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> EmptyCSharpQualifiedEnumMemberLookup =
+        new Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
+    private static readonly IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> EmptyCSharpQualifiedPatternLookup =
+        new Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
 
-    private static List<CSharpUsingAliasRecord> BuildCSharpUsingAliases(
+    private static (
+        IReadOnlyList<CSharpUsingAliasRecord> Aliases,
+        IReadOnlyList<CSharpUsingNamespaceRecord> Namespaces,
+        IReadOnlyList<CSharpUsingStaticRecord> Statics) BuildCSharpUsingImports(
         string language,
         IReadOnlyList<SymbolRecord> symbols,
         IReadOnlySet<string> csharpKnownTypeNames,
@@ -24,9 +36,12 @@ public static partial class ReferenceExtractor
         IReadOnlyList<string>? lines = null,
         IReadOnlyList<string>? aliasScanLines = null)
     {
-        var aliases = new List<CSharpUsingAliasRecord>();
         if (language != "csharp")
-            return aliases;
+            return ([], [], []);
+
+        List<CSharpUsingAliasRecord>? aliases = null;
+        List<CSharpUsingNamespaceRecord>? namespaces = null;
+        List<CSharpUsingStaticRecord>? statics = null;
 
         foreach (var symbol in symbols)
         {
@@ -34,17 +49,30 @@ public static partial class ReferenceExtractor
                 continue;
 
             var signature = symbol.Signature!;
-            if (signature.IndexOf("using", StringComparison.Ordinal) < 0
-                || signature.IndexOf('=') < 0)
-            {
+            if (signature.IndexOf("using", StringComparison.Ordinal) < 0)
                 continue;
+
+            if (signature.IndexOf('=') >= 0)
+            {
+                var aliasMatch = CSharpUsingAliasRegex.Match(signature);
+                if (aliasMatch.Success)
+                    AddCSharpUsingAliasRecord(aliases ??= [], namespaceScopes, symbol.Line, aliasMatch, csharpKnownTypeNames);
             }
 
-            var match = CSharpUsingAliasRegex.Match(signature);
-            if (!match.Success)
-                continue;
+            if (signature.IndexOf('=') < 0
+                && signature.IndexOf("static", StringComparison.Ordinal) < 0)
+            {
+                var namespaceMatch = CSharpUsingNamespaceRegex.Match(signature);
+                if (namespaceMatch.Success)
+                    AddCSharpUsingNamespaceRecord(namespaces ??= [], namespaceScopes, symbol.Line, namespaceMatch);
+            }
 
-            AddCSharpUsingAliasRecord(aliases, namespaceScopes, symbol.Line, match, csharpKnownTypeNames);
+            if (signature.IndexOf("static", StringComparison.Ordinal) >= 0)
+            {
+                var staticMatch = CSharpUsingStaticRegex.Match(signature);
+                if (staticMatch.Success)
+                    AddCSharpUsingStaticRecord(statics ??= [], namespaceScopes, symbol.Line, staticMatch);
+            }
         }
 
         if (lines != null)
@@ -67,20 +95,22 @@ public static partial class ReferenceExtractor
 
                 var lineNumber = i + 1;
                 var aliasName = NormalizeCSharpIdentifier(match.Groups["alias"].Value);
-                if (HasCSharpUsingAliasRecord(aliases, lineNumber, aliasName))
+                if (aliases != null && HasCSharpUsingAliasRecord(aliases, lineNumber, aliasName))
                     continue;
 
-                AddCSharpUsingAliasRecord(aliases, namespaceScopes, lineNumber, match, csharpKnownTypeNames);
+                AddCSharpUsingAliasRecord(aliases ??= [], namespaceScopes, lineNumber, match, csharpKnownTypeNames);
             }
         }
 
-        aliases.Sort(static (left, right) => left.Line.CompareTo(right.Line));
-        return aliases;
+        aliases?.Sort(static (left, right) => left.Line.CompareTo(right.Line));
+        namespaces?.Sort(static (left, right) => left.Line.CompareTo(right.Line));
+        statics?.Sort(static (left, right) => left.Line.CompareTo(right.Line));
+        return (aliases ?? [], namespaces ?? [], statics ?? []);
     }
 
-    private static List<(int StartLine, int EndLine)> BuildCSharpNamespaceScopes(IReadOnlyList<SymbolRecord> symbols)
+    private static IReadOnlyList<(int StartLine, int EndLine)> BuildCSharpNamespaceScopes(IReadOnlyList<SymbolRecord> symbols)
     {
-        var scopes = new List<(int StartLine, int EndLine)>();
+        List<(int StartLine, int EndLine)>? scopes = null;
         foreach (var symbol in symbols)
         {
             if (symbol.Kind != "namespace")
@@ -89,10 +119,10 @@ public static partial class ReferenceExtractor
             var startLine = symbol.BodyStartLine ?? symbol.StartLine;
             var endLine = symbol.BodyEndLine ?? symbol.EndLine;
             if (startLine > 0 && endLine >= startLine)
-                scopes.Add((startLine, endLine));
+                (scopes ??= []).Add((startLine, endLine));
         }
 
-        return scopes;
+        return scopes ?? [];
     }
 
     private static bool HasCSharpUsingAliasRecord(
@@ -123,6 +153,50 @@ public static partial class ReferenceExtractor
         if (string.IsNullOrWhiteSpace(alias) || string.IsNullOrWhiteSpace(target))
             return;
 
+        var (scopeStartLine, scopeEndLine) = ResolveCSharpUsingScope(namespaceScopes, lineNumber);
+
+        aliases.Add(new CSharpUsingAliasRecord(
+            alias,
+            target,
+            lineNumber,
+            scopeStartLine,
+            scopeEndLine,
+            IsCSharpUsingAliasTypeTarget(target, csharpKnownTypeNames)));
+    }
+
+    private static void AddCSharpUsingNamespaceRecord(
+        List<CSharpUsingNamespaceRecord> imports,
+        IReadOnlyList<(int StartLine, int EndLine)> namespaceScopes,
+        int lineNumber,
+        Match match)
+    {
+        var target = TryNormalizeCSharpQualifiedName(match.Groups["target"].Value)
+            ?? NormalizeCSharpUsingAliasRawTarget(match.Groups["target"].Value);
+        if (string.IsNullOrWhiteSpace(target))
+            return;
+
+        var (scopeStartLine, scopeEndLine) = ResolveCSharpUsingScope(namespaceScopes, lineNumber);
+        imports.Add(new CSharpUsingNamespaceRecord(target, lineNumber, scopeStartLine, scopeEndLine));
+    }
+
+    private static void AddCSharpUsingStaticRecord(
+        List<CSharpUsingStaticRecord> imports,
+        IReadOnlyList<(int StartLine, int EndLine)> namespaceScopes,
+        int lineNumber,
+        Match match)
+    {
+        var target = TryNormalizeCSharpQualifiedName(match.Groups["target"].Value);
+        if (string.IsNullOrWhiteSpace(target))
+            return;
+
+        var (scopeStartLine, scopeEndLine) = ResolveCSharpUsingScope(namespaceScopes, lineNumber);
+        imports.Add(new CSharpUsingStaticRecord(target, lineNumber, scopeStartLine, scopeEndLine));
+    }
+
+    private static (int ScopeStartLine, int ScopeEndLine) ResolveCSharpUsingScope(
+        IReadOnlyList<(int StartLine, int EndLine)> namespaceScopes,
+        int lineNumber)
+    {
         var scopeStartLine = 1;
         var scopeEndLine = int.MaxValue;
         var scopeWidth = int.MaxValue;
@@ -140,13 +214,7 @@ public static partial class ReferenceExtractor
             scopeWidth = width;
         }
 
-        aliases.Add(new CSharpUsingAliasRecord(
-            alias,
-            target,
-            lineNumber,
-            scopeStartLine,
-            scopeEndLine,
-            IsCSharpUsingAliasTypeTarget(target, csharpKnownTypeNames)));
+        return (scopeStartLine, scopeEndLine);
     }
 
     private static string NormalizeCSharpUsingAliasRawTarget(string target)
@@ -158,119 +226,15 @@ public static partial class ReferenceExtractor
         return trimmed;
     }
 
-    private static List<CSharpUsingNamespaceRecord> BuildCSharpUsingNamespaces(
+    private static (IReadOnlySet<string> KnownTypeNames, IReadOnlySet<string> NonEnumTypeNames) BuildCSharpTypeNameSets(
         string language,
-        IReadOnlyList<SymbolRecord> symbols,
-        IReadOnlyList<(int StartLine, int EndLine)> namespaceScopes)
+        IReadOnlyList<SymbolRecord> symbols)
     {
-        var imports = new List<CSharpUsingNamespaceRecord>();
         if (language != "csharp")
-            return imports;
+            return (EmptyCSharpStringSet, EmptyCSharpStringSet);
 
-        foreach (var symbol in symbols)
-        {
-            if (symbol.Kind != "import" || string.IsNullOrWhiteSpace(symbol.Signature))
-                continue;
-
-            var signature = symbol.Signature!;
-            if (signature.IndexOf("using", StringComparison.Ordinal) < 0
-                || signature.IndexOf('=') >= 0
-                || signature.IndexOf("static", StringComparison.Ordinal) >= 0)
-            {
-                continue;
-            }
-
-            var match = CSharpUsingNamespaceRegex.Match(signature);
-            if (!match.Success)
-                continue;
-
-            var target = TryNormalizeCSharpQualifiedName(match.Groups["target"].Value)
-                ?? NormalizeCSharpUsingAliasRawTarget(match.Groups["target"].Value);
-            if (string.IsNullOrWhiteSpace(target))
-                continue;
-
-            var scopeStartLine = 1;
-            var scopeEndLine = int.MaxValue;
-            var scopeWidth = int.MaxValue;
-            foreach (var (startLine, endLine) in namespaceScopes)
-            {
-                if (symbol.Line < startLine || symbol.Line > endLine)
-                    continue;
-
-                var width = endLine - startLine;
-                if (width > scopeWidth)
-                    continue;
-
-                scopeStartLine = startLine;
-                scopeEndLine = endLine;
-                scopeWidth = width;
-            }
-
-            imports.Add(new CSharpUsingNamespaceRecord(target, symbol.Line, scopeStartLine, scopeEndLine));
-        }
-
-        imports.Sort(static (left, right) => left.Line.CompareTo(right.Line));
-        return imports;
-    }
-
-    private static List<CSharpUsingStaticRecord> BuildCSharpUsingStatics(
-        string language,
-        IReadOnlyList<SymbolRecord> symbols,
-        IReadOnlyList<(int StartLine, int EndLine)> namespaceScopes)
-    {
-        var imports = new List<CSharpUsingStaticRecord>();
-        if (language != "csharp")
-            return imports;
-
-        foreach (var symbol in symbols)
-        {
-            if (symbol.Kind != "import" || string.IsNullOrWhiteSpace(symbol.Signature))
-                continue;
-
-            var signature = symbol.Signature!;
-            if (signature.IndexOf("using", StringComparison.Ordinal) < 0
-                || signature.IndexOf("static", StringComparison.Ordinal) < 0)
-            {
-                continue;
-            }
-
-            var match = CSharpUsingStaticRegex.Match(signature);
-            if (!match.Success)
-                continue;
-
-            var target = TryNormalizeCSharpQualifiedName(match.Groups["target"].Value);
-            if (string.IsNullOrWhiteSpace(target))
-                continue;
-
-            var scopeStartLine = 1;
-            var scopeEndLine = int.MaxValue;
-            var scopeWidth = int.MaxValue;
-            foreach (var (startLine, endLine) in namespaceScopes)
-            {
-                if (symbol.Line < startLine || symbol.Line > endLine)
-                    continue;
-
-                var width = endLine - startLine;
-                if (width > scopeWidth)
-                    continue;
-
-                scopeStartLine = startLine;
-                scopeEndLine = endLine;
-                scopeWidth = width;
-            }
-
-            imports.Add(new CSharpUsingStaticRecord(target, symbol.Line, scopeStartLine, scopeEndLine));
-        }
-
-        imports.Sort(static (left, right) => left.Line.CompareTo(right.Line));
-        return imports;
-    }
-
-    private static HashSet<string> BuildCSharpKnownTypeNames(string language, IReadOnlyList<SymbolRecord> symbols)
-    {
-        var names = new HashSet<string>(StringComparer.Ordinal);
-        if (language != "csharp")
-            return names;
+        HashSet<string>? knownTypeNames = null;
+        HashSet<string>? nonEnumTypeNames = null;
 
         foreach (var symbol in symbols)
         {
@@ -279,7 +243,7 @@ public static partial class ReferenceExtractor
 
             var normalizedName = NormalizeCSharpIdentifier(symbol.Name);
             if (!string.IsNullOrWhiteSpace(normalizedName))
-                names.Add(normalizedName);
+                (knownTypeNames ??= new HashSet<string>(StringComparer.Ordinal)).Add(normalizedName);
 
             var qualifiedContainer = !string.IsNullOrWhiteSpace(symbol.ContainerQualifiedName)
                 ? symbol.ContainerQualifiedName
@@ -287,25 +251,13 @@ public static partial class ReferenceExtractor
                     ? symbol.ContainerName
                     : null;
             if (!string.IsNullOrWhiteSpace(qualifiedContainer) && !string.IsNullOrWhiteSpace(normalizedName))
-                names.Add(qualifiedContainer + "." + normalizedName);
+                (knownTypeNames ??= new HashSet<string>(StringComparer.Ordinal)).Add(qualifiedContainer + "." + normalizedName);
+
+            if (symbol.Kind != "enum" && !string.IsNullOrWhiteSpace(symbol.Name))
+                (nonEnumTypeNames ??= new HashSet<string>(StringComparer.Ordinal)).Add(symbol.Name);
         }
 
-        return names;
-    }
-
-    private static HashSet<string> BuildCSharpNonEnumTypeNames(IReadOnlyList<SymbolRecord> symbols)
-    {
-        var names = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var symbol in symbols)
-        {
-            if (symbol.Kind is not ("class" or "struct" or "interface" or "delegate"))
-                continue;
-
-            if (!string.IsNullOrWhiteSpace(symbol.Name))
-                names.Add(symbol.Name);
-        }
-
-        return names;
+        return (knownTypeNames ?? EmptyCSharpStringSet, nonEnumTypeNames ?? EmptyCSharpStringSet);
     }
 
     private static HashSet<string>? BuildCallableDefinitionNames(string language, IReadOnlyList<SymbolRecord> symbols)
@@ -313,7 +265,7 @@ public static partial class ReferenceExtractor
         if (language != "csharp")
             return null;
 
-        var names = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string>? names = null;
         foreach (var symbol in symbols)
         {
             if (symbol.Kind != "function" || string.IsNullOrWhiteSpace(symbol.Name))
@@ -323,7 +275,7 @@ public static partial class ReferenceExtractor
                 ? NormalizeCSharpIdentifier(symbol.Name)
                 : symbol.Name;
             if (!string.IsNullOrWhiteSpace(name))
-                names.Add(name);
+                (names ??= new HashSet<string>(StringComparer.Ordinal)).Add(name);
         }
 
         return names;
@@ -363,67 +315,42 @@ public static partial class ReferenceExtractor
                 builder.Append(ch);
         }
 
-        var normalized = builder.ToString().Trim();
+        var normalized = builder.ToString().AsSpan().Trim();
         while (normalized.EndsWith("?", StringComparison.Ordinal))
             normalized = normalized[..^1].TrimEnd();
         while (normalized.EndsWith("[]", StringComparison.Ordinal))
             normalized = normalized[..^2].TrimEnd();
 
-        return normalized;
+        return normalized.ToString();
     }
 
-    private static Dictionary<string, CSharpContainingTypeValueReceiverNames> BuildCSharpValueReceiverNamesByContainingType(string language, IReadOnlyList<SymbolRecord> symbols)
-    {
-        var lookup = new Dictionary<string, CSharpContainingTypeValueReceiverNames>(StringComparer.Ordinal);
-        if (language != "csharp")
-            return lookup;
-
-        foreach (var symbol in symbols)
-        {
-            if (symbol.Kind != "property" || string.IsNullOrWhiteSpace(symbol.Name))
-                continue;
-
-            var containingType = GetContainingTypeQualifiedName(symbol);
-            if (string.IsNullOrWhiteSpace(containingType))
-                continue;
-
-            if (!lookup.TryGetValue(containingType!, out var names))
-            {
-                names = new CSharpContainingTypeValueReceiverNames(
-                    new HashSet<string>(StringComparer.Ordinal),
-                    new HashSet<string>(StringComparer.Ordinal));
-                lookup[containingType!] = names;
-            }
-
-            if (IsStaticCSharpSymbol(symbol))
-                names.StaticNames.Add(symbol.Name);
-            else
-                names.InstanceNames.Add(symbol.Name);
-        }
-
-        return lookup;
-    }
-
-    private static Dictionary<int, List<CSharpFunctionValueReceiverNameRecord>> BuildCSharpValueReceiverNamesByFunctionStartLine(
+    private static (
+        IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames> ByContainingType,
+        IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> ByFunctionStartLine) BuildCSharpValueReceiverNameLookups(
         string language,
         IReadOnlyList<SymbolRecord> symbols,
         IReadOnlyList<string> structuralLines,
         IReadOnlySet<string> csharpKnownTypeNames,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
     {
-        var lookup = new Dictionary<int, List<CSharpFunctionValueReceiverNameRecord>>();
         if (language != "csharp")
-            return lookup;
+            return (EmptyCSharpValueReceiverNamesByContainingType, EmptyCSharpValueReceiverNamesByFunctionStartLine);
+
+        Dictionary<string, CSharpContainingTypeValueReceiverNames>? byContainingType = null;
+        Dictionary<int, List<CSharpFunctionValueReceiverNameRecord>>? byFunctionStartLine = null;
 
         foreach (var symbol in symbols)
         {
+            AddCSharpContainingTypeValueReceiverName(ref byContainingType, symbol);
+
             if (symbol.Kind is not ("function" or "property") || symbol.StartLine <= 0)
                 continue;
 
-            var names = new List<CSharpFunctionValueReceiverNameRecord>();
-            var seenNames = new HashSet<CSharpFunctionValueReceiverNameRecord>();
+            List<CSharpFunctionValueReceiverNameRecord>? names = null;
             if (symbol.BodyStartLine != null && symbol.BodyEndLine != null)
             {
+                names = [];
+                var seenNames = new HashSet<CSharpFunctionValueReceiverNameRecord>();
                 var start = Math.Max(symbol.BodyStartLine.Value - 1, 0);
                 var end = Math.Min(symbol.BodyEndLine.Value - 1, structuralLines.Count - 1);
                 var blockScopes = BuildCSharpBlockScopes(structuralLines, start, end);
@@ -549,152 +476,159 @@ public static partial class ReferenceExtractor
                     seenNames);
             }
 
-            if (names.Count > 0)
-                lookup[symbol.StartLine] = names;
+            if (names is { Count: > 0 })
+            {
+                byFunctionStartLine ??= new Dictionary<int, List<CSharpFunctionValueReceiverNameRecord>>();
+                byFunctionStartLine[symbol.StartLine] = names;
+            }
         }
 
-        return lookup;
+        return (
+            byContainingType ?? EmptyCSharpValueReceiverNamesByContainingType,
+            byFunctionStartLine ?? EmptyCSharpValueReceiverNamesByFunctionStartLine);
     }
 
-    private static Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> BuildCSharpQualifiedEnumMemberLookup(
-        string language,
-        IReadOnlyList<SymbolRecord> symbols)
+    private static void AddCSharpContainingTypeValueReceiverName(
+        ref Dictionary<string, CSharpContainingTypeValueReceiverNames>? lookup,
+        SymbolRecord symbol)
     {
-        var lookup = new Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
-        if (language != "csharp")
-            return lookup;
+        if (symbol.Kind != "property" || string.IsNullOrWhiteSpace(symbol.Name))
+            return;
 
-        var conflictingNonEnumTypeNames = BuildCSharpNonEnumTypeNames(symbols);
+        var containingType = GetContainingTypeQualifiedName(symbol);
+        if (string.IsNullOrWhiteSpace(containingType))
+            return;
+
+        lookup ??= new Dictionary<string, CSharpContainingTypeValueReceiverNames>(StringComparer.Ordinal);
+        if (!lookup.TryGetValue(containingType!, out var names))
+        {
+            names = new CSharpContainingTypeValueReceiverNames(
+                new HashSet<string>(StringComparer.Ordinal),
+                new HashSet<string>(StringComparer.Ordinal));
+            lookup[containingType!] = names;
+        }
+
+        if (IsStaticCSharpSymbol(symbol))
+            names.StaticNames.Add(symbol.Name);
+        else
+            names.InstanceNames.Add(symbol.Name);
+    }
+
+    private static (
+        IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> EnumMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> ConstantPatternMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> TypePatternLookup) BuildCSharpQualifiedPatternLookups(
+        string language,
+        IReadOnlyList<SymbolRecord> symbols,
+        IReadOnlySet<string> conflictingNonEnumTypeNames)
+    {
+        if (language != "csharp")
+            return (EmptyCSharpQualifiedEnumMemberLookup, EmptyCSharpQualifiedPatternLookup, EmptyCSharpQualifiedPatternLookup);
+
+        Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>>? enumMemberLookup = null;
+        Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>? constantPatternMemberLookup = null;
+        Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>? typePatternLookup = null;
 
         foreach (var symbol in symbols)
         {
-            if (symbol.Kind != "enum" || symbol.ContainerKind != "enum")
-                continue;
+            if (symbol.Kind is "class" or "struct" or "interface" or "enum" or "delegate"
+                && !string.IsNullOrWhiteSpace(symbol.Name)
+                && !string.IsNullOrWhiteSpace(symbol.ContainerName))
+            {
+                AddCSharpQualifiedPatternTarget(
+                    ref typePatternLookup,
+                    symbol.Name,
+                    symbol.ContainerName!,
+                    symbol.ContainerQualifiedName,
+                    allowShortNameFallback: true);
+            }
+
             if (string.IsNullOrWhiteSpace(symbol.Name) || string.IsNullOrWhiteSpace(symbol.ContainerName))
                 continue;
 
-            if (!lookup.TryGetValue(symbol.Name, out var targets))
+            if (symbol.Kind == "enum" && symbol.ContainerKind == "enum")
             {
-                targets = [];
-                lookup[symbol.Name] = targets;
-            }
-
-            bool exists = false;
-            foreach (var target in targets)
-            {
-                if (string.Equals(target.EnumName, symbol.ContainerName, StringComparison.Ordinal)
-                    && string.Equals(target.QualifiedEnumName, symbol.ContainerQualifiedName, StringComparison.Ordinal))
-                {
-                    exists = true;
-                    break;
-                }
-            }
-
-            if (!exists)
-                targets.Add((
+                var allowShortNameFallback = !conflictingNonEnumTypeNames.Contains(symbol.ContainerName!);
+                AddCSharpQualifiedEnumMemberTarget(
+                    ref enumMemberLookup,
+                    symbol.Name,
                     symbol.ContainerName!,
                     symbol.ContainerQualifiedName,
-                    AllowShortNameFallback: !conflictingNonEnumTypeNames.Contains(symbol.ContainerName!)));
-        }
-
-        return lookup;
-    }
-
-    private static Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> BuildCSharpQualifiedConstantPatternMemberLookup(
-        string language,
-        IReadOnlyList<SymbolRecord> symbols)
-    {
-        var lookup = new Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
-        if (language != "csharp")
-            return lookup;
-
-        var conflictingNonEnumTypeNames = BuildCSharpNonEnumTypeNames(symbols);
-
-        foreach (var symbol in symbols)
-        {
-            if (string.IsNullOrWhiteSpace(symbol.Name) || string.IsNullOrWhiteSpace(symbol.ContainerName))
-                continue;
-
-            var target = symbol switch
-            {
-                { Kind: "enum", ContainerKind: "enum" } => (
-                    Included: true,
-                    AllowShortNameFallback: !conflictingNonEnumTypeNames.Contains(symbol.ContainerName!)),
-                _ when IsCSharpConstMemberSymbol(symbol) => (
-                    Included: true,
-                    AllowShortNameFallback: true),
-                _ => (Included: false, AllowShortNameFallback: false)
-            };
-
-            if (!target.Included)
-                continue;
-
-            if (!lookup.TryGetValue(symbol.Name, out var targets))
-            {
-                targets = [];
-                lookup[symbol.Name] = targets;
-            }
-
-            bool exists = false;
-            foreach (var existing in targets)
-            {
-                if (string.Equals(existing.ContainerName, symbol.ContainerName, StringComparison.Ordinal)
-                    && string.Equals(existing.QualifiedContainerName, symbol.ContainerQualifiedName, StringComparison.Ordinal))
-                {
-                    exists = true;
-                    break;
-                }
-            }
-
-            if (!exists)
-                targets.Add((
+                    allowShortNameFallback);
+                AddCSharpQualifiedPatternTarget(
+                    ref constantPatternMemberLookup,
+                    symbol.Name,
                     symbol.ContainerName!,
                     symbol.ContainerQualifiedName,
-                    target.AllowShortNameFallback));
-        }
-
-        return lookup;
-    }
-
-    private static Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> BuildCSharpQualifiedTypePatternLookup(
-        string language,
-        IReadOnlyList<SymbolRecord> symbols)
-    {
-        var lookup = new Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
-        if (language != "csharp")
-            return lookup;
-
-        foreach (var symbol in symbols)
-        {
-            if (symbol.Kind is not ("class" or "struct" or "interface" or "enum" or "delegate")
-                || string.IsNullOrWhiteSpace(symbol.Name)
-                || string.IsNullOrWhiteSpace(symbol.ContainerName))
-            {
+                    allowShortNameFallback);
                 continue;
             }
 
-            if (!lookup.TryGetValue(symbol.Name, out var targets))
-            {
-                targets = [];
-                lookup[symbol.Name] = targets;
-            }
-
-            bool exists = false;
-            foreach (var existing in targets)
-            {
-                if (string.Equals(existing.ContainerName, symbol.ContainerName, StringComparison.Ordinal)
-                    && string.Equals(existing.QualifiedContainerName, symbol.ContainerQualifiedName, StringComparison.Ordinal))
-                {
-                    exists = true;
-                    break;
-                }
-            }
-
-            if (!exists)
-                targets.Add((symbol.ContainerName!, symbol.ContainerQualifiedName, AllowShortNameFallback: true));
+            if (IsCSharpConstMemberSymbol(symbol))
+                AddCSharpQualifiedPatternTarget(
+                    ref constantPatternMemberLookup,
+                    symbol.Name,
+                    symbol.ContainerName!,
+                    symbol.ContainerQualifiedName,
+                    allowShortNameFallback: true);
         }
 
-        return lookup;
+        return (
+            enumMemberLookup ?? EmptyCSharpQualifiedEnumMemberLookup,
+            constantPatternMemberLookup ?? EmptyCSharpQualifiedPatternLookup,
+            typePatternLookup ?? EmptyCSharpQualifiedPatternLookup);
+    }
+
+    private static void AddCSharpQualifiedEnumMemberTarget(
+        ref Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>>? lookup,
+        string name,
+        string enumName,
+        string? qualifiedEnumName,
+        bool allowShortNameFallback)
+    {
+        lookup ??= new Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
+        if (!lookup.TryGetValue(name, out var targets))
+        {
+            targets = [];
+            lookup[name] = targets;
+        }
+
+        foreach (var target in targets)
+        {
+            if (string.Equals(target.EnumName, enumName, StringComparison.Ordinal)
+                && string.Equals(target.QualifiedEnumName, qualifiedEnumName, StringComparison.Ordinal))
+            {
+                return;
+            }
+        }
+
+        targets.Add((enumName, qualifiedEnumName, allowShortNameFallback));
+    }
+
+    private static void AddCSharpQualifiedPatternTarget(
+        ref Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>? lookup,
+        string name,
+        string containerName,
+        string? qualifiedContainerName,
+        bool allowShortNameFallback)
+    {
+        lookup ??= new Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
+        if (!lookup.TryGetValue(name, out var targets))
+        {
+            targets = [];
+            lookup[name] = targets;
+        }
+
+        foreach (var existing in targets)
+        {
+            if (string.Equals(existing.ContainerName, containerName, StringComparison.Ordinal)
+                && string.Equals(existing.QualifiedContainerName, qualifiedContainerName, StringComparison.Ordinal))
+            {
+                return;
+            }
+        }
+
+        targets.Add((containerName, qualifiedContainerName, allowShortNameFallback));
     }
 
     private static bool IsCSharpConstMemberSymbol(SymbolRecord symbol)
@@ -1500,14 +1434,30 @@ public static partial class ReferenceExtractor
         IReadOnlyList<(int Start, int End)> segments,
         int count)
     {
-        var builder = new StringBuilder();
+        var capacity = Math.Max(0, count - 1);
+        for (var i = 0; i < count; i++)
+        {
+            var (start, end) = segments[i];
+            var length = end - start;
+            if (length > 0 && preparedLine[start] == '@')
+                length--;
+            capacity += length;
+        }
+
+        var builder = new StringBuilder(capacity);
         for (var i = 0; i < count; i++)
         {
             if (i > 0)
                 builder.Append('.');
             var (start, end) = segments[i];
-            var segment = preparedLine.Substring(start, end - start);
-            builder.Append(segment[0] == '@' ? segment[1..] : segment);
+            var length = end - start;
+            if (length > 0 && preparedLine[start] == '@')
+            {
+                start++;
+                length--;
+            }
+
+            builder.Append(preparedLine, start, length);
         }
         return builder.ToString();
     }
@@ -1698,16 +1648,28 @@ public static partial class ReferenceExtractor
             return;
 
         var parameters = signature[(openParen + 1)..closeParen];
-        foreach (var segment in SplitTopLevelCSharpParameterSegments(parameters))
-        {
-            if (TryExtractTrailingCSharpParameterName(segment, out var name))
-                AddCSharpFunctionValueReceiverName(names, name, scopeStartLine, scopeStartColumn, scopeEndLine, scopeEndColumn, seenNames);
-        }
+        if (string.IsNullOrWhiteSpace(parameters))
+            return;
+
+        AddTopLevelCSharpParameterNames(
+            names,
+            parameters.AsSpan(),
+            scopeStartLine,
+            scopeStartColumn,
+            scopeEndLine,
+            scopeEndColumn,
+            seenNames);
     }
 
-    private static List<string> SplitTopLevelCSharpParameterSegments(string parameters)
+    private static void AddTopLevelCSharpParameterNames(
+        List<CSharpFunctionValueReceiverNameRecord> names,
+        ReadOnlySpan<char> parameters,
+        int scopeStartLine,
+        int scopeStartColumn,
+        int scopeEndLine,
+        int scopeEndColumn,
+        HashSet<CSharpFunctionValueReceiverNameRecord>? seenNames)
     {
-        var segments = new List<string>();
         var depthAngle = 0;
         var depthParen = 0;
         var depthBracket = 0;
@@ -1750,7 +1712,14 @@ public static partial class ReferenceExtractor
                 case ',':
                     if (depthAngle == 0 && depthParen == 0 && depthBracket == 0 && depthBrace == 0)
                     {
-                        segments.Add(parameters[segmentStart..i]);
+                        AddCSharpParameterSegmentName(
+                            names,
+                            parameters[segmentStart..i],
+                            scopeStartLine,
+                            scopeStartColumn,
+                            scopeEndLine,
+                            scopeEndColumn,
+                            seenNames);
                         segmentStart = i + 1;
                     }
                     break;
@@ -1758,16 +1727,34 @@ public static partial class ReferenceExtractor
         }
 
         if (segmentStart <= parameters.Length)
-            segments.Add(parameters[segmentStart..]);
-
-        return segments;
+            AddCSharpParameterSegmentName(
+                names,
+                parameters[segmentStart..],
+                scopeStartLine,
+                scopeStartColumn,
+                scopeEndLine,
+                scopeEndColumn,
+                seenNames);
     }
 
-    private static bool TryExtractTrailingCSharpParameterName(string segment, out string name)
+    private static void AddCSharpParameterSegmentName(
+        List<CSharpFunctionValueReceiverNameRecord> names,
+        ReadOnlySpan<char> segment,
+        int scopeStartLine,
+        int scopeStartColumn,
+        int scopeEndLine,
+        int scopeEndColumn,
+        HashSet<CSharpFunctionValueReceiverNameRecord>? seenNames)
+    {
+        if (TryExtractTrailingCSharpParameterName(segment, out var name))
+            AddCSharpFunctionValueReceiverName(names, name, scopeStartLine, scopeStartColumn, scopeEndLine, scopeEndColumn, seenNames);
+    }
+
+    private static bool TryExtractTrailingCSharpParameterName(ReadOnlySpan<char> segment, out string name)
     {
         name = string.Empty;
         var trimmed = segment.Trim();
-        if (trimmed.Length == 0 || trimmed == "this")
+        if (trimmed.Length == 0 || trimmed.Equals("this".AsSpan(), StringComparison.Ordinal))
             return false;
 
         var end = trimmed.Length - 1;
@@ -1781,7 +1768,7 @@ public static partial class ReferenceExtractor
         if (end < 0 || start >= end)
             return false;
 
-        name = NormalizeCSharpIdentifier(trimmed[(start + 1)..(end + 1)]);
+        name = NormalizeCSharpIdentifier(trimmed[(start + 1)..(end + 1)].ToString());
         return !string.IsNullOrWhiteSpace(name);
     }
 
@@ -2117,8 +2104,9 @@ public static partial class ReferenceExtractor
         if (armStartOffset < 0 || armStartOffset >= arrowIndex || arrowIndex > bodyText.Length)
             return false;
 
-        var armText = bodyText[armStartOffset..arrowIndex];
-        var preparedArmLines = StructuralLineMasker.MaskLines("csharp", armText.Split('\n'));
+        var preparedArmLines = StructuralLineMasker.MaskLines(
+            "csharp",
+            SplitCSharpSwitchExpressionArmLines(bodyText, armStartOffset, arrowIndex));
         for (var i = 0; i < preparedArmLines.Length; i++)
             preparedArmLines[i] = PrepareLine("csharp", preparedArmLines[i]);
 
@@ -2131,6 +2119,36 @@ public static partial class ReferenceExtractor
 
         designationOffset = armStartOffset + relativeOffset;
         return designationOffset < arrowIndex;
+    }
+
+    private static string[] SplitCSharpSwitchExpressionArmLines(string bodyText, int startOffset, int endOffset)
+    {
+        var length = endOffset - startOffset;
+        var firstLineBreak = bodyText.IndexOf('\n', startOffset, length);
+        if (firstLineBreak < 0)
+            return [bodyText[startOffset..endOffset]];
+
+        var lineCount = 2;
+        for (var i = firstLineBreak + 1; i < endOffset; i++)
+        {
+            if (bodyText[i] == '\n')
+                lineCount++;
+        }
+
+        var lines = new string[lineCount];
+        var lineStart = startOffset;
+        var lineIndex = 0;
+        for (var i = startOffset; i < endOffset; i++)
+        {
+            if (bodyText[i] != '\n')
+                continue;
+
+            lines[lineIndex++] = bodyText[lineStart..i];
+            lineStart = i + 1;
+        }
+
+        lines[lineIndex] = bodyText[lineStart..endOffset];
+        return lines;
     }
 
     private static bool TryParseCSharpSwitchExpressionArmDeclarationPatternDesignation(

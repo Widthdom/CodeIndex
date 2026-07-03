@@ -314,19 +314,16 @@ public static partial class SymbolExtractor
             if (parenDepth != 0 || bracketDepth != 0 || inBlockComment || inString || inChar)
                 continue;
 
-            var trimmed = line.TrimEnd();
-            if (trimmed.EndsWith("extends", StringComparison.Ordinal)
-                || trimmed.EndsWith("with", StringComparison.Ordinal)
-                || trimmed.EndsWith("derives", StringComparison.Ordinal)
-                || trimmed.EndsWith(':'))
+            if (ScalaLineEndsHeaderContinuation(line))
             {
                 continue;
             }
 
-            var nextLine = TryGetNextScalaHeaderLine(lines, lineIndex + 1);
-            if (nextLine is null)
+            var nextHeaderLine = TryGetNextScalaHeaderLine(lines, lineIndex + 1);
+            if (nextHeaderLine is not { } headerLine)
                 return lineIndex;
 
+            var nextLine = headerLine.Line.AsSpan(headerLine.Start);
             if (nextLine.StartsWith("extends ", StringComparison.Ordinal)
                 || nextLine.StartsWith("with ", StringComparison.Ordinal)
                 || nextLine.StartsWith("derives ", StringComparison.Ordinal))
@@ -334,7 +331,7 @@ public static partial class SymbolExtractor
                 continue;
             }
 
-            if (nextLine.StartsWith('{'))
+            if (nextLine.Length > 0 && nextLine[0] == '{')
                 return null;
 
             return lineIndex;
@@ -343,15 +340,31 @@ public static partial class SymbolExtractor
         return null;
     }
 
-    private static string? TryGetNextScalaHeaderLine(string[] lines, int startIndex)
+    private readonly record struct ScalaHeaderLine(string Line, int Start);
+
+    private static bool ScalaLineEndsHeaderContinuation(string line)
+    {
+        var trimmed = line.AsSpan().TrimEnd();
+        return trimmed.EndsWith("extends", StringComparison.Ordinal)
+            || trimmed.EndsWith("with", StringComparison.Ordinal)
+            || trimmed.EndsWith("derives", StringComparison.Ordinal)
+            || (trimmed.Length > 0 && trimmed[^1] == ':');
+    }
+
+    private static ScalaHeaderLine? TryGetNextScalaHeaderLine(string[] lines, int startIndex)
     {
         for (var i = startIndex; i < lines.Length; i++)
         {
-            var nextLine = lines[i].TrimStart();
+            var line = lines[i];
+            var start = 0;
+            while (start < line.Length && char.IsWhiteSpace(line[start]))
+                start++;
+
+            var nextLine = line.AsSpan(start);
             if (nextLine.Length == 0 || nextLine.StartsWith("//", StringComparison.Ordinal))
                 continue;
 
-            return nextLine;
+            return new ScalaHeaderLine(line, start);
         }
 
         return null;

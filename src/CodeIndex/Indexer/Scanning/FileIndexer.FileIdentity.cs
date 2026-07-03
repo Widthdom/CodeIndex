@@ -5,18 +5,23 @@ namespace CodeIndex.Indexer;
 
 public partial class FileIndexer
 {
+    private static readonly bool IsLinuxPlatform = OperatingSystem.IsLinux();
+    private static readonly bool IsMacOSPlatform = OperatingSystem.IsMacOS();
+    private static readonly bool IsFileIdentityWindowsPlatform = OperatingSystem.IsWindows();
+    private static readonly bool FileIdentitySupportedPlatform = IsLinuxPlatform || IsMacOSPlatform || IsFileIdentityWindowsPlatform;
+
     internal static bool TryGetFileIdentity(string path, out FileIdentity identity)
     {
         identity = default;
-        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS() && !OperatingSystem.IsWindows())
+        if (!FileIdentitySupportedPlatform)
             return false;
 
         try
         {
-            if (OperatingSystem.IsWindows())
+            if (IsFileIdentityWindowsPlatform)
                 return TryGetWindowsFileIdentity(path, out identity);
 
-            if (OperatingSystem.IsMacOS())
+            if (IsMacOSPlatform)
             {
                 if (StatMac(path, out var stat) != 0)
                     return false;

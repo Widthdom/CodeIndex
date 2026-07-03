@@ -24,10 +24,12 @@ public static partial class ReferenceExtractor
             fileId,
             language,
             content,
+            symbols,
             path,
             request.ContentIsNormalized,
             request.HasOversizeLine,
             request.ConflictMarkerLine,
+            request.MaxReferenceCount,
             request.CancellationToken,
             out var structuralMetadataReferences))
             return structuralMetadataReferences;
@@ -123,9 +125,11 @@ public static partial class ReferenceExtractor
         var rustEnumCandidates = language == "rust"
             ? BuildRustEnumCandidates(symbols)
             : null;
-        var pythonDefinitionContainersByLineAndKind = language == "python"
-            ? BuildPythonDefinitionContainersByLineAndKind(symbols)
-            : null;
+        var pythonSymbolLookups = language == "python"
+            ? BuildPythonSymbolLookups(symbols)
+            : default;
+        var pythonDefinitionContainersByLineAndKind = pythonSymbolLookups.DefinitionContainersByLineAndKind;
+        var pythonHeaderSymbolsByLine = pythonSymbolLookups.HeaderSymbolsByLine;
         var swiftPropertyDefinitionsByLine = BuildSwiftPropertyDefinitionsByLine(language, symbols, request.ReportDiagnostic);
 
         // Synthetic function-kind container for C# primary-ctor declarations with a base
@@ -135,34 +139,42 @@ public static partial class ReferenceExtractor
         // C# のプライマリコンストラクタ宣言（record / class / struct）で base primary-ctor を呼んでいる場合、
         // 宣言ヘッダー全体を合成コンテナで上書きする。`{` / `;` 以降の本体行は通常の container に戻す。
         var recordPrimaryCtorRanges = BuildCSharpPrimaryCtorContainers(language, symbols, structuralLines);
-        var csharpQualifiedEnumMemberLookup = BuildCSharpQualifiedEnumMemberLookup(language, symbols);
-        var csharpQualifiedConstantPatternMemberLookup = BuildCSharpQualifiedConstantPatternMemberLookup(language, symbols);
-        var csharpQualifiedTypePatternLookup = BuildCSharpQualifiedTypePatternLookup(language, symbols);
-        var csharpKnownTypeNames = BuildCSharpKnownTypeNames(language, symbols);
-        var kotlinConstructorTypeNames = KotlinReferenceExtractor.BuildConstructorTypeNames(language, symbols);
-        var kotlinInfixFunctionNames = KotlinReferenceExtractor.BuildInfixFunctionNames(language, symbols);
+        var csharpTypeNameSets = BuildCSharpTypeNameSets(language, symbols);
+        var csharpKnownTypeNames = csharpTypeNameSets.KnownTypeNames;
+        var csharpNonEnumTypeNames = csharpTypeNameSets.NonEnumTypeNames;
+        var csharpQualifiedPatternLookups = BuildCSharpQualifiedPatternLookups(language, symbols, csharpNonEnumTypeNames);
+        var csharpQualifiedEnumMemberLookup = csharpQualifiedPatternLookups.EnumMemberLookup;
+        var csharpQualifiedConstantPatternMemberLookup = csharpQualifiedPatternLookups.ConstantPatternMemberLookup;
+        var csharpQualifiedTypePatternLookup = csharpQualifiedPatternLookups.TypePatternLookup;
+        var kotlinNameSets = KotlinReferenceExtractor.BuildNameSets(language, symbols);
+        var kotlinConstructorTypeNames = kotlinNameSets.ConstructorTypeNames;
+        var kotlinInfixFunctionNames = kotlinNameSets.InfixFunctionNames;
         KotlinReferenceExtractor.AddDeclaredInfixFunctionNames(language, lines, kotlinInfixFunctionNames);
         var callableDefinitionNames = BuildCallableDefinitionNames(language, symbols);
         var stylusVariableDefinitionNames = language == "stylus"
             ? CssReferenceExtractor.BuildStylusVariableDefinitionNames(lines)
             : null;
-        var dockerfileStageNames = DockerfileReferenceExtractor.BuildStageNames(language, symbols);
-        var dockerfileVariableNames = DockerfileReferenceExtractor.BuildVariableNames(language, symbols);
-        var shellCallableNames = ShellReferenceExtractor.BuildCallableNames(language, symbols);
-        var shellGlobalAliasNames = ShellReferenceExtractor.BuildGlobalAliasNames(language, symbols);
+        var dockerfileNameSets = DockerfileReferenceExtractor.BuildNameSets(language, symbols);
+        var dockerfileStageNames = dockerfileNameSets.StageNames;
+        var dockerfileVariableNames = dockerfileNameSets.VariableNames;
+        var shellNameSets = ShellReferenceExtractor.BuildNameSets(language, symbols);
+        var shellCallableNames = shellNameSets.CallableNames;
+        var shellGlobalAliasNames = shellNameSets.GlobalAliasNames;
         IReadOnlyList<(int StartLine, int EndLine)> csharpNamespaceScopes = language == "csharp"
             ? BuildCSharpNamespaceScopes(symbols)
             : Array.Empty<(int StartLine, int EndLine)>();
-        var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols, csharpKnownTypeNames, csharpNamespaceScopes, lines, structuralLines);
-        var csharpUsingNamespaces = BuildCSharpUsingNamespaces(language, symbols, csharpNamespaceScopes);
-        var csharpUsingStatics = BuildCSharpUsingStatics(language, symbols, csharpNamespaceScopes);
-        var csharpValueReceiverNames = BuildCSharpValueReceiverNamesByContainingType(language, symbols);
-        var csharpFunctionValueReceiverNames = BuildCSharpValueReceiverNamesByFunctionStartLine(
+        var csharpUsingImports = BuildCSharpUsingImports(language, symbols, csharpKnownTypeNames, csharpNamespaceScopes, lines, structuralLines);
+        var csharpUsingAliases = csharpUsingImports.Aliases;
+        var csharpUsingNamespaces = csharpUsingImports.Namespaces;
+        var csharpUsingStatics = csharpUsingImports.Statics;
+        var csharpValueReceiverLookups = BuildCSharpValueReceiverNameLookups(
             language,
             symbols,
             structuralLines,
             csharpKnownTypeNames,
             csharpUsingAliases);
+        var csharpValueReceiverNames = csharpValueReceiverLookups.ByContainingType;
+        var csharpFunctionValueReceiverNames = csharpValueReceiverLookups.ByFunctionStartLine;
         var powershellSplatAssignments = language == "powershell"
             ? PowerShellReferenceExtractor.BuildSplatAssignments(preparedLines)
             : null;
@@ -344,8 +356,10 @@ public static partial class ReferenceExtractor
             if (language != "csharp")
                 return;
 
-            foreach (var reference in references.ToArray())
+            var referenceCount = references.Count;
+            for (var referenceIndex = 0; referenceIndex < referenceCount; referenceIndex++)
             {
+                var reference = references[referenceIndex];
                 if (reference.ReferenceKind != "instantiate"
                     || !string.Equals(reference.SymbolName, "Regex", StringComparison.Ordinal)
                     || reference.Line <= 0
@@ -502,7 +516,8 @@ public static partial class ReferenceExtractor
             else
                 return false;
 
-            var segments = new List<string>();
+            string? singleSegment = null;
+            List<string>? segments = null;
             while (cursor >= 0)
             {
                 while (cursor >= 0 && char.IsWhiteSpace(line[cursor]))
@@ -516,7 +531,21 @@ public static partial class ReferenceExtractor
                 if (segmentStart > segmentEnd)
                     return false;
 
-                segments.Add(NormalizeCSharpIdentifier(line[segmentStart..(segmentEnd + 1)]));
+                var segment = NormalizeCSharpIdentifier(line[segmentStart..(segmentEnd + 1)]);
+                if (singleSegment is null && segments is null)
+                {
+                    singleSegment = segment;
+                }
+                else
+                {
+                    if (segments is null)
+                    {
+                        segments = [singleSegment!];
+                        singleSegment = null;
+                    }
+
+                    segments.Add(segment);
+                }
                 while (cursor >= 0 && char.IsWhiteSpace(line[cursor]))
                     cursor--;
 
@@ -535,6 +564,15 @@ public static partial class ReferenceExtractor
                 break;
             }
 
+            if (segments is null)
+            {
+                if (singleSegment is null)
+                    return false;
+
+                prefix = singleSegment;
+                return true;
+            }
+
             if (segments.Count == 0)
                 return false;
 
@@ -546,7 +584,10 @@ public static partial class ReferenceExtractor
         static bool TryCollectCSharpInvocationArguments(string[] sourceLines, int lineIndex, int openParen, out string args)
         {
             const int MaxInvocationLines = 32;
-            var builder = new StringBuilder();
+            var initialCapacity = lineIndex >= 0 && lineIndex < sourceLines.Length
+                ? Math.Min(512, Math.Max(0, sourceLines[lineIndex].Length - openParen))
+                : 0;
+            var builder = new StringBuilder(initialCapacity);
             var depth = 0;
             var started = false;
             var lineLimit = Math.Min(sourceLines.Length, lineIndex + MaxInvocationLines);
@@ -1114,12 +1155,14 @@ public static partial class ReferenceExtractor
             Dictionary<string, int>? definitionNameIndices = null;
             if (definitionNames != null && language != "sql")
             {
-                definitionNameIndices = new Dictionary<string, int>(definitionNamesComparer);
                 foreach (var definitionName in definitionNames)
                 {
                     var definitionIndex = preparedLine.IndexOf(definitionName, StringComparison.Ordinal);
                     if (definitionIndex >= 0)
+                    {
+                        definitionNameIndices ??= new Dictionary<string, int>(definitionNamesComparer);
                         definitionNameIndices[definitionName] = definitionIndex;
+                    }
                 }
             }
             List<SqlReferenceExtractor.DefinitionLeafSpan>? sqlDefinitionLeafSpans = null;
@@ -2601,10 +2644,8 @@ public static partial class ReferenceExtractor
             {
                 var pythonPreparedLine = preparedLine;
                 var pythonHeaderMap = default(PythonLogicalHeaderReferenceLine?);
-                var pythonHeaderSymbol = symbols.FirstOrDefault(symbol =>
-                    symbol.Line == lineNumber
-                    && symbol.Signature != null
-                    && symbol.Kind is "function" or "class" or "property" or "class_hook");
+                SymbolRecord? pythonHeaderSymbol = null;
+                pythonHeaderSymbolsByLine?.TryGetValue(lineNumber, out pythonHeaderSymbol);
                 if (pythonHeaderSymbol?.Signature != null
                     && TryBuildPythonLogicalHeaderReferenceLine(lines, i, pythonHeaderSymbol.StartColumn ?? 0, out var builtPythonHeaderMap))
                 {

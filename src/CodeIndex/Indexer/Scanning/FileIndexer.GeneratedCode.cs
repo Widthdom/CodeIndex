@@ -10,6 +10,8 @@ public partial class FileIndexer
     internal static bool IsGeneratedCodeFile(string relativePath, string content)
         => HasGeneratedCodeFileName(relativePath) || HasGeneratedCodeHeader(content);
 
+    internal bool HasGeneratedCodeExtractionSuppressionPatterns => !_generatedCodePatterns.IsEmpty;
+
     internal bool IsGeneratedCodeExtractionSuppressed(string relativePath)
         => _generatedCodePatterns.TryMatch(relativePath, out _);
 

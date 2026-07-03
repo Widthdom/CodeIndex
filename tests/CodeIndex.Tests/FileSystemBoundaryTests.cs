@@ -25,27 +25,30 @@ public class FileSystemBoundaryTests
     [Fact]
     public void TryValidateDirectoryCleanupTarget_UsesPathCasingProbe_Issue3970()
     {
-        var previousProbe = PathCasing.IgnoreCaseProbeForTesting;
-        try
+        lock (PathCasingTestLock.Gate)
         {
-            PathCasing.ResetCacheForTests();
-            PathCasing.IgnoreCaseProbeForTesting = _ => true;
-            var root = Path.Combine(Path.GetTempPath(), $"CDIDX-BOUNDARY-{Guid.NewGuid():N}");
-            var target = Path.Combine(root.ToLowerInvariant(), "cleanup-target");
+            var previousProbe = PathCasing.IgnoreCaseProbeForTesting;
+            try
+            {
+                PathCasing.ResetCacheForTests();
+                PathCasing.IgnoreCaseProbeForTesting = _ => true;
+                var root = Path.Combine(Path.GetTempPath(), $"CDIDX-BOUNDARY-{Guid.NewGuid():N}");
+                var target = Path.Combine(root.ToLowerInvariant(), "cleanup-target");
 
-            var valid = FileSystemBoundary.TryValidateDirectoryCleanupTarget(
-                target,
-                root,
-                CreateOptions(),
-                out _,
-                out var failureReason);
+                var valid = FileSystemBoundary.TryValidateDirectoryCleanupTarget(
+                    target,
+                    root,
+                    CreateOptions(),
+                    out _,
+                    out var failureReason);
 
-            Assert.True(valid, failureReason);
-        }
-        finally
-        {
-            PathCasing.IgnoreCaseProbeForTesting = previousProbe;
-            PathCasing.ResetCacheForTests();
+                Assert.True(valid, failureReason);
+            }
+            finally
+            {
+                PathCasing.IgnoreCaseProbeForTesting = previousProbe;
+                PathCasing.ResetCacheForTests();
+            }
         }
     }
 

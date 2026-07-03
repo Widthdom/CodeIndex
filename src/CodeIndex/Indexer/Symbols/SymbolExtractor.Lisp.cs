@@ -24,70 +24,81 @@ public static partial class SymbolExtractor
 
         for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
         {
-            var chars = lines[lineIndex].ToCharArray();
-            for (var i = 0; i < chars.Length; i++)
+            var line = lines[lineIndex];
+            char[]? chars = null;
+
+            void MaskAt(int index) =>
+                (chars ??= line.ToCharArray())[index] = ' ';
+
+            void MaskToEnd(int start)
+            {
+                var masked = chars ??= line.ToCharArray();
+                for (var index = start; index < line.Length; index++)
+                    masked[index] = ' ';
+            }
+
+            for (var i = 0; i < line.Length; i++)
             {
                 if (blockCommentDepth > 0)
                 {
-                    if (chars[i] == '#' && i + 1 < chars.Length && chars[i + 1] == '|')
+                    if (line[i] == '#' && i + 1 < line.Length && line[i + 1] == '|')
                     {
-                        chars[i++] = ' ';
-                        chars[i] = ' ';
+                        MaskAt(i++);
+                        MaskAt(i);
                         blockCommentDepth++;
                         continue;
                     }
 
-                    if (chars[i] == '|' && i + 1 < chars.Length && chars[i + 1] == '#')
+                    if (line[i] == '|' && i + 1 < line.Length && line[i + 1] == '#')
                     {
-                        chars[i++] = ' ';
-                        chars[i] = ' ';
+                        MaskAt(i++);
+                        MaskAt(i);
                         blockCommentDepth--;
                         continue;
                     }
 
-                    chars[i] = ' ';
+                    MaskAt(i);
                     continue;
                 }
 
                 if (inString)
                 {
-                    if (chars[i] == '\\' && i + 1 < chars.Length)
+                    if (line[i] == '\\' && i + 1 < line.Length)
                     {
-                        chars[i++] = ' ';
-                        chars[i] = ' ';
+                        MaskAt(i++);
+                        MaskAt(i);
                         continue;
                     }
 
-                    var closesString = chars[i] == '"';
-                    chars[i] = ' ';
+                    var closesString = line[i] == '"';
+                    MaskAt(i);
                     if (closesString)
                         inString = false;
                     continue;
                 }
 
-                if (chars[i] == ';')
+                if (line[i] == ';')
                 {
-                    for (var j = i; j < chars.Length; j++)
-                        chars[j] = ' ';
+                    MaskToEnd(i);
                     break;
                 }
 
-                if (chars[i] == '#' && i + 1 < chars.Length && chars[i + 1] == '|')
+                if (line[i] == '#' && i + 1 < line.Length && line[i + 1] == '|')
                 {
-                    chars[i++] = ' ';
-                    chars[i] = ' ';
+                    MaskAt(i++);
+                    MaskAt(i);
                     blockCommentDepth++;
                     continue;
                 }
 
-                if (chars[i] == '"')
+                if (line[i] == '"')
                 {
-                    chars[i] = ' ';
+                    MaskAt(i);
                     inString = true;
                 }
             }
 
-            maskedLines[lineIndex] = new string(chars);
+            maskedLines[lineIndex] = chars is null ? line : new string(chars);
         }
 
         return maskedLines;
@@ -332,22 +343,28 @@ public static partial class SymbolExtractor
 
         for (var lineIndex = startLineIndex; lineIndex < maskedLines.Length; lineIndex++)
         {
-            var chars = maskedLines[lineIndex].ToCharArray();
+            var line = maskedLines[lineIndex];
+            char[]? chars = null;
+
+            void MaskAt(int index) =>
+                (chars ??= line.ToCharArray())[index] = ' ';
+
             var column = lineIndex == startLineIndex ? startColumn : 0;
-            for (; column < chars.Length; column++)
+            for (; column < line.Length; column++)
             {
-                if (chars[column] == '(')
+                if (line[column] == '(')
                 {
                     depth++;
                     started = true;
                 }
-                else if (chars[column] == ')' && started)
+                else if (line[column] == ')' && started)
                 {
                     depth--;
-                    chars[column] = ' ';
+                    MaskAt(column);
                     if (depth == 0)
                     {
-                        maskedLines[lineIndex] = new string(chars);
+                        if (chars is not null)
+                            maskedLines[lineIndex] = new string(chars);
                         return;
                     }
 
@@ -355,10 +372,11 @@ public static partial class SymbolExtractor
                 }
 
                 if (started)
-                    chars[column] = ' ';
+                    MaskAt(column);
             }
 
-            maskedLines[lineIndex] = new string(chars);
+            if (chars is not null)
+                maskedLines[lineIndex] = new string(chars);
         }
     }
 

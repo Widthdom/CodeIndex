@@ -23,11 +23,7 @@ public static partial class SymbolExtractor
             if (activeTerminator is { } terminator)
             {
                 maskedLines[i] = string.Empty;
-                var terminatorLine = terminator.StripLeadingTabs
-                    ? line.TrimStart('\t')
-                    : line;
-                terminatorLine = terminatorLine.TrimEnd('\r');
-                if (string.Equals(terminatorLine, terminator.Delimiter, StringComparison.Ordinal))
+                if (ShellHeredocTerminatorMatches(line, terminator))
                 {
                     activeTerminator = pendingTerminators.Count > 0
                         ? pendingTerminators.Dequeue()
@@ -45,6 +41,24 @@ public static partial class SymbolExtractor
         }
 
         return maskedLines;
+    }
+
+    private static bool ShellHeredocTerminatorMatches(string line, ShellHeredocTerminator terminator)
+    {
+        var start = 0;
+        if (terminator.StripLeadingTabs)
+        {
+            while (start < line.Length && line[start] == '\t')
+                start++;
+        }
+
+        var end = line.Length;
+        while (end > start && line[end - 1] == '\r')
+            end--;
+
+        var length = end - start;
+        return length == terminator.Delimiter.Length
+            && string.CompareOrdinal(line, start, terminator.Delimiter, 0, length) == 0;
     }
 
     private static IEnumerable<ShellHeredocTerminator> EnumerateShellHeredocTerminators(string line)

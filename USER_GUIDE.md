@@ -582,7 +582,7 @@ Use the smallest change that reduces the expensive part of your run.
 
 | Knob | Default | When to tune | Trade-off |
 |---|---|---|---|
-| `.gitignore` / `.cdidxignore` | project rules | Generated, vendored, or build-output trees dominate scan time | Excluded files disappear from all search and graph results |
+| built-in skips plus `.gitignore` / `.cdidxignore` | common generated/cache dirs plus project rules | Generated, vendored, cache, or build-output trees dominate scan time | Excluded files disappear from all search and graph results |
 | `--files <path...>` | off | Editor/save hooks or known in-place edits | Does not purge old rename/delete paths unless listed |
 | `--commits <id...>` | off | After normal commits | Requires git history but sees rename/delete paths |
 | `--changed-between <old> <new>` | off | After branch switches when both refs are known | Only as accurate as the supplied refs |
@@ -883,7 +883,7 @@ Indexing scope and ignore handling:
 
 | Area | Behavior |
 |---|---|
-| Built-in skips | Generated/vendor directories such as `node_modules`, `bin`, and `obj`, plus platform metadata files, are excluded. Dependency lockfiles are indexed as `dependency_lock` unless user ignore rules exclude them. |
+| Built-in skips | Generated/vendor/cache directories such as `node_modules`, `.pnpm-store`, `.turbo`, `.mypy_cache`, `bazel-out`, `.dart_tool`, `bin`, and `obj`, plus platform metadata files, are excluded. Dependency lockfiles are indexed as `dependency_lock` unless user ignore rules exclude them. |
 | User ignore files | User `.gitignore` plus optional `.cdidxignore` rules are honored across full scans, `--files`, and `--commits` updates. |
 | Workspace-scoped cdidx ignores | A project-root `.codeindex/.cdidxignore` is also loaded as a workspace-scoped ignore file, so multi-workspace manifests can keep local cdidx-only ignore rules out of the repository root. |
 | Encoding | Ignore files are read as UTF-8, so non-ASCII patterns behave the same across platforms. |
@@ -3319,7 +3319,7 @@ cdidx index . --duration-format seconds
 
 | Knob | 既定値 | いつ調整するか | Trade-off |
 |---|---|---|---|
-| `.gitignore` / `.cdidxignore` | project rules | generated / vendored / build output が scan time を支配している | 除外した file は search / graph から消える |
+| 組み込み skip と `.gitignore` / `.cdidxignore` | 一般的な generated/cache directory と project rules | generated / vendored / cache / build output が scan time を支配している | 除外した file は search / graph から消える |
 | `--files <path...>` | off | editor/save hook や既知の in-place edit | rename/delete 旧 path は明示しない限り purge されない |
 | `--commits <id...>` | off | 通常の commit 後 | git history が必要だが rename/delete paths も扱える |
 | `--changed-between <old> <new>` | off | branch switch 後に両 ref が分かる | 渡した ref の正確さに依存 |
@@ -3697,7 +3697,7 @@ cdidx ./myproject --json
 | 項目 | 動作 |
 |---|---|
 | DB の既定配置 | `cdidx index` は DB を `<projectPath>/.cdidx/codeindex.db` に置きます。 |
-| 組み込み skip | `node_modules`、`bin`、`obj` などの生成・vendor directory と platform metadata file は除外されます。dependency lockfile は、ユーザー ignore rule で除外しない限り `dependency_lock` として index されます。 |
+| 組み込み skip | `node_modules`、`.pnpm-store`、`.turbo`、`.mypy_cache`、`bazel-out`、`.dart_tool`、`bin`、`obj` などの生成・vendor・cache directory と platform metadata file は除外されます。dependency lockfile は、ユーザー ignore rule で除外しない限り `dependency_lock` として index されます。 |
 | ユーザー ignore | ユーザーの `.gitignore` と任意の `.cdidxignore` は、full scan、`--files`、`--commits` の更新経路すべてで尊重されます。 |
 | workspace scope の cdidx ignore | project root の `.codeindex/.cdidxignore` も workspace scope の ignore file として読み込むため、multi-workspace manifest 用の cdidx 専用 rule を repository root に置かずに管理できます。 |
 | encoding | ignore file は UTF-8 として読み込むため、非 ASCII pattern も platform 間で同じように動作します。 |

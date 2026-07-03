@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
@@ -826,6 +827,115 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void TryDetectLanguageForIndexing_CachesLanguageMapOverridesPerDirectory()
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_indexer_cache");
+        LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        var stampProbeCount = 0;
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(tempDir, LanguageMapOverrides.WorkspaceFileName),
+                "entries:\n- extension: custom\n  language: ruby\n");
+            var firstPath = Path.Combine(tempDir, "first.custom");
+            var secondPath = Path.Combine(tempDir, "second.custom");
+            File.WriteAllText(firstPath, "first");
+            File.WriteAllText(secondPath, "second");
+            LanguageMapOverrides.ConfigPathStampProbeForTesting = _ => stampProbeCount++;
+
+            var indexer = new FileIndexer(tempDir);
+
+            Assert.Equal("ruby", indexer.TryDetectLanguageForIndexing(firstPath).Language);
+            var firstProbeCount = stampProbeCount;
+            Assert.True(firstProbeCount > 0);
+
+            Assert.Equal("ruby", indexer.TryDetectLanguageForIndexing(secondPath).Language);
+            Assert.Equal(firstProbeCount, stampProbeCount);
+        }
+        finally
+        {
+            LanguageMapOverrides.ConfigPathStampProbeForTesting = null;
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void TryDetectLanguageForIndexing_ReusesParentLanguageMapOverridesWhenChildHasNoConfig()
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_parent_cache");
+        LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        var stampProbeCount = 0;
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(tempDir, LanguageMapOverrides.WorkspaceFileName),
+                "entries:\n- extension: custom\n  language: ruby\n");
+            var childDir = Path.Combine(tempDir, "src");
+            Directory.CreateDirectory(childDir);
+            var parentPath = Path.Combine(tempDir, "parent.custom");
+            var childPath = Path.Combine(childDir, "child.custom");
+            File.WriteAllText(parentPath, "parent");
+            File.WriteAllText(childPath, "child");
+            LanguageMapOverrides.ConfigPathStampProbeForTesting = _ => stampProbeCount++;
+
+            var indexer = new FileIndexer(tempDir);
+
+            Assert.Equal("ruby", indexer.TryDetectLanguageForIndexing(parentPath).Language);
+            var parentProbeCount = stampProbeCount;
+            Assert.True(parentProbeCount > 0);
+
+            Assert.Equal("ruby", indexer.TryDetectLanguageForIndexing(childPath).Language);
+            Assert.Equal(parentProbeCount, stampProbeCount);
+        }
+        finally
+        {
+            LanguageMapOverrides.ConfigPathStampProbeForTesting = null;
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void TryDetectLanguageForIndexing_DoesNotReuseParentLanguageMapOverridesWhenChildHasConfig()
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_child_cache");
+        LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        var stampProbeCount = 0;
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(tempDir, LanguageMapOverrides.WorkspaceFileName),
+                "entries:\n- extension: custom\n  language: ruby\n");
+            var childDir = Path.Combine(tempDir, "src");
+            Directory.CreateDirectory(childDir);
+            File.WriteAllText(
+                Path.Combine(childDir, LanguageMapOverrides.WorkspaceFileName),
+                "entries:\n- extension: custom\n  language: python\n");
+            var parentPath = Path.Combine(tempDir, "parent.custom");
+            var childPath = Path.Combine(childDir, "child.custom");
+            File.WriteAllText(parentPath, "parent");
+            File.WriteAllText(childPath, "child");
+            LanguageMapOverrides.ConfigPathStampProbeForTesting = _ => stampProbeCount++;
+
+            var indexer = new FileIndexer(tempDir);
+
+            Assert.Equal("ruby", indexer.TryDetectLanguageForIndexing(parentPath).Language);
+            var parentProbeCount = stampProbeCount;
+            Assert.True(parentProbeCount > 0);
+
+            Assert.Equal("python", indexer.TryDetectLanguageForIndexing(childPath).Language);
+            Assert.True(stampProbeCount > parentProbeCount);
+        }
+        finally
+        {
+            LanguageMapOverrides.ConfigPathStampProbeForTesting = null;
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public void LanguageMapOverrides_LoadEffectiveMapReloadsWhenWorkspaceConfigChanges()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_cache_{Guid.NewGuid():N}");
@@ -1118,6 +1228,28 @@ public partial class FileIndexerTests
 
             Assert.True(FileIndexer.SupportsHotspotFamilyMarkerLanguage("msbuild"));
             Assert.False(string.IsNullOrWhiteSpace(indexer.GetProjectMarkerFingerprint("msbuild")));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void GetProjectMarkerFingerprint_UsesJoinedSortedMarkerPaths()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_exact_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(tempDir, "Directory.Build.props"), "<Project />");
+            File.WriteAllText(Path.Combine(tempDir, "App.csproj"), "<Project />");
+
+            var indexer = new FileIndexer(tempDir);
+            var expectedPayload = "App.csproj\nDirectory.Build.props";
+            var expected = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(expectedPayload))).ToLowerInvariant();
+
+            Assert.Equal(expected, indexer.GetProjectMarkerFingerprint("msbuild"));
         }
         finally
         {
@@ -4457,6 +4589,40 @@ public partial class FileIndexerTests
         }
     }
 
+    [Theory]
+    [InlineData(".pnpm-store", "pkg.js")]
+    [InlineData(".turbo", "trace.json")]
+    [InlineData(".parcel-cache", "bundle.js")]
+    [InlineData(".mypy_cache", "module.meta.json")]
+    [InlineData(".ruff_cache", "cache.bin")]
+    [InlineData("bazel-out", "generated.cc")]
+    [InlineData("CMakeFiles", "compiler_depend.ts")]
+    [InlineData(".swiftpm", "workspace-state.json")]
+    [InlineData(".dart_tool", "package_config.json")]
+    [InlineData(".stack-work", "build.log")]
+    public void ScanFiles_SkipsCommonGeneratedCacheDirectories(string directoryName, string fileName)
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        try
+        {
+            File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('hello')");
+
+            var cacheDir = Path.Combine(tempDir, directoryName);
+            Directory.CreateDirectory(cacheDir);
+            File.WriteAllText(Path.Combine(cacheDir, fileName), "generated");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles();
+
+            Assert.Single(files);
+            Assert.Contains("app.py", files[0]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
     [Fact]
     public void ScanFilesDetailed_FileDeletedAfterEnumeration_RecordsWarning()
     {
@@ -5058,6 +5224,33 @@ public partial class FileIndexerTests
             var indexer = new FileIndexer(tempDir);
             Assert.Equal(FileIndexer.PathFilterKind.None, indexer.EvaluatePathFilter(libPath).FilterKind);
             Assert.Equal(FileIndexer.PathFilterKind.ExcludedByDefaultDirectory, indexer.EvaluatePathFilter(unrelatedPath).FilterKind);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Theory]
+    [InlineData(".turbo", "run.json")]
+    [InlineData(".ruff_cache", "cache.bin")]
+    [InlineData("bazel-testlogs", "test.log")]
+    [InlineData(".dart_tool", "package_config.json")]
+    public void EvaluatePathFilter_SkipsCommonGeneratedCacheDirectories(string directoryName, string fileName)
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        try
+        {
+            var cacheDir = Path.Combine(tempDir, directoryName);
+            Directory.CreateDirectory(cacheDir);
+            var path = Path.Combine(cacheDir, fileName);
+            File.WriteAllText(path, "generated");
+
+            var indexer = new FileIndexer(tempDir);
+
+            Assert.Equal(
+                FileIndexer.PathFilterKind.ExcludedByDefaultDirectory,
+                indexer.EvaluatePathFilter(path).FilterKind);
         }
         finally
         {

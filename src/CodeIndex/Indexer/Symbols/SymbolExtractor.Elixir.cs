@@ -105,45 +105,58 @@ public static partial class SymbolExtractor
         if (line.Length == 0)
             return line;
 
-        var chars = line.ToCharArray();
+        char[]? chars = null;
 
-        for (int i = 0; i < chars.Length; i++)
+        void MaskAt(int index) =>
+            (chars ??= line.ToCharArray())[index] = ' ';
+
+        void MaskToEnd(int start)
         {
-            var current = chars[i];
+            var masked = chars ??= line.ToCharArray();
+            for (int index = start; index < line.Length; index++)
+                masked[index] = ' ';
+        }
+
+        for (int i = 0; i < line.Length; i++)
+        {
+            var current = line[i];
 
             switch (state.Mode)
             {
                 case ElixirMaskMode.Normal:
                     if (current == '#')
                     {
-                        for (int j = i; j < chars.Length; j++)
-                            chars[j] = ' ';
+                        MaskToEnd(i);
                         return new string(chars);
                     }
 
                     if (current == '"' || current == '\'')
                     {
-                        bool triple = i + 2 < chars.Length && chars[i + 1] == current && chars[i + 2] == current;
+                        bool triple = i + 2 < line.Length && line[i + 1] == current && line[i + 2] == current;
                         if (triple)
                         {
-                            chars[i] = chars[i + 1] = chars[i + 2] = ' ';
+                            MaskAt(i);
+                            MaskAt(i + 1);
+                            MaskAt(i + 2);
                             state.Mode = current == '"' ? ElixirMaskMode.TripleDoubleQuote : ElixirMaskMode.TripleSingleQuote;
                             i += 2;
                         }
                         else
                         {
-                            chars[i] = ' ';
+                            MaskAt(i);
                             state.Mode = current == '"' ? ElixirMaskMode.DoubleQuote : ElixirMaskMode.SingleQuote;
                         }
                         break;
                     }
 
-                    if (current == '~' && i + 2 < chars.Length && char.IsLetter(chars[i + 1]))
+                    if (current == '~' && i + 2 < line.Length && char.IsLetter(line[i + 1]))
                     {
-                        var sigilOpen = chars[i + 2];
+                        var sigilOpen = line[i + 2];
                         if (TryGetElixirSigilClose(sigilOpen, out var sigilClose, out var nested))
                         {
-                            chars[i] = chars[i + 1] = chars[i + 2] = ' ';
+                            MaskAt(i);
+                            MaskAt(i + 1);
+                            MaskAt(i + 2);
                             state.Mode = ElixirMaskMode.Sigil;
                             state.SigilOpen = sigilOpen;
                             state.SigilClose = sigilClose;
@@ -154,10 +167,10 @@ public static partial class SymbolExtractor
                     break;
 
                 case ElixirMaskMode.DoubleQuote:
-                    chars[i] = ' ';
-                    if (current == '\\' && i + 1 < chars.Length)
+                    MaskAt(i);
+                    if (current == '\\' && i + 1 < line.Length)
                     {
-                        chars[++i] = ' ';
+                        MaskAt(++i);
                         continue;
                     }
 
@@ -166,10 +179,10 @@ public static partial class SymbolExtractor
                     break;
 
                 case ElixirMaskMode.SingleQuote:
-                    chars[i] = ' ';
-                    if (current == '\\' && i + 1 < chars.Length)
+                    MaskAt(i);
+                    if (current == '\\' && i + 1 < line.Length)
                     {
-                        chars[++i] = ' ';
+                        MaskAt(++i);
                         continue;
                     }
 
@@ -178,30 +191,34 @@ public static partial class SymbolExtractor
                     break;
 
                 case ElixirMaskMode.TripleDoubleQuote:
-                    chars[i] = ' ';
-                    if (current == '"' && i + 2 < chars.Length && chars[i + 1] == '"' && chars[i + 2] == '"')
+                    MaskAt(i);
+                    if (current == '"' && i + 2 < line.Length && line[i + 1] == '"' && line[i + 2] == '"')
                     {
-                        chars[i] = chars[i + 1] = chars[i + 2] = ' ';
+                        MaskAt(i);
+                        MaskAt(i + 1);
+                        MaskAt(i + 2);
                         state.Mode = ElixirMaskMode.Normal;
                         i += 2;
                     }
                     break;
 
                 case ElixirMaskMode.TripleSingleQuote:
-                    chars[i] = ' ';
-                    if (current == '\'' && i + 2 < chars.Length && chars[i + 1] == '\'' && chars[i + 2] == '\'')
+                    MaskAt(i);
+                    if (current == '\'' && i + 2 < line.Length && line[i + 1] == '\'' && line[i + 2] == '\'')
                     {
-                        chars[i] = chars[i + 1] = chars[i + 2] = ' ';
+                        MaskAt(i);
+                        MaskAt(i + 1);
+                        MaskAt(i + 2);
                         state.Mode = ElixirMaskMode.Normal;
                         i += 2;
                     }
                     break;
 
                 case ElixirMaskMode.Sigil:
-                    chars[i] = ' ';
-                    if (current == '\\' && i + 1 < chars.Length)
+                    MaskAt(i);
+                    if (current == '\\' && i + 1 < line.Length)
                     {
-                        chars[++i] = ' ';
+                        MaskAt(++i);
                         continue;
                     }
 
@@ -224,7 +241,7 @@ public static partial class SymbolExtractor
             }
         }
 
-        return new string(chars);
+        return chars is null ? line : new string(chars);
     }
 
     private static bool TryGetElixirSigilClose(char open, out char close, out bool nested)
