@@ -44,9 +44,9 @@ public static partial class SymbolExtractor
 
     private static List<SymbolRecord> ExtractAssemblySymbols(long fileId, string[] lines)
     {
-        var symbols = new List<SymbolRecord>();
-        var functionSymbols = new List<SymbolRecord>();
-        var sectionSymbols = new List<SymbolRecord>();
+        List<SymbolRecord>? symbols = null;
+        List<SymbolRecord>? functionSymbols = null;
+        List<SymbolRecord>? sectionSymbols = null;
 
         for (var i = 0; i < lines.Length; i++)
         {
@@ -56,22 +56,31 @@ public static partial class SymbolExtractor
             if (string.IsNullOrWhiteSpace(codeLine))
                 continue;
 
-            if (TryAddAssemblySectionSymbol(fileId, symbols, sectionSymbols, codeLine, lineNumber, rawLine))
+            if (TryAddAssemblySectionSymbol(fileId, ref symbols, ref sectionSymbols, codeLine, lineNumber, rawLine))
                 continue;
 
-            if (TryAddAssemblyFunctionSymbol(fileId, symbols, functionSymbols, codeLine, lineNumber, rawLine))
+            if (TryAddAssemblyFunctionSymbol(fileId, ref symbols, ref functionSymbols, codeLine, lineNumber, rawLine))
                 continue;
 
-            if (TryAddAssemblyMacroSymbol(fileId, symbols, functionSymbols, codeLine, lineNumber, rawLine))
+            if (TryAddAssemblyMacroSymbol(fileId, ref symbols, ref functionSymbols, codeLine, lineNumber, rawLine))
                 continue;
 
-            if (TryAddAssemblyImportSymbol(fileId, symbols, codeLine, lineNumber, rawLine))
+            if (TryAddAssemblyImportSymbol(fileId, ref symbols, codeLine, lineNumber, rawLine))
                 continue;
 
-            TryAddAssemblyConstantSymbol(fileId, symbols, codeLine, lineNumber, rawLine);
+            TryAddAssemblyConstantSymbol(fileId, ref symbols, codeLine, lineNumber, rawLine);
         }
 
-        AssignAssemblyRanges(functionSymbols, sectionSymbols, lines.Length);
+        if (symbols == null)
+            return [];
+
+        IReadOnlyList<SymbolRecord> functionRangeSymbols = functionSymbols != null
+            ? functionSymbols
+            : Array.Empty<SymbolRecord>();
+        IReadOnlyList<SymbolRecord> sectionRangeSymbols = sectionSymbols != null
+            ? sectionSymbols
+            : Array.Empty<SymbolRecord>();
+        AssignAssemblyRanges(functionRangeSymbols, sectionRangeSymbols, lines.Length);
         AssignContainers(symbols, lines, null);
         PopulateDeclaredContainerQualifiedNames(symbols);
         return symbols;
@@ -144,8 +153,8 @@ public static partial class SymbolExtractor
 
     private static bool TryAddAssemblySectionSymbol(
         long fileId,
-        List<SymbolRecord> symbols,
-        List<SymbolRecord> sectionSymbols,
+        ref List<SymbolRecord>? symbols,
+        ref List<SymbolRecord>? sectionSymbols,
         string codeLine,
         int lineNumber,
         string rawLine)
@@ -160,15 +169,15 @@ public static partial class SymbolExtractor
 
         var name = match.Groups["name"].Value;
         var symbol = CreateAssemblySymbol(fileId, "namespace", name, lineNumber, match.Groups["name"].Index, codeLine);
-        AddSymbolRecord(symbols, null, lineNumber, symbol, rawLine);
-        sectionSymbols.Add(symbol);
+        AddSymbolRecord(symbols ??= [], null, lineNumber, symbol, rawLine);
+        (sectionSymbols ??= []).Add(symbol);
         return true;
     }
 
     private static bool TryAddAssemblyFunctionSymbol(
         long fileId,
-        List<SymbolRecord> symbols,
-        List<SymbolRecord> functionSymbols,
+        ref List<SymbolRecord>? symbols,
+        ref List<SymbolRecord>? functionSymbols,
         string codeLine,
         int lineNumber,
         string rawLine)
@@ -181,15 +190,15 @@ public static partial class SymbolExtractor
 
         var name = match.Groups["name"].Value;
         var symbol = CreateAssemblySymbol(fileId, "function", name, lineNumber, match.Groups["name"].Index, codeLine);
-        AddSymbolRecord(symbols, null, lineNumber, symbol, rawLine);
-        functionSymbols.Add(symbol);
+        AddSymbolRecord(symbols ??= [], null, lineNumber, symbol, rawLine);
+        (functionSymbols ??= []).Add(symbol);
         return true;
     }
 
     private static bool TryAddAssemblyMacroSymbol(
         long fileId,
-        List<SymbolRecord> symbols,
-        List<SymbolRecord> functionSymbols,
+        ref List<SymbolRecord>? symbols,
+        ref List<SymbolRecord>? functionSymbols,
         string codeLine,
         int lineNumber,
         string rawLine)
@@ -200,14 +209,14 @@ public static partial class SymbolExtractor
 
         var group = match.Groups["name1"].Success ? match.Groups["name1"] : match.Groups["name2"];
         var symbol = CreateAssemblySymbol(fileId, "function", group.Value, lineNumber, group.Index, codeLine);
-        AddSymbolRecord(symbols, null, lineNumber, symbol, rawLine);
-        functionSymbols.Add(symbol);
+        AddSymbolRecord(symbols ??= [], null, lineNumber, symbol, rawLine);
+        (functionSymbols ??= []).Add(symbol);
         return true;
     }
 
     private static bool TryAddAssemblyImportSymbol(
         long fileId,
-        List<SymbolRecord> symbols,
+        ref List<SymbolRecord>? symbols,
         string codeLine,
         int lineNumber,
         string rawLine)
@@ -219,13 +228,13 @@ public static partial class SymbolExtractor
             return false;
 
         var name = match.Groups["name"].Value;
-        AddSymbolRecord(symbols, null, lineNumber, CreateAssemblySymbol(fileId, "import", name, lineNumber, match.Groups["name"].Index, codeLine), rawLine);
+        AddSymbolRecord(symbols ??= [], null, lineNumber, CreateAssemblySymbol(fileId, "import", name, lineNumber, match.Groups["name"].Index, codeLine), rawLine);
         return true;
     }
 
     private static bool TryAddAssemblyConstantSymbol(
         long fileId,
-        List<SymbolRecord> symbols,
+        ref List<SymbolRecord>? symbols,
         string codeLine,
         int lineNumber,
         string rawLine)
@@ -235,7 +244,7 @@ public static partial class SymbolExtractor
             return false;
 
         var group = match.Groups["name1"].Success ? match.Groups["name1"] : match.Groups["name2"];
-        AddSymbolRecord(symbols, null, lineNumber, CreateAssemblySymbol(fileId, "property", group.Value, lineNumber, group.Index, codeLine), rawLine);
+        AddSymbolRecord(symbols ??= [], null, lineNumber, CreateAssemblySymbol(fileId, "property", group.Value, lineNumber, group.Index, codeLine), rawLine);
         return true;
     }
 
@@ -259,8 +268,8 @@ public static partial class SymbolExtractor
         };
 
     private static void AssignAssemblyRanges(
-        List<SymbolRecord> functionSymbols,
-        List<SymbolRecord> sectionSymbols,
+        IReadOnlyList<SymbolRecord> functionSymbols,
+        IReadOnlyList<SymbolRecord> sectionSymbols,
         int lineCount)
     {
         var sections = BuildSortedAssemblyRangeSymbols(sectionSymbols);
