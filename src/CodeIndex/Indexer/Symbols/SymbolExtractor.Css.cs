@@ -167,12 +167,12 @@ public static partial class SymbolExtractor
         List<SymbolRecord> symbols,
         HashSet<string>? cssSeenSymbols)
     {
-        var trimmedMaskedSegment = maskedSegment.TrimStart();
+        var trimmedMaskedSegment = maskedSegment.AsSpan().TrimStart();
         if (!trimmedMaskedSegment.StartsWith("@layer", StringComparison.OrdinalIgnoreCase))
             return;
 
-        var trimmedRawSegment = rawSegment.Trim();
-        if (trimmedRawSegment.Length == 0)
+        var trimmedRawSegment = rawSegment.AsSpan().Trim();
+        if (trimmedRawSegment.IsEmpty)
             return;
 
         const string atLayerPrefix = "@layer";
@@ -181,10 +181,11 @@ public static partial class SymbolExtractor
 
         var rawNames = trimmedRawSegment[atLayerPrefix.Length..].Trim();
         var maskedNames = trimmedMaskedSegment[atLayerPrefix.Length..].Trim();
-        if (rawNames.Length == 0 || maskedNames.Length == 0)
+        if (rawNames.IsEmpty || maskedNames.IsEmpty)
             return;
 
-        foreach (var (rawName, maskedName) in EnumerateCssCommaSeparatedSegments(rawNames, maskedNames))
+        var trimmedRawText = trimmedRawSegment.Length == rawSegment.Length ? rawSegment : trimmedRawSegment.ToString();
+        foreach (var (rawName, maskedName) in EnumerateCssCommaSeparatedSegments(rawNames.ToString(), maskedNames.ToString()))
         {
             var name = rawName.Trim();
             if (name.Length == 0 || maskedName.Length == 0)
@@ -202,7 +203,7 @@ public static partial class SymbolExtractor
                     Line = lineIndex + 1,
                     StartLine = lineIndex + 1,
                     EndLine = lineIndex + 1,
-                    Signature = trimmedRawSegment,
+                    Signature = trimmedRawText,
                 });
         }
     }
@@ -242,12 +243,16 @@ public static partial class SymbolExtractor
 
             if (ch == ',' && parenDepth == 0 && bracketDepth == 0)
             {
-                yield return (rawText[segmentStart..index].Trim(), maskedText[segmentStart..index].Trim());
+                yield return (
+                    rawText.AsSpan(segmentStart, index - segmentStart).Trim().ToString(),
+                    maskedText.AsSpan(segmentStart, index - segmentStart).Trim().ToString());
                 segmentStart = index + 1;
             }
         }
 
-        yield return (rawText[segmentStart..].Trim(), maskedText[segmentStart..].Trim());
+        yield return (
+            rawText.AsSpan(segmentStart).Trim().ToString(),
+            maskedText.AsSpan(segmentStart).Trim().ToString());
     }
 
     private static int FindCssSameLineBraceEndColumn(string line, int startColumn)
