@@ -802,7 +802,7 @@ internal static class XamlReferenceExtractor
 
     private static string NormalizeXamlMarkupArgument(string value)
     {
-        value = value.Trim().Trim('"', '\'');
+        value = TrimXamlQuotedArgumentBoundary(value);
         if (value.Length == 0)
             return "";
 
@@ -837,9 +837,9 @@ internal static class XamlReferenceExtractor
         var memberTypeEnd = value.IndexOf("}.", StringComparison.Ordinal);
         if (memberTypeEnd >= 0 && memberTypeEnd + 2 < value.Length)
         {
-            var typeExpression = value[..(memberTypeEnd + 1)].Trim();
+            var typeExpression = TrimXamlRange(value, 0, memberTypeEnd + 1);
             var typeName = NormalizeXamlMarkupArgument(typeExpression);
-            var memberName = value[(memberTypeEnd + 2)..].Trim();
+            var memberName = TrimXamlRange(value, memberTypeEnd + 2, value.Length - memberTypeEnd - 2);
             if (typeName.Length > 0 && memberName.Length > 0)
                 return $"{typeName}.{memberName}";
         }
@@ -849,7 +849,7 @@ internal static class XamlReferenceExtractor
         if (value.StartsWith("{x:TypeExtension ", StringComparison.Ordinal))
             value = TrimXamlMarkupExtensionBody(value, "{x:TypeExtension ".Length);
 
-        return value.Trim().TrimEnd('}', '/', '>');
+        return TrimXamlMarkupArgumentTail(value);
     }
 
     private static bool TryNormalizeXStaticMarkup(string value, out string normalized)
@@ -865,9 +865,9 @@ internal static class XamlReferenceExtractor
         var memberTypeEnd = value.IndexOf("}.", StringComparison.Ordinal);
         if (memberTypeEnd >= 0 && memberTypeEnd + 2 < value.Length)
         {
-            var typeExpression = value[..(memberTypeEnd + 1)].Trim();
+            var typeExpression = TrimXamlRange(value, 0, memberTypeEnd + 1);
             var typeName = NormalizeXamlMarkupArgument(typeExpression);
-            var memberName = value[(memberTypeEnd + 2)..].Trim().TrimEnd('}');
+            var memberName = TrimXamlStaticMemberName(value, memberTypeEnd + 2);
             if (typeName.Length > 0 && memberName.Length > 0)
             {
                 normalized = $"{typeName}.{memberName}";
@@ -875,8 +875,39 @@ internal static class XamlReferenceExtractor
             }
         }
 
-        normalized = value.Trim().TrimEnd('}');
+        normalized = TrimXamlStaticMemberName(value, 0);
         return normalized.Length > 0;
+    }
+
+    private static string TrimXamlRange(string value, int start, int length)
+    {
+        return value.AsSpan(start, length).Trim().ToString();
+    }
+
+    private static string TrimXamlQuotedArgumentBoundary(string value)
+    {
+        var span = value.AsSpan().Trim();
+        while (span.Length > 0 && span[0] is '"' or '\'')
+            span = span[1..];
+        while (span.Length > 0 && span[^1] is '"' or '\'')
+            span = span[..^1];
+        return span.ToString();
+    }
+
+    private static string TrimXamlMarkupArgumentTail(string value)
+    {
+        var span = value.AsSpan().Trim();
+        while (span.Length > 0 && span[^1] is '}' or '/' or '>')
+            span = span[..^1];
+        return span.ToString();
+    }
+
+    private static string TrimXamlStaticMemberName(string value, int start)
+    {
+        var span = value.AsSpan(start).Trim();
+        while (span.Length > 0 && span[^1] == '}')
+            span = span[..^1];
+        return span.ToString();
     }
 
     private static string TrimXamlArgumentValue(string value, int start)
