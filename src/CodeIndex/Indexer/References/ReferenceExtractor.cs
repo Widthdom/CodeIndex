@@ -24,6 +24,7 @@ public static partial class ReferenceExtractor
     internal const int MaxReferenceLookupNamesPerLine = 512;
     internal const int MaxReferenceContainerCandidates = 20_000;
     internal const int MaxSwiftPropertyDefinitionsPerLine = 256;
+    private static readonly IReadOnlySet<string> EmptyDefinitionNameSet = new HashSet<string>(StringComparer.Ordinal);
     private static readonly string[] AdditionalReferenceLanguages =
     [
         "vue",
@@ -1223,11 +1224,14 @@ public static partial class ReferenceExtractor
         return namesByLine;
     }
 
-    private static HashSet<string> BuildAllDefinitionNames(
+    private static IReadOnlySet<string> BuildAllDefinitionNames(
         string language,
         IReadOnlyList<SymbolRecord> symbols,
         Action<ReferenceExtractionDiagnostic>? reportDiagnostic)
     {
+        if (symbols.Count == 0)
+            return EmptyDefinitionNameSet;
+
         var names = new HashSet<string>(GetDefinitionNamesComparer(language));
         for (var index = 0; index < symbols.Count; index++)
         {
@@ -1249,8 +1253,11 @@ public static partial class ReferenceExtractor
         return names;
     }
 
-    private static HashSet<string> BuildFileDefinitionNames(IReadOnlyList<SymbolRecord> symbols)
+    private static IReadOnlySet<string> BuildFileDefinitionNames(IReadOnlyList<SymbolRecord> symbols)
     {
+        if (symbols.Count == 0)
+            return EmptyDefinitionNameSet;
+
         var names = new HashSet<string>(symbols.Count, StringComparer.Ordinal);
         foreach (var symbol in symbols)
             names.Add(symbol.Name);

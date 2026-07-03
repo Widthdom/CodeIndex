@@ -275,7 +275,7 @@ internal static class CssReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        HashSet<string>? definitionNames,
+        IReadOnlySet<string>? definitionNames,
         HashSet<string>? variableDefinitionNames,
         SymbolRecord? container)
     {
