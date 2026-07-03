@@ -837,7 +837,7 @@ public static partial class ReferenceExtractor
     private static bool CanAttachCSharpXmlDocCommentToNextDeclaration(
         SymbolRecord? innermostContainer,
         IReadOnlyList<SymbolRecord>? scopeCandidates,
-        List<List<(int start, int end)>>? csharpAttrRanges,
+        IReadOnlyList<List<(int start, int end)>?>? csharpAttrRanges,
         string[] preparedLines,
         int lineNumber,
         SymbolRecord documentedContainer)
@@ -867,7 +867,7 @@ public static partial class ReferenceExtractor
     }
 
     private static bool HasOnlyCSharpWhitespaceOrAttributesBetweenCommentAndDeclaration(
-        List<List<(int start, int end)>>? csharpAttrRanges,
+        IReadOnlyList<List<(int start, int end)>?>? csharpAttrRanges,
         string[] preparedLines,
         int commentLineNumber,
         int declarationLineNumber)
@@ -889,7 +889,7 @@ public static partial class ReferenceExtractor
         return true;
     }
 
-    private static bool IsCSharpAttributeOnlyLine(string preparedLine, List<(int start, int end)>? ranges)
+    private static bool IsCSharpAttributeOnlyLine(string preparedLine, IReadOnlyList<(int start, int end)>? ranges)
     {
         if (ranges == null || ranges.Count == 0)
             return false;
@@ -1217,7 +1217,7 @@ public static partial class ReferenceExtractor
 
     private static bool HasOnlyCSharpWhitespaceOrAttributesAfterColumn(
         string preparedLine,
-        List<(int start, int end)>? ranges,
+        IReadOnlyList<(int start, int end)>? ranges,
         int startColumn)
     {
         if (startColumn < 0 || startColumn >= preparedLine.Length)
@@ -1396,7 +1396,7 @@ public static partial class ReferenceExtractor
         IReadOnlyList<SymbolRecord> candidates,
         string structuralLine,
         string preparedLine,
-        List<(int start, int end)>? csharpAttrRangesOnLine,
+        IReadOnlyList<(int start, int end)>? csharpAttrRangesOnLine,
         int lineNumber,
         int sameLineDeclarationStartColumn)
     {
@@ -4315,15 +4315,10 @@ public static partial class ReferenceExtractor
     /// `(開始列, 終端列 (exclusive))` のレンジを保持し、呼び出し名の列がどれかのレンジに含まれる場合に
     /// `call` ではなく `attribute` へ再分類する。
     /// </summary>
-    private static (List<List<(int start, int end)>>, List<List<(int start, int end)>>) BuildCSharpAttributeRanges(string[] preparedLines)
+    private static (List<(int start, int end)>?[] Ranges, List<(int start, int end)>?[] TopLevelRanges) BuildCSharpAttributeRanges(string[] preparedLines)
     {
-        var perLine = new List<List<(int, int)>>(preparedLines.Length);
-        var perLineTopLevel = new List<List<(int, int)>>(preparedLines.Length);
-        for (var i = 0; i < preparedLines.Length; i++)
-        {
-            perLine.Add(new List<(int, int)>());
-            perLineTopLevel.Add(new List<(int, int)>());
-        }
+        var perLine = new List<(int start, int end)>?[preparedLines.Length];
+        var perLineTopLevel = new List<(int start, int end)>?[preparedLines.Length];
 
         // Stack entries capture the opening `[` position, whether that bracket was at
         // a C# declaration (attribute) position, and a snapshot of the global paren depth
@@ -4361,7 +4356,7 @@ public static partial class ReferenceExtractor
                 int s = (l == topZoneStartLi) ? topZoneStartCi : 0;
                 int e = (l == endLi) ? endCi : preparedLines[l].Length;
                 if (e > s)
-                    perLineTopLevel[l].Add((s, e));
+                    AddCSharpAttributeRange(perLineTopLevel, l, s, e);
             }
             topZoneStartLi = -1;
         }
@@ -4455,7 +4450,7 @@ public static partial class ReferenceExtractor
                             {
                                 int s = (l == opened.li) ? opened.ci : 0;
                                 int e = (l == li) ? ci + 1 : preparedLines[l].Length;
-                                perLine[l].Add((s, e));
+                                AddCSharpAttributeRange(perLine, l, s, e);
                             }
                             // Close the top-level zone at the `]`. Section-local depth should
                             // be 0 here (we are at the closing bracket of this section) — if
@@ -4486,6 +4481,15 @@ public static partial class ReferenceExtractor
         }
 
         return (perLine, perLineTopLevel);
+    }
+
+    private static void AddCSharpAttributeRange(
+        List<(int start, int end)>?[] rangesByLine,
+        int lineIndex,
+        int start,
+        int end)
+    {
+        (rangesByLine[lineIndex] ??= []).Add((start, end));
     }
 
     /// <summary>
