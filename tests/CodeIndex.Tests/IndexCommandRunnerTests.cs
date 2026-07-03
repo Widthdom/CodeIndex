@@ -134,7 +134,7 @@ public partial class IndexCommandRunnerTests
     [Fact]
     public void RunBackfillFold_UnknownOption_ReturnsUsageError()
     {
-        var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_unknown_{Guid.NewGuid():N}.db");
+        var missingDb = CreateTempDbPath("cdidx_backfill_unknown");
 
         lock (TestConsoleLock.Gate)
         {
@@ -166,7 +166,7 @@ public partial class IndexCommandRunnerTests
     [Fact]
     public void RunBackfillFold_UnknownOptionBeforeJson_ReturnsJsonUsageError()
     {
-        var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_unknown_json_{Guid.NewGuid():N}.db");
+        var missingDb = CreateTempDbPath("cdidx_backfill_unknown_json");
 
         lock (TestConsoleLock.Gate)
         {
