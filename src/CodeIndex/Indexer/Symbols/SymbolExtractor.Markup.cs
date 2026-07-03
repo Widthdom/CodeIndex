@@ -16,6 +16,9 @@ public static partial class SymbolExtractor
     {
         const string defaultSlotSymbolName = "(default)";
 
+        if (!LinesContain(lines, "<", StringComparison.Ordinal))
+            return [];
+
         // HTML needs proper tag-structure awareness so attribute lookalikes inside
         // other attributes' quoted values (e.g. `<link title="href=evil.css" href="/real.css">`)
         // don't leak phantom imports AND real attributes on the same tag aren't
