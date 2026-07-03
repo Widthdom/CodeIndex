@@ -1138,7 +1138,8 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void Dispose_AfterWriteWork_RunsOptimizePragma()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_optimize_write_test_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_optimize_write");
+        var dbPath = Path.Combine(dbDir, $"codeindex_optimize_write_{Guid.NewGuid():N}.db");
         var optimizeCount = 0;
         DbContext.OptimizePragmaExecutedForTesting = dataSource =>
         {
@@ -1157,14 +1158,16 @@ public class DatabaseTests : IDisposable
         finally
         {
             DbContext.OptimizePragmaExecutedForTesting = null;
-            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
     [Fact]
     public void Dispose_WithoutWriteWork_SkipsOptimizePragma()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_optimize_read_test_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_optimize_read");
+        var dbPath = Path.Combine(dbDir, $"codeindex_optimize_read_{Guid.NewGuid():N}.db");
         var optimizeCount = 0;
         DbContext.OptimizePragmaExecutedForTesting = dataSource =>
         {
@@ -1182,7 +1185,8 @@ public class DatabaseTests : IDisposable
         finally
         {
             DbContext.OptimizePragmaExecutedForTesting = null;
-            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
