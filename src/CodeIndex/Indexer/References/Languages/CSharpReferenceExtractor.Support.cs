@@ -304,13 +304,13 @@ public static partial class ReferenceExtractor
                 builder.Append(ch);
         }
 
-        var normalized = builder.ToString().Trim();
+        var normalized = builder.ToString().AsSpan().Trim();
         while (normalized.EndsWith("?", StringComparison.Ordinal))
             normalized = normalized[..^1].TrimEnd();
         while (normalized.EndsWith("[]", StringComparison.Ordinal))
             normalized = normalized[..^2].TrimEnd();
 
-        return normalized;
+        return normalized.ToString();
     }
 
     private static (
