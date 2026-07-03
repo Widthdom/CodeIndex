@@ -2583,7 +2583,7 @@ internal static class RustReferenceExtractor
         if (callIndex <= 0)
             return false;
 
-        var prefix = line[..callIndex].TrimEnd();
+        var prefix = line.AsSpan(0, callIndex).TrimEnd();
         return prefix.EndsWith("fn", StringComparison.Ordinal);
     }
 
