@@ -14,6 +14,7 @@ public class PathCasingTests
 {
     [Fact]
     public void IsIgnoreCase_AgreesWithLiveFilesystemProbe()
+        => RunWithPathCasingLock(() =>
     {
         PathCasing.ResetCacheForTests();
         var tempDir = TestProjectHelper.CreateTempProject("cdidx_pathcasing");
@@ -26,10 +27,11 @@ public class PathCasingTests
         {
             TestProjectHelper.DeleteDirectory(tempDir);
         }
-    }
+    });
 
     [Fact]
     public void IsIgnoreCase_CachesResultPerAnchor()
+        => RunWithPathCasingLock(() =>
     {
         PathCasing.ResetCacheForTests();
         var tempDir = TestProjectHelper.CreateTempProject("cdidx_pathcasing_cache");
@@ -47,10 +49,11 @@ public class PathCasingTests
         {
             TestProjectHelper.DeleteDirectory(tempDir);
         }
-    }
+    });
 
     [Fact]
     public void SeedFromWorkspace_OverridesSubsequentProbes()
+        => RunWithPathCasingLock(() =>
     {
         PathCasing.ResetCacheForTests();
         var tempDir = TestProjectHelper.CreateTempProject("cdidx_pathcasing_seed");
@@ -67,10 +70,11 @@ public class PathCasingTests
         {
             TestProjectHelper.DeleteDirectory(tempDir);
         }
-    }
+    });
 
     [Fact]
     public void IsIgnoreCase_ProbeFailureThrowsStructuredFilesystemError_Issue3439()
+        => RunWithPathCasingLock(() =>
     {
         PathCasing.ResetCacheForTests();
         var tempDir = TestProjectHelper.CreateTempProject("cdidx_pathcasing_probe_failure");
@@ -91,10 +95,11 @@ public class PathCasingTests
             PathCasing.ResetCacheForTests();
             TestProjectHelper.DeleteDirectory(tempDir);
         }
-    }
+    });
 
     [Fact]
     public void PathsEqual_UsesSeededIgnoreCase()
+        => RunWithPathCasingLock(() =>
     {
         PathCasing.ResetCacheForTests();
         var tempDir = TestProjectHelper.CreateTempProject("cdidx_pathcasing_equal");
@@ -114,10 +119,11 @@ public class PathCasingTests
         {
             TestProjectHelper.DeleteDirectory(tempDir);
         }
-    }
+    });
 
     [Fact]
     public void IsPathEqualOrParent_RespectsCaseSensitiveSeed()
+        => RunWithPathCasingLock(() =>
     {
         PathCasing.ResetCacheForTests();
         var tempDir = TestProjectHelper.CreateTempProject("cdidx_pathcasing_parent");
@@ -137,10 +143,11 @@ public class PathCasingTests
         {
             TestProjectHelper.DeleteDirectory(tempDir);
         }
-    }
+    });
 
     [Fact]
     public void IsPathEqualOrParent_PreventsPrefixCollision()
+        => RunWithPathCasingLock(() =>
     {
         PathCasing.ResetCacheForTests();
         var tempDir = TestProjectHelper.CreateTempProject("cdidx_pathcasing_prefix");
@@ -156,7 +163,7 @@ public class PathCasingTests
         {
             TestProjectHelper.DeleteDirectory(tempDir);
         }
-    }
+    });
 
     [Fact]
     public void NormalizeBoundaryPath_TrimsTrailingSeparatorsButKeepsRoot_Issue3682()
@@ -180,6 +187,7 @@ public class PathCasingTests
 
     [Fact]
     public void IsFullPathEqualOrParent_UsesSeededCaseSensitivity_Issue3682()
+        => RunWithPathCasingLock(() =>
     {
         PathCasing.ResetCacheForTests();
         var tempDir = TestProjectHelper.CreateTempProject("cdidx_pathcasing_full_parent");
@@ -200,13 +208,19 @@ public class PathCasingTests
             PathCasing.ResetCacheForTests();
             TestProjectHelper.DeleteDirectory(tempDir);
         }
-    }
+    });
 
     [Fact]
     public void PathsEqual_NullEitherSide_IsFalse()
     {
         Assert.False(PathCasing.PathsEqual(null, "/tmp"));
         Assert.False(PathCasing.PathsEqual("/tmp", null));
+    }
+
+    private static void RunWithPathCasingLock(Action action)
+    {
+        lock (PathCasingTestLock.Gate)
+            action();
     }
 
     private static bool ProbeDirectoryIgnoreCaseLikeProduction(string path)
