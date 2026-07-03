@@ -788,11 +788,29 @@ public static partial class ReferenceExtractor
     };
 
     public static IReadOnlyCollection<string> GetSupportedLanguages()
-        => RegisteredLanguages
-            .Concat(AdditionalReferenceLanguages)
-            .Concat(ExtractorPluginRegistry.ReferenceLanguages)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
+    {
+        var pluginLanguages = ExtractorPluginRegistry.ReferenceLanguages;
+        var capacity = RegisteredLanguages.Count + AdditionalReferenceLanguages.Length + pluginLanguages.Count;
+        var languages = new List<string>(capacity);
+        var seen = new HashSet<string>(capacity, StringComparer.Ordinal);
+
+        AddSupportedLanguages(RegisteredLanguages, languages, seen);
+        AddSupportedLanguages(AdditionalReferenceLanguages, languages, seen);
+        AddSupportedLanguages(pluginLanguages, languages, seen);
+        return languages.ToArray();
+    }
+
+    private static void AddSupportedLanguages(
+        IEnumerable<string> candidates,
+        List<string> languages,
+        HashSet<string> seen)
+    {
+        foreach (var language in candidates)
+        {
+            if (seen.Add(language))
+                languages.Add(language);
+        }
+    }
 
     /// <summary>
     /// Registered language keys for reference extraction.
