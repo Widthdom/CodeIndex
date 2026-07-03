@@ -15,12 +15,12 @@ public static partial class SymbolExtractor
 
         for (var i = startIndex + 1; i < lines.Length; i++)
         {
-            var trimmed = lines[i].Trim();
+            var trimmed = lines[i].AsSpan().Trim();
+            if (trimmed.IsEmpty)
+                continue;
+
             if (IsSmalltalkRangeBoundary(trimmed))
                 break;
-
-            if (trimmed.Length == 0)
-                continue;
 
             bodyStartLine ??= i + 1;
             lastBodyLine = i + 1;
@@ -31,8 +31,17 @@ public static partial class SymbolExtractor
             : (lastBodyLine, bodyStartLine, lastBodyLine);
     }
 
-    private static bool IsSmalltalkRangeBoundary(string line) =>
-        (line.Contains(">>", StringComparison.Ordinal) && SmalltalkMethodStartForRangeRegex.IsMatch(line))
-        || ((line.Contains("subclass:", StringComparison.Ordinal) || line.Contains("named:", StringComparison.Ordinal))
-            && SmalltalkClassDeclarationForRangeRegex.IsMatch(line));
+    private static bool IsSmalltalkRangeBoundary(ReadOnlySpan<char> line)
+    {
+        if (line.Contains(">>", StringComparison.Ordinal))
+            return SmalltalkMethodStartForRangeRegex.IsMatch(line.ToString());
+
+        if (!line.Contains("subclass:", StringComparison.Ordinal)
+            && !line.Contains("named:", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return SmalltalkClassDeclarationForRangeRegex.IsMatch(line.ToString());
+    }
 }
