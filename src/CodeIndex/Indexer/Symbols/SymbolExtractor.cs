@@ -4871,10 +4871,17 @@ public static partial class SymbolExtractor
             return;
         }
 
+        if (!TryGetSqlGeneratedColumnContainerMarkers(
+            structuralLines,
+            out var hasAlterAdd,
+            out var hasCreateTable))
+        {
+            return;
+        }
+
         var structuralContent = string.Join('\n', structuralLines);
         List<int>? lineStarts = null;
-        if (structuralContent.Contains("ALTER", StringComparison.OrdinalIgnoreCase)
-            && structuralContent.Contains("ADD", StringComparison.OrdinalIgnoreCase))
+        if (hasAlterAdd)
         {
             foreach (Match match in SqlAlterTableAddGeneratedColumnRegex.Matches(structuralContent))
             {
@@ -4890,11 +4897,8 @@ public static partial class SymbolExtractor
             }
         }
 
-        if (!structuralContent.Contains("CREATE", StringComparison.OrdinalIgnoreCase)
-            || !structuralContent.Contains("TABLE", StringComparison.OrdinalIgnoreCase))
-        {
+        if (!hasCreateTable)
             return;
-        }
 
         foreach (Match tableMatch in SqlCreateTableBodyRegex.Matches(structuralContent))
         {
@@ -4919,6 +4923,32 @@ public static partial class SymbolExtractor
                     symbols);
             }
         }
+    }
+
+    private static bool TryGetSqlGeneratedColumnContainerMarkers(
+        IReadOnlyList<string> lines,
+        out bool hasAlterAdd,
+        out bool hasCreateTable)
+    {
+        var hasAlter = false;
+        var hasAdd = false;
+        var hasCreate = false;
+        var hasTable = false;
+
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var line = lines[i];
+            hasAlter |= line.IndexOf("ALTER", StringComparison.OrdinalIgnoreCase) >= 0;
+            hasAdd |= line.IndexOf("ADD", StringComparison.OrdinalIgnoreCase) >= 0;
+            hasCreate |= line.IndexOf("CREATE", StringComparison.OrdinalIgnoreCase) >= 0;
+            hasTable |= line.IndexOf("TABLE", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (hasAlter && hasAdd && hasCreate && hasTable)
+                break;
+        }
+
+        hasAlterAdd = hasAlter && hasAdd;
+        hasCreateTable = hasCreate && hasTable;
+        return hasAlterAdd || hasCreateTable;
     }
 
     private static void AddSqlGeneratedColumnSymbol(
