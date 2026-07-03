@@ -4845,18 +4845,6 @@ public static partial class SymbolExtractor
         return starts;
     }
 
-    private static List<int> BuildLineStarts(string content)
-    {
-        var starts = new List<int> { 0 };
-        for (var i = 0; i < content.Length; i++)
-        {
-            if (content[i] == '\n')
-                starts.Add(i + 1);
-        }
-
-        return starts;
-    }
-
     private static int GetLineNumberFromOffset(List<int> lineStarts, int offset)
     {
         var index = lineStarts.BinarySearch(offset);
