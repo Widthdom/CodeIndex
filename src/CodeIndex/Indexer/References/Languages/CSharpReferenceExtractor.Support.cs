@@ -27,11 +27,12 @@ public static partial class ReferenceExtractor
         IReadOnlyList<string>? lines = null,
         IReadOnlyList<string>? aliasScanLines = null)
     {
+        if (language != "csharp")
+            return ([], [], []);
+
         var aliases = new List<CSharpUsingAliasRecord>();
         var namespaces = new List<CSharpUsingNamespaceRecord>();
         var statics = new List<CSharpUsingStaticRecord>();
-        if (language != "csharp")
-            return (aliases, namespaces, statics);
 
         foreach (var symbol in symbols)
         {
