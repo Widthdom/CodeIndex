@@ -6914,18 +6914,21 @@ public static partial class SymbolExtractor
 
     private sealed class DartClassBodyScope
     {
-        private readonly bool[] _lineStartInsideClassBody;
+        private readonly bool[]? _lineStartInsideClassBody;
 
-        public DartClassBodyScope(bool[] lineStartInsideClassBody)
+        public DartClassBodyScope(bool[]? lineStartInsideClassBody)
         {
             _lineStartInsideClassBody = lineStartInsideClassBody;
         }
 
-        public bool IsInsideClassBodyAt(int lineIndex) => _lineStartInsideClassBody[lineIndex];
+        public bool IsInsideClassBodyAt(int lineIndex) => _lineStartInsideClassBody?[lineIndex] ?? false;
     }
 
     private static DartClassBodyScope BuildDartClassBodyScope(string[] structuralLines)
     {
+        if (!LinesContain(structuralLines, "class", StringComparison.Ordinal))
+            return new DartClassBodyScope(null);
+
         var lineStartInsideClassBody = new bool[structuralLines.Length];
         var scopeStack = new Stack<bool>();
         scopeStack.Push(false);
