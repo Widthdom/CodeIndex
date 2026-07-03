@@ -301,6 +301,12 @@ public static partial class SymbolExtractor
 
     private static List<SymbolRecord> BuildSortedAssemblyRangeSymbols(IReadOnlyList<SymbolRecord> symbols)
     {
+        if (symbols.Count == 0)
+            return [];
+
+        if (symbols.Count == 1)
+            return [symbols[0]];
+
         var entries = new List<(SymbolRecord Symbol, int OriginalIndex)>(symbols.Count);
         for (var index = 0; index < symbols.Count; index++)
             entries.Add((symbols[index], index));
