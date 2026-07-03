@@ -162,11 +162,13 @@ internal static class SwiftReferenceExtractor
             return;
         }
 
-        var emittedAliases = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string>? emittedAliases = aliases.Count > 1
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : null;
         foreach (var bindingCandidate in aliases)
         {
             var alias = bindingCandidate.Alias;
-            if (!emittedAliases.Add(alias))
+            if (emittedAliases is not null && !emittedAliases.Add(alias))
                 continue;
 
             var searchStart = 0;
