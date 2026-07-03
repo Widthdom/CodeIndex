@@ -6866,7 +6866,7 @@ public sealed class Caller
             return;
 
         var projectRoot = CreateTempProject();
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_private_lock_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_private_lock");
         var lockPath = dbPath + ".lock";
         var infoPath = lockPath + ".info";
         try
@@ -6897,7 +6897,7 @@ public sealed class Caller
     public void IndexLock_Dispose_WhenMetadataCleanupFails_ReportsSanitizedDiagnostic_Issue3462()
     {
         var projectRoot = CreateTempProject();
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_cleanup_diag_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_cleanup_diag");
         var lockPath = dbPath + ".lock";
         var infoPath = lockPath + ".info";
         var diagnostics = new List<LockCleanupDiagnostic>();
@@ -6936,7 +6936,7 @@ public sealed class Caller
     [Fact]
     public void IndexLock_TryReadHolderInfo_WhenInfoFileTooLarge_ReturnsNull()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_large_lock_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_large_lock");
         var lockPath = dbPath + ".lock";
         var infoPath = lockPath + ".info";
         try
@@ -6957,7 +6957,7 @@ public sealed class Caller
     [Fact]
     public void IndexLock_TryReadHolderInfo_WhenProcessDoesNotMatch_MarksMetadataStale_Issue3825()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_stale_holder_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_stale_holder");
         var lockPath = dbPath + ".lock";
         var infoPath = lockPath + ".info";
         try
@@ -6983,7 +6983,7 @@ public sealed class Caller
     public void Run_LockHeldByAnotherHolder_RejectedWithHolderInfo()
     {
         var projectRoot = CreateTempProject();
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_lock_held_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_lock_held");
         var lockPath = dbPath + ".lock";
         var infoPath = lockPath + ".info";
         try
@@ -7019,7 +7019,7 @@ public sealed class Caller
     public void Run_LockHeldByAnotherHolder_JsonIncludesHint()
     {
         var projectRoot = CreateTempProject();
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_lock_json_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_lock_json");
         var lockPath = dbPath + ".lock";
         var infoPath = lockPath + ".info";
         try
@@ -7057,7 +7057,7 @@ public sealed class Caller
     public void Run_LockHeldWithoutHolderInfo_ReportsDbLocked()
     {
         var projectRoot = CreateTempProject();
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_lock_no_info_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_lock_no_info");
         var lockPath = dbPath + ".lock";
         try
         {
@@ -7089,7 +7089,7 @@ public sealed class Caller
     public void Run_ForceFlag_BypassesLockEvenWhenHeld()
     {
         var projectRoot = CreateTempProject();
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_lock_force_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_lock_force");
         var lockPath = dbPath + ".lock";
         var infoPath = lockPath + ".info";
         try
@@ -7118,7 +7118,7 @@ public sealed class Caller
     public void Run_StaleLockFile_ReclaimedWithoutDeletingLockFileAfterSuccess_Issue3825()
     {
         var projectRoot = CreateTempProject();
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_lock_stale_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_lock_stale");
         var lockPath = dbPath + ".lock";
         var infoPath = lockPath + ".info";
         try
@@ -7173,7 +7173,7 @@ public sealed class Caller
     public void Run_ReadOnlyFlag_ReturnsUsageError()
     {
         var projectRoot = CreateTempProject();
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_index_readonly_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_index_readonly");
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hi')\n");
