@@ -1193,8 +1193,7 @@ public partial class FileIndexerTests
     [Fact]
     public void LanguageMapOverrides_BomPrefixedFileLoadsOverrides()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_bom_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_bom");
         try
         {
             var configPath = Path.Combine(tempDir, LanguageMapOverrides.WorkspaceFileName);
@@ -1218,8 +1217,7 @@ public partial class FileIndexerTests
     [InlineData("Project.vbproj")]
     public void GetProjectMarkerFingerprint_RecognizesMsbuildProjectMarkers(string markerFileName)
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_msbuild_marker");
         try
         {
             File.WriteAllText(Path.Combine(tempDir, markerFileName), "<Project />");
@@ -1238,8 +1236,7 @@ public partial class FileIndexerTests
     [Fact]
     public void GetProjectMarkerFingerprint_UsesJoinedSortedMarkerPaths()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_exact_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_msbuild_marker_exact");
         try
         {
             File.WriteAllText(Path.Combine(tempDir, "Directory.Build.props"), "<Project />");
@@ -1260,8 +1257,7 @@ public partial class FileIndexerTests
     [Fact]
     public void GetProjectMarkerFingerprint_CancelledToken_ThrowsBeforeTraversal()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_cancel_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_msbuild_marker_cancel");
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
         try
@@ -1280,7 +1276,7 @@ public partial class FileIndexerTests
     [Fact]
     public void GetProjectMarkerFingerprint_DirectoryCapTruncatesTraversal()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_dir_cap_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_msbuild_marker_dir_cap");
         try
         {
             var nestedDir = Path.Combine(tempDir, "src", "App");
@@ -1305,10 +1301,9 @@ public partial class FileIndexerTests
     [Fact]
     public void GetProjectMarkerFingerprint_DirectoryCapReportsIncompleteTraversal()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_incomplete_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_msbuild_marker_incomplete");
         try
         {
-            Directory.CreateDirectory(tempDir);
             for (var i = 0; i < 4; i++)
                 Directory.CreateDirectory(Path.Combine(tempDir, $"project-{i}"));
 
@@ -1343,11 +1338,10 @@ public partial class FileIndexerTests
     [MemberData(nameof(ProjectMarkerTraversalFailures))]
     public void GetProjectMarkerFingerprint_TraversalFailureReportsWarning_Issue3473(Exception exception)
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_warning_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_msbuild_marker_warning");
         var previousEnumerator = FileIndexer.EnumerateProjectMarkerDirectoriesForTesting;
         try
         {
-            Directory.CreateDirectory(tempDir);
             FileIndexer.EnumerateProjectMarkerDirectoriesForTesting = _ => throw exception;
             var indexer = new FileIndexer(tempDir, ignoreCase: false);
 
@@ -1369,10 +1363,9 @@ public partial class FileIndexerTests
     [Fact]
     public void GetProjectMarkerFingerprint_IgnoredGeneratedTreeDoesNotExhaustDirectoryCap()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_ignored_cap_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_msbuild_marker_ignored_cap");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "generated/\n");
             var generatedDir = Path.Combine(tempDir, "generated");
             Directory.CreateDirectory(generatedDir);
@@ -1399,8 +1392,7 @@ public partial class FileIndexerTests
     [Fact]
     public void GetProjectMarkerFingerprint_FileCapTruncatesMarkerCollection()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_file_cap_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_msbuild_marker_file_cap");
         try
         {
             File.WriteAllText(Path.Combine(tempDir, "App.csproj"), "<Project />");
