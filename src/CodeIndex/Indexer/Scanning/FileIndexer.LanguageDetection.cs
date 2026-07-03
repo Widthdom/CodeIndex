@@ -399,13 +399,13 @@ public partial class FileIndexer
             return new LanguageDetectionResult(FileProbeStatus.Supported, lang);
         }
 
-        if (ExtractorPluginRegistry.LanguageExtensions.TryGetValue(ext, out var pluginLang))
+        if (ExtractorPluginRegistry.TryGetLanguageForExtension(ext, out var pluginLang))
             return new LanguageDetectionResult(FileProbeStatus.Supported, pluginLang);
 
         if (!string.IsNullOrEmpty(ext))
         {
             ExtractorPluginRegistry.LoadPatternConfigsForPath(filePath);
-            if (ExtractorPluginRegistry.LanguageExtensions.TryGetValue(ext, out pluginLang))
+            if (ExtractorPluginRegistry.TryGetLanguageForExtension(ext, out pluginLang))
                 return new LanguageDetectionResult(FileProbeStatus.Supported, pluginLang);
 
             return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);

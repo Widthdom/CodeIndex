@@ -84,6 +84,23 @@ public static partial class ExtractorPluginRegistry
         }
     }
 
+    internal static bool TryGetLanguageForExtension(string extension, out string language)
+    {
+        language = "";
+        if (string.IsNullOrWhiteSpace(extension))
+            return false;
+
+        EnsurePluginsLoaded();
+        lock (Gate)
+        {
+            if (SymbolExtractors.Count == 0 && ReferenceExtractors.Count == 0)
+                return false;
+
+            return TryGetLanguageForExtension(extension, SymbolExtractors.Values, out language)
+                   || TryGetLanguageForExtension(extension, ReferenceExtractors.Values, out language);
+        }
+    }
+
     public static bool TryGetSymbolExtractor(string language, out ISymbolExtractor extractor)
     {
         EnsurePluginsLoaded();
@@ -288,6 +305,57 @@ public static partial class ExtractorPluginRegistry
                     target.TryAdd(normalizedExtension, normalizedLanguage);
             }
         }
+    }
+
+    private static bool TryGetLanguageForExtension(
+        string extension,
+        IEnumerable<ISymbolExtractor> plugins,
+        out string language)
+    {
+        foreach (var plugin in plugins)
+        {
+            if (TryMatchPluginExtension(extension, plugin.Language, plugin.FileExtensions, out language))
+                return true;
+        }
+
+        language = "";
+        return false;
+    }
+
+    private static bool TryGetLanguageForExtension(
+        string extension,
+        IEnumerable<IReferenceExtractor> plugins,
+        out string language)
+    {
+        foreach (var plugin in plugins)
+        {
+            if (TryMatchPluginExtension(extension, plugin.Language, plugin.FileExtensions, out language))
+                return true;
+        }
+
+        language = "";
+        return false;
+    }
+
+    private static bool TryMatchPluginExtension(
+        string extension,
+        string pluginLanguage,
+        IReadOnlyCollection<string> pluginExtensions,
+        out string language)
+    {
+        foreach (var pluginExtension in pluginExtensions)
+        {
+            var normalizedExtension = NormalizePluginExtension(pluginExtension);
+            if (normalizedExtension != null
+                && string.Equals(normalizedExtension, extension, StringComparison.OrdinalIgnoreCase))
+            {
+                language = NormalizePluginLanguage(pluginLanguage);
+                return true;
+            }
+        }
+
+        language = "";
+        return false;
     }
 
     private static string NormalizePluginLanguage(string language)

@@ -9,7 +9,7 @@ public partial class FileIndexer
         var extension = Path.GetExtension(filePath);
         return !string.IsNullOrEmpty(extension)
             && !LangMap.ContainsKey(extension)
-            && !ExtractorPluginRegistry.LanguageExtensions.ContainsKey(extension);
+            && !ExtractorPluginRegistry.TryGetLanguageForExtension(extension, out _);
     }
 
     private static bool IsInternalIndexArtifactPath(string relativePath)
