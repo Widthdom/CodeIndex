@@ -37,15 +37,17 @@ internal static class KotlinReferenceExtractor
     {
         "and", "downTo", "or", "shl", "shr", "step", "to", "until", "ushr", "xor",
     };
+    private static readonly HashSet<string> EmptyKotlinNameSet = new(StringComparer.Ordinal);
 
     public static (HashSet<string> ConstructorTypeNames, HashSet<string> InfixFunctionNames) BuildNameSets(
         string language,
         IReadOnlyList<SymbolRecord> symbols)
     {
+        if (language != "kotlin")
+            return (EmptyKotlinNameSet, EmptyKotlinNameSet);
+
         var constructorTypeNames = new HashSet<string>(StringComparer.Ordinal);
         var infixFunctionNames = new HashSet<string>(BuiltInInfixFunctionNames, StringComparer.Ordinal);
-        if (language != "kotlin")
-            return (constructorTypeNames, infixFunctionNames);
 
         var callableNames = new HashSet<string>(StringComparer.Ordinal);
         List<string>? constructableClassNames = null;
