@@ -119,7 +119,7 @@ public static partial class SymbolExtractor
         }
         var startColumn = rawLine.IndexOf(name, StringComparison.Ordinal);
         if (startColumn < 0)
-            startColumn = rawLine.Length - rawLine.TrimStart().Length;
+            startColumn = GetGoFirstNonWhitespaceColumn(rawLine);
 
         AddSymbolRecord(
             symbols,
@@ -174,7 +174,7 @@ public static partial class SymbolExtractor
 
             var startColumn = rawLine.IndexOf(name, StringComparison.Ordinal);
             if (startColumn < 0)
-                startColumn = rawLine.Length - rawLine.TrimStart().Length;
+                startColumn = GetGoFirstNonWhitespaceColumn(rawLine);
 
             AddSymbolRecord(
                 symbols,
@@ -386,7 +386,7 @@ public static partial class SymbolExtractor
         if (startColumn < 0)
             startColumn = rawLine.IndexOf(importText, StringComparison.Ordinal);
         if (startColumn < 0)
-            startColumn = rawLine.Length - rawLine.TrimStart().Length;
+            startColumn = GetGoFirstNonWhitespaceColumn(rawLine);
 
         AddSymbolRecord(
             symbols,
@@ -426,7 +426,7 @@ public static partial class SymbolExtractor
 
         var startColumn = rawLine.IndexOf("//go:", StringComparison.Ordinal);
         if (startColumn < 0)
-            startColumn = rawLine.Length - rawLine.TrimStart().Length;
+            startColumn = GetGoFirstNonWhitespaceColumn(rawLine);
 
         AddSymbolRecord(
             symbols,
@@ -585,7 +585,7 @@ public static partial class SymbolExtractor
 
         var startColumn = rawLine.IndexOf(name, StringComparison.Ordinal);
         if (startColumn < 0)
-            startColumn = rawLine.Length - rawLine.TrimStart().Length;
+            startColumn = GetGoFirstNonWhitespaceColumn(rawLine);
 
         AddSymbolRecord(
             symbols,
@@ -631,7 +631,7 @@ public static partial class SymbolExtractor
 
         var startColumn = rawLine.IndexOf(name, StringComparison.Ordinal);
         if (startColumn < 0)
-            startColumn = rawLine.Length - rawLine.TrimStart().Length;
+            startColumn = GetGoFirstNonWhitespaceColumn(rawLine);
 
         AddSymbolRecord(
             symbols,
@@ -741,7 +741,7 @@ public static partial class SymbolExtractor
 
         var startColumn = rawLine.IndexOf(name, StringComparison.Ordinal);
         if (startColumn < 0)
-            startColumn = rawLine.Length - rawLine.TrimStart().Length;
+            startColumn = GetGoFirstNonWhitespaceColumn(rawLine);
 
         AddSymbolRecord(
             symbols,
@@ -989,6 +989,14 @@ public static partial class SymbolExtractor
         while (start < text.Length && char.IsWhiteSpace(text[start]))
             start++;
         return start;
+    }
+
+    private static int GetGoFirstNonWhitespaceColumn(string text)
+    {
+        var column = 0;
+        while (column < text.Length && char.IsWhiteSpace(text[column]))
+            column++;
+        return column;
     }
 
     private static bool IsGoSymbolIdentifierStart(char ch) =>
