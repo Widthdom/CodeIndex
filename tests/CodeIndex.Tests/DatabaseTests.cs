@@ -555,7 +555,8 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void InitializeSchema_RefreshesLegacyKindCheckConstraints()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_kind_check_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_kind_check");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
             SeedLegacyKindCheckSchema(dbPath);
@@ -603,14 +604,16 @@ public class DatabaseTests : IDisposable
         }
         finally
         {
-            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
     [Fact]
     public void InitializeSchema_ForeignKeyCheckDetectsRebuildViolations_Issue3717()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_fk_check_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_fk_check");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
             SeedLegacyKindCheckSchema(dbPath);
@@ -638,7 +641,8 @@ public class DatabaseTests : IDisposable
         finally
         {
             DbContext.ForeignKeyValidationBeforeCheckForTesting = null;
-            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
@@ -670,7 +674,8 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void Dispose_AfterWriteWork_AttemptsWalCheckpoint()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_checkpoint_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("cdidx_checkpoint");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         var checkpointAttempted = false;
         DbContext.WalCheckpointTruncateExecutedForTesting = _ => checkpointAttempted = true;
         try
@@ -687,15 +692,15 @@ public class DatabaseTests : IDisposable
         {
             DbContext.WalCheckpointTruncateExecutedForTesting = null;
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
     [Fact]
     public void Dispose_AfterSchemaInitializationOnly_DoesNotCheckpointWal()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_schema_checkpoint_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("cdidx_schema_checkpoint");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         var checkpointAttempted = false;
         DbContext.WalCheckpointTruncateExecutedForTesting = _ => checkpointAttempted = true;
         try
@@ -711,8 +716,7 @@ public class DatabaseTests : IDisposable
         {
             DbContext.WalCheckpointTruncateExecutedForTesting = null;
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
