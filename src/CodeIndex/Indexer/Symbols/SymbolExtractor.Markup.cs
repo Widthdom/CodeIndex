@@ -364,7 +364,7 @@ public static partial class SymbolExtractor
         // Markdown headings are the closest thing to navigable symbols in docs files.
         // Markdown の見出しは、ドキュメント内でナビゲート可能な symbol に最も近い。
         IReadOnlyDictionary<string, string>? referenceTargets = null;
-        var symbols = new List<SymbolRecord>();
+        List<SymbolRecord>? symbols = null;
         Stack<(int Level, int SymbolIndex)>? headingStack = null;
         var inFence = false;
         var fenceChar = '\0';
@@ -392,17 +392,17 @@ public static partial class SymbolExtractor
 
                     if (headingStack is { Count: > 0 })
                     {
-                        var parent = symbols[headingStack.Peek().SymbolIndex];
+                        var parent = symbols![headingStack.Peek().SymbolIndex];
                         codeSymbol.ContainerKind = "heading";
                         codeSymbol.ContainerName = parent.Name;
                     }
 
-                    symbols.Add(codeSymbol);
+                    (symbols ??= []).Add(codeSymbol);
                     fenceSymbolIndex = symbols.Count - 1;
                 }
                 else if (fenceSymbolIndex >= 0)
                 {
-                    symbols[fenceSymbolIndex].EndLine = i + 1;
+                    symbols![fenceSymbolIndex].EndLine = i + 1;
                     symbols[fenceSymbolIndex].BodyEndLine = Math.Max(symbols[fenceSymbolIndex].BodyStartLine ?? i + 1, i);
                     fenceSymbolIndex = -1;
                 }
@@ -422,7 +422,7 @@ public static partial class SymbolExtractor
                 while (headingStack is { Count: > 0 } && headingStack.Peek().Level >= setextLevel)
                 {
                     var closedHeading = headingStack.Pop();
-                    symbols[closedHeading.SymbolIndex].EndLine = i;
+                    symbols![closedHeading.SymbolIndex].EndLine = i;
                     symbols[closedHeading.SymbolIndex].BodyEndLine = i;
                 }
 
@@ -441,28 +441,28 @@ public static partial class SymbolExtractor
 
                 if (headingStack is { Count: > 0 })
                 {
-                    var parent = symbols[headingStack.Peek().SymbolIndex];
+                    var parent = symbols![headingStack.Peek().SymbolIndex];
                     setextSymbol.ContainerKind = "heading";
                     setextSymbol.ContainerName = parent.Name;
                 }
 
-                symbols.Add(setextSymbol);
+                (symbols ??= []).Add(setextSymbol);
                 (headingStack ??= new Stack<(int Level, int SymbolIndex)>()).Push((setextLevel, symbols.Count - 1));
-                AddMarkdownReferenceSymbols(fileId, lines[i], i + 1, symbols, lines, ref referenceTargets);
+                AddMarkdownReferenceSymbols(fileId, lines[i], i + 1, ref symbols, lines, ref referenceTargets);
                 i++;
                 continue;
             }
 
             if (!TryParseMarkdownHeading(lines[i], out var level, out var headingText))
             {
-                AddMarkdownReferenceSymbols(fileId, lines[i], i + 1, symbols, lines, ref referenceTargets);
+                AddMarkdownReferenceSymbols(fileId, lines[i], i + 1, ref symbols, lines, ref referenceTargets);
                 continue;
             }
 
             while (headingStack is { Count: > 0 } && headingStack.Peek().Level >= level)
             {
                 var closedHeading = headingStack.Pop();
-                symbols[closedHeading.SymbolIndex].EndLine = i;
+                symbols![closedHeading.SymbolIndex].EndLine = i;
                 symbols[closedHeading.SymbolIndex].BodyEndLine = i;
             }
 
@@ -481,24 +481,24 @@ public static partial class SymbolExtractor
 
             if (headingStack is { Count: > 0 })
             {
-                var parent = symbols[headingStack.Peek().SymbolIndex];
+                var parent = symbols![headingStack.Peek().SymbolIndex];
                 symbol.ContainerKind = "heading";
                 symbol.ContainerName = parent.Name;
             }
 
-            symbols.Add(symbol);
+            (symbols ??= []).Add(symbol);
             (headingStack ??= new Stack<(int Level, int SymbolIndex)>()).Push((level, symbols.Count - 1));
-            AddMarkdownReferenceSymbols(fileId, lines[i], i + 1, symbols, lines, ref referenceTargets);
+            AddMarkdownReferenceSymbols(fileId, lines[i], i + 1, ref symbols, lines, ref referenceTargets);
         }
 
         while (headingStack is { Count: > 0 })
         {
             var closedHeading = headingStack.Pop();
-            symbols[closedHeading.SymbolIndex].EndLine = lines.Length;
+            symbols![closedHeading.SymbolIndex].EndLine = lines.Length;
             symbols[closedHeading.SymbolIndex].BodyEndLine = lines.Length;
         }
 
-        return symbols;
+        return symbols ?? [];
     }
 
     private static IReadOnlyDictionary<string, string> BuildMarkdownReferenceDefinitionTargets(string[] lines)
@@ -538,20 +538,20 @@ public static partial class SymbolExtractor
         long fileId,
         string line,
         int lineNumber,
-        List<SymbolRecord> symbols,
+        ref List<SymbolRecord>? symbols,
         string[] allLines,
         ref IReadOnlyDictionary<string, string>? referenceTargets)
     {
         if (line.Contains("](", StringComparison.Ordinal))
         {
             foreach (Match match in MarkdownLocalAnchorLinkRegex.Matches(line))
-                AddMarkdownReferenceSymbol(fileId, match.Groups["target"].Value, line, lineNumber, symbols);
+                AddMarkdownReferenceSymbol(fileId, match.Groups["target"].Value, line, lineNumber, ref symbols);
         }
 
         if (line.Contains("]:", StringComparison.Ordinal))
         {
             foreach (Match match in MarkdownLocalAnchorReferenceRegex.Matches(line))
-                AddMarkdownReferenceSymbol(fileId, match.Groups["target"].Value, line, lineNumber, symbols);
+                AddMarkdownReferenceSymbol(fileId, match.Groups["target"].Value, line, lineNumber, ref symbols);
         }
 
         if (!line.Contains("][", StringComparison.Ordinal))
@@ -565,17 +565,17 @@ public static partial class SymbolExtractor
 
             referenceTargets ??= BuildMarkdownReferenceDefinitionTargets(allLines);
             if (referenceTargets.TryGetValue(label, out var target) && target.TrimStart().StartsWith("#", StringComparison.Ordinal))
-                AddMarkdownReferenceSymbol(fileId, target, line, lineNumber, symbols);
+                AddMarkdownReferenceSymbol(fileId, target, line, lineNumber, ref symbols);
         }
     }
 
-    private static void AddMarkdownReferenceSymbol(long fileId, string target, string line, int lineNumber, List<SymbolRecord> symbols)
+    private static void AddMarkdownReferenceSymbol(long fileId, string target, string line, int lineNumber, ref List<SymbolRecord>? symbols)
     {
         var normalizedTarget = NormalizeMarkdownAnchorTarget(target);
         if (normalizedTarget.Length == 0)
             return;
 
-        symbols.Add(new SymbolRecord
+        (symbols ??= []).Add(new SymbolRecord
         {
             FileId = fileId,
             Kind = "reference",
