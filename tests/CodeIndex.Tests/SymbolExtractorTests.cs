@@ -3813,6 +3813,23 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Shell_IgnoresTabbedHeredocBodiesWithCrLf()
+    {
+        var content = "setup() {\n"
+            + "\tcat <<-EOF\r\n"
+            + "function fake_tabbed_heredoc_function() {\r\n"
+            + "}\r\n"
+            + "\tEOF\r\n"
+            + "real_after() { echo done; }\n"
+            + "}\n";
+        var symbols = SymbolExtractor.Extract(1, "shell", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "setup");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "real_after");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "fake_tabbed_heredoc_function");
+    }
+
+    [Fact]
     public void Extract_Shell_BoundsFunctionRanges_Issue3510()
     {
         var content = """
