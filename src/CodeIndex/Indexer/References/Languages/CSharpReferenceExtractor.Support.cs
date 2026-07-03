@@ -525,9 +525,9 @@ public static partial class ReferenceExtractor
         if (language != "csharp")
             return (EmptyCSharpQualifiedEnumMemberLookup, EmptyCSharpQualifiedPatternLookup, EmptyCSharpQualifiedPatternLookup);
 
-        var enumMemberLookup = new Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
-        var constantPatternMemberLookup = new Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
-        var typePatternLookup = new Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
+        Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>>? enumMemberLookup = null;
+        Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>? constantPatternMemberLookup = null;
+        Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>? typePatternLookup = null;
 
         foreach (var symbol in symbols)
         {
@@ -536,7 +536,7 @@ public static partial class ReferenceExtractor
                 && !string.IsNullOrWhiteSpace(symbol.ContainerName))
             {
                 AddCSharpQualifiedPatternTarget(
-                    typePatternLookup,
+                    ref typePatternLookup,
                     symbol.Name,
                     symbol.ContainerName!,
                     symbol.ContainerQualifiedName,
@@ -550,13 +550,13 @@ public static partial class ReferenceExtractor
             {
                 var allowShortNameFallback = !conflictingNonEnumTypeNames.Contains(symbol.ContainerName!);
                 AddCSharpQualifiedEnumMemberTarget(
-                    enumMemberLookup,
+                    ref enumMemberLookup,
                     symbol.Name,
                     symbol.ContainerName!,
                     symbol.ContainerQualifiedName,
                     allowShortNameFallback);
                 AddCSharpQualifiedPatternTarget(
-                    constantPatternMemberLookup,
+                    ref constantPatternMemberLookup,
                     symbol.Name,
                     symbol.ContainerName!,
                     symbol.ContainerQualifiedName,
@@ -566,23 +566,27 @@ public static partial class ReferenceExtractor
 
             if (IsCSharpConstMemberSymbol(symbol))
                 AddCSharpQualifiedPatternTarget(
-                    constantPatternMemberLookup,
+                    ref constantPatternMemberLookup,
                     symbol.Name,
                     symbol.ContainerName!,
                     symbol.ContainerQualifiedName,
                     allowShortNameFallback: true);
         }
 
-        return (enumMemberLookup, constantPatternMemberLookup, typePatternLookup);
+        return (
+            enumMemberLookup ?? EmptyCSharpQualifiedEnumMemberLookup,
+            constantPatternMemberLookup ?? EmptyCSharpQualifiedPatternLookup,
+            typePatternLookup ?? EmptyCSharpQualifiedPatternLookup);
     }
 
     private static void AddCSharpQualifiedEnumMemberTarget(
-        Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> lookup,
+        ref Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>>? lookup,
         string name,
         string enumName,
         string? qualifiedEnumName,
         bool allowShortNameFallback)
     {
+        lookup ??= new Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
         if (!lookup.TryGetValue(name, out var targets))
         {
             targets = [];
@@ -602,12 +606,13 @@ public static partial class ReferenceExtractor
     }
 
     private static void AddCSharpQualifiedPatternTarget(
-        Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> lookup,
+        ref Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>? lookup,
         string name,
         string containerName,
         string? qualifiedContainerName,
         bool allowShortNameFallback)
     {
+        lookup ??= new Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
         if (!lookup.TryGetValue(name, out var targets))
         {
             targets = [];
