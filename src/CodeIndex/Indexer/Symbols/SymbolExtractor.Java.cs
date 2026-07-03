@@ -168,7 +168,7 @@ public static partial class SymbolExtractor
         if (!match.Success)
             return false;
 
-        name = match.Groups["name"].Value.Trim();
+        name = match.Groups["name"].ValueSpan.Trim().ToString();
         return name.Length > 0;
     }
 

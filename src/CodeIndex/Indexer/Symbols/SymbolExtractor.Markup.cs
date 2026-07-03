@@ -525,7 +525,7 @@ public static partial class SymbolExtractor
             if (line.Contains("]:", StringComparison.Ordinal))
             {
                 foreach (Match match in MarkdownReferenceDefinitionRegex.Matches(line))
-                    targets[match.Groups["label"].Value.Trim()] = match.Groups["target"].Value.Trim();
+                    targets[match.Groups["label"].ValueSpan.Trim().ToString()] = match.Groups["target"].ValueSpan.Trim().ToString();
             }
         }
 
@@ -551,7 +551,7 @@ public static partial class SymbolExtractor
 
         foreach (Match match in MarkdownReferenceLinkRegex.Matches(line))
         {
-            var label = match.Groups["label"].Value.Trim();
+            var label = match.Groups["label"].ValueSpan.Trim().ToString();
             if (label.Length == 0)
                 continue;
 
@@ -747,7 +747,7 @@ public static partial class SymbolExtractor
             {
                 foreach (Match classMatch in XamlClassRegex.Matches(line))
                 {
-                    var value = classMatch.Groups["value"].Value.Trim();
+                    var value = classMatch.Groups["value"].ValueSpan.Trim().ToString();
                     if (value.Length == 0)
                         continue;
                     symbols.Add(new SymbolRecord
@@ -827,7 +827,7 @@ public static partial class SymbolExtractor
             {
                 foreach (Match nameMatch in XamlNameRegex.Matches(line))
                 {
-                    var value = nameMatch.Groups["value"].Value.Trim();
+                    var value = nameMatch.Groups["value"].ValueSpan.Trim().ToString();
                     if (value.Length == 0)
                         continue;
                     symbols.Add(new SymbolRecord
@@ -867,7 +867,7 @@ public static partial class SymbolExtractor
             {
                 foreach (Match handlerMatch in XamlEventHandlerRegex.Matches(line))
                 {
-                    var value = handlerMatch.Groups["value"].Value.Trim();
+                    var value = handlerMatch.Groups["value"].ValueSpan.Trim().ToString();
                     if (value.Length == 0)
                         continue;
                     symbols.Add(new SymbolRecord

@@ -96,7 +96,7 @@ public static partial class SymbolExtractor
             if (!match.Success)
                 continue;
 
-            var name = match.Groups["name"].Value.Trim();
+            var name = match.Groups["name"].ValueSpan.Trim().ToString();
             if (name.Length == 0)
                 continue;
 

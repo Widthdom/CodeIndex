@@ -4378,7 +4378,7 @@ public static partial class SymbolExtractor
                 {
                     foreach (Match match in CssInlineCustomPropertyRegex.Matches(cssScannerLine))
                     {
-                        var propertyName = match.Groups["name"].Value.Trim();
+                        var propertyName = match.Groups["name"].ValueSpan.Trim().ToString();
                         if (propertyName.Length == 0)
                             continue;
 
@@ -4515,7 +4515,7 @@ public static partial class SymbolExtractor
 
             foreach (Match match in HdlInlineParameterRegex.Matches(line))
             {
-                var name = match.Groups["name"].Value.Trim();
+                var name = match.Groups["name"].ValueSpan.Trim().ToString();
                 if (name.Length == 0)
                     continue;
 
@@ -8881,7 +8881,7 @@ public static partial class SymbolExtractor
             return false;
         }
 
-        var categoryName = match.Groups["category"].Value.Trim();
+        var categoryName = match.Groups["category"].ValueSpan.Trim().ToString();
         if (categoryName.Length == 0)
         {
             displayName = string.Empty;
@@ -9388,7 +9388,7 @@ public static partial class SymbolExtractor
                             ContainerName = trait.Name,
                             ContainerQualifiedName = trait.ContainerQualifiedName,
                             Visibility = match.Groups["visibility"].Success ? match.Groups["visibility"].Value : null,
-                            ReturnType = match.Groups["returnType"].Value.Trim(),
+                            ReturnType = match.Groups["returnType"].ValueSpan.Trim().ToString(),
                         });
                     }
                 }
