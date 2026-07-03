@@ -1017,17 +1017,21 @@ public static partial class SymbolExtractor
 
     private static void ExtractGoGroupedDeclarations(long fileId, string[] lines, List<SymbolRecord> symbols)
     {
-        var hasInterfaceMarker = LinesContain(lines, "interface", StringComparison.Ordinal);
-        if (hasInterfaceMarker)
-            ExtractGoInterfaceMethods(fileId, lines, symbols);
-
-        if (!hasInterfaceMarker
-            && !LinesContain(lines, "type", StringComparison.Ordinal)
-            && !LinesContain(lines, "const", StringComparison.Ordinal)
-            && !LinesContain(lines, "var", StringComparison.Ordinal))
+        if (!TryGetGoGroupedDeclarationMarkers(
+            lines,
+            out var hasInterfaceMarker,
+            out var hasTypeMarker,
+            out var hasConstMarker,
+            out var hasVarMarker))
         {
             return;
         }
+
+        if (hasInterfaceMarker)
+            ExtractGoInterfaceMethods(fileId, lines, symbols);
+
+        if (!hasTypeMarker && !hasConstMarker && !hasVarMarker)
+            return;
 
         string? blockKind = null;
         var typeBodyDepth = 0;
@@ -1143,6 +1147,32 @@ public static partial class SymbolExtractor
                     goBlockDepth = 0;
             }
         }
+    }
+
+    private static bool TryGetGoGroupedDeclarationMarkers(
+        IReadOnlyList<string> lines,
+        out bool hasInterfaceMarker,
+        out bool hasTypeMarker,
+        out bool hasConstMarker,
+        out bool hasVarMarker)
+    {
+        hasInterfaceMarker = false;
+        hasTypeMarker = false;
+        hasConstMarker = false;
+        hasVarMarker = false;
+
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var line = lines[i];
+            hasInterfaceMarker |= line.IndexOf("interface", StringComparison.Ordinal) >= 0;
+            hasTypeMarker |= line.IndexOf("type", StringComparison.Ordinal) >= 0;
+            hasConstMarker |= line.IndexOf("const", StringComparison.Ordinal) >= 0;
+            hasVarMarker |= line.IndexOf("var", StringComparison.Ordinal) >= 0;
+            if (hasInterfaceMarker && hasTypeMarker && hasConstMarker && hasVarMarker)
+                break;
+        }
+
+        return hasInterfaceMarker || hasTypeMarker || hasConstMarker || hasVarMarker;
     }
 
     private static bool MayAffectGoCodeBraceDepth(string text)
