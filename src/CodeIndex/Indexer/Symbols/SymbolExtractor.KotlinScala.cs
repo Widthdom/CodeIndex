@@ -319,10 +319,11 @@ public static partial class SymbolExtractor
                 continue;
             }
 
-            var nextLine = TryGetNextScalaHeaderLine(lines, lineIndex + 1);
-            if (nextLine is null)
+            var nextHeaderLine = TryGetNextScalaHeaderLine(lines, lineIndex + 1);
+            if (nextHeaderLine is not { } headerLine)
                 return lineIndex;
 
+            var nextLine = headerLine.Line.AsSpan(headerLine.Start);
             if (nextLine.StartsWith("extends ", StringComparison.Ordinal)
                 || nextLine.StartsWith("with ", StringComparison.Ordinal)
                 || nextLine.StartsWith("derives ", StringComparison.Ordinal))
@@ -330,7 +331,7 @@ public static partial class SymbolExtractor
                 continue;
             }
 
-            if (nextLine.StartsWith('{'))
+            if (nextLine.Length > 0 && nextLine[0] == '{')
                 return null;
 
             return lineIndex;
@@ -338,6 +339,8 @@ public static partial class SymbolExtractor
 
         return null;
     }
+
+    private readonly record struct ScalaHeaderLine(string Line, int Start);
 
     private static bool ScalaLineEndsHeaderContinuation(string line)
     {
@@ -348,15 +351,20 @@ public static partial class SymbolExtractor
             || (trimmed.Length > 0 && trimmed[^1] == ':');
     }
 
-    private static string? TryGetNextScalaHeaderLine(string[] lines, int startIndex)
+    private static ScalaHeaderLine? TryGetNextScalaHeaderLine(string[] lines, int startIndex)
     {
         for (var i = startIndex; i < lines.Length; i++)
         {
-            var nextLine = lines[i].TrimStart();
+            var line = lines[i];
+            var start = 0;
+            while (start < line.Length && char.IsWhiteSpace(line[start]))
+                start++;
+
+            var nextLine = line.AsSpan(start);
             if (nextLine.Length == 0 || nextLine.StartsWith("//", StringComparison.Ordinal))
                 continue;
 
-            return nextLine;
+            return new ScalaHeaderLine(line, start);
         }
 
         return null;
