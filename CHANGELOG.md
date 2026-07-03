@@ -11,6 +11,705 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.36.0] - 2026-07-04
+
+#### Added
+
+- **Added large-file outline sorting (#4117)** — `outline` can now sort symbols by size/span, complexity, kind, name, path, or reference count before limit/cursor paging, with compact JSON retaining ranking metadata for giant-file triage.
+- **Language capability JSON now explains unsupported references and graph queries (#4122)** — `languages --json` and the MCP `languages` tool now include `unsupported_guidance` entries with fallback commands when a language does not advertise reference extraction, graph queries, or symbol extraction.
+- **String comparison audit recipes now classify comparison semantics (#4137)** — `string-comparison-semantics` and `risky-code/path-case-heuristic` expose taxonomy metadata for path, protocol, CLI, stable identifier, human-text, and machine-formatting domains so ordinal, invariant-culture, and invariant-casing hits are easier to triage.
+- **Added a phrase risk-pattern audit recipe (#4139)** - `search --recipe phrase-risk-patterns` now covers noisy audit phrases such as `async void`, `throw new Exception`, `.Result`, `unsafe`, `Skip =`, `Version="`, `TODO`, and `Obsolete` with exact-substring, origin, result-kind, file-kind, and source/test scope facets.
+- **Added test skip governance reporting (#4143)** - `CodeIndex.TestTelemetry` now has a `skips` command that parses xUnit skip attributes, summarizes skipped tests by area, scenario/category, and reason, and reports owner/expiry governance token coverage without counting ordinary `Skip =` text in comments or fixtures.
+- **Resource materialization audits now classify subsystem hotspots (#4155)** - the new `resource-materialization-audit` recipe groups disposable boundaries, async disposal, DB command ownership, file-open sharing policy, stream materialization, and query/MCP `ToArray()` conversions into focused audit queries.
+- **Documentation drift checks now cover guide and workflow references (#4160)** — the test suite now verifies workflow index consistency, documented `cdidx` command examples, release/changelog workflow snippets, and representative English/Japanese guide sections.
+- **Added a nullable-contracts search audit recipe (#4161)** — `cdidx search --recipe nullable-contracts` now classifies `return null`, `null!`, `default!`, null-guard, and typed-diagnostic evidence, and JSON recipe metadata includes `nullable_contract_taxonomy` domains for nullable return triage.
+
+#### Changed
+
+- **Batch jump segment trimming avoids intermediate strings** — Batch reference extraction now trims command segments with spans and only materializes text when the jump-target regex must run, reducing temporary strings while indexing large `.bat` and `.cmd` files.
+- Avoided copying every line in C-style and Haskell block comment masking when only a subset of lines actually needs masking.
+- **Reduced directory case-probe path work** - scan-time case-sensitivity checks now reuse fully-qualified directory paths instead of normalizing the same path again for each directory.
+- **Catch type reference extraction now trims candidate prefixes with spans** — indexing large files avoids substring allocations when deciding whether a trailing catch identifier is a variable or part of a qualified type.
+- **COBOL callable and Rust enum reference setup now skips empty candidate lists** — files without matching symbols avoid sort buffers and per-line empty candidate scans during indexing.
+- **Codex can use normal-development GitHub CLI commands safely** - The `codeindex_workspace` permission profile now allows network access only to `github.com` and `api.github.com`, while command guards explicitly allow normal Issue/PR development commands such as `gh issue/pr list/view/create/edit/comment`, `gh pr ready`, `gh pr close`, `gh repo view`, and `gh status`, and continue blocking authentication, secrets, releases, repo creation/forking/deletion, arbitrary `gh api`, and PR merges.
+- Check ignore and JavaScript/TypeScript config file names with spans while normalizing commit and update targets, reducing path allocations on large change lists.
+- Decode TypeScript path alias configs and extractor pattern configs directly from bounded read buffers to avoid an extra byte-array copy during indexing setup.
+- **C++ declaration leaf checks avoid temporary trim strings** — C++ declaration normalization now checks the final qualified-name segment from a trimmed span when deciding whether an `operator` name should keep generic text.
+- **C++ friend reference extraction now normalizes qualified leaves with spans** — indexing large C++ files avoids intermediate trim and slice strings while preserving friend type/function reference names.
+- Avoided copying C++ friend declaration scan lines unless comments or string literals actually need masking.
+- **C++ indented aliases reuse trimmed lines** — C++ alias extraction now trims each candidate line once and reuses that result for indentation checks and symbol signatures.
+- **C++ same-line class and Java module symbol extraction now skips empty snapshots** — files without matching declarations avoid temporary snapshot lists and sort buffers during indexing.
+- **C++ same-line class extraction now allocates member-name sets only when needed** — class bodies without existing or newly recognized members skip unused duplicate-tracking sets during indexing.
+- **C++ using-namespace symbol extraction now trims targets with spans** — indexing large C++ files avoids intermediate slice strings when stripping comments and semicolons from `using namespace` directives.
+- **C# using-alias target normalization now trims nullable and array suffixes with spans** — reference extraction avoids repeated suffix slice strings while matching aliases against known type names in large C# indexes.
+- Reduced C# reference extraction allocations by creating per-line attribute range lists only for lines that actually contain attribute spans.
+- Reduced C# declarator and record component trim allocations by slicing only the final trimmed source range.
+- Reduced C# reference extraction allocations by returning before parameter segment splitting for functions with empty parameter lists.
+- Pre-sized C# field declarator comma-split buffers to reduce growth while scanning large field declarations.
+- Avoid per-line `char[]` allocation while rebuilding C#/Java/Kotlin type headers unless comments or literals actually need masking.
+- **Shared empty C# helper lookups outside C# reference extraction** — non-C# files no longer allocate empty C# type-name sets, value-receiver maps, or qualified-pattern maps during shared reference setup.
+- Pre-sized C# invocation argument builders from the starting line to reduce buffer growth during reference extraction.
+- Reduced C# reference extraction allocations by scanning top-level parameter segments with spans instead of materializing a list of parameter segment strings.
+- **Narrowed generated-suppression cache for the C# prepass** - full scans now build the generated-code suppression lookup used by the C# static-interface prepass only for C# targets instead of every indexed file.
+- **C# static-interface prepass reuses known indexability** — prepass raw-byte probes and normalized content reads avoid repeating the regular-file probe for targets produced by the index scan.
+- **C# prepass target creation avoids common relative-path calls** — update and MCP indexing now derive project-root-relative C# prepass paths from the absolute path prefix when possible, falling back to `Path.GetRelativePath` only for nonstandard inputs.
+- Build C# qualified enum-member, constant-pattern, and type-pattern lookup tables in one symbol pass during reference extraction.
+- Reduced C# reference extraction allocations by creating qualified enum, constant-pattern, and type-pattern lookup dictionaries only when matching symbols are present.
+- Pre-sized C# reflection-name literal builders to reduce buffer growth while scanning string-based type references.
+- Avoid allocating a snapshot array while deriving C# BCL Regex timeout audit references during indexing.
+- Reduced C# symbol scanner allocations by using span-based return type suffix checks and appending trimmed multiline signature ranges directly.
+- Pre-sized C# multi-line source span builders and avoided substring append allocations while assembling scanner slices.
+- Build C# static interface implementation type candidates and static members in one local symbol pass, reducing repeated scans during implicit implementation reference extraction.
+- Defer C# interface generic parameter parsing for static interface implementation checks until a workspace actually contains static interface member contracts.
+- **C# static interface implementation reference setup now allocates file lookups only when needed** — files without candidate types or static members skip empty implementation lists and dictionaries during indexing.
+- Removed static byte-array allocations from the C# static-interface raw-byte prepass by using UTF-8 literal spans for keyword probes.
+- Build C# static interface member contracts and interface generic parameter lookups in a single workspace-symbol pass to reduce repeated scanning during reference extraction.
+- **C# reference extraction now lazily allocates symbol-derived name sets** — C# files without type or callable symbols reuse empty lookups instead of allocating unused `HashSet` instances during per-file setup.
+- Build C# known type names and non-enum type names in one pass, then reuse the non-enum set for enum and constant-pattern lookups.
+- Reduced per-file reference extraction allocations for C# files that do not declare using aliases, using namespace imports, using static imports, or namespace scopes.
+- Build C# using alias, namespace, and static import records in one symbol pass during reference extraction.
+- **Avoided C# using import list allocation for non-C# reference extraction** — shared reference setup now returns empty C# using import collections before allocating alias, namespace, and static import lists for other languages.
+- Pre-size C# value-receiver helper builders and skip `StringBuilder` entirely for single-line structural text slices.
+- **C# value receiver setup now lazily allocates lookup storage** — files without containing-type receiver names or scoped receiver names reuse empty lookups, and symbols without bodies no longer allocate unused per-function buffers.
+- Build C# containing-type and function-scope value receiver lookup tables during one symbol pass to reduce repeated work while indexing large C# files.
+- Avoid creating a builder while normalizing CSS `@font-face` family values that contain no block comments.
+- Mask and join CSS `@font-face` block ranges without allocating sliced line arrays during symbol extraction.
+- **CSS inline grouping depth avoids selector slice allocations** — CSS inline grouping scans now classify `{` segments from a trimmed masked span and skip the unused raw selector slice allocation.
+- **CSS layer segments avoid substring trim chains** — CSS `@layer` list extraction now checks layer prefixes with spans and trims comma-separated segments from slices before materializing names.
+- Reuse the CSS scanner line-masking core for single-line brace scans without allocating singleton input and output arrays.
+- **Dependency package field normalization reuses trimmed strings** — package extraction now trims required and optional package fields with spans and avoids rebuilding already-normalized values during indexing.
+- **Dependency references now reuse extracted package symbols** — large dependency lock and manifest files no longer repeat the package parser during reference extraction when symbol extraction already found packages, reducing duplicate JSON/XML/TOML work during indexing.
+- **Dependency specs avoid marker trim strings** — requirement-style dependency parsing now trims marker-stripped specs and regex captures with spans before materializing package names or versions.
+- **Dockerfile instruction prefixes avoid trim strings** — Dockerfile `EXPOSE`, `VOLUME`, `SHELL`, and ONBUILD-aware instruction parsing now checks prefixes and bodies with spans before materializing token or JSON payload text.
+- Build Dockerfile stage and variable name sets in one symbol pass during reference extraction.
+- **Dockerfile and shell reference extraction now lazily allocates name sets** — files without stage, variable, callable, or global-alias symbols avoid empty `HashSet` allocations while building per-file reference context.
+- Pre-sized Dockerfile instruction token builders to reduce buffer growth while scanning long instruction bodies.
+- Avoided copying Elixir symbol-scan lines unless comments, strings, or sigils actually need masking.
+- Avoid redundant file-name extraction before extension checks in scanner, encoding issue, Razor, and JSX paths so large indexing runs do less per-file path work.
+- Reuse fixed candidate arrays in TypeScript path alias resolution, Dockerfile diagnostics, XAML symbol extraction, C# accessor scanning, and supported-language listings to avoid repeated small allocations during indexing.
+- **File indexability caches the Windows platform check** — scan-time file probes reuse a process-wide OS flag instead of asking the runtime for every file attribute decision.
+- **Filename-prefix language detection skips impossible names** — ordinary files no longer scan the Dockerfile/Containerfile/Makefile prefix table unless their first character and length can match a suffixed special filename.
+- **Filesystem traversal reuses enumeration options** — hot directory walks now share the top-directory-only `EnumerationOptions` instance instead of allocating one for every file, directory, or entry enumeration call.
+- **Path filtering reuses the directory-prefix relative path helper** — scan filtering and ignore-rule candidate matching now avoid `Path.GetRelativePath` when the absolute path already has the expected directory prefix.
+- **F# record and union extraction now trims delimited candidates with spans** — symbol extraction avoids chained trim strings while scanning large F# type declarations for fields and union cases.
+- **F# type member scanning avoids trim strings** — F# record and union member detection now uses trimmed spans for indentation and prefix checks before materializing candidate text.
+- **Expanded built-in generated/cache directory skips** - `cdidx index` now skips additional common cache/build trees such as `.pnpm-store`, `.turbo`, `.mypy_cache`, `bazel-out`, `.dart_tool`, `.swiftpm`, and `.stack-work` before file content probing, reducing first-scan time on large polyglot repositories.
+- **Skipped generated-suppression precompute when no patterns are configured** - CLI and MCP indexing now avoid building per-file generated-code suppression dictionaries when the project has no generated-code extraction patterns.
+- **Submodule ancestor tracking avoids split/join allocations** — `.gitmodules` scan setup now builds only the needed ancestor paths for submodule passthrough instead of splitting every submodule path into segments first.
+- Avoid an iterator allocation while parsing `.gitmodules` submodule paths during repository scans.
+- **`.gitmodules` parsing reduces per-line string allocations** — submodule discovery now parses section headers, keys, comments, and rooted-path checks with spans, only materializing accepted submodule paths.
+- **`.gitmodules` warning paths are computed once during scan setup** — submodule discovery now reuses the project-relative `.gitmodules` path across warning branches instead of recalculating it for each warning.
+- Read only the first top-level Go builtin type argument span instead of allocating a full comma split list during reference extraction.
+- **Go label comment checks avoid trim strings** — Go label extraction now checks comment-like trimmed prefixes with spans instead of allocating a trimmed line before running the label regex.
+- **Go receiver type normalization avoids trim chains** — Go method receiver lookup now strips receiver names, pointer markers, generic arguments, and qualifiers with spans so only the final receiver type name is allocated.
+- **Go signature return checks avoid trailing strings** — Go symbol extraction now checks the text after a parameter list with spans instead of allocating a trimmed suffix while deciding whether a signature has an explicit return value.
+- **Go start-column fallback avoids trim strings** — Go symbol extraction now computes fallback indentation by scanning the line instead of allocating a `TrimStart` result when a symbol name cannot be located directly.
+- **Go extractor avoids substring trim work in directive and signature scans** — Go directive names, same-line interface bodies, and empty-parameter checks now trim or inspect spans before materializing strings.
+- Reduced Go reference extraction allocations by normalizing type expression ranges directly instead of trimming temporary substrings.
+- **Go type prefix normalization avoids slice trim chains** — Go type symbol extraction now trims the text after a `type` prefix from a span slice instead of allocating a substring before trimming.
+- **Reused hook callback payload lists when available** — isolated post-extraction hook callbacks now avoid copying symbol and reference payloads that are already backed by `List<T>`.
+- Skipped post-extraction hook disposal enumeration when no hooks were loaded, avoiding unnecessary work in the default indexing path.
+- Avoided allocating snapshot lists for empty post-extraction hooks and diagnostics, reducing default indexing overhead when no hooks are configured.
+- Build literal ignore-rule patterns with a pre-scan and `string.Create`, avoiding wasted builders for wildcard rules.
+- Batch leading token removals while parsing ignore rules so large ignore files do less list shifting.
+- Append ordinary ignore-rule regex literal characters directly instead of allocating one-character strings for `Regex.Escape`.
+- Pre-sized ignore rule regex builders to reduce buffer growth while compiling repository ignore patterns.
+- **Reduced ignore-rule loading allocations** - directory scans now allocate ignore-rule lists only when a `.gitignore` or `.cdidxignore` file actually contributes rules, trimming hot-path allocation in large trees with sparse ignore files.
+- **Avoided redundant delete existence probes during indexing** - full-scan cleanup and scoped update deletes now rely on `DeleteFileByPath` row counts instead of issuing a separate `HasFileAtPath` query immediately before the delete.
+- **Index target relative paths share a root-prefix fast path** — full scans, record loading, and C# prepass target creation now reuse a common project-root-relative path helper and avoid unnecessary separator replacement on POSIX paths.
+- **Cached language-map override lookups during indexing** - `cdidx index` now reuses per-directory language-map override snapshots within a `FileIndexer` run, avoiding repeated config-path stamp probes for each file in large directories.
+- **Indexer hot paths reuse cached OS checks** — relative-path prefix matching, hardlink identity probing, and C# prepass root checks now reuse process-wide platform flags instead of calling `OperatingSystem` per file.
+- **Indexing callers share the relative path fast path** — project-marker scopes, scan diagnostics, freshness checks, and TypeScript path-alias normalization now avoid `Path.GetRelativePath` when the path is already under the expected directory prefix.
+- **Reduced unchanged-file indexing database roundtrips** - CLI and MCP indexing now combine stat-based and checksum-based reuse checks with existing cap/generated-file issue checks, avoiding a second SQLite query for unchanged files that can be skipped.
+- **Batched validation issue writes during indexing** - files that produce multiple validation issues now write those rows in multi-value SQLite inserts instead of executing one insert per issue.
+- **Capped generated-header detection work** - generated-code header detection now inspects only a bounded leading header window, avoiding whole-file scans on very long first lines or minified payloads.
+- **Avoided duplicate generated-pattern checks during indexing** - full-scan and MCP targets now cache generated-code suppression matches and reuse them across C# prepass, stat reuse, and extraction scheduling.
+- **Reused generated-pattern matches inside the C# prepass** - C# static-interface prepass callers can pass cached generated-code suppression results instead of re-running project pattern matching.
+- **Simplified reference-line lookup work** - reference insertion now resolves batched `reference_lines` ids through a small `VALUES` lookup table instead of generating long `OR` predicate chains, and skips redundant per-row lookup-key probes after SQLite returns the joined rows.
+- **Narrowed stale stem purge scans** - extension-change cleanup now asks SQLite for same-stem path candidates instead of scanning every indexed file row after each retained file update.
+- **Short-circuited oversize checksum probes** - checksum reuse now returns immediately for seekable streams whose length already exceeds the indexing byte cap, avoiding bounded-but-unnecessary reads of huge files.
+- **Kept content normalization on the fast path for mid-line invisibles** - indexing normalization now only enters the rewrite loop for carriage returns or line-leading invisible markers, preserving the unchanged-content path when U+FEFF/U+200B appears inside ordinary text.
+- **Collapsed C# doc-comment probing to one pass** - reference preparation now detects `///` and `/**` XML doc comment candidates with a single scan before deciding whether to build C# line-state masks.
+- **Gated C# reference regex probes by marker** - C# reference extraction now checks using-alias, `where`, and reflection member-name markers before running their regex probes.
+- **Gated TypeScript and Swift alias regex probes by marker** - type-alias reference extraction now checks per-line declaration keywords and assignment markers before running alias regexes.
+- **Gated SQL maintenance target scans by keyword** - SQL reference extraction now checks permission, authorization, statistics, drop-table, truncate, and revoke markers before running those target regex passes.
+- **Gated SQL temp-object establishment scans by statement marker** - SQL statement-prefix carryover now checks target, truncate, select-into, and create markers before running temp-object regex probes.
+- **Gated SQL source and call scans by statement marker** - SQL reference extraction now checks call, source, merge, delete-using, output, and select-into markers before running their statement-level regex passes.
+- **Gated SQL index target scans by statement marker** - SQL reference extraction now skips index target regex groups on non-index statements and dispatches create, alter, drop, XML, columnstore, hash, and fulltext variants by marker.
+- **Gated SQL lifecycle target scans by statement marker** - SQL reference extraction now checks trigger, security policy, references, synonym, and drop-object markers before running lifecycle target regex groups.
+- **Gated SQL alter-object target scans by statement marker** - SQL reference extraction now checks ALTER object-type markers before running view, procedure, function, trigger, sequence, policy, catalog, partition, XML schema, assembly, schema-transfer, and table-history regex groups.
+- **Gated SQL generic target scans by statement marker** - SQL reference extraction now runs the generic INSERT/UPDATE/MERGE/DELETE/ALTER TABLE target regex only for statements containing those target-capable markers.
+- **Gated SQL window clause scans by marker** - SQL reference extraction now skips window-clause discovery and suppression scans when the file or statement lacks an `OVER` marker.
+- **Gated SQL generated-column dependency scans by marker** - SQL reference extraction now checks generated-column and `NEXT VALUE FOR` markers before running generated dependency regexes and computed-column prefix probes.
+- **Gated R call-start reference scans by marker** - R reference extraction now checks source, data, system.file, documentation, and package-install call markers before running the matching call-start regexes.
+- **Gated R operator and member reference scans by marker** - R reference extraction now checks `::`, backtick-call, infix-operator, `$`, and slot markers before running the corresponding operator/member regex passes.
+- **Gated R directive reference scans by marker** - R reference extraction now checks namespace, roxygen, and S4 directive markers before running directive-start regexes or sequential directive match probes.
+- **Gated PowerShell splat reference scans by marker** - PowerShell reference extraction now checks splat assignment, splat usage, and hashtable key markers before running the corresponding regex scans.
+- **Gated PowerShell call reference scans by marker** - PowerShell reference extraction now checks statement and pipeline call-start markers before running cmdlet/function call regex probes.
+- **Gated Shell call and source reference scans by marker** - Shell reference extraction now skips command-call regexes when no callable names exist and checks substitution, source, and global-alias markers before running those scans.
+- **Gated C# using namespace/static scans by marker** - C# reference extraction now checks `using`, `static`, and alias markers before running using-namespace and using-static regex probes.
+- **Gated F# pipeline call scans by marker** - F# reference extraction now checks forward and backward pipeline markers before running pipeline call regex probes.
+- **Gated F# control-flow application scans by marker** - F# reference extraction now checks control-flow markers before running try/finally, condition, match, and when-guard application regex probes.
+- **Gated F# keyword application scans by marker** - F# reference extraction now checks assert, lazy, raise, cast, and new markers before running their application-call regex probes.
+- **Gated F# operator and composition scans by marker** - F# reference extraction now checks composition/operator markers before running those regex probes and resolves operator-definition suppression once per line.
+- **Gated SQL temp-object collection scans by marker** - SQL temp object carry-forward now skips collection without `#` markers and runs target, truncate, select-into, and create probes only when their statement keywords are present.
+- **Gated Go concurrency reference scans by marker** - Go reference extraction now checks `go` and channel-arrow markers before running goroutine and channel send/receive regex probes.
+- **Gated Scala block and type-context scans by marker** - Scala reference extraction now checks block, generator, implicit, given, and using markers before running those regex probes.
+- **Gated Lua call and table-field scans by marker** - Lua reference extraction now checks whitespace, colon, and dot markers before running command-call, method-call, and table-field regex probes.
+- **Gated Rust raw-identifier and macro call scans by marker** - Rust reference extraction now checks `r#` and `!` markers before running raw-identifier and macro-call regex probes.
+- **Gated Rust attribute reference scans by marker** - Rust reference extraction now checks the attribute hash marker before running derive, cfg_attr derive, and attribute-head regex probes.
+- **Gated Rust associated receiver scans by marker** - Rust reference extraction now checks path separator, generic, and call markers before running associated call/value receiver scans.
+- **Gated Rust struct literal scans by marker** - Rust reference extraction now checks the opening-brace marker before running struct literal instantiation regex probes.
+- **Gated Rust mutable reference type scans by marker** - Rust reference extraction now checks ampersand and `mut` markers before running mutable-reference type regex probes.
+- **Gated Rust declaration reference scans by marker** - Rust reference extraction now checks use, extern crate, and module markers before running declaration reference regex probes.
+- **Gated Rust lifetime and ranked-bound scans by marker** - Rust reference extraction now checks lifetime apostrophe and higher-ranked `for<...>` markers before scanning those reference forms.
+- **Gated Rust function signature type scans by marker** - Rust reference extraction now checks `fn`, parenthesis, and return-arrow markers before running function signature type probes.
+- **Gated Rust closure signature type scans by marker** - Rust reference extraction now checks pipe, annotation, and return-arrow markers before scanning closure parameter and return types.
+- **Gated Rust declaration type scans by marker** - Rust reference extraction now checks `let`, `const`, `static`, and type-annotation markers before scanning local and static declaration types.
+- **Gated Rust alias and associated type scans by marker** - Rust reference extraction now checks `type`, `trait`, assignment, and bound markers before scanning alias targets and associated type bounds.
+- **Gated Rust aggregate field type scans by marker** - Rust reference extraction now checks struct, tuple, and enum variant delimiters before scanning aggregate field type lists.
+- **Gated Rust cast type scans by marker** - Rust reference extraction now checks the `as` marker before trimming declarations and scanning cast target types.
+- **Gated Rust impl and trait header type scans by marker** - Rust reference extraction now checks `impl`, `trait`, and trait-bound markers before scanning implementation and trait header types.
+- **Gated Rust generic and where-bound scans by marker** - Rust reference extraction now checks generic-angle and `where` markers before scanning generic bounds, defaults, const generic usages, and where clauses.
+- **Gated Rust const generic segment scans by marker** - Rust reference extraction now checks `const` and annotation markers before splitting generic and where-clause segments for const generic references.
+- **Gated Rust function-trait return type scans by marker** - Rust reference extraction now checks return-arrow and bound markers before scanning function-trait return types in generic, where, and trait expressions.
+- **Gated Rust generic default type scans by marker** - Rust reference extraction now checks assignment markers before locating generic defaults or splitting generic clauses for default type references.
+- **Gated Gradle DSL call scans by marker** - Gradle reference extraction now checks block braces and whitespace before running block-call and command-call DSL regex probes.
+- **Gated Haskell signature and space-call scans by marker** - Haskell reference extraction now checks type-signature and whitespace markers before invoking shared signature and space-call regex probes.
+- **Gated Haskell definition suppression scans by marker** - Haskell reference extraction now checks assignment markers before running definition-suppression regex probes for space calls.
+- **Gated CSS preprocessor import scans by marker** - CSS, Sass, and Stylus reference extraction now checks import/use/forward/require markers before stripping comments and running import regex probes.
+- **Gated CSS animation reference scans by marker** - CSS reference extraction now checks the animation marker before running animation-name and shorthand value regex probes.
+- **Gated CSS custom-property reference scans by marker** - CSS reference extraction now checks `var` and custom-property markers before running custom-property reference regex probes.
+- **Gated SCSS reference scans by marker** - SCSS reference extraction now checks dollar, `@extend`, and `@include` markers before running variable, extend, and include regex probes.
+- **Gated Sass call scans by marker** - Sass reference extraction now skips reference-line preparation on plain lines and checks mixin-plus and parenthesis markers before running call regex probes.
+- **Gated Stylus reference scans by marker** - Stylus reference extraction now checks dollar and parenthesis markers before running explicit variable and function regex probes, and skips bare variable probes when no variable definitions were collected.
+- **Gated Stylus variable definition scans by marker** - Stylus variable-definition collection now preserves block-comment state while skipping definition-line preparation and regex probes on ordinary lines without assignment markers.
+- **Gated Python decorator reference scans by marker** - Python reference extraction now skips decorator-call and bare-decorator regex probes on lines without an `@` marker.
+- **Gated Python raise/except type scans by marker** - Python reference extraction now checks `raise` and `except` markers before running exception type regex probes.
+- **Gated Python runtime type-check scans by marker** - Python reference extraction now checks `isinstance` and `issubclass` markers before running runtime type-check regex probes.
+- **Gated Python typing helper scans by marker** - Python reference extraction now checks `cast` and `assert_type` markers before running typing helper regex probes.
+- **Gated Python class-base scans by marker** - Python reference extraction now checks `class` and parenthesis markers before running class base/metaclass regex probes.
+- **Gated Python function annotation scans by marker** - Python reference extraction now checks function declaration, return-arrow, and parenthesis markers before running return and parameter annotation regex probes.
+- **Gated Python variable and type-alias scans by marker** - Python reference extraction now checks annotation and alias markers before running variable annotation and type-alias regex probes.
+- **Gated Python type-factory scans by marker** - Python reference extraction now checks `NewType`, `TypeVar`, `ParamSpec`, and `bound` markers before running type factory regex probes.
+- **Gated Python dataclass and type-hints scans by marker** - Python reference extraction now checks `get_type_hints`, `fields`, `field`, `default_factory`, and `metadata` markers before running dataclass/type-hints regex probes.
+- **Gated Python framework and dynamic-import scans by marker** - Python reference extraction now checks attrs, pydantic, pytest, contextlib, importlib, and `__import__` markers before running those API regex probes.
+- **Gated PHP use import scans by marker** - PHP reference extraction now checks `use`, `function`, and `const` markers before running type, function, and const import regex probes.
+- **Gated PHP static and exception type scans by marker** - PHP reference extraction now checks `::`, `instanceof`, and `catch` markers before running static-access and exception type regex probes.
+- **Gated PHP signature type scans by marker** - PHP reference extraction now checks colon, dollar, visibility, `extends`, and `implements` markers before running return, parameter, property, and inheritance type regex probes.
+- **Gated PHP docblock type scans by marker** - PHP reference extraction now checks docblock tag markers before running generic, property, and method-parameter docblock type regex probes.
+- **Gated PHP object member scans by marker** - PHP reference extraction now checks the object access arrow marker before running object-member regex probes.
+- **Gated C++ friend reference scans by marker** - C++ reference extraction now checks the `friend` marker before running friend type/function regex probes.
+- **Skipped reference-line preparation on empty lines** - all language reference preparation now returns empty lines immediately instead of running comment/string-literal trigger checks.
+- **Collapsed string-literal delimiter probes** - reference-line preparation now checks quote/backtick trigger characters with `IndexOfAny` instead of separate scans per delimiter.
+- **Hoisted reference-line preparation language flags** - per-file reference preparation now computes language comment/string handling flags once and reuses them for each line instead of repeating language switches in the hot loop.
+- **Skipped symbol pattern scans on whitespace-only lines** - symbol extraction now bypasses the regex pattern loop when the effective match line is blank after language-specific masking.
+- **Skipped Python walrus regex scans on ordinary lines** - supplemental Python symbol extraction now checks for `:=` before running the walrus assignment regex.
+- **Skipped PHP supplemental regex scans on non-candidate lines** - PHP property, constructor-promotion, docblock, and trait-alias supplemental passes now check cheap marker substrings before running their regexes.
+- **Dispatched JS/TS module supplemental scans by marker** - JavaScript/TypeScript module import supplemental helpers now run only for lines containing the marker they scan for, instead of invoking every helper on every line.
+- **Skipped C++ friend-declaration scans on ordinary lines** - C++ supplemental friend declaration extraction now avoids regex probes unless the masked line still contains `friend`, while preserving block-comment state on comment-affecting lines.
+- **Skipped Perl hash-constant collection on non-candidate lines** - Perl supplemental constant extraction now checks for `constant` before attempting the `use constant { ... }` body collector on each line.
+- **Skipped Rust supplemental collectors before marker hits** - Rust `use`, multiline `impl`, and associated-type-default supplemental extraction now checks cheap file/line markers before running statement collectors or trait-body scans.
+- **Gated Go supplemental declaration scans by markers** - Go import/directive/label and grouped declaration helpers now skip ordinary lines before trimming, regex checks, or brace-depth scans when the required markers are absent.
+- **Gated Go import-block reference scans by marker** - Go reference preparation now skips import-block regex checks on lines without the required `import`, parenthesis, or quoted-path markers.
+- **Gated Go top-level reference scans by marker** - Go reference extraction now checks import, `func`, brace, and uppercase markers before running top-level import/function/composite regex probes.
+- **Gated Go generic helper function scans by marker** - Go generic call and instantiation helpers now skip function-line regex checks when the line lacks the `func` marker.
+- **Skipped GraphQL member extraction when input/union markers are absent** - GraphQL supplemental member extraction now avoids full-content joins for files without `input` blocks and runs union regexes only on lines containing `union`.
+- **Dispatched Razor directive scans by marker** - Razor directive supplemental extraction now skips lines without `@` and invokes only the directive regex matching the line marker.
+- **Gated Razor reference scans by marker** - Razor reference extraction now checks component-tag, directive, attribute, inject, and event-binding markers before running the matching regex probes.
+- **Dispatched Dockerfile supplemental scans by instruction** - Dockerfile extra symbol extraction now reads the leading instruction once per line and invokes only the matching ENV/LABEL/EXPOSE/VOLUME/FROM/SHELL/COPY/ADD/RUN helper.
+- **Gated Dockerfile named-stage fallback scans by marker** - Dockerfile extraction now skips named-stage base-image regex checks on `FROM` lines without an `AS` marker.
+- **Gated Java enum fallback scans by name start** - Java enum recovery now skips the line-fallback regex unless the line shape can match an uppercase enum member.
+- **Gated section-heading regex scans by marker** - C# `#region` and JavaScript/TypeScript `@module` heading extraction now checks required marker substrings before running heading regexes.
+- **Skipped CSS custom-property regex scans on ordinary lines** - CSS inline custom-property extraction now checks for the required `--` marker before running its regex.
+- **Skipped CSS font-face block joins without family markers** - CSS `@font-face` family-name resolution now checks the block for `font-family` before masking and joining block text.
+- **Skipped Svelte reactive-property regex scans on ordinary lines** - Svelte supplemental extraction now checks for `$:` before running its reactive assignment regex.
+- **Dispatched Markdown reference regex scans by delimiter** - Markdown reference extraction now checks for `](`, `]:`, and `][` before running the matching link/reference regex.
+- **Gated XAML type-bearing attribute regex scans** - XAML/XML extraction now checks for `x:Class`, `x:DataType`, `x:TypeArguments`, and `TargetType` before running the matching attribute regex.
+- **Gated XAML identity/resource attribute regex scans** - XAML/XML extraction now checks for `x:Name` and `x:Key` before running the matching property attribute regexes.
+- **Gated XAML event-handler regex scans by event name** - XAML/XML extraction now checks for configured event attribute names before running the event-handler regex.
+- **Gated XAML binding markup regex scans** - XAML/XML extraction now checks for binding markup prefixes before running the full-document binding regex.
+- **Gated wrapped XAML attribute scans by attribute name** - wrapped XAML attribute extraction now skips full-text walks for `x:Name`, `x:Key`, and event attributes whose names are absent.
+- **Gated XAML Binding ElementName scans by marker** - XAML/XML extraction now skips Binding markup, object element, and property element ElementName scans when their markers are absent.
+- **Gated XAML Binding Path scans by marker** - XAML/XML extraction now skips Binding object-element and property-element Path scans when their markers are absent.
+- **Gated XAML type element regex scans by marker** - XAML/XML extraction now checks for `x:Type`/`TypeName` markers before running type object/property element regexes.
+- **Gated XAML type markup scans by prefix** - XAML/XML extraction now invokes `{x:Type}` and `{x:TypeExtension}` markup-extension scans only when the matching prefix is present.
+- **Gated XAML static-member markup scans by prefix** - XAML/XML extraction now skips `{x:Static}` type inference when the prefix is absent.
+- **Gated XAML reference scans by prefix** - XAML/XML extraction now skips `x:Reference` markup, object element, and property element scans when their prefixes are absent.
+- **Gated XAML resource reference scans by prefix** - XAML/XML extraction now skips static/dynamic resource markup scans when their prefixes are absent.
+- **Gated Pascal range token scans by keyword** - Pascal extraction now skips begin/end/case/try regex counting on lines that cannot contain the corresponding token.
+- **Gated Ruby and Elixir block token scans by keyword** - Ruby and Elixir range extraction now skips block-token regex scans on masked text without any matching token marker.
+- **Gated shell heredoc scans by redirect marker** - Shell extraction now skips heredoc masking and redirect regex scans on lines without `<<`.
+- **Gated Perl hash-constant key scans by pair marker** - Perl extraction now skips `use constant` hash key regex scans when the collected body lacks `=>`.
+- **Gated GraphQL input field scans by colon** - GraphQL extraction now skips input-field regex scans for input bodies that cannot contain field declarations.
+- **Gated GraphQL union variant scans by name start** - GraphQL extraction now skips union-variant regex scans when stripped variant text contains no GraphQL name start.
+- **Gated GraphQL declaration boundary scans by keyword** - GraphQL union continuation scanning now skips declaration-start regex checks when no declaration keyword is present.
+- **Gated Elixir defimpl type scans by marker** - Elixir reference extraction now checks the `defimpl` marker before running defimpl protocol and implementation type regex probes.
+- **Gated Elixir pipe-call scans by marker** - Elixir reference extraction now checks the pipe operator marker before running pipe-call regex probes.
+- **Gated Elixir import and behaviour type scans by marker** - Elixir reference extraction now checks alias/import/require/use and attribute markers before running import and behaviour regex probes.
+- **Gated Elixir parenless call scans by marker** - Elixir reference extraction now checks whitespace markers before running parenless-call regex probes.
+- **Gated Elixir first-line block scans by marker** - Elixir range extraction now avoids shorthand and opener regex checks when the masked first line lacks the required markers.
+- **Gated XAML line-level attribute scans by assignment marker** - XAML extraction now skips class, type, name, and key attribute regex scans on lines without `=`.
+- **Gated wrapped XAML type-argument scans by attribute marker** - XAML extraction now skips multiline `x:TypeArguments` scanning when the attribute marker is absent from the document.
+- **Gated wrapped XAML type-bearing scans by attribute markers** - XAML extraction now skips multiline class/type attribute scanning when `x:Class`, `x:DataType`, and `TargetType` are all absent.
+- **Gated wrapped XAML search-attribute scans by markers** - XAML extraction now skips multiline name/key/event attribute scanning when none of those markers appear in the document.
+- **Gated COBOL paragraph scans by required markers** - COBOL extraction now skips program, entry, section, and paragraph regex checks when the line lacks the required marker.
+- **Gated Fortran routine-start scans by keyword** - Fortran range extraction now skips routine-start regex checks when a line contains neither `subroutine` nor `function`.
+- **Gated Fortran include and group reference scans by marker** - Fortran reference extraction now skips include/common/namelist regex checks unless the line has the required keyword and delimiter markers.
+- **Gated Fortran statement reference scans by keyword** - Fortran reference extraction now runs data, save, submodule, external, intrinsic, access, finalizer, and equivalence regex checks only on matching statement candidates.
+- **Gated Fortran allocation and type reference scans by marker** - Fortran reference extraction now checks procedure, pointer, associate, type-expression, allocation, deallocation, and kind markers before running their regex passes.
+- **Gated Fortran call reference scans by marker** - Fortran reference extraction now checks the `call` statement marker before running call-target regex probes.
+- **Gated Objective-C type reference scans by marker** - Objective-C reference extraction now checks interface-base, protocol-list, and pointer-declaration markers before running the matching type regex probes.
+- **Gated Objective-C message call scans by marker** - Objective-C reference extraction now checks message-send and selector markers before running message and `@selector` regex probes.
+- **Gated Pascal type reference scans by marker** - Pascal reference extraction now checks `uses`, base-declaration, and colon markers before running the matching type regex probes.
+- **Gated Pascal bare-call scans by marker** - Pascal reference extraction now checks the semicolon statement marker before running the bare-call regex probe.
+- **Gated Smalltalk message reference scans by marker** - Smalltalk reference extraction now checks whitespace markers before running method-definition, class-declaration, and message-send regex probes.
+- **Gated Smalltalk range-boundary scans by marker** - Smalltalk range extraction now skips method/class boundary regex checks when the line lacks `>>`, `subclass:`, or `named:`.
+- **Gated Rust use-start scans by keyword** - Rust use-statement collection now skips the start regex when the first line lacks the `use` keyword marker.
+- **Gated Kotlin class subkind scans by keyword** - Kotlin class enrichment now skips value/inline class regex checks when metadata lacks the corresponding keyword marker.
+- **Gated Kotlin inline-function scans by keyword** - Kotlin function enrichment now skips inline/reified regex checks when signatures lack the matching keyword markers.
+- **Dispatched Solidity type declaration scans by keyword** - Solidity extraction now runs contract/interface/library, struct, and enum declaration regexes only when their keyword marker is present.
+- **Dispatched Solidity callable declaration scans by keyword** - Solidity extraction now runs function, constructor, fallback/receive, and modifier declaration regexes only for lines with the corresponding marker.
+- **Dispatched Solidity event/error declaration scans by keyword** - Solidity extraction now runs event and error declaration regexes only on lines with the matching keyword marker.
+- **Gated Solidity parenthesized declaration scans by marker** - Solidity extraction now skips function, constructor, fallback/receive, event, and error regexes when the line lacks `(`.
+- **Skipped duplicate PHP constructor-start regex checks** - PHP promoted-property extraction now avoids the constructor-start regex once the same-line constructor regex has already matched.
+- **Dispatched PHP import scans by marker** - PHP import extraction now checks `use`, grouped-use braces, and require/include markers before running the corresponding regexes.
+- **Gated PHP grouped-use alias scans by marker** - PHP grouped-use import extraction now skips per-item alias regex checks unless the item contains an `as` marker.
+- **Gated PHP promoted-property parameter scans by marker** - PHP constructor promotion extraction now skips parameter regex checks when the segment lacks `$` or visibility keywords.
+- **Gated PHP docblock and alias scans by syntax marker** - PHP supplemental extraction now skips docblock, trait-alias, and constructor regex checks when lines lack required sigils or delimiters.
+- **Collapsed duplicate F# type-declaration regex scans** - F# type-member extraction now reuses the declaration match instead of running `IsMatch` and `Match` on the same line.
+- **Gated F# record-field scans by colon** - F# record-field extraction now skips record-field regex checks for candidates that cannot contain a typed field separator.
+- **Gated F# active/operator scans by marker** - F# extraction now skips active-pattern and operator-definition regex checks when lines lack their required markers.
+- **Gated YAML mapping-key scans by colon** - YAML structured-data extraction now skips mapping-key regex checks on lines that cannot contain a mapping separator.
+- **Gated JSON fallback property scans by markers** - oversized or malformed JSON fallback extraction now skips property regex checks on lines without both a quote and colon.
+- **Deferred JSON property-line queue construction** - JSON extraction now builds property-line lookup queues only for object roots that can emit structured key symbols.
+- **Gated Visual Basic enum-member scans by name start** - Visual Basic enum extraction now skips enum-member regex checks when the trimmed line cannot start a member name.
+- **Gated Python dynamic-import scans by marker** - Python import expansion now skips dynamic import literal regex enumeration when statements lack `importlib` and `__import__` markers.
+- **Dispatched Python direct/from import scans by prefix** - Python import expansion now runs direct and from-import regexes only for statements beginning with the matching import keyword.
+- **Gated Python `__all__` export scans by marker** - Python export expansion now skips append/extend/assignment regex checks on lines without the `__all__` marker.
+- **Gated Python class attribute scans by marker** - Python class-body extraction now checks special attributes, dataclass fields, annotations, and assignments with cheap markers before running the corresponding regexes.
+- **Dispatched Python `__all__` operation scans by marker** - Python export expansion now runs append, extend, and assignment regexes only when the line contains the matching operation marker.
+- **Gated Python dataclass metadata scans by marker** - Python dataclass field expansion now skips metadata regex checks on field-call lines that lack the `metadata` and dictionary markers.
+- **Gated C/C++ include, base, constructor, and cast scans by marker** - C/C++ reference extraction now checks include/import, inheritance, allocation, named-cast, and parenthesized-cast markers before running the matching type regex probes.
+- **Gated C typedef cast scans by marker** - C reference extraction now checks `*_t` and parenthesis markers before running typedef cast type regex probes.
+- **Gated C sizeof and alignof type scans by marker** - C reference extraction now checks operand keywords plus typedef/tag markers before running sizeof and alignof type regex probes.
+- **Gated C declaration type scans by marker** - C reference extraction now checks declaration terminators plus typedef/tag markers before running declaration type regex probes.
+- **Gated C function return type scans by marker** - C reference extraction now checks parenthesis plus typedef/tag markers before running function return type regex probes.
+- **Gated C parameter type scans by marker** - C reference extraction now checks parameter delimiters plus typedef/tag markers before running parameter type regex probes.
+- **Gated C compound literal type scans by marker** - C reference extraction now checks compound-literal delimiters plus typedef/tag markers before running compound literal type regex probes.
+- **Gated C typeof type scans by marker** - C reference extraction now checks `typeof` plus typedef/tag markers before running typeof and typeof_unqual type regex probes.
+- **Gated C builtin type-compatibility scans by marker** - C reference extraction now checks the `__builtin_types_compatible_p` marker plus typedef/tag markers before running builtin type comparison regex probes.
+- **Gated C generic association type scans by marker** - C reference extraction now checks `_Generic` or continuation delimiters plus typedef/tag markers before running generic association type regex probes.
+- **Gated C atomic and alignas type scans by marker** - C reference extraction now checks `_Atomic` and alignas markers plus typedef/tag markers before running atomic and alignas type regex probes.
+- **Gated C function-pointer type scans by marker** - C reference extraction now checks function-pointer delimiter markers plus typedef/tag markers before running function-pointer alias and declaration type regex probes.
+- **Gated C pointer-array declaration type scans by marker** - C reference extraction now checks function-pointer and array delimiters plus typedef/tag markers before running pointer-array declaration type regex probes.
+- **Gated C offsetof type scans by marker** - C reference extraction now checks `offsetof` call and comma markers plus typedef/tag markers before running offsetof type regex probes.
+- **Gated C va_arg type scans by marker** - C reference extraction now checks `va_arg` call and comma markers before running va_arg regex and operand scanners.
+- **Gated C++ type operand scans by marker** - C/C++ reference extraction now checks `sizeof` or `alignof` call markers before running C++ type operand regex probes.
+- **Gated C++ typeid scans by marker** - C/C++ reference extraction now checks `typeid` call markers before running C++ typeid regex probes.
+- **Gated C++ decltype brace construction scans by marker** - C/C++ reference extraction now checks `decltype`, parenthesis, and brace markers before running decltype construction regex probes.
+- **Gated C++ factory template argument scans by marker** - C/C++ reference extraction now checks `make_`, template, and call markers before running factory template argument regex probes.
+- **Gated C++ type-trait template argument scans by marker** - C/C++ reference extraction now checks `is_` and template markers before running type-trait template argument regex probes.
+- **Gated C++ brace construction scans by marker** - C/C++ reference extraction now checks brace and construction lead-in markers before running brace construction regex probes.
+- **Gated C++ qualified template brace construction scans by marker** - C/C++ reference extraction now checks brace, template, and scope markers before running qualified template brace construction regex probes.
+- **Gated C++ using-alias target scans by marker** - C/C++ reference extraction now checks `using`, assignment, and statement markers before running using-alias target regex probes.
+- **Gated C++ typedef-alias target scans by marker** - C/C++ reference extraction now checks `typedef`, statement, and no-parenthesis markers before running typedef-alias target regex probes.
+- **Gated C++ explicit template instantiation scans by marker** - C/C++ reference extraction now checks `template`, class/struct, and statement markers before running explicit template instantiation regex probes.
+- **Gated C++ template-id declaration scans by marker** - C/C++ reference extraction now checks template delimiters and declaration terminators before running template-id declaration regex probes.
+- **Gated C++ template parameter default scans by marker** - C/C++ reference extraction now checks `typename`/`class` and assignment markers before running template parameter default regex probes.
+- **Gated C++ qualified member receiver scans by marker** - C/C++ reference extraction now checks scope markers before running qualified member receiver regex probes.
+- **Gated C++ pointer-to-member type scans by marker** - C/C++ reference extraction now checks scope and pointer markers before running pointer-to-member type regex probes.
+- **Gated C++ trailing return type scans by marker** - C/C++ reference extraction now checks close-parenthesis and arrow markers before running trailing return type regex probes.
+- **Gated C++ requires concept type scans by marker** - C/C++ reference extraction now checks `requires` and template markers before running requires concept type regex probes.
+- **Gated C++ qualified requires concept scans by marker** - C/C++ reference extraction now checks `requires`, template, and scope markers before running qualified requires concept regex probes.
+- **Gated C++ concept expression type scans by marker** - C/C++ reference extraction now checks template and concept operator markers before running concept expression type regex probes.
+- **Gated C++ compound requirement concept scans by marker** - C/C++ reference extraction now checks arrow and template delimiter markers before running compound requirement concept regex probes.
+- **Gated C++ friend type scans by marker** - C/C++ reference extraction now checks `friend`, type-kind, and statement markers before running friend type regex probes.
+- **Gated C++ dynamic exception spec scans by marker** - C/C++ reference extraction now checks `throw` and parenthesis markers before running dynamic exception specification regex probes.
+- **Gated C++ declaration type scans by marker** - C/C++ reference extraction now checks declaration terminators and lightweight type markers before running declaration type regex probes.
+- **Gated Dart variable type scans by marker** - Dart reference extraction now checks declaration terminators and uppercase type markers before running variable type regex probes.
+- **Gated Dart function signature scans by marker** - Dart reference extraction now checks parenthesis and uppercase type markers before running function signature and parameter type regex probes.
+- **Gated Dart constructor call scans by marker** - Dart reference extraction now checks `new`/`const`, parenthesis, and uppercase type markers before running constructor call regex probes.
+- **Gated VB type keyword scans by marker** - Visual Basic reference extraction now checks type keyword markers before running type keyword regex probes.
+- **Gated VB generic list scans by marker** - Visual Basic reference extraction now checks `(` and `Of` markers before running generic argument list regex probes.
+- **Gated VB new type scans by marker** - Visual Basic reference extraction now checks `New` markers before running constructor type regex probes.
+- **Gated VB implements list scans by marker** - Visual Basic reference extraction now checks `Implements` markers before running implements list regex probes.
+- **Gated VB imports list scans by marker** - Visual Basic reference extraction now checks `Imports` markers before running imports list regex probes.
+- **Gated VB cast type scans by marker** - Visual Basic reference extraction now checks cast, parenthesis, and comma markers before running cast type regex probes.
+- **Gated VB GetType scans by marker** - Visual Basic reference extraction now checks `GetType` and parenthesis markers before running `GetType` regex probes.
+- **Gated VB TypeOf scans by marker** - Visual Basic reference extraction now checks `TypeOf` and `Is` markers before running `TypeOf` regex probes.
+- **Gated VB NameOf scans by marker** - Visual Basic reference extraction now checks `NameOf` and parenthesis markers before running `NameOf` regex probes.
+- **Gated VB XML namespace scans by marker** - Visual Basic reference extraction now checks `GetXmlNamespace` and parenthesis markers before running XML namespace regex probes.
+- **Gated VB AddressOf scans by marker** - Visual Basic reference extraction now checks `AddressOf` markers before running delegate target regex probes.
+- **Gated VB AddHandler scans by marker** - Visual Basic reference extraction now checks `AddHandler` markers before running event subscription regex probes.
+- **Gated VB RemoveHandler scans by marker** - Visual Basic reference extraction now checks `RemoveHandler` markers before running event unsubscription regex probes.
+- **Gated VB RaiseEvent scans by marker** - Visual Basic reference extraction now checks `RaiseEvent` markers before running event invocation regex probes.
+- **Gated VB escaped call scans by marker** - Visual Basic reference extraction now checks escaped identifier and parenthesis markers before running escaped call regex probes.
+- **Gated VB bare call scans by leading token** - Visual Basic reference extraction now checks the first non-whitespace token before running bare call regex probes.
+- **Gated VB CallByName scans by marker** - Visual Basic reference extraction now checks `CallByName`, parenthesis, comma, and quote markers before running `CallByName` regex probes.
+- **Gated VB bare member call scans by leading token** - Visual Basic reference extraction now checks for leading member access before running bare member call regex probes.
+- **Gated Fortran use scans by marker** - Fortran reference extraction now checks `use` markers before running use, only-list, and rename-list regex probes.
+- **Gated Fortran import scans by marker** - Fortran reference extraction now checks `import` markers before running import list regex probes.
+- **Gated Fortran data group scans by slash marker** - Fortran reference extraction now checks data statement slash markers before running data object group regex probes.
+- **Gated Fortran save slash group scans by marker** - Fortran reference extraction now checks save-list slash markers before running saved common block regex probes.
+- **Gated Fortran allocate source scans by marker** - Fortran reference extraction now checks `source` and `mold` markers before running allocate source keyword regex probes.
+- **Gated Fortran allocation status scans by marker** - Fortran reference extraction now checks `stat` and `errmsg` markers before running allocate/deallocate status keyword regex probes.
+- **Gated Fortran pointer assignment scans by leading token** - Fortran reference extraction now checks the leading identifier token before running pointer assignment regex probes.
+- **Gated Fortran allocate type-spec scans by marker** - Fortran reference extraction now checks `::` markers before running allocate type-spec regex probes.
+- **Gated Fortran call scans by leading keyword** - Fortran reference extraction now checks for a leading `call` keyword before running call regex probes.
+- **Tightened Fortran use scans to leading keyword gates** - Fortran reference extraction now requires leading `use` before running use-clause regex probes.
+- **Tightened Fortran import scans to leading keyword gates** - Fortran reference extraction now requires leading `import` before running import list regex probes.
+- **Tightened Fortran include scans to leading keyword gates** - Fortran reference extraction now requires leading `include` before running include filename regex probes.
+- **Replaced Fortran common line regex gates with leading keyword checks** - Fortran reference extraction now avoids common-line regex probes by using direct leading keyword checks.
+- **Replaced Fortran namelist line regex gates with leading keyword checks** - Fortran reference extraction now avoids namelist-line regex probes by using direct leading keyword checks.
+- **Tightened Fortran equivalence scans to leading keyword gates** - Fortran reference extraction now requires leading `equivalence` before running equivalence list regex probes.
+- **Tightened Fortran data scans to leading keyword gates** - Fortran reference extraction now requires leading `data` before running data-object regex probes.
+- **Tightened Fortran save scans to leading keyword gates** - Fortran reference extraction now requires leading `save` before running save-list regex probes.
+- **Tightened Fortran submodule scans to leading keyword gates** - Fortran reference extraction now requires leading `submodule` before running parent-module regex probes.
+- **Tightened Fortran external scans to leading keyword gates** - Fortran reference extraction now requires leading `external` before running external-list regex probes.
+- **Tightened Fortran intrinsic scans to leading keyword gates** - Fortran reference extraction now requires leading `intrinsic` before running intrinsic-list regex probes.
+- **Tightened Fortran access-list scans to leading keyword gates** - Fortran reference extraction now requires leading `public` or `private` before running access-list regex probes.
+- **Tightened Fortran finalizer scans to leading keyword gates** - Fortran reference extraction now requires leading `final` before running finalizer-list regex probes.
+- **Tightened Fortran procedure binding scans to leading keyword gates** - Fortran reference extraction now requires leading `procedure` or `generic` before running binding-target regex probes.
+- **Tightened Fortran associate scans to leading keyword gates** - Fortran reference extraction now requires leading `associate` before running associate-target regex probes.
+- **Tightened Fortran allocate scans to leading keyword gates** - Fortran reference extraction now requires leading `allocate` before running allocation type and object regex probes.
+- **Tightened Fortran deallocate scans to leading keyword gates** - Fortran reference extraction now requires leading `deallocate` before running deallocation object regex probes.
+- **Added Fortran keyword-kind assignment gates** - Fortran reference extraction now checks for `=` before running intrinsic `kind =` regex probes.
+- **Removed unused Fortran common and namelist gate regexes** - Fortran reference extraction now avoids carrying redundant line-gate regex definitions after direct keyword gates replaced them.
+- **Removed redundant Fortran equivalence line regex gates** - Fortran reference extraction now relies on direct leading keyword checks before scanning equivalence name lists.
+- **Removed redundant Fortran procedure binding line regex gates** - Fortran reference extraction now uses direct leading keyword checks before scanning binding targets.
+- **Tightened Pascal uses scans to leading keyword gates** - Pascal reference extraction now requires leading `uses` before running unit-list regex probes.
+- **Added Pascal class-base closing-paren gates** - Pascal reference extraction now checks for `)` before running class/interface/object base-list regex probes.
+- **Added shared keyword containment gates** - Reference extraction now has a boundary-aware case-insensitive keyword helper for replacing broad substring probes in language hot paths.
+- **Tightened Pascal class base markers to keyword boundaries** - Pascal reference extraction now treats `class` as a boundary-aware keyword before running base-list regex probes.
+- **Tightened Pascal interface base markers to keyword boundaries** - Pascal reference extraction now treats `interface` as a boundary-aware keyword before running base-list regex probes.
+- **Tightened Pascal object base markers to keyword boundaries** - Pascal reference extraction now treats `object` as a boundary-aware keyword before running base-list regex probes.
+- **Added shared leading character gates** - Reference extraction now has a leading-character helper for anchored syntax markers that are not identifier keywords.
+- **Tightened Objective-C interface base scans to leading marker gates** - Objective-C reference extraction now requires leading `@` before running interface/implementation base regex probes.
+- **Added Haskell signature separator gates** - Haskell reference extraction now checks for `::` before running type-signature regex probes.
+- **Added Haskell space-call whitespace gates** - Haskell reference extraction now skips space-call regex probes on lines without whitespace.
+- **Added shared ordinal keyword gates** - Reference extraction now has a case-sensitive leading keyword helper for languages with lowercase-only syntax markers.
+- **Tightened Elixir alias import-family scans to leading keyword gates** - Elixir reference extraction now requires leading `alias` before running import-family regex probes.
+- **Tightened Elixir import scans to leading keyword gates** - Elixir reference extraction now requires leading `import` before running import-family regex probes.
+- **Tightened Elixir require scans to leading keyword gates** - Elixir reference extraction now requires leading `require` before running import-family regex probes.
+- **Tightened Elixir use scans to leading keyword gates** - Elixir reference extraction now requires leading `use` before running import-family regex probes.
+- **Added shared ordinal containment gates** - Reference extraction now has a boundary-aware case-sensitive keyword helper for lowercase marker hot paths.
+- **Tightened Elixir behaviour attribute scans to leading marker gates** - Elixir reference extraction now requires a leading `@` before running behaviour/impl regex probes.
+- **Tightened Elixir behaviour scans to keyword boundaries** - Elixir reference extraction now treats `behaviour` as a boundary-aware keyword before running behaviour regex probes.
+- **Tightened Elixir impl scans to keyword boundaries** - Elixir reference extraction now treats `impl` as a boundary-aware keyword before running implementation regex probes.
+- **Gated Smalltalk method-definition skips by marker** - Smalltalk message extraction now checks for `>>` before running method-definition regex probes.
+- **Gated Smalltalk class-declaration skips by literal marker** - Smalltalk message extraction now checks for `#` before running class-declaration regex probes.
+- **Gated Smalltalk class-declaration skips by keyword marker** - Smalltalk message extraction now checks class-declaration keywords before running class-declaration regex probes.
+- **Gated Objective-C selector scans by parenthesis marker** - Objective-C message extraction now checks for `(` before running `@selector(...)` regex probes.
+- **Tightened C++ class base-list markers to keyword boundaries** - C++ reference extraction now treats `class` as a boundary-aware keyword before running base-list regex probes.
+- **Tightened C++ struct base-list markers to keyword boundaries** - C++ reference extraction now treats `struct` as a boundary-aware keyword before running base-list regex probes.
+- **Tightened C++ new type markers to keyword boundaries** - C++ reference extraction now treats `new` as a boundary-aware keyword before running allocation type regex probes.
+- **Tightened C function-pointer typedef markers to keyword boundaries** - C reference extraction now treats `typedef` as a boundary-aware keyword before running function-pointer alias regex probes.
+- **Tightened C++ typedef alias markers to keyword boundaries** - C++ reference extraction now treats `typedef` as a boundary-aware keyword before running alias-target regex probes.
+- **Tightened C++ explicit-template markers to keyword boundaries** - C++ reference extraction now treats `template` as a boundary-aware keyword before running explicit instantiation regex probes.
+- **Tightened C++ explicit-template class markers to keyword boundaries** - C++ reference extraction now treats `class` as a boundary-aware keyword before explicit instantiation regex probes.
+- **Tightened C++ explicit-template struct markers to keyword boundaries** - C++ reference extraction now treats `struct` as a boundary-aware keyword before explicit instantiation regex probes.
+- **Tightened C struct type markers to keyword boundaries** - C reference extraction now treats `struct` as a boundary-aware keyword before running tagged-type regex probes.
+- **Java and Kotlin reference extraction now reuses empty generic-parameter sets** — non-generic declarations and malformed generic clauses avoid short-lived empty `HashSet` allocations while indexing large Java/Kotlin repositories.
+- Avoided temporary substring and trim allocations while building JavaScript and TypeScript destructured export signatures.
+- Replaced several JavaScript/TypeScript line-end `TrimEnd()` checks with direct trailing-whitespace scans during symbol extraction.
+- **JavaScript and TypeScript RHS checks avoid slice trim chains** — arrow, lambda, class, anonymous function, and re-export parsing now trims right-hand-side slices from spans instead of allocating a substring before each trim.
+- **Record loading reuses known indexability** — full scans, incremental updates, dry runs, freshness checks, and MCP indexing avoid a second regular-file probe when the caller already proved the file is indexable.
+- **Avoided Kotlin name-set allocation outside Kotlin files** — shared reference setup now reuses empty Kotlin constructor and infix-function name sets for non-Kotlin languages.
+- **Kotlin name normalization avoids transient trim strings** — Kotlin companion-object and secondary-constructor normalization now use trimmed spans for prefix and empty checks instead of allocating intermediate trim strings.
+- Build Kotlin constructor type names and infix function names in one symbol pass during reference extraction.
+- Pre-sized the merged language extension map used by CLI/MCP language listings so it avoids repeated dictionary growth while combining built-in, plugin, and override entries.
+- Build language map override candidate paths directly during indexing cache misses to avoid iterator and array-copy overhead across language detection.
+- Load effective language map override files directly from cached path stamps to avoid an iterator allocation during indexing cache misses.
+- Add a fast path for repeated language-map override lookups in the same directory during large scans.
+- **Reused parent language-map caches for child directories** - indexing now reuses a cached parent `.cdidx-langmap.yaml` result when a child directory has no local override file, reducing repeated ancestor config probes during large scans.
+- **Language normalization avoids common trim allocations** — symbol and reference extractor language-key normalization now handles aliases with spans and reuses already-normalized lowercase keys.
+- Avoided per-line character array allocation in Go, CSS, Sass, and Stylus masking paths until a comment, string, or URL token actually needs masking.
+- **Reduced per-directory scan allocations** - file discovery now allocates the child-directory list only for directories that actually contain subdirectories, lowering traversal overhead in large trees with many leaf directories.
+- Avoided copying Lisp symbol-scan lines unless comments, strings, or already matched forms actually need masking.
+- Avoided materializing a temporary list while formatting bounded loader-exception diagnostics for extractor plugin failures.
+- **Long-path helpers cache the OS check** — index traversal no longer repeats the Windows platform probe for every long-path prefix add/remove helper call.
+- Replace repeated uppercase-hex-plus-lowercase conversions with a shared one-pass lowercase hex helper for indexing checksums, marker fingerprints, and related hash output.
+- Allocate Lua long comment/string mask buffers only for lines that actually need masking, reusing unchanged lines when long-bracket candidates are skipped inside strings or comments.
+- Only run Lua long comment/string masking when a line contains a plausible long-bracket opener (`[[` or `[=`), avoiding full-line masking for ordinary table/index usage.
+- Normalize Markdown anchors with a single character buffer instead of lowercasing, list growth, array conversion, and trimming passes during reference extraction.
+- **Markdown symbol extraction now allocates heading stacks only after the first heading** — documents without headings skip unused heading hierarchy stacks during indexing.
+- Avoided copying Markdown reference-scan lines that do not contain inline-code backticks.
+- **Markdown symbol extraction now builds reference target lookups only when reference-style links are present** — documents without `][` links skip full-file reference-definition scans and empty dictionaries during indexing.
+- **Metadata normalization trims values with a single span pass** — shared symbol metadata normalization now trims spans once and only materializes a new string when leading or trailing whitespace is actually removed.
+- **Cached nested Git repository probes during file scanning** — `cdidx` now reuses `.git` existence checks for directories that path filtering and traversal inspect repeatedly.
+- Avoided copying every Pascal reference-scan line when only comment-bearing lines need block comment masking.
+- **Reduced path-comparison allocations** - scan directory identity normalization now walks path segments with spans instead of allocating a split segment array for each directory.
+- **Skipped submodule path bookkeeping for repositories without submodules** — path filtering now avoids per-segment cumulative path strings and submodule lookups when no `.gitmodules` paths were loaded.
+- Add an errorless path-filter fast path for project marker visibility, file watching, and solution project discovery.
+- **Perl qualified subroutine prefix checks avoid trim strings** — Perl reference extraction now checks qualified subroutine definitions with spans instead of allocating a trimmed prefix for every qualified call candidate.
+- Allocate PHP docblock property dedupe sets only when a property tag is actually found, for both symbol and reference extraction.
+- Added a direct plugin extension lookup path so language detection and unknown-extension checks avoid materializing the full plugin extension map for each file.
+- Reused empty arrays for plugin symbol/reference language snapshots when no extractors are registered, avoiding default status/indexing allocations.
+- Reused an immutable empty plugin extension map when no extractor extensions are registered, avoiding repeated dictionary allocations during language detection.
+- **Poetry version extraction avoids trim strings** — Poetry dependency version parsing now trims quoted values and TOML `version` captures with spans before materializing the normalized version.
+- **PowerShell splat extraction now reuses empty key lists** — malformed or keyless splat hashtables no longer allocate short-lived empty lists while indexing large PowerShell-heavy repositories.
+- **Reused empty PowerShell splat-assignment maps** — PowerShell reference extraction now avoids allocating an empty dictionary for files that do not declare splat assignments.
+- Avoid allocating PowerShell splat hashtable key collections until a key is actually found while indexing large scripts.
+- Delay PowerShell splat-assignment dictionary allocation until a real assignment is found, and pre-size the splat body builder from the first line.
+- Deduplicate small PowerShell splat hashtable key lists without allocating a `HashSet` for the common no-duplicate case.
+- **Carried generated-suppression state on C# prepass targets** - CLI and MCP indexing now pass the already-known generated-code suppression decision through prepass targets, avoiding an extra full-target dictionary and repeated lookups while preserving generated-file reuse checks.
+- Avoid an iterator allocation while scanning project marker files during hotspot family scope and fingerprint checks.
+- Hash project marker fingerprint inputs incrementally so large marker lists no longer allocate a joined payload string and UTF-8 byte array.
+- **Hotspot family scope derivation avoids repeated full-path normalization** — indexing now normalizes each file path once before walking project marker directories, reducing per-file path work on large codebases.
+- **Project marker scope checks skip duplicate marker enumeration for single-set languages** — C#, VB, and F# indexing no longer probes the same project marker patterns twice per ancestor directory when deriving hotspot family scopes.
+- **Project marker pattern lists are reused during indexing** — C#, VB, F#, and MSBuild hotspot family scope detection now share static marker pattern arrays instead of allocating equivalent lists for every file.
+- Replace project marker traversal warning limit checks with a direct loop that stops as soon as the limit is reached.
+- Build project marker fingerprint warnings with a direct loop instead of LINQ to avoid iterator overhead during full indexing scans.
+- Replaced Python logical line continuation `TrimEnd()` checks with an allocation-free trailing backslash scan.
+- **Python docstring heading scans avoid line trim strings** — Section heading extraction now scans Python module docstring candidates with spans and only allocates the final heading name.
+- Removed redundant character array copies while masking Python f-strings during type reference extraction.
+- Cache Python header symbols by line so reference extraction avoids scanning the full symbol list for every line in large Python files.
+- Pre-sized Python logical header and statement builders from the starting line to reduce buffer growth during reference scans.
+- Avoid allocating physical line/column map arrays for single-line Python logical reference headers and type-factory statements; multi-line cases still use the existing remap arrays.
+- Avoided character array allocation for Python lines that contain `f` or `F` but do not actually contain a single-line f-string.
+- Reduced temporary string allocations while building Python symbol header signatures by appending trimmed source ranges directly.
+- Build Python definition-container and header-symbol lookups in one symbol pass during reference extraction.
+- Reduced Python reference extraction allocations by creating definition-container and header-symbol lookup dictionaries only when matching Python symbols exist.
+- Pre-size qualified-name builders in SQL and C# reference extraction, and avoid temporary C# segment substrings while normalizing qualified names.
+- Pre-sized the query language alias dictionary from the language-extension count, reducing growth while building CLI/MCP language filters.
+- Reduced reference extraction overhead for files without container symbols by returning shared empty candidate arrays and skipping empty resolver state.
+- **Reference extraction now reuses empty line-based definition lookups** — files with no symbols skip allocating per-line definition dictionaries during indexing.
+- **Reference extraction now reuses empty definition-name sets** — files with no symbols avoid allocating all-definition and Razor file-definition lookup sets while indexing.
+- **Merged reference extractor supported languages with a pre-sized ordered set** — `cdidx` now avoids temporary LINQ iterator and distinct buffers while combining built-in, additional, and plugin reference languages during indexing setup.
+- **Regex capture normalization trims from spans across extractors** — Core symbol extraction plus C#, CSS, C++, Go, and PHP paths now trim match and group captures from `ValueSpan` before materializing normalized names.
+- **Reduced relative-path conversion overhead** - scan diagnostics and bookkeeping now use a project-root prefix fast path for files and directories already known to be inside the workspace.
+- **Remaining regex capture trims use spans across extractors** — Markdown/XAML, C# scanner, Java module, Rust, CSS custom-property, HDL parameter, and Objective-C category paths now trim regex captures from spans before allocating symbol strings.
+- Reuse strict decoder instances when classifying U+FFFD replacement character origins during file inspection.
+- Short-circuit reusable language checks for ordinary extension-based files before filename mapping work.
+- Avoided character array allocation for Ruby body-scan lines until comments, strings, percent literals, or heredocs actually require masking.
+- Build Rust attribute text incrementally during reference extraction instead of collecting line slices in a list and joining them.
+- **Rust function declaration checks avoid prefix strings** — Rust reference extraction now tests `fn` declaration prefixes with spans instead of allocating a trimmed prefix for each call-shaped candidate.
+- **Rust impl prefix checks avoid trim strings** — Rust `impl` statement range detection now checks the first line prefix with a single trimmed span instead of allocating trimmed strings.
+- Avoided character array allocation while scanning Rust lines with apostrophes unless a lifetime token actually needs masking.
+- **Rust use extraction keeps body trimming on spans** — Rust `use` extraction now trims the statement body and semicolon suffix on spans, preserving the body offset without re-searching the materialized string.
+- **Rust use-path reference extraction now trims path segments with spans** — indexing large Rust modules avoids intermediate trim strings while combining nested `use` prefixes and imported names.
+- Avoided copying Sass and Stylus reference-scan lines unless comments or string literals actually need masking.
+- **Scala companion classification now allocates class lookup dictionaries only when needed** — Scala files without top-level classes skip empty companion lookup setup during indexing.
+- **Scala braceless class scanning now avoids trim strings for continuation checks** — symbol extraction uses span-based suffix checks when deciding whether large Scala headers continue onto following lines.
+- **Scala braceless header scanning now avoids trim-start strings for lookahead lines** — symbol extraction keeps the original line and first non-whitespace column when checking continuation lines in large Scala declarations.
+- **Reduced duplicate-path scan overhead** - case-insensitive directory deduplication now reuses already-enumerated full paths during normal file discovery instead of normalizing every file path again.
+- **Extended scan relative-path fast paths** - project marker discovery and symlink diagnostics now reuse the scanner's project-root relative path fast path instead of calling `Path.GetRelativePath` directly.
+- Process directory traversal subdirectory paths directly in the normal scan path to avoid a wrapper iterator allocation during full indexing scans.
+- Pre-sized C# and Dart scope declaration buffers to reduce repeated growth during large symbol scans.
+- **Section heading extraction trims regex groups from spans** — C# `#region` and JavaScript/TypeScript `@module` heading names now trim regex group spans before materializing the final symbol name.
+- Reduced extra path separator normalization allocations while formatting probe paths, project marker scope keys, and TypeScript path alias references during indexing.
+- Reuse strict UTF-8 and UTF-16 shebang decoders instead of allocating encoding instances during extensionless file probes.
+- **Shell global alias signature checks avoid trim strings** — Shell reference extraction now scans alias signatures with spans before running the global-alias regex, avoiding trimmed signature allocations for non-global aliases during large shell indexes.
+- **Shell heredoc terminator matching now avoids per-line trim strings** — shell symbol extraction compares heredoc terminators by source range, reducing allocations while indexing large shell scripts with heredoc bodies.
+- Build shell callable and global alias name sets in one symbol pass during reference extraction.
+- **Smalltalk range boundary scans avoid trim strings** — Smalltalk method range detection now trims body lines with spans and only materializes regex input for plausible method or class boundaries.
+- **Solution project lines avoid trim strings** — `.sln` project discovery now filters solution-folder GUIDs and blank project fields with spans before materializing project names and paths.
+- Cache SQL definition leaf-name regex patterns while building definition-span suppressions, avoiding repeated qualified-name splitting for duplicate symbols in large SQL files.
+- Parse dotted unquoted SQL names without the quoted-name `StringBuilder` loop when normalizing references and containers.
+- **SQL reference extraction now skips empty setup lookups** — SQL files without definition leaf spans or window-function suppression sites no longer allocate unused empty dictionaries or sets during per-file setup.
+- Avoided copying SQL reference and synthetic symbol scan lines unless comments or string literals actually need masking.
+- Pre-sized SQL qualified-name parsing builders to reduce buffer growth during large reference scans.
+- Avoid `StringBuilder` work for simple unquoted SQL identifiers when normalizing names and scanning qualified-name segments in reference extraction.
+- Return simple SQL qualified-name segments without per-character scanning when the name contains no dot or quoting characters, reducing work in large symbol tables.
+- Reuse the SQL window-clause pre-scan to estimate joined text size and initialize the join `StringBuilder` with that capacity, reducing growth churn on large SQL files that do contain window clauses.
+- Skip building joined SQL text for window-function suppression when no line contains `OVER`, reducing unnecessary allocation on large SQL files without window clauses.
+- **Stylus reference extraction now lazily allocates variable definition sets** — Stylus files without variable definitions avoid an unused empty `HashSet` during per-file reference setup.
+- **Reduced subdirectory traversal probes** - full scans now carry directory attributes from the initial filesystem enumeration into symlink and skip checks, avoiding repeated attribute probes for every subdirectory.
+- Reuse built-in symbol and reference language snapshots when building supported-language lists, while still merging dynamically registered plugin languages.
+- **Swift import kind prefixes skip redundant trim** — Swift import name normalization now reuses the whitespace scan after an import-kind prefix instead of trimming the sliced name again.
+- Reduced Swift reference extraction allocations by skipping property lookup dictionaries when a file has no property symbols and avoiding sort-entry lists for single-property lines.
+- Pre-sized several C#, Java, and JavaScript/TypeScript symbol extraction builders from the source span being scanned to reduce buffer growth on large files.
+- **Merged symbol extractor supported languages with a pre-sized ordered set** — `cdidx` now avoids temporary LINQ iterator and distinct buffers while combining built-in, additional, and plugin symbol languages during indexing setup.
+- Skip depth-tracking scans in shared comma and ampersand span splitters when the separator is absent, reducing work across typed reference extraction.
+- Require both the alias keyword and `=` before building TypeScript or Swift type-alias scope tables, avoiding unnecessary brace-depth scans in files that merely mention the keywords.
+- Avoid namespace-alias preparation for TypeScript files that only contain alias-free imports by requiring `*`, `from`, or a dynamic-import parenthesis before scanning every line.
+- Build TypeScript namespace-alias brace-depth tables lazily and reuse them across alias shadow-range checks, avoiding repeated full-file scans for files with many imports.
+- **TypeScript namespace alias setup now reuses empty lookup data** — files without local declaration shadows or parameter shadow ranges avoid unused empty dictionaries and lists while preparing namespace alias references.
+- Cache TypeScript namespace alias parameter-shadow ranges by alias name so repeated imports of the same alias do not rescan every prepared line.
+- Build a single local-declaration lookup for TypeScript namespace alias shadow lines instead of rescanning every line for each alias binding.
+- Avoid LINQ list copying for inherited TypeScript path alias rules and pre-size target lists from JSON array lengths during config parsing.
+- **TypeScript and Swift type alias extraction now reuses empty type-parameter sets** — aliases without generic parameters avoid short-lived empty `HashSet` allocations during large repository indexing.
+- **TypeScript and Swift alias expansion skips single-alias dedupe sets** — files with one type alias no longer allocate a per-line alias de-duplication `HashSet` during reference extraction.
+- **TypeScript and Swift type alias shadow tracking now allocates ranges only when needed** — files whose aliases are not shadowed skip empty `LineRange` list creation during reference extraction.
+- **Update target normalization reuses the relative path helper** — commit, explicit-file, and `.gitmodules` update paths now use the directory-prefix fast path before falling back to `Path.GetRelativePath`.
+- **Visual Basic enum line filters avoid trim strings** — Visual Basic enum member extraction now checks blank, comment, and `End Enum` lines with spans before materializing the trimmed member text.
+- Reuse plain XAML/XML lines directly when comment stripping has no work to do, avoiding per-line `StringBuilder` allocation during reference extraction.
+- **XAML markup argument normalization now trims fixed prefixes with spans** — reference extraction avoids intermediate slice strings for common `{x:Type ...}`, `{x:Static ...}`, `TypeName=`, `Member=`, and `ResourceKey=` forms in large XAML files.
+- **XAML markup argument splitting now trims segments with spans** — reference extraction avoids substring allocations while walking comma-separated markup extension arguments in large XAML files.
+- **XAML markup tail normalization avoids trim chains** — XAML reference extraction now trims quoted markup arguments, static-member suffixes, and closing markup characters with spans so large XAML-heavy indexes allocate fewer temporary strings.
+- Avoided duplicate trim scans while normalizing XAML markup-extension values during indexing.
+- **Wrapped XAML attribute extraction avoids duplicate trims** — wrapped `x:Name` and event-handler attributes now pass raw captured values to the shared XAML attribute helper, which already trims once before creating symbols.
+- Reduced transient string allocation while indexing YAML plain keys by trimming the regex capture span before materializing the key.
+- **Graph-heavy `deps` and `hotspots` output can now be bounded (#4112)** — JSON graph output supports `--summary-only` and `--max-json-bytes`, and large graph queries emit `Progress:` diagnostics on stderr at `--limit 80+` or with `--verbose`.
+- **`unused` suppresses low-confidence contract-domain candidates by default (#4120)** — broad unused audits now group suppressed contract-surface candidates into suppression summaries, while `--all` restores the raw low-confidence output.
+- **`validate` JSON now separates actionable encoding risks from expected fixture literals (#4138)** — validation issues include `category` and `actionable`, the default JSON response includes grouped actionability summaries, and `--format compact` returns the same summary with compact issue rows.
+- **GitHub HTTP GET calls now share transient retry handling (#4145)** — GitHub API lookup, update check, and upgrade download GET requests now use the shared bounded HTTP policy for transient network failures and 408/5xx responses, while issue-creation POST requests remain non-retried to avoid duplicate submissions.
+- **Status JSON now summarizes HEAD freshness for automation (#4152)** — `status --json` adds `head_freshness`, a compact object that distinguishes full workspace freshness from HEAD-only checks and identifies whether the indexed HEAD came from the latest index stamp or the legacy full-scan stamp.
+- **Path filters now use exact or anchored directory semantics without wildcards (#4163)** - `--path` and `--exclude-path` values without `*` or `?` now normalize `./foo` and `/foo` to repo-relative `foo`, then match only that exact file/directory path or files under that directory instead of arbitrary path substrings.
+- **Watch mode JSON now exposes its batching contract (#4169)** — `cdidx index --watch --json` includes a `watch_contract` object on the `watching` lifecycle event, documenting debounce quiet-window semantics, path coalescing, rename handling, overflow/error full-rescan recovery, cancellation, sub-run output, and MCP watch-mode support.
+- **Documented the JSON compatibility alias deprecation lifecycle (#4182)** — `find --count --json` keeps serializing the deprecated `file_count` alias, and new `JsonCompatibilityAliasLifecycles` metadata, alias serialization tests, production-scoped audit search tests, and bilingual documentation track future removals.
+- **Map and recipe audit compact JSON now support explicit byte bounds (#4183)** — `map` accepts `--max-json-bytes` for JSON output, recipe-backed `search --format compact` can be byte-capped, and both compact payloads now expose output limit, truncation, and next-command metadata for agent audit loops.
+
+#### Fixed
+
+- **Dependency and file hotspot rankings now suppress common-symbol noise (#4113)** — `deps` and `hotspots --group-by file` now preserve raw reference counts while ordering by a noise-adjusted `ranking_score`, so generic utility edges and tiny constant/helper files no longer dominate the top results.
+- **Dependency cycle truncation is now actionable (#4114)** — `deps --cycles` JSON now explains whether results are complete, a candidate-edge sample, or display-limited, includes suggested next-step flags, and lets `--suppress-noise` remove generic `Append`-style helper-symbol cycles.
+- **Bounded UTF-8 reads now fail on invalid byte sequences (#4114)** — bounded text reads now report invalid UTF-8 instead of silently accepting replacement characters, with focused byte, line, UTF-8, and tail-capture contract tests.
+- **`map` now ranks production CLI entrypoints ahead of tooling programs (#4115)** — entrypoint scoring now treats production source paths as stronger entrypoint signals and de-prioritizes tooling, automation, install, documentation, test, and fixture paths.
+- **Hotspot grouping semantics are explicit (#4116)** — `hotspots --group-by statement` is now accepted only for SQL scopes, while CLI and MCP JSON responses describe the grouping unit, count kind, limit target, and ranking fields for symbol, file, and SQL statement outputs.
+- **Audit issue-draft exports can now summarize recipe metadata (#4118)** — recipe issue-draft output accepts `--summary-only` to omit the full top-level recipe catalog and emit `recipe_summary`, while preserving draft evidence, per-draft source metadata, and query freshness fields that call out zero-result child queries without misclassifying output-limited omitted matches.
+- **Search aggregation output now honors row and byte limits (#4119)** — `search --group-by`, `--count-by`, `--unique`, and compact/count recipe JSON now cap returned group rows with `--limit` and allow `--max-json-bytes` on JSON outputs that previously rejected or ignored the bound.
+- **C# reference ranking now demotes common qualified member noise (#4121)** — `symbols --sort references` now uses conservative per-file counts for ambiguous C# names and properties, and C# extraction suppresses more qualified framework-style calls such as `reader.GetInt32(...)`.
+- **CLI exception diagnostics now avoid raw messages on MCP and upgrade failure paths (#4123)** — `cdidx mcp --audit-log` no longer echoes raw exception messages or absolute paths when opening the audit log fails, quoted paths with spaces are redacted as a whole, and upgrade cleanup warnings now use typed, sanitized diagnostics while unexpected cleanup exceptions are no longer swallowed.
+- **.NET sync-over-async audits now separate blocking wait shapes (#4125)** — `dotnet-risk-patterns` now includes a `sync-wait-call` query for `.Wait(` call sites while keeping `.Result` DTO/property accesses out of the `sync-over-async` query, so cancellation and blocking audits produce clearer triage evidence.
+- **JSON parsing now uses shared bounded helpers at repository boundaries (#4127)** — configuration, protocol, GitHub API, MCP/LSP, indexing, import, and worker JSON reads now route through bounded parse/deserialization helpers with explicit byte and depth limits.
+- **Watch debounce and request cancellation now use explicit time budgets (#4129)** - `cdidx index --watch` now measures debounce windows with `TimeProvider` monotonic timestamps, and shared request timeout handling classifies zero/infinite sentinels through an explicit budget abstraction.
+- **Case-sensitivity probe cleanup now revalidates directory boundaries before deletion (#4131)** - Created `.cdidx/probes` directories are checked against their expected safe root/name and symlink/reparse/device status before cleanup, preventing replaced probe directories from reaching destructive deletion.
+- **Filesystem traversal helpers now expose explicit cancellation, budget, and failure taxonomy hooks (#4131)** - Central traversal wrappers can be called with a cancellation token or entry budget, and traversal failure classification is shared by CLI diagnostics instead of being duplicated in command code.
+- **Atomic overwrite moves avoid post-replace mode failures (#4132)** — overwrite moves that need destination metadata now apply that metadata to the staged source before replacing the target, so a mode failure leaves both the source and existing destination intact.
+- **Regex audit recipes now suppress bounded regex evidence (#4136)** - `regex-construction` and static regex audit queries now filter nearby `RegexOptions.NonBacktracking`, explicit `TimeSpan` timeout overloads, and match-timeout helper arguments before reporting raw regex findings.
+- **`cdidx batch --json-summary` now emits stable per-line envelopes (#4142)** — each non-blank input line produces a `batch_result` or `batch_error` record with captured child stdout/stderr before the final `batch_summary`.
+- **Unsupported-operation audits now have a dedicated taxonomy (#4144)** - `unsupported-operation-boundaries` groups `NotSupportedException`, `PlatformNotSupportedException`, `unsupported`, and `not supported` hits so CLI, MCP, LSP, and capability diagnostics can be reviewed against stable structured-error evidence.
+- **YAML outline display names no longer duplicate parent keys (#4151)** — `outline` now keeps structured YAML paths such as `on.push`, `permissions.contents`, and `jobs.preflight` without repeating their parent segments.
+- **Clarified `cdidx report --output` artifact metadata (#4153)** - report JSON and the support manifest now identify the output as a gzip-compressed tar bundle, recommend `.tgz` / `.tar.gz`, and warn on misleading extensions such as `.json` while keeping stdout JSON parseable.
+- **Standardized locked restore and dependency policy coverage (#4156)** - CI and mutation-test NuGet caches now use exact lockfile-derived keys without broad restore-key fallbacks, Docker restores the resolved musl RID under `--locked-mode` before `--no-restore` publish, and repository tests now pin the restore, package-version, RID, trim/AOT, package metadata, and test target-matrix contracts.
+- **Fixed Python symbol spans and file hotspot counts (#4159)** — annotated and multiline Python function/class headers now report their full symbol spans, and file hotspot `symbol_count` now matches the filtered file symbol summary instead of counting only referenced hotspot rows.
+- **`suggestions` option parsing now consumes its parser contract from `CliFlagSchema` (#4162)** — the `suggestions` parser now uses the schema's value-bearing/flag-only partition before dispatching options, and the parser-only `--lang` alias is represented in the schema so parser behavior and completion contracts cannot drift silently.
+- **Bounded compact `files` and `symbols` output (#4165)** - `files` and `symbols` now accept compact JSON controls with `--format compact`, `--summary-only`, and `--max-json-bytes`, including emitted/omitted row counts and truncation metadata.
+- **Accepted top-level `suggestions` list flags (#4171)** — `cdidx suggestions --json --limit <n>` now behaves like `cdidx suggestions list --json --limit <n>` instead of reporting `--json` as an unknown subcommand.
+- **`search --source-only` now suppresses documentation-like origins by default (#4184)** — ad hoc source-scope searches now exclude comment and CLI help-text matches unless `--origin comment` or `--origin help_text` explicitly opts them back in, and JSON `query_context` reports active origin filters.
+- **Stabilized package-normalizer diagnostic redaction tests (#4224)** — The package normalizer now uses the same one-second redaction regex budget as the main diagnostic policy, avoiding high-load net8 full-suite timeouts that collapsed expected `<path>` placeholders to the generic fallback.
+- **Fixed duplicated `Usage:` prefixes in `cdidx suggestions` usage errors (#4244)** - invalid suggestions options now print a single `Usage: cdidx suggestions ...` line.
+- **Package normalization redaction tests now accept the safe timeout fallback (#4257)** - the package normalization diagnostic redaction test still verifies that paths, tokens, and passwords are not leaked, while allowing the all-redacted fallback produced when regex redaction times out under full Release suite load.
+- **Cleanup-boundary symlink checks no longer depend on symlink target state (#4260)** — directory cleanup validation now probes the cleanup target path itself before existence checks, so symlink, reparse-point, and device targets are consistently rejected as unsafe even when the link target is missing or environment-sensitive.
+- **Codex rules now use parser-compatible allow decisions (#4267)** — GitHub CLI subcommand rules now use the accepted `allow` decision value so `codex exec review --base origin/main` can load repository rules without failing on `allowed`.
+
+#### Security
+
+- **Exception diagnostics now use shared redaction before reaching CLI, MCP, and database warning output (#4124)** — raw exception messages are routed through bounded path/secret redaction helpers so user-facing and protocol-adjacent diagnostics no longer echo sensitive message text directly.
+- **Centralized environment variable access and secret-sensitive diagnostics (#4126)** — process environment reads now flow through shared environment access helpers, with tests locking down scoped config reads versus raw process-only reads and preventing new production bypasses.
+- **Added a SQLite query-policy audit recipe (#4128)** - `search --recipe sqlite-query-policy-surfaces` now covers raw `CommandText`, PRAGMA, Execute* calls, DDL, transactions, metadata, read-only/immutable, migration, CHECK constraint, and maintenance status surfaces, while dynamic maintenance PRAGMAs now route through bounded policy helpers.
+- **Dependency manifest XML parsing now uses the shared safe reader policy (#4130)** — package extraction for XML dependency manifests now disables DTD processing, external entity resolution, and oversized documents through the same bounded XML reader settings used by build and metadata extraction.
+- **Post-extraction hook discovery now rejects symlink and reparse-point hook directories and DLL candidates (#4133)** — hook assembly discovery now applies the same local-file trust boundary as extractor plugin discovery before loading extension code.
+- **Bearer token redaction now covers GitHub diagnostics and MCP audit values (#4134)** — GitHub API error diagnostics now pass through the shared sensitive-text redactor, and MCP audit value sanitization redacts bearer tokens even when they appear inside non-secret argument values.
+- **Pinned the local JSONL relaxed-escaping boundary (#4135)** — Added tests proving private JSONL diagnostics preserve HTML/script-like characters for tail/JSON consumers while control characters remain line-safe, and the relaxed encoder stays limited to local metrics/audit log sinks.
+- **Release publishing now separates prepared payloads from privileged publishing (#4147)** — the release workflow prepares and verifies artifacts under read-only permissions, hands off a short-lived `release-payload` artifact, removes temporary GPG material before publishing continues, and scopes Windows signing secrets to the signing step.
+- **Doctor and config diagnostics now default to compact, redacted environment inventory output (#4148)** — `doctor --json` and `config show --json` redact local paths by default and expose `environment_inventory_summary`, while full inventory details and raw path diagnostics now require explicit `--env-inventory=full` or `--show-paths` flags.
+- **Installer shell scripts now have safety lint coverage (#4150)** - tests reject unreviewed destructive shell operations, untracked temporary-directory cleanup, and direct curl paths outside the reviewed bounded-diagnostics wrapper.
+- **Hardened Docker image contract coverage (#4157)** - documented the official container image SDK/runtime split, runtime package allowlist, musl RID mapping, and entrypoint privilege-drop behavior, and added release workflow tests that lock those contracts.
+- **Standardized GitHub Actions policy checks (#4158)** — Workflows now pin versioned hosted runners, bound artifact uploads/downloads and cache keys, remove broad cache restore fallbacks, and keep `continue-on-error` limited to diagnostic artifact upload.
+- **Codex and Claude guard policy contracts now share parity tests (#4173)** - A single guard-policy inventory now drives contract tests across the shared command core, Codex hook adapters, Claude hook adapter, and settings registrations so allow/deny drift, script-scan gaps, malformed payload handling, and missing secret-scanner fail-closed behavior are caught together.
+- **Standardized ZIP entry-name safety for archive import and package normalization (#4174)** — `cdidx import` now rejects unsafe, non-canonical, duplicate, and extra archive entries before payload extraction, and the NuGet package normalizer uses the same entry-name policy for unsafe-name and normalized-duplicate checks before package rewrite.
+- **Aligned MCP audit-log and diagnostic secret-name redaction (#4175)** - audit argument redaction, diagnostic redaction, and global tool-log flag checks now share one sensitive-name taxonomy with regression coverage for credential-like keys and audit shutdown draining.
+- **Hardened MCP contract regression coverage (#4177)** — Added tests that pin tool catalog metadata, schema alias/deprecation metadata, rate-limit config/status alignment, token-auth failure categories, and bounded rate-limit error diagnostics.
+
+#### Documentation
+
+- **Clarified stdout, stderr, and JSON diagnostic boundaries (#4146)** — the developer guide now states that JSON-mode stdout must remain machine-parseable and that diagnostics, progress, worker logs, and MCP telemetry belong on stderr or private logs, with report JSON coverage locking the mixed artifact-plus-summary path.
+
+#### Internal
+
+- Avoided assembly range-symbol sort setup when there are zero or one symbols to order.
+- Deferred Assembly symbol and range-list allocation until declarations are actually emitted, avoiding empty function and section lists on lightweight assembly files.
+- Stabilized CI tests that use shared path-casing test state and kept trimmed CLI publish tests from failing before execution on SDK trim-analyzer crashes.
+- Skipped container-assignment sort setup when a file has zero or one extracted symbol.
+- Skipped C++ friend-declaration duplicate setup and scanning when a file has no `friend` token.
+- Avoided allocating the C# callable-parameter line-start state array for files whose callable parameter lists never carry state across line boundaries during symbol extraction.
+- Skipped C# callable parameter-scope construction when a file has no parameter-list opener.
+- **Allocated C# parameter transition rows lazily** - C# symbol extraction now creates callable-parameter transition arrays only after a parameter-list transition is observed.
+- **Avoided C# qualified-prefix lists for single segments** - C# reference extraction now skips temporary list/reverse/join work when a qualified prefix contains only one segment.
+- **Sliced C# switch-arm lines directly** - C# switch expression arm parsing now builds line arrays from the original body range instead of first materializing the whole arm text during reference indexing.
+- Skipped C# switch-expression line scanning for files without the `switch` keyword and delayed the helper's brace stack allocation until a brace is encountered.
+- Reuse an empty C# type body scope when structural lines contain no braces.
+- Skip C# type body scope construction when brace-bearing structural lines have no class-like type markers.
+- Replaced per-line CSS ancestor stack scans with a qualified-rule depth counter and lazy context stack allocation, reducing work in deeply nested CSS files.
+- Skip Dart class body scope allocation when structural lines contain class text but no braces.
+- Reused an empty Dart class-body scope for files without class declarations.
+- Skipped Dart class-body scope array and stack construction for files without the `class` keyword, treating the scope as all-false for bare-const constructor gating.
+- Added one-candidate fast paths for enum and Rust associated-type container snapshots.
+- Allocated Fortran multi-declarator expansion lists only after a second declarator is found.
+- Skip Fortran declarator list splitting when enumerator or parameter declarations contain no comma.
+- Collapsed Go grouped-declaration marker checks into one scan before the supplemental declaration pass.
+- Skip GraphQL input block content joining when input markers appear without braces.
+- Collapsed GraphQL input/union member marker checks into one scan before supplemental extraction.
+- Skipped HTML raw-text joining, masking, and line-start setup when an HTML input contains no tag opener.
+- Deferred HTML symbol list and line-start allocation until a custom element, semantic attribute, resource, anchor, or slot symbol is actually emitted.
+- Allocated Java compact-constructor existing-symbol lists only when matching symbols are found.
+- Added zero/one-candidate fast paths for Java module and record declaration snapshots.
+- Skipped Java enum-member snapshot setup when a file has no `enum` token.
+- Skipped Java module-directive and compact-constructor supplemental setup when their required keywords are absent.
+- Added zero/one-class fast paths for JavaScript/TypeScript existing class target collection.
+- Skipped JavaScript/TypeScript export-surface sanitization when a file has no `export`/`exports` token.
+- Allocated JavaScript/TypeScript object-literal scan target state only after a target candidate is found.
+- Skip JavaScript and TypeScript private-scope lexing when files contain no braces or arrow bodies.
+- Allocated JavaScript/TypeScript qualified-assignment synthetic-class state only after a class-valued assignment is found.
+- Skipped JavaScript/TypeScript qualified-assignment setup when a file has no assignment operator.
+- Allocate JavaScript and TypeScript synthetic class scan targets and identity sets only after a candidate survives validation.
+- Added JavaScript/TypeScript target-collection prechecks so files without object braces or class tokens skip the corresponding scans.
+- Reduced small allocations while grouping JavaScript and TypeScript tagged-template reference hits by keeping single-hit lines as compact read-only lists and only promoting duplicate lines to mutable buckets.
+- Deferred JSON line-start allocation until property-line queue lookup misses, and skipped structured state setup for empty root objects.
+- Build JSON property line queues from the parsed DOM for single-line JSON instead of re-reading UTF-8 tokens.
+- Avoided the UTF-8 line-start list allocation for single-line JSON property scans.
+- Deferred SQL and GraphQL line-start table allocation until CTE, generated column, or input field symbols actually need offset-to-line mapping.
+- Return single-line offset lists directly from the shared symbol line-start helper.
+- Reused existing GraphQL and SQL line arrays to build regex offset line-start tables, avoiding an extra scan over joined content during member and generated-column symbol extraction.
+- Skipped the fenced-line-aware Markdown reference-definition scan when a document has reference-style links but no definition marker.
+- Deferred Markdown symbol list allocation until a heading, fenced code block, or local anchor reference is actually emitted.
+- Reused the shared line-start array builder in HTML and XAML symbol extraction, removing duplicate per-file offset loops from markup indexing paths.
+- Deferred MSBuild symbol and XML traversal stack allocation until symbols or nesting state are actually needed, reducing empty state for lightweight project files.
+- Allocated Perl hash-constant dedupe state only after a second constant name is encountered.
+- Skipped PHP and Swift supplemental duplicate-set setup when a file has no property symbols to inspect.
+- Restored read-time indexability checks for full-scan, MCP, freshness, and C# prepass file reads so scan-time file probes cannot be reused across symlink/reparse-point races.
+- **Streamed record primary components** - symbol extraction now yields top-level record/primary-constructor components directly instead of materializing a temporary component list.
+- Deferred per-line definition-name index allocation during reference extraction until a definition name is actually present on the prepared line, reducing empty dictionaries across large non-SQL files.
+- Skipped Rust `use` occurrence dedupe allocation when a statement expands to zero or one import symbol.
+- Skipped Shell alias and Rust use/impl identity-set allocation when the file lacks the relevant keyword.
+- Avoided container-stack array copies when assigning symbols with a single active container.
+- Skipped Solidity comment/string masking when no declaration keyword is present in the file.
+- Deferred Solidity symbol list allocation until the first declaration is emitted, avoiding an empty list for files with no Solidity symbols after masking.
+- Skip SQL CTE content joining and regex scans when files contain `WITH` but no `AS` token text.
+- **Built SQL CTE line starts from existing lines** - SQL CTE symbol supplementation now derives line-start offsets from the existing line array instead of rescanning joined content.
+- Added SQL generated-column container prechecks before building the joined structural text.
+- **Streamed SQL qualified-name pattern building** - SQL definition leaf matching now builds qualified-name regex patterns directly instead of materializing an intermediate segment list during indexing.
+- **Streamed SQL top-level comma segments** - SQL MERGE column extraction now yields comma-separated segments directly instead of materializing an intermediate list during reference indexing.
+- Deferred Solution and app manifest symbol list allocation until project or manifest symbols are actually emitted, avoiding empty lists for metadata files with no indexed entries.
+- Deferred structured-data symbol state for JSON and YAML until symbols are actually needed, avoiding empty symbol lists and YAML path stacks on files with no extractable mappings.
+- Return raw structured-data line starts directly for empty and single-line inputs.
+- Avoid splitting and allocating Swift enum case declarator results when a case line cannot contain multiple top-level cases.
+- Kept symbol-extraction duplicate and line-identity bookkeeping local to each extraction run so parallel tests and concurrent indexing no longer expose mutable static per-file state.
+- **Skipped symbol line splitting for unsupported languages** - generic symbol extraction now returns before splitting file content when a language has no line-based extractor.
+- Sized symbol-line identity sets from known symbol counts to reduce HashSet growth during duplicate checks.
+- Sized symbol line-key sets from known symbol counts during PHP and Swift supplemental extraction.
+- **Allocated symbol snapshots lazily** - enum, property, and Rust associated-type snapshot helpers now avoid creating candidate lists for files that have no matching symbols.
+- Added a zero/one-rule fast path for TypeScript path alias sorting.
+- Removed the unused content-string line-start scanner after moving symbol extraction paths to existing line-array offset builders.
+- Deferred XAML/XML line-start array allocation until wrapped attributes, XAML object elements, references, resources, or binding symbols actually need offset mapping.
+- Skip XAML raw-text joining and XML structure checks when XAML files contain no symbol-bearing markers.
+- **Split the search command entry point out of QueryCommandRunner (#4106)** — `RunSearch` now lives in `QueryCommandRunner.Search.cs`, reducing the primary runner hotspot without changing CLI behavior.
+- **Started the SymbolExtractor language-helper decomposition path (#4107)** - moved the JS/TS styled-factory gate and CSS/Sass scanner helpers into focused partials so the shared core no longer owns those language-specific paths, without changing extraction semantics.
+- **Split the MCP `batch_query` handler and focused tests (#4108)** — `batch_query` now has a dedicated MCP handler file and representative command-handler tests live in a focused batch-query test file, reducing the largest MCP handler and tool-call test clusters without changing behavior.
+- **Go reference support now lives in a focused partial file (#4109)** - moved the Go import-block mapping, branch-label references, and type-reference helpers out of the shared language support file without changing reference extraction behavior.
+- **Database reader hotspots were split into narrower partial files (#4110)** — status aggregation and search-symbol ranking SQL now live in focused `DbReader` partials, reducing the base reader and file/status surfaces without changing query behavior.
+- **ProgramRunner immediate command handling now has its own partial file (#4111)** — startup-only commands such as help, version, license, completions, doctor, and easter egg handling are separated from the regular CLI dispatcher to keep dispatch boundaries easier to test and review.
+- **Test fixtures now have shared project-root filesystem helpers (#4140)** — `TestProjectHelper` centralizes temp-project path resolution, directory creation, and text-file setup so tests can avoid ad hoc `Path.Combine` / `File.*Text` fixture code.
+- **Split build-file reference extractor tests into a focused suite (#4141)** — moved solution, CMake, Justfile, and MSBuild reference extraction coverage into a dedicated partial test file with a small semantic assertion helper for expected references.
+- **Shared regex construction now has a central registry (#4149)** — direct production regex construction for find, ignore globs, and generated-code pattern matching now routes through named shared factories with documented timeouts and source-audit tests.
+- **Documented synchronization gate ownership for the #4154 audit** - added a synchronization model inventory and pinned `DbWriter` nested transaction ownership with focused coverage.
+- **Added deterministic test timing and concurrency helpers (#4164)** - tests now share bounded polling, eventual assertions, blocked-task observation, same-start worker orchestration, fake-clock advancement, and seeded random fixture helpers.
+- **CLI machine-contract validation is centralized (#4166)** — tests now use a shared manifest for exit codes, structured error codes, JSON API versioning, source-generated CLI JSON roots, and golden JSON payload families so contract drift is caught in one place.
+- **Added path compatibility matrix coverage (#4167)** — Cross-platform tests now cover path-casing policy, path-prefix boundaries, Windows long-path prefixing, POSIX sensitive-file permissions, symlink and dangling-entry scan behavior, submodule passthrough under default skip directories, and git skip-worktree path normalization.
+- **LSP protocol framing is separated from feature handlers (#4168)** — LSP content-length framing, request-id parsing, and message read/write helpers now live in a focused protocol helper, while live-document capacity tracking moved into a dedicated document-state store.
+- **Console completion rendering now has focused ownership (#4170)** — bash, zsh, fish, and PowerShell completion generation now lives in `ConsoleCompletionRenderer`, with shared command names in `CliCommandCatalog` and snapshot-style shell format checks pointed at the completion renderer directly.
+- **License and distribution policy surfaces now have a consistency guard (#4172)** — CI coverage now checks that package metadata, installer notice assets, console license summaries, release workflow behavior, license-policy workflow inputs, and distribution documentation stay aligned.
+- **Hardened MCP HTTP transport lifetime contracts (#4176)** - split HTTP transport shutdown into a dedicated lifetime partial and pinned concurrent disposal plus open SSE stream cleanup with regression coverage.
+- **Schema and status readiness drift checks are stricter (#4178)** — tests now compare SQLite symbol/reference CHECK constraints against `SymbolKindCatalog` and require readiness, maintenance, and MCP status fields to stay documented.
+- Split git process capture and report bundle/log-tail orchestration into focused internal helpers, with direct contract coverage for diagnostic redaction and log truncation (#4179).
+- **Split TRX telemetry out of the test telemetry CLI (#4180)** — the TRX parser, bounded traversal, and renderer now live behind a focused module, with explicit coverage for the traversal entry cap.
+- **Split diff and export/import helpers out of command runners (#4181)** — diff option parsing/rendering, manifest JSON decoding, header validation, and nullable SQLite row reads now live in focused helpers with direct regression coverage, reducing the CLI orchestration hotspots.
+- **Split post-extraction hook orchestration into focused contracts (#4185)** - discovery, trust resolution, candidate validation, callback protocol framing, invocation, diagnostics, and mutation materialization now live in smaller internal units with focused contract tests.
+- **HTTP MCP transport tests no longer depend on CookieContainer initialization (#4264)** — loopback `HttpClient` instances in the transport test suite now disable cookies, avoiding environment-dependent `System.Net.CookieContainer` startup failures in sandboxed full-suite validation.
+
 ### [1.35.0] - 2026-06-28
 
 #### Added
@@ -4751,6 +5450,705 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.36.0] - 2026-07-04
+
+#### 追加
+
+- **大規模ファイル向けの outline 並べ替えを追加しました (#4117)** — `outline` は limit / カーソルページングの前に size/span、complexity、kind、name、path、参照数でシンボルを並べ替えられるようになり、巨大ファイル調査向けの compact JSON でもランキングメタデータを保持します。
+- **言語機能 JSON が未対応の参照抽出とグラフクエリを説明するようになりました (#4122)** — `languages --json` と MCP `languages` ツールは、言語が参照抽出、グラフクエリ、シンボル抽出を提供しない場合に代替コマンドを含む `unsupported_guidance` を返します。
+- **文字列比較の audit recipe が比較 semantics を分類するようになりました (#4137)** — `string-comparison-semantics` と `risky-code/path-case-heuristic` は path、protocol、CLI、stable identifier、human-text、machine-formatting domain の taxonomy metadata を出力し、ordinal、invariant-culture、invariant casing の hit を triage しやすくします。
+- **phrase risk-pattern 監査レシピを追加しました (#4139)** - `search --recipe phrase-risk-patterns` は `async void`、`throw new Exception`、`.Result`、`unsafe`、`Skip =`、`Version="`、`TODO`、`Obsolete` のようなノイズの多い監査語句を exact-substring、origin、result-kind、file-kind、source/test scope の facet 付きで扱います。
+- **テスト skip governance report を追加しました (#4143)** - `CodeIndex.TestTelemetry` に `skips` command を追加し、xUnit の skip 属性を parse して、skip されたテストを area、scenario/category、理由ごとに集計し、コメントや fixture 中の通常の `Skip =` 文字列を数えずに owner/expiry governance token の付与状況を表示できるようにしました。
+- **リソース実体化監査がサブシステム別の注目箇所を分類できるようになりました (#4155)** - 新しい `resource-materialization-audit` recipe は、破棄境界、非同期破棄、DB コマンド所有権、ファイルを開く際の共有ポリシー、ストリームの実体化、query/MCP の `ToArray()` 変換を個別の監査クエリとして分類します。
+- **guide と workflow 参照の documentation drift チェックを追加しました (#4160)** — テストスイートが workflow index の整合性、文書化された `cdidx` コマンド例、release/changelog workflow の snippet、代表的な英日 guide セクションを検証するようになりました。
+- **`nullable-contracts` search audit recipe を追加しました (#4161)** — `cdidx search --recipe nullable-contracts` は `return null`、`null!`、`default!`、null guard、typed diagnostic evidence を分類し、JSON recipe metadata には nullable return triage 用の `nullable_contract_taxonomy` domain が含まれます。
+
+#### 変更
+
+- **Batchのjump segment trimで中間文字列を避けるようになりました** — Batch参照抽出はcommand segmentをspanでtrimし、jump targetの正規表現が必要な時だけ文字列化するため、大きな`.bat` / `.cmd`ファイルのインデックス作成時に一時文字列を減らします。
+- C-style と Haskell のブロックコメントマスクで、実際にマスクが必要な一部の行だけをコピーするようにしました。
+- **directory case-probe の path 処理を削減しました** - scan 中の case-sensitivity check で fully-qualified directory path を再利用し、directory ごとの同一 path 再正規化を避けます。
+- **catch type reference 抽出が候補 prefix の trim に span を使うようになりました** — 大きなファイルを index するとき、catch の末尾識別子が変数か qualified type の一部かを判定するための substring 割り当てを避けます。
+- **COBOL callable / Rust enum の reference 準備が空 candidate list を作らないようになりました** — 対象 symbol が無いファイルでは、indexing 中の sort buffer と行ごとの空 candidate scan を避けます。
+- **Codex が通常開発用の GitHub CLI コマンドを安全に使えるようになりました** - `codeindex_workspace` permission profile は `github.com` と `api.github.com` だけに network access を許可し、command guard は `gh issue/pr list/view/create/edit/comment`、`gh pr ready`、`gh pr close`、`gh repo view`、`gh status` など通常の Issue / PR 開発コマンドを明示的に許可しつつ、認証、secret、release、repo 作成 / fork / delete、任意の `gh api`、PR merge は引き続き禁止します。
+- commit/update 対象の正規化時に ignore file と JavaScript/TypeScript config 名を span で判定し、大量の変更ファイル一覧での path allocation を減らしました。
+- TypeScript path alias config と extractor pattern config を bounded read buffer から直接 decode し、indexing setup 中の余分な byte array copy を避けるようにしました。
+- **C++ declaration leaf判定で一時trim文字列を避けるようになりました** — C++ declaration正規化は、`operator`名がgeneric textを保持すべきか判断するとき、最後のqualified-name segmentをtrim済みspanから確認するようになりました。
+- **C++ friend 参照抽出が qualified leaf の正規化に span を使うようになりました** — 巨大 C++ ファイルの indexing で中間的な trim / slice 文字列生成を避けつつ、friend type/function の参照名を維持します。
+- C++ friend declaration scan で、コメントや文字列のマスクが必要な行だけをコピーするようにしました。
+- **C++ indented aliasでtrim済み行を再利用するようになりました** — C++ alias抽出は候補行を1回だけtrimし、その結果をindent判定とsymbol signatureに再利用するようになりました。
+- **C++ same-line class / Java module の symbol 抽出が空 snapshot を作らないようになりました** — 対象 declaration が無いファイルでは、indexing 中の一時 snapshot list と sort buffer を避けます。
+- **C++ same-line class 抽出が必要時だけ member-name set を割り当てるようになりました** — 既存 member や新規認識 member が無い class body では、indexing 中の未使用 duplicate tracking set を避けます。
+- **C++ using namespace シンボル抽出が target の trim に span を使うようになりました** — 大きな C++ ファイルを index するとき、`using namespace` directive から comment や semicolon を取り除く中間 slice 文字列生成を避けます。
+- **C# using alias target 正規化が nullable / array suffix の trim に span を使うようになりました** — 大規模 C# index で alias を既知型名と照合するとき、suffix ごとの slice 文字列生成を避けます。
+- C# の参照抽出で、属性 span を実際に含む行だけ属性 range リストを作るようにして割り当てを削減しました。
+- C# declarator と record component の trim 処理で、最終的な trim 済みソース範囲だけを slice するようにして割り当てを削減しました。
+- parameter list が空の C# 関数では parameter segment 分割前に戻るようにして、参照抽出時の割り当てを削減しました。
+- 大きな field declaration の scan 中の拡張を減らすため、C# field declarator comma-split buffer を事前容量付きにしました。
+- C#/Java/Kotlin の型ヘッダー再構築で、コメントやリテラルのマスクが必要な行だけ `char[]` を割り当てるようにしました。
+- **C# 以外で空の C# helper lookup を共有** — C# 以外のファイルでは、共通参照準備中に空の C# 型名セット、value receiver map、qualified pattern map を毎回確保しないようになりました。
+- reference extraction 中の buffer 拡張を減らすため、C# invocation argument builder を開始行の長さから事前容量付きにしました。
+- C# の top-level parameter segment を文字列リスト化せず span で走査するようにして、参照抽出時の割り当てを削減しました。
+- **C# prepass 用 generated-suppression cache の対象を絞りました** - full scan は C# static-interface prepass が使う generated-code suppression lookup を、全 index 対象 file ではなく C# target だけで作るようになりました。
+- **C# static-interface prepass が既知の indexability を再利用** — index scan が生成した target の raw-byte probe と normalized content read で、regular-file probe を繰り返さないようにしました。
+- **C# prepass target 作成で一般的な relative-path 呼び出しを回避** — update と MCP indexing で C# prepass の project-root-relative path を可能な場合は絶対パス prefix から導出し、特殊な入力だけ `Path.GetRelativePath` にフォールバックするようにしました。
+- C# の reference 抽出で qualified enum member、constant pattern、type pattern の lookup table を 1 回の symbol pass で構築するようにしました。
+- 対象 symbol がある場合だけ C# の qualified enum、constant-pattern、type-pattern lookup dictionary を作るようにして参照抽出の割り当てを削減しました。
+- string ベースの type reference scan 中の buffer 拡張を減らすため、C# reflection-name literal builder を事前容量付きにしました。
+- indexing 中に C# BCL Regex timeout audit references を派生するときの snapshot array allocation を避けるようにしました。
+- C# シンボル scanner で戻り値型サフィックス判定を span ベースにし、複数行 signature の trim 済み範囲を直接追加して割り当てを削減しました。
+- C# scanner slice の組み立てで、multi-line source span builder を事前容量付きにし、substring append の割り当てを避けました。
+- C# static interface implementation の型候補と static member 表をローカル symbol の単一パスで構築し、implicit implementation 参照抽出時の重複走査を削減しました。
+- C# static interface implementation の確認で、workspace に static interface member contract が存在する場合だけ interface generic parameter を解析するよう遅延しました。
+- **C# static interface implementation 参照準備が必要時だけ file lookup を割り当てるようになりました** — candidate type や static member が無いファイルでは、indexing 中の空 implementation list / dictionary を避けます。
+- C# static interface の raw-byte prepass で keyword probe に UTF-8 literal span を使い、静的 byte 配列の割り当てをなくしました。
+- C# static interface member の契約表と interface generic parameter lookup を workspace symbol の単一パスで構築し、参照抽出時の重複走査を削減しました。
+- **C# 参照抽出がシンボル由来の name set を遅延確保するようになりました** — type または callable シンボルを持たない C# ファイルで、ファイル単位の準備時に未使用の `HashSet` を割り当てず空 lookup を再利用します。
+- C# の known type name と non-enum type name を 1 回の pass で構築し、non-enum set を enum / constant pattern lookup で再利用するようにしました。
+- using alias、using namespace import、using static import、namespace scope を宣言しない C# ファイルで、参照抽出時のファイルごとの割り当てを削減しました。
+- C# の reference 抽出で using alias、namespace、static import record を 1 回の symbol pass で構築するようにしました。
+- **C# 以外の参照抽出で C# using import list の割当を回避** — 共通の参照準備処理は、他言語ファイルでは alias / namespace / static import list を確保する前に空の C# using import collection を返すようになりました。
+- C# value receiver 補助処理の builder 容量を事前に確保し、単一行の構造テキスト切り出しでは `StringBuilder` 自体を使わないようにしました。
+- **C# value receiver 準備が lookup storage を遅延確保するようになりました** — containing type receiver 名や scoped receiver 名が無いファイルでは空 lookup を再利用し、body の無いシンボルでは未使用の per-function buffer を割り当てないようにしました。
+- C# の containing type 別および function scope 別 value receiver lookup を単一の symbol パスで構築し、大規模 C# ファイルの index 時の重複処理を削減しました。
+- CSS `@font-face` family value の normalization で block comment がない場合は builder を作らないようにしました。
+- CSS symbol extraction で `@font-face` block range を処理するとき、sliced line array を作らずに mask/join するようにしました。
+- **CSS inline grouping depthでselector slice割り当てを避けるようになりました** — CSS inline grouping scanはtrim済みmasked spanから`{` segmentを分類し、未使用のraw selector slice割り当てを省くようになりました。
+- **CSS layer segmentでsubstring後のtrim連鎖を避けるようになりました** — CSS `@layer` list抽出はlayer prefixをspanで判定し、comma区切りsegmentをslice上でtrimしてから名前を文字列化するようになりました。
+- CSS scanner の single-line brace scan で singleton input/output array を作らず、line-masking core を直接再利用するようにしました。
+- **dependency package項目正規化でtrim済み文字列を再利用するようになりました** — package抽出は必須/任意package項目をspanでtrimし、index中に既に正規化済みの値を作り直さないようになりました。
+- **依存関係参照が抽出済み package symbol を再利用するようになりました** — 大きな dependency lock / manifest ファイルで、symbol 抽出済みの package がある場合は参照抽出時に package parser を再実行しないため、インデックス時の JSON/XML/TOML の重複処理を減らします。
+- **dependency specでmarker除去後のtrim文字列を避けるようになりました** — requirement形式のdependency解析はpackage名やversionを文字列化する前に、marker除去後のspecとregex captureをspanでtrimするようになりました。
+- **Dockerfile instruction prefixでtrim文字列を避けるようになりました** — Dockerfile `EXPOSE`、`VOLUME`、`SHELL`、ONBUILD対応instruction解析はtokenやJSON payload textを文字列化する前に、prefixとbodyをspanで判定するようになりました。
+- Dockerfile の reference 抽出で stage 名と variable 名の集合を 1 回の symbol pass で構築するようにしました。
+- **Dockerfile / shell の参照抽出が name set を遅延確保するようになりました** — stage、variable、callable、global alias のシンボルが無いファイルで、ファイル単位の参照コンテキスト構築時に空 `HashSet` を割り当てないようにしました。
+- 長い instruction body の scan 中の buffer 拡張を減らすため、Dockerfile instruction token builder を事前容量付きにしました。
+- Elixir の symbol scan で、コメント、文字列、sigil のマスクが必要な行だけをコピーするようにしました。
+- scanner、encoding issue、Razor、JSX の拡張子判定前に不要なファイル名切り出しを行わないようにし、大規模 indexing 時のファイルごとの path 処理を減らしました。
+- TypeScript path alias 解決、Dockerfile 診断、XAML symbol 抽出、C# accessor scan、supported language 一覧で固定候補配列を再利用し、indexing 中の小さな繰り返し allocation を減らしました。
+- **file indexability が Windows platform 判定を cache** — scan 時の file probe は、file attribute 判定ごとに runtime へ OS を問い合わせず、process-wide な OS flag を再利用するようにしました。
+- **filename-prefix language detection が一致不能な名前を skip** — 通常ファイルでは、先頭文字と長さが suffixed special filename に一致し得る場合だけ Dockerfile/Containerfile/Makefile prefix table を走査するようにしました。
+- **filesystem traversal が enumeration options を再利用** — hot directory walk で file、directory、entry の列挙ごとに top-directory-only `EnumerationOptions` を割り当てず、共有 instance を使うようにしました。
+- **path filtering で directory-prefix relative path helper を再利用** — scan filtering と ignore-rule candidate matching で、絶対パスが期待する directory prefix を持つ場合は `Path.GetRelativePath` を避けるようにしました。
+- **F# record / union 抽出が delimited candidate の trim に span を使うようになりました** — 大きな F# type 宣言から field や union case を抽出するとき、連鎖した trim 文字列生成を避けます。
+- **F# type member scanでtrim文字列を避けるようになりました** — F# record/union member検出はcandidate textを文字列化する前に、indentとprefix判定をtrim済みspanで行うようになりました。
+- **組み込みの generated/cache directory skip を拡張しました** - `cdidx index` は `.pnpm-store`、`.turbo`、`.mypy_cache`、`bazel-out`、`.dart_tool`、`.swiftpm`、`.stack-work` などの一般的な cache / build tree をファイル内容 probing 前に skip するようになり、大規模 polyglot repository の初回 scan 時間を削減します。
+- **generated suppression pattern が未設定の場合の precompute を skip しました** - CLI と MCP の indexing は、project に generated-code extraction pattern が無い場合、file ごとの generated-code suppression dictionary を作らないようになりました。
+- **submodule ancestor tracking で split/join 割り当てを回避** — `.gitmodules` の scan 初期化で submodule passthrough 用の ancestor path だけを作り、各 submodule path を先に segment 分割しないようにしました。
+- repository scan 中に `.gitmodules` の submodule path を解析するときの iterator allocation を回避しました。
+- **`.gitmodules` parsing の行ごとの string 割り当てを削減** — submodule discovery で section header、key、comment、rooted path 判定を span で処理し、受理した submodule path だけを string 化するようにしました。
+- **scan 初期化時の `.gitmodules` warning path を 1 回だけ計算** — submodule discovery で warning 分岐ごとに project-relative な `.gitmodules` path を再計算せず、同じ値を再利用するようにしました。
+- Go builtin type の reference 抽出で comma split list 全体を作らず、最初の top-level 型引数 span だけを読むようにしました。
+- **Go labelのコメント判定でtrim文字列を避けるようになりました** — Go label抽出はlabel正規表現を実行する前に、trim済み行を割り当てずspanでコメント風prefixを判定するようになりました。
+- **Go receiver type正規化でtrim連鎖を避けるようになりました** — Go method receiver lookupはreceiver名、pointer marker、generic引数、qualifierの除去をspanで行い、最終的なreceiver type名だけを割り当てるようになりました。
+- **Go署名の戻り値判定で末尾文字列を避けるようになりました** — Goシンボル抽出は署名に明示的な戻り値があるかを判断する際、parameter list後のテキストをtrim済み文字列にせずspanで確認するようになりました。
+- **Goのstart column fallbackでtrim文字列を避けるようになりました** — Goシンボル抽出はシンボル名を直接見つけられない場合、`TrimStart`結果を割り当てずに行頭空白を走査してfallback indentationを計算するようになりました。
+- **Go extractorのdirectiveとsignature scanでsubstring trim処理を避けるようになりました** — Go directive名、同一行interface body、空parameter判定は、文字列化の前にspan上でtrimまたは検査するようになりました。
+- Go の reference 抽出で一時 substring を trim する代わりに、型式の範囲を直接正規化して割り当てを削減しました。
+- **Go type prefix正規化でslice後のtrim連鎖を避けるようになりました** — Go type symbol抽出は`type` prefix後のtextをsubstring化してからtrimせず、span slice上でtrimするようになりました。
+- **hook callback の payload list を再利用** — isolated post-extraction hook callback は、symbol / reference payload が既に `List<T>` で保持されている場合に余分なコピーを避けるようになりました。
+- post-extraction hook が読み込まれていないときは dispose 時の列挙処理を省き、既定の indexing path で不要な処理を避けるようにしました。
+- post-extraction hook と diagnostics が空のときに snapshot list を割り当てないようにし、hook 未設定時の既定 indexing overhead を削減しました。
+- ignore rule の literal pattern を事前 scan と `string.Create` で構築し、wildcard rule で不要な builder allocation が出ないようにしました。
+- ignore rule の解析で先頭 token の削除をまとめ、大きな ignore file での list shift を減らしました。
+- ignore rule の regex literal で通常文字を直接 append し、`Regex.Escape` 用の 1 文字 string allocation を減らしました。
+- repository ignore pattern の compile 中の buffer 拡張を減らすため、ignore rule regex builder を事前容量付きにしました。
+- **ignore rule loading の allocation を削減しました** - directory scan は `.gitignore` または `.cdidxignore` が実際に rule を追加した場合だけ ignore-rule list を確保するようになり、ignore file が少ない大規模 tree の hot path allocation を減らします。
+- **indexing 中の冗長な delete 前 existence probe を削減しました** - full-scan cleanup と scoped update の delete は、削除直前の `HasFileAtPath` query ではなく `DeleteFileByPath` の row count を使うようになりました。
+- **index target の relative path 生成で root-prefix fast path を共有** — full scan、record loading、C# prepass target 作成で共通の project-root-relative path helper を使い、POSIX path では不要な区切り文字置換も避けるようにしました。
+- **indexing 中の language-map override lookup を cache しました** - `cdidx index` は `FileIndexer` の 1 実行内で directory ごとの language-map override snapshot を再利用し、大きな directory で file ごとに config path stamp を再確認する処理を減らします。
+- **indexer hot path が cached OS check を再利用** — relative-path prefix matching、hardlink identity probe、C# prepass root check は、file ごとに `OperatingSystem` を呼ばず process-wide な platform flag を再利用するようにしました。
+- **indexing caller で relative path fast path を共有** — project marker scope、scan diagnostics、freshness check、TypeScript path-alias normalization は、期待する directory prefix 配下の path では `Path.GetRelativePath` を避けるようにしました。
+- **未変更ファイルの indexing DB 往復を削減しました** - CLI と MCP の indexing は stat ベースおよび checksum ベースの再利用判定と既存の cap/generated-file issue 判定をまとめ、skip できる未変更ファイルごとの追加 SQLite query を避けるようになりました。
+- **indexing 中の validation issue 書き込みをバッチ化しました** - 複数の validation issue を出すファイルは、issue ごとに INSERT を実行せず、複数行の SQLite INSERT でまとめて書き込むようになりました。
+- **generated header 判定の処理量を制限しました** - generated-code header 検出は先頭の bounded header window のみを調べるようになり、非常に長い先頭行や minified payload でファイル全体を走査しないようになりました。
+- **indexing 中の generated-pattern 重複判定を避けました** - full-scan と MCP の target は generated-code 抑制patternの一致結果を保持し、C# prepass、stat reuse、extraction scheduling で再利用するようになりました。
+- **C# prepass 内でも generated-pattern 判定結果を再利用しました** - C# static-interface prepass の呼び出し元は cached generated-code 抑制結果を渡せるようになり、project pattern matching の再実行を避けます。
+- **reference-line lookup 処理を単純化しました** - reference 挿入時の batched `reference_lines` id 解決は、長い `OR` predicate chain ではなく小さな `VALUES` lookup table を使い、SQLite が joined row を返した後の行ごとの重複 lookup-key probe も避けるようになりました。
+- **stale stem purge の scan 対象を絞りました** - 拡張子変更 cleanup は retained file 更新ごとに全 indexed file 行を走査せず、同じ stem の path candidate だけを SQLite に問い合わせるようになりました。
+- **oversize checksum probe を即時終了するようにしました** - checksum reuse は seekable stream の長さが indexing byte cap を既に超えている場合、巨大ファイルを上限まで読む前に即 false を返すようになりました。
+- **行中の不可視文字では content normalization の fast path を維持します** - indexing normalization は carriage return または行頭不可視 marker がある場合だけ rewrite loop に入り、U+FEFF/U+200B が通常テキスト中に出るだけなら unchanged-content 経路を保ちます。
+- **C# doc comment probe を 1 pass にまとめました** - reference preparation は C# line-state mask を作るか決める前に、`///` と `/**` の XML doc comment 候補を 1 回の scan で検出するようになりました。
+- **C# reference regex probe を marker で gate します** - C# reference extraction は using alias、`where`、reflection member-name marker を確認してから対応 regex probe を実行します。
+- **TypeScript / Swift alias regex probe を marker で gate します** - type-alias reference extraction は行ごとの declaration keyword と assignment marker を確認してから alias regex を実行します。
+- **SQL maintenance target scan を keyword で gate します** - SQL reference extraction は permission、authorization、statistics、drop-table、truncate、revoke marker を確認してから対応 target regex pass を実行します。
+- **SQL temp-object establishment scan を statement marker で gate します** - SQL statement-prefix carryover は target、truncate、select-into、create marker を確認してから temp-object regex probe を実行します。
+- **SQL source / call scan を statement marker で gate します** - SQL reference extraction は call、source、merge、delete-using、output、select-into marker を確認してから statement-level regex pass を実行します。
+- **SQL index target scan を statement marker で gate します** - SQL reference extraction は index でない statement の index target regex group を skip し、create、alter、drop、XML、columnstore、hash、fulltext variant を marker で振り分けます。
+- **SQL lifecycle target scan を statement marker で gate します** - SQL reference extraction は trigger、security policy、references、synonym、drop-object marker を確認してから lifecycle target regex group を実行します。
+- **SQL alter-object target scan を statement marker で gate します** - SQL reference extraction は ALTER object-type marker を確認してから view、procedure、function、trigger、sequence、policy、catalog、partition、XML schema、assembly、schema-transfer、table-history regex group を実行します。
+- **SQL generic target scan を statement marker で gate します** - SQL reference extraction は generic INSERT/UPDATE/MERGE/DELETE/ALTER TABLE target regex を、それらの target-capable marker がある statement だけで実行します。
+- **SQL window clause scan を marker で gate します** - SQL reference extraction は file または statement に `OVER` marker がない場合、window-clause discovery と suppression scan を skip します。
+- **SQL generated-column dependency scan を marker で gate します** - SQL reference extraction は generated-column と `NEXT VALUE FOR` marker を確認してから generated dependency regex と computed-column prefix probe を実行します。
+- **R call-start reference scan を marker で gate します** - R reference extraction は source、data、system.file、documentation、package-install call marker を確認してから対応する call-start regex を実行します。
+- **R operator / member reference scan を marker で gate します** - R reference extraction は `::`、backtick-call、infix-operator、`$`、slot marker を確認してから対応する operator/member regex pass を実行します。
+- **R directive reference scan を marker で gate します** - R reference extraction は namespace、roxygen、S4 directive marker を確認してから directive-start regex や sequential directive match probe を実行します。
+- **PowerShell splat reference scan を marker で gate します** - PowerShell reference extraction は splat assignment、splat usage、hashtable key marker を確認してから対応する regex scan を実行します。
+- **PowerShell call reference scan を marker で gate します** - PowerShell reference extraction は cmdlet/function call regex probe を実行する前に statement と pipeline の call-start marker を確認します。
+- **Shell call / source reference scan を marker で gate します** - Shell reference extraction は callable name がない場合に command-call regex を skip し、substitution、source、global-alias marker を確認してから対応 scan を実行します。
+- **C# using namespace/static scan を marker で gate します** - C# reference extraction は using-namespace と using-static regex probe を実行する前に `using`、`static`、alias marker を確認します。
+- **F# pipeline call scan を marker で gate します** - F# reference extraction は pipeline call regex probe を実行する前に forward / backward pipeline marker を確認します。
+- **F# control-flow application scan を marker で gate します** - F# reference extraction は try/finally、condition、match、when-guard application regex probe を実行する前に control-flow marker を確認します。
+- **F# keyword application scan を marker で gate します** - F# reference extraction は assert、lazy、raise、cast、new の application-call regex probe を実行する前に各 marker を確認します。
+- **F# operator / composition scan を marker で gate します** - F# reference extraction は operator/composition regex probe を実行する前に marker を確認し、operator-definition suppression を行ごとに一度だけ解決します。
+- **SQL temp-object collection scan を marker で gate します** - SQL temp object carry-forward は `#` marker がない場合の collection を skip し、target、truncate、select-into、create probe は対応する statement keyword がある場合だけ実行します。
+- **Go concurrency reference scan を marker で gate します** - Go reference extraction は goroutine と channel send/receive regex probe を実行する前に `go` と channel-arrow marker を確認します。
+- **Scala block / type-context scan を marker で gate します** - Scala reference extraction は block、generator、implicit、given、using marker を確認してから対応する regex probe を実行します。
+- **Lua call / table-field scan を marker で gate します** - Lua reference extraction は command-call、method-call、table-field regex probe を実行する前に whitespace、colon、dot marker を確認します。
+- **Rust raw-identifier / macro call scan を marker で gate します** - Rust reference extraction は raw-identifier と macro-call regex probe を実行する前に `r#` と `!` marker を確認します。
+- **Rust attribute reference scan を marker で gate します** - Rust reference extraction は derive、cfg_attr derive、attribute-head regex probe を実行する前に attribute hash marker を確認します。
+- **Rust associated receiver scan を marker で gate します** - Rust reference extraction は associated call/value receiver scan を実行する前に path separator、generic、call marker を確認します。
+- **Rust struct literal scan を marker で gate します** - Rust reference extraction は struct literal instantiation regex probe を実行する前に opening-brace marker を確認します。
+- **Rust mutable reference type scan を marker で gate します** - Rust reference extraction は mutable-reference type regex probe を実行する前に ampersand と `mut` marker を確認します。
+- **Rust declaration reference scan を marker で gate します** - Rust reference extraction は declaration reference regex probe を実行する前に use、extern crate、module marker を確認します。
+- **Rust lifetime / ranked-bound scan を marker で gate します** - Rust reference extraction は lifetime apostrophe と higher-ranked `for<...>` marker を確認してから対応する reference form を走査します。
+- **Rust function signature type scan を marker で gate します** - Rust reference extraction は function signature type probe の前に `fn`、parenthesis、return-arrow marker を確認します。
+- **Rust closure signature type scan を marker で gate します** - Rust reference extraction は closure parameter / return type を走査する前に pipe、annotation、return-arrow marker を確認します。
+- **Rust declaration type scan を marker で gate します** - Rust reference extraction は local / static declaration type を走査する前に `let`、`const`、`static`、type-annotation marker を確認します。
+- **Rust alias / associated type scan を marker で gate します** - Rust reference extraction は alias target と associated type bound を走査する前に `type`、`trait`、assignment、bound marker を確認します。
+- **Rust aggregate field type scan を marker で gate します** - Rust reference extraction は aggregate field type list を走査する前に struct、tuple、enum variant delimiter marker を確認します。
+- **Rust cast type scan を marker で gate します** - Rust reference extraction は declaration trim と cast target type scan の前に `as` marker を確認します。
+- **Rust impl / trait header type scan を marker で gate します** - Rust reference extraction は implementation と trait header type を走査する前に `impl`、`trait`、trait-bound marker を確認します。
+- **Rust generic / where-bound scan を marker で gate します** - Rust reference extraction は generic bound、default、const generic usage、where clause を走査する前に generic-angle と `where` marker を確認します。
+- **Rust const generic segment scan を marker で gate します** - Rust reference extraction は generic / where-clause segment を分割して const generic reference を探す前に `const` と annotation marker を確認します。
+- **Rust function-trait return type scan を marker で gate します** - Rust reference extraction は generic、where、trait expression 内の function-trait return type を走査する前に return-arrow と bound marker を確認します。
+- **Rust generic default type scan を marker で gate します** - Rust reference extraction は generic default や default type reference のために generic clause を分割する前に assignment marker を確認します。
+- **Gradle DSL call scan を marker で gate します** - Gradle reference extraction は block-call と command-call DSL regex probe の前に block brace と whitespace marker を確認します。
+- **Haskell signature / space-call scan を marker で gate します** - Haskell reference extraction は shared signature / space-call regex probe の前に type-signature と whitespace marker を確認します。
+- **Haskell definition suppression scan を marker で gate します** - Haskell reference extraction は space call の definition-suppression regex probe の前に assignment marker を確認します。
+- **CSS preprocessor import scan を marker で gate します** - CSS、Sass、Stylus reference extraction は comment strip と import regex probe の前に import/use/forward/require marker を確認します。
+- **CSS animation reference scan を marker で gate します** - CSS reference extraction は animation-name と shorthand value regex probe を実行する前に animation marker を確認します。
+- **CSS custom-property reference scan を marker で gate します** - CSS reference extraction は custom-property reference regex probe を実行する前に `var` と custom-property marker を確認します。
+- **SCSS reference scan を marker で gate します** - SCSS reference extraction は variable、extend、include regex probe を実行する前に dollar、`@extend`、`@include` marker を確認します。
+- **Sass call scan を marker で gate します** - Sass reference extraction は通常行で reference-line preparation を skip し、mixin-plus と parenthesis marker を確認してから call regex probe を実行します。
+- **Stylus reference scan を marker で gate します** - Stylus reference extraction は explicit variable と function regex probe の前に dollar と parenthesis marker を確認し、variable definition が集まっていない場合は bare variable probe を skip します。
+- **Stylus variable definition scan を marker で gate します** - Stylus variable-definition collection は block-comment state を維持しつつ、assignment marker がない通常行では definition-line preparation と regex probe を skip します。
+- **Python decorator reference scan を marker で gate します** - Python reference extraction は `@` marker がない行では decorator-call と bare-decorator regex probe を skip します。
+- **Python raise/except type scan を marker で gate します** - Python reference extraction は exception type regex probe を実行する前に `raise` と `except` marker を確認します。
+- **Python runtime type-check scan を marker で gate します** - Python reference extraction は runtime type-check regex probe を実行する前に `isinstance` と `issubclass` marker を確認します。
+- **Python typing helper scan を marker で gate します** - Python reference extraction は typing helper regex probe を実行する前に `cast` と `assert_type` marker を確認します。
+- **Python class-base scan を marker で gate します** - Python reference extraction は class base/metaclass regex probe を実行する前に `class` と parenthesis marker を確認します。
+- **Python function annotation scan を marker で gate します** - Python reference extraction は return/parameter annotation regex probe を実行する前に function declaration、return-arrow、parenthesis marker を確認します。
+- **Python variable / type-alias scan を marker で gate します** - Python reference extraction は variable annotation と type-alias regex probe を実行する前に annotation と alias marker を確認します。
+- **Python type-factory scan を marker で gate します** - Python reference extraction は type factory regex probe を実行する前に `NewType`、`TypeVar`、`ParamSpec`、`bound` marker を確認します。
+- **Python dataclass / type-hints scan を marker で gate します** - Python reference extraction は dataclass/type-hints regex probe を実行する前に `get_type_hints`、`fields`、`field`、`default_factory`、`metadata` marker を確認します。
+- **Python framework / dynamic-import scan を marker で gate します** - Python reference extraction は attrs、pydantic、pytest、contextlib、importlib、`__import__` API regex probe を実行する前に対応 marker を確認します。
+- **PHP use import scan を marker で gate します** - PHP reference extraction は type/function/const import regex probe を実行する前に `use`、`function`、`const` marker を確認します。
+- **PHP static / exception type scan を marker で gate します** - PHP reference extraction は static-access と exception type regex probe を実行する前に `::`、`instanceof`、`catch` marker を確認します。
+- **PHP signature type scan を marker で gate します** - PHP reference extraction は return、parameter、property、inheritance type regex probe を実行する前に colon、dollar、visibility、`extends`、`implements` marker を確認します。
+- **PHP docblock type scan を marker で gate します** - PHP reference extraction は generic、property、method-parameter docblock type regex probe を実行する前に docblock tag marker を確認します。
+- **PHP object member scan を marker で gate します** - PHP reference extraction は object-member regex probe を実行する前に object access arrow marker を確認します。
+- **C++ friend reference scan を marker で gate します** - C++ reference extraction は friend type/function regex probe を実行する前に `friend` marker を確認します。
+- **空行の reference-line preparation を skip します** - 全言語の reference preparation は空行に対して comment/string-literal trigger 判定を走らせず即 return するようになりました。
+- **string-literal delimiter probe をまとめました** - reference-line preparation は quote/backtick trigger character を delimiter ごとの個別 scan ではなく `IndexOfAny` で確認します。
+- **reference-line preparation の言語フラグを loop 外へ出しました** - ファイルごとの reference preparation は comment/string handling の言語フラグを一度だけ計算し、hot loop 内で language switch を繰り返さないようになりました。
+- **whitespace-only 行の symbol pattern scan を skip します** - symbol extraction は言語別 masking 後の実効 match line が空白だけの場合、regex pattern loop に入らないようになりました。
+- **通常行では Python walrus regex scan を skip します** - supplemental Python symbol extraction は walrus assignment regex を走らせる前に `:=` の有無を確認します。
+- **候補でない行では PHP supplemental regex scan を skip します** - PHP property、constructor promotion、docblock、trait alias の supplemental pass は regex を走らせる前に軽量な marker substring を確認します。
+- **JS/TS module supplemental scan を marker で振り分けます** - JavaScript/TypeScript の module import supplemental helper は全 helper を全行で呼ばず、それぞれが探す marker を含む行だけで実行します。
+- **通常行では C++ friend declaration scan を skip します** - C++ の supplemental friend declaration extraction は mask 後の行にまだ `friend` がある場合だけ regex probe を行い、comment に影響する行では block-comment state を維持します。
+- **候補でない行では Perl hash constant collection を skip します** - Perl の supplemental constant extraction は各行で `use constant { ... }` body collector を試す前に `constant` の有無を確認します。
+- **marker がない場合は Rust supplemental collector を skip します** - Rust の `use`、multiline `impl`、associated-type-default supplemental extraction は statement collector や trait-body scan の前に軽量な file/line marker を確認します。
+- **Go supplemental declaration scan を marker で gate します** - Go の import/directive/label と grouped declaration helper は必須 marker がない通常行では trim、regex check、brace-depth scan の前に skip します。
+- **Go import-block reference scan を marker で gate します** - Go reference preparation は必須の `import`、parenthesis、quoted-path marker がない行で import-block regex check を skip します。
+- **Go top-level reference scan を marker で gate します** - Go reference extraction は import、`func`、brace、uppercase marker を確認してから top-level import/function/composite regex probe を実行します。
+- **Go generic helper function scan を marker で gate します** - Go generic call / instantiation helper は line に `func` marker がない場合 function-line regex check を skip します。
+- **input/union marker がない場合は GraphQL member extraction を skip します** - GraphQL の supplemental member extraction は `input` block がない file では full-content join を避け、union regex も `union` を含む行だけで実行します。
+- **Razor directive scan を marker で振り分けます** - Razor の directive supplemental extraction は `@` のない行を skip し、行 marker に対応する directive regex だけを実行します。
+- **Razor reference scan を marker で gate します** - Razor reference extraction は component-tag、directive、attribute、inject、event-binding marker を確認してから対応 regex probe を実行します。
+- **Dockerfile supplemental scan を instruction で振り分けます** - Dockerfile の追加 symbol extraction は各行の先頭 instruction を一度だけ読み、対応する ENV/LABEL/EXPOSE/VOLUME/FROM/SHELL/COPY/ADD/RUN helper だけを実行します。
+- **Dockerfile named-stage fallback scan を marker で gate します** - Dockerfile extraction は `AS` marker がない `FROM` 行で named-stage base-image regex check を skip します。
+- **Java enum fallback scan を name start で gate します** - Java enum recovery は uppercase enum member に一致し得る行形状の場合だけ line-fallback regex を実行します。
+- **section-heading regex scan を marker で gate します** - C# `#region` と JavaScript/TypeScript `@module` heading extraction は heading regex を走らせる前に必須 marker substring を確認します。
+- **通常行では CSS custom-property regex scan を skip します** - CSS inline custom-property extraction は regex を走らせる前に必須の `--` marker を確認します。
+- **family marker のない CSS font-face block join を skip します** - CSS `@font-face` の family name 解決は block text を mask/join する前に `font-family` の有無を確認します。
+- **通常行では Svelte reactive-property regex scan を skip します** - Svelte supplemental extraction は reactive assignment regex を走らせる前に `$:` の有無を確認します。
+- **Markdown reference regex scan を delimiter で振り分けます** - Markdown reference extraction は対応する link/reference regex を走らせる前に `](`、`]:`、`][` の有無を確認します。
+- **XAML type-bearing attribute regex scan を gate します** - XAML/XML extraction は `x:Class`、`x:DataType`、`x:TypeArguments`、`TargetType` の有無を確認してから対応する attribute regex を実行します。
+- **XAML identity/resource attribute regex scan を gate します** - XAML/XML extraction は `x:Name` と `x:Key` の有無を確認してから対応する property attribute regex を実行します。
+- **XAML event-handler regex scan を event name で gate します** - XAML/XML extraction は configured event attribute name を確認してから event-handler regex を実行します。
+- **XAML binding markup regex scan を gate します** - XAML/XML extraction は full-document binding regex を実行する前に binding markup prefix の有無を確認します。
+- **wrapped XAML attribute scan を attribute name で gate します** - wrapped XAML attribute extraction は `x:Name`、`x:Key`、event attribute の名前がない場合に full-text walk を skip します。
+- **XAML Binding ElementName scan を marker で gate します** - XAML/XML extraction は marker がない場合に Binding markup、object element、property element の ElementName scan を skip します。
+- **XAML Binding Path scan を marker で gate します** - XAML/XML extraction は marker がない場合に Binding object-element と property-element の Path scan を skip します。
+- **XAML type element regex scan を marker で gate します** - XAML/XML extraction は type object/property element regex を実行する前に `x:Type` / `TypeName` marker を確認します。
+- **XAML type markup scan を prefix で gate します** - XAML/XML extraction は `{x:Type}` と `{x:TypeExtension}` の markup-extension scan を対応 prefix がある場合だけ呼び出します。
+- **XAML static-member markup scan を prefix で gate します** - XAML/XML extraction は `{x:Static}` prefix がない場合に static-member type inference を skip します。
+- **XAML reference scan を prefix で gate します** - XAML/XML extraction は `x:Reference` の markup、object element、property element scan を対応 prefix がない場合に skip します。
+- **XAML resource reference scan を prefix で gate します** - XAML/XML extraction は static/dynamic resource markup scan を対応 prefix がない場合に skip します。
+- **Pascal range token scan を keyword で gate します** - Pascal extraction は begin/end/case/try token を含めない行で対応 regex counting を skip します。
+- **Ruby/Elixir block token scan を keyword で gate します** - Ruby と Elixir の range extraction は token marker がない masked text で block-token regex scan を skip します。
+- **shell heredoc scan を redirect marker で gate します** - Shell extraction は `<<` がない行で heredoc masking と redirect regex scan を skip します。
+- **Perl hash-constant key scan を pair marker で gate します** - Perl extraction は collected body に `=>` がない `use constant` hash で key regex scan を skip します。
+- **GraphQL input field scan を colon で gate します** - GraphQL extraction は field declaration を含めない input body で input-field regex scan を skip します。
+- **GraphQL union variant scan を name start で gate します** - GraphQL extraction は stripped variant text に GraphQL name start がない場合 union-variant regex scan を skip します。
+- **GraphQL declaration boundary scan を keyword で gate します** - GraphQL union continuation scanning は declaration keyword がない場合 declaration-start regex check を skip します。
+- **Elixir defimpl type scan を marker で gate します** - Elixir reference extraction は defimpl protocol と implementation type regex probe の前に `defimpl` marker を確認します。
+- **Elixir pipe-call scan を marker で gate します** - Elixir reference extraction は pipe-call regex probe の前に pipe operator marker を確認します。
+- **Elixir import / behaviour type scan を marker で gate します** - Elixir reference extraction は import と behaviour regex probe の前に alias/import/require/use と attribute marker を確認します。
+- **Elixir parenless call scan を marker で gate します** - Elixir reference extraction は parenless-call regex probe の前に whitespace marker を確認します。
+- **Elixir first-line block scan を marker で gate します** - Elixir range extraction は masked first line に必要 marker がない場合 shorthand と opener regex check を skip します。
+- **XAML line-level attribute scan を assignment marker で gate します** - XAML extraction は `=` がない行で class/type/name/key 属性 regex scan を skip します。
+- **wrapped XAML type-argument scan を attribute marker で gate します** - XAML extraction は document に `x:TypeArguments` marker がない場合 multiline scan を skip します。
+- **wrapped XAML type-bearing scan を attribute marker で gate します** - XAML extraction は `x:Class`、`x:DataType`、`TargetType` がすべてない場合 multiline class/type attribute scan を skip します。
+- **wrapped XAML search-attribute scan を marker で gate します** - XAML extraction は name/key/event attribute marker がすべてない場合 multiline scan を skip します。
+- **COBOL paragraph scan を required marker で gate します** - COBOL extraction は line に必須 marker がない場合 program/entry/section/paragraph regex check を skip します。
+- **Fortran routine-start scan を keyword で gate します** - Fortran range extraction は line に `subroutine` と `function` のどちらもない場合 routine-start regex check を skip します。
+- **Fortran include / group reference scan を marker で gate します** - Fortran reference extraction は必須の keyword と delimiter marker がない行で include/common/namelist regex check を skip します。
+- **Fortran statement reference scan を keyword で gate します** - Fortran reference extraction は data、save、submodule、external、intrinsic、access、finalizer、equivalence regex check を対応 statement candidate だけで実行します。
+- **Fortran allocation / type reference scan を marker で gate します** - Fortran reference extraction は procedure、pointer、associate、type-expression、allocation、deallocation、kind marker を確認してから対応 regex pass を実行します。
+- **Fortran call reference scan を marker で gate します** - Fortran reference extraction は call-target regex probe の前に `call` statement marker を確認します。
+- **Objective-C type reference scan を marker で gate します** - Objective-C reference extraction は対応する type regex probe の前に interface-base、protocol-list、pointer-declaration marker を確認します。
+- **Objective-C message call scan を marker で gate します** - Objective-C reference extraction は message と `@selector` regex probe の前に message-send と selector marker を確認します。
+- **Pascal type reference scan を marker で gate します** - Pascal reference extraction は対応する type regex probe の前に `uses`、base-declaration、colon marker を確認します。
+- **Pascal bare-call scan を marker で gate します** - Pascal reference extraction は bare-call regex probe の前に semicolon statement marker を確認します。
+- **Smalltalk message reference scan を marker で gate します** - Smalltalk reference extraction は method-definition、class-declaration、message-send regex probe の前に whitespace marker を確認します。
+- **Smalltalk range-boundary scan を marker で gate します** - Smalltalk range extraction は line に `>>`、`subclass:`、`named:` がない場合 method/class boundary regex check を skip します。
+- **Rust use-start scan を keyword で gate します** - Rust use-statement collection は first line に `use` keyword marker がない場合 start regex を skip します。
+- **Kotlin class subkind scan を keyword で gate します** - Kotlin class enrichment は metadata に対応する keyword marker がない場合 value/inline class regex check を skip します。
+- **Kotlin inline-function scan を keyword で gate します** - Kotlin function enrichment は signature に対応する keyword marker がない場合 inline/reified regex check を skip します。
+- **Solidity type declaration scan を keyword で振り分けます** - Solidity extraction は contract/interface/library、struct、enum の declaration regex を対応 keyword marker がある場合だけ実行します。
+- **Solidity callable declaration scan を keyword で振り分けます** - Solidity extraction は function、constructor、fallback/receive、modifier の declaration regex を対応 marker がある行だけで実行します。
+- **Solidity event/error declaration scan を keyword で振り分けます** - Solidity extraction は event と error の declaration regex を対応 keyword marker がある行だけで実行します。
+- **Solidity parenthesized declaration scan を marker で gate します** - Solidity extraction は line に `(` がない場合、function、constructor、fallback/receive、event、error regex を skip します。
+- **PHP constructor-start regex の重複 check を skip します** - PHP promoted-property extraction は same-line constructor regex が既に match した場合 constructor-start regex を実行しないようになりました。
+- **PHP import scan を marker で振り分けます** - PHP import extraction は `use`、grouped-use の brace、require/include marker を確認してから対応 regex を実行します。
+- **PHP grouped-use alias scan を marker で gate します** - PHP grouped-use import extraction は item に `as` marker がある場合だけ item alias regex を実行します。
+- **PHP promoted-property parameter scan を marker で gate します** - PHP constructor promotion extraction は segment に `$` または visibility keyword がない場合 parameter regex を skip します。
+- **PHP docblock / alias scan を syntax marker で gate します** - PHP supplemental extraction は必須の sigil や delimiter がない行で docblock、trait alias、constructor regex check を skip します。
+- **F# type-declaration regex の重複 scan をまとめます** - F# type-member extraction は同じ行に `IsMatch` と `Match` を重ねず、declaration match を再利用します。
+- **F# record-field scan を colon で gate します** - F# record-field extraction は typed field separator を含めない candidate で record-field regex check を skip します。
+- **F# active/operator scan を marker で gate します** - F# extraction は line に必要 marker がない場合 active-pattern と operator-definition regex check を skip します。
+- **YAML mapping-key scan を colon で gate します** - YAML structured-data extraction は mapping separator を含めない行で mapping-key regex check を skip します。
+- **JSON fallback property scan を marker で gate します** - oversized または malformed JSON の fallback extraction は quote と colon の両方を含まない行で property regex check を skip します。
+- **JSON property-line queue 構築を遅延します** - JSON extraction は structured key symbol を出せる object root の場合だけ property-line lookup queue を構築します。
+- **Visual Basic enum-member scan を name start で gate します** - Visual Basic enum extraction は trimmed line が member 名で始まり得ない場合 enum-member regex check を skip します。
+- **Python dynamic-import scan を marker で gate します** - Python import expansion は statement に `importlib` と `__import__` marker がない場合 dynamic import literal regex enumeration を skip します。
+- **Python direct/from import scan を prefix で振り分けます** - Python import expansion は matching import keyword で始まる statement にだけ direct/from-import regex を実行します。
+- **Python `__all__` export scan を marker で gate します** - Python export expansion は `__all__` marker のない行で append/extend/assignment regex check を skip します。
+- **Python class attribute scan を marker で gate します** - Python class-body extraction は special attribute、dataclass field、annotation、assignment を対応する軽量 marker で確認してから regex を実行します。
+- **Python `__all__` operation scan を marker で振り分けます** - Python export expansion は append、extend、assignment の各 regex を、対応する operation marker がある行だけで実行します。
+- **Python dataclass metadata scan を marker で gate します** - Python dataclass field expansion は `metadata` と dictionary marker がない field-call 行で metadata regex check を skip します。
+- **C/C++ include/base/constructor/cast scan を marker で gate します** - C/C++ reference extraction は include/import、継承、allocation、named cast、parenthesized cast の marker を確認してから対応する type regex probe を実行します。
+- **C typedef cast scan を marker で gate します** - C reference extraction は typedef cast type regex probe の前に `*_t` と parenthesis marker を確認します。
+- **C sizeof / alignof type scan を marker で gate します** - C reference extraction は sizeof / alignof type regex probe の前に operand keyword と typedef/tag marker を確認します。
+- **C declaration type scan を marker で gate します** - C reference extraction は declaration type regex probe の前に declaration terminator と typedef/tag marker を確認します。
+- **C function return type scan を marker で gate します** - C reference extraction は function return type regex probe の前に parenthesis と typedef/tag marker を確認します。
+- **C parameter type scan を marker で gate します** - C reference extraction は parameter type regex probe の前に parameter delimiter と typedef/tag marker を確認します。
+- **C compound literal type scan を marker で gate します** - C reference extraction は compound literal type regex probe の前に compound-literal delimiter と typedef/tag marker を確認します。
+- **C typeof type scan を marker で gate します** - C reference extraction は typeof / typeof_unqual type regex probe の前に `typeof` と typedef/tag marker を確認します。
+- **C builtin type-compatibility scan を marker で gate します** - C reference extraction は builtin type comparison regex probe の前に `__builtin_types_compatible_p` と typedef/tag marker を確認します。
+- **C generic association type scan を marker で gate します** - C reference extraction は generic association type regex probe の前に `_Generic` または continuation delimiter と typedef/tag marker を確認します。
+- **C atomic / alignas type scan を marker で gate します** - C reference extraction は atomic / alignas type regex probe の前に `_Atomic` や alignas marker と typedef/tag marker を確認します。
+- **C function-pointer type scan を marker で gate します** - C reference extraction は function-pointer alias / declaration type regex probe の前に function-pointer delimiter marker と typedef/tag marker を確認します。
+- **C pointer-array declaration type scan を marker で gate します** - C reference extraction は pointer-array declaration type regex probe の前に function-pointer / array delimiter marker と typedef/tag marker を確認します。
+- **C offsetof type scan を marker で gate します** - C reference extraction は offsetof type regex probe の前に `offsetof` call marker / comma marker と typedef/tag marker を確認します。
+- **C va_arg type scan を marker で gate します** - C reference extraction は va_arg regex / operand scanner の前に `va_arg` call marker と comma marker を確認します。
+- **C++ type operand scan を marker で gate します** - C/C++ reference extraction は C++ type operand regex probe の前に `sizeof` / `alignof` call marker を確認します。
+- **C++ typeid scan を marker で gate します** - C/C++ reference extraction は C++ typeid regex probe の前に `typeid` call marker を確認します。
+- **C++ decltype brace construction scan を marker で gate します** - C/C++ reference extraction は decltype construction regex probe の前に `decltype` / parenthesis / brace marker を確認します。
+- **C++ factory template argument scan を marker で gate します** - C/C++ reference extraction は factory template argument regex probe の前に `make_` / template / call marker を確認します。
+- **C++ type-trait template argument scan を marker で gate します** - C/C++ reference extraction は type-trait template argument regex probe の前に `is_` と template marker を確認します。
+- **C++ brace construction scan を marker で gate します** - C/C++ reference extraction は brace construction regex probe の前に brace と construction lead-in marker を確認します。
+- **C++ qualified template brace construction scan を marker で gate します** - C/C++ reference extraction は qualified template brace construction regex probe の前に brace / template / scope marker を確認します。
+- **C++ using-alias target scan を marker で gate します** - C/C++ reference extraction は using-alias target regex probe の前に `using` / assignment / statement marker を確認します。
+- **C++ typedef-alias target scan を marker で gate します** - C/C++ reference extraction は typedef-alias target regex probe の前に `typedef` / statement / no-parenthesis marker を確認します。
+- **C++ explicit template instantiation scan を marker で gate します** - C/C++ reference extraction は explicit template instantiation regex probe の前に `template` / class-or-struct / statement marker を確認します。
+- **C++ template-id declaration scan を marker で gate します** - C/C++ reference extraction は template-id declaration regex probe の前に template delimiter と declaration terminator を確認します。
+- **C++ template parameter default scan を marker で gate します** - C/C++ reference extraction は template parameter default regex probe の前に `typename` / `class` と assignment marker を確認します。
+- **C++ qualified member receiver scan を marker で gate します** - C/C++ reference extraction は qualified member receiver regex probe の前に scope marker を確認します。
+- **C++ pointer-to-member type scan を marker で gate します** - C/C++ reference extraction は pointer-to-member type regex probe の前に scope と pointer marker を確認します。
+- **C++ trailing return type scan を marker で gate します** - C/C++ reference extraction は trailing return type regex probe の前に close-parenthesis と arrow marker を確認します。
+- **C++ requires concept type scan を marker で gate します** - C/C++ reference extraction は requires concept type regex probe の前に `requires` と template marker を確認します。
+- **C++ qualified requires concept scan を marker で gate します** - C/C++ reference extraction は qualified requires concept regex probe の前に `requires` / template / scope marker を確認します。
+- **C++ concept expression type scan を marker で gate します** - C/C++ reference extraction は concept expression type regex probe の前に template と concept operator marker を確認します。
+- **C++ compound requirement concept scan を marker で gate します** - C/C++ reference extraction は compound requirement concept regex probe の前に arrow と template delimiter marker を確認します。
+- **C++ friend type scan を marker で gate します** - C/C++ reference extraction は friend type regex probe の前に `friend` / type-kind / statement marker を確認します。
+- **C++ dynamic exception spec scan を marker で gate します** - C/C++ reference extraction は dynamic exception specification regex probe の前に `throw` と parenthesis marker を確認します。
+- **C++ declaration type scan を marker で gate します** - C/C++ reference extraction は declaration type regex probe の前に declaration terminator と軽量 type marker を確認します。
+- **Dart variable type scan を marker で gate します** - Dart reference extraction は variable type regex probe の前に declaration terminator と uppercase type marker を確認します。
+- **Dart function signature scan を marker で gate します** - Dart reference extraction は function signature / parameter type regex probe の前に parenthesis と uppercase type marker を確認します。
+- **Dart constructor call scan を marker で gate します** - Dart reference extraction は constructor call regex probe の前に `new` / `const`、parenthesis、uppercase type marker を確認します。
+- **VB type keyword scan を marker で gate します** - Visual Basic reference extraction は type keyword regex probe の前に type keyword marker を確認します。
+- **VB generic list scan を marker で gate します** - Visual Basic reference extraction は generic argument list regex probe の前に `(` と `Of` marker を確認します。
+- **VB new type scan を marker で gate します** - Visual Basic reference extraction は constructor type regex probe の前に `New` marker を確認します。
+- **VB implements list scan を marker で gate します** - Visual Basic reference extraction は implements list regex probe の前に `Implements` marker を確認します。
+- **VB imports list scan を marker で gate します** - Visual Basic reference extraction は imports list regex probe の前に `Imports` marker を確認します。
+- **VB cast type scan を marker で gate します** - Visual Basic reference extraction は cast / parenthesis / comma marker を確認してから cast type regex probe を実行します。
+- **VB GetType scan を marker で gate します** - Visual Basic reference extraction は `GetType` regex probe の前に `GetType` と parenthesis marker を確認します。
+- **VB TypeOf scan を marker で gate します** - Visual Basic reference extraction は `TypeOf` regex probe の前に `TypeOf` と `Is` marker を確認します。
+- **VB NameOf scan を marker で gate します** - Visual Basic reference extraction は `NameOf` regex probe の前に `NameOf` と parenthesis marker を確認します。
+- **VB XML namespace scan を marker で gate します** - Visual Basic reference extraction は XML namespace regex probe の前に `GetXmlNamespace` と parenthesis marker を確認します。
+- **VB AddressOf scan を marker で gate します** - Visual Basic reference extraction は delegate target regex probe の前に `AddressOf` marker を確認します。
+- **VB AddHandler scan を marker で gate します** - Visual Basic reference extraction は event subscription regex probe の前に `AddHandler` marker を確認します。
+- **VB RemoveHandler scan を marker で gate します** - Visual Basic reference extraction は event unsubscription regex probe の前に `RemoveHandler` marker を確認します。
+- **VB RaiseEvent scan を marker で gate します** - Visual Basic reference extraction は event invocation regex probe の前に `RaiseEvent` marker を確認します。
+- **VB escaped call scan を marker で gate します** - Visual Basic reference extraction は escaped call regex probe の前に escaped identifier と parenthesis marker を確認します。
+- **VB bare call scan を leading token で gate します** - Visual Basic reference extraction は bare call regex probe の前に最初の非空白tokenを確認します。
+- **VB CallByName scan を marker で gate します** - Visual Basic reference extraction は `CallByName` regex probe の前に `CallByName` / parenthesis / comma / quote marker を確認します。
+- **VB bare member call scan を leading token で gate します** - Visual Basic reference extraction は bare member call regex probe の前に leading member access を確認します。
+- **Fortran use scan を marker で gate します** - Fortran reference extraction は use / only-list / rename-list regex probe の前に `use` marker を確認します。
+- **Fortran import scan を marker で gate します** - Fortran reference extraction は import list regex probe の前に `import` marker を確認します。
+- **Fortran data group scan を slash marker で gate します** - Fortran reference extraction は data object group regex probe の前に data statement slash marker を確認します。
+- **Fortran save slash group scan を marker で gate します** - Fortran reference extraction は saved common block regex probe の前に save-list slash marker を確認します。
+- **Fortran allocate source scan を marker で gate します** - Fortran reference extraction は allocate source keyword regex probe の前に `source` と `mold` marker を確認します。
+- **Fortran allocation status scan を marker で gate します** - Fortran reference extraction は allocate/deallocate status keyword regex probe の前に `stat` と `errmsg` marker を確認します。
+- **Fortran pointer assignment scan を leading token で gate します** - Fortran reference extraction は pointer assignment regex probe の前に leading identifier token を確認します。
+- **Fortran allocate type-spec scan を marker で gate します** - Fortran reference extraction は allocate type-spec regex probe の前に `::` marker を確認します。
+- **Fortran call scan を leading keyword で gate します** - Fortran reference extraction は call regex probe の前に leading `call` keyword を確認します。
+- **Fortran use scan を leading keyword gate に強化します** - Fortran reference extraction は use-clause regex probe の前に leading `use` を要求します。
+- **Fortran import scan を leading keyword gate に強化します** - Fortran reference extraction は import list regex probe の前に leading `import` を要求します。
+- **Fortran include scan を leading keyword gate に強化します** - Fortran reference extraction は include filename regex probe の前に leading `include` を要求します。
+- **Fortran common line regex gate を leading keyword check に置き換えます** - Fortran reference extraction は direct leading keyword check により common-line regex probe を避けます。
+- **Fortran namelist line regex gate を leading keyword check に置き換えます** - Fortran reference extraction は direct leading keyword check により namelist-line regex probe を避けます。
+- **Fortran equivalence scan を leading keyword gate に強化します** - Fortran reference extraction は equivalence list regex probe の前に leading `equivalence` を要求します。
+- **Fortran data scan を leading keyword gate に強化します** - Fortran reference extraction は data-object regex probe の前に leading `data` を要求します。
+- **Fortran save scan を leading keyword gate に強化します** - Fortran reference extraction は save-list regex probe の前に leading `save` を要求します。
+- **Fortran submodule scan を leading keyword gate に強化します** - Fortran reference extraction は parent-module regex probe の前に leading `submodule` を要求します。
+- **Fortran external scan を leading keyword gate に強化します** - Fortran reference extraction は external-list regex probe の前に leading `external` を要求します。
+- **Fortran intrinsic scan を leading keyword gate に強化します** - Fortran reference extraction は intrinsic-list regex probe の前に leading `intrinsic` を要求します。
+- **Fortran access-list scan を leading keyword gate に強化します** - Fortran reference extraction は access-list regex probe の前に leading `public` または `private` を要求します。
+- **Fortran finalizer scan を leading keyword gate に強化します** - Fortran reference extraction は finalizer-list regex probe の前に leading `final` を要求します。
+- **Fortran procedure binding scan を leading keyword gate に強化します** - Fortran reference extraction は binding-target regex probe の前に leading `procedure` または `generic` を要求します。
+- **Fortran associate scan を leading keyword gate に強化します** - Fortran reference extraction は associate-target regex probe の前に leading `associate` を要求します。
+- **Fortran allocate scan を leading keyword gate に強化します** - Fortran reference extraction は allocation type/object regex probe の前に leading `allocate` を要求します。
+- **Fortran deallocate scan を leading keyword gate に強化します** - Fortran reference extraction は deallocation object regex probe の前に leading `deallocate` を要求します。
+- **Fortran keyword-kind assignment gate を追加します** - Fortran reference extraction は intrinsic `kind =` regex probe の前に `=` を確認します。
+- **未使用の Fortran common / namelist gate regex を削除します** - Fortran reference extraction は direct keyword gate への置換後に不要となった line-gate regex 定義を保持しません。
+- **冗長な Fortran equivalence line regex gate を削除します** - Fortran reference extraction は equivalence name list を scan する前に direct leading keyword check を利用します。
+- **冗長な Fortran procedure binding line regex gate を削除します** - Fortran reference extraction は binding target を scan する前に direct leading keyword check を利用します。
+- **Pascal uses scan を leading keyword gate に強化します** - Pascal reference extraction は unit-list regex probe の前に leading `uses` を要求します。
+- **Pascal class-base closing-paren gate を追加します** - Pascal reference extraction は class/interface/object base-list regex probe の前に `)` を確認します。
+- **共通 keyword containment gate を追加します** - Reference extraction は language hot path の broad substring probe を置き換える boundary-aware case-insensitive keyword helper を持つようになります。
+- **Pascal class base marker を keyword boundary に強化します** - Pascal reference extraction は base-list regex probe の前に `class` を boundary-aware keyword として扱います。
+- **Pascal interface base marker を keyword boundary に強化します** - Pascal reference extraction は base-list regex probe の前に `interface` を boundary-aware keyword として扱います。
+- **Pascal object base marker を keyword boundary に強化します** - Pascal reference extraction は base-list regex probe の前に `object` を boundary-aware keyword として扱います。
+- **共通 leading character gate を追加します** - Reference extraction は identifier keyword ではない anchored syntax marker 用の leading-character helper を持つようになります。
+- **Objective-C interface base scan を leading marker gate に強化します** - Objective-C reference extraction は interface/implementation base regex probe の前に leading `@` を要求します。
+- **Haskell signature separator gate を追加します** - Haskell reference extraction は type-signature regex probe の前に `::` を確認します。
+- **Haskell space-call whitespace gate を追加します** - Haskell reference extraction は whitespace がない行では space-call regex probe を省略します。
+- **共通 ordinal keyword gate を追加します** - Reference extraction は lowercase-only syntax marker を持つ言語向けの case-sensitive leading keyword helper を持つようになります。
+- **Elixir alias import-family scan を leading keyword gate に強化します** - Elixir reference extraction は import-family regex probe の前に leading `alias` を要求します。
+- **Elixir import scan を leading keyword gate に強化します** - Elixir reference extraction は import-family regex probe の前に leading `import` を要求します。
+- **Elixir require scan を leading keyword gate に強化します** - Elixir reference extraction は import-family regex probe の前に leading `require` を要求します。
+- **Elixir use scan を leading keyword gate に強化します** - Elixir reference extraction は import-family regex probe の前に leading `use` を要求します。
+- **共通 ordinal containment gate を追加します** - Reference extraction は lowercase marker hot path 向けの boundary-aware case-sensitive keyword helper を持つようになります。
+- **Elixir behaviour attribute scan を leading marker gate に強化します** - Elixir reference extraction は behaviour/impl regex probe の前に leading `@` を要求します。
+- **Elixir behaviour scan を keyword boundary に強化します** - Elixir reference extraction は behaviour regex probe の前に `behaviour` を boundary-aware keyword として扱います。
+- **Elixir impl scan を keyword boundary に強化します** - Elixir reference extraction は implementation regex probe の前に `impl` を boundary-aware keyword として扱います。
+- **Smalltalk method-definition skip を marker gate します** - Smalltalk message extraction は method-definition regex probe の前に `>>` を確認します。
+- **Smalltalk class-declaration skip を literal marker gate します** - Smalltalk message extraction は class-declaration regex probe の前に `#` を確認します。
+- **Smalltalk class-declaration skip を keyword marker gate します** - Smalltalk message extraction は class-declaration regex probe の前に class-declaration keyword を確認します。
+- **Objective-C selector scan を parenthesis marker gate します** - Objective-C message extraction は `@selector(...)` regex probe の前に `(` を確認します。
+- **C++ class base-list marker を keyword boundary に強化します** - C++ reference extraction は base-list regex probe の前に `class` を boundary-aware keyword として扱います。
+- **C++ struct base-list marker を keyword boundary に強化します** - C++ reference extraction は base-list regex probe の前に `struct` を boundary-aware keyword として扱います。
+- **C++ new type marker を keyword boundary に強化します** - C++ reference extraction は allocation type regex probe の前に `new` を boundary-aware keyword として扱います。
+- **C function-pointer typedef marker を keyword boundary に強化します** - C reference extraction は function-pointer alias regex probe の前に `typedef` を boundary-aware keyword として扱います。
+- **C++ typedef alias marker を keyword boundary に強化します** - C++ reference extraction は alias-target regex probe の前に `typedef` を boundary-aware keyword として扱います。
+- **C++ explicit-template marker を keyword boundary に強化します** - C++ reference extraction は explicit instantiation regex probe の前に `template` を boundary-aware keyword として扱います。
+- **C++ explicit-template class marker を keyword boundary に強化します** - C++ reference extraction は explicit instantiation regex probe の前に `class` を boundary-aware keyword として扱います。
+- **C++ explicit-template struct marker を keyword boundary に強化します** - C++ reference extraction は explicit instantiation regex probe の前に `struct` を boundary-aware keyword として扱います。
+- **C struct type marker を keyword boundary に強化します** - C reference extraction は tagged-type regex probe の前に `struct` を boundary-aware keyword として扱います。
+- **Java / Kotlin の参照抽出が空の generic parameter 集合を再利用するようになりました** — generic ではない宣言や malformed な generic 句で、大規模な Java / Kotlin リポジトリのインデックス化中に発生する短命な空 `HashSet` 割り当てを避けます。
+- JavaScript/TypeScript の分割代入 export 署名を組み立てる際に、一時的な substring と trim の割り当てを避けるようにしました。
+- JavaScript/TypeScript のシンボル抽出で複数の行末 `TrimEnd()` 判定を末尾空白の直接走査に置き換えました。
+- **JavaScript/TypeScript RHS判定でslice後のtrim連鎖を避けるようになりました** — arrow/lambda/class/anonymous function/re-export解析は各trim前にsubstringを作らず、RHS sliceをspanからtrimするようになりました。
+- **record loading が既知の indexability を再利用** — full scan、incremental update、dry run、freshness check、MCP indexing は、呼び出し側で file が indexable と確認済みの場合に二度目の regular-file probe を避けるようにしました。
+- **Kotlin 以外で Kotlin name set の割当を回避** — 共通参照準備処理は、Kotlin 以外の言語では空の Kotlin constructor / infix-function name set を再利用するようになりました。
+- **Kotlin name正規化で一時的なtrim文字列を避けるようになりました** — Kotlin companion objectとsecondary constructorの正規化は、中間のtrim文字列を割り当てず、trim済みspanでprefixと空判定を行うようになりました。
+- Kotlin の reference 抽出で constructor type name と infix function name を 1 回の symbol pass で構築するようにしました。
+- CLI/MCP の language listing が使う統合 language extension map を事前に sizing し、built-in、plugin、override の項目を結合するときの dictionary growth を減らしました。
+- indexing 中の cache miss で language map override 候補 path を直接構築し、language detection 全体で iterator と array copy の overhead を避けるようにしました。
+- indexing 中の cache miss で iterator allocation を避けるため、effective language map override file を cached path stamp から直接読み込むようにしました。
+- 大規模 scan 中に同一 directory の language-map override lookup が続く場合の fast path を追加しました。
+- **子 directory で親の language-map cache を再利用します** - indexing は子 directory にローカル override file が無い場合、親の `.cdidx-langmap.yaml` 解決結果を再利用し、巨大 scan 中の祖先 config probe の繰り返しを減らします。
+- **言語名正規化で一般的なtrim allocationを避けるようになりました** — symbol/reference extractor の言語キー正規化はalias判定をspanで行い、既に正規化済みの小文字キーを再利用するようになりました。
+- Go、CSS、Sass、Stylus のマスク処理で、コメント・文字列・URL token を実際に隠す必要が出るまで行ごとの文字配列割り当てを避けるようにしました。
+- **directory scan ごとの allocation を削減しました** - file discovery は実際に subdirectory を含む directory の場合だけ child-directory list を確保するようになり、leaf directory が多い巨大 tree の traversal overhead を抑えます。
+- Lisp の symbol scan で、コメント、文字列、検出済みフォームのマスクが必要な行だけをコピーするようにしました。
+- extractor plugin 失敗時の bounded loader-exception diagnostics を整形するとき、一時 list を materialize しないようにしました。
+- **long-path helper が OS 判定を cache** — index traversal で long-path prefix の付与/除去 helper を呼ぶたびに Windows platform 判定を繰り返さないようにしました。
+- indexing checksum、marker fingerprint、関連 hash output で、大文字 hex 生成後に lowercase 変換する処理を共有の single-pass lowercase hex helper に置き換えました。
+- Lua の long comment/string マスク用 buffer を実際にマスクが必要な行だけに遅延確保し、文字列やコメント内で long-bracket 候補をスキップした未変更行を再利用するようにしました。
+- Lua の long comment/string マスクを、`[[` または `[=` を含む long-bracket 開始候補がある場合だけ実行し、通常の table/index 利用だけのファイルで全行マスクを避けるようにしました。
+- reference extraction 中の Markdown anchor normalization で、lowercase 文字列、list growth、array conversion、trim の一時 allocation を避け、単一の char buffer で処理するようにしました。
+- **Markdown symbol 抽出が最初の heading 後にだけ heading stack を割り当てるようになりました** — heading が無い文書では、indexing 中の未使用 heading hierarchy stack を避けます。
+- Markdown の reference scan で、inline code の backtick を含まない行をコピーしないようにしました。
+- **Markdown symbol 抽出が reference-style link がある時だけ reference target lookup を構築するようになりました** — `][` link が無い文書では、indexing 中の全ファイル reference-definition scan と空 dictionary を避けます。
+- **metadata正規化で1回のspan passによるtrimを使うようになりました** — 共有symbol metadata正規化はspanを一度だけtrimし、前後空白が実際に除去された場合だけ新しい文字列を作るようになりました。
+- **ファイル走査中の nested Git repository probe をキャッシュ** — `cdidx` は path filtering と traversal が繰り返し確認するディレクトリの `.git` 存在チェックを再利用するようになりました。
+- Pascal の reference scan で、ブロックコメントのマスクが必要な行だけをコピーするようにしました。
+- **path comparison の allocation を削減しました** - scan の directory identity 正規化で、directory ごとに split segment array を確保せず span で path segment を走査します。
+- **submodule 未設定リポジトリで submodule path 管理をスキップ** — path filtering は `.gitmodules` 由来の path が読み込まれていない場合、各セグメントの累積path文字列生成と submodule lookup を避けるようになりました。
+- project marker visibility、file watching、solution project discovery で skip 判定だけが必要な場合に error list allocation を避ける path-filter fast path を追加しました。
+- **Perlのqualified subroutine prefix判定でtrim文字列を避けるようになりました** — Perl参照抽出はqualified call候補ごとにtrim済みprefix文字列を作らず、spanでqualified subroutine定義を判定するようになりました。
+- PHP docblock property の重複排除 set は、symbol 抽出と reference 抽出の両方で実際に property tag を見つけた時だけ割り当てるようにしました。
+- plugin extension を直接 lookup する経路を追加し、言語判定と unknown-extension 判定でファイルごとに plugin extension map 全体を materialize しないようにしました。
+- plugin の symbol/reference language snapshot で extractor が未登録のときは空配列を再利用し、既定 status/indexing path の割り当てを避けるようにしました。
+- extractor extension が未登録のときは immutable な空 plugin extension map を再利用し、言語判定中の dictionary 割り当てを繰り返さないようにしました。
+- **Poetry version抽出でtrim文字列を避けるようになりました** — Poetry dependency version解析は正規化済みversionを文字列化する前に、quoted valueとTOML `version` captureをspanでtrimするようになりました。
+- **PowerShell splat 抽出が空キー一覧を再利用するようになりました** — malformed またはキーの無い splat hashtable で、大規模な PowerShell 多めのリポジトリをインデックス化するときの短命な空リスト割り当てを避けます。
+- **空の PowerShell splat assignment map を再利用** — PowerShell の参照抽出は、splat assignment を宣言しないファイルで空の dictionary を毎回確保しないようになりました。
+- 大規模スクリプトのインデックス化時、PowerShell splat ハッシュテーブルのキーが実際に見つかるまでキー用コレクションを割り当てないようにしました。
+- PowerShell の splat assignment 用 dictionary は実際の assignment 検出まで遅延し、splat 本文 builder も開始行から容量を見積もるようにしました。
+- PowerShell splat hashtable の小さな key list は、重複がない一般ケースで `HashSet` を割り当てずに重複排除するようにしました。
+- **C# prepass target に generated-suppression 状態を持たせました** - CLI / MCP indexing は既に判定済みの generated-code suppression 結果を prepass target 経由で渡すようになり、generated file の再利用判定を保ったまま余分な全 target 辞書と lookup を避けます。
+- hotspot family の scope 判定と fingerprint 確認で project marker file を走査するときの iterator allocation を回避しました。
+- project marker fingerprint の入力を incremental に hash し、大きな marker list で joined payload string と UTF-8 byte array を作らないようにしました。
+- **hotspot family scope の導出で重複する full-path 正規化を回避** — indexing 時に project marker ディレクトリを辿る前のファイルパス正規化を 1 回に抑え、大規模コードベースでのファイルごとのパス処理を削減しました。
+- **単一 marker set の言語では project marker scope 判定の重複列挙を省略** — C#、VB、F# の indexing で hotspot family scope を導出する際、祖先ディレクトリごとに同じ project marker pattern を二度確認しないようにしました。
+- **indexing 中に project marker pattern list を再利用** — C#、VB、F#、MSBuild の hotspot family scope 検出で、ファイルごとに同等の list を割り当てず static な marker pattern 配列を共有するようにしました。
+- project marker traversal warning の上限確認を、上限到達時に即停止する direct loop に置き換えました。
+- full indexing scan 中の iterator overhead を避けるため、project marker fingerprint の warning 配列を LINQ ではなく直接ループで構築するようにしました。
+- Python logical line continuation の `TrimEnd()` 判定を、割り当てなしの末尾 backslash scan に置き換えました。
+- **Python docstring heading走査で行trim文字列を避けるようになりました** — section heading抽出はPython module docstring候補をspanで走査し、最終的なheading名だけを割り当てるようになりました。
+- Python f-string を type reference 抽出向けにマスクする際の冗長な文字配列コピーを削除しました。
+- Python header symbol を行番号でキャッシュし、大きな Python ファイルの reference 抽出で各行ごとに symbol list 全体を走査しないようにしました。
+- reference scan 中の buffer 拡張を減らすため、Python logical header/statement builder を開始行の長さから事前容量付きにしました。
+- 単一行の Python 論理参照ヘッダーと型ファクトリ文では物理行・列マップ配列を割り当てず、複数行の場合だけ従来のリマップ配列を使うようにしました。
+- `f` または `F` を含むものの single-line f-string ではない Python 行で、文字配列の割り当てを避けるようにしました。
+- Python シンボルのヘッダー署名を組み立てる際に、trim 済みのソース範囲を直接追加して一時文字列の割り当てを削減しました。
+- Python の reference 抽出で definition container と header symbol の lookup を 1 回の symbol pass で構築するようにしました。
+- 対象の Python symbol がある場合だけ definition-container lookup と header-symbol lookup の dictionary を作るようにして、Python 参照抽出の割り当てを削減しました。
+- SQL と C# の参照抽出で qualified name 用の builder 容量を事前に見積もり、C# qualified name 正規化時の一時 segment substring も避けるようにしました。
+- language-extension 数をもとに query language alias dictionary を事前 sizing し、CLI/MCP の language filter 構築時の growth を減らしました。
+- container symbol がないファイルで共有の空候補配列を返し、空の resolver 状態を作らないことで参照抽出の負荷を削減しました。
+- **reference 抽出が空の line-based definition lookup を再利用するようになりました** — symbol が無いファイルでは、indexing 中の per-line definition dictionary 割り当てを避けます。
+- **reference 抽出が空 definition-name set を再利用するようになりました** — symbol が無いファイルでは、indexing 中に all-definition / Razor file-definition lookup set を割り当てないようにしました。
+- **参照抽出器の対応言語を事前サイズ指定した順序付き集合で統合** — `cdidx` はインデックス準備時に組み込み・追加・プラグイン参照言語を結合する際、一時的な LINQ iterator と distinct 用バッファを避けるようになりました。
+- **複数extractorのregex capture正規化でspanからtrimするようになりました** — core symbol抽出とC#、CSS、C++、Go、PHPの経路は、正規化済みnameを作る前に`ValueSpan`上でmatch/group captureをtrimするようになりました。
+- **relative path 変換の overhead を削減しました** - scan diagnostics と bookkeeping で、workspace 内にあることが分かっている file / directory には project-root prefix の fast path を使います。
+- **残りのregex capture trimも複数extractorでspan化しました** — Markdown/XAML、C# scanner、Java module、Rust、CSS custom property、HDL parameter、Objective-C categoryの経路は、symbol文字列を割り当てる前にregex captureをspan上でtrimするようになりました。
+- file inspection 中に U+FFFD replacement character の origin を分類するとき、strict decoder instance を再利用するようにしました。
+- 通常の extension-based file では filename mapping の処理に入る前に reusable language check を short-circuit するようにしました。
+- Ruby の body scan で、コメント・文字列・percent literal・heredoc を実際にマスクする必要が出るまで文字配列の割り当てを避けるようにしました。
+- Rust reference extraction で attribute text を line slice の list に集めて join する代わりに、必要に応じて段階的に構築するようにしました。
+- **Rustの関数宣言判定でprefix文字列を避けるようになりました** — Rust参照抽出はcall形の候補ごとにtrim済みprefix文字列を作らず、spanで`fn`宣言prefixを判定するようになりました。
+- **Rust impl prefix判定でtrim文字列を避けるようになりました** — Rust `impl` statement range検出はtrim文字列を作らず、1つのtrim済みspanで先頭行prefixを判定するようになりました。
+- Rust 行で apostrophe を走査する際、lifetime token を実際にマスクする必要が出るまで文字配列の割り当てを避けるようにしました。
+- **Rust use抽出でbody trimをspan上に保つようになりました** — Rust `use`抽出はstatement bodyとsemicolon suffixをspan上でtrimし、文字列化したbodyを再検索せずにbody offsetを保持するようになりました。
+- **Rust use-path 参照抽出が path segment の trim に span を使うようになりました** — 大きな Rust module を index するとき、nested `use` prefix と import 名を結合する中間 trim 文字列生成を避けます。
+- Sass と Stylus の reference scan で、コメントや文字列のマスクが必要な行だけをコピーするようにしました。
+- **Scala companion 分類が必要時だけ class lookup dictionary を割り当てるようになりました** — top-level class が無い Scala ファイルでは、indexing 中の空 companion lookup 準備を避けます。
+- **Scala の braceless class 走査で継続判定用の trim 文字列生成を避けるようになりました** — シンボル抽出は巨大な Scala header が次行へ続くかを判定するとき、span ベースの suffix 判定を使います。
+- **Scala の braceless header 走査で先読み行の trim-start 文字列生成を避けるようになりました** — シンボル抽出は巨大な Scala 宣言の継続行を確認するとき、元の行と最初の非空白列を保持して判定します。
+- **duplicate path scan の overhead を削減しました** - case-insensitive directory の重複排除で、通常の file discovery 中は列挙済みの full path を再利用し、各 file path の再正規化を避けます。
+- **scan relative-path fast path の適用範囲を広げました** - project marker discovery と symlink diagnostics で `Path.GetRelativePath` の直接呼び出しを避け、scanner の project-root relative path fast path を再利用します。
+- full indexing scan 中の wrapper iterator allocation を避けるため、通常の directory traversal では subdirectory path を直接処理するようにしました。
+- 大規模な symbol scan 中の繰り返し拡張を減らすため、C# と Dart の scope declaration buffer を事前容量付きにしました。
+- **Section heading抽出でregex groupをspanからtrimするようになりました** — C# `#region` と JavaScript/TypeScript `@module` のheading名は、最終的なsymbol名を作る前にregex group span上でtrimするようになりました。
+- インデックス作成中の probe path、project marker scope key、TypeScript path alias 参照の整形で、余分な path separator 正規化 allocation を削減しました。
+- extensionless file の probe 中に encoding instance を都度確保せず、strict UTF-8/UTF-16 shebang decoder を再利用するようにしました。
+- **Shellのglobal alias signature判定でtrim文字列を避けるようになりました** — Shell参照抽出はglobal alias正規表現を実行する前にalias signatureをspanで走査し、大規模なshellインデックス作成時にglobalでないaliasのtrim済みsignature割当を避けます。
+- **shell heredoc 終端照合で行ごとの trim 文字列生成を避けるようになりました** — shell シンボル抽出は heredoc 終端をソース範囲で比較し、heredoc 本文を含む巨大 shell script のインデックス作成時の割り当てを減らします。
+- shell の reference 抽出で callable 名と global alias 名の集合を 1 回の symbol pass で構築するようにしました。
+- **Smalltalk range boundary走査でtrim文字列を避けるようになりました** — Smalltalk method range検出はbody行をspanでtrimし、method/class境界候補にだけ正規表現入力を文字列化するようになりました。
+- **solution project行でtrim文字列を避けるようになりました** — `.sln` project discovery はproject名とpathを文字列化する前に、solution folder GUIDと空のproject項目をspanで判定するようになりました。
+- SQL の definition span suppression 構築中に definition leaf 名の正規表現パターンをキャッシュし、大規模 SQL ファイルで重複 symbol の qualified-name 分割を繰り返さないようにしました。
+- SQL 参照やコンテナ名の正規化で、未クォートの dotted name はクォート対応の `StringBuilder` ループを通さずに解析するようにしました。
+- **SQL 参照抽出が空の setup lookup を作らないようになりました** — definition leaf span や window-function suppression site を持たない SQL ファイルで、ファイル単位の準備中に未使用の空 dictionary / set を割り当てないようにしました。
+- SQL の reference scan と synthetic symbol scan で、コメントや文字列のマスクが必要な行だけをコピーするようにしました。
+- 大規模な reference scan 中の buffer 拡張を減らすため、SQL qualified-name 解析用の builder を事前容量付きにしました。
+- SQL 参照抽出で単純な未クォート識別子を正規化・qualified name セグメント走査する際の `StringBuilder` 処理を避けるようにしました。
+- SQL qualified name が `.` や引用文字を含まない単純名の場合は文字単位スキャンなしで segment を返し、大規模 symbol table での処理量を削減しました。
+- SQL window clause の事前走査で結合テキストのサイズも見積もり、その容量で join 用 `StringBuilder` を初期化して、window clause を含む大規模 SQL ファイルでの伸長コストを削減しました。
+- `OVER` を含む行がない場合は SQL window function suppression 用の結合テキストを作らないようにし、window clause のない大規模 SQL ファイルで不要な allocation を削減しました。
+- **Stylus 参照抽出が variable definition set を遅延確保するようになりました** — variable 定義を含まない Stylus ファイルで、ファイル単位の参照準備中に未使用の空 `HashSet` を割り当てないようにしました。
+- **subdirectory traversal の probe を削減しました** - full scan では最初の filesystem enumeration で得た directory attributes を symlink / skip 判定へ持ち回し、各 subdirectory の属性 probe の繰り返しを避けます。
+- supported-language list の構築で built-in symbol/reference language の snapshot を再利用し、動的登録された plugin language は従来どおり毎回マージするようにしました。
+- **Swift import kind prefixで重複trimを省くようになりました** — Swift import名正規化はimport-kind prefix後の空白scan結果を再利用し、sliceした名前を再度trimしないようになりました。
+- property symbol がない Swift ファイルでは property lookup dictionary を作らず、1 行に property が 1 件だけの場合の sort-entry list も避けるようにして割り当てを削減しました。
+- 大きなファイルでのバッファ拡張を減らすため、C#、Java、JavaScript/TypeScript の複数のシンボル抽出ビルダーを走査対象のソース範囲から事前サイズ指定するようにしました。
+- **シンボル抽出器の対応言語を事前サイズ指定した順序付き集合で統合** — `cdidx` はインデックス準備時に組み込み・追加・プラグインシンボル言語を結合する際、一時的な LINQ iterator と distinct 用バッファを避けるようになりました。
+- 共有の comma / ampersand span splitter で区切り文字がない場合は depth tracking scan を省き、型付き reference 抽出全体の処理量を減らしました。
+- TypeScript と Swift の type alias scope table を構築する前に alias keyword と `=` の両方を要求し、keyword に触れているだけのファイルで不要な brace-depth 走査を避けるようにしました。
+- TypeScript ファイルで alias を作らない import だけの場合に namespace-alias 準備へ進まないよう、全行スキャン前の条件を `*`、`from`、または dynamic import の括弧に絞りました。
+- TypeScript namespace alias の brace-depth table を遅延構築して alias shadow-range 検査間で共有し、多数の import を持つファイルで全ファイル走査の繰り返しを避けるようにしました。
+- **TypeScript namespace alias 準備が空 lookup data を再利用するようになりました** — local declaration shadow や parameter shadow range が無いファイルで、namespace alias 参照準備中に未使用の空 dictionary / list を割り当てないようにしました。
+- TypeScript namespace alias の parameter shadow range を alias 名ごとにキャッシュし、同じ alias の import が繰り返される場合に prepared line 全体を再走査しないようにしました。
+- TypeScript namespace alias の shadow line 判定で、alias binding ごとに全行を再走査せず、ローカル宣言 lookup を一度だけ構築するようにしました。
+- TypeScript path alias config parsing で inherited rules の LINQ list copy を避け、target list は JSON array length から初期容量を決めるようにしました。
+- **TypeScript / Swift の type alias 抽出が空の type parameter 集合を再利用するようになりました** — generic parameter を持たない alias で、大規模リポジトリのインデックス化中に発生する短命な空 `HashSet` 割り当てを避けます。
+- **TypeScript / Swift の alias 展開が単一 alias では重複排除集合を作らないようになりました** — type alias が1件だけのファイルで、参照抽出中に行ごとの alias 重複排除 `HashSet` を割り当てないようにしました。
+- **TypeScript / Swift の type alias shadow tracking が必要時だけ range を割り当てるようになりました** — alias が shadow されていないファイルでは、reference 抽出中の空 `LineRange` list 作成を避けます。
+- **update target normalization で relative path helper を再利用** — commit、明示 file、`.gitmodules` の update path は `Path.GetRelativePath` へ落ちる前に directory-prefix fast path を使うようにしました。
+- **Visual Basic enum行フィルタでtrim文字列を避けるようになりました** — Visual Basic enum member抽出はtrim済みmember本文を文字列化する前に、空行・コメント・`End Enum`行をspanで判定するようになりました。
+- XAML/XML のコメント除去で処理対象のコメントがない行は元の行をそのまま使い、参照抽出中の行ごとの `StringBuilder` 割り当てを避けるようにしました。
+- **XAML markup argument 正規化が固定 prefix の trim に span を使うようになりました** — 大きな XAML ファイルでよく出る `{x:Type ...}`、`{x:Static ...}`、`TypeName=`、`Member=`、`ResourceKey=` 形式の中間 slice 文字列生成を避けます。
+- **XAML markup argument 分割が segment の trim に span を使うようになりました** — 大きな XAML ファイルで markup extension の comma-separated argument を走査するとき、substring 割り当てを避けます。
+- **XAML markup末尾の正規化でtrim連鎖を避けるようになりました** — XAML参照抽出は引用付きmarkup引数、static memberの接尾辞、閉じmarkup文字をspanでtrimするようになり、大規模なXAML中心のインデックス作成で一時文字列の割当を減らします。
+- XAML markup extension の値をインデックス時に正規化するとき、重複していた trim scan を省きました。
+- **wrapped XAML属性抽出で重複trimを避けるようになりました** — wrapped `x:Name` とevent handler属性は、symbol作成前に一度だけtrimする共有XAML属性helperへraw capture値を渡すようになりました。
+- YAML の plain key をインデックス化するとき、キーを文字列化する前に正規表現 capture の span を trim することで短命な文字列割り当てを削減しました。
+- **重い graph 系の `deps` / `hotspots` 出力を制限できるようになりました (#4112)** — JSON graph 出力で `--summary-only` と `--max-json-bytes` を使えるようにし、`--limit 80` 以上または `--verbose` 指定時の大きな graph query では stderr に `Progress:` 診断を出力します。
+- **`unused` が低信頼の contract-domain 候補を既定で抑制するようになりました (#4120)** — 広い unused audit では contract surface 系の候補を suppression summary にまとめ、`--all` で従来どおり低信頼候補を含めて出力できます。
+- **`validate` JSON が対応すべき encoding risk と想定済み fixture literal を分けるようになりました (#4138)** — validation issue に `category` と `actionable` を追加し、既定 JSON response に actionability の grouped summary を入れ、`--format compact` で同じ summary と compact な issue row を返します。
+- **GitHub HTTP GET 呼び出しが一時的失敗の再試行を共有するようになりました (#4145)** — GitHub API の重複確認、更新確認、アップグレード用ダウンロードの GET リクエストは、一時的なネットワーク失敗と 408/5xx 応答に対して、共通の上限付き HTTP ポリシーを使って再試行するようになりました。重複送信を避けるため、Issue 作成 POST は再試行しません。
+- **status JSON が automation 向けに HEAD freshness を要約するようになりました (#4152)** — `status --json` に `head_freshness` を追加し、workspace 全体の fresh 判定と HEAD だけの一致を区別しつつ、indexed HEAD が最新 index stamp 由来か legacy full-scan stamp 由来かを示します。
+- **ワイルドカードなしの path filter が完全一致またはディレクトリ配下だけに一致するようになりました (#4163)** - `--path` と `--exclude-path` は `*` や `?` を含まない値について `./foo` や `/foo` をリポジトリ相対の `foo` に正規化し、任意のパス部分文字列ではなく、そのファイル/ディレクトリの完全一致またはそのディレクトリ配下だけに一致するようになりました。
+- **watch mode JSON がバッチ処理契約を公開するようになりました (#4169)** — `cdidx index --watch --json` の `watching` lifecycle event に `watch_contract` オブジェクトを含め、debounce の静穏 window、パス集約、リネーム処理、overflow/error 時の full-rescan 復旧、キャンセル、サブ実行出力、MCP の watch mode 対応を示すようにしました。
+- **JSON compatibility alias の deprecation lifecycle を文書化しました (#4182)** — `find --count --json` は非推奨の `file_count` alias を引き続き serialize しつつ、明示的な `JsonCompatibilityAliasLifecycles` metadata、alias serialization と production-scoped audit search の test、将来の削除に向けた bilingual documentation を追加しました。
+- **map と recipe audit の compact JSON が明示的な byte 上限に対応しました (#4183)** — `map` は JSON 出力で `--max-json-bytes` を受け付け、recipe-backed な `search --format compact` も byte cap を指定できるようになり、両方の compact payload が agent audit loop 向けに出力上限、truncation、次に実行するコマンドの metadata を公開します。
+
+#### 修正
+
+- **依存関係と file hotspot の ranking が common-symbol noise を抑えるようになりました (#4113)** — `deps` と `hotspots --group-by file` は raw な参照数を保持しつつ noise-adjusted な `ranking_score` で並べるため、汎用 utility edge や小さな定数/helper ファイルが上位結果を独占しにくくなりました。
+- **依存 cycle の切り詰め結果を次の操作につなげやすくしました (#4114)** — `deps --cycles` の JSON は結果が完全か、候補 edge のサンプルか、表示上限による部分結果かを説明し、次に試す候補フラグを返すようになりました。`--suppress-noise` は `Append` などの汎用 helper symbol 由来の cycle も除外できます。
+- **上限付き UTF-8 読み込みが不正 byte 列を失敗として扱うようになりました (#4114)** — bounded text read は置換文字として黙って受け入れず invalid UTF-8 を報告し、byte・line・UTF-8・tail capture の契約テストを追加しました。
+- **`map` が本体 CLI の entrypoint を tooling program より上位に表示するようになりました (#4115)** — entrypoint scoring は本体ソースパスをより強い entrypoint シグナルとして扱い、tooling / automation / install / documentation / test / fixture のパスを低く評価するようになりました。
+- **hotspots の grouping semantics を明示しました (#4116)** — `hotspots --group-by statement` は SQL scope のみで受け付けるようになり、CLI / MCP の JSON response は symbol、file、SQL statement output の grouping unit、count kind、limit target、ranking field を明示します。
+- **audit の issue-draft エクスポートで recipe metadata を要約できるようになりました (#4118)** — recipe issue-draft 出力は `--summary-only` を受け付け、トップレベルの完全な recipe カタログを省略して `recipe_summary` を出力します。Issue 作成用の draft evidence と draft ごとの source metadata は維持し、出力制限で省略された match を誤分類せずに、結果 0 件の child query を示す query freshness field も出力します。
+- **search aggregation 出力が行数と byte 数の上限を守るようになりました (#4119)** — `search --group-by`、`--count-by`、`--unique`、および compact/count recipe JSON は、返す group 行を `--limit` で制限し、これまで拒否または無視していた JSON 出力でも `--max-json-bytes` を利用できるようになりました。
+- **C# の参照ランキングで修飾済み一般メンバーのノイズを抑えるようになりました (#4121)** — `symbols --sort references` は曖昧な C# 名や property に保守的なファイル内カウントを使い、C# 抽出は `reader.GetInt32(...)` のような修飾済みフレームワーク風呼び出しをさらに抑制します。
+- **MCP と upgrade の失敗経路で CLI 例外診断が raw message を避けるようになりました (#4123)** — `cdidx mcp --audit-log` は audit log の open に失敗しても raw 例外メッセージや絶対パスを stderr に出さず、空白を含む引用符付きパスも全体を redaction し、upgrade cleanup 警告も型付き・サニタイズ済み診断を使い、想定外の cleanup 例外を握り潰さなくなりました。
+- **.NET の sync-over-async 監査が blocking wait の形を分けるようになりました (#4125)** — `dotnet-risk-patterns` は `.Wait(` 呼び出しを検出する `sync-wait-call` query を追加し、DTO/property の `.Result` access は `sync-over-async` query に含めないため、cancellation と blocking の監査でより分類しやすい根拠を出せるようになりました。
+- **リポジトリ境界の JSON パースが共通の bounded helper を使うようになりました (#4127)** — 設定、プロトコル、GitHub API、MCP/LSP、インデックス、import、worker の JSON 読み取りが、明示的な byte / depth 上限を持つ共通の parse / deserialize helper を経由するようになりました。
+- **watch debounce とリクエスト取り消しが明示的な時間 budget を使うようになりました (#4129)** - `cdidx index --watch` は debounce ウィンドウを `TimeProvider` の単調 timestamp で測定し、共有のリクエスト timeout 処理は zero/infinite sentinel を明示的な budget 抽象で分類するようになりました。
+- **case-sensitivity probe の cleanup が削除前にディレクトリ境界を再検証するようになりました (#4131)** - 作成済みの `.cdidx/probes` directory は cleanup 前に期待する safe root / 名前 / symlink・reparse・device 状態を確認し、置き換えられた probe directory が破壊的削除へ進まないようにしました。
+- **filesystem traversal helper が明示的な cancellation、budget、failure taxonomy hook を公開するようになりました (#4131)** - 中央 traversal wrapper は cancellation token または entry budget 付きで呼び出せるようになり、traversal failure の分類は command code 内の重複ではなく CLI diagnostic と共有されます。
+- **atomic overwrite move で置換後の mode 失敗を避けるようになりました (#4132)** — 宛先 metadata が必要な overwrite move は、target を置換する前に staged source 側へ metadata を適用するため、mode 失敗時に source と既存 destination の両方が保持されます。
+- **regex audit recipe が bounded な regex evidence を抑制するようになりました (#4136)** - `regex-construction` と static regex audit query は、近傍の `RegexOptions.NonBacktracking`、明示的な `TimeSpan` timeout overload、match-timeout helper 引数を検出した場合、raw regex finding として報告しないようになりました。
+- **`cdidx batch --json-summary` が安定した行ごとの envelope を出力するようになりました (#4142)** — 空白でない入力行ごとに child stdout / stderr を捕捉した `batch_result` または `batch_error` record を出力し、最後に `batch_summary` を出力します。
+- **unsupported operation の監査に専用 taxonomy を追加しました (#4144)** - `unsupported-operation-boundaries` は `NotSupportedException`、`PlatformNotSupportedException`、`unsupported`、`not supported` の hit をまとめ、CLI / MCP / LSP / capability diagnostic が安定した structured error の根拠に沿ってレビューできるようにします。
+- **YAML outline の display name が親キーを重複表示しないようになりました (#4151)** — `outline` は `on.push`、`permissions.contents`、`jobs.preflight` のような構造化 YAML path で親セグメントを繰り返さなくなりました。
+- **`cdidx report --output` の artifact metadata を明確化しました (#4153)** - report JSON と support manifest は出力が gzip 圧縮 tar bundle であること、推奨拡張子が `.tgz` / `.tar.gz` であることを示し、`.json` のような誤解を招く拡張子では stdout JSON を parse 可能に保ったまま warning を出すようになりました。
+- **locked restore と dependency policy のカバレッジを標準化しました (#4156)** - CI と mutation-test の NuGet cache は broad な restore-key fallback を使わず lockfile 由来の完全一致 key だけを使うようになり、Docker は `--no-restore` publish の前に解決済み musl RID を `--locked-mode` で restore します。repository test でも restore、package version、RID、trim/AOT、package metadata、test target matrix の契約を固定しました。
+- **Python の symbol span と file hotspot の count を修正しました (#4159)** — アノテーション付きおよび複数行の Python 関数/クラスヘッダーが完全な symbol span を返すようになり、file hotspot の `symbol_count` は参照された hotspot 行だけでなくフィルタ後のファイル別 symbol summary と一致するようになりました。
+- **`suggestions` のオプション解析が `CliFlagSchema` の parser 契約を使うようになりました (#4162)** — `suggestions` parser はオプション dispatch 前に schema の「値を取る / flag 単体」分割を使い、parser-only alias の `--lang` も schema に表現することで、parser 挙動と補完契約が静かにずれるのを防ぎます。
+- **`files` と `symbols` の compact 出力を境界付きにしました (#4165)** - `files` と `symbols` は `--format compact`、`--summary-only`、`--max-json-bytes` に対応し、出力済み/省略済み行数と切り詰めメタデータを返すようになりました。
+- **`suggestions` のトップレベル list フラグを受け付けるようにしました (#4171)** — `cdidx suggestions --json --limit <n>` は `cdidx suggestions list --json --limit <n>` と同じ動作になり、`--json` を不明なサブコマンドとして扱わなくなりました。
+- **`search --source-only` がドキュメント的な origin を既定で除外するようになりました (#4184)** — ad hoc な source scope 検索は、`--origin comment` または `--origin help_text` で明示的に戻さない限り、コメントと CLI ヘルプ文言の一致を除外し、JSON の `query_context` で有効な origin filter を報告します。
+- **package normalizer の diagnostic redaction テストを安定化しました (#4224)** — package normalizer の redaction regex budget を本体 diagnostic policy と同じ 1 秒に揃え、高負荷の net8 full-suite 実行で期待される `<path>` placeholder が generic fallback に潰れる timeout を避けるようにしました。
+- **`cdidx suggestions` の usage error で `Usage:` が重複する問題を修正しました (#4244)** - 不正な suggestions option では `Usage: cdidx suggestions ...` 行を 1 回だけ出力します。
+- **package normalization の redaction test が安全な timeout fallback を許容するようになりました (#4257)** - package normalization diagnostic redaction test は path、token、password が漏れないことを引き続き検証しつつ、Release 全体テスト負荷で regex redaction が timeout した場合の全体 `<redacted>` fallback を許容します。
+- **cleanup boundary の symlink 判定がリンク先の状態に依存しなくなりました (#4260)** — directory cleanup validation は存在確認の前に cleanup target path 自体を probe するため、リンク先が存在しない場合や環境差がある場合でも symlink、reparse point、device target を一貫して unsafe として拒否します。
+- **Codex rules が parser 互換の allow decision を使うようになりました (#4267)** — GitHub CLI サブコマンドのルールで受理される `allow` decision 値を使うようにし、`codex exec review --base origin/main` が `allowed` で失敗せずにリポジトリルールを読み込めるようにしました。
+
+#### セキュリティ
+
+- **CLI、MCP、DB 警告に出る例外診断が共通 redaction を通るようになりました (#4124)** — 生の例外メッセージをそのまま出さず、path / secret の redaction と長さ制限を通すことで、ユーザー向けおよび protocol-adjacent な診断に機微な message text が直接出ないようにしました。
+- **環境変数アクセスと秘匿値を含む診断の経路を中央化しました (#4126)** — process environment の読み取りを共有 environment access helper 経由に寄せ、scoped config 読み取りと raw process-only 読み取りの違い、および本番コードでの新たな迂回をテストで固定しました。
+- **SQLite query policy 監査レシピを追加しました (#4128)** - `search --recipe sqlite-query-policy-surfaces` は raw `CommandText`、PRAGMA、Execute* 呼び出し、DDL、transaction、metadata、read-only/immutable、migration、CHECK constraint、maintenance status の各 surface を対象にし、動的 maintenance PRAGMA は境界チェック済みの policy helper を通すようになりました。
+- **依存関係 manifest の XML 解析が共有の安全な reader policy を使うようになりました (#4130)** — XML 依存関係 manifest の package 抽出は、build / metadata 抽出と同じ上限付き XML reader settings を使い、DTD 処理、外部 entity 解決、過大な document を無効化します。
+- **post-extraction hook discovery が symlink / reparse point の hooks directory と DLL 候補を拒否するようになりました (#4133)** — hook assembly discovery は extension code を読み込む前に、extractor plugin discovery と同じ local-file trust boundary を適用します。
+- **Bearer token の redaction が GitHub 診断と MCP audit 値をカバーするようになりました (#4134)** — GitHub API error 診断は共有の sensitive-text redactor を通り、MCP audit の値 sanitization は secret ではない引数値の中に Bearer token が現れた場合も redact します。
+- **local JSONL の relaxed escaping 境界を固定しました (#4135)** — private JSONL diagnostic が tail / JSON consumer 向けに HTML/script-like 文字を保持しつつ control character は1行内に収めること、relaxed encoder の利用先が local metrics / audit log sink に限られることをテストで固定しました。
+- **release publishing で prepared payload と privileged publishing を分離しました (#4147)** — release workflow は read-only 権限で成果物の準備と検証を行い、短命の `release-payload` artifact だけを引き渡し、一時 GPG material を公開処理の続行前に削除し、Windows 署名 secret を署名 step のみにスコープします。
+- **doctor / config 診断の環境変数 inventory は既定で compact かつ redact されるようになりました (#4148)** — `doctor --json` と `config show --json` は既定でローカルパスを redact し、`environment_inventory_summary` を出力します。full inventory の詳細や raw path 診断は `--env-inventory=full` または `--show-paths` の明示指定が必要です。
+- **installer shell script に安全 lint coverage を追加しました (#4150)** - 未レビューの破壊的 shell 操作、一時ディレクトリ cleanup の追跡漏れ、bounded diagnostics wrapper 外の直接 curl 経路をテストで拒否します。
+- **Docker image contract のカバレッジを強化しました (#4157)** - official container image の SDK/runtime 分離、runtime package allowlist、musl RID mapping、entrypoint の privilege-drop 挙動を文書化し、それらの contract を固定する release workflow tests を追加しました。
+- **GitHub Actions policy check を標準化しました (#4158)** — workflow は version 付き hosted runner に固定され、artifact upload/download と cache key の境界を明示し、広い cache restore fallback を削除し、`continue-on-error` は diagnostic artifact upload に限定されました。
+- **Codex と Claude の guard policy contract を parity test で共有するようになりました (#4173)** - 単一の guard-policy inventory から shared command core、Codex hook adapter、Claude hook adapter、settings registration を横断する contract test を実行し、allow/deny の drift、script scan の抜け、malformed payload handling、secret scanner 不在時の fail-closed 挙動をまとめて検出できるようにしました。
+- **archive import と package normalization の ZIP entry 名安全性を標準化しました (#4174)** — `cdidx import` は unsafe、non-canonical、duplicate、extra な archive entry を payload extraction 前に拒否し、NuGet package normalizer は同じ entry-name policy を使って unsafe name と正規化後 duplicate を package rewrite 前に検査します。
+- **MCP 監査ログと diagnostic の secret-name redaction を揃えました (#4175)** - audit argument redaction、diagnostic redaction、global tool-log flag 判定が sensitive-name taxonomy を共有し、credential 風キーと audit shutdown drain の回帰テストを追加しました。
+- **MCP contract の回帰テストを強化しました (#4177)** — tool catalog metadata、schema alias/deprecation metadata、rate-limit config/status の同期、token 認証の失敗カテゴリ、bounded な rate-limit error 診断を固定するテストを追加しました。
+
+#### ドキュメント
+
+- **stdout / stderr / JSON diagnostic の境界を明確化しました (#4146)** — developer guide は JSON mode の stdout を機械処理可能に保ち、diagnostic、progress、worker log、MCP telemetry は stderr または private log に出す契約を明記しました。report JSON のテストで artifact 作成と summary 出力が混在する経路も固定しています。
+
+#### 内部変更
+
+- Assembly range symbol が 0 件または 1 件の場合、sort setup を省略するようにしました。
+- Assembly の symbol list と range 用リストを宣言が実際に出るまで遅延確保し、軽量な assembly ファイルで空の function / section list を作らないようにしました。
+- shared path-casing test state を使う CI テストを安定化し、trimmed CLI publish テストが SDK trim-analyzer crash により実行前に失敗しないようにしました。
+- extracted symbol が 0 件または 1 件の file で container-assignment sort setup を省略するようにしました。
+- C++ file に `friend` token がない場合、friend-declaration の duplicate setup と scan を省略するようにしました。
+- C# の symbol 抽出で、callable parameter list の状態が行境界をまたがないファイルでは行頭状態配列を確保しないようにしました。
+- C# ファイルに parameter list opener がない場合は callable parameter scope 構築をスキップするようにしました。
+- **C# parameter transition 行を遅延確保** - C# symbol 抽出で callable parameter-list transition が見つかった場合にだけ transition 配列を作るようにしました。
+- **C# qualified prefix の single segment で list を省略** - C# 参照抽出で qualified prefix が 1 segment だけの場合、一時 list / reverse / join を行わないようにしました。
+- **C# switch arm の行を直接 slice** - C# switch expression arm の解析で、参照インデックス作成中に arm 全体の文字列を先に作らず、元の body 範囲から行配列を構築するようにしました。
+- `switch` キーワードを含まない C# ファイルでは switch-expression 行走査を省略し、helper 内の brace stack も brace に到達するまで遅延確保するようにしました。
+- C# の構造行に波括弧がない場合、空の type body scope を再利用するようにしました。
+- C# の構造行に波括弧があっても class-like type marker がない場合、type body scope の構築を省くようにしました。
+- CSS ancestor 判定の行ごとの stack 走査を qualified-rule depth カウンタと遅延 context stack 確保に置き換え、深くネストした CSS ファイルでの処理量を減らしました。
+- Dart の構造行に class 文字列があっても波括弧がない場合、class body scope の確保を省くようにしました。
+- class 宣言のない Dart ファイルでは空の Dart class-body scope を再利用するようにしました。
+- `class` キーワードを含まない Dart ファイルでは class-body scope の配列と stack 構築を省略し、bare const constructor の gate では全 false scope として扱うようにしました。
+- enum と Rust associated-type container の snapshot に、候補 1 件の fast path を追加しました。
+- Fortran multi-declarator 展開用 List を、2 件目の declarator を見つけてから確保するようにしました。
+- Fortran の enumerator/parameter 宣言にカンマがない場合、宣言リスト分割を省くようにしました。
+- Go grouped declaration の補助パス前 marker 確認を 1 回の走査にまとめました。
+- GraphQL の input marker があっても波括弧がない場合、input block 用の内容結合を省くようにしました。
+- GraphQL input/union member の補助抽出前 marker 確認を 1 回の走査にまとめました。
+- HTML input に tag opener がない場合、raw-text join、masking、line-start setup を行わずに終了するようにしました。
+- HTML の symbol list と line-start allocation を、custom element、semantic attribute、resource、anchor、slot symbol が実際に emit される時点まで遅延しました。
+- Java compact-constructor の existing-symbol list を、matching symbol が見つかった場合だけ確保するようにしました。
+- Java module/record declaration snapshot に、候補 0 件または 1 件の fast path を追加しました。
+- Java file に `enum` token がない場合、enum-member snapshot setup を省略するようにしました。
+- Java module directive と compact constructor の supplemental setup を、必要 keyword がない場合に省略するようにしました。
+- JavaScript/TypeScript existing class target collection に、class 0 件または 1 件の fast path を追加しました。
+- JavaScript/TypeScript file に `export`/`exports` token がない場合、export-surface sanitization を省略するようにしました。
+- JavaScript/TypeScript object literal scan target 用 state を、target candidate を見つけてから確保するようにしました。
+- JavaScript/TypeScript ファイルに波括弧も arrow body もない場合、private-scope 用 lexing を省くようにしました。
+- JavaScript/TypeScript qualified assignment の synthetic class 用 state を、class 値の代入を見つけてから確保するようにしました。
+- JavaScript/TypeScript file に assignment operator がない場合、qualified-assignment setup を省略するようにしました。
+- JavaScript/TypeScript の synthetic class scan target と identity set を、候補が検証を通過してから確保するようにしました。
+- JavaScript/TypeScript target collection に precheck を追加し、object brace や class token がない file では該当 scan を省略するようにしました。
+- JavaScript / TypeScript のタグ付きテンプレート参照ヒットを行単位にまとめる際、単発行は小さな読み取り専用リストのまま保持し、重複行だけ可変 bucket に昇格することで小さな割り当てを減らしました。
+- JSON の line-start allocation を property-line queue lookup が外れた時点まで遅延し、空の root object では structured state setup を省略しました。
+- 単一行 JSON では UTF-8 token を再走査せず、parse 済み DOM から property line queue を作るようにしました。
+- 1 行 JSON の property scan で UTF-8 line-start 用 List を確保しないようにしました。
+- SQL / GraphQL の line-start table 確保を、CTE・generated column・input field symbol が offset-to-line mapping を実際に必要とする時点まで遅延しました。
+- symbol 抽出の共通 line-start helper で、単一行の offset list を直接返すようにしました。
+- GraphQL と SQL の既存行配列から regex offset 用の line-start table を作るようにし、member / generated column の symbol 抽出で join 済み content を追加走査しないようにしました。
+- Markdown document に reference-style link があっても definition marker がない場合、fence aware な reference definition scan を省略するようにしました。
+- Markdown の symbol list 確保を、heading、fenced code block、local anchor reference が実際に emit される時点まで遅延しました。
+- HTML / XAML の symbol 抽出で共有 line-start 配列 builder を使うようにし、markup indexing 経路のファイル単位 offset ループ重複をなくしました。
+- MSBuild の symbol list と XML traversal stack を symbol やネスト状態が実際に必要になるまで遅延確保し、軽量な project file の空状態を減らしました。
+- Perl hash constant の dedupe state を 2 件目の constant name を見つけてから確保するようにしました。
+- PHP/Swift file に確認対象の property symbol がない場合、supplemental duplicate-set setup を省略するようにしました。
+- full-scan、MCP、freshness、C# prepass のファイル読み込みで read-time indexability check を復元し、scan 時点の file probe が symlink/reparse-point race をまたいで再利用されないようにしました。
+- **record primary component をストリーム化** - symbol 抽出で top-level record / primary-constructor component の一時リストを作らず、直接列挙するようにしました。
+- 参照抽出時の行単位 definition-name index を、準備済み行に定義名が実際に存在するまで遅延確保するようにし、大きな非 SQL ファイルで空 Dictionary の生成を減らしました。
+- Rust `use` statement が import symbol 0 件または 1 件に展開される場合は dedupe 用 allocation を省くようにしました。
+- Shell alias と Rust use/impl の対象 keyword がないファイルでは、identity set allocation を省略するようにしました。
+- active container が 1 件だけの symbol assignment で container stack の array copy を省略するようにしました。
+- Solidity file に declaration keyword がない場合、comment/string masking を省略するようにしました。
+- Solidity の symbol list を最初の宣言を出すまで遅延確保し、mask 後に Solidity symbol がないファイルで空 List を作らないようにしました。
+- SQL ファイルに `WITH` があっても `AS` 文字列がない場合、CTE 用の内容結合と regex 走査を省くようにしました。
+- **SQL CTE の line start を既存行から構築** - SQL CTE symbol 補完で、結合済み content を再走査せず既存の行配列から line-start offset を作るようにしました。
+- SQL generated column 抽出で structural text を結合する前に container marker を確認するようにしました。
+- **SQL qualified-name pattern 構築をストリーム化** - SQL definition leaf の照合で、インデックス作成中に中間 segment list を作らず qualified-name regex pattern を直接構築するようにしました。
+- **SQL の top-level comma segment をストリーム化** - SQL MERGE の column 抽出で参照インデックス作成中に中間リストを作らず、comma 区切り segment を直接列挙するようにしました。
+- Solution / app manifest の symbol list を project や manifest symbol が実際に出るまで遅延確保し、indexed entry のない metadata file で空 List を作らないようにしました。
+- JSON / YAML の structured-data symbol state を実際に symbol が必要になるまで遅延し、抽出可能な mapping がないファイルで空の symbol list や YAML path stack を作らないようにしました。
+- structured-data の raw line-start helper で、空入力と単一行入力の offset を直接返すようにしました。
+- Swift enum case の行が複数トップレベル case を含めない場合に、分割処理と結果リスト確保を省くようにしました。
+- symbol extraction の duplicate/line identity 管理を抽出実行ごとの局所状態に戻し、並列テストや同時 indexing で mutable static な per-file 状態が露出しないようにしました。
+- **未対応言語の symbol 行分割を省略** - 汎用 symbol 抽出で line-based extractor を持たない言語は、ファイル本文を行配列に分割する前に返すようにしました。
+- duplicate check 用の symbol-line identity set を既知の symbol 件数で初期化し、HashSet 拡張を減らしました。
+- PHP/Swift supplemental extraction の symbol line-key set を既知の symbol 件数で初期化するようにしました。
+- **symbol snapshot を遅延確保** - enum、property、Rust associated type の snapshot helper で、該当 symbol がないファイルでは candidate list を作らないようにしました。
+- TypeScript path alias sorting に、rule 0 件または 1 件の fast path を追加しました。
+- symbol 抽出経路を既存の行配列 offset builder に移したため、未使用になった content 文字列用 line-start scanner を削除しました。
+- XAML/XML の line-start array 確保を、wrapped attribute、XAML object element、reference、resource、binding symbol が offset mapping を実際に必要とする時点まで遅延しました。
+- XAML ファイルに symbol になり得る marker がない場合、raw text 結合と XML 構造チェックを省くようにしました。
+- **検索コマンドの入口を QueryCommandRunner から分離しました (#4106)** — `RunSearch` を `QueryCommandRunner.Search.cs` に移し、CLI の挙動を変えずに主要な runner hotspot を小さくしました。
+- **SymbolExtractor の言語別 helper 分割経路を開始しました (#4107)** - JS/TS styled-factory gate と CSS/Sass scanner helper を focused partial へ移し、共有 core がそれらの言語固有 path を持たないようにしました。抽出 semantics は変更していません。
+- **MCP `batch_query` handler と focused test を分割しました (#4108)** — `batch_query` を専用の MCP handler ファイルへ移し、代表的な command-handler test を batch-query 専用テストファイルへ分けることで、挙動を変えずに最大級の MCP handler / tool-call test 集中を小さくしました。
+- **Go 参照サポートを専用 partial ファイルに分離しました (#4109)** - Go の import block マップ、branch label 参照、型参照ヘルパーを共有言語サポート本体から移動し、参照抽出の挙動は変更していません。
+- **database reader hotspot をより狭い partial file に分割しました (#4110)** — status aggregation と search-symbol ranking SQL を専用の `DbReader` partial に移し、query 挙動を変えずに base reader と file/status surface を小さくしました。
+- **ProgramRunner の即時コマンド処理を専用 partial ファイルへ分離しました (#4111)** — help / version / license / completions / doctor / easter egg など起動直後に完結する処理を通常の CLI dispatcher から分け、dispatch 境界をテスト・レビューしやすくしました。
+- **テスト fixture に project-root ベースの共有 filesystem helper を追加しました (#4140)** — `TestProjectHelper` が temp project の path 解決、directory 作成、text file setup を集約し、テスト内の個別の `Path.Combine` / `File.*Text` fixture code を避けやすくしました。
+- **build-file 系の参照抽出テストを専用 suite に分割しました (#4141)** — solution、CMake、Justfile、MSBuild の参照抽出カバレッジを専用の partial test file へ移し、期待参照を表す小さな semantic assertion helper を導入しました。
+- **共有 regex 構築に中央 registry を追加しました (#4149)** — find、ignore glob、generated-code pattern matching の production regex 構築は、documented timeout を持つ名前付き共有 factory と source-audit test を通るようになりました。
+- **#4154 の監査に向けて同期 gate の所有権を文書化しました** - 同期モデル inventory を追加し、`DbWriter` の nested transaction ownership を重点的な coverage で固定しました。
+- **決定的なテスト時刻・並行実行ヘルパーを追加しました (#4164)** - 境界付きポーリング、最終的な条件成立のアサーション、ブロック中タスクの観測、ワーカーの同時開始制御、疑似時計の前進、固定シード乱数フィクスチャヘルパーをテストで共有するようにしました。
+- **CLI の機械向け契約検証を一箇所に集約しました (#4166)** — exit code、構造化 error code、JSON API version、source-generated CLI JSON root、golden JSON payload family を共有 manifest で検証し、契約 drift を一箇所で検出できるようにしました。
+- **path compatibility matrix のカバレッジを追加しました (#4167)** — cross-platform テストで path-casing policy、path-prefix boundary、Windows long-path prefix、POSIX sensitive-file 権限、symlink と dangling entry の scan 挙動、既定 skip directory 配下の submodule passthrough、git skip-worktree path 正規化を検証するようにしました。
+- **LSP の protocol framing を feature handler から分離しました (#4168)** — LSP の Content-Length framing、request id parsing、message read/write helper を protocol 専用 helper に移し、live document の容量管理は専用の document-state store に分離しました。
+- **コンソール補完 rendering の所有を分離しました (#4170)** — bash、zsh、fish、PowerShell の completion 生成は `ConsoleCompletionRenderer` に移り、共有 command 名は `CliCommandCatalog` に分離し、snapshot-style の shell format 検証は completion renderer を直接確認するようになりました。
+- **ライセンスと配布ポリシーの surface に一貫性ガードを追加しました (#4172)** — package metadata、installer の notice asset、console の license summary、release workflow、license-policy workflow の入力、配布ドキュメントが揃っていることを CI で検証するようになりました。
+- **MCP HTTP transport の lifetime 契約を強化しました (#4176)** - HTTP transport の shutdown を専用 lifetime partial に分離し、並行 dispose と開いた SSE stream の cleanup を回帰テストで固定しました。
+- **schema と status readiness の drift 検出を強化しました (#4178)** — SQLite の symbol/reference CHECK 制約を `SymbolKindCatalog` と比較し、readiness、maintenance、MCP status field が文書に残ることをテストで固定します。
+- git process capture と report bundle/log-tail の orchestration を専用の内部ヘルパーへ分割し、diagnostic redaction と log truncation の contract を直接検証するテストを追加しました (#4179)。
+- **テスト用計測 CLI から TRX 計測を分離しました (#4180)** — TRX の解析、上限付き走査、表示処理を専用モジュールに移し、走査エントリ数上限の明示的なテストを追加しました。
+- **diff と export/import の helper を command runner から分離しました (#4181)** — diff のオプション解析と出力整形、manifest JSON のデコード、ヘッダー検証、nullable SQLite 行読み取りを専用 helper に移し、直接の回帰テストを追加することで CLI の orchestration hotspot を縮小しました。
+- **post-extraction hook のオーケストレーションを責務ごとの契約に分割しました (#4185)** - discovery、trust resolution、candidate validation、callback protocol framing、invocation、diagnostics、mutation materialization を小さな内部単位へ分け、焦点を絞った contract test を追加しました。
+- **HTTP MCP transport テストが CookieContainer 初期化に依存しなくなりました (#4264)** — transport テストスイート内の loopback `HttpClient` は cookies を無効化し、sandboxed full-suite 検証で環境依存の `System.Net.CookieContainer` 初期化失敗に巻き込まれないようにしました。
+
 ### [1.35.0] - 2026-06-28
 
 #### 追加
@@ -9473,7 +10871,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.35.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.36.0...HEAD
+[1.36.0]: https://github.com/Widthdom/CodeIndex/compare/v1.35.0...v1.36.0
 [1.35.0]: https://github.com/Widthdom/CodeIndex/compare/v1.34.5...v1.35.0
 [1.34.5]: https://github.com/Widthdom/CodeIndex/compare/v1.34.4...v1.34.5
 [1.34.4]: https://github.com/Widthdom/CodeIndex/compare/v1.34.3...v1.34.4
