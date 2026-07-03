@@ -54,6 +54,9 @@ public static partial class SymbolExtractor
         if (candidates is not { Count: > 0 })
             return null;
 
+        if (candidates.Count == 1)
+            return [candidates[0].Symbol];
+
         candidates.Sort(static (left, right) =>
         {
             var comparison = left.Symbol.StartLine.CompareTo(right.Symbol.StartLine);
@@ -420,7 +423,7 @@ public static partial class SymbolExtractor
 
     private static List<SymbolRecord> BuildJavaRecordDeclarationSnapshot(long fileId, string[] rawLines, IReadOnlyList<SymbolRecord> symbols)
     {
-        var candidates = new List<(SymbolRecord Symbol, int OriginalIndex)>();
+        List<(SymbolRecord Symbol, int OriginalIndex)>? candidates = null;
         for (var index = 0; index < symbols.Count; index++)
         {
             var symbol = symbols[index];
@@ -430,9 +433,15 @@ public static partial class SymbolExtractor
                 && symbol.BodyEndLine != null
                 && IsJavaRecordSymbol(rawLines, symbol))
             {
-                candidates.Add((symbol, index));
+                (candidates ??= []).Add((symbol, index));
             }
         }
+
+        if (candidates is not { Count: > 0 })
+            return [];
+
+        if (candidates.Count == 1)
+            return [candidates[0].Symbol];
 
         candidates.Sort(static (left, right) =>
         {
