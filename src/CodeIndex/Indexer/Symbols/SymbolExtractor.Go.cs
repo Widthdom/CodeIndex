@@ -420,7 +420,7 @@ public static partial class SymbolExtractor
             return false;
         }
 
-        var name = trimmed[2..].Trim();
+        var name = trimmed.AsSpan(2).Trim().ToString();
         if (HasGoSymbol(symbols, fileId, lineIndex + 1, "annotation", name))
             return true;
 
@@ -483,7 +483,7 @@ public static partial class SymbolExtractor
                 awaitingInterfaceBody = false;
                 interfaceBodyDepth = CountGoBraceDelta(rawLine);
 
-                var sameLineBody = rawLine[(openBraceIndex + 1)..].TrimStart();
+                var sameLineBody = rawLine.AsSpan(openBraceIndex + 1).TrimStart().ToString();
                 if (sameLineBody.Length > 0
                     && !sameLineBody.StartsWith("//", StringComparison.Ordinal)
                     && !sameLineBody.StartsWith("/*", StringComparison.Ordinal)
@@ -903,7 +903,10 @@ public static partial class SymbolExtractor
         if (open < 0)
             return false;
         var close = ReferenceExtractor.FindMatchingChar(signature, open, '(', ')');
-        return close > open && string.IsNullOrWhiteSpace(signature[(open + 1)..close]);
+        if (close <= open)
+            return false;
+
+        return signature.AsSpan(open + 1, close - open - 1).Trim().IsEmpty;
     }
 
     private static bool GoSignatureHasNoReturnValue(string signature)
