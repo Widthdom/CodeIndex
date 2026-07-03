@@ -130,8 +130,8 @@ public static partial class SymbolExtractor
             if (useMatch.Success)
             {
                 var symbolName = useMatch.Groups["alias"].Success
-                    ? useMatch.Groups["alias"].Value.Trim()
-                    : useMatch.Groups["name"].Value.Trim();
+                    ? useMatch.Groups["alias"].ValueSpan.Trim().ToString()
+                    : useMatch.Groups["name"].ValueSpan.Trim().ToString();
                 if (symbolName.Length > 0)
                 {
                     AddSymbolRecord(
@@ -166,8 +166,8 @@ public static partial class SymbolExtractor
             return;
 
         var importedPath = requireMatch.Groups["singleName"].Success
-            ? requireMatch.Groups["singleName"].Value.Trim()
-            : requireMatch.Groups["doubleName"].Value.Trim();
+            ? requireMatch.Groups["singleName"].ValueSpan.Trim().ToString()
+            : requireMatch.Groups["doubleName"].ValueSpan.Trim().ToString();
         if (importedPath.Length == 0)
             return;
 

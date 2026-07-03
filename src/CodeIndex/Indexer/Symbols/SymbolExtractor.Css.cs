@@ -105,8 +105,8 @@ public static partial class SymbolExtractor
                 continue;
 
             var name = match.Groups["name"].Success
-                ? match.Groups["name"].Value.Trim()
-                : match.Value.Trim();
+                ? match.Groups["name"].ValueSpan.Trim().ToString()
+                : match.ValueSpan.Trim().ToString();
             if (string.IsNullOrWhiteSpace(name))
                 return;
 

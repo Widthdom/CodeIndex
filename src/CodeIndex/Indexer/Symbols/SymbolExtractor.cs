@@ -3230,8 +3230,8 @@ public static partial class SymbolExtractor
                         }
 
                         var name = match.Groups["name"].Success
-                            ? match.Groups["name"].Value.Trim()
-                            : match.Value.Trim();
+                            ? match.Groups["name"].ValueSpan.Trim().ToString()
+                            : match.ValueSpan.Trim().ToString();
                         name = NormalizeExtractedSymbolName(lang, name, match, matchLine);
                         if (pattern.Kind == "import" && lang is "javascript" or "typescript")
                             name = ResolveJavaScriptTypeScriptModuleSpecifier(lang, filePath, projectRoot, name);

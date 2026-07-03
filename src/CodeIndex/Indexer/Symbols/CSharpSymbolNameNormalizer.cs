@@ -34,7 +34,7 @@ internal static class CSharpSymbolNameNormalizer
     {
         name = string.Empty;
 
-        var conversionKind = match.Groups["conversionKind"].Value.Trim();
+        var conversionKind = match.Groups["conversionKind"].ValueSpan.Trim().ToString();
         if (conversionKind.Length == 0)
             return false;
 

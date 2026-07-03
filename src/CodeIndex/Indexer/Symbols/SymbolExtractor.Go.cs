@@ -104,7 +104,7 @@ public static partial class SymbolExtractor
         if (!match.Success)
             return true;
 
-        var name = match.Groups["name"].Value.Trim();
+        var name = match.Groups["name"].ValueSpan.Trim().ToString();
         var kind = Regex.IsMatch(normalizedTypeText, @"\bstruct\b")
             ? "struct"
             : Regex.IsMatch(normalizedTypeText, @"\binterface\b")
@@ -380,7 +380,7 @@ public static partial class SymbolExtractor
         if (!match.Success)
             return true;
 
-        var name = match.Groups["name"].Value.Trim();
+        var name = match.Groups["name"].ValueSpan.Trim().ToString();
         var kind = string.Equals(name, @"""C""", StringComparison.Ordinal) ? "cgo" : "import";
         var startColumn = rawLine.IndexOf(name, StringComparison.Ordinal);
         if (startColumn < 0)
@@ -579,7 +579,7 @@ public static partial class SymbolExtractor
         if (!match.Success)
             return false;
 
-        var name = match.Groups["name"].Value.Trim();
+        var name = match.Groups["name"].ValueSpan.Trim().ToString();
         if (HasGoSymbol(symbols, fileId, lineIndex + 1, "function", name))
             return true;
 
@@ -617,7 +617,7 @@ public static partial class SymbolExtractor
         if (!match.Success)
             return false;
 
-        var name = match.Groups["name"].Value.Trim();
+        var name = match.Groups["name"].ValueSpan.Trim().ToString();
         if (name.Length == 0)
             return false;
 
@@ -735,7 +735,7 @@ public static partial class SymbolExtractor
         if (!match.Success)
             return false;
 
-        var name = match.Groups["name"].Value.Trim();
+        var name = match.Groups["name"].ValueSpan.Trim().ToString();
         if (name.Length == 0 || HasGoSymbol(symbols, fileId, lineIndex + 1, "import", name))
             return true;
 
