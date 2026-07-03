@@ -5386,9 +5386,15 @@ public static partial class SymbolExtractor
         return index;
     }
 
+    private static string TrimJavaScriptTypeScriptStart(string text, int startIndex = 0)
+    {
+        var trimmed = text.AsSpan(startIndex).TrimStart();
+        return startIndex == 0 && trimmed.Length == text.Length ? text : trimmed.ToString();
+    }
+
     private static bool StartsJavaScriptTypeScriptArrowFunctionAssignmentValue(string rhs)
     {
-        rhs = rhs.TrimStart();
+        rhs = TrimJavaScriptTypeScriptStart(rhs);
         while (rhs.Length > 0)
         {
             if (StartsJavaScriptTypeScriptGenericArrowAssignmentValue(rhs)
@@ -5400,7 +5406,7 @@ public static partial class SymbolExtractor
             if (rhs[0] != '(')
                 return false;
 
-            rhs = rhs[1..].TrimStart();
+            rhs = TrimJavaScriptTypeScriptStart(rhs, 1);
         }
 
         return false;
@@ -5408,7 +5414,7 @@ public static partial class SymbolExtractor
 
     private static bool StartsJavaScriptTypeScriptLambdaAssignmentValue(string rhs)
     {
-        rhs = rhs.TrimStart();
+        rhs = TrimJavaScriptTypeScriptStart(rhs);
         while (rhs.Length > 0)
         {
             if (StartsJavaScriptTypeScriptArrowFunctionAssignmentValue(rhs)
@@ -5420,7 +5426,7 @@ public static partial class SymbolExtractor
             if (rhs[0] != '(')
                 return false;
 
-            rhs = rhs[1..].TrimStart();
+            rhs = TrimJavaScriptTypeScriptStart(rhs, 1);
         }
 
         return false;
@@ -5428,7 +5434,7 @@ public static partial class SymbolExtractor
 
     private static bool StartsJavaScriptTypeScriptClassAssignmentValue(string rhs)
     {
-        rhs = rhs.TrimStart();
+        rhs = TrimJavaScriptTypeScriptStart(rhs);
         while (rhs.Length > 0)
         {
             if (IsJavaScriptTypeScriptKeywordAt(rhs, 0, "class"))
@@ -5437,7 +5443,7 @@ public static partial class SymbolExtractor
             if (rhs[0] != '(')
                 return false;
 
-            rhs = rhs[1..].TrimStart();
+            rhs = TrimJavaScriptTypeScriptStart(rhs, 1);
         }
 
         return false;
@@ -5445,16 +5451,16 @@ public static partial class SymbolExtractor
 
     private static bool StartsJavaScriptTypeScriptAnonymousFunctionAssignmentValue(string rhs)
     {
-        rhs = rhs.TrimStart();
+        rhs = TrimJavaScriptTypeScriptStart(rhs);
         if (IsJavaScriptTypeScriptKeywordAt(rhs, 0, "async"))
-            rhs = rhs["async".Length..].TrimStart();
+            rhs = TrimJavaScriptTypeScriptStart(rhs, "async".Length);
 
         if (!IsJavaScriptTypeScriptKeywordAt(rhs, 0, "function"))
             return false;
 
-        rhs = rhs["function".Length..].TrimStart();
+        rhs = TrimJavaScriptTypeScriptStart(rhs, "function".Length);
         if (rhs.StartsWith('*'))
-            rhs = rhs[1..].TrimStart();
+            rhs = TrimJavaScriptTypeScriptStart(rhs, 1);
 
         return rhs.StartsWith('(');
     }
@@ -5464,15 +5470,15 @@ public static partial class SymbolExtractor
         if (!IsJavaScriptTypeScriptKeywordAt(rhs, 0, "async"))
             return false;
 
-        var asyncRemainder = rhs["async".Length..].TrimStart();
+        var asyncRemainder = TrimJavaScriptTypeScriptStart(rhs, "async".Length);
         return IsJavaScriptTypeScriptKeywordAt(asyncRemainder, 0, "function");
     }
 
     private static bool StartsJavaScriptTypeScriptPotentialGenericArrowAssignmentValue(string rhs)
     {
-        rhs = rhs.TrimStart();
+        rhs = TrimJavaScriptTypeScriptStart(rhs);
         if (IsJavaScriptTypeScriptKeywordAt(rhs, 0, "async"))
-            rhs = rhs["async".Length..].TrimStart();
+            rhs = TrimJavaScriptTypeScriptStart(rhs, "async".Length);
 
         return rhs.Length > 0 && rhs[0] == '<';
     }
@@ -5588,9 +5594,9 @@ public static partial class SymbolExtractor
 
     private static bool StartsJavaScriptTypeScriptGenericArrowAssignmentValue(string rhs)
     {
-        rhs = rhs.TrimStart();
+        rhs = TrimJavaScriptTypeScriptStart(rhs);
         if (IsJavaScriptTypeScriptKeywordAt(rhs, 0, "async"))
-            rhs = rhs["async".Length..].TrimStart();
+            rhs = TrimJavaScriptTypeScriptStart(rhs, "async".Length);
 
         if (rhs.Length == 0 || rhs[0] != '<')
             return false;
@@ -5599,7 +5605,7 @@ public static partial class SymbolExtractor
         if (genericEnd < 0)
             return false;
 
-        var remainder = rhs[(genericEnd + 1)..].TrimStart();
+        var remainder = TrimJavaScriptTypeScriptStart(rhs, genericEnd + 1);
         if (remainder.Length == 0)
             return false;
 
@@ -5609,7 +5615,7 @@ public static partial class SymbolExtractor
             if (parameterListEnd < 0)
                 return false;
 
-            remainder = remainder[(parameterListEnd + 1)..].TrimStart();
+            remainder = TrimJavaScriptTypeScriptStart(remainder, parameterListEnd + 1);
         }
         else
         {
@@ -5617,7 +5623,7 @@ public static partial class SymbolExtractor
             if (parameterNameLength <= 0)
                 return false;
 
-            remainder = remainder[parameterNameLength..].TrimStart();
+            remainder = TrimJavaScriptTypeScriptStart(remainder, parameterNameLength);
         }
 
         return remainder.StartsWith("=>", StringComparison.Ordinal);
@@ -6258,7 +6264,7 @@ public static partial class SymbolExtractor
                 continue;
 
             if (specifier.StartsWith("type ", StringComparison.Ordinal))
-                specifier = specifier["type ".Length..].TrimStart();
+                specifier = TrimJavaScriptTypeScriptStart(specifier, "type ".Length);
 
             var asIndex = specifier.LastIndexOf(" as ", StringComparison.Ordinal);
             var exportedName = asIndex >= 0
