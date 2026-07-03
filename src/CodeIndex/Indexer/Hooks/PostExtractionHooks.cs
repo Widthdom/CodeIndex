@@ -621,6 +621,9 @@ public sealed class PostExtractionHookRunner : IDisposable
             return;
 
         disposed = true;
+        if (hooks.Count == 0)
+            return;
+
         foreach (var hook in hooks)
         {
             hook.Worker.Dispose();
