@@ -48,6 +48,7 @@ public partial class FileIndexer
     private readonly Func<string, IEnumerable<string>> _enumerateFileSystemEntries;
     private readonly Dictionary<string, bool> _directoryIgnoreCaseCache;
     private readonly Dictionary<string, IReadOnlyDictionary<string, string>> _languageMapOverrideCache;
+    private readonly Dictionary<string, bool> _nestedGitRepositoryCache;
     private LanguageMapOverrideLookupCache? _lastLanguageMapOverrideLookup;
     private readonly long _maxFileSizeBytes;
     private readonly FileContentLoader _contentLoader;
@@ -135,6 +136,7 @@ public partial class FileIndexer
         _enumerateFileSystemEntries = enumerateFileSystemEntries ?? (dir => CodeIndex.FileSystemTraversalPolicy.EnumerateFileSystemEntries(LongPath.EnsureWindowsPrefix(dir)));
         _directoryIgnoreCaseCache = new Dictionary<string, bool>(StringComparer.Ordinal);
         _languageMapOverrideCache = new Dictionary<string, IReadOnlyDictionary<string, string>>(StringComparer.Ordinal);
+        _nestedGitRepositoryCache = new Dictionary<string, bool>(StringComparer.Ordinal);
         _maxFileSizeBytes = ResolveMaxFileSizeBytes(maxFileSizeBytes);
         _contentLoader = new FileContentLoader(_maxFileSizeBytes);
         _symlinkPolicy = symlinkPolicy;

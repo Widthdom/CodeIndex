@@ -135,7 +135,12 @@ public partial class FileIndexer
         if (PathsEqual(dir, _projectRoot))
             return false;
 
-        return Directory.Exists(LongPath.EnsureWindowsPrefix(Path.Combine(dir, ".git"))) ||
-            File.Exists(LongPath.EnsureWindowsPrefix(Path.Combine(dir, ".git")));
+        if (_nestedGitRepositoryCache.TryGetValue(dir, out var cached))
+            return cached;
+
+        var gitPath = LongPath.EnsureWindowsPrefix(Path.Combine(dir, ".git"));
+        var isNestedRepository = Directory.Exists(gitPath) || File.Exists(gitPath);
+        _nestedGitRepositoryCache[dir] = isNestedRepository;
+        return isNestedRepository;
     }
 }
