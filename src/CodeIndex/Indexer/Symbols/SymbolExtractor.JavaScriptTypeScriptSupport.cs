@@ -1867,9 +1867,9 @@ public static partial class SymbolExtractor
             return;
 
         var sanitizedLines = BuildJavaScriptTypeScriptSanitizedLines(lines);
-        var syntheticClassTargets = new List<JavaScriptClassScanTarget>();
-        var symbolLineIdentities = BuildSymbolLineIdentities(symbols);
-        var targetIdentities = new HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)>();
+        List<JavaScriptClassScanTarget>? syntheticClassTargets = null;
+        HashSet<SymbolLineIdentity>? symbolLineIdentities = null;
+        HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)>? targetIdentities = null;
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -1960,9 +1960,9 @@ public static partial class SymbolExtractor
                         lang,
                         lines,
                         symbols,
-                        syntheticClassTargets,
-                        symbolLineIdentities,
-                        targetIdentities,
+                        syntheticClassTargets ??= [],
+                        symbolLineIdentities ??= BuildSymbolLineIdentities(symbols),
+                        targetIdentities ??= [],
                         i,
                         absoluteMatchIndex,
                         classTokenLineIndex,
@@ -2023,7 +2023,7 @@ public static partial class SymbolExtractor
             }
         }
 
-        if (syntheticClassTargets.Count > 0)
+        if (syntheticClassTargets is { Count: > 0 })
             ExtractJavaScriptTypeScriptBareMethodsInTargets(fileId, lang, lines, symbols, syntheticClassTargets);
     }
 
