@@ -146,10 +146,12 @@ public static partial class SymbolExtractor
         int lineNumber,
         List<SymbolRecord> symbols)
     {
-        if (string.IsNullOrWhiteSpace(line))
+        var trimmedSpan = line.AsSpan().TrimStart();
+        if (trimmedSpan.IsEmpty)
             return false;
 
-        var trimmed = line.TrimStart();
+        var isIndented = trimmedSpan.Length != line.Length;
+        var trimmed = isIndented ? trimmedSpan.ToString() : line;
         if (trimmed.StartsWith("namespace ", StringComparison.Ordinal))
         {
             var equalsIndex = trimmed.IndexOf('=');
@@ -225,7 +227,7 @@ public static partial class SymbolExtractor
             }
         }
 
-        if (line.Length == line.TrimStart().Length)
+        if (!isIndented)
             return false;
 
         if (trimmed.StartsWith("using ", StringComparison.Ordinal)
