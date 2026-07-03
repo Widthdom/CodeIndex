@@ -4775,6 +4775,8 @@ public static partial class SymbolExtractor
     {
         if (!LinesContain(lines, "WITH", StringComparison.OrdinalIgnoreCase))
             return;
+        if (!LinesContain(lines, "AS", StringComparison.OrdinalIgnoreCase))
+            return;
 
         var content = string.Join('\n', lines);
         List<int>? lineStarts = null;
