@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.Runtime.Loader;
 using CodeIndex.Cli;
 
@@ -29,6 +30,8 @@ public static partial class ExtractorPluginRegistry
     private static readonly HashSet<string> LoadedPatternConfigPaths = new(StringComparer.OrdinalIgnoreCase);
     private static readonly List<AssemblyLoadContext> LoadedPluginAssemblyContexts = [];
     private static readonly IReadOnlyList<string> PatternConfigSearchPatterns = ["*.yaml", "*.yml"];
+    private static readonly IReadOnlyDictionary<string, string> EmptyLanguageExtensions =
+        new ReadOnlyDictionary<string, string>(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
     private static readonly List<ExtractorRegistryDiagnostic> Diagnostics = [];
     private const int DiagnosticLimit = 20;
     private static int pluginAssemblyCount;
@@ -70,10 +73,13 @@ public static partial class ExtractorPluginRegistry
             EnsurePluginsLoaded();
             lock (Gate)
             {
+                if (SymbolExtractors.Count == 0 && ReferenceExtractors.Count == 0)
+                    return EmptyLanguageExtensions;
+
                 var extensions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 AddLanguageExtensions(extensions, SymbolExtractors.Values.Select(extractor => (extractor.Language, extractor.FileExtensions)));
                 AddLanguageExtensions(extensions, ReferenceExtractors.Values.Select(extractor => (extractor.Language, extractor.FileExtensions)));
-                return extensions;
+                return extensions.Count == 0 ? EmptyLanguageExtensions : extensions;
             }
         }
     }
