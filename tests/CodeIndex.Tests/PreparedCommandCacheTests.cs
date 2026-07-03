@@ -13,12 +13,14 @@ namespace CodeIndex.Tests;
 [Collection("SQLite pool sensitive")]
 public class PreparedCommandCacheTests : IDisposable
 {
+    private readonly string _dbDir;
     private readonly string _dbPath;
     private readonly DbContext _db;
 
     public PreparedCommandCacheTests()
     {
-        _dbPath = Path.Combine(Path.GetTempPath(), $"prepcache_test_{Guid.NewGuid():N}.db");
+        _dbDir = TestProjectHelper.CreateTempProject("prepcache_test");
+        _dbPath = Path.Combine(_dbDir, "codeindex.db");
         _db = new DbContext(_dbPath);
         _db.InitializeSchema();
     }
@@ -195,7 +197,8 @@ public class PreparedCommandCacheTests : IDisposable
     {
         using var env = EnvironmentVariableScope.Capture(PreparedCommandCache.CapacityEnvironmentVariable);
         env.Set(PreparedCommandCache.CapacityEnvironmentVariable, "4");
-        var dbPath = Path.Combine(Path.GetTempPath(), $"prepcache_capacity_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("prepcache_capacity");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         DbContext? db = null;
         try
         {
@@ -208,7 +211,7 @@ public class PreparedCommandCacheTests : IDisposable
         {
             db?.Dispose();
             SqliteConnection.ClearAllPools();
-            try { File.Delete(dbPath); } catch { }
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
@@ -944,8 +947,7 @@ public class PreparedCommandCacheTests : IDisposable
     public void DbWriter_WithCache_PurgeFileScansAndDeletesReuseCommands()
     {
         var writer = new DbWriter(_db);
-        var projectRoot = Path.Combine(Path.GetTempPath(), $"prepcache_purge_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(projectRoot);
+        var projectRoot = TestProjectHelper.CreateTempProject("prepcache_purge");
         try
         {
             var now = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
@@ -993,7 +995,7 @@ public class PreparedCommandCacheTests : IDisposable
         }
         finally
         {
-            try { Directory.Delete(projectRoot, recursive: true); } catch { /* ignore */ }
+            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 
@@ -1255,6 +1257,7 @@ public class PreparedCommandCacheTests : IDisposable
     public void Dispose()
     {
         _db.Dispose();
-        try { File.Delete(_dbPath); } catch { /* ignore */ }
+        SqliteConnection.ClearAllPools();
+        TestProjectHelper.DeleteDirectory(_dbDir);
     }
 }
