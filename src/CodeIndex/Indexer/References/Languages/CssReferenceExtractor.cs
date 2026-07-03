@@ -354,9 +354,9 @@ internal static class CssReferenceExtractor
         }
     }
 
-    internal static HashSet<string> BuildStylusVariableDefinitionNames(string[] lines)
+    internal static HashSet<string>? BuildStylusVariableDefinitionNames(string[] lines)
     {
-        var names = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string>? names = null;
         var inBlockComment = false;
 
         foreach (var line in lines)
@@ -374,7 +374,7 @@ internal static class CssReferenceExtractor
             var referenceLine = PrepareSassStylusReferenceLine(blockMaskedLine);
             var match = StylusVariableDefinitionRegex.Match(referenceLine);
             if (match.Success)
-                names.Add(match.Groups["name"].Value);
+                (names ??= new HashSet<string>(StringComparer.Ordinal)).Add(match.Groups["name"].Value);
         }
 
         return names;
