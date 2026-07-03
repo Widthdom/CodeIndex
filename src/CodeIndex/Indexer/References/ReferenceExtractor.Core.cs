@@ -560,7 +560,10 @@ public static partial class ReferenceExtractor
         static bool TryCollectCSharpInvocationArguments(string[] sourceLines, int lineIndex, int openParen, out string args)
         {
             const int MaxInvocationLines = 32;
-            var builder = new StringBuilder();
+            var initialCapacity = lineIndex >= 0 && lineIndex < sourceLines.Length
+                ? Math.Min(512, Math.Max(0, sourceLines[lineIndex].Length - openParen))
+                : 0;
+            var builder = new StringBuilder(initialCapacity);
             var depth = 0;
             var started = false;
             var lineLimit = Math.Min(sourceLines.Length, lineIndex + MaxInvocationLines);
