@@ -67,7 +67,10 @@ public static partial class SymbolExtractor
             var searchOffset = 0;
             var traversalNodes = 0;
             var truncated = false;
-            var propertyLines = BuildJsonPropertyLineQueues(content);
+            var propertyLines = content.IndexOf('\n', StringComparison.Ordinal) < 0
+                && content.IndexOf('\r', StringComparison.Ordinal) < 0
+                ? BuildSingleLineJsonPropertyLineQueues(document.RootElement)
+                : BuildJsonPropertyLineQueues(content);
             ExtractJsonObjectSymbols(
                 fileId,
                 content,
@@ -404,6 +407,40 @@ public static partial class SymbolExtractor
         }
 
         return propertyLines;
+    }
+
+    private static Dictionary<string, Queue<int>> BuildSingleLineJsonPropertyLineQueues(JsonElement element)
+    {
+        var propertyLines = new Dictionary<string, Queue<int>>(StringComparer.Ordinal);
+        AddSingleLineJsonPropertyLines(element, propertyLines);
+        return propertyLines;
+    }
+
+    private static void AddSingleLineJsonPropertyLines(JsonElement element, Dictionary<string, Queue<int>> propertyLines)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                if (!string.IsNullOrEmpty(property.Name))
+                {
+                    if (!propertyLines.TryGetValue(property.Name, out var lines))
+                    {
+                        lines = new Queue<int>();
+                        propertyLines.Add(property.Name, lines);
+                    }
+
+                    lines.Enqueue(1);
+                }
+
+                AddSingleLineJsonPropertyLines(property.Value, propertyLines);
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+                AddSingleLineJsonPropertyLines(item, propertyLines);
+        }
     }
 
     private static int[] BuildUtf8LineStarts(byte[] bytes)
