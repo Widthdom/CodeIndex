@@ -143,6 +143,9 @@ public static partial class SymbolExtractor
         JavaScriptScopePrivacyFlags[][] privateScopeColumns,
         List<JavaScriptClassScanTarget> objectLiteralTargets)
     {
+        if (!LinesContain(lines, "export", StringComparison.Ordinal))
+            return;
+
         var sanitizedLines = BuildJavaScriptTypeScriptSanitizedLines(lines);
         ExtractJavaScriptTypeScriptReExportSymbols(fileId, lang, lines, sanitizedLines, symbols);
         ExtractJavaScriptTypeScriptLocalNamedExportSymbols(fileId, lines, sanitizedLines, symbols);
