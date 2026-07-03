@@ -468,7 +468,7 @@ public static partial class SymbolExtractor
         SymbolRecord recordSymbol,
         int lineNumber)
     {
-        var existingSymbols = new List<SymbolRecord>();
+        List<SymbolRecord>? existingSymbols = null;
         foreach (var symbol in symbols)
         {
             if (symbol.FileId == fileId
@@ -478,11 +478,11 @@ public static partial class SymbolExtractor
                 && (symbol.ContainerName == null || symbol.ContainerName == recordSymbol.Name)
                 && (symbol.ContainerKind == null || symbol.ContainerKind == "class"))
             {
-                existingSymbols.Add(symbol);
+                (existingSymbols ??= []).Add(symbol);
             }
         }
 
-        return existingSymbols;
+        return existingSymbols ?? [];
     }
 
     private static bool LooksLikeJavaCompactConstructorSymbol(SymbolRecord symbol, string recordName)
