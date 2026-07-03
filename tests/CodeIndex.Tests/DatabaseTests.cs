@@ -2526,151 +2526,156 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void RebuildTypeScriptAugmentationReferences_LinksMergedInterfacesOnly()
     {
-        var projectRoot = Path.Combine(Path.GetTempPath(), $"cdidx_ts_aug_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-        File.WriteAllText(Path.Combine(projectRoot, "src/module-c.ts"), "export {}\ninterface Ambient {}\n");
-        File.WriteAllText(Path.Combine(projectRoot, "src/module-d.ts"), "import \"./setup\";\ninterface Ambient {}\n");
-        File.WriteAllText(Path.Combine(projectRoot, "src/express-a.ts"), "declare module \"express\" { interface Request { user: string } }\n");
-        File.WriteAllText(Path.Combine(projectRoot, "src/express-b.ts"), "declare module \"express\" { interface Request { account: string } }\n");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_ts_aug");
+        try
+        {
+            TestProjectHelper.CreateDirectory(projectRoot, "src");
+            TestProjectHelper.WriteTextFile(projectRoot, "src/module-c.ts", "export {}\ninterface Ambient {}\n");
+            TestProjectHelper.WriteTextFile(projectRoot, "src/module-d.ts", "import \"./setup\";\ninterface Ambient {}\n");
+            TestProjectHelper.WriteTextFile(projectRoot, "src/express-a.ts", "declare module \"express\" { interface Request { user: string } }\n");
+            TestProjectHelper.WriteTextFile(projectRoot, "src/express-b.ts", "declare module \"express\" { interface Request { account: string } }\n");
 
-        var firstFileId = _writer.UpsertFile(new FileRecord
-        {
-            Path = "src/a.ts",
-            Lang = "typescript",
-            Size = 80,
-            Lines = 4,
-            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
-        });
-        var secondFileId = _writer.UpsertFile(new FileRecord
-        {
-            Path = "src/b.ts",
-            Lang = "typescript",
-            Size = 80,
-            Lines = 4,
-            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
-        });
-        var thirdFileId = _writer.UpsertFile(new FileRecord
-        {
-            Path = "src/c.ts",
-            Lang = "typescript",
-            Size = 80,
-            Lines = 4,
-            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
-        });
-        var moduleOneFileId = _writer.UpsertFile(new FileRecord
-        {
-            Path = "src/module-a.ts",
-            Lang = "typescript",
-            Size = 80,
-            Lines = 4,
-            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
-        });
-        var moduleTwoFileId = _writer.UpsertFile(new FileRecord
-        {
-            Path = "src/module-b.ts",
-            Lang = "typescript",
-            Size = 80,
-            Lines = 4,
-            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
-        });
-        var moduleMarkerFileId = _writer.UpsertFile(new FileRecord
-        {
-            Path = "src/module-c.ts",
-            Lang = "typescript",
-            Size = 80,
-            Lines = 2,
-            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
-        });
-        var sideEffectImportFileId = _writer.UpsertFile(new FileRecord
-        {
-            Path = "src/module-d.ts",
-            Lang = "typescript",
-            Size = 80,
-            Lines = 2,
-            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
-        });
-        var ambientGlobalFileId = _writer.UpsertFile(new FileRecord
-        {
-            Path = "src/ambient-global.ts",
-            Lang = "typescript",
-            Size = 80,
-            Lines = 1,
-            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
-        });
-        var ambientModuleFirstFileId = _writer.UpsertFile(new FileRecord
-        {
-            Path = "src/express-a.ts",
-            Lang = "typescript",
-            Size = 80,
-            Lines = 1,
-            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
-        });
-        var ambientModuleSecondFileId = _writer.UpsertFile(new FileRecord
-        {
-            Path = "src/express-b.ts",
-            Lang = "typescript",
-            Size = 80,
-            Lines = 1,
-            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
-        });
+            var firstFileId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/a.ts",
+                Lang = "typescript",
+                Size = 80,
+                Lines = 4,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            var secondFileId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/b.ts",
+                Lang = "typescript",
+                Size = 80,
+                Lines = 4,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            var thirdFileId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/c.ts",
+                Lang = "typescript",
+                Size = 80,
+                Lines = 4,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            var moduleOneFileId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/module-a.ts",
+                Lang = "typescript",
+                Size = 80,
+                Lines = 4,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            var moduleTwoFileId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/module-b.ts",
+                Lang = "typescript",
+                Size = 80,
+                Lines = 4,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            var moduleMarkerFileId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/module-c.ts",
+                Lang = "typescript",
+                Size = 80,
+                Lines = 2,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            var sideEffectImportFileId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/module-d.ts",
+                Lang = "typescript",
+                Size = 80,
+                Lines = 2,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            var ambientGlobalFileId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/ambient-global.ts",
+                Lang = "typescript",
+                Size = 80,
+                Lines = 1,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            var ambientModuleFirstFileId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/express-a.ts",
+                Lang = "typescript",
+                Size = 80,
+                Lines = 1,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            var ambientModuleSecondFileId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/express-b.ts",
+                Lang = "typescript",
+                Size = 80,
+                Lines = 1,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
 
-        _writer.InsertSymbols([
-            new SymbolRecord { FileId = firstFileId, Kind = "interface", Name = "Widget", Line = 1, StartLine = 1, StartColumn = 7, EndLine = 3, Signature = "interface Widget { a: number }" },
-            new SymbolRecord { FileId = secondFileId, Kind = "interface", Name = "Widget", Line = 1, StartLine = 1, StartColumn = 17, EndLine = 3, Signature = "declare global { interface Widget { b: string } }" },
-            new SymbolRecord { FileId = firstFileId, Kind = "import", Name = "Options", Line = 4, StartLine = 4, StartColumn = 5, EndLine = 4, Signature = "type Options = { a: number }" },
-            new SymbolRecord { FileId = secondFileId, Kind = "import", Name = "Options", Line = 4, StartLine = 4, StartColumn = 5, EndLine = 4, Signature = "type Options = { b: string }" },
-            new SymbolRecord { FileId = thirdFileId, Kind = "interface", Name = "LocalOnly", Line = 1, StartLine = 1, StartColumn = 11, EndLine = 1, Signature = "interface LocalOnly {}" },
-            new SymbolRecord { FileId = moduleOneFileId, Kind = "interface", Name = "Props", Line = 2, StartLine = 2, StartColumn = 17, EndLine = 2, Signature = "export interface Props { a: number }", Visibility = "export" },
-            new SymbolRecord { FileId = moduleTwoFileId, Kind = "interface", Name = "Props", Line = 2, StartLine = 2, StartColumn = 17, EndLine = 2, Signature = "export interface Props { b: string }", Visibility = "export" },
-            new SymbolRecord { FileId = moduleMarkerFileId, Kind = "interface", Name = "Ambient", Line = 2, StartLine = 2, StartColumn = 11, EndLine = 2, Signature = "interface Ambient {}" },
-            new SymbolRecord { FileId = sideEffectImportFileId, Kind = "interface", Name = "Ambient", Line = 2, StartLine = 2, StartColumn = 11, EndLine = 2, Signature = "interface Ambient {}" },
-            new SymbolRecord { FileId = ambientGlobalFileId, Kind = "interface", Name = "Ambient", Line = 1, StartLine = 1, StartColumn = 11, EndLine = 1, Signature = "interface Ambient {}" },
-            new SymbolRecord { FileId = ambientModuleFirstFileId, Kind = "interface", Name = "Request", Line = 1, StartLine = 1, StartColumn = 28, EndLine = 1, Signature = "interface Request { user: string }", ContainerName = "\"express\"" },
-            new SymbolRecord { FileId = ambientModuleSecondFileId, Kind = "interface", Name = "Request", Line = 1, StartLine = 1, StartColumn = 28, EndLine = 1, Signature = "interface Request { account: string }", ContainerName = "\"express\"" },
-        ]);
+            _writer.InsertSymbols([
+                new SymbolRecord { FileId = firstFileId, Kind = "interface", Name = "Widget", Line = 1, StartLine = 1, StartColumn = 7, EndLine = 3, Signature = "interface Widget { a: number }" },
+                new SymbolRecord { FileId = secondFileId, Kind = "interface", Name = "Widget", Line = 1, StartLine = 1, StartColumn = 17, EndLine = 3, Signature = "declare global { interface Widget { b: string } }" },
+                new SymbolRecord { FileId = firstFileId, Kind = "import", Name = "Options", Line = 4, StartLine = 4, StartColumn = 5, EndLine = 4, Signature = "type Options = { a: number }" },
+                new SymbolRecord { FileId = secondFileId, Kind = "import", Name = "Options", Line = 4, StartLine = 4, StartColumn = 5, EndLine = 4, Signature = "type Options = { b: string }" },
+                new SymbolRecord { FileId = thirdFileId, Kind = "interface", Name = "LocalOnly", Line = 1, StartLine = 1, StartColumn = 11, EndLine = 1, Signature = "interface LocalOnly {}" },
+                new SymbolRecord { FileId = moduleOneFileId, Kind = "interface", Name = "Props", Line = 2, StartLine = 2, StartColumn = 17, EndLine = 2, Signature = "export interface Props { a: number }", Visibility = "export" },
+                new SymbolRecord { FileId = moduleTwoFileId, Kind = "interface", Name = "Props", Line = 2, StartLine = 2, StartColumn = 17, EndLine = 2, Signature = "export interface Props { b: string }", Visibility = "export" },
+                new SymbolRecord { FileId = moduleMarkerFileId, Kind = "interface", Name = "Ambient", Line = 2, StartLine = 2, StartColumn = 11, EndLine = 2, Signature = "interface Ambient {}" },
+                new SymbolRecord { FileId = sideEffectImportFileId, Kind = "interface", Name = "Ambient", Line = 2, StartLine = 2, StartColumn = 11, EndLine = 2, Signature = "interface Ambient {}" },
+                new SymbolRecord { FileId = ambientGlobalFileId, Kind = "interface", Name = "Ambient", Line = 1, StartLine = 1, StartColumn = 11, EndLine = 1, Signature = "interface Ambient {}" },
+                new SymbolRecord { FileId = ambientModuleFirstFileId, Kind = "interface", Name = "Request", Line = 1, StartLine = 1, StartColumn = 28, EndLine = 1, Signature = "interface Request { user: string }", ContainerName = "\"express\"" },
+                new SymbolRecord { FileId = ambientModuleSecondFileId, Kind = "interface", Name = "Request", Line = 1, StartLine = 1, StartColumn = 28, EndLine = 1, Signature = "interface Request { account: string }", ContainerName = "\"express\"" },
+            ]);
 
-        var inserted = _writer.RebuildTypeScriptAugmentationReferences(projectRoot);
+            var inserted = _writer.RebuildTypeScriptAugmentationReferences(projectRoot);
 
-        Assert.Equal(4, inserted);
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = @"
+            Assert.Equal(4, inserted);
+            using var cmd = _db.Connection.CreateCommand();
+            cmd.CommandText = @"
             SELECT symbol_name, container_kind, COUNT(*)
             FROM symbol_references
             WHERE reference_kind = 'augmentation'
             GROUP BY symbol_name, container_kind
             ORDER BY symbol_name, container_kind";
 
-        using var reader = cmd.ExecuteReader();
-        Assert.True(reader.Read());
-        Assert.Equal("Request", reader.GetString(0));
-        Assert.Equal("interface", reader.GetString(1));
-        Assert.Equal(2, reader.GetInt32(2));
-        Assert.True(reader.Read());
-        Assert.Equal("Widget", reader.GetString(0));
-        Assert.Equal("interface", reader.GetString(1));
-        Assert.Equal(2, reader.GetInt32(2));
-        Assert.False(reader.Read());
+            using var reader = cmd.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.Equal("Request", reader.GetString(0));
+            Assert.Equal("interface", reader.GetString(1));
+            Assert.Equal(2, reader.GetInt32(2));
+            Assert.True(reader.Read());
+            Assert.Equal("Widget", reader.GetString(0));
+            Assert.Equal("interface", reader.GetString(1));
+            Assert.Equal(2, reader.GetInt32(2));
+            Assert.False(reader.Read());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Fact]
     public void TypeScriptFileHasModuleSyntaxForTests_UsesBoundedFallbackRead_Issue3179()
     {
-        var projectRoot = Path.Combine(Path.GetTempPath(), $"cdidx_ts_module_fallback_{Guid.NewGuid():N}");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_ts_module_fallback");
         try
         {
-            Directory.CreateDirectory(projectRoot);
-            var normalFile = Path.Combine(projectRoot, "normal.ts");
-            File.WriteAllText(normalFile, "// comment\nexport {}\n");
+            var normalFile = TestProjectHelper.WriteTextFile(projectRoot, "normal.ts", "// comment\nexport {}\n");
+            var oversizedFile = TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "oversized.ts",
+                "export {}\n" + new string('x', (int)FileIndexer.DefaultMaxFileSizeBytes));
 
-            var oversizedFile = Path.Combine(projectRoot, "oversized.ts");
-            File.WriteAllText(oversizedFile, "export {}\n" + new string('x', (int)FileIndexer.DefaultMaxFileSizeBytes));
-
-            var lateMarkerFile = Path.Combine(projectRoot, "late-marker.ts");
             var lateMarkerBuilder = new StringBuilder();
             for (var i = 0; i < 17000; i++)
                 lateMarkerBuilder.Append("// filler\n");
             lateMarkerBuilder.Append("export {}\n");
-            File.WriteAllText(lateMarkerFile, lateMarkerBuilder.ToString());
+            var lateMarkerFile = TestProjectHelper.WriteTextFile(projectRoot, "late-marker.ts", lateMarkerBuilder.ToString());
 
             Assert.True(DbWriter.TypeScriptFileHasModuleSyntaxForTests(normalFile));
             Assert.False(DbWriter.TypeScriptFileHasModuleSyntaxForTests(oversizedFile));
