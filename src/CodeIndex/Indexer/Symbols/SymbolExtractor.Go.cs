@@ -915,8 +915,8 @@ public static partial class SymbolExtractor
         if (close < 0 || close + 1 >= signature.Length)
             return true;
 
-        var trailing = signature[(close + 1)..].TrimStart();
-        return trailing.Length == 0 || trailing[0] == '{';
+        var trailing = signature.AsSpan(close + 1).TrimStart();
+        return trailing.IsEmpty || trailing[0] == '{';
     }
 
     private static bool TryGetGoMethodReceiverTypeName(string signature, out string receiverTypeName)
