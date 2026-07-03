@@ -21,14 +21,12 @@ public class GitHelperTests : IDisposable
 
     public GitHelperTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_test_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_tempDir);
+        _tempDir = TestProjectHelper.CreateTempProject("cdidx_test");
     }
 
     public void Dispose()
     {
-        if (Directory.Exists(_tempDir))
-            TestProjectHelper.DeleteDirectory(_tempDir);
+        TestProjectHelper.DeleteDirectory(_tempDir);
     }
 
     [Fact]
