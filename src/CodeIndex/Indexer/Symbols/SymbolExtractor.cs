@@ -2696,6 +2696,7 @@ public static partial class SymbolExtractor
             ? BuildCSharpCallableParameterScope(structuralLines, csharpInsideTypeBody!)
             : null;
         var csharpSwitchExpressionLines = lang == "csharp"
+            && LinesContain(structuralLines, "switch", StringComparison.Ordinal)
             ? FindCSharpSwitchExpressionLines(structuralLines)
             : null;
         var cssQualifiedRuleAncestors = lang == "css"
@@ -6967,7 +6968,7 @@ public static partial class SymbolExtractor
     private static bool[] FindCSharpSwitchExpressionLines(string[] structuralLines)
     {
         var switchExpressionLines = new bool[structuralLines.Length];
-        var braceKinds = new Stack<bool>();
+        Stack<bool>? braceKinds = null;
         var activeSwitchExpressionDepth = 0;
         var pendingSwitchExpression = 0;
         var pendingSwitchKeyword = false;
@@ -7032,7 +7033,7 @@ public static partial class SymbolExtractor
                 if (line[cursor] == '{')
                 {
                     var startsSwitchExpression = pendingSwitchExpression > 0;
-                    braceKinds.Push(startsSwitchExpression);
+                    (braceKinds ??= new Stack<bool>()).Push(startsSwitchExpression);
                     if (startsSwitchExpression)
                     {
                         pendingSwitchExpression--;
@@ -7042,7 +7043,7 @@ public static partial class SymbolExtractor
                     continue;
                 }
 
-                if (line[cursor] == '}' && braceKinds.Count > 0)
+                if (line[cursor] == '}' && braceKinds != null && braceKinds.Count > 0)
                 {
                     if (braceKinds.Pop())
                         activeSwitchExpressionDepth--;
