@@ -7665,9 +7665,8 @@ public static partial class SymbolExtractor
         return -1;
     }
 
-    private static List<RecordPrimaryComponentSlice> SplitTopLevelRecordPrimaryComponents(string parameterList, int firstLineNumber)
+    private static IEnumerable<RecordPrimaryComponentSlice> SplitTopLevelRecordPrimaryComponents(string parameterList, int firstLineNumber)
     {
-        var components = new List<RecordPrimaryComponentSlice>();
         var builder = new System.Text.StringBuilder();
         var parenDepth = 0;
         var angleDepth = 0;
@@ -7771,7 +7770,7 @@ public static partial class SymbolExtractor
                 case ',' when parenDepth == 0 && angleDepth == 0 && bracketDepth == 0 && braceDepth == 0:
                     var component = builder.ToString().Trim();
                     if (component.Length > 0)
-                        components.Add(new RecordPrimaryComponentSlice(component, componentLineNumber));
+                        yield return new RecordPrimaryComponentSlice(component, componentLineNumber);
                     builder.Clear();
                     componentHasToken = false;
                     componentLineNumber = currentLineNumber;
@@ -7786,9 +7785,7 @@ public static partial class SymbolExtractor
 
         var trailingComponent = builder.ToString().Trim();
         if (trailingComponent.Length > 0)
-            components.Add(new RecordPrimaryComponentSlice(trailingComponent, componentLineNumber));
-
-        return components;
+            yield return new RecordPrimaryComponentSlice(trailingComponent, componentLineNumber);
     }
 
     private static string StripRecordComponentComments(string text)
