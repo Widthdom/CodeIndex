@@ -6597,9 +6597,9 @@ public static partial class SymbolExtractor
         if (!LinesContain(lines, "class", StringComparison.Ordinal))
             return [];
 
-        var targets = new List<JavaScriptClassScanTarget>();
-        var symbolLineIdentities = BuildSymbolLineIdentities(symbols);
-        var targetIdentities = new HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)>();
+        List<JavaScriptClassScanTarget>? targets = null;
+        HashSet<SymbolLineIdentity>? symbolLineIdentities = null;
+        HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)>? targetIdentities = null;
         var lexState = new JavaScriptLexState();
         for (int i = 0; i < lines.Length; i++)
         {
@@ -6609,10 +6609,13 @@ public static partial class SymbolExtractor
             var lineOffset = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, 0);
             while (lineOffset >= 0 && lineOffset < sanitizedLine.Length)
             {
-                TryAddJavaScriptTypeScriptSyntheticClassTarget(fileId, lang, lines, symbols, targets, symbolLineIdentities, targetIdentities, i, lineOffset, sanitizedLine, privateScopeColumns);
+                TryAddJavaScriptTypeScriptSyntheticClassTarget(fileId, lang, lines, symbols, ref targets, ref symbolLineIdentities, ref targetIdentities, i, lineOffset, sanitizedLine, privateScopeColumns);
                 lineOffset = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, lineOffset + 1);
             }
         }
+
+        if (targets is null)
+            return [];
 
         SortJavaScriptTypeScriptClassScanTargets(targets);
         return targets;
@@ -7755,9 +7758,9 @@ public static partial class SymbolExtractor
         string lang,
         string[] lines,
         List<SymbolRecord> symbols,
-        List<JavaScriptClassScanTarget> targets,
-        HashSet<SymbolLineIdentity> symbolLineIdentities,
-        HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)> targetIdentities,
+        ref List<JavaScriptClassScanTarget>? targets,
+        ref HashSet<SymbolLineIdentity>? symbolLineIdentities,
+        ref HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)>? targetIdentities,
         int startIndex,
         int startColumn,
         string sanitizedLine,
@@ -7785,6 +7788,9 @@ public static partial class SymbolExtractor
                 return;
             }
 
+            targets ??= [];
+            symbolLineIdentities ??= BuildSymbolLineIdentities(symbols);
+            targetIdentities ??= new HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)>();
             AddJavaScriptTypeScriptSyntheticClassTarget(
                 fileId,
                 lang,
@@ -7828,6 +7834,9 @@ public static partial class SymbolExtractor
                 if (IsJavaScriptTypeScriptMatchInNamespaceScope(privateScopeColumns, startIndex, startColumn + exportEqualsMatch.Index, sanitizedLine))
                     return;
 
+                targets ??= [];
+                symbolLineIdentities ??= BuildSymbolLineIdentities(symbols);
+                targetIdentities ??= new HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)>();
                 AddJavaScriptTypeScriptSyntheticClassTarget(
                     fileId,
                     lang,
@@ -7881,6 +7890,9 @@ public static partial class SymbolExtractor
             ?? TryGetGroup(classExpressionBindingMatch, "moduleExportsAlias")
             ?? (classExpressionBindingMatch.Groups["moduleExports"].Success ? "default" : null)
             ?? "class";
+        targets ??= [];
+        symbolLineIdentities ??= BuildSymbolLineIdentities(symbols);
+        targetIdentities ??= new HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)>();
         AddJavaScriptTypeScriptSyntheticClassTarget(
             fileId,
             lang,
