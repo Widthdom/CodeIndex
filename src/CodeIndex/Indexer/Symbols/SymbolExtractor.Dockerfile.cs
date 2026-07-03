@@ -265,7 +265,7 @@ public static partial class SymbolExtractor
         int lineNumber,
         List<SymbolRecord> symbols)
     {
-        var trimmed = line.TrimStart();
+        var trimmed = line.AsSpan().TrimStart();
         if (trimmed.Length <= 6
             || !trimmed.StartsWith("EXPOSE", StringComparison.OrdinalIgnoreCase)
             || !char.IsWhiteSpace(trimmed[6]))
@@ -273,8 +273,9 @@ public static partial class SymbolExtractor
             return;
         }
 
+        var trimmedText = trimmed.Length == line.Length ? line : trimmed.ToString();
         var first = true;
-        foreach (var token in EnumerateDockerfileWhitespaceTokens(trimmed, 6))
+        foreach (var token in EnumerateDockerfileWhitespaceTokens(trimmedText, 6))
         {
             if (first)
             {
@@ -329,7 +330,7 @@ public static partial class SymbolExtractor
         int lineNumber,
         List<SymbolRecord> symbols)
     {
-        var trimmed = line.TrimStart();
+        var trimmed = line.AsSpan().TrimStart();
         if (trimmed.Length <= 6
             || !trimmed.StartsWith("VOLUME", StringComparison.OrdinalIgnoreCase)
             || !char.IsWhiteSpace(trimmed[6]))
@@ -340,12 +341,13 @@ public static partial class SymbolExtractor
         var body = trimmed[6..].TrimStart();
         if (body.StartsWith("[", StringComparison.Ordinal))
         {
-            AddDockerfileJsonVolumeSymbols(fileId, line, lineNumber, symbols, body);
+            AddDockerfileJsonVolumeSymbols(fileId, line, lineNumber, symbols, body.ToString());
             return;
         }
 
+        var trimmedText = trimmed.Length == line.Length ? line : trimmed.ToString();
         var first = true;
-        foreach (var token in EnumerateDockerfileWhitespaceTokens(trimmed, 6))
+        foreach (var token in EnumerateDockerfileWhitespaceTokens(trimmedText, 6))
         {
             if (first)
             {
@@ -515,7 +517,7 @@ public static partial class SymbolExtractor
         int lineNumber,
         List<SymbolRecord> symbols)
     {
-        var trimmed = line.TrimStart();
+        var trimmed = line.AsSpan().TrimStart();
         if (trimmed.Length <= 5
             || !trimmed.StartsWith("SHELL", StringComparison.OrdinalIgnoreCase)
             || !char.IsWhiteSpace(trimmed[5]))
@@ -534,7 +536,7 @@ public static partial class SymbolExtractor
 
         try
         {
-            using var document = ParseDockerfileJsonFormPayload(body);
+            using var document = ParseDockerfileJsonFormPayload(body.ToString());
             if (document.RootElement.ValueKind != JsonValueKind.Array)
                 return;
 
@@ -663,7 +665,7 @@ public static partial class SymbolExtractor
 
     private static bool TryGetDockerfileInstructionBody(string line, string instruction, bool allowOnbuild, out string body)
     {
-        var trimmed = line.TrimStart();
+        var trimmed = line.AsSpan().TrimStart();
         if (allowOnbuild
             && trimmed.Length > "ONBUILD".Length
             && trimmed.StartsWith("ONBUILD", StringComparison.OrdinalIgnoreCase)
@@ -680,7 +682,7 @@ public static partial class SymbolExtractor
             return false;
         }
 
-        body = trimmed[instruction.Length..].TrimStart();
+        body = trimmed[instruction.Length..].TrimStart().ToString();
         return true;
     }
 
