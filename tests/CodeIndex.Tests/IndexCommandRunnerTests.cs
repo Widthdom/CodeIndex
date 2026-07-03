@@ -5014,7 +5014,7 @@ public sealed class Caller
     [Fact]
     public void BackfillFoldedColumns_CancelledDuringSymbolLoop_KeepsCompletedRowsForResume()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_cancel_symbols_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_backfill_cancel_symbols");
         var cts = new CancellationTokenSource();
         try
         {
@@ -5062,7 +5062,7 @@ public sealed class Caller
     [Fact]
     public void BackfillFoldedColumns_CancelledDuringReferenceLoop_KeepsCompletedRowsForResume()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_cancel_refs_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_backfill_cancel_refs");
         var cts = new CancellationTokenSource();
         try
         {
@@ -5110,7 +5110,7 @@ public sealed class Caller
     [Fact]
     public void BackfillFoldedColumns_RewriteAllResumesAfterCheckpoint()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_rewrite_resume_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_backfill_rewrite_resume");
         var cts = new CancellationTokenSource();
         try
         {
@@ -5155,7 +5155,7 @@ public sealed class Caller
     [Fact]
     public void BackfillFoldedColumns_RewriteAllResumesReferencePhaseCheckpoint()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_rewrite_refs_resume_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_backfill_rewrite_refs_resume");
         var cts = new CancellationTokenSource();
         try
         {
@@ -5201,7 +5201,7 @@ public sealed class Caller
     [Fact]
     public void RunBackfillFold_Cancelled_ReturnsInterruptedErrorCode()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_cancel_cli_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_backfill_cancel_cli");
         using var cts = new CancellationTokenSource();
         try
         {
