@@ -19,7 +19,8 @@ public static partial class SymbolExtractor
             listEnd = patternMatchLine.Length;
 
         var list = patternMatchLine[listStart..listEnd];
-        var results = new List<(string Name, int StartColumn)>();
+        (string Name, int StartColumn)? firstResult = null;
+        List<(string Name, int StartColumn)>? results = null;
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(list))
         {
             var segment = list.Substring(segmentStart, segmentLength);
@@ -40,10 +41,19 @@ public static partial class SymbolExtractor
             if (name.Length == 0)
                 return null;
 
-            results.Add((name, listStart + segmentStart + leading));
+            var result = (name, listStart + segmentStart + leading);
+            if (firstResult is null)
+            {
+                firstResult = result;
+            }
+            else
+            {
+                results ??= [firstResult.Value];
+                results.Add(result);
+            }
         }
 
-        return results.Count > 1 ? results : null;
+        return results;
     }
 
     private static List<(string Name, int StartColumn)>? TryExpandFortranParameterDeclaratorList(
@@ -61,7 +71,8 @@ public static partial class SymbolExtractor
             listEnd = patternMatchLine.Length;
 
         var list = patternMatchLine[listStart..listEnd];
-        var results = new List<(string Name, int StartColumn)>();
+        (string Name, int StartColumn)? firstResult = null;
+        List<(string Name, int StartColumn)>? results = null;
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(list))
         {
             var segment = list.Substring(segmentStart, segmentLength);
@@ -82,9 +93,18 @@ public static partial class SymbolExtractor
             if (name.Length == 0)
                 return null;
 
-            results.Add((name, listStart + segmentStart + leading));
+            var result = (name, listStart + segmentStart + leading);
+            if (firstResult is null)
+            {
+                firstResult = result;
+            }
+            else
+            {
+                results ??= [firstResult.Value];
+                results.Add(result);
+            }
         }
 
-        return results.Count > 1 ? results : null;
+        return results;
     }
 }
