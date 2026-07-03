@@ -56,19 +56,19 @@ public static partial class SymbolExtractor
     {
         for (var i = 0; i < lines.Length; i++)
         {
-            var trimmed = lines[i].TrimStart();
-            if (trimmed.Length == 0 || trimmed.StartsWith("#", StringComparison.Ordinal))
+            var trimmed = lines[i].AsSpan().TrimStart();
+            if (trimmed.IsEmpty || trimmed[0] == '#')
                 continue;
 
             var quote = trimmed.StartsWith("\"\"\"", StringComparison.Ordinal) ? "\"\"\"" :
-                trimmed.StartsWith("'''", StringComparison.Ordinal) ? "'''" : null;
-            if (quote == null)
+                trimmed.StartsWith("'''", StringComparison.Ordinal) ? "'''" : "";
+            if (quote.Length == 0)
                 return;
 
             var name = trimmed[quote.Length..].Trim();
             if (name.EndsWith(quote, StringComparison.Ordinal))
                 name = name[..^quote.Length].Trim();
-            AddHeadingSymbol(fileId, lines, symbols, i, name, "module docstring");
+            AddHeadingSymbol(fileId, lines, symbols, i, name.ToString(), "module docstring");
             return;
         }
     }
