@@ -27,9 +27,7 @@ public static partial class SymbolExtractor
 
     private static void ExtractGraphQLMemberSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
     {
-        var hasInputBlocks = LinesContain(lines, "input", StringComparison.Ordinal);
-        var hasUnions = LinesContain(lines, "union", StringComparison.Ordinal);
-        if (!hasInputBlocks && !hasUnions)
+        if (!TryGetGraphQLMemberMarkers(lines, out var hasInputBlocks, out var hasUnions))
             return;
 
         if (hasInputBlocks)
@@ -126,6 +124,26 @@ public static partial class SymbolExtractor
                 }
             }
         }
+    }
+
+    private static bool TryGetGraphQLMemberMarkers(
+        IReadOnlyList<string> lines,
+        out bool hasInputBlocks,
+        out bool hasUnions)
+    {
+        hasInputBlocks = false;
+        hasUnions = false;
+
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var line = lines[i];
+            hasInputBlocks |= line.IndexOf("input", StringComparison.Ordinal) >= 0;
+            hasUnions |= line.IndexOf("union", StringComparison.Ordinal) >= 0;
+            if (hasInputBlocks && hasUnions)
+                break;
+        }
+
+        return hasInputBlocks || hasUnions;
     }
 
     private static void AddGraphQLUnionVariantSymbols(
