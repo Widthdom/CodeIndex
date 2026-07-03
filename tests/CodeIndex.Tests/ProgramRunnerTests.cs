@@ -303,10 +303,9 @@ public class ProgramRunnerTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_test_extractor_{Guid.NewGuid():N}");
+            var tempDir = TestProjectHelper.CreateTempProject("cdidx_test_extractor");
             try
             {
-                Directory.CreateDirectory(tempDir);
                 var file = Path.Combine(tempDir, "app.py");
                 File.WriteAllText(file, "def hello():\n    pass\n");
 
@@ -333,10 +332,9 @@ public class ProgramRunnerTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_test_extractor_large_source_{Guid.NewGuid():N}");
+            var tempDir = TestProjectHelper.CreateTempProject("cdidx_test_extractor_large_source");
             try
             {
-                Directory.CreateDirectory(tempDir);
                 var file = Path.Combine(tempDir, "large.py");
                 File.WriteAllText(file, new string('x', (int)ProgramRunner.TestExtractorMaxInputBytes + 1));
 
@@ -364,10 +362,9 @@ public class ProgramRunnerTests
 
         lock (TestConsoleLock.Gate)
         {
-            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_test_extractor_growing_source_{Guid.NewGuid():N}");
+            var tempDir = TestProjectHelper.CreateTempProject("cdidx_test_extractor_growing_source");
             try
             {
-                Directory.CreateDirectory(tempDir);
                 var file = Path.Combine(tempDir, "growing.py");
                 File.WriteAllText(file, new string('x', (int)ProgramRunner.TestExtractorMaxInputBytes - 1));
                 ProgramRunner.TestExtractorFileLengthCheckedForTesting = checkedPath =>
@@ -398,10 +395,9 @@ public class ProgramRunnerTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_test_extractor_large_expect_{Guid.NewGuid():N}");
+            var tempDir = TestProjectHelper.CreateTempProject("cdidx_test_extractor_large_expect");
             try
             {
-                Directory.CreateDirectory(tempDir);
                 var file = Path.Combine(tempDir, "app.py");
                 var expect = Path.Combine(tempDir, "expected.json");
                 File.WriteAllText(file, "def hello():\n    pass\n");
@@ -428,10 +424,9 @@ public class ProgramRunnerTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_test_extractor_deep_expect_{Guid.NewGuid():N}");
+            var tempDir = TestProjectHelper.CreateTempProject("cdidx_test_extractor_deep_expect");
             try
             {
-                Directory.CreateDirectory(tempDir);
                 var file = Path.Combine(tempDir, "app.py");
                 var expect = Path.Combine(tempDir, "expected.json");
                 File.WriteAllText(file, "def hello():\n    pass\n");
