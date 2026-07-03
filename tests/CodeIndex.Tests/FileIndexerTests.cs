@@ -2874,7 +2874,8 @@ public partial class FileIndexerTests
             // Dangling symlinks (target does not exist) must be skipped without aborting the scan.
             // target が存在しない dangling symlink は、scan 全体を落とさずスキップする。
             File.CreateSymbolicLink(Path.Combine(tempDir, "dangling.py"), "missing_target.py");
-            Directory.CreateSymbolicLink(Path.Combine(tempDir, "dangling_dir"), Path.Combine(Path.GetTempPath(), $"missing_{Guid.NewGuid():N}"));
+            var missingDirectoryTarget = Path.Combine(tempDir, "missing_directory_target");
+            Directory.CreateSymbolicLink(Path.Combine(tempDir, "dangling_dir"), missingDirectoryTarget);
 
             var indexer = new FileIndexer(tempDir);
             var files = indexer.ScanFiles()
