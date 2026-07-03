@@ -9240,10 +9240,14 @@ public static partial class SymbolExtractor
 
     private static string? NormalizeMetadata(string? value)
     {
-        if (string.IsNullOrWhiteSpace(value))
+        if (value is null)
             return null;
 
-        return value.Trim();
+        var trimmed = value.AsSpan().Trim();
+        if (trimmed.IsEmpty)
+            return null;
+
+        return trimmed.Length == value.Length ? value : trimmed.ToString();
     }
 
     private static string NormalizeExtractedSymbolName(string? lang, string name, Match match, string matchLine)
