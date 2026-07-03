@@ -1182,8 +1182,7 @@ public class LegacySchemaMigrationTests : IDisposable
         // to authoritative. This test stamps `canStampReadiness=false`-equivalent semantics
         // at the DbWriter boundary and verifies no ready bit flips on.
         // update モードが legacy DB を trusted に昇格させないことを確認。
-        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_update_legacy_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
+        var dir = TestProjectHelper.CreateTempProject("codeindex_update_legacy");
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
@@ -1231,7 +1230,7 @@ public class LegacySchemaMigrationTests : IDisposable
         // to local paths before the `.cdidx` heuristic, so workspace / git lookups recover
         // the same project root as a plain filesystem path.
         // --db が file: URI の場合でも、.cdidx 判定前にローカルパス化して正しい project root を返す。
-        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_uri_root_{Guid.NewGuid():N}");
+        var dir = TestProjectHelper.CreateTempProject("codeindex_uri_root");
         var cdidxDir = Path.Combine(dir, ".cdidx");
         Directory.CreateDirectory(cdidxDir);
         var dbPath = Path.Combine(cdidxDir, "codeindex.db");
@@ -1274,8 +1273,7 @@ public class LegacySchemaMigrationTests : IDisposable
         // empty tables and end-of-run stamping cannot leave old bits blessing empty data.
         // This mirrors the ordering in IndexCommandRunner / McpToolHandlers.
         // rebuild 開始時は DropAll より前に readiness をクリアする順序の固定。
-        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_rebuild_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
+        var dir = TestProjectHelper.CreateTempProject("codeindex_rebuild");
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
@@ -1322,8 +1320,7 @@ public class LegacySchemaMigrationTests : IDisposable
         // (InitializeSchema → writes → MarkIndexComplete) stamps user_version and the tables
         // are then trusted even if empty (legitimate docs-only repo).
         // 成功 index では MarkIndexComplete が版印を打ち、空テーブルでも trusted になる。
-        var completedDir = Path.Combine(Path.GetTempPath(), $"codeindex_completed_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(completedDir);
+        var completedDir = TestProjectHelper.CreateTempProject("codeindex_completed");
         var completedDb = Path.Combine(completedDir, "codeindex.db");
         try
         {
@@ -1351,8 +1348,7 @@ public class LegacySchemaMigrationTests : IDisposable
     [Fact]
     public void ReadyBitStamps_ShareUserVersionHelperAcrossRawAndTrackedTransactions_Issue3716()
     {
-        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_ready_bits_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
+        var dir = TestProjectHelper.CreateTempProject("codeindex_ready_bits");
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
