@@ -1704,10 +1704,10 @@ public static partial class ReferenceExtractor
         if (!TryFindLastIdentifier(clause, start, end, out var lastStart, out _))
             return end;
 
-        var before = clause.Substring(start, lastStart - start).TrimEnd();
+        var before = clause.AsSpan(start, lastStart - start).TrimEnd();
         if (language == "csharp" && before.EndsWith("@", StringComparison.Ordinal))
         {
-            var prefix = before.Substring(0, before.Length - 1).TrimEnd();
+            var prefix = before[..^1].TrimEnd();
             if (prefix.Length == 0
                 || prefix.EndsWith(".", StringComparison.Ordinal)
                 || prefix.EndsWith("::", StringComparison.Ordinal))
