@@ -6,6 +6,8 @@ namespace CodeIndex.Indexer;
 
 internal static class JavaReferenceExtractor
 {
+    private static readonly IReadOnlySet<string> EmptyGenericParameterNames = new HashSet<string>(StringComparer.Ordinal);
+
     // Java compile-time type literal: `T.class`, `T[].class`, `outer.Inner.class` etc.
     private static readonly Regex DotClassArgRegex = new(
         @"(?<![\w$.])(?<arg>[A-Za-z_][\w.]*)\s*(?:\[\s*\])*\s*\.class\b",
@@ -809,7 +811,7 @@ internal static class JavaReferenceExtractor
         EmitNamedTypeGenericBoundReferences(line, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
     }
 
-    private static HashSet<string> CollectGenericParameterNamesForDeclaration(string line)
+    private static IReadOnlySet<string> CollectGenericParameterNamesForDeclaration(string line)
     {
         if (ReferenceExtractor.TryFindCallableParameterList(line, "java", out var callableNameStart, out _, out _))
         {
@@ -823,7 +825,7 @@ internal static class JavaReferenceExtractor
 
         var tokens = ReferenceExtractor.GetTopLevelTokenSpans(line);
         if (tokens.Count < 2)
-            return [];
+            return EmptyGenericParameterNames;
 
         for (int i = 0; i < tokens.Count; i++)
         {
@@ -831,22 +833,22 @@ internal static class JavaReferenceExtractor
                 continue;
             var nameIndex = i + 1;
             if (nameIndex >= tokens.Count)
-                return [];
+                return EmptyGenericParameterNames;
             return CollectGenericParameterNamesFromHeader(line.Substring(tokens[nameIndex].Start, tokens[nameIndex].Length));
         }
 
-        return [];
+        return EmptyGenericParameterNames;
     }
 
-    private static HashSet<string> CollectGenericParameterNamesFromHeader(string header)
+    private static IReadOnlySet<string> CollectGenericParameterNamesFromHeader(string header)
     {
         int openAngle = header.IndexOf('<');
         if (openAngle < 0)
-            return [];
+            return EmptyGenericParameterNames;
 
         int closeAngle = ReferenceExtractor.FindMatchingChar(header, openAngle, '<', '>');
         if (closeAngle < 0)
-            return [];
+            return EmptyGenericParameterNames;
 
         return CollectGenericParameterNames(header.Substring(openAngle + 1, closeAngle - openAngle - 1));
     }
@@ -994,9 +996,9 @@ internal static class JavaReferenceExtractor
     private static bool IsNamedTypeKeyword(ReadOnlySpan<char> token) =>
         token is "class" or "interface" or "enum" or "record";
 
-    private static HashSet<string> CollectGenericParameterNames(string parameterClauseText)
+    private static IReadOnlySet<string> CollectGenericParameterNames(string parameterClauseText)
     {
-        var names = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string>? names = null;
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(parameterClauseText))
         {
             var parameterLeading = ReferenceExtractor.CountLeadingWhitespace(parameterClauseText, segmentStart, segmentLength);
@@ -1010,10 +1012,10 @@ internal static class JavaReferenceExtractor
             int extendsIndex = ReferenceExtractor.FindTopLevelKeyword(rawParameter, "extends");
             var nameFragment = extendsIndex >= 0 ? rawParameter.Substring(0, extendsIndex) : rawParameter;
             if (TryReadGenericParameterName(nameFragment, out var name))
-                names.Add(name);
+                (names ??= new HashSet<string>(StringComparer.Ordinal)).Add(name);
         }
 
-        return names;
+        return names ?? EmptyGenericParameterNames;
     }
 
     private static bool TryReadGenericParameterName(string text, out string name)

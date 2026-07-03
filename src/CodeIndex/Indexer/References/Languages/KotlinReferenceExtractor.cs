@@ -38,6 +38,7 @@ internal static class KotlinReferenceExtractor
         "and", "downTo", "or", "shl", "shr", "step", "to", "until", "ushr", "xor",
     };
     private static readonly HashSet<string> EmptyKotlinNameSet = new(StringComparer.Ordinal);
+    private static readonly IReadOnlySet<string> EmptyGenericParameterNames = new HashSet<string>(StringComparer.Ordinal);
 
     public static (HashSet<string> ConstructorTypeNames, HashSet<string> InfixFunctionNames) BuildNameSets(
         string language,
@@ -815,7 +816,7 @@ internal static class KotlinReferenceExtractor
             genericParameterNames);
     }
 
-    private static HashSet<string> CollectGenericParameterNames(string preparedLine)
+    private static IReadOnlySet<string> CollectGenericParameterNames(string preparedLine)
     {
         foreach (var funIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "fun"))
         {
@@ -839,25 +840,25 @@ internal static class KotlinReferenceExtractor
             }
         }
 
-        return [];
+        return EmptyGenericParameterNames;
     }
 
-    private static HashSet<string> CollectGenericParameterNamesFromClause(string preparedLine, int genericOpenIndex)
+    private static IReadOnlySet<string> CollectGenericParameterNamesFromClause(string preparedLine, int genericOpenIndex)
     {
-        var names = new HashSet<string>(StringComparer.Ordinal);
         var genericCloseIndex = ReferenceExtractor.FindMatchingChar(preparedLine, genericOpenIndex, '<', '>');
         if (genericCloseIndex <= genericOpenIndex)
-            return names;
+            return EmptyGenericParameterNames;
 
+        HashSet<string>? names = null;
         var clause = preparedLine.Substring(genericOpenIndex + 1, genericCloseIndex - genericOpenIndex - 1);
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(clause))
         {
             var fragment = clause.Substring(segmentStart, segmentLength);
             if (TryReadGenericParameterName(fragment, out var name))
-                names.Add(name);
+                (names ??= new HashSet<string>(StringComparer.Ordinal)).Add(name);
         }
 
-        return names;
+        return names ?? EmptyGenericParameterNames;
     }
 
     private static int ConsumeKotlinDeclarationName(string preparedLine, int startIndex)
