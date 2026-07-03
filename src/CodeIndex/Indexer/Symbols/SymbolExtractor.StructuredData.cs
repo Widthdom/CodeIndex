@@ -58,8 +58,12 @@ public static partial class SymbolExtractor
             if (document.RootElement.ValueKind != JsonValueKind.Object)
                 return [];
 
+            var rootProperties = document.RootElement.EnumerateObject();
+            if (!rootProperties.MoveNext())
+                return [];
+
             var symbols = new List<SymbolRecord>();
-            var lineStarts = BuildLineStarts(lines);
+            int[]? lineStarts = null;
             var searchOffset = 0;
             var traversalNodes = 0;
             var truncated = false;
@@ -68,7 +72,7 @@ public static partial class SymbolExtractor
                 fileId,
                 content,
                 lines,
-                lineStarts,
+                ref lineStarts,
                 document.RootElement,
                 parentPath: null,
                 ref searchOffset,
@@ -89,7 +93,7 @@ public static partial class SymbolExtractor
         long fileId,
         string content,
         string[] lines,
-        int[] lineStarts,
+        ref int[]? lineStarts,
         JsonElement element,
         string? parentPath,
         ref int searchOffset,
@@ -119,7 +123,7 @@ public static partial class SymbolExtractor
                 : parentPath + "." + property.Name;
             var line = TryDequeueJsonPropertyLine(propertyLines, property.Name, out var mappedLine)
                 ? mappedLine
-                : FindLineNumberForOffset(lineStarts, FindJsonPropertyOffset(content, property.Name, ref searchOffset));
+                : FindLineNumberForOffset(lineStarts ??= BuildLineStarts(lines), FindJsonPropertyOffset(content, property.Name, ref searchOffset));
 
             if (name.Length > StructuredDataMaxPathLength)
             {
@@ -136,7 +140,7 @@ public static partial class SymbolExtractor
 
             if (property.Value.ValueKind == JsonValueKind.Object)
             {
-                ExtractJsonObjectSymbols(fileId, content, lines, lineStarts, property.Value, name, ref searchOffset, symbols, propertyLines, depth + 1, ref traversalNodes, ref truncated);
+                ExtractJsonObjectSymbols(fileId, content, lines, ref lineStarts, property.Value, name, ref searchOffset, symbols, propertyLines, depth + 1, ref traversalNodes, ref truncated);
                 if (truncated)
                     return;
             }
@@ -145,7 +149,7 @@ public static partial class SymbolExtractor
                 foreach (var item in property.Value.EnumerateArray())
                 {
                     if (item.ValueKind == JsonValueKind.Object)
-                        ExtractJsonObjectSymbols(fileId, content, lines, lineStarts, item, name, ref searchOffset, symbols, propertyLines, depth + 1, ref traversalNodes, ref truncated);
+                        ExtractJsonObjectSymbols(fileId, content, lines, ref lineStarts, item, name, ref searchOffset, symbols, propertyLines, depth + 1, ref traversalNodes, ref truncated);
                     if (truncated)
                         return;
                 }
