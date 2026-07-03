@@ -22,17 +22,18 @@ public static partial class SymbolExtractor
 
             for (var lineIndex = bodyStartLineIndex; lineIndex <= bodyEndLineIndex && lineIndex < lines.Length; lineIndex++)
             {
-                var trimmed = lines[lineIndex].Trim();
-                if (trimmed.Length == 0
-                    || trimmed.StartsWith("'", StringComparison.Ordinal)
-                    || trimmed.StartsWith("Rem ", StringComparison.OrdinalIgnoreCase))
+                var trimmedSpan = lines[lineIndex].AsSpan().Trim();
+                if (trimmedSpan.IsEmpty
+                    || trimmedSpan[0] == '\''
+                    || trimmedSpan.StartsWith("Rem ", StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
 
-                if (trimmed.StartsWith("End Enum", StringComparison.OrdinalIgnoreCase))
+                if (trimmedSpan.StartsWith("End Enum", StringComparison.OrdinalIgnoreCase))
                     break;
 
+                var trimmed = trimmedSpan.ToString();
                 if (inAttributeBlock)
                 {
                     var attributeCloseIndex = trimmed.IndexOf('>');
