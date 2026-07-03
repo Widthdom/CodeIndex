@@ -37,7 +37,8 @@ public static partial class SymbolExtractor
     private static List<SymbolRecord> ExtractSoliditySymbols(long fileId, string[] lines)
     {
         var matchLines = SolidityLanguageSupport.MaskCommentsAndStrings(lines);
-        var symbols = new List<SymbolRecord>();
+        List<SymbolRecord>? symbols = null;
+        List<SymbolRecord> Symbols() => symbols ??= [];
 
         for (var i = 0; i < matchLines.Length; i++)
         {
@@ -49,7 +50,7 @@ public static partial class SymbolExtractor
                 {
                     var keyword = typeMatch.Groups["keyword"].Value;
                     var kind = keyword == "interface" ? "interface" : "class";
-                    AddSoliditySymbol(symbols, fileId, kind, keyword, typeMatch, lines[i], matchLines, i, BodyStyle.Brace);
+                    AddSoliditySymbol(Symbols(), fileId, kind, keyword, typeMatch, lines[i], matchLines, i, BodyStyle.Brace);
                     continue;
                 }
             }
@@ -59,7 +60,7 @@ public static partial class SymbolExtractor
                 var functionMatch = SolidityFunctionDeclarationRegex.Match(line);
                 if (functionMatch.Success)
                 {
-                    AddSoliditySymbol(symbols, fileId, "function", "function", functionMatch, lines[i], matchLines, i, BodyStyle.Brace);
+                    AddSoliditySymbol(Symbols(), fileId, "function", "function", functionMatch, lines[i], matchLines, i, BodyStyle.Brace);
                     continue;
                 }
             }
@@ -69,7 +70,7 @@ public static partial class SymbolExtractor
                 var constructorMatch = SolidityConstructorDeclarationRegex.Match(line);
                 if (constructorMatch.Success)
                 {
-                    AddSoliditySymbol(symbols, fileId, "function", "constructor", constructorMatch, lines[i], matchLines, i, BodyStyle.Brace);
+                    AddSoliditySymbol(Symbols(), fileId, "function", "constructor", constructorMatch, lines[i], matchLines, i, BodyStyle.Brace);
                     continue;
                 }
             }
@@ -80,7 +81,7 @@ public static partial class SymbolExtractor
                 var fallbackReceiveMatch = SolidityFallbackReceiveDeclarationRegex.Match(line);
                 if (fallbackReceiveMatch.Success)
                 {
-                    AddSoliditySymbol(symbols, fileId, "function", fallbackReceiveMatch.Groups["name"].Value, fallbackReceiveMatch, lines[i], matchLines, i, BodyStyle.Brace);
+                    AddSoliditySymbol(Symbols(), fileId, "function", fallbackReceiveMatch.Groups["name"].Value, fallbackReceiveMatch, lines[i], matchLines, i, BodyStyle.Brace);
                     continue;
                 }
             }
@@ -90,7 +91,7 @@ public static partial class SymbolExtractor
                 var eventMatch = SolidityEventDeclarationRegex.Match(line);
                 if (eventMatch.Success)
                 {
-                    AddSoliditySymbol(symbols, fileId, "event", "event", eventMatch, lines[i], matchLines, i, BodyStyle.None);
+                    AddSoliditySymbol(Symbols(), fileId, "event", "event", eventMatch, lines[i], matchLines, i, BodyStyle.None);
                     continue;
                 }
             }
@@ -100,7 +101,7 @@ public static partial class SymbolExtractor
                 var errorMatch = SolidityErrorDeclarationRegex.Match(line);
                 if (errorMatch.Success)
                 {
-                    AddSoliditySymbol(symbols, fileId, "type", "error", errorMatch, lines[i], matchLines, i, BodyStyle.None);
+                    AddSoliditySymbol(Symbols(), fileId, "type", "error", errorMatch, lines[i], matchLines, i, BodyStyle.None);
                     continue;
                 }
             }
@@ -110,7 +111,7 @@ public static partial class SymbolExtractor
                 var structMatch = SolidityStructDeclarationRegex.Match(line);
                 if (structMatch.Success)
                 {
-                    AddSoliditySymbol(symbols, fileId, "struct", "struct", structMatch, lines[i], matchLines, i, BodyStyle.Brace);
+                    AddSoliditySymbol(Symbols(), fileId, "struct", "struct", structMatch, lines[i], matchLines, i, BodyStyle.Brace);
                     continue;
                 }
             }
@@ -120,7 +121,7 @@ public static partial class SymbolExtractor
                 var enumMatch = SolidityEnumDeclarationRegex.Match(line);
                 if (enumMatch.Success)
                 {
-                    AddSoliditySymbol(symbols, fileId, "enum", "enum", enumMatch, lines[i], matchLines, i, BodyStyle.Brace);
+                    AddSoliditySymbol(Symbols(), fileId, "enum", "enum", enumMatch, lines[i], matchLines, i, BodyStyle.Brace);
                     continue;
                 }
             }
@@ -129,9 +130,12 @@ public static partial class SymbolExtractor
             {
                 var modifierMatch = SolidityModifierDeclarationRegex.Match(line);
                 if (modifierMatch.Success)
-                    AddSoliditySymbol(symbols, fileId, "function", "modifier", modifierMatch, lines[i], matchLines, i, BodyStyle.Brace);
+                    AddSoliditySymbol(Symbols(), fileId, "function", "modifier", modifierMatch, lines[i], matchLines, i, BodyStyle.Brace);
             }
         }
+
+        if (symbols == null)
+            return [];
 
         AssignContainers(symbols, lines, null);
         PopulateDeclaredContainerQualifiedNames(symbols);
