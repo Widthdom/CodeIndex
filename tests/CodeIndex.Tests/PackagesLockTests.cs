@@ -69,6 +69,7 @@ public class PackagesLockTests
 
         Assert.Equal("true", ElementValue(project, "IsTrimmable"));
         Assert.Equal("'$(PublishTrimmed)' == 'true' or '$(PublishAot)' == 'true'", RequiredAttributeValue(Element(project, "IsTrimmable"), "Condition"));
+        Assert.Equal("false", ElementValue(project, "EnableTrimAnalyzer"));
         Assert.Equal("'$(PublishTrimmed)' == 'true'", RequiredAttributeValue(Element(project, "EnableTrimAnalyzer"), "Condition"));
         Assert.Equal("'$(PublishAot)' == 'true'", RequiredAttributeValue(Element(project, "EnableAotAnalyzer"), "Condition"));
     }

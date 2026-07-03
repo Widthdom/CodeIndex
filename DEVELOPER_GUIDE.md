@@ -2196,6 +2196,11 @@ generation, so they do not depend on reflection-based `System.Text.Json`.
 The release verify step installs the tarball and runs `status --json` so
 this does not silently regress.
 
+The project disables the Roslyn compile-time trim analyzer when
+`PublishTrimmed=true` because the .NET 8 analyzer can fail with AD0001 before
+RID-specific publish starts. This does not disable trimming: the ILLink
+publish-time pass still runs and still emits trim analysis warnings.
+
 `JsonOutputFailure` remains for manually modified or experimental builds.
 In .NET 8, trimming sets
 `JsonSerializerIsReflectionEnabledByDefault=false` implicitly. If a custom
@@ -4227,6 +4232,8 @@ JSON-RPC 2.0 は `-32700` と `-32600..-32603` を仕様自身、`-32000..-32099
 ### release の `--json` 方針と trimmed fallback
 
 `release.yml` は自己完結バイナリを `-p:PublishTrimmed=true` で publish する。`status --json` や `index --json` などの CLI JSON payload は `CliJsonSerializerContext` の source generation でカバーしているため、reflection-based `System.Text.Json` に依存しない。release verify step は tarball を install したうえで `status --json` を実行し、この性質が黙って壊れないようにしている。
+
+プロジェクトは `PublishTrimmed=true` 時の Roslyn compile-time trim analyzer を無効化している。.NET 8 analyzer が RID-specific publish の開始前に AD0001 で失敗することがあるためで、trimming 自体を無効にしているわけではない。ILLink の publish-time pass は引き続き実行され、trim analysis warning も出力される。
 
 `JsonOutputFailure` は、手動変更ビルドや実験的なビルド向けの防御として残している。.NET 8 では trimming が暗黙に `JsonSerializerIsReflectionEnabledByDefault=false` を設定する。ソース生成済み `JsonTypeInfo<T>` を持たない reflection serializer 経路に custom build が到達した場合、CodeIndex は serializer failure を database error と誤分類せず、専用 stderr メッセージと終了コード `4`（`FeatureUnavailable`）で fail-fast する。新しい CLI JSON DTO を追加するときは、release artifact の trim を維持できるよう `CliJsonSerializerContext` への登録も同時に行う。
 

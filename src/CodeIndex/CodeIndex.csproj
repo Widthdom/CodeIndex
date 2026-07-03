@@ -9,7 +9,13 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsTrimmable Condition="'$(PublishTrimmed)' == 'true' or '$(PublishAot)' == 'true'">true</IsTrimmable>
-    <EnableTrimAnalyzer Condition="'$(PublishTrimmed)' == 'true'">true</EnableTrimAnalyzer>
+    <!--
+      Keep the publish-time ILLink trim pass enabled, but disable the Roslyn
+      trim analyzer by default. The .NET 8 analyzer can throw AD0001 before
+      publish starts on this reflection-heavy CLI; ILLink still emits trim
+      analysis warnings during `dotnet publish`.
+    -->
+    <EnableTrimAnalyzer Condition="'$(PublishTrimmed)' == 'true'">false</EnableTrimAnalyzer>
     <EnableAotAnalyzer Condition="'$(PublishAot)' == 'true'">true</EnableAotAnalyzer>
     <TrimmerSingleWarn>false</TrimmerSingleWarn>
     <Deterministic>true</Deterministic>
