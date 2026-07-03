@@ -233,8 +233,8 @@ public static partial class ReferenceExtractor
         if (language != "csharp")
             return (EmptyCSharpStringSet, EmptyCSharpStringSet);
 
-        var knownTypeNames = new HashSet<string>(StringComparer.Ordinal);
-        var nonEnumTypeNames = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string>? knownTypeNames = null;
+        HashSet<string>? nonEnumTypeNames = null;
 
         foreach (var symbol in symbols)
         {
@@ -243,7 +243,7 @@ public static partial class ReferenceExtractor
 
             var normalizedName = NormalizeCSharpIdentifier(symbol.Name);
             if (!string.IsNullOrWhiteSpace(normalizedName))
-                knownTypeNames.Add(normalizedName);
+                (knownTypeNames ??= new HashSet<string>(StringComparer.Ordinal)).Add(normalizedName);
 
             var qualifiedContainer = !string.IsNullOrWhiteSpace(symbol.ContainerQualifiedName)
                 ? symbol.ContainerQualifiedName
@@ -251,13 +251,13 @@ public static partial class ReferenceExtractor
                     ? symbol.ContainerName
                     : null;
             if (!string.IsNullOrWhiteSpace(qualifiedContainer) && !string.IsNullOrWhiteSpace(normalizedName))
-                knownTypeNames.Add(qualifiedContainer + "." + normalizedName);
+                (knownTypeNames ??= new HashSet<string>(StringComparer.Ordinal)).Add(qualifiedContainer + "." + normalizedName);
 
             if (symbol.Kind != "enum" && !string.IsNullOrWhiteSpace(symbol.Name))
-                nonEnumTypeNames.Add(symbol.Name);
+                (nonEnumTypeNames ??= new HashSet<string>(StringComparer.Ordinal)).Add(symbol.Name);
         }
 
-        return (knownTypeNames, nonEnumTypeNames);
+        return (knownTypeNames ?? EmptyCSharpStringSet, nonEnumTypeNames ?? EmptyCSharpStringSet);
     }
 
     private static HashSet<string>? BuildCallableDefinitionNames(string language, IReadOnlyList<SymbolRecord> symbols)
@@ -265,7 +265,7 @@ public static partial class ReferenceExtractor
         if (language != "csharp")
             return null;
 
-        var names = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string>? names = null;
         foreach (var symbol in symbols)
         {
             if (symbol.Kind != "function" || string.IsNullOrWhiteSpace(symbol.Name))
@@ -275,7 +275,7 @@ public static partial class ReferenceExtractor
                 ? NormalizeCSharpIdentifier(symbol.Name)
                 : symbol.Name;
             if (!string.IsNullOrWhiteSpace(name))
-                names.Add(name);
+                (names ??= new HashSet<string>(StringComparer.Ordinal)).Add(name);
         }
 
         return names;
