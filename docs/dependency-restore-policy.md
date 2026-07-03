@@ -13,8 +13,9 @@ Docker, release, package metadata, and test infrastructure.
 - CI and mutation-test NuGet caches use exact lockfile-derived keys and do not
   use broad `restore-keys` fallbacks that can reuse stale package graphs.
 - Docker resolves `TARGETARCH` to `linux-musl-x64` or `linux-musl-arm64`, runs
-  `dotnet restore src/CodeIndex/CodeIndex.csproj --runtime "$rid"
-  --locked-mode`, and then publishes the same RID with `--no-restore`.
+  `dotnet restore src/CodeIndex/CodeIndex.csproj
+  -p:RuntimeIdentifier="$rid" --locked-mode`, and then publishes the same RID
+  property with `--no-restore`.
 - `src/CodeIndex/CodeIndex.csproj` targets `net8.0`, declares the supported
   musl RIDs, keeps trim/AOT analyzer settings explicit, derives package version
   metadata from `version.json`, and keeps Source Link / ILLink references
@@ -42,9 +43,9 @@ infrastructure をまたぐ dependency restore の挙動を明示的に保ちま
 - CI と mutation-test の NuGet cache は lockfile 由来の完全一致 key を使い、
   古い package graph を再利用しうる broad な `restore-keys` fallback は使いません。
 - Docker は `TARGETARCH` を `linux-musl-x64` または `linux-musl-arm64` に
-  解決し、`dotnet restore src/CodeIndex/CodeIndex.csproj --runtime "$rid"
-  --locked-mode` を実行してから、同じ RID を `--no-restore` 付きで publish
-  します。
+  解決し、`dotnet restore src/CodeIndex/CodeIndex.csproj
+  -p:RuntimeIdentifier="$rid" --locked-mode` を実行してから、同じ RID
+  property を `--no-restore` 付きで publish します。
 - `src/CodeIndex/CodeIndex.csproj` は `net8.0` を対象にし、supported musl
   RID、trim/AOT analyzer 設定、`version.json` 由来の package version
   metadata、`PrivateAssets=All` の Source Link / ILLink build-only reference

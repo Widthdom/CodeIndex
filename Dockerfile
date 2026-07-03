@@ -18,7 +18,7 @@ RUN case "$TARGETARCH" in \
       *) echo "Unsupported container architecture: $TARGETARCH" >&2; exit 1 ;; \
     esac && \
     dotnet restore src/CodeIndex/CodeIndex.csproj \
-      --runtime "$rid" \
+      -p:RuntimeIdentifier="$rid" \
       --locked-mode
 
 COPY src/CodeIndex/ src/CodeIndex/
@@ -36,7 +36,7 @@ RUN case "$TARGETARCH" in \
     build_date="${CDIDX_BUILD_DATE:-$(date -u +%Y-%m-%d)}" && \
     dotnet publish src/CodeIndex/CodeIndex.csproj \
       --configuration Release \
-      --runtime "$rid" \
+      -p:RuntimeIdentifier="$rid" \
       --no-restore \
       --self-contained true \
       -p:PublishSingleFile=true \

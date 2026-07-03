@@ -94,11 +94,13 @@ public class PackagesLockTests
         Assert.Contains("key: ${{ runner.os }}-dotnet-nuget-${{ hashFiles('**/packages.lock.json', 'global.json') }}", dotnetWorkflow, StringComparison.Ordinal);
         Assert.Contains("key: ${{ runner.os }}-mutation-stryker-4.14.0-${{ hashFiles('**/packages.lock.json', 'global.json') }}", mutationWorkflow, StringComparison.Ordinal);
 
+        Assert.DoesNotContain("dotnet restore src/CodeIndex/CodeIndex.csproj \\\n      --runtime \"$rid\"", dockerfile, StringComparison.Ordinal);
+        Assert.DoesNotContain("--runtime \"$rid\" \\\n      --no-restore", dockerfile, StringComparison.Ordinal);
         Assert.Contains(
-            "dotnet restore src/CodeIndex/CodeIndex.csproj \\\n      --runtime \"$rid\" \\\n      --locked-mode",
+            "dotnet restore src/CodeIndex/CodeIndex.csproj \\\n      -p:RuntimeIdentifier=\"$rid\" \\\n      --locked-mode",
             dockerfile,
             StringComparison.Ordinal);
-        Assert.Contains("--runtime \"$rid\" \\\n      --no-restore", dockerfile, StringComparison.Ordinal);
+        Assert.Contains("-p:RuntimeIdentifier=\"$rid\" \\\n      --no-restore", dockerfile, StringComparison.Ordinal);
         Assert.Contains("linux-musl-x64", dockerfile, StringComparison.Ordinal);
         Assert.Contains("linux-musl-arm64", dockerfile, StringComparison.Ordinal);
     }
