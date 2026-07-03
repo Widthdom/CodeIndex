@@ -1269,15 +1269,18 @@ public static partial class ReferenceExtractor
         return names;
     }
 
-    private static List<SymbolRecord> BuildCobolCallableSymbols(IReadOnlyList<SymbolRecord> symbols)
+    private static IReadOnlyList<SymbolRecord>? BuildCobolCallableSymbols(IReadOnlyList<SymbolRecord> symbols)
     {
-        var callableSymbols = new List<(SymbolRecord Symbol, int OriginalIndex)>();
+        List<(SymbolRecord Symbol, int OriginalIndex)>? callableSymbols = null;
         for (var index = 0; index < symbols.Count; index++)
         {
             var symbol = symbols[index];
             if (symbol.Kind == "function")
-                callableSymbols.Add((symbol, index));
+                (callableSymbols ??= []).Add((symbol, index));
         }
+
+        if (callableSymbols is not { Count: > 0 })
+            return null;
 
         callableSymbols.Sort(CompareCobolCallableSymbolEntries);
 
@@ -1305,15 +1308,18 @@ public static partial class ReferenceExtractor
             : left.OriginalIndex.CompareTo(right.OriginalIndex);
     }
 
-    private static List<SymbolRecord> BuildRustEnumCandidates(IReadOnlyList<SymbolRecord> symbols)
+    private static IReadOnlyList<SymbolRecord>? BuildRustEnumCandidates(IReadOnlyList<SymbolRecord> symbols)
     {
-        var candidates = new List<(SymbolRecord Symbol, int OriginalIndex)>();
+        List<(SymbolRecord Symbol, int OriginalIndex)>? candidates = null;
         for (var index = 0; index < symbols.Count; index++)
         {
             var symbol = symbols[index];
             if (symbol.Kind == "enum" && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
-                candidates.Add((symbol, index));
+                (candidates ??= []).Add((symbol, index));
         }
+
+        if (candidates is not { Count: > 0 })
+            return null;
 
         candidates.Sort(CompareRustEnumCandidateEntries);
 
