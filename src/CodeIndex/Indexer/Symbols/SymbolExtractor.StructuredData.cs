@@ -482,7 +482,7 @@ public static partial class SymbolExtractor
             return match.Groups["double"].Value.Replace("\"\"", "\"", StringComparison.Ordinal).Trim();
         if (match.Groups["single"].Success)
             return match.Groups["single"].Value.Replace("''", "'", StringComparison.Ordinal).Trim();
-        return match.Groups["plain"].Value.Trim();
+        return match.Groups["plain"].ValueSpan.Trim().ToString();
     }
 
     private static string StripYamlInlineComment(string value)
