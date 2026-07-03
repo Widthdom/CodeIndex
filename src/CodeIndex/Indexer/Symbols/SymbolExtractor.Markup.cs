@@ -368,7 +368,7 @@ public static partial class SymbolExtractor
         // Markdown の見出しは、ドキュメント内でナビゲート可能な symbol に最も近い。
         IReadOnlyDictionary<string, string>? referenceTargets = null;
         var symbols = new List<SymbolRecord>();
-        var headingStack = new Stack<(int Level, int SymbolIndex)>();
+        Stack<(int Level, int SymbolIndex)>? headingStack = null;
         var inFence = false;
         var fenceChar = '\0';
         var fenceLength = 0;
@@ -393,7 +393,7 @@ public static partial class SymbolExtractor
                         Signature = lines[i].Trim(),
                     };
 
-                    if (headingStack.Count > 0)
+                    if (headingStack is { Count: > 0 })
                     {
                         var parent = symbols[headingStack.Peek().SymbolIndex];
                         codeSymbol.ContainerKind = "heading";
@@ -422,7 +422,7 @@ public static partial class SymbolExtractor
             if (i + 1 < lines.Length
                 && TryParseMarkdownSetextHeading(lines[i], lines[i + 1], out var setextLevel, out var setextHeadingText))
             {
-                while (headingStack.Count > 0 && headingStack.Peek().Level >= setextLevel)
+                while (headingStack is { Count: > 0 } && headingStack.Peek().Level >= setextLevel)
                 {
                     var closedHeading = headingStack.Pop();
                     symbols[closedHeading.SymbolIndex].EndLine = i;
@@ -442,7 +442,7 @@ public static partial class SymbolExtractor
                     Signature = lines[i].TrimEnd(),
                 };
 
-                if (headingStack.Count > 0)
+                if (headingStack is { Count: > 0 })
                 {
                     var parent = symbols[headingStack.Peek().SymbolIndex];
                     setextSymbol.ContainerKind = "heading";
@@ -450,7 +450,7 @@ public static partial class SymbolExtractor
                 }
 
                 symbols.Add(setextSymbol);
-                headingStack.Push((setextLevel, symbols.Count - 1));
+                (headingStack ??= new Stack<(int Level, int SymbolIndex)>()).Push((setextLevel, symbols.Count - 1));
                 AddMarkdownReferenceSymbols(fileId, lines[i], i + 1, symbols, lines, ref referenceTargets);
                 i++;
                 continue;
@@ -462,7 +462,7 @@ public static partial class SymbolExtractor
                 continue;
             }
 
-            while (headingStack.Count > 0 && headingStack.Peek().Level >= level)
+            while (headingStack is { Count: > 0 } && headingStack.Peek().Level >= level)
             {
                 var closedHeading = headingStack.Pop();
                 symbols[closedHeading.SymbolIndex].EndLine = i;
@@ -482,7 +482,7 @@ public static partial class SymbolExtractor
                 Signature = lines[i].Trim(),
             };
 
-            if (headingStack.Count > 0)
+            if (headingStack is { Count: > 0 })
             {
                 var parent = symbols[headingStack.Peek().SymbolIndex];
                 symbol.ContainerKind = "heading";
@@ -490,11 +490,11 @@ public static partial class SymbolExtractor
             }
 
             symbols.Add(symbol);
-            headingStack.Push((level, symbols.Count - 1));
+            (headingStack ??= new Stack<(int Level, int SymbolIndex)>()).Push((level, symbols.Count - 1));
             AddMarkdownReferenceSymbols(fileId, lines[i], i + 1, symbols, lines, ref referenceTargets);
         }
 
-        while (headingStack.Count > 0)
+        while (headingStack is { Count: > 0 })
         {
             var closedHeading = headingStack.Pop();
             symbols[closedHeading.SymbolIndex].EndLine = lines.Length;
