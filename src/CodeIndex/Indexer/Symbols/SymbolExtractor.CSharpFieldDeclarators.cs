@@ -294,8 +294,8 @@ public static partial class SymbolExtractor
 
     private static List<string> SplitCSharpTopLevelComma(string text)
     {
-        var result = new List<string>();
-        var segment = new StringBuilder();
+        var result = new List<string>(2);
+        var segment = new StringBuilder(text.Length);
         int angle = 0, paren = 0, bracket = 0, brace = 0;
         foreach (var ch in text)
         {
