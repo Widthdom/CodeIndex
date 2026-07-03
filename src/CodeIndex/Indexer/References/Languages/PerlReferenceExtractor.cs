@@ -271,8 +271,8 @@ internal static class PerlReferenceExtractor
 
     private static bool IsQualifiedSubroutineDefinition(string line, int nameIndex)
     {
-        var prefix = line[..nameIndex].TrimEnd();
-        return string.Equals(prefix, "sub", StringComparison.Ordinal)
+        var prefix = line.AsSpan(0, nameIndex).TrimEnd();
+        return prefix.Equals("sub", StringComparison.Ordinal)
             || prefix.EndsWith(" sub", StringComparison.Ordinal);
     }
 }
