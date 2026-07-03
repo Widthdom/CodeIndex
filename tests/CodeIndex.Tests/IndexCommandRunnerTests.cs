@@ -5261,7 +5261,7 @@ public sealed class Caller
     [Fact]
     public void RunBackfillFold_BlankFile_ReturnsDatabaseError()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_blank_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_backfill_blank");
         File.WriteAllText(dbPath, string.Empty);
 
         try
@@ -5299,7 +5299,7 @@ public sealed class Caller
     [Fact]
     public void RunBackfillFold_NonexistentFileUri_ReturnsNotFound()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_missing_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_backfill_missing");
         var dbUri = new Uri(dbPath).AbsoluteUri;
 
         JsonElement json;
@@ -5329,7 +5329,7 @@ public sealed class Caller
     [Fact]
     public void RunBackfillFold_LegacyDbWithoutCodeIndexMeta_Succeeds()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_legacy_no_meta_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_backfill_legacy_no_meta");
         try
         {
             using (var db = new DbContext(dbPath))
