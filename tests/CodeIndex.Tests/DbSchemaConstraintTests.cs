@@ -33,8 +33,7 @@ public class DbSchemaConstraintTests
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            TestProjectHelper.DeleteFile(dbPath);
         }
     }
 
@@ -64,8 +63,7 @@ public class DbSchemaConstraintTests
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            TestProjectHelper.DeleteFile(dbPath);
         }
     }
 
@@ -91,8 +89,7 @@ public class DbSchemaConstraintTests
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                TestProjectHelper.DeleteFile(dbPath);
+            TestProjectHelper.DeleteFile(dbPath);
         }
     }
 

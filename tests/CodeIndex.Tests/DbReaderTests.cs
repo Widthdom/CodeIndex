@@ -1164,7 +1164,7 @@ public partial class DbReaderTests : IDisposable
         finally
         {
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            if (File.Exists(legacyPath)) File.Delete(legacyPath);
+            TestProjectHelper.DeleteFile(legacyPath);
         }
     }
 

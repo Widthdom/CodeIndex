@@ -1793,7 +1793,7 @@ public partial class DbReaderTests
         finally
         {
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            if (File.Exists(mismatchPath)) File.Delete(mismatchPath);
+            TestProjectHelper.DeleteFile(mismatchPath);
         }
     }
 
@@ -1875,7 +1875,7 @@ public partial class DbReaderTests
         finally
         {
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            if (File.Exists(legacyPath)) File.Delete(legacyPath);
+            TestProjectHelper.DeleteFile(legacyPath);
         }
     }
 
