@@ -221,9 +221,18 @@ public partial class FileIndexer
     /// </summary>
     public static IReadOnlyDictionary<string, string> GetLanguageExtensions()
     {
+        var pluginExtensions = ExtractorPluginRegistry.LanguageExtensions;
+        var languageMapOverrides = LanguageMapOverrides.LoadEffectiveMap();
+        var capacity = LangMap.Count
+            + DisplayOnlyLanguageExtensions.Length
+            + FileNameMap.Count
+            + FileNamePrefixMap.Length
+            + pluginExtensions.Count
+            + languageMapOverrides.Count;
+
         // Merge extension map and filename map for a complete view
         // 完全な一覧のため拡張子マップとファイル名マップを統合
-        var merged = new Dictionary<string, string>(StringComparer.Ordinal);
+        var merged = new Dictionary<string, string>(capacity, StringComparer.Ordinal);
         foreach (var (pattern, lang) in LangMap)
             merged.TryAdd(pattern, lang);
         // Keep display-only case variants that collapse in the case-insensitive detection map.
@@ -238,9 +247,9 @@ public partial class FileIndexer
         // 露出させ、`cdidx languages` や MCP の一覧が TryDetectLanguage の実挙動と一致するようにする。
         foreach (var (prefix, lang) in FileNamePrefixMap)
             merged.TryAdd($"{prefix}<suffix>", lang);
-        foreach (var (extension, lang) in ExtractorPluginRegistry.LanguageExtensions)
+        foreach (var (extension, lang) in pluginExtensions)
             merged.TryAdd(extension, lang);
-        foreach (var (extension, lang) in LanguageMapOverrides.LoadEffectiveMap())
+        foreach (var (extension, lang) in languageMapOverrides)
             merged[extension] = lang;
         return merged;
     }
