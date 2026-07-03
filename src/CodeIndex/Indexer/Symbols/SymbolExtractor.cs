@@ -4879,7 +4879,7 @@ public static partial class SymbolExtractor
         }
 
         var structuralContent = string.Join('\n', structuralLines);
-        var lineStarts = BuildLineStarts(structuralContent);
+        var lineStarts = BuildLineStartList(structuralLines);
         if (structuralContent.Contains("ALTER", StringComparison.OrdinalIgnoreCase)
             && structuralContent.Contains("ADD", StringComparison.OrdinalIgnoreCase))
         {

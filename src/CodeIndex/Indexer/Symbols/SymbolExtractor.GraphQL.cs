@@ -35,7 +35,7 @@ public static partial class SymbolExtractor
         if (hasInputBlocks)
         {
             var content = string.Join('\n', lines);
-            var lineStarts = BuildLineStarts(content);
+            var lineStarts = BuildLineStartList(lines);
             foreach (Match inputMatch in GraphQLInputBlockRegex.Matches(content))
             {
                 var inputName = inputMatch.Groups["name"].Value;
