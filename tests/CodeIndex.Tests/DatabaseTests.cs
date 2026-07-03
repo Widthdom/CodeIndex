@@ -2801,7 +2801,8 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void InitializeSchema_MigratesReferenceLinesToContextKey()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_ref_line_context_key_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_ref_line_context_key");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
             using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
@@ -2863,7 +2864,8 @@ public class DatabaseTests : IDisposable
         }
         finally
         {
-            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
