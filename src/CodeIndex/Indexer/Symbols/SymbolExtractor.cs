@@ -75,6 +75,9 @@ public static partial class SymbolExtractor
         if (candidates is null)
             return Array.Empty<SymbolRecord>();
 
+        if (candidates.Count == 1)
+            return [candidates[0].Symbol];
+
         candidates.Sort(static (left, right) =>
         {
             var comparison = left.Symbol.StartLine.CompareTo(right.Symbol.StartLine);
@@ -9495,6 +9498,9 @@ public static partial class SymbolExtractor
 
         if (candidates is null)
             return Array.Empty<SymbolRecord>();
+
+        if (candidates.Count == 1)
+            return [candidates[0].Symbol];
 
         candidates.Sort(static (left, right) =>
         {
