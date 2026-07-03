@@ -4773,7 +4773,7 @@ public static partial class SymbolExtractor
             return;
 
         var content = string.Join('\n', lines);
-        var lineStarts = BuildLineStarts(content);
+        var lineStarts = BuildLineStartList(lines);
         foreach (Match match in SqlCteDefinitionRegex.Matches(content))
         {
             var nameGroup = match.Groups["name"];
@@ -4830,6 +4830,19 @@ public static partial class SymbolExtractor
         }
 
         return false;
+    }
+
+    private static List<int> BuildLineStartList(IReadOnlyList<string> lines)
+    {
+        var starts = new List<int>(Math.Max(1, lines.Count)) { 0 };
+        var offset = 0;
+        for (var i = 0; i < lines.Count - 1; i++)
+        {
+            offset += lines[i].Length + 1;
+            starts.Add(offset);
+        }
+
+        return starts;
     }
 
     private static List<int> BuildLineStarts(string content)
