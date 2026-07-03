@@ -503,6 +503,9 @@ public static partial class SymbolExtractor
 
     private static IReadOnlyDictionary<string, string> BuildMarkdownReferenceDefinitionTargets(string[] lines)
     {
+        if (!LinesContain(lines, "]:", StringComparison.Ordinal))
+            return EmptyMarkdownReferenceDefinitionTargets;
+
         Dictionary<string, string>? targets = null;
         var inFence = false;
         var fenceChar = '\0';
