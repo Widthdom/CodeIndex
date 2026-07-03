@@ -6908,6 +6908,12 @@ public static partial class SymbolExtractor
 
     private static JavaScriptScopePrivacyFlags[][] BuildJavaScriptTypeScriptPrivateScopeColumns(string[] lines, string lang)
     {
+        if (!LinesContain(lines, "{", StringComparison.Ordinal)
+            && !LinesContain(lines, "=>", StringComparison.Ordinal))
+        {
+            return BuildEmptyJavaScriptTypeScriptPrivateScopeColumns(lines.Length);
+        }
+
         var privateColumns = new JavaScriptScopePrivacyFlags[lines.Length][];
         var lexState = new JavaScriptLexState();
         var scopeStack = new Stack<JavaScriptScopeKind>();
@@ -7429,6 +7435,16 @@ public static partial class SymbolExtractor
 
             privateColumns[lineIndex] = linePrivateColumns;
         }
+
+        return privateColumns;
+    }
+
+    private static JavaScriptScopePrivacyFlags[][] BuildEmptyJavaScriptTypeScriptPrivateScopeColumns(int lineCount)
+    {
+        var privateColumns = new JavaScriptScopePrivacyFlags[lineCount][];
+        var emptyLine = Array.Empty<JavaScriptScopePrivacyFlags>();
+        for (var i = 0; i < privateColumns.Length; i++)
+            privateColumns[i] = emptyLine;
 
         return privateColumns;
     }
