@@ -25,6 +25,8 @@ public static partial class ReferenceExtractor
     internal const int MaxReferenceContainerCandidates = 20_000;
     internal const int MaxSwiftPropertyDefinitionsPerLine = 256;
     private static readonly IReadOnlySet<string> EmptyDefinitionNameSet = new HashSet<string>(StringComparer.Ordinal);
+    private static readonly IReadOnlyDictionary<int, HashSet<string>> EmptyDefinitionNamesByLine =
+        new Dictionary<int, HashSet<string>>();
     private static readonly string[] AdditionalReferenceLanguages =
     [
         "vue",
@@ -1161,11 +1163,14 @@ public static partial class ReferenceExtractor
         return true;
     }
 
-    private static Dictionary<int, HashSet<string>> BuildDefinitionNamesByLine(
+    private static IReadOnlyDictionary<int, HashSet<string>> BuildDefinitionNamesByLine(
         string language,
         IReadOnlyList<SymbolRecord> symbols,
         Action<ReferenceExtractionDiagnostic>? reportDiagnostic)
     {
+        if (symbols.Count == 0)
+            return EmptyDefinitionNamesByLine;
+
         var definitionNamesComparer = GetDefinitionNamesComparer(language);
         var namesByLine = new Dictionary<int, HashSet<string>>();
         var lineBudgetReported = false;
