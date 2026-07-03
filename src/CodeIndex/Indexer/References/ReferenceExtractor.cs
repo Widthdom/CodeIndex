@@ -2580,7 +2580,7 @@ public static partial class ReferenceExtractor
     {
         symbolName = string.Empty;
         nameIndex = -1;
-        var builder = new StringBuilder();
+        var builder = new StringBuilder(Math.Min(256, Math.Max(0, line.Length - startIndex)));
         var i = startIndex;
         var sawLiteral = false;
         var firstLiteralIndex = -1;
@@ -2753,7 +2753,7 @@ public static partial class ReferenceExtractor
 
         contentIndex = index + 1;
         index++;
-        var builder = new StringBuilder();
+        var builder = new StringBuilder(Math.Min(256, line.Length - contentIndex));
         while (index < line.Length)
         {
             var c = line[index];
