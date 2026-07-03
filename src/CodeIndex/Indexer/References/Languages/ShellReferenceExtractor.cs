@@ -36,14 +36,17 @@ internal static class ShellReferenceExtractor
             if (symbol.Kind != "alias")
                 continue;
 
-            var signature = symbol.Signature?.TrimStart();
-            if (string.IsNullOrWhiteSpace(signature))
+            if (symbol.Signature is not { } signatureText)
+                continue;
+
+            var signature = signatureText.AsSpan().TrimStart();
+            if (signature.IsEmpty)
                 continue;
 
             if (signature.IndexOf("-g", StringComparison.Ordinal) < 0)
                 continue;
 
-            if (!GlobalAliasSignatureRegex.IsMatch(signature))
+            if (!GlobalAliasSignatureRegex.IsMatch(signature.ToString()))
                 continue;
 
             globalAliasNames.Add(symbol.Name);
