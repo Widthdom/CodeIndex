@@ -33,7 +33,8 @@ public static partial class SymbolExtractor
                 continue;
             }
 
-            var seenConstantNames = new HashSet<string>(StringComparer.Ordinal);
+            string? firstConstantName = null;
+            HashSet<string>? seenConstantNames = null;
             foreach (Match keyMatch in PerlHashConstantKeyRegex.Matches(body))
             {
                 var nameGroup = keyMatch.Groups["bare"].Success
@@ -42,8 +43,18 @@ public static partial class SymbolExtractor
                 if (!nameGroup.Success)
                     continue;
                 var name = NormalizePerlConstantName(nameGroup.Value);
-                if (name.Length == 0 || !seenConstantNames.Add(name))
+                if (name.Length == 0)
                     continue;
+                if (firstConstantName is null)
+                {
+                    firstConstantName = name;
+                }
+                else
+                {
+                    seenConstantNames ??= new HashSet<string>(StringComparer.Ordinal) { firstConstantName };
+                    if (!seenConstantNames.Add(name))
+                        continue;
+                }
 
                 var (lineIndex, column) = ResolvePerlHashConstantBodyPosition(lineSegments, nameGroup.Index);
                 AddSymbolRecord(
