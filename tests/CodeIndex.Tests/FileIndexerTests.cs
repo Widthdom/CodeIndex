@@ -3139,7 +3139,6 @@ public partial class FileIndexerTests
         UnixFileMode? originalMode = null;
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(ignorePath, "secret.py\n");
             File.WriteAllText(Path.Combine(tempDir, "secret.py"), "print('secret')");
             File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('keep')");
@@ -5128,7 +5127,6 @@ public partial class FileIndexerTests
         var previousReader = FileIndexer.ReadGitmodulesLinesForTesting;
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(
                 Path.Combine(tempDir, ".gitmodules"),
                 "[submodule \"foo\"]\n\tpath = vendor/foo\n\turl = https://example.invalid/foo.git\n");
