@@ -5854,8 +5854,8 @@ public static partial class SymbolExtractor
     {
         var text = value.Trim();
         var qualifierIndex = text.LastIndexOf("::", StringComparison.Ordinal);
-        var leaf = qualifierIndex >= 0 ? text[(qualifierIndex + 2)..].Trim() : text;
-        if (!leaf.StartsWith("operator", StringComparison.Ordinal))
+        var leaf = qualifierIndex >= 0 ? text.AsSpan(qualifierIndex + 2).Trim() : text.AsSpan();
+        if (!leaf.StartsWith("operator".AsSpan(), StringComparison.Ordinal))
         {
             var genericIndex = text.IndexOf('<');
             if (genericIndex >= 0)
