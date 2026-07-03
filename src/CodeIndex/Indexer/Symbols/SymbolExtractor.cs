@@ -4709,7 +4709,7 @@ public static partial class SymbolExtractor
 
     private static void ClassifyScalaCompanions(List<SymbolRecord> symbols)
     {
-        var topLevelClasses = new Dictionary<string, List<SymbolRecord>>(StringComparer.Ordinal);
+        Dictionary<string, List<SymbolRecord>>? topLevelClasses = null;
         foreach (var symbol in symbols)
         {
             if (symbol.Kind != "class"
@@ -4719,6 +4719,7 @@ public static partial class SymbolExtractor
                 continue;
             }
 
+            topLevelClasses ??= new Dictionary<string, List<SymbolRecord>>(StringComparer.Ordinal);
             if (!topLevelClasses.TryGetValue(symbol.Name, out var companionClasses))
             {
                 companionClasses = new List<SymbolRecord>();
@@ -4727,6 +4728,9 @@ public static partial class SymbolExtractor
 
             companionClasses.Add(symbol);
         }
+
+        if (topLevelClasses is not { Count: > 0 })
+            return;
 
         foreach (var scalaObject in symbols)
         {
