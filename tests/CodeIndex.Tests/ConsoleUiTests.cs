@@ -800,7 +800,7 @@ public class ConsoleUiTests
         }
         finally
         {
-            File.Delete(path);
+            TestProjectHelper.DeleteFile(path);
         }
     }
 
@@ -814,7 +814,7 @@ public class ConsoleUiTests
         }
         finally
         {
-            File.Delete(path);
+            TestProjectHelper.DeleteFile(path);
         }
     }
 
@@ -836,7 +836,7 @@ public class ConsoleUiTests
         }
         finally
         {
-            File.Delete(path);
+            TestProjectHelper.DeleteFile(path);
         }
     }
 
@@ -856,7 +856,7 @@ public class ConsoleUiTests
         }
         finally
         {
-            File.Delete(path);
+            TestProjectHelper.DeleteFile(path);
         }
     }
 

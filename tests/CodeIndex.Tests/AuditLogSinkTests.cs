@@ -676,10 +676,7 @@ public class AuditLogSinkTests
         finally
         {
             foreach (var p in new[] { path, rotation1, path + ".2" })
-            {
-                if (File.Exists(p))
-                    File.Delete(p);
-            }
+                TestProjectHelper.DeleteFile(p);
         }
     }
 
@@ -724,10 +721,7 @@ public class AuditLogSinkTests
         finally
         {
             foreach (var p in new[] { path, rotation1, rotation2, path + ".3" })
-            {
-                if (File.Exists(p))
-                    File.Delete(p);
-            }
+                TestProjectHelper.DeleteFile(p);
         }
     }
 
@@ -771,10 +765,7 @@ public class AuditLogSinkTests
         finally
         {
             foreach (var p in new[] { path, rotation1, rotation2, rotation3 })
-            {
-                if (File.Exists(p))
-                    File.Delete(p);
-            }
+                TestProjectHelper.DeleteFile(p);
         }
     }
 
@@ -991,8 +982,7 @@ public class AuditLogSinkTests
         finally
         {
             sink.Dispose();
-            if (File.Exists(path))
-                File.Delete(path);
+            TestProjectHelper.DeleteFile(path);
         }
     }
 
