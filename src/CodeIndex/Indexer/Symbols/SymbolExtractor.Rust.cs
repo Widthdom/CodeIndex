@@ -23,22 +23,23 @@ public static partial class SymbolExtractor
             if (useIndex < 0)
                 continue;
 
-            var body = statement[(useIndex + 4)..].Trim();
-            if (body.Length == 0)
+            var bodyOffset = useIndex + 4;
+            while (bodyOffset < statement.Length && char.IsWhiteSpace(statement[bodyOffset]))
+                bodyOffset++;
+
+            var bodySpan = statement.AsSpan(bodyOffset).TrimEnd();
+            if (bodySpan.IsEmpty)
                 continue;
 
-            var semicolonIndex = body.LastIndexOf(';');
+            var semicolonIndex = bodySpan.LastIndexOf(';');
             if (semicolonIndex < 0)
                 continue;
-            body = body[..semicolonIndex].Trim();
-            if (body.Length == 0)
+            bodySpan = bodySpan[..semicolonIndex].TrimEnd();
+            if (bodySpan.IsEmpty)
                 continue;
 
+            var body = bodySpan.ToString();
             var occurrences = new List<RustUseSymbolOccurrence>();
-            var bodyOffset = useIndex + 4;
-            var trimmedBodyOffset = statement[(useIndex + 4)..].IndexOf(body, StringComparison.Ordinal);
-            if (trimmedBodyOffset >= 0)
-                bodyOffset += trimmedBodyOffset;
             CollectRustUseSymbolOccurrences(body, bodyOffset, lineStarts, i + 1, occurrences);
 
             var seen = new HashSet<string>(StringComparer.Ordinal);
