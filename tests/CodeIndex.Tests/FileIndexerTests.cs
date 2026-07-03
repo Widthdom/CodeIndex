@@ -4585,8 +4585,7 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFilesDetailed_FileDeletedAfterEnumeration_RecordsWarning()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-delete-race-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-delete-race");
         try
         {
             var scriptPath = Path.Combine(tempDir, "script");
@@ -4630,8 +4629,7 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-dangling-symlink-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-dangling-symlink");
         try
         {
             var linkPath = Path.Combine(tempDir, "missing-link");
@@ -4659,8 +4657,7 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-symlink-permission-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-symlink-permission");
         try
         {
             var targetDir = Path.Combine(tempDir, "src");
@@ -4709,10 +4706,8 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-symlink-policy-{Guid.NewGuid():N}");
-        var externalDir = Path.Combine(Path.GetTempPath(), $"cdidx-symlink-external-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
-        Directory.CreateDirectory(externalDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-symlink-policy");
+        var externalDir = TestProjectHelper.CreateTempProject("cdidx-symlink-external");
         try
         {
             File.WriteAllText(Path.Combine(externalDir, "external.py"), "print('external')\n");
@@ -4751,8 +4746,7 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-symlink-internal-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-symlink-internal");
         try
         {
             var targetDir = Path.Combine(tempDir, "src");
@@ -4788,8 +4782,7 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-symlink-cycle-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-symlink-cycle");
         try
         {
             File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('app')\n");
