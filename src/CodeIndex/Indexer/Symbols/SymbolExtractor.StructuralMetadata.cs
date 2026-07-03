@@ -15,10 +15,10 @@ public static partial class SymbolExtractor
 
     private static List<SymbolRecord> ExtractSolutionSymbols(long fileId, string[] lines)
     {
-        var symbols = new List<SymbolRecord>();
+        List<SymbolRecord>? symbols = null;
         foreach (var project in SolutionFileParser.ExtractProjects(lines))
         {
-            symbols.Add(new SymbolRecord
+            (symbols ??= []).Add(new SymbolRecord
             {
                 FileId = fileId,
                 Kind = "project",
@@ -32,12 +32,12 @@ public static partial class SymbolExtractor
             });
         }
 
-        return symbols;
+        return symbols ?? [];
     }
 
     private static List<SymbolRecord> ExtractAppManifestSymbols(long fileId, string content, string[] lines)
     {
-        var symbols = new List<SymbolRecord>();
+        List<SymbolRecord>? symbols = null;
 
         try
         {
@@ -54,14 +54,14 @@ public static partial class SymbolExtractor
 
                 if (string.Equals(elementName, "assemblyIdentity", StringComparison.OrdinalIgnoreCase))
                 {
-                    AddManifestAssemblyIdentitySymbols(fileId, lines, symbols, reader, lineNumber);
+                    AddManifestAssemblyIdentitySymbols(fileId, lines, ref symbols, reader, lineNumber);
                 }
                 else if (string.Equals(elementName, "requestedExecutionLevel", StringComparison.OrdinalIgnoreCase))
                 {
                     AddManifestAttributeSymbol(
                         fileId,
                         lines,
-                        symbols,
+                        ref symbols,
                         "property",
                         "requestedExecutionLevel.level",
                         reader.GetAttribute("level"),
@@ -70,7 +70,7 @@ public static partial class SymbolExtractor
                     AddManifestAttributeSymbol(
                         fileId,
                         lines,
-                        symbols,
+                        ref symbols,
                         "property",
                         "requestedExecutionLevel.uiAccess",
                         reader.GetAttribute("uiAccess"),
@@ -81,11 +81,11 @@ public static partial class SymbolExtractor
                 {
                     var id = reader.GetAttribute("Id");
                     var name = string.IsNullOrWhiteSpace(id) ? "supportedOS" : $"supportedOS.{id}";
-                    AddManifestAttributeSymbol(fileId, lines, symbols, "property", name, id, lineNumber, parentName: "compatibility");
+                    AddManifestAttributeSymbol(fileId, lines, ref symbols, "property", name, id, lineNumber, parentName: "compatibility");
                 }
                 else if (string.Equals(elementName, "longPathAware", StringComparison.OrdinalIgnoreCase))
                 {
-                    symbols.Add(CreateManifestSymbol(
+                    (symbols ??= []).Add(CreateManifestSymbol(
                         fileId,
                         "property",
                         "longPathAware",
@@ -97,23 +97,23 @@ public static partial class SymbolExtractor
         }
         catch (XmlException)
         {
-            return symbols;
+            return symbols ?? [];
         }
 
-        return symbols;
+        return symbols ?? [];
     }
 
     private static void AddManifestAssemblyIdentitySymbols(
         long fileId,
         string[] lines,
-        List<SymbolRecord> symbols,
+        ref List<SymbolRecord>? symbols,
         XmlReader reader,
         int lineNumber)
     {
         var assemblyName = reader.GetAttribute("name");
         if (!string.IsNullOrWhiteSpace(assemblyName))
         {
-            symbols.Add(CreateManifestSymbol(fileId, "assembly", assemblyName, lineNumber, lines, parentName: null));
+            (symbols ??= []).Add(CreateManifestSymbol(fileId, "assembly", assemblyName, lineNumber, lines, parentName: null));
         }
 
         foreach (var attributeName in ManifestAssemblyIdentityAttributes)
@@ -121,7 +121,7 @@ public static partial class SymbolExtractor
             AddManifestAttributeSymbol(
                 fileId,
                 lines,
-                symbols,
+                ref symbols,
                 "property",
                 $"assemblyIdentity.{attributeName}",
                 reader.GetAttribute(attributeName),
@@ -133,7 +133,7 @@ public static partial class SymbolExtractor
     private static void AddManifestAttributeSymbol(
         long fileId,
         string[] lines,
-        List<SymbolRecord> symbols,
+        ref List<SymbolRecord>? symbols,
         string kind,
         string name,
         string? value,
@@ -143,7 +143,7 @@ public static partial class SymbolExtractor
         if (string.IsNullOrWhiteSpace(value))
             return;
 
-        symbols.Add(CreateManifestSymbol(fileId, kind, name, lineNumber, lines, parentName));
+        (symbols ??= []).Add(CreateManifestSymbol(fileId, kind, name, lineNumber, lines, parentName));
     }
 
     private static SymbolRecord CreateManifestSymbol(
