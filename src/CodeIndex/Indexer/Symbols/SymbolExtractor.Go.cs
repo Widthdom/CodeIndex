@@ -206,7 +206,7 @@ public static partial class SymbolExtractor
         if (rawLine.IndexOf(':') < 0)
             return false;
 
-        var trimmed = rawLine.TrimStart();
+        var trimmed = rawLine.AsSpan().TrimStart();
         if (trimmed.StartsWith("//", StringComparison.Ordinal)
             || trimmed.StartsWith("/*", StringComparison.Ordinal)
             || trimmed.StartsWith("*", StringComparison.Ordinal))
