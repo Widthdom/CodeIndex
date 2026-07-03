@@ -37,13 +37,7 @@ public static partial class SymbolExtractor
         // 各シンボルの行番号を O(log n) で引けるように行ごとの絶対 offset を事前計算。
         // lines[i] 自体は連結に使う '\n' を含まないため、lineStarts[i] は i 行目の
         // 先頭文字位置を指す。
-        var lineStarts = new int[lines.Length];
-        var lineCursor = 0;
-        for (var i = 0; i < lines.Length; i++)
-        {
-            lineStarts[i] = lineCursor;
-            lineCursor += lines[i].Length + 1;
-        }
+        var lineStarts = BuildLineStarts(lines);
 
         var symbols = new List<SymbolRecord>();
         var pos = 0;
@@ -742,13 +736,7 @@ public static partial class SymbolExtractor
         if (TryGetXmlStructureIssue(rawText, out _))
             return [];
 
-        var lineStarts = new int[lines.Length];
-        var lineCursor = 0;
-        for (var i = 0; i < lines.Length; i++)
-        {
-            lineStarts[i] = lineCursor;
-            lineCursor += lines[i].Length + 1;
-        }
+        var lineStarts = BuildLineStarts(lines);
 
         var symbols = new List<SymbolRecord>();
         for (var i = 0; i < lines.Length; i++)
