@@ -1120,7 +1120,8 @@ public partial class DbReaderTests : IDisposable
         // via raw SQL that bypasses the writer's folded-column population, then confirm the
         // backfill check reports missing data.
         // Codex 指摘の回帰: legacy 行が残っていれば AllFoldedColumnsBackfilled() は false を返す。
-        var legacyPath = Path.Combine(Path.GetTempPath(), $"codeindex_fold_verify_{Guid.NewGuid():N}.db");
+        var legacyDir = TestProjectHelper.CreateTempProject("codeindex_fold_verify");
+        var legacyPath = Path.Combine(legacyDir, "codeindex.db");
         try
         {
             using var db = new DbContext(legacyPath);
@@ -1166,7 +1167,7 @@ public partial class DbReaderTests : IDisposable
         finally
         {
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            TestProjectHelper.DeleteFile(legacyPath);
+            TestProjectHelper.DeleteDirectory(legacyDir);
         }
     }
 
@@ -1217,7 +1218,8 @@ public partial class DbReaderTests : IDisposable
     {
         using var env = EnvironmentVariableScope.Capture(DbReader.VerifyFoldReadyRowsEnvironmentVariable);
         env.Set(DbReader.VerifyFoldReadyRowsEnvironmentVariable, "1");
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_fold_status_legacy_refs_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_fold_status_legacy_refs");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
             using var db = new DbContext(dbPath);
@@ -1251,7 +1253,7 @@ public partial class DbReaderTests : IDisposable
         finally
         {
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
@@ -1268,7 +1270,8 @@ public partial class DbReaderTests : IDisposable
         bool nullReferenceSymbolName,
         bool nullReferenceContainerName)
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_fold_partial_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_fold_partial");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
             using var db = new DbContext(dbPath);
@@ -1321,7 +1324,7 @@ public partial class DbReaderTests : IDisposable
         finally
         {
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath)) File.Delete(dbPath);
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
@@ -1336,7 +1339,8 @@ public partial class DbReaderTests : IDisposable
         // filter becomes a no-op) rather than throw.
         // #493 回帰: legacy/read-only DB で container_kind 列が欠けていても、exact graph 経路が
         // クラッシュせず probe が成立する契約を固定する。
-        var legacyPath = Path.Combine(Path.GetTempPath(), $"codeindex_issue493_{Guid.NewGuid():N}.db");
+        var legacyDir = TestProjectHelper.CreateTempProject("codeindex_issue493");
+        var legacyPath = Path.Combine(legacyDir, "codeindex.db");
         try
         {
             using (var db = new DbContext(legacyPath))
@@ -1392,7 +1396,7 @@ public partial class DbReaderTests : IDisposable
         finally
         {
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            if (File.Exists(legacyPath)) File.Delete(legacyPath);
+            TestProjectHelper.DeleteDirectory(legacyDir);
         }
     }
 
