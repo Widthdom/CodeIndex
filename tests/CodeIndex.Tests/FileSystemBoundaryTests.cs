@@ -58,13 +58,11 @@ public class FileSystemBoundaryTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var safeRoot = Path.Combine(Path.GetTempPath(), $"cdidx_boundary_safe_{Guid.NewGuid():N}");
-        var externalRoot = Path.Combine(Path.GetTempPath(), $"cdidx_boundary_external_{Guid.NewGuid():N}");
+        var safeRoot = TestProjectHelper.CreateTempProject("cdidx_boundary_safe");
+        var externalRoot = TestProjectHelper.CreateTempProject("cdidx_boundary_external");
         var link = Path.Combine(safeRoot, "cleanup-link");
         try
         {
-            Directory.CreateDirectory(safeRoot);
-            Directory.CreateDirectory(externalRoot);
             Directory.CreateSymbolicLink(link, externalRoot);
 
             var valid = FileSystemBoundary.TryValidateDirectoryCleanupTarget(
