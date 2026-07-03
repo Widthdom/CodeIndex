@@ -28,12 +28,16 @@ public static partial class ReferenceExtractor
                 return;
 
             var scopeStart = GetLineColumnFromOffset(bodyText, openParenIndex, startLineNumber);
-            var parameters = bodyText[(openParenIndex + 1)..leftIndex];
-            foreach (var segment in SplitTopLevelCSharpParameterSegments(parameters))
-            {
-                if (TryExtractTrailingCSharpParameterName(segment, out var parameterName))
-                    AddCSharpFunctionValueReceiverName(names, parameterName, scopeStart.Line, scopeStart.Column, scopeEnd.Line, scopeEnd.Column, seenNames);
-            }
+            var parameters = bodyText.AsSpan(openParenIndex + 1, leftIndex - openParenIndex - 1);
+            if (parameters.Trim().Length > 0)
+                AddTopLevelCSharpParameterNames(
+                    names,
+                    parameters,
+                    scopeStart.Line,
+                    scopeStart.Column,
+                    scopeEnd.Line,
+                    scopeEnd.Column,
+                    seenNames);
 
             return;
         }

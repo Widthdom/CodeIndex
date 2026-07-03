@@ -1651,16 +1651,25 @@ public static partial class ReferenceExtractor
         if (string.IsNullOrWhiteSpace(parameters))
             return;
 
-        foreach (var segment in SplitTopLevelCSharpParameterSegments(parameters))
-        {
-            if (TryExtractTrailingCSharpParameterName(segment, out var name))
-                AddCSharpFunctionValueReceiverName(names, name, scopeStartLine, scopeStartColumn, scopeEndLine, scopeEndColumn, seenNames);
-        }
+        AddTopLevelCSharpParameterNames(
+            names,
+            parameters.AsSpan(),
+            scopeStartLine,
+            scopeStartColumn,
+            scopeEndLine,
+            scopeEndColumn,
+            seenNames);
     }
 
-    private static List<string> SplitTopLevelCSharpParameterSegments(string parameters)
+    private static void AddTopLevelCSharpParameterNames(
+        List<CSharpFunctionValueReceiverNameRecord> names,
+        ReadOnlySpan<char> parameters,
+        int scopeStartLine,
+        int scopeStartColumn,
+        int scopeEndLine,
+        int scopeEndColumn,
+        HashSet<CSharpFunctionValueReceiverNameRecord>? seenNames)
     {
-        var segments = new List<string>();
         var depthAngle = 0;
         var depthParen = 0;
         var depthBracket = 0;
@@ -1703,7 +1712,14 @@ public static partial class ReferenceExtractor
                 case ',':
                     if (depthAngle == 0 && depthParen == 0 && depthBracket == 0 && depthBrace == 0)
                     {
-                        segments.Add(parameters[segmentStart..i]);
+                        AddCSharpParameterSegmentName(
+                            names,
+                            parameters[segmentStart..i],
+                            scopeStartLine,
+                            scopeStartColumn,
+                            scopeEndLine,
+                            scopeEndColumn,
+                            seenNames);
                         segmentStart = i + 1;
                     }
                     break;
@@ -1711,16 +1727,34 @@ public static partial class ReferenceExtractor
         }
 
         if (segmentStart <= parameters.Length)
-            segments.Add(parameters[segmentStart..]);
-
-        return segments;
+            AddCSharpParameterSegmentName(
+                names,
+                parameters[segmentStart..],
+                scopeStartLine,
+                scopeStartColumn,
+                scopeEndLine,
+                scopeEndColumn,
+                seenNames);
     }
 
-    private static bool TryExtractTrailingCSharpParameterName(string segment, out string name)
+    private static void AddCSharpParameterSegmentName(
+        List<CSharpFunctionValueReceiverNameRecord> names,
+        ReadOnlySpan<char> segment,
+        int scopeStartLine,
+        int scopeStartColumn,
+        int scopeEndLine,
+        int scopeEndColumn,
+        HashSet<CSharpFunctionValueReceiverNameRecord>? seenNames)
+    {
+        if (TryExtractTrailingCSharpParameterName(segment, out var name))
+            AddCSharpFunctionValueReceiverName(names, name, scopeStartLine, scopeStartColumn, scopeEndLine, scopeEndColumn, seenNames);
+    }
+
+    private static bool TryExtractTrailingCSharpParameterName(ReadOnlySpan<char> segment, out string name)
     {
         name = string.Empty;
         var trimmed = segment.Trim();
-        if (trimmed.Length == 0 || trimmed == "this")
+        if (trimmed.Length == 0 || trimmed.Equals("this".AsSpan(), StringComparison.Ordinal))
             return false;
 
         var end = trimmed.Length - 1;
@@ -1734,7 +1768,7 @@ public static partial class ReferenceExtractor
         if (end < 0 || start >= end)
             return false;
 
-        name = NormalizeCSharpIdentifier(trimmed[(start + 1)..(end + 1)]);
+        name = NormalizeCSharpIdentifier(trimmed[(start + 1)..(end + 1)].ToString());
         return !string.IsNullOrWhiteSpace(name);
     }
 
