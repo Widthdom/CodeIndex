@@ -20,7 +20,11 @@ public static partial class SymbolExtractor
             listEnd = patternMatchLine.Length;
 
         var list = patternMatchLine[listStart..listEnd];
-        var results = new List<(string Name, int StartColumn, string? ReturnType)>();
+        if (list.IndexOf(',') < 0)
+            return null;
+
+        (string Name, int StartColumn, string? ReturnType)? firstResult = null;
+        List<(string Name, int StartColumn, string? ReturnType)>? results = null;
         foreach (var (segmentStart, segmentLength) in SplitSwiftEnumCaseSegments(list))
         {
             var segment = list.Substring(segmentStart, segmentLength);
@@ -45,10 +49,19 @@ public static partial class SymbolExtractor
             if (!TryReadSwiftEnumCaseRawValue(segment, index, out var rawValue))
                 return null;
 
-            results.Add((name, listStart + segmentStart + nameStart, rawValue));
+            var result = (name, listStart + segmentStart + nameStart, rawValue);
+            if (firstResult is null)
+            {
+                firstResult = result;
+            }
+            else
+            {
+                results ??= [firstResult.Value];
+                results.Add(result);
+            }
         }
 
-        return results.Count > 1 ? results : null;
+        return results;
     }
 
     private static List<(int Start, int Length)> SplitSwiftEnumCaseSegments(string text)
