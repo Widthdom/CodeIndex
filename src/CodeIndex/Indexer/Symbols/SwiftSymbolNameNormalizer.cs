@@ -130,7 +130,7 @@ internal static class SwiftSymbolNameNormalizer
 
             return index >= name.Length
                 ? string.Empty
-                : name[index..].TrimStart();
+                : name[index..];
         }
 
         return name;
