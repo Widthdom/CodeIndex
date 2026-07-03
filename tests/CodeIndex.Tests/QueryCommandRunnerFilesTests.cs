@@ -2240,7 +2240,8 @@ public partial class QueryCommandRunnerTests
     public void RunStatus_ReadOnlyUriForExplicitDb_UsesPersistedProjectRootMetadata()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_uri");
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_query_runner_status_{Guid.NewGuid():N}.db");
+        var dbRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_db");
+        var dbPath = Path.Combine(dbRoot, "codeindex.db");
         try
         {
             TestProjectHelper.InitializeGitRepo(projectRoot);
@@ -2286,7 +2287,7 @@ public partial class QueryCommandRunnerTests
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
-            TestProjectHelper.DeleteFile(dbPath);
+            TestProjectHelper.DeleteDirectory(dbRoot);
         }
     }
 
@@ -2589,18 +2590,25 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunStatus_MissingDatabaseReturnsGuidance()
     {
-        var missingDbPath = Path.Combine(Path.GetTempPath(), $"missing_{Guid.NewGuid():N}.db");
+        var dbRoot = TestProjectHelper.CreateTempProject("cdidx_missing_db");
+        var missingDbPath = Path.Combine(dbRoot, "missing.db");
+        try
+        {
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", missingDbPath],
+                _jsonOptions));
 
-        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
-            ["--db", missingDbPath],
-            _jsonOptions));
-
-        Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Contains("Error [E001_DB_NOT_FOUND]: --db", stderr);
-        // Verify full (absolute) path is shown, not just the basename / フルパス表示を検証
-        Assert.Contains(Path.GetFullPath(missingDbPath), stderr);
-        Assert.Contains("does not point to an existing database file", stderr);
-        Assert.Contains("Hint: create or refresh the index with `cdidx index <projectPath>`", stderr);
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("Error [E001_DB_NOT_FOUND]: --db", stderr);
+            // Verify full (absolute) path is shown, not just the basename / フルパス表示を検証
+            Assert.Contains(Path.GetFullPath(missingDbPath), stderr);
+            Assert.Contains("does not point to an existing database file", stderr);
+            Assert.Contains("Hint: create or refresh the index with `cdidx index <projectPath>`", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(dbRoot);
+        }
     }
 
     [Fact]
