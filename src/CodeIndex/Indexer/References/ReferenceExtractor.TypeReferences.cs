@@ -746,8 +746,8 @@ public static partial class ReferenceExtractor
     internal sealed class InnermostContainerResolver
     {
         private readonly IReadOnlyList<SymbolRecord> candidates;
-        private readonly List<(SymbolRecord Symbol, int SpanLength, int OriginalIndex)> candidatesByStart;
-        private readonly SortedSet<ActiveContainer> activeContainers = new();
+        private readonly List<(SymbolRecord Symbol, int SpanLength, int OriginalIndex)>? candidatesByStart;
+        private SortedSet<ActiveContainer>? activeContainers;
         private int nextCandidateIndex;
         private int currentLine;
         private int? cachedLine;
@@ -756,6 +756,9 @@ public static partial class ReferenceExtractor
         internal InnermostContainerResolver(IReadOnlyList<SymbolRecord> candidates)
         {
             this.candidates = candidates;
+            if (candidates.Count == 0)
+                return;
+
             candidatesByStart = new List<(SymbolRecord Symbol, int SpanLength, int OriginalIndex)>(candidates.Count);
             for (var index = 0; index < candidates.Count; index++)
             {
@@ -771,24 +774,33 @@ public static partial class ReferenceExtractor
             if (cachedLine == lineNumber)
                 return cachedContainer;
 
+            if (candidatesByStart == null)
+                return Cache(lineNumber, null);
+
             if (lineNumber < currentLine)
                 return Cache(lineNumber, FindInnermostContainer(candidates, lineNumber));
 
             AdvanceTo(lineNumber);
-            return Cache(lineNumber, activeContainers.Count == 0 ? null : activeContainers.Min.Symbol);
+            return Cache(lineNumber, activeContainers is not { Count: > 0 } ? null : activeContainers.Min.Symbol);
         }
 
         private void AdvanceTo(int lineNumber)
         {
+            if (candidatesByStart == null)
+            {
+                currentLine = lineNumber;
+                return;
+            }
+
             while (nextCandidateIndex < candidatesByStart.Count
                    && candidatesByStart[nextCandidateIndex].Symbol.BodyStartLine!.Value <= lineNumber)
             {
                 var candidate = candidatesByStart[nextCandidateIndex];
-                activeContainers.Add(new ActiveContainer(candidate.Symbol, candidate.SpanLength, candidate.OriginalIndex));
+                (activeContainers ??= []).Add(new ActiveContainer(candidate.Symbol, candidate.SpanLength, candidate.OriginalIndex));
                 nextCandidateIndex++;
             }
 
-            activeContainers.RemoveWhere(active => active.Symbol.BodyEndLine!.Value < lineNumber);
+            activeContainers?.RemoveWhere(active => active.Symbol.BodyEndLine!.Value < lineNumber);
             currentLine = lineNumber;
         }
 

@@ -1347,7 +1347,7 @@ public static partial class ReferenceExtractor
             ? StringComparer.OrdinalIgnoreCase
             : StringComparer.Ordinal;
 
-    private static List<SymbolRecord> BuildReferenceContainerCandidates(
+    private static IReadOnlyList<SymbolRecord> BuildReferenceContainerCandidates(
         IReadOnlyList<SymbolRecord> symbols,
         Action<ReferenceExtractionDiagnostic>? reportDiagnostic)
         => BuildBoundedContainerCandidates(
@@ -1360,7 +1360,7 @@ public static partial class ReferenceExtractor
             "Reference container lookup retained the highest-priority bounded candidate set and skipped additional candidates.",
             reportDiagnostic);
 
-    private static List<SymbolRecord>? BuildCSharpXmlDocAttachmentScopeCandidates(
+    private static IReadOnlyList<SymbolRecord>? BuildCSharpXmlDocAttachmentScopeCandidates(
         string language,
         IReadOnlyList<SymbolRecord> symbols,
         Action<ReferenceExtractionDiagnostic>? reportDiagnostic)
@@ -1374,7 +1374,7 @@ public static partial class ReferenceExtractor
                 reportDiagnostic)
             : null;
 
-    private static List<SymbolRecord> BuildEnclosingTypeCandidates(
+    private static IReadOnlyList<SymbolRecord> BuildEnclosingTypeCandidates(
         IReadOnlyList<SymbolRecord> symbols,
         Action<ReferenceExtractionDiagnostic>? reportDiagnostic)
         => BuildBoundedContainerCandidates(
@@ -1478,14 +1478,14 @@ public static partial class ReferenceExtractor
             : left.OriginalIndex.CompareTo(right.OriginalIndex);
     }
 
-    private static List<SymbolRecord> BuildBoundedContainerCandidates(
+    private static IReadOnlyList<SymbolRecord> BuildBoundedContainerCandidates(
         IReadOnlyList<SymbolRecord> symbols,
         Func<SymbolRecord, bool> predicate,
         string diagnosticKind,
         string diagnosticMessage,
         Action<ReferenceExtractionDiagnostic>? reportDiagnostic)
     {
-        var candidates = new List<ReferenceContainerCandidateSortEntry>(Math.Min(symbols.Count, MaxReferenceContainerCandidates));
+        List<ReferenceContainerCandidateSortEntry>? candidates = null;
         var truncated = false;
         for (var symbolIndex = 0; symbolIndex < symbols.Count; symbolIndex++)
         {
@@ -1493,13 +1493,14 @@ public static partial class ReferenceExtractor
             if (!predicate(symbol))
                 continue;
 
-            if (candidates.Count >= MaxReferenceContainerCandidates)
+            if ((candidates?.Count ?? 0) >= MaxReferenceContainerCandidates)
             {
                 truncated = true;
                 continue;
             }
 
-            candidates.Add(new ReferenceContainerCandidateSortEntry(
+            (candidates ??= new List<ReferenceContainerCandidateSortEntry>(
+                Math.Min(symbols.Count, MaxReferenceContainerCandidates))).Add(new ReferenceContainerCandidateSortEntry(
                 symbol,
                 GetReferenceContainerCandidateSpanLength(symbol),
                 symbolIndex));
@@ -1508,11 +1509,14 @@ public static partial class ReferenceExtractor
         if (truncated)
             ReportReferenceLookupBudgetHit(reportDiagnostic, diagnosticKind, diagnosticMessage);
 
+        if (candidates is not { Count: > 0 })
+            return Array.Empty<SymbolRecord>();
+
         candidates.Sort(CompareReferenceContainerCandidateSortEntries);
 
-        var sorted = new List<SymbolRecord>(candidates.Count);
-        foreach (var candidate in candidates)
-            sorted.Add(candidate.Symbol);
+        var sorted = new SymbolRecord[candidates.Count];
+        for (var index = 0; index < candidates.Count; index++)
+            sorted[index] = candidates[index].Symbol;
 
         return sorted;
     }
