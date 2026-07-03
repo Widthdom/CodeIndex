@@ -15,6 +15,15 @@ public static partial class ReferenceExtractor
     private sealed record CSharpCastTypeShape(IReadOnlyList<string> IdentifierSegments, string? SimpleQualifiedName, bool HasTypeOnlySyntax, bool AllIdentifiersTypeLike);
     internal sealed record CSharpContainingTypeValueReceiverNames(HashSet<string> InstanceNames, HashSet<string> StaticNames);
     internal sealed record CSharpFunctionValueReceiverNameRecord(string Name, int ScopeStartLine, int ScopeStartColumn, int ScopeEndLine, int ScopeEndColumn);
+    private static readonly IReadOnlySet<string> EmptyCSharpStringSet = new HashSet<string>(StringComparer.Ordinal);
+    private static readonly IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames> EmptyCSharpValueReceiverNamesByContainingType =
+        new Dictionary<string, CSharpContainingTypeValueReceiverNames>(StringComparer.Ordinal);
+    private static readonly IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> EmptyCSharpValueReceiverNamesByFunctionStartLine =
+        new Dictionary<int, List<CSharpFunctionValueReceiverNameRecord>>();
+    private static readonly IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> EmptyCSharpQualifiedEnumMemberLookup =
+        new Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
+    private static readonly IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> EmptyCSharpQualifiedPatternLookup =
+        new Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
 
     private static (
         List<CSharpUsingAliasRecord> Aliases,
@@ -217,14 +226,15 @@ public static partial class ReferenceExtractor
         return trimmed;
     }
 
-    private static (HashSet<string> KnownTypeNames, HashSet<string> NonEnumTypeNames) BuildCSharpTypeNameSets(
+    private static (IReadOnlySet<string> KnownTypeNames, IReadOnlySet<string> NonEnumTypeNames) BuildCSharpTypeNameSets(
         string language,
         IReadOnlyList<SymbolRecord> symbols)
     {
+        if (language != "csharp")
+            return (EmptyCSharpStringSet, EmptyCSharpStringSet);
+
         var knownTypeNames = new HashSet<string>(StringComparer.Ordinal);
         var nonEnumTypeNames = new HashSet<string>(StringComparer.Ordinal);
-        if (language != "csharp")
-            return (knownTypeNames, nonEnumTypeNames);
 
         foreach (var symbol in symbols)
         {
@@ -315,18 +325,19 @@ public static partial class ReferenceExtractor
     }
 
     private static (
-        Dictionary<string, CSharpContainingTypeValueReceiverNames> ByContainingType,
-        Dictionary<int, List<CSharpFunctionValueReceiverNameRecord>> ByFunctionStartLine) BuildCSharpValueReceiverNameLookups(
+        IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames> ByContainingType,
+        IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> ByFunctionStartLine) BuildCSharpValueReceiverNameLookups(
         string language,
         IReadOnlyList<SymbolRecord> symbols,
         IReadOnlyList<string> structuralLines,
         IReadOnlySet<string> csharpKnownTypeNames,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
     {
+        if (language != "csharp")
+            return (EmptyCSharpValueReceiverNamesByContainingType, EmptyCSharpValueReceiverNamesByFunctionStartLine);
+
         var byContainingType = new Dictionary<string, CSharpContainingTypeValueReceiverNames>(StringComparer.Ordinal);
         var byFunctionStartLine = new Dictionary<int, List<CSharpFunctionValueReceiverNameRecord>>();
-        if (language != "csharp")
-            return (byContainingType, byFunctionStartLine);
 
         foreach (var symbol in symbols)
         {
@@ -497,18 +508,19 @@ public static partial class ReferenceExtractor
     }
 
     private static (
-        Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> EnumMemberLookup,
-        Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> ConstantPatternMemberLookup,
-        Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> TypePatternLookup) BuildCSharpQualifiedPatternLookups(
+        IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> EnumMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> ConstantPatternMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> TypePatternLookup) BuildCSharpQualifiedPatternLookups(
         string language,
         IReadOnlyList<SymbolRecord> symbols,
         IReadOnlySet<string> conflictingNonEnumTypeNames)
     {
+        if (language != "csharp")
+            return (EmptyCSharpQualifiedEnumMemberLookup, EmptyCSharpQualifiedPatternLookup, EmptyCSharpQualifiedPatternLookup);
+
         var enumMemberLookup = new Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
         var constantPatternMemberLookup = new Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
         var typePatternLookup = new Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
-        if (language != "csharp")
-            return (enumMemberLookup, constantPatternMemberLookup, typePatternLookup);
 
         foreach (var symbol in symbols)
         {
