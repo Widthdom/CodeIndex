@@ -2104,8 +2104,9 @@ public static partial class ReferenceExtractor
         if (armStartOffset < 0 || armStartOffset >= arrowIndex || arrowIndex > bodyText.Length)
             return false;
 
-        var armText = bodyText[armStartOffset..arrowIndex];
-        var preparedArmLines = StructuralLineMasker.MaskLines("csharp", armText.Split('\n'));
+        var preparedArmLines = StructuralLineMasker.MaskLines(
+            "csharp",
+            SplitCSharpSwitchExpressionArmLines(bodyText, armStartOffset, arrowIndex));
         for (var i = 0; i < preparedArmLines.Length; i++)
             preparedArmLines[i] = PrepareLine("csharp", preparedArmLines[i]);
 
@@ -2118,6 +2119,36 @@ public static partial class ReferenceExtractor
 
         designationOffset = armStartOffset + relativeOffset;
         return designationOffset < arrowIndex;
+    }
+
+    private static string[] SplitCSharpSwitchExpressionArmLines(string bodyText, int startOffset, int endOffset)
+    {
+        var length = endOffset - startOffset;
+        var firstLineBreak = bodyText.IndexOf('\n', startOffset, length);
+        if (firstLineBreak < 0)
+            return [bodyText[startOffset..endOffset]];
+
+        var lineCount = 2;
+        for (var i = firstLineBreak + 1; i < endOffset; i++)
+        {
+            if (bodyText[i] == '\n')
+                lineCount++;
+        }
+
+        var lines = new string[lineCount];
+        var lineStart = startOffset;
+        var lineIndex = 0;
+        for (var i = startOffset; i < endOffset; i++)
+        {
+            if (bodyText[i] != '\n')
+                continue;
+
+            lines[lineIndex++] = bodyText[lineStart..i];
+            lineStart = i + 1;
+        }
+
+        lines[lineIndex] = bodyText[lineStart..endOffset];
+        return lines;
     }
 
     private static bool TryParseCSharpSwitchExpressionArmDeclarationPatternDesignation(
