@@ -57,6 +57,11 @@ public static partial class SymbolExtractor
     {
         if (!LinesContain(structuralLines, "{", StringComparison.Ordinal))
             return CSharpTypeBodyScope.Empty;
+        if (!LinesContainAny(structuralLines, "class", "struct", "interface", StringComparison.Ordinal)
+            && !LinesContain(structuralLines, "record", StringComparison.Ordinal))
+        {
+            return CSharpTypeBodyScope.Empty;
+        }
 
         var lineStartInsideTypeBody = new bool[structuralLines.Length];
         var transitions = new List<(int Column, bool IsTypeBody)>?[structuralLines.Length];
