@@ -6984,6 +6984,8 @@ public static partial class SymbolExtractor
     {
         if (!LinesContain(structuralLines, "class", StringComparison.Ordinal))
             return DartClassBodyScope.Empty;
+        if (!LinesContain(structuralLines, "{", StringComparison.Ordinal))
+            return DartClassBodyScope.Empty;
 
         var lineStartInsideClassBody = new bool[structuralLines.Length];
         var scopeStack = new Stack<bool>();
