@@ -59,9 +59,9 @@ public static partial class SymbolExtractor
         };
     }
 
-    private static List<SymbolRecord> BuildEnumDeclarationSnapshot(IReadOnlyList<SymbolRecord> symbols, long? fileId = null)
+    private static IReadOnlyList<SymbolRecord> BuildEnumDeclarationSnapshot(IReadOnlyList<SymbolRecord> symbols, long? fileId = null)
     {
-        var candidates = new List<(SymbolRecord Symbol, int OriginalIndex)>();
+        List<(SymbolRecord Symbol, int OriginalIndex)>? candidates = null;
         for (var index = 0; index < symbols.Count; index++)
         {
             var symbol = symbols[index];
@@ -69,8 +69,11 @@ public static partial class SymbolExtractor
                 continue;
 
             if (symbol.Kind == "enum" && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
-                candidates.Add((symbol, index));
+                (candidates ??= []).Add((symbol, index));
         }
+
+        if (candidates is null)
+            return Array.Empty<SymbolRecord>();
 
         candidates.Sort(static (left, right) =>
         {
@@ -85,9 +88,9 @@ public static partial class SymbolExtractor
             return left.OriginalIndex.CompareTo(right.OriginalIndex);
         });
 
-        var snapshot = new List<SymbolRecord>(candidates.Count);
-        foreach (var candidate in candidates)
-            snapshot.Add(candidate.Symbol);
+        var snapshot = new SymbolRecord[candidates.Count];
+        for (var i = 0; i < candidates.Count; i++)
+            snapshot[i] = candidates[i].Symbol;
         return snapshot;
     }
 
@@ -5377,18 +5380,21 @@ public static partial class SymbolExtractor
         return existing;
     }
 
-    private static List<SymbolRecord> BuildPropertySymbolSnapshot(IReadOnlyList<SymbolRecord> symbols, int lineCount)
+    private static IReadOnlyList<SymbolRecord> BuildPropertySymbolSnapshot(IReadOnlyList<SymbolRecord> symbols, int lineCount)
     {
-        var properties = new List<SymbolRecord>();
+        List<SymbolRecord>? properties = null;
         foreach (var symbol in symbols)
         {
             if (symbol.Kind == "property"
                 && symbol.Line >= 1
                 && symbol.Line <= lineCount)
             {
-                properties.Add(symbol);
+                (properties ??= []).Add(symbol);
             }
         }
+
+        if (properties is null)
+            return Array.Empty<SymbolRecord>();
 
         return properties;
     }
@@ -9429,9 +9435,9 @@ public static partial class SymbolExtractor
         }
     }
 
-    private static List<SymbolRecord> BuildRustAssociatedTypeContainerSnapshot(IReadOnlyList<SymbolRecord> symbols)
+    private static IReadOnlyList<SymbolRecord> BuildRustAssociatedTypeContainerSnapshot(IReadOnlyList<SymbolRecord> symbols)
     {
-        var candidates = new List<(SymbolRecord Symbol, int OriginalIndex)>();
+        List<(SymbolRecord Symbol, int OriginalIndex)>? candidates = null;
         for (var index = 0; index < symbols.Count; index++)
         {
             var symbol = symbols[index];
@@ -9439,9 +9445,12 @@ public static partial class SymbolExtractor
                 && symbol.BodyStartLine is > 0
                 && symbol.BodyEndLine is > 0)
             {
-                candidates.Add((symbol, index));
+                (candidates ??= []).Add((symbol, index));
             }
         }
+
+        if (candidates is null)
+            return Array.Empty<SymbolRecord>();
 
         candidates.Sort(static (left, right) =>
         {
@@ -9451,9 +9460,9 @@ public static partial class SymbolExtractor
                 : left.OriginalIndex.CompareTo(right.OriginalIndex);
         });
 
-        var snapshot = new List<SymbolRecord>(candidates.Count);
-        foreach (var candidate in candidates)
-            snapshot.Add(candidate.Symbol);
+        var snapshot = new SymbolRecord[candidates.Count];
+        for (var i = 0; i < candidates.Count; i++)
+            snapshot[i] = candidates[i].Symbol;
         return snapshot;
     }
 
