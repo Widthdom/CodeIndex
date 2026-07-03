@@ -738,6 +738,8 @@ public static partial class SymbolExtractor
     {
         if (!XamlReferenceExtractor.IsXaml(lines))
             return [];
+        if (!MayContainXamlSymbolMarkers(lines))
+            return [];
 
         var rawText = string.Join('\n', lines);
         if (TryGetXmlStructureIssue(rawText, out _))
@@ -976,6 +978,25 @@ public static partial class SymbolExtractor
         }
 
         return TrimStructuredDataSymbols(symbols, fileId, "structured_data_xml_symbol_budget_exceeded", lines);
+    }
+
+    private static bool MayContainXamlSymbolMarkers(string[] lines)
+    {
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            if (line.IndexOf('=') >= 0
+                || line.Contains("x:", StringComparison.Ordinal)
+                || line.Contains("{", StringComparison.Ordinal)
+                || line.Contains(".TypeName", StringComparison.Ordinal)
+                || line.Contains("Binding", StringComparison.Ordinal)
+                || line.Contains("Resource", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool MayContainXamlEventHandlerAttribute(string line)
