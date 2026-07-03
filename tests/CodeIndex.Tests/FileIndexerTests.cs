@@ -1818,16 +1818,14 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFiles_LoadsProjectRootPatternConfigsBeforeLanguageDetection_3190()
     {
-        var projectRoot = Path.Combine(Path.GetTempPath(), $"cdidx-pattern-scan-project-{Guid.NewGuid():N}");
-        var cwdRoot = Path.Combine(Path.GetTempPath(), $"cdidx-pattern-scan-cwd-{Guid.NewGuid():N}");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx-pattern-scan-project");
+        var cwdRoot = TestProjectHelper.CreateTempProject("cdidx-pattern-scan-cwd");
         lock (TestConsoleLock.Gate)
         {
             var originalDirectory = Environment.CurrentDirectory;
             try
             {
                 ExtractorPluginRegistry.ResetForTests();
-                Directory.CreateDirectory(projectRoot);
-                Directory.CreateDirectory(cwdRoot);
                 WriteFileIndexerPatternConfig(
                     projectRoot,
                     "project.yaml",
