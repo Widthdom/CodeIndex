@@ -20,19 +20,21 @@ internal static partial class SqlReferenceExtractor
             names.Add(leafName);
     }
 
-    public static Dictionary<int, List<DefinitionLeafSpan>> BuildDefinitionLeafSpansByLine(
+    public static Dictionary<int, List<DefinitionLeafSpan>>? BuildDefinitionLeafSpansByLine(
         string[] lines,
         IReadOnlyList<SymbolRecord> symbols)
     {
-        var spansByLine = new Dictionary<int, List<DefinitionLeafSpan>>();
-        var patternCache = new Dictionary<string, DefinitionLeafPattern>(StringComparer.Ordinal);
+        Dictionary<int, List<DefinitionLeafSpan>>? spansByLine = null;
+        Dictionary<string, DefinitionLeafPattern>? patternCache = null;
         foreach (var symbol in symbols)
         {
             if (symbol.Line < 1 || symbol.Line > lines.Length)
                 continue;
+            patternCache ??= new Dictionary<string, DefinitionLeafPattern>(StringComparer.Ordinal);
             if (!TryFindDefinitionLeafSpan(lines[symbol.Line - 1], symbol.Name, patternCache, out var span))
                 continue;
 
+            spansByLine ??= new Dictionary<int, List<DefinitionLeafSpan>>();
             if (!spansByLine.TryGetValue(symbol.Line, out var spans))
             {
                 spans = [];
@@ -45,11 +47,10 @@ internal static partial class SqlReferenceExtractor
         return spansByLine;
     }
 
-    public static HashSet<(int LineNumber, int ColumnIndex)> BuildWindowFunctionCallSiteSuppressions(string[] lines)
+    public static HashSet<(int LineNumber, int ColumnIndex)>? BuildWindowFunctionCallSiteSuppressions(string[] lines)
     {
-        var suppressed = new HashSet<(int LineNumber, int ColumnIndex)>();
         if (lines.Length == 0)
-            return suppressed;
+            return null;
 
         var hasWindowClauseKeyword = false;
         long joinedLength = lines.Length - 1;
@@ -64,7 +65,7 @@ internal static partial class SqlReferenceExtractor
         }
 
         if (!hasWindowClauseKeyword)
-            return suppressed;
+            return null;
 
         var lineStarts = new int[lines.Length];
         var textBuilder = new StringBuilder((int)joinedLength);
@@ -77,6 +78,7 @@ internal static partial class SqlReferenceExtractor
         }
 
         var text = textBuilder.ToString();
+        HashSet<(int LineNumber, int ColumnIndex)>? suppressed = null;
         var searchStart = 0;
         while (TryFindNextWindowClause(
             text,
@@ -88,7 +90,7 @@ internal static partial class SqlReferenceExtractor
             if (TryFindWindowFunctionNameIndex(text, overKeywordIndex, out var functionNameIndex)
                 && TryMapJoinedOffsetToLine(lineStarts, text, functionNameIndex, out var lineNumber, out var columnIndex))
             {
-                suppressed.Add((lineNumber, columnIndex));
+                (suppressed ??= []).Add((lineNumber, columnIndex));
             }
 
             searchStart = closeParenIndex + 1;
