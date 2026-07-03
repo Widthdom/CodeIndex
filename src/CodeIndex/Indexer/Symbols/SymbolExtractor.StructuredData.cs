@@ -408,14 +408,14 @@ public static partial class SymbolExtractor
 
     private static int[] BuildUtf8LineStarts(byte[] bytes)
     {
-        var starts = new List<int> { 0 };
+        List<int>? starts = null;
         for (var i = 0; i < bytes.Length; i++)
         {
             if (bytes[i] == (byte)'\n')
-                starts.Add(i + 1);
+                (starts ??= [0]).Add(i + 1);
         }
 
-        return starts.ToArray();
+        return starts is null ? [0] : starts.ToArray();
     }
 
     private static bool TryDequeueJsonPropertyLine(
