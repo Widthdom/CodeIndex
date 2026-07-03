@@ -80,8 +80,7 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFilesDetailed_CancelledToken_ThrowsBeforeEnumeration()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-cancel-scan-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-cancel-scan");
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
         try
@@ -98,8 +97,7 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFilesDetailed_DanglingFileSystemEntryScanCapsCandidatesWithWarning()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-dangling-cap-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-dangling-cap");
         try
         {
             for (var i = 0; i < 5; i++)
@@ -130,8 +128,7 @@ public partial class FileIndexerTests
     [Fact]
     public void Constructor_CaseProbeAvoidsRootProbeArtifacts_Issue3174()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-probe-indexer-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-case-probe-indexer");
         try
         {
             _ = new FileIndexer(tempDir);
@@ -148,8 +145,7 @@ public partial class FileIndexerTests
     [Fact]
     public void Constructor_CaseProbePreservesExistingCdidxDirectory_Issue3174()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-probe-existing-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-case-probe-existing");
         try
         {
             var dataDirectory = Path.Combine(tempDir, CaseSensitivityProbeDirectory.DataDirectoryName);
@@ -169,8 +165,7 @@ public partial class FileIndexerTests
     [Fact]
     public void Constructor_CaseProbeFailureThrowsInsteadOfOsFallback_Issue3439()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-probe-failure-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-case-probe-failure");
         var previousProbe = FileIndexer.FileSystemIgnoreCaseProbeForTesting;
         FileIndexer.FileSystemIgnoreCaseProbeForTesting = _ => throw new IOException("probe blocked");
         try
@@ -190,8 +185,7 @@ public partial class FileIndexerTests
     [Fact]
     public void CaseSensitivityProbeDirectory_CleanupFailureDowngradesToDiagnostic_Issue3828()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-probe-cleanup-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-case-probe-cleanup");
         var previousDelete = CaseSensitivityProbeDirectory.DeleteCreatedEmptyDirectoryForTesting;
         var previousSink = CaseSensitivityProbeDirectory.CleanupDiagnosticSinkForTesting;
         var diagnostics = new List<CaseSensitivityProbeCleanupDiagnostic>();
@@ -223,14 +217,12 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-probe-boundary-{Guid.NewGuid():N}");
-        var externalDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-probe-external-{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-case-probe-boundary");
+        var externalDir = TestProjectHelper.CreateTempProject("cdidx-case-probe-external");
         var probeDirectory = Path.Combine(
             tempDir,
             CaseSensitivityProbeDirectory.DataDirectoryName,
             CaseSensitivityProbeDirectory.ProbeDirectoryName);
-        Directory.CreateDirectory(tempDir);
-        Directory.CreateDirectory(externalDir);
         var previousSink = CaseSensitivityProbeDirectory.CleanupDiagnosticSinkForTesting;
         var diagnostics = new List<CaseSensitivityProbeCleanupDiagnostic>();
         try
@@ -260,8 +252,7 @@ public partial class FileIndexerTests
     [Fact]
     public void FileWriteProbe_TryWriteAndDeleteEmptyFile_RemovesProbeAfterSuccess_Issue3689()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-write-probe-success-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-write-probe-success");
         try
         {
             var probePath = Path.Combine(tempDir, ".cdidx-write-probe.tmp");
@@ -293,8 +284,7 @@ public partial class FileIndexerTests
     [Fact]
     public void FileWriteProbe_TryWriteAndDeleteEmptyFile_ReturnsFalseForDirectoryPath_Issue3689()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-write-probe-failure-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-write-probe-failure");
         try
         {
             var result = FileWriteProbe.TryWriteAndDeleteEmptyFile(tempDir, Encoding.UTF8);
@@ -311,8 +301,7 @@ public partial class FileIndexerTests
     [Fact]
     public void FileWriteProbe_TryWriteAndDeleteEmptyFile_DoesNotOverwriteOrDeleteExistingProbe_Issue3777()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-write-probe-existing-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-write-probe-existing");
         try
         {
             var probePath = Path.Combine(tempDir, ".cdidx-write-probe.tmp");
@@ -333,8 +322,7 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFilesDetailed_CaseInsensitiveChildDirectory_SkipsCaseOnlyDuplicatePathWithWarning()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-dedupe-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-case-dedupe");
         try
         {
             var childDir = Path.Combine(tempDir, "LinkedVolume");
