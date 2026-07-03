@@ -8789,6 +8789,12 @@ public static partial class SymbolExtractor
 
     private static List<ContainerAssignmentSortEntry> BuildContainerAssignmentOrder(IReadOnlyList<SymbolRecord> symbols)
     {
+        if (symbols.Count == 0)
+            return [];
+
+        if (symbols.Count == 1)
+            return [new ContainerAssignmentSortEntry(symbols[0], 0)];
+
         var ordered = new List<ContainerAssignmentSortEntry>(symbols.Count);
         for (var i = 0; i < symbols.Count; i++)
             ordered.Add(new ContainerAssignmentSortEntry(symbols[i], i));
