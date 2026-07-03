@@ -727,11 +727,10 @@ public partial class FileIndexerTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_{Guid.NewGuid():N}");
+            var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap");
             var originalDirectory = Environment.CurrentDirectory;
             try
             {
-                Directory.CreateDirectory(tempDir);
                 File.WriteAllText(
                     Path.Combine(tempDir, LanguageMapOverrides.WorkspaceFileName),
                     "entries:\n  - extension: \".in\"\n    language: \"text\"\n  - extension: \".kts.in\"\n    language: \"kotlin\"\n");
@@ -926,8 +925,7 @@ public partial class FileIndexerTests
     [Fact]
     public void LanguageMapOverrides_LoadEffectiveMapReloadsWhenWorkspaceConfigChanges()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_cache_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_cache");
         LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
         try
         {
@@ -953,8 +951,7 @@ public partial class FileIndexerTests
     [Fact]
     public void LanguageMapOverrides_OversizedFileSkipsOverridesWithWarning()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_caps_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_caps");
         try
         {
             var oversizedPath = Path.Combine(tempDir, "large-langmap.yaml");
@@ -980,8 +977,7 @@ public partial class FileIndexerTests
     [Fact]
     public void LanguageMapOverrides_ReadFailureSkipsOverridesWithWarning()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_read_failure_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_read_failure");
         try
         {
             var unreadablePath = Path.Combine(tempDir, "unreadable-langmap.yaml");
@@ -1015,8 +1011,7 @@ public partial class FileIndexerTests
     [Fact]
     public void LanguageMapOverrides_TooManyLinesSkipsOverridesWithWarning()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_lines_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_lines");
         try
         {
             var tooManyLinesPath = Path.Combine(tempDir, "many-lines-langmap.yaml");
@@ -1041,8 +1036,7 @@ public partial class FileIndexerTests
     [Fact]
     public void LanguageMapOverrides_OverlongLineSkipsOverridesWithWarning_Issue3706()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_line_length_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_line_length");
         try
         {
             var overlongLinePath = Path.Combine(tempDir, "long-line-langmap.yaml");
@@ -1067,8 +1061,7 @@ public partial class FileIndexerTests
     [Fact]
     public void LanguageMapOverrides_WarningsSanitizeConfigPath_Issue3819()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_sanitize_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_sanitize");
         try
         {
             var configPath = Path.Combine(tempDir, "secret-langmap.yaml");
@@ -1091,8 +1084,7 @@ public partial class FileIndexerTests
     [Fact]
     public void LanguageMapOverrides_EntryCountCapTruncatesRemainingOverridesWithWarning()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_entries_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_entries");
         try
         {
             var configPath = Path.Combine(tempDir, "langmap.yaml");
@@ -1120,8 +1112,7 @@ public partial class FileIndexerTests
     [Fact]
     public void LanguageMapOverrides_PatternCountCapTruncatesRemainingOverridesWithWarning_Issue3764()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_patterns_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_patterns");
         try
         {
             const int maxPatterns = 8192;
@@ -1148,8 +1139,7 @@ public partial class FileIndexerTests
     [Fact]
     public void LanguageMapOverrides_EntryCountCapIsPerFileSoWorkspaceOverridesStillLoad()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_per_file_entries_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_per_file_entries");
         try
         {
             var userConfigPath = Path.Combine(tempDir, "user-langmap.yaml");
