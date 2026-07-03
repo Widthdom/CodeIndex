@@ -181,8 +181,12 @@ public static partial class SymbolExtractor
         endIndex = startIndex;
 
         var firstLine = lines[startIndex];
-        if (!firstLine.TrimStart().StartsWith("impl", StringComparison.Ordinal) && !firstLine.TrimStart().StartsWith("unsafe impl", StringComparison.Ordinal))
+        var trimmedFirstLine = firstLine.AsSpan().TrimStart();
+        if (!trimmedFirstLine.StartsWith("impl", StringComparison.Ordinal)
+            && !trimmedFirstLine.StartsWith("unsafe impl", StringComparison.Ordinal))
+        {
             return false;
+        }
 
         var builder = new StringBuilder(firstLine.Length + 32);
         lineStarts.Add(0);
