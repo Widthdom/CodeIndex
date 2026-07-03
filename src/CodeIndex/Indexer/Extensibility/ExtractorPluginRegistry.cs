@@ -45,7 +45,9 @@ public static partial class ExtractorPluginRegistry
         {
             EnsurePluginsLoaded();
             lock (Gate)
-                return SymbolExtractors.Keys.Order(StringComparer.Ordinal).ToArray();
+                return SymbolExtractors.Count == 0
+                    ? Array.Empty<string>()
+                    : SymbolExtractors.Keys.Order(StringComparer.Ordinal).ToArray();
         }
     }
 
@@ -55,7 +57,9 @@ public static partial class ExtractorPluginRegistry
         {
             EnsurePluginsLoaded();
             lock (Gate)
-                return ReferenceExtractors.Keys.Order(StringComparer.Ordinal).ToArray();
+                return ReferenceExtractors.Count == 0
+                    ? Array.Empty<string>()
+                    : ReferenceExtractors.Keys.Order(StringComparer.Ordinal).ToArray();
         }
     }
 
