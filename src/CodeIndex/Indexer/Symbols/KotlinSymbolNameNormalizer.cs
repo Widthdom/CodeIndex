@@ -7,13 +7,13 @@ internal static class KotlinSymbolNameNormalizer
     internal static string Normalize(string name, string matchLine)
     {
         var normalizedName = StripBacktickIdentifier(name);
-        var trimmedLine = matchLine.TrimStart();
-        if (!trimmedLine.StartsWith("companion object", StringComparison.Ordinal))
+        var trimmedLine = matchLine.AsSpan().TrimStart();
+        if (!trimmedLine.StartsWith("companion object".AsSpan(), StringComparison.Ordinal))
             return normalizedName;
 
-        var trimmedName = normalizedName.Trim();
-        return string.IsNullOrWhiteSpace(trimmedName)
-            || string.Equals(trimmedName, "companion object", StringComparison.Ordinal)
+        var trimmedName = normalizedName.AsSpan().Trim();
+        return trimmedName.IsEmpty
+            || trimmedName.Equals("companion object".AsSpan(), StringComparison.Ordinal)
             ? "Companion"
             : normalizedName;
     }
@@ -36,15 +36,15 @@ internal static class KotlinSymbolNameNormalizer
                 continue;
             }
 
-            var signature = symbol.Signature?.TrimStart();
-            if (string.IsNullOrWhiteSpace(signature))
+            var signature = symbol.Signature.AsSpan().TrimStart();
+            if (signature.IsEmpty)
                 continue;
 
-            var isSecondaryConstructor = signature.StartsWith("constructor", StringComparison.Ordinal)
-                || signature.StartsWith("public constructor", StringComparison.Ordinal)
-                || signature.StartsWith("private constructor", StringComparison.Ordinal)
-                || signature.StartsWith("protected constructor", StringComparison.Ordinal)
-                || signature.StartsWith("internal constructor", StringComparison.Ordinal);
+            var isSecondaryConstructor = signature.StartsWith("constructor".AsSpan(), StringComparison.Ordinal)
+                || signature.StartsWith("public constructor".AsSpan(), StringComparison.Ordinal)
+                || signature.StartsWith("private constructor".AsSpan(), StringComparison.Ordinal)
+                || signature.StartsWith("protected constructor".AsSpan(), StringComparison.Ordinal)
+                || signature.StartsWith("internal constructor".AsSpan(), StringComparison.Ordinal);
             if (!isSecondaryConstructor)
                 continue;
 
