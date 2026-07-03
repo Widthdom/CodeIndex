@@ -6691,6 +6691,8 @@ public static partial class SymbolExtractor
 
     private sealed class CSharpCallableParameterScope
     {
+        public static readonly CSharpCallableParameterScope Empty = new(null, null);
+
         private readonly bool[]? _lineStartInsideParameterList;
         private readonly List<(int Column, bool IsInsideParameterList)>?[]? _transitions;
 
@@ -6722,6 +6724,9 @@ public static partial class SymbolExtractor
         string[] structuralLines,
         CSharpTypeBodyScope typeBodyScope)
     {
+        if (!LinesContain(structuralLines, "(", StringComparison.Ordinal))
+            return CSharpCallableParameterScope.Empty;
+
         bool[]? lineStartInsideParameterList = null;
         List<(int Column, bool IsInsideParameterList)>?[]? transitions = null;
         var declarationBuffer = new StringBuilder(256);
