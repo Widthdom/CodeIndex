@@ -2503,11 +2503,9 @@ public partial class FileIndexerTests
             return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
 
         var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        var outsideDir = Path.Combine(Path.GetTempPath(), $"codeindex_outside_{Guid.NewGuid():N}");
+        var outsideDir = TestProjectHelper.CreateTempProject("codeindex_outside");
         try
         {
-            Directory.CreateDirectory(tempDir);
-            Directory.CreateDirectory(outsideDir);
             File.WriteAllText(Path.Combine(outsideDir, "outside.cs"), "class Outside { }\n");
 
             var linkDir = Path.Combine(tempDir, "linked");
@@ -2669,11 +2667,9 @@ public partial class FileIndexerTests
             return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
 
         var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        var externalDir = Path.Combine(Path.GetTempPath(), $"codeindex_external_{Guid.NewGuid():N}");
+        var externalDir = TestProjectHelper.CreateTempProject("codeindex_external");
         try
         {
-            Directory.CreateDirectory(tempDir);
-            Directory.CreateDirectory(externalDir);
             var realFile = Path.Combine(tempDir, "real.py");
             File.WriteAllText(realFile, "x = 1\n");
             var externalFile = Path.Combine(externalDir, "external.py");
@@ -2712,11 +2708,9 @@ public partial class FileIndexerTests
             return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
 
         var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        var externalDir = Path.Combine(Path.GetTempPath(), $"codeindex_external_{Guid.NewGuid():N}");
+        var externalDir = TestProjectHelper.CreateTempProject("codeindex_external");
         try
         {
-            Directory.CreateDirectory(tempDir);
-            Directory.CreateDirectory(externalDir);
             var realFile = Path.Combine(externalDir, "real.py");
             File.WriteAllText(realFile, "x = 1\n");
             File.CreateSymbolicLink(Path.Combine(tempDir, "alias.py"), realFile);
