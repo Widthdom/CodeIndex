@@ -1377,8 +1377,7 @@ public static partial class SymbolExtractor
 
     private static string NormalizeXamlElementReferenceValue(string value)
     {
-        value = NormalizeXamlMarkupValue(value);
-        return value.Trim();
+        return NormalizeXamlMarkupValue(value);
     }
 
     private static void AddXamlBindingObjectElementSymbols(
@@ -2152,7 +2151,7 @@ public static partial class SymbolExtractor
 
         var equalsIndex = IndexOfTopLevelEquals(value);
         if (equalsIndex >= 0)
-            return NormalizeXamlMarkupValue(value[(equalsIndex + 1)..].Trim());
+            return NormalizeXamlMarkupValue(value[(equalsIndex + 1)..]);
 
         return NormalizeXamlMarkupValue(value);
     }
