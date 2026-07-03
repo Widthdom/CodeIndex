@@ -36,6 +36,9 @@ public static partial class SymbolExtractor
 
     private static List<SymbolRecord> ExtractSoliditySymbols(long fileId, string[] lines)
     {
+        if (!MayContainSolidityDeclaration(lines))
+            return [];
+
         var matchLines = SolidityLanguageSupport.MaskCommentsAndStrings(lines);
         List<SymbolRecord>? symbols = null;
         List<SymbolRecord> Symbols() => symbols ??= [];
@@ -146,6 +149,29 @@ public static partial class SymbolExtractor
         line.Contains("contract", StringComparison.Ordinal)
         || line.Contains("interface", StringComparison.Ordinal)
         || line.Contains("library", StringComparison.Ordinal);
+
+    private static bool MayContainSolidityDeclaration(IReadOnlyList<string> lines)
+    {
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var line = lines[i];
+            if (MayContainSolidityTypeDeclaration(line)
+                || line.Contains("function", StringComparison.Ordinal)
+                || line.Contains("constructor", StringComparison.Ordinal)
+                || line.Contains("fallback", StringComparison.Ordinal)
+                || line.Contains("receive", StringComparison.Ordinal)
+                || line.Contains("event", StringComparison.Ordinal)
+                || line.Contains("error", StringComparison.Ordinal)
+                || line.Contains("struct", StringComparison.Ordinal)
+                || line.Contains("enum", StringComparison.Ordinal)
+                || line.Contains("modifier", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     private static void AddSoliditySymbol(
         List<SymbolRecord> symbols,
