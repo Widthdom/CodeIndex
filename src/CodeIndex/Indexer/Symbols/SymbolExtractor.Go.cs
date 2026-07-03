@@ -936,8 +936,8 @@ public static partial class SymbolExtractor
         if (close <= open + 1)
             return false;
 
-        var receiver = signature[(open + 1)..close].Trim();
-        if (receiver.Length == 0)
+        var receiver = signature.AsSpan(open + 1, close - open - 1).Trim();
+        if (receiver.IsEmpty)
             return false;
 
         var typeText = receiver;
@@ -964,13 +964,13 @@ public static partial class SymbolExtractor
         if (dot >= 0 && dot + 1 < typeText.Length)
             typeText = typeText[(dot + 1)..];
 
-        receiverTypeName = typeText.Trim();
+        receiverTypeName = typeText.Trim().ToString();
         return receiverTypeName.Length > 0;
     }
 
     private static string GetGoReceiverTypeLookupName(string typeName)
     {
-        var lookupName = typeName.Trim();
+        var lookupName = typeName.AsSpan().Trim();
         while (lookupName.StartsWith("*", StringComparison.Ordinal))
             lookupName = lookupName[1..].TrimStart();
 
@@ -980,11 +980,18 @@ public static partial class SymbolExtractor
 
         var dot = lookupName.LastIndexOf('.');
         return dot >= 0 && dot + 1 < lookupName.Length
-            ? lookupName[(dot + 1)..].Trim()
-            : lookupName;
+            ? lookupName[(dot + 1)..].Trim().ToString()
+            : lookupName.ToString();
     }
 
     private static int SkipGoSymbolWhitespace(string text, int start)
+    {
+        while (start < text.Length && char.IsWhiteSpace(text[start]))
+            start++;
+        return start;
+    }
+
+    private static int SkipGoSymbolWhitespace(ReadOnlySpan<char> text, int start)
     {
         while (start < text.Length && char.IsWhiteSpace(text[start]))
             start++;
