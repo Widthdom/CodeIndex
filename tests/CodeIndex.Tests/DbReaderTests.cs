@@ -7571,8 +7571,7 @@ public partial class DbReaderTests : IDisposable
         //   5. BOM 付きソース中の call-site 参照がエンドツーエンドで抽出され、
         //      references / callers 経路を同じパイプラインで pin する。
         // Closes #183.
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_bom_e2e_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_bom_e2e");
         try
         {
             var source =
