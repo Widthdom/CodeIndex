@@ -81,6 +81,61 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_RechecksIndexabilityBeforeContentRead()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_read_probe_race");
+        var outsideRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_read_probe_outside");
+        var sourcePath = Path.Combine(projectRoot, "app.py");
+        var outsidePath = Path.Combine(outsideRoot, "outside.py");
+        var swapped = false;
+        try
+        {
+            File.WriteAllText(sourcePath, "def project_value():\n    return 1\n");
+            File.WriteAllText(outsidePath, "def escaped_secret():\n    return 2\n");
+
+            lock (FullScanContentLoadHookGate)
+            {
+                try
+                {
+                    IndexCommandRunner.FullScanFileContentLoadForTesting = path =>
+                    {
+                        if (!string.Equals(path, "app.py", StringComparison.Ordinal) || swapped)
+                            return;
+
+                        File.Delete(sourcePath);
+                        File.CreateSymbolicLink(sourcePath, outsidePath);
+                        swapped = true;
+                    };
+
+                    var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+                    Assert.True(swapped);
+                    Assert.Equal(CommandExitCodes.Success, exitCode);
+                    Assert.Equal("partial", json.GetProperty("status").GetString());
+                    Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
+                    Assert.Contains(
+                        json.GetProperty("errors").EnumerateArray(),
+                        error => string.Equals(error.GetProperty("file").GetString(), sourcePath, StringComparison.Ordinal));
+                    Assert.DoesNotContain("app.py", ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+                }
+                finally
+                {
+                    IndexCommandRunner.FullScanFileContentLoadForTesting = null;
+                }
+            }
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+            DeleteDirectory(outsideRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_IncludeSymbolKindKeepsOnlyMatchingSymbols()
     {
         var projectRoot = CreateTempProject();

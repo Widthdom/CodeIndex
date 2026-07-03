@@ -671,7 +671,6 @@ public static partial class IndexCommandRunner
                         absPath,
                         relPath,
                         knownLanguage,
-                        indexability,
                         cancellationToken);
                     var record = loaded.Record;
                     knownReadableFileSizes[absPath] = record.Size;

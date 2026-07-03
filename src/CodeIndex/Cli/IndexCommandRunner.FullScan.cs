@@ -1420,7 +1420,6 @@ public static partial class IndexCommandRunner
                                     filePath,
                                     relativeFilePath,
                                     target.Language,
-                                    FileIndexer.FileProbeStatus.Supported,
                                     extractionCancellationToken);
                                 var record = loaded.Record;
                                 var content = loaded.Content;

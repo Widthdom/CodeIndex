@@ -51,56 +51,12 @@ public partial class FileIndexer
         string? knownLanguage,
         bool detectGeneratedCode,
         CancellationToken cancellationToken = default)
-        => BuildLoadedRecordWithRawBytes(
-            absolutePath,
-            relativePath,
-            knownLanguage,
-            detectGeneratedCode,
-            knownIndexability: null,
-            cancellationToken);
-
-    internal LoadedFileRecord BuildLoadedRecordWithRawBytes(
-        string absolutePath,
-        string relativePath,
-        string? knownLanguage,
-        FileProbeStatus knownIndexability,
-        CancellationToken cancellationToken = default)
-        => BuildLoadedRecordWithRawBytes(
-            absolutePath,
-            relativePath,
-            knownLanguage,
-            detectGeneratedCode: true,
-            knownIndexability,
-            cancellationToken);
-
-    internal LoadedFileRecord BuildLoadedRecordWithRawBytes(
-        string absolutePath,
-        string relativePath,
-        string? knownLanguage,
-        bool detectGeneratedCode,
-        FileProbeStatus knownIndexability,
-        CancellationToken cancellationToken = default)
-        => BuildLoadedRecordWithRawBytes(
-            absolutePath,
-            relativePath,
-            knownLanguage,
-            detectGeneratedCode,
-            (FileProbeStatus?)knownIndexability,
-            cancellationToken);
-
-    private LoadedFileRecord BuildLoadedRecordWithRawBytes(
-        string absolutePath,
-        string relativePath,
-        string? knownLanguage,
-        bool detectGeneratedCode,
-        FileProbeStatus? knownIndexability,
-        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!IsFilePathSyntaxIndexable(absolutePath))
             throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
 
-        var indexability = knownIndexability ?? GetFileIndexabilityForIndexing(absolutePath);
+        var indexability = GetFileIndexabilityForIndexing(absolutePath);
         if (indexability != FileProbeStatus.Supported)
             throw new InvalidOperationException("Only regular files can be indexed");
 
@@ -135,26 +91,12 @@ public partial class FileIndexer
     }
 
     internal string LoadNormalizedContentForPrepass(string absolutePath, string relativePath, CancellationToken cancellationToken = default)
-        => LoadNormalizedContentForPrepass(absolutePath, relativePath, knownIndexability: null, cancellationToken);
-
-    internal string LoadNormalizedContentForPrepass(
-        string absolutePath,
-        string relativePath,
-        FileProbeStatus knownIndexability,
-        CancellationToken cancellationToken = default)
-        => LoadNormalizedContentForPrepass(absolutePath, relativePath, (FileProbeStatus?)knownIndexability, cancellationToken);
-
-    private string LoadNormalizedContentForPrepass(
-        string absolutePath,
-        string relativePath,
-        FileProbeStatus? knownIndexability,
-        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!IsFilePathSyntaxIndexable(absolutePath))
             throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
 
-        var indexability = knownIndexability ?? GetFileIndexabilityForIndexing(absolutePath);
+        var indexability = GetFileIndexabilityForIndexing(absolutePath);
         if (indexability != FileProbeStatus.Supported)
             throw new InvalidOperationException("Only regular files can be indexed");
 
@@ -170,26 +112,12 @@ public partial class FileIndexer
         string absolutePath,
         string relativePath,
         CancellationToken cancellationToken = default)
-        => RawFileMayContainCSharpStaticInterfaceContract(absolutePath, relativePath, knownIndexability: null, cancellationToken);
-
-    internal bool RawFileMayContainCSharpStaticInterfaceContract(
-        string absolutePath,
-        string relativePath,
-        FileProbeStatus knownIndexability,
-        CancellationToken cancellationToken = default)
-        => RawFileMayContainCSharpStaticInterfaceContract(absolutePath, relativePath, (FileProbeStatus?)knownIndexability, cancellationToken);
-
-    private bool RawFileMayContainCSharpStaticInterfaceContract(
-        string absolutePath,
-        string relativePath,
-        FileProbeStatus? knownIndexability,
-        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!IsFilePathSyntaxIndexable(absolutePath))
             throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
 
-        var indexability = knownIndexability ?? GetFileIndexabilityForIndexing(absolutePath);
+        var indexability = GetFileIndexabilityForIndexing(absolutePath);
         if (indexability != FileProbeStatus.Supported)
             throw new InvalidOperationException("Only regular files can be indexed");
 

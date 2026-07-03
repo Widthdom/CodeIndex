@@ -5723,7 +5723,6 @@ public partial class McpServer
                     filePath,
                     target.RelativePath,
                     target.Language,
-                    FileIndexer.FileProbeStatus.Supported,
                     requestToken);
                 var record = loaded.Record;
                 knownReadableFileSizes[filePath] = record.Size;
