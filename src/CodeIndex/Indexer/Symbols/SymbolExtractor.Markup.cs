@@ -9,6 +9,8 @@ namespace CodeIndex.Indexer;
 public static partial class SymbolExtractor
 {
     private static readonly string[] WrappedXamlTypeBearingAttributeNames = ["x:Class", "x:DataType", "TargetType"];
+    private static readonly IReadOnlyDictionary<string, string> EmptyMarkdownReferenceDefinitionTargets =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
     private static List<SymbolRecord> ExtractHtmlSymbols(long fileId, string[] lines)
     {
@@ -364,7 +366,7 @@ public static partial class SymbolExtractor
     {
         // Markdown headings are the closest thing to navigable symbols in docs files.
         // Markdown の見出しは、ドキュメント内でナビゲート可能な symbol に最も近い。
-        var referenceTargets = BuildMarkdownReferenceDefinitionTargets(lines);
+        IReadOnlyDictionary<string, string>? referenceTargets = null;
         var symbols = new List<SymbolRecord>();
         var headingStack = new Stack<(int Level, int SymbolIndex)>();
         var inFence = false;
@@ -449,14 +451,14 @@ public static partial class SymbolExtractor
 
                 symbols.Add(setextSymbol);
                 headingStack.Push((setextLevel, symbols.Count - 1));
-                AddMarkdownReferenceSymbols(fileId, lines[i], i + 1, symbols, referenceTargets);
+                AddMarkdownReferenceSymbols(fileId, lines[i], i + 1, symbols, lines, ref referenceTargets);
                 i++;
                 continue;
             }
 
             if (!TryParseMarkdownHeading(lines[i], out var level, out var headingText))
             {
-                AddMarkdownReferenceSymbols(fileId, lines[i], i + 1, symbols, referenceTargets);
+                AddMarkdownReferenceSymbols(fileId, lines[i], i + 1, symbols, lines, ref referenceTargets);
                 continue;
             }
 
@@ -489,7 +491,7 @@ public static partial class SymbolExtractor
 
             symbols.Add(symbol);
             headingStack.Push((level, symbols.Count - 1));
-            AddMarkdownReferenceSymbols(fileId, lines[i], i + 1, symbols, referenceTargets);
+            AddMarkdownReferenceSymbols(fileId, lines[i], i + 1, symbols, lines, ref referenceTargets);
         }
 
         while (headingStack.Count > 0)
@@ -502,9 +504,9 @@ public static partial class SymbolExtractor
         return symbols;
     }
 
-    private static Dictionary<string, string> BuildMarkdownReferenceDefinitionTargets(string[] lines)
+    private static IReadOnlyDictionary<string, string> BuildMarkdownReferenceDefinitionTargets(string[] lines)
     {
-        var targets = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, string>? targets = null;
         var inFence = false;
         var fenceChar = '\0';
         var fenceLength = 0;
@@ -525,14 +527,23 @@ public static partial class SymbolExtractor
             if (line.Contains("]:", StringComparison.Ordinal))
             {
                 foreach (Match match in MarkdownReferenceDefinitionRegex.Matches(line))
+                {
+                    targets ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                     targets[match.Groups["label"].ValueSpan.Trim().ToString()] = match.Groups["target"].ValueSpan.Trim().ToString();
+                }
             }
         }
 
-        return targets;
+        return targets ?? EmptyMarkdownReferenceDefinitionTargets;
     }
 
-    private static void AddMarkdownReferenceSymbols(long fileId, string line, int lineNumber, List<SymbolRecord> symbols, IReadOnlyDictionary<string, string> referenceTargets)
+    private static void AddMarkdownReferenceSymbols(
+        long fileId,
+        string line,
+        int lineNumber,
+        List<SymbolRecord> symbols,
+        string[] allLines,
+        ref IReadOnlyDictionary<string, string>? referenceTargets)
     {
         if (line.Contains("](", StringComparison.Ordinal))
         {
@@ -555,6 +566,7 @@ public static partial class SymbolExtractor
             if (label.Length == 0)
                 continue;
 
+            referenceTargets ??= BuildMarkdownReferenceDefinitionTargets(allLines);
             if (referenceTargets.TryGetValue(label, out var target) && target.TrimStart().StartsWith("#", StringComparison.Ordinal))
                 AddMarkdownReferenceSymbol(fileId, target, line, lineNumber, symbols);
         }
