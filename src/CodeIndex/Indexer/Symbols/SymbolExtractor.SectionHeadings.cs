@@ -26,7 +26,7 @@ public static partial class SymbolExtractor
                 if (!match.Success)
                     continue;
 
-                AddHeadingSymbol(fileId, lines, symbols, i, match.Groups["name"].Value.Trim(), "#region");
+                AddHeadingSymbol(fileId, lines, symbols, i, match.Groups["name"].ValueSpan.Trim().ToString(), "#region");
             }
         }
         else if (lang == "python")
@@ -47,7 +47,7 @@ public static partial class SymbolExtractor
                 if (!match.Success)
                     continue;
 
-                AddHeadingSymbol(fileId, lines, symbols, i, match.Groups["name"].Value.Trim(), "@module");
+                AddHeadingSymbol(fileId, lines, symbols, i, match.Groups["name"].ValueSpan.Trim().ToString(), "@module");
             }
         }
     }
