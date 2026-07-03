@@ -4774,7 +4774,7 @@ public static partial class SymbolExtractor
             return;
 
         var content = string.Join('\n', lines);
-        var lineStarts = BuildLineStartList(lines);
+        List<int>? lineStarts = null;
         foreach (Match match in SqlCteDefinitionRegex.Matches(content))
         {
             var nameGroup = match.Groups["name"];
@@ -4782,7 +4782,8 @@ public static partial class SymbolExtractor
             if (string.IsNullOrWhiteSpace(name))
                 continue;
 
-            var lineNumber = GetLineNumberFromOffset(lineStarts, nameGroup.Index);
+            var currentLineStarts = lineStarts ??= BuildLineStartList(lines);
+            var lineNumber = GetLineNumberFromOffset(currentLineStarts, nameGroup.Index);
             AddSymbolRecord(
                 symbols,
                 null,
@@ -4794,7 +4795,7 @@ public static partial class SymbolExtractor
                     Name = name,
                     Line = lineNumber,
                     StartLine = lineNumber,
-                    StartColumn = nameGroup.Index - lineStarts[lineNumber - 1],
+                    StartColumn = nameGroup.Index - currentLineStarts[lineNumber - 1],
                     EndLine = lineNumber,
                     Signature = lines[lineNumber - 1].Trim(),
                 });
@@ -4868,17 +4869,18 @@ public static partial class SymbolExtractor
         }
 
         var structuralContent = string.Join('\n', structuralLines);
-        var lineStarts = BuildLineStartList(structuralLines);
+        List<int>? lineStarts = null;
         if (structuralContent.Contains("ALTER", StringComparison.OrdinalIgnoreCase)
             && structuralContent.Contains("ADD", StringComparison.OrdinalIgnoreCase))
         {
             foreach (Match match in SqlAlterTableAddGeneratedColumnRegex.Matches(structuralContent))
             {
                 var nameGroup = match.Groups["name"];
+                var currentLineStarts = lineStarts ??= BuildLineStartList(structuralLines);
                 AddSqlGeneratedColumnSymbol(
                     fileId,
                     lines,
-                    lineStarts,
+                    currentLineStarts,
                     new GroupProxy(nameGroup.Value, nameGroup.Index),
                     match.Groups["table"].Value,
                     symbols);
@@ -4904,10 +4906,11 @@ public static partial class SymbolExtractor
                 if (!nameMatch.Success)
                     continue;
 
+                var currentLineStarts = lineStarts ??= BuildLineStartList(structuralLines);
                 AddSqlGeneratedColumnSymbol(
                     fileId,
                     lines,
-                    lineStarts,
+                    currentLineStarts,
                     new GroupProxy(nameMatch.Groups["name"].Value, column.StartIndex + nameMatch.Groups["name"].Index),
                     tableName,
                     symbols);

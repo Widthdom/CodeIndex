@@ -35,7 +35,7 @@ public static partial class SymbolExtractor
         if (hasInputBlocks)
         {
             var content = string.Join('\n', lines);
-            var lineStarts = BuildLineStartList(lines);
+            List<int>? lineStarts = null;
             foreach (Match inputMatch in GraphQLInputBlockRegex.Matches(content))
             {
                 var inputName = inputMatch.Groups["name"].Value;
@@ -47,7 +47,8 @@ public static partial class SymbolExtractor
                 {
                     var fieldGroup = fieldMatch.Groups["name"];
                     var absoluteIndex = body.Index + fieldGroup.Index;
-                    var lineNumber = GetLineNumberFromOffset(lineStarts, absoluteIndex);
+                    var currentLineStarts = lineStarts ??= BuildLineStartList(lines);
+                    var lineNumber = GetLineNumberFromOffset(currentLineStarts, absoluteIndex);
                     AddSymbolRecord(
                         symbols,
                         null,
@@ -59,7 +60,7 @@ public static partial class SymbolExtractor
                             Name = fieldGroup.Value,
                             Line = lineNumber,
                             StartLine = lineNumber,
-                            StartColumn = absoluteIndex - lineStarts[lineNumber - 1],
+                            StartColumn = absoluteIndex - currentLineStarts[lineNumber - 1],
                             EndLine = lineNumber,
                             Signature = lines[lineNumber - 1].Trim(),
                             ContainerKind = "class",
