@@ -1857,6 +1857,9 @@ public static partial class SymbolExtractor
         List<SymbolRecord> symbols,
         JavaScriptScopePrivacyFlags[][] privateScopeColumns)
     {
+        if (!LinesContain(lines, "=", StringComparison.Ordinal))
+            return;
+
         var sanitizedLines = BuildJavaScriptTypeScriptSanitizedLines(lines);
         var syntheticClassTargets = new List<JavaScriptClassScanTarget>();
         var symbolLineIdentities = BuildSymbolLineIdentities(symbols);
