@@ -326,7 +326,7 @@ public static partial class SymbolExtractor
 
     private static string NormalizeCppUsingNamespaceTarget(string text)
     {
-        var target = text.Trim();
+        var target = text.AsSpan().Trim();
         var commentIndex = target.IndexOf("//", StringComparison.Ordinal);
         if (commentIndex < 0)
             commentIndex = target.IndexOf("/*", StringComparison.Ordinal);
@@ -334,10 +334,10 @@ public static partial class SymbolExtractor
         if (commentIndex >= 0)
             target = target[..commentIndex].TrimEnd();
 
-        if (target.EndsWith(';'))
+        if (target.Length > 0 && target[^1] == ';')
             target = target[..^1].TrimEnd();
 
-        return target;
+        return target.ToString();
     }
 
 }
