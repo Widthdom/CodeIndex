@@ -8,7 +8,12 @@ namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
-    private static void ExtractJavaModuleDirectiveSymbols(long fileId, string[] rawLines, string[] structuralLines, List<SymbolRecord> symbols)
+    private static void ExtractJavaModuleDirectiveSymbols(
+        long fileId,
+        string[] rawLines,
+        string[] structuralLines,
+        List<SymbolRecord> symbols,
+        SymbolExtractionState extractionState)
     {
         if (!LinesContain(structuralLines, "module", StringComparison.Ordinal))
             return;
@@ -26,6 +31,7 @@ public static partial class SymbolExtractor
 
                 AddSymbolRecord(
                     symbols,
+                    extractionState,
                     cssSeenSymbols: null,
                     statement.StartLine,
                     new SymbolRecord

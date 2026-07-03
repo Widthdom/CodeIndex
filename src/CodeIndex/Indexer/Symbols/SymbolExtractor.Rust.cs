@@ -8,7 +8,11 @@ namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
-    private static void ExtractRustUseSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    private static void ExtractRustUseSymbols(
+        long fileId,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        SymbolExtractionState extractionState)
     {
         if (!LinesContain(lines, "use", StringComparison.Ordinal))
             return;
@@ -52,7 +56,7 @@ public static partial class SymbolExtractor
 
             if (occurrences.Count == 1)
             {
-                AddRustUseSymbolOccurrence(fileId, lines, symbols, symbolLineIdentities, statement, occurrences[0]);
+                AddRustUseSymbolOccurrence(fileId, lines, symbols, extractionState, symbolLineIdentities, statement, occurrences[0]);
                 i = endLineIndex;
                 continue;
             }
@@ -63,7 +67,7 @@ public static partial class SymbolExtractor
                 if (!seen.Add($"{occurrence.Name}@{occurrence.Line}:{occurrence.Column}"))
                     continue;
 
-                AddRustUseSymbolOccurrence(fileId, lines, symbols, symbolLineIdentities, statement, occurrence);
+                AddRustUseSymbolOccurrence(fileId, lines, symbols, extractionState, symbolLineIdentities, statement, occurrence);
             }
 
             i = endLineIndex;
@@ -74,6 +78,7 @@ public static partial class SymbolExtractor
         long fileId,
         string[] lines,
         List<SymbolRecord> symbols,
+        SymbolExtractionState extractionState,
         HashSet<SymbolLineIdentity> symbolLineIdentities,
         string statement,
         RustUseSymbolOccurrence occurrence)
@@ -95,6 +100,7 @@ public static partial class SymbolExtractor
         };
         AddSymbolRecord(
             symbols,
+            extractionState,
             cssSeenSymbols: null,
             occurrence.Line,
             symbol,
@@ -102,7 +108,11 @@ public static partial class SymbolExtractor
         RecordSymbolLineIdentity(symbolLineIdentities, symbol);
     }
 
-    private static void ExtractRustMultilineImplSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    private static void ExtractRustMultilineImplSymbols(
+        long fileId,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        SymbolExtractionState extractionState)
     {
         if (!LinesContain(lines, "impl", StringComparison.Ordinal))
             return;
@@ -146,6 +156,7 @@ public static partial class SymbolExtractor
             };
             AddSymbolRecord(
                 symbols,
+                extractionState,
                 cssSeenSymbols: null,
                 position.Line,
                 symbol,

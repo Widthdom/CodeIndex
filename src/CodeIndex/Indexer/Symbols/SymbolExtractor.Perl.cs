@@ -17,7 +17,11 @@ public static partial class SymbolExtractor
         @"(?:^|,)\s*(?:""(?<quoted>(?:\\x\{[0-9A-Fa-f]+\}|\\x[0-9A-Fa-f]{2}|\\.|[^""])*)""|'(?<quoted>(?:\\x\{[0-9A-Fa-f]+\}|\\x[0-9A-Fa-f]{2}|\\.|[^'])*)'|(?<bare>[\p{L}_][\p{L}\p{Nd}_]*))\s*=>",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    private static void ExtractPerlHashConstantSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    private static void ExtractPerlHashConstantSymbols(
+        long fileId,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        SymbolExtractionState extractionState)
     {
         for (var i = 0; i < lines.Length; i++)
         {
@@ -59,6 +63,7 @@ public static partial class SymbolExtractor
                 var (lineIndex, column) = ResolvePerlHashConstantBodyPosition(lineSegments, nameGroup.Index);
                 AddSymbolRecord(
                     symbols,
+                    extractionState,
                     cssSeenSymbols: null,
                     lineIndex + 1,
                     new SymbolRecord

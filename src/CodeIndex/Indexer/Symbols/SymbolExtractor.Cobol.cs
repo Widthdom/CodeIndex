@@ -8,7 +8,11 @@ namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
-    private static void ExtractCobolParagraphSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    private static void ExtractCobolParagraphSymbols(
+        long fileId,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        SymbolExtractionState extractionState)
     {
         string? programName = null;
         var inProcedureDivision = false;
@@ -57,6 +61,7 @@ public static partial class SymbolExtractor
 
                     AddSymbolRecord(
                         symbols,
+                        extractionState,
                         cssSeenSymbols: null,
                         i + 1,
                         new SymbolRecord
@@ -90,6 +95,7 @@ public static partial class SymbolExtractor
                     var (sectionEndLine, sectionBodyStartLine, sectionBodyEndLine) = FindCobolSectionRange(lines, i);
                     AddSymbolRecord(
                         symbols,
+                        extractionState,
                         cssSeenSymbols: null,
                         i + 1,
                         new SymbolRecord
@@ -127,6 +133,7 @@ public static partial class SymbolExtractor
             var (endLine, bodyStartLine, bodyEndLine) = FindCobolParagraphRange(lines, i);
             AddSymbolRecord(
                 symbols,
+                extractionState,
                 cssSeenSymbols: null,
                 i + 1,
                 new SymbolRecord
