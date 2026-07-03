@@ -26,9 +26,9 @@ public static partial class ReferenceExtractor
         new Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
 
     private static (
-        List<CSharpUsingAliasRecord> Aliases,
-        List<CSharpUsingNamespaceRecord> Namespaces,
-        List<CSharpUsingStaticRecord> Statics) BuildCSharpUsingImports(
+        IReadOnlyList<CSharpUsingAliasRecord> Aliases,
+        IReadOnlyList<CSharpUsingNamespaceRecord> Namespaces,
+        IReadOnlyList<CSharpUsingStaticRecord> Statics) BuildCSharpUsingImports(
         string language,
         IReadOnlyList<SymbolRecord> symbols,
         IReadOnlySet<string> csharpKnownTypeNames,
@@ -39,9 +39,9 @@ public static partial class ReferenceExtractor
         if (language != "csharp")
             return ([], [], []);
 
-        var aliases = new List<CSharpUsingAliasRecord>();
-        var namespaces = new List<CSharpUsingNamespaceRecord>();
-        var statics = new List<CSharpUsingStaticRecord>();
+        List<CSharpUsingAliasRecord>? aliases = null;
+        List<CSharpUsingNamespaceRecord>? namespaces = null;
+        List<CSharpUsingStaticRecord>? statics = null;
 
         foreach (var symbol in symbols)
         {
@@ -56,7 +56,7 @@ public static partial class ReferenceExtractor
             {
                 var aliasMatch = CSharpUsingAliasRegex.Match(signature);
                 if (aliasMatch.Success)
-                    AddCSharpUsingAliasRecord(aliases, namespaceScopes, symbol.Line, aliasMatch, csharpKnownTypeNames);
+                    AddCSharpUsingAliasRecord(aliases ??= [], namespaceScopes, symbol.Line, aliasMatch, csharpKnownTypeNames);
             }
 
             if (signature.IndexOf('=') < 0
@@ -64,14 +64,14 @@ public static partial class ReferenceExtractor
             {
                 var namespaceMatch = CSharpUsingNamespaceRegex.Match(signature);
                 if (namespaceMatch.Success)
-                    AddCSharpUsingNamespaceRecord(namespaces, namespaceScopes, symbol.Line, namespaceMatch);
+                    AddCSharpUsingNamespaceRecord(namespaces ??= [], namespaceScopes, symbol.Line, namespaceMatch);
             }
 
             if (signature.IndexOf("static", StringComparison.Ordinal) >= 0)
             {
                 var staticMatch = CSharpUsingStaticRegex.Match(signature);
                 if (staticMatch.Success)
-                    AddCSharpUsingStaticRecord(statics, namespaceScopes, symbol.Line, staticMatch);
+                    AddCSharpUsingStaticRecord(statics ??= [], namespaceScopes, symbol.Line, staticMatch);
             }
         }
 
@@ -95,22 +95,22 @@ public static partial class ReferenceExtractor
 
                 var lineNumber = i + 1;
                 var aliasName = NormalizeCSharpIdentifier(match.Groups["alias"].Value);
-                if (HasCSharpUsingAliasRecord(aliases, lineNumber, aliasName))
+                if (aliases != null && HasCSharpUsingAliasRecord(aliases, lineNumber, aliasName))
                     continue;
 
-                AddCSharpUsingAliasRecord(aliases, namespaceScopes, lineNumber, match, csharpKnownTypeNames);
+                AddCSharpUsingAliasRecord(aliases ??= [], namespaceScopes, lineNumber, match, csharpKnownTypeNames);
             }
         }
 
-        aliases.Sort(static (left, right) => left.Line.CompareTo(right.Line));
-        namespaces.Sort(static (left, right) => left.Line.CompareTo(right.Line));
-        statics.Sort(static (left, right) => left.Line.CompareTo(right.Line));
-        return (aliases, namespaces, statics);
+        aliases?.Sort(static (left, right) => left.Line.CompareTo(right.Line));
+        namespaces?.Sort(static (left, right) => left.Line.CompareTo(right.Line));
+        statics?.Sort(static (left, right) => left.Line.CompareTo(right.Line));
+        return (aliases ?? [], namespaces ?? [], statics ?? []);
     }
 
-    private static List<(int StartLine, int EndLine)> BuildCSharpNamespaceScopes(IReadOnlyList<SymbolRecord> symbols)
+    private static IReadOnlyList<(int StartLine, int EndLine)> BuildCSharpNamespaceScopes(IReadOnlyList<SymbolRecord> symbols)
     {
-        var scopes = new List<(int StartLine, int EndLine)>();
+        List<(int StartLine, int EndLine)>? scopes = null;
         foreach (var symbol in symbols)
         {
             if (symbol.Kind != "namespace")
@@ -119,10 +119,10 @@ public static partial class ReferenceExtractor
             var startLine = symbol.BodyStartLine ?? symbol.StartLine;
             var endLine = symbol.BodyEndLine ?? symbol.EndLine;
             if (startLine > 0 && endLine >= startLine)
-                scopes.Add((startLine, endLine));
+                (scopes ??= []).Add((startLine, endLine));
         }
 
-        return scopes;
+        return scopes ?? [];
     }
 
     private static bool HasCSharpUsingAliasRecord(
