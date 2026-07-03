@@ -548,10 +548,11 @@ internal static class DependencyPackageExtractor
         int line,
         int column)
     {
-        name = name.Trim();
-        if (name.Length == 0)
+        var trimmedName = name.AsSpan().Trim();
+        if (trimmedName.IsEmpty)
             return;
 
+        name = TrimDependencyField(name, trimmedName);
         line = Math.Max(1, line);
         column = Math.Max(1, column);
         version = NormalizeEmpty(version);
@@ -664,10 +665,33 @@ internal static class DependencyPackageExtractor
         => line > 0 && line <= lines.Length ? lines[line - 1].Trim() : string.Empty;
 
     private static string NormalizePackageName(string name)
-        => name.Trim().ToLowerInvariant();
+    {
+        var trimmed = name.AsSpan().Trim();
+        return trimmed.IsEmpty ? string.Empty : NormalizeLowerInvariantKey(name, trimmed);
+    }
 
     private static string? NormalizeEmpty(string? value)
-        => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    {
+        if (value is null)
+            return null;
+
+        var trimmed = value.AsSpan().Trim();
+        return trimmed.IsEmpty ? null : TrimDependencyField(value, trimmed);
+    }
+
+    private static string TrimDependencyField(string original, ReadOnlySpan<char> trimmed)
+        => trimmed.Length == original.Length ? original : trimmed.ToString();
+
+    private static string NormalizeLowerInvariantKey(string original, ReadOnlySpan<char> trimmed)
+    {
+        for (var i = 0; i < trimmed.Length; i++)
+        {
+            if (char.ToLowerInvariant(trimmed[i]) != trimmed[i])
+                return trimmed.ToString().ToLowerInvariant();
+        }
+
+        return TrimDependencyField(original, trimmed);
+    }
 
     private static bool LooksLikeVersionConstraint(string version)
         => version.StartsWith("=", StringComparison.Ordinal)
