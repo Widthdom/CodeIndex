@@ -1493,7 +1493,8 @@ public class DatabaseTests : IDisposable
     {
         lock (TestConsoleLock.Gate)
         {
-            var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_perf_pragmas_{Guid.NewGuid():N}.db");
+            var dbDir = TestProjectHelper.CreateTempProject("codeindex_perf_pragmas");
+            var dbPath = Path.Combine(dbDir, "codeindex.db");
             using var env = EnvironmentVariableScope.Capture(
                 DbContext.CacheSizeEnvironmentVariable,
                 DbContext.MmapSizeEnvironmentVariable);
@@ -1511,8 +1512,7 @@ public class DatabaseTests : IDisposable
             finally
             {
                 SqliteConnection.ClearAllPools();
-                if (File.Exists(dbPath))
-                    File.Delete(dbPath);
+                TestProjectHelper.DeleteDirectory(dbDir);
             }
         }
     }
