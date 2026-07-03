@@ -488,6 +488,9 @@ public static partial class SymbolExtractor
 
     private static int[] BuildLineStarts(string[] lines)
     {
+        if (lines.Length <= 1)
+            return [0];
+
         var starts = new int[lines.Length == 0 ? 1 : lines.Length];
         var offset = 0;
         for (var i = 0; i < lines.Length; i++)
