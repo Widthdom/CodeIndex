@@ -6701,7 +6701,7 @@ public sealed class Caller
     private static void DeleteTemporaryDotnetHostPath(string hostPath)
     {
         var hostDir = Path.GetDirectoryName(hostPath);
-        if (!string.IsNullOrWhiteSpace(hostDir) && Directory.Exists(hostDir))
+        if (!string.IsNullOrWhiteSpace(hostDir))
             TestProjectHelper.DeleteDirectory(hostDir);
     }
 

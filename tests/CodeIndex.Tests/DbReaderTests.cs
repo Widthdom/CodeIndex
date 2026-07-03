@@ -5379,25 +5379,7 @@ public partial class DbReaderTests : IDisposable
 
     private void DeleteDbPath()
     {
-        if (!File.Exists(_dbPath))
-            return;
-
-        try
-        {
-            File.Delete(_dbPath);
-        }
-        catch (IOException)
-        {
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            if (File.Exists(_dbPath))
-                File.Delete(_dbPath);
-        }
-        catch (UnauthorizedAccessException)
-        {
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            if (File.Exists(_dbPath))
-                File.Delete(_dbPath);
-        }
+        TestProjectHelper.DeleteFile(_dbPath);
     }
 
     // --- Outline tests / アウトラインテスト ---

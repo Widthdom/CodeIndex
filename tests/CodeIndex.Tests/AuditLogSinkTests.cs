@@ -901,8 +901,7 @@ public class AuditLogSinkTests
         }
         finally
         {
-            if (Directory.Exists(path))
-                TestProjectHelper.DeleteDirectory(path);
+            TestProjectHelper.DeleteDirectory(path);
         }
     }
 
