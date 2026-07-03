@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.36.1] - 2026-07-04
+
+#### Internal
+
+- Disabled the Roslyn compile-time trim analyzer for trimmed publishes so release RIDs still run the real ILLink trim pass without failing early on the .NET 8 analyzer AD0001 crash.
+
 ### [1.36.0] - 2026-07-04
 
 #### Added
@@ -5450,6 +5456,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.36.1] - 2026-07-04
+
+#### 内部変更
+
+- trimmed publish では Roslyn compile-time trim analyzer を無効化し、.NET 8 analyzer の AD0001 crash で早期失敗せずに、実際の ILLink trim pass を release RID で継続実行できるようにしました。
+
 ### [1.36.0] - 2026-07-04
 
 #### 追加
@@ -10871,7 +10883,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.36.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.36.1...HEAD
+[1.36.1]: https://github.com/Widthdom/CodeIndex/compare/v1.36.0...v1.36.1
 [1.36.0]: https://github.com/Widthdom/CodeIndex/compare/v1.35.0...v1.36.0
 [1.35.0]: https://github.com/Widthdom/CodeIndex/compare/v1.34.5...v1.35.0
 [1.34.5]: https://github.com/Widthdom/CodeIndex/compare/v1.34.4...v1.34.5
