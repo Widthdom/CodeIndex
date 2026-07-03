@@ -623,15 +623,20 @@ internal static class DependencyPackageExtractor
 
     private static string? ExtractPoetryVersion(string value)
     {
-        value = value.Trim();
-        if ((value.StartsWith("\"", StringComparison.Ordinal) && value.EndsWith("\"", StringComparison.Ordinal))
-            || (value.StartsWith("'", StringComparison.Ordinal) && value.EndsWith("'", StringComparison.Ordinal)))
+        var trimmed = value.AsSpan().Trim();
+        if (trimmed.IsEmpty)
+            return null;
+
+        if (trimmed.Length >= 2
+            && ((trimmed[0] == '"' && trimmed[^1] == '"')
+                || (trimmed[0] == '\'' && trimmed[^1] == '\'')))
         {
-            return value[1..^1].Trim();
+            return TrimDependencyField(value, trimmed[1..^1].Trim());
         }
 
-        var match = TomlVersionRegex.Match(value);
-        return match.Success ? match.Groups["version"].Value.Trim() : null;
+        var normalized = TrimDependencyField(value, trimmed);
+        var match = TomlVersionRegex.Match(normalized);
+        return match.Success ? TrimDependencyField(normalized, match.Groups["version"].ValueSpan.Trim()) : null;
     }
 
     private static (int Line, int Column) FindJsonProperty(string[] lines, string propertyName)
