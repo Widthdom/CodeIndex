@@ -34,15 +34,13 @@ public static partial class SymbolExtractor
         var rawText = string.Join('\n', lines);
         var maskedText = MaskHtmlRawTextRegions(rawText);
 
-        // Precompute per-line absolute offsets for O(log n) line lookup via binary
-        // search. Each lines[i] does not include the joining '\n', so lineStarts[i]
-        // points at the first character of line i.
-        // 各シンボルの行番号を O(log n) で引けるように行ごとの絶対 offset を事前計算。
-        // lines[i] 自体は連結に使う '\n' を含まないため、lineStarts[i] は i 行目の
-        // 先頭文字位置を指す。
-        var lineStarts = BuildLineStarts(lines);
+        // Build per-line absolute offsets only once a symbol needs O(log n)
+        // offset-to-line lookup. Plain markup with no emitted symbols can skip it.
+        // シンボルが offset-to-line lookup を必要とする時だけ行ごとの絶対 offset を作る。
+        // emit 対象のない plain markup では確保を避ける。
+        int[]? lineStarts = null;
 
-        var symbols = new List<SymbolRecord>();
+        List<SymbolRecord>? symbols = null;
         var pos = 0;
         while (pos < maskedText.Length)
         {
@@ -91,9 +89,9 @@ public static partial class SymbolExtractor
             // ファイルで `symbols` / `definition` / `outline` が汚染されるのを防ぐ。
             if (tagName.Contains('-') && !HtmlReservedHyphenatedTags.Contains(tagNameLower))
             {
-                var startLine = FindHtmlLineNumber(lineStarts, pos);
+                var startLine = FindHtmlLineNumber(lineStarts ??= BuildLineStarts(lines), pos);
                 var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
-                symbols.Add(new SymbolRecord
+                (symbols ??= []).Add(new SymbolRecord
                 {
                     FileId = fileId,
                     Kind = "class",
@@ -193,9 +191,9 @@ public static partial class SymbolExtractor
 
                 if (IsHtmlSemanticStateAttributeName(attrNameLower))
                 {
-                    var attrStartLine = FindHtmlLineNumber(lineStarts, attrNameStart);
+                    var attrStartLine = FindHtmlLineNumber(lineStarts ??= BuildLineStarts(lines), attrNameStart);
                     var attrSignatureIndex = Math.Clamp(attrStartLine - 1, 0, lines.Length - 1);
-                    symbols.Add(new SymbolRecord
+                    (symbols ??= []).Add(new SymbolRecord
                     {
                         FileId = fileId,
                         Kind = "property",
@@ -277,12 +275,12 @@ public static partial class SymbolExtractor
                 // 属性値の位置でシンボルを固定し、属性が折り返されたタグでも値が書かれた
                 // 行にジャンプできるようにする。
                 var anchor = attrValueStart >= 0 ? attrValueStart : pos;
-                var startLine = FindHtmlLineNumber(lineStarts, anchor);
+                var startLine = FindHtmlLineNumber(lineStarts ??= BuildLineStarts(lines), anchor);
                 var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
 
                 void AddEmittedName(string emittedName)
                 {
-                    symbols.Add(new SymbolRecord
+                    (symbols ??= []).Add(new SymbolRecord
                     {
                         FileId = fileId,
                         Kind = emitKind!,
@@ -309,9 +307,9 @@ public static partial class SymbolExtractor
 
             if (tagNameLower == "slot" && !sawNamedSlotDeclaration)
             {
-                var startLine = FindHtmlLineNumber(lineStarts, pos);
+                var startLine = FindHtmlLineNumber(lineStarts ??= BuildLineStarts(lines), pos);
                 var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
-                symbols.Add(new SymbolRecord
+                (symbols ??= []).Add(new SymbolRecord
                 {
                     FileId = fileId,
                     Kind = "property",
@@ -325,6 +323,9 @@ public static partial class SymbolExtractor
 
             pos = cursor < maskedText.Length ? cursor + 1 : cursor;
         }
+
+        if (symbols is null)
+            return [];
 
         AssignContainers(symbols, lines, null);
         PopulateDeclaredContainerQualifiedNames(symbols);
