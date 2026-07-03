@@ -865,13 +865,25 @@ internal static class RustReferenceExtractor
 
     private static string CombineUsePath(string? prefix, string name)
     {
-        var cleanedPrefix = prefix?.Trim().TrimEnd(':');
-        var cleanedName = name.Trim().TrimEnd(':');
-        if (string.IsNullOrWhiteSpace(cleanedPrefix))
+        var cleanedPrefix = TrimRustUsePathSegment(prefix);
+        var cleanedName = TrimRustUsePathSegment(name);
+        if (cleanedPrefix.Length == 0)
             return cleanedName;
-        if (string.IsNullOrWhiteSpace(cleanedName))
+        if (cleanedName.Length == 0)
             return cleanedPrefix;
         return $"{cleanedPrefix}::{cleanedName}";
+    }
+
+    private static string TrimRustUsePathSegment(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        var span = value.AsSpan().Trim();
+        while (span.Length > 0 && span[^1] == ':')
+            span = span[..^1];
+
+        return span.ToString();
     }
 
     private static void EmitExternCrateReferences(
