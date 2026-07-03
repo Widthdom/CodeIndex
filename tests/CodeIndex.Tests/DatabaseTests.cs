@@ -935,7 +935,8 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void RunIncrementalVacuum_ReclaimsFreelistPages()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_vacuum_test_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_vacuum");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
             VacuumResult result;
@@ -974,14 +975,16 @@ public class DatabaseTests : IDisposable
         }
         finally
         {
-            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
     [Fact]
     public void RunIncrementalVacuum_CancellationBeforeMetrics_ThrowsOperationCanceled_Issue3811()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_vacuum_cancel_test_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_vacuum_cancel");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
             using var db = new DbContext(dbPath);
@@ -993,14 +996,16 @@ public class DatabaseTests : IDisposable
         }
         finally
         {
-            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
     [Fact]
     public void RunIncrementalVacuum_ReportsProgressBoundaries_Issue3811()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_vacuum_progress_test_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_vacuum_progress");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         var progress = new List<string>();
         try
         {
@@ -1017,7 +1022,8 @@ public class DatabaseTests : IDisposable
         finally
         {
             DbContext.MaintenanceProgressForTesting = null;
-            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
@@ -1083,7 +1089,8 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void RunIncrementalVacuum_ConvertsLegacyNoAutoVacuumDatabase()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_legacy_vacuum_test_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_legacy_vacuum");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
             using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
@@ -1123,7 +1130,8 @@ public class DatabaseTests : IDisposable
         }
         finally
         {
-            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
