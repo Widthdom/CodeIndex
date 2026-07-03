@@ -25,6 +25,7 @@ internal static class PowerShellReferenceExtractor
         RegexOptions.Compiled | RegexOptions.Multiline);
     private static readonly IReadOnlyDictionary<string, List<SplatAssignment>> EmptySplatAssignments =
         new Dictionary<string, List<SplatAssignment>>(StringComparer.OrdinalIgnoreCase);
+    private static readonly IReadOnlyList<string> EmptyHashtableKeys = Array.Empty<string>();
 
     public static void EmitCallReferences(string preparedLine, Action<string, int> addCallLikeReference)
     {
@@ -143,10 +144,10 @@ internal static class PowerShellReferenceExtractor
         }
     }
 
-    private static List<string> ExtractHashtableKeys(string text)
+    private static IReadOnlyList<string> ExtractHashtableKeys(string text)
     {
         if (text.IndexOf('=') < 0)
-            return [];
+            return EmptyHashtableKeys;
 
         List<string>? keys = null;
         foreach (Match match in HashtableKeyRegex.Matches(text))
@@ -165,7 +166,7 @@ internal static class PowerShellReferenceExtractor
             }
         }
 
-        return keys ?? [];
+        return keys ?? EmptyHashtableKeys;
     }
 
     private static bool ContainsPowerShellHashtableKey(List<string> keys, string key)
