@@ -98,7 +98,7 @@ public static partial class SymbolExtractor
         ref string? goTypeBodyKind)
     {
         var normalizedTypeText = typeText.StartsWith("type", StringComparison.Ordinal)
-            ? typeText["type".Length..].TrimStart()
+            ? typeText.AsSpan("type".Length).TrimStart().ToString()
             : typeText;
         var match = GoTypeBlockSpecRegex.Match(normalizedTypeText);
         if (!match.Success)
