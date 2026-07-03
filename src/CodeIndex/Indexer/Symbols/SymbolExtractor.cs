@@ -6049,7 +6049,9 @@ public static partial class SymbolExtractor
 
     private static HashSet<SymbolLineIdentity> BuildSymbolLineIdentities(IEnumerable<SymbolRecord> symbols)
     {
-        var identities = new HashSet<SymbolLineIdentity>();
+        var identities = symbols is ICollection<SymbolRecord> collection
+            ? new HashSet<SymbolLineIdentity>(collection.Count)
+            : new HashSet<SymbolLineIdentity>();
         foreach (var symbol in symbols)
             identities.Add(GetSymbolLineIdentity(symbol));
         return identities;
