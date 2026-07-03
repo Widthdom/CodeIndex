@@ -516,21 +516,27 @@ internal static class DependencyPackageExtractor
     {
         name = string.Empty;
         version = null;
-        var markerIndex = spec.IndexOf(';');
-        var normalized = (markerIndex >= 0 ? spec[..markerIndex] : spec).Trim();
-        if (normalized.Length == 0)
+        var normalizedSpan = spec.AsSpan();
+        var markerIndex = normalizedSpan.IndexOf(';');
+        if (markerIndex >= 0)
+            normalizedSpan = normalizedSpan[..markerIndex];
+
+        normalizedSpan = normalizedSpan.Trim();
+        if (normalizedSpan.IsEmpty)
             return false;
 
+        var normalized = TrimDependencyField(spec, normalizedSpan);
         var match = RequirementNameRegex.Match(normalized);
         if (!match.Success)
             return false;
 
-        name = match.Groups["name"].Value.Trim();
-        if (string.IsNullOrWhiteSpace(name))
+        var nameSpan = match.Groups["name"].ValueSpan.Trim();
+        if (nameSpan.IsEmpty)
             return false;
 
+        name = TrimDependencyField(normalized, nameSpan);
         version = match.Groups["version"].Success
-            ? match.Groups["version"].Value.Trim()
+            ? TrimDependencyField(normalized, match.Groups["version"].ValueSpan.Trim())
             : null;
         return true;
     }
@@ -680,7 +686,7 @@ internal static class DependencyPackageExtractor
     }
 
     private static string TrimDependencyField(string original, ReadOnlySpan<char> trimmed)
-        => trimmed.Length == original.Length ? original : trimmed.ToString();
+        => trimmed.Length == original.Length && trimmed.SequenceEqual(original.AsSpan()) ? original : trimmed.ToString();
 
     private static string NormalizeLowerInvariantKey(string original, ReadOnlySpan<char> trimmed)
     {
