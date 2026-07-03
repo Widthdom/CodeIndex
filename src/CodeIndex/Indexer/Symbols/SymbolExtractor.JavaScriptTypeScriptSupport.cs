@@ -38,6 +38,9 @@ public static partial class SymbolExtractor
         string[] lines,
         JavaScriptScopePrivacyFlags[][] privateScopeColumns)
     {
+        if (!LinesContain(lines, "{", StringComparison.Ordinal))
+            return [];
+
         var targets = new List<JavaScriptClassScanTarget>();
         var targetIdentities = new HashSet<(int StartIndex, int ScanStartIndex, int ScanEndExclusive, string ContainerName)>();
         var lexState = new JavaScriptLexState();
@@ -6565,6 +6568,9 @@ public static partial class SymbolExtractor
 
     private static List<JavaScriptClassScanTarget> CollectJavaScriptTypeScriptSyntheticClassScanTargets(long fileId, string lang, string[] lines, List<SymbolRecord> symbols, JavaScriptScopePrivacyFlags[][] privateScopeColumns)
     {
+        if (!LinesContain(lines, "class", StringComparison.Ordinal))
+            return [];
+
         var targets = new List<JavaScriptClassScanTarget>();
         var symbolLineIdentities = BuildSymbolLineIdentities(symbols);
         var targetIdentities = new HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)>();
