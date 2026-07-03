@@ -314,11 +314,7 @@ public static partial class SymbolExtractor
             if (parenDepth != 0 || bracketDepth != 0 || inBlockComment || inString || inChar)
                 continue;
 
-            var trimmed = line.TrimEnd();
-            if (trimmed.EndsWith("extends", StringComparison.Ordinal)
-                || trimmed.EndsWith("with", StringComparison.Ordinal)
-                || trimmed.EndsWith("derives", StringComparison.Ordinal)
-                || trimmed.EndsWith(':'))
+            if (ScalaLineEndsHeaderContinuation(line))
             {
                 continue;
             }
@@ -341,6 +337,15 @@ public static partial class SymbolExtractor
         }
 
         return null;
+    }
+
+    private static bool ScalaLineEndsHeaderContinuation(string line)
+    {
+        var trimmed = line.AsSpan().TrimEnd();
+        return trimmed.EndsWith("extends", StringComparison.Ordinal)
+            || trimmed.EndsWith("with", StringComparison.Ordinal)
+            || trimmed.EndsWith("derives", StringComparison.Ordinal)
+            || (trimmed.Length > 0 && trimmed[^1] == ':');
     }
 
     private static string? TryGetNextScalaHeaderLine(string[] lines, int startIndex)
