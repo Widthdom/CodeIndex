@@ -6,10 +6,10 @@ namespace CodeIndex.Indexer;
 internal static class CSharpStaticInterfacePrepass
 {
     private static readonly bool IsWindowsPlatform = OperatingSystem.IsWindows();
-    private static readonly byte[] CSharpInterfaceKeywordBytes = "interface"u8.ToArray();
-    private static readonly byte[] CSharpStaticKeywordBytes = "static"u8.ToArray();
-    private static readonly byte[] CSharpAbstractKeywordBytes = "abstract"u8.ToArray();
-    private static readonly byte[] CSharpVirtualKeywordBytes = "virtual"u8.ToArray();
+    private static ReadOnlySpan<byte> CSharpInterfaceKeywordBytes => "interface"u8;
+    private static ReadOnlySpan<byte> CSharpStaticKeywordBytes => "static"u8;
+    private static ReadOnlySpan<byte> CSharpAbstractKeywordBytes => "abstract"u8;
+    private static ReadOnlySpan<byte> CSharpVirtualKeywordBytes => "virtual"u8;
 
     internal static CSharpStaticInterfaceWorkspaceSymbols BuildWorkspaceSymbols(
         DbWriter writer,
