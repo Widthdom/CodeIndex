@@ -8833,6 +8833,14 @@ public static partial class SymbolExtractor
         if (containers.Count == 0)
             return [];
 
+        if (containers.Count == 1)
+        {
+            var container = containers.Peek();
+            return ContainsSymbol(container, symbol, rawLines, csharpLineStartStates)
+                ? [container]
+                : [];
+        }
+
         var orderedContainers = containers.ToArray();
         var containingContainers = new List<SymbolRecord>(orderedContainers.Length);
         for (var i = orderedContainers.Length - 1; i >= 0; i--)
