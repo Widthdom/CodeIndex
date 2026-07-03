@@ -10,6 +10,9 @@ public static partial class SymbolExtractor
 {
     private static void ExtractJavaModuleDirectiveSymbols(long fileId, string[] rawLines, string[] structuralLines, List<SymbolRecord> symbols)
     {
+        if (!LinesContain(structuralLines, "module", StringComparison.Ordinal))
+            return;
+
         var moduleDeclarations = BuildJavaModuleDeclarationSnapshot(symbols);
         if (moduleDeclarations is null)
             return;
@@ -315,6 +318,9 @@ public static partial class SymbolExtractor
 
     private static void ExtractJavaCompactConstructors(long fileId, string[] rawLines, List<SymbolRecord> symbols)
     {
+        if (!LinesContain(rawLines, "record", StringComparison.Ordinal))
+            return;
+
         var recordDeclarations = BuildJavaRecordDeclarationSnapshot(fileId, rawLines, symbols);
 
         foreach (var recordSymbol in recordDeclarations)
