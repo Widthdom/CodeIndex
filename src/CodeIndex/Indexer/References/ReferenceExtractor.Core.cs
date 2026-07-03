@@ -516,7 +516,8 @@ public static partial class ReferenceExtractor
             else
                 return false;
 
-            var segments = new List<string>();
+            string? singleSegment = null;
+            List<string>? segments = null;
             while (cursor >= 0)
             {
                 while (cursor >= 0 && char.IsWhiteSpace(line[cursor]))
@@ -530,7 +531,21 @@ public static partial class ReferenceExtractor
                 if (segmentStart > segmentEnd)
                     return false;
 
-                segments.Add(NormalizeCSharpIdentifier(line[segmentStart..(segmentEnd + 1)]));
+                var segment = NormalizeCSharpIdentifier(line[segmentStart..(segmentEnd + 1)]);
+                if (singleSegment is null && segments is null)
+                {
+                    singleSegment = segment;
+                }
+                else
+                {
+                    if (segments is null)
+                    {
+                        segments = [singleSegment!];
+                        singleSegment = null;
+                    }
+
+                    segments.Add(segment);
+                }
                 while (cursor >= 0 && char.IsWhiteSpace(line[cursor]))
                     cursor--;
 
@@ -547,6 +562,15 @@ public static partial class ReferenceExtractor
                 }
 
                 break;
+            }
+
+            if (segments is null)
+            {
+                if (singleSegment is null)
+                    return false;
+
+                prefix = singleSegment;
+                return true;
             }
 
             if (segments.Count == 0)
