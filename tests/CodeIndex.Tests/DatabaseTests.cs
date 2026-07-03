@@ -1215,7 +1215,8 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void TryMigrateForRead_CreatesReferenceCompositeIndexesForGraphLookups()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_legacy_index_test_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_legacy_index");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
             using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
@@ -1267,23 +1268,7 @@ public class DatabaseTests : IDisposable
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-            {
-                try
-                {
-                    File.Delete(dbPath);
-                }
-                catch (IOException) when (OperatingSystem.IsWindows())
-                {
-                    SqliteConnection.ClearAllPools();
-                    File.Delete(dbPath);
-                }
-                catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows())
-                {
-                    SqliteConnection.ClearAllPools();
-                    File.Delete(dbPath);
-                }
-            }
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
@@ -1342,7 +1327,8 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void TryMigrateForRead_InsideExistingTransaction_DoesNotStartNestedTransaction()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_nested_migration_test_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_nested_migration");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
             using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
@@ -1391,30 +1377,15 @@ public class DatabaseTests : IDisposable
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-            {
-                try
-                {
-                    File.Delete(dbPath);
-                }
-                catch (IOException) when (OperatingSystem.IsWindows())
-                {
-                    SqliteConnection.ClearAllPools();
-                    File.Delete(dbPath);
-                }
-                catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows())
-                {
-                    SqliteConnection.ClearAllPools();
-                    File.Delete(dbPath);
-                }
-            }
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
     [Fact]
     public void TryMigrateForRead_EnforcesForeignKeysAfterAddingReferenceLineColumn()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_legacy_fk_test_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_legacy_fk");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
             using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
@@ -1472,23 +1443,7 @@ public class DatabaseTests : IDisposable
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-            {
-                try
-                {
-                    File.Delete(dbPath);
-                }
-                catch (IOException) when (OperatingSystem.IsWindows())
-                {
-                    SqliteConnection.ClearAllPools();
-                    File.Delete(dbPath);
-                }
-                catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows())
-                {
-                    SqliteConnection.ClearAllPools();
-                    File.Delete(dbPath);
-                }
-            }
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
