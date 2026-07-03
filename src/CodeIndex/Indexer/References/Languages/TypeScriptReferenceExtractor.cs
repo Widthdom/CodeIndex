@@ -28,6 +28,8 @@ internal static class TypeScriptReferenceExtractor
     private static readonly string[] TypeAliasTargetStopKeywords = ["extends", "implements"];
     private static readonly string[] LiteralKeywords = ["true", "false", "null", "undefined"];
     private static readonly IReadOnlySet<string> EmptyTypeParameters = new HashSet<string>(StringComparer.Ordinal);
+    private static readonly IReadOnlyDictionary<string, List<int>> EmptyLocalDeclarationLinesByName =
+        new Dictionary<string, List<int>>(StringComparer.Ordinal);
     private static readonly Regex NamespaceImportExportRegex = new(
         @"^\s*(?:import|export)\s+(?:type\s+)?\*\s*as\s*(?<alias>[A-Za-z_$][\w$]*)\s+from\s*[""'](?<module>[^""']+)[""']",
         RegexOptions.Compiled);
@@ -65,7 +67,7 @@ internal static class TypeScriptReferenceExtractor
 
         var bindings = new List<NamespaceAliasBinding>();
         int[]? braceDepths = null;
-        Dictionary<string, List<int>>? localDeclarationLinesByName = null;
+        IReadOnlyDictionary<string, List<int>>? localDeclarationLinesByName = null;
         Dictionary<string, IReadOnlyList<LineRange>>? parameterShadowRangesByAlias = null;
         for (var index = 0; index < originalLines.Count; index++)
         {
@@ -1324,9 +1326,9 @@ internal static class TypeScriptReferenceExtractor
     private static bool IsTypeScriptNamespaceMemberStart(char ch) =>
         ch == '_' || ch == '$' || ch is >= 'A' and <= 'Z' || ch is >= 'a' and <= 'z';
 
-    private static Dictionary<string, List<int>> BuildLocalDeclarationLinesByName(IReadOnlyList<string> preparedLines)
+    private static IReadOnlyDictionary<string, List<int>> BuildLocalDeclarationLinesByName(IReadOnlyList<string> preparedLines)
     {
-        var linesByName = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+        Dictionary<string, List<int>>? linesByName = null;
         for (var index = 0; index < preparedLines.Count; index++)
         {
             var line = preparedLines[index];
@@ -1338,6 +1340,7 @@ internal static class TypeScriptReferenceExtractor
                 continue;
 
             var name = match.Groups["name"].Value;
+            linesByName ??= new Dictionary<string, List<int>>(StringComparer.Ordinal);
             if (!linesByName.TryGetValue(name, out var lines))
             {
                 lines = [];
@@ -1347,7 +1350,7 @@ internal static class TypeScriptReferenceExtractor
             lines.Add(index + 1);
         }
 
-        return linesByName;
+        return linesByName ?? EmptyLocalDeclarationLinesByName;
     }
 
     private static int? FindShadowLine(
@@ -1409,7 +1412,7 @@ internal static class TypeScriptReferenceExtractor
         int[] braceDepths,
         string alias)
     {
-        var ranges = new List<LineRange>();
+        List<LineRange>? ranges = null;
         for (var index = 0; index < preparedLines.Count; index++)
         {
             if (!TryGetSingleLineCallableParameters(preparedLines[index], out var parameters)
@@ -1420,10 +1423,10 @@ internal static class TypeScriptReferenceExtractor
 
             var endLine = FindBlockEndLine(preparedLines, braceDepths, index);
             if (endLine >= index + 1)
-                ranges.Add(new LineRange(index + 1, endLine));
+                (ranges ??= []).Add(new LineRange(index + 1, endLine));
         }
 
-        return ranges;
+        return ranges is null ? Array.Empty<LineRange>() : ranges;
     }
 
     private static IReadOnlyList<LineRange> GetParameterShadowRanges(
