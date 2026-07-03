@@ -387,10 +387,9 @@ public partial class SymbolExtractorTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_patterns_parent_symlink_{Guid.NewGuid():N}");
+            var tempDir = TestProjectHelper.CreateTempProject("cdidx_patterns_parent_symlink");
             try
             {
-                Directory.CreateDirectory(tempDir);
                 var externalCdidxDir = Path.Combine(tempDir, "external-cdidx");
                 var externalPatternDir = Path.Combine(externalCdidxDir, "patterns");
                 Directory.CreateDirectory(externalPatternDir);
