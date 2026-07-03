@@ -1392,25 +1392,32 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunStatus_LogPath_JsonPrintsResolvedDirectoryWithoutDatabase()
     {
-        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_status_log_path_{Guid.NewGuid():N}");
-        using var env = EnvironmentVariableScope.Capture(
-            "CDIDX_GLOBAL_TOOL_LOG_DIR",
-            "XDG_STATE_HOME",
-            "XDG_CACHE_HOME",
-            "XDG_RUNTIME_DIR");
-        env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
-        env.Set("XDG_STATE_HOME", null);
-        env.Set("XDG_CACHE_HOME", null);
-        env.Set("XDG_RUNTIME_DIR", null);
+        var logDir = TestProjectHelper.CreateTempProject("cdidx_status_log_path");
+        try
+        {
+            using var env = EnvironmentVariableScope.Capture(
+                "CDIDX_GLOBAL_TOOL_LOG_DIR",
+                "XDG_STATE_HOME",
+                "XDG_CACHE_HOME",
+                "XDG_RUNTIME_DIR");
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+            env.Set("XDG_STATE_HOME", null);
+            env.Set("XDG_CACHE_HOME", null);
+            env.Set("XDG_RUNTIME_DIR", null);
 
-        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
-            ["--log-path", "--json"],
-            _jsonOptions));
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--log-path", "--json"],
+                _jsonOptions));
 
-        using var document = ParseJsonOutput(stdout);
-        Assert.Equal(CommandExitCodes.Success, exitCode);
-        Assert.Equal(string.Empty, stderr);
-        Assert.Equal(Path.GetFullPath(logDir), document.RootElement.GetProperty("log_path").GetString());
+            using var document = ParseJsonOutput(stdout);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(Path.GetFullPath(logDir), document.RootElement.GetProperty("log_path").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(logDir);
+        }
     }
 
     [Fact]
@@ -1421,13 +1428,14 @@ public partial class QueryCommandRunnerTests
             "XDG_STATE_HOME",
             "XDG_CACHE_HOME",
             "XDG_RUNTIME_DIR");
-        var cacheHome = Path.Combine(Path.GetTempPath(), $"cdidx_status_log_path_xdg_cache_{Guid.NewGuid():N}");
+        var tempRoot = TestProjectHelper.CreateTempProject("cdidx_status_log_path_xdg");
+        var cacheHome = Path.Combine(tempRoot, "cache");
         try
         {
             env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", null);
             env.Set("XDG_STATE_HOME", null);
             env.Set("XDG_CACHE_HOME", cacheHome);
-            env.Set("XDG_RUNTIME_DIR", Path.Combine(Path.GetTempPath(), "ignored-runtime"));
+            env.Set("XDG_RUNTIME_DIR", Path.Combine(tempRoot, "ignored-runtime"));
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
                 ["--log-path", "--json"],
@@ -1440,7 +1448,7 @@ public partial class QueryCommandRunnerTests
         }
         finally
         {
-            TestProjectHelper.DeleteDirectory(cacheHome);
+            TestProjectHelper.DeleteDirectory(tempRoot);
         }
     }
 
