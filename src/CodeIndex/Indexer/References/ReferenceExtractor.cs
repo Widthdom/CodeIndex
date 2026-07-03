@@ -2318,21 +2318,21 @@ public static partial class ReferenceExtractor
     }
 
     private static (
-        Dictionary<(int Line, string Kind), SymbolRecord>? DefinitionContainersByLineAndKind,
-        Dictionary<int, SymbolRecord>? HeaderSymbolsByLine) BuildPythonSymbolLookups(IReadOnlyList<SymbolRecord> symbols)
+        IReadOnlyDictionary<(int Line, string Kind), SymbolRecord>? DefinitionContainersByLineAndKind,
+        IReadOnlyDictionary<int, SymbolRecord>? HeaderSymbolsByLine) BuildPythonSymbolLookups(IReadOnlyList<SymbolRecord> symbols)
     {
-        var containers = new Dictionary<(int Line, string Kind), SymbolRecord>();
-        var symbolsByLine = new Dictionary<int, SymbolRecord>();
+        Dictionary<(int Line, string Kind), SymbolRecord>? containers = null;
+        Dictionary<int, SymbolRecord>? symbolsByLine = null;
         foreach (var symbol in symbols)
         {
             if (symbol.Kind is "class" or "function")
-                containers.TryAdd((symbol.Line, symbol.Kind), symbol);
+                (containers ??= []).TryAdd((symbol.Line, symbol.Kind), symbol);
 
             if (symbol.Signature == null
                 || symbol.Kind is not ("function" or "class" or "property" or "class_hook"))
                 continue;
 
-            symbolsByLine.TryAdd(symbol.Line, symbol);
+            (symbolsByLine ??= []).TryAdd(symbol.Line, symbol);
         }
 
         return (containers, symbolsByLine);

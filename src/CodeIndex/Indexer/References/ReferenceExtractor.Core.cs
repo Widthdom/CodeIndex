@@ -2618,7 +2618,8 @@ public static partial class ReferenceExtractor
             {
                 var pythonPreparedLine = preparedLine;
                 var pythonHeaderMap = default(PythonLogicalHeaderReferenceLine?);
-                pythonHeaderSymbolsByLine!.TryGetValue(lineNumber, out var pythonHeaderSymbol);
+                SymbolRecord? pythonHeaderSymbol = null;
+                pythonHeaderSymbolsByLine?.TryGetValue(lineNumber, out pythonHeaderSymbol);
                 if (pythonHeaderSymbol?.Signature != null
                     && TryBuildPythonLogicalHeaderReferenceLine(lines, i, pythonHeaderSymbol.StartColumn ?? 0, out var builtPythonHeaderMap))
                 {
