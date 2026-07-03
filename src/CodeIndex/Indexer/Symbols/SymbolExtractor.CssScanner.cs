@@ -22,11 +22,12 @@ public static partial class SymbolExtractor
     private static bool[] FindCssQualifiedRuleAncestors(string[] lines)
     {
         var ancestors = new bool[lines.Length];
-        var contexts = new Stack<CssContextKind>();
+        Stack<CssContextKind>? contexts = null;
+        var qualifiedRuleDepth = 0;
 
         for (int lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
-            ancestors[lineIndex] = contexts.Contains(CssContextKind.QualifiedRule);
+            ancestors[lineIndex] = qualifiedRuleDepth > 0;
             var line = lines[lineIndex];
             var segmentStart = 0;
             for (int cursor = 0; cursor < line.Length; cursor++)
@@ -38,12 +39,15 @@ public static partial class SymbolExtractor
                     var contextKind = segment.StartsWith("@", StringComparison.Ordinal)
                         ? CssContextKind.GroupingAtRule
                         : CssContextKind.QualifiedRule;
-                    contexts.Push(contextKind);
+                    (contexts ??= new Stack<CssContextKind>()).Push(contextKind);
+                    if (contextKind == CssContextKind.QualifiedRule)
+                        qualifiedRuleDepth++;
                     segmentStart = cursor + 1;
                 }
-                else if (ch == '}' && contexts.Count > 0)
+                else if (ch == '}' && contexts != null && contexts.Count > 0)
                 {
-                    contexts.Pop();
+                    if (contexts.Pop() == CssContextKind.QualifiedRule)
+                        qualifiedRuleDepth--;
                     segmentStart = cursor + 1;
                 }
                 else if (ch == ';')
