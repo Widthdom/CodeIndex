@@ -4841,6 +4841,9 @@ public static partial class SymbolExtractor
 
     private static List<int> BuildLineStartList(IReadOnlyList<string> lines)
     {
+        if (lines.Count <= 1)
+            return [0];
+
         var starts = new List<int>(Math.Max(1, lines.Count)) { 0 };
         var offset = 0;
         for (var i = 0; i < lines.Count - 1; i++)
