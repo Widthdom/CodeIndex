@@ -13,13 +13,15 @@ namespace CodeIndex.Tests;
 [Collection("SQLite pool sensitive")]
 public class PerformanceTests : IDisposable
 {
+    private readonly string _dbDir;
     private readonly string _dbPath;
     private readonly string _projectRoot;
     private readonly DbContext _db;
 
     public PerformanceTests()
     {
-        _dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_perf_{Guid.NewGuid():N}.db");
+        _dbDir = TestProjectHelper.CreateTempProject("codeindex_perf");
+        _dbPath = Path.Combine(_dbDir, "codeindex.db");
         _projectRoot = TestProjectHelper.CreateTempProject("cdidx_perf_smoke");
         _db = new DbContext(_dbPath);
         _db.InitializeSchema();
@@ -247,7 +249,7 @@ public class PerformanceTests : IDisposable
     {
         _db.Dispose();
         SqliteConnection.ClearAllPools();
-        try { File.Delete(_dbPath); } catch { }
+        TestProjectHelper.DeleteDirectory(_dbDir);
         TestProjectHelper.DeleteDirectory(_projectRoot);
     }
 }
