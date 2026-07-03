@@ -1385,7 +1385,7 @@ public static partial class ReferenceExtractor
             "Reference enclosing-type lookup retained the highest-priority bounded candidate set and skipped additional candidates.",
             reportDiagnostic);
 
-    private static Dictionary<int, SymbolRecord[]>? BuildSwiftPropertyDefinitionsByLine(
+    private static IReadOnlyDictionary<int, SymbolRecord[]>? BuildSwiftPropertyDefinitionsByLine(
         string language,
         IReadOnlyList<SymbolRecord> symbols,
         Action<ReferenceExtractionDiagnostic>? reportDiagnostic)
@@ -1393,7 +1393,7 @@ public static partial class ReferenceExtractor
         if (language != "swift")
             return null;
 
-        var byLine = new Dictionary<int, List<SymbolRecord>>();
+        Dictionary<int, List<SymbolRecord>>? byLine = null;
         var lineBudgetReported = false;
         var perLineBudgetReported = false;
         for (var index = 0; index < symbols.Count && index < MaxReferenceLookupSymbols; index++)
@@ -1402,9 +1402,10 @@ public static partial class ReferenceExtractor
             if (symbol.Kind != "property")
                 continue;
 
-            if (!byLine.TryGetValue(symbol.Line, out var lineSymbols))
+            var lookup = byLine ??= new Dictionary<int, List<SymbolRecord>>();
+            if (!lookup.TryGetValue(symbol.Line, out var lineSymbols))
             {
-                if (byLine.Count >= MaxReferenceLookupLines)
+                if (lookup.Count >= MaxReferenceLookupLines)
                 {
                     if (!lineBudgetReported)
                     {
@@ -1419,7 +1420,7 @@ public static partial class ReferenceExtractor
                 }
 
                 lineSymbols = [];
-                byLine[symbol.Line] = lineSymbols;
+                lookup[symbol.Line] = lineSymbols;
             }
 
             if (lineSymbols.Count >= MaxSwiftPropertyDefinitionsPerLine)
@@ -1447,6 +1448,9 @@ public static partial class ReferenceExtractor
                 $"Swift property lookup used the first {MaxReferenceLookupSymbols:N0} symbols and skipped additional symbols.");
         }
 
+        if (byLine is not { Count: > 0 })
+            return null;
+
         var result = new Dictionary<int, SymbolRecord[]>(byLine.Count);
         foreach (var pair in byLine)
             result.Add(pair.Key, SortSwiftPropertyDefinitionCandidates(pair.Value));
@@ -1456,6 +1460,9 @@ public static partial class ReferenceExtractor
 
     private static SymbolRecord[] SortSwiftPropertyDefinitionCandidates(IReadOnlyList<SymbolRecord> candidates)
     {
+        if (candidates.Count == 1)
+            return [candidates[0]];
+
         var entries = new List<(SymbolRecord Symbol, int OriginalIndex)>(candidates.Count);
         for (var index = 0; index < candidates.Count; index++)
             entries.Add((candidates[index], index));
