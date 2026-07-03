@@ -6541,12 +6541,32 @@ public static partial class SymbolExtractor
 
     private static List<JavaScriptClassScanTarget> GetJavaScriptTypeScriptExistingClassScanTargets(string lang, string[] lines, List<SymbolRecord> symbols)
     {
-        var classSymbols = new List<(SymbolRecord Symbol, int OriginalIndex)>();
+        List<(SymbolRecord Symbol, int OriginalIndex)>? classSymbols = null;
         for (var index = 0; index < symbols.Count; index++)
         {
             var symbol = symbols[index];
             if (symbol.Kind is "class" or "interface" && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
-                classSymbols.Add((symbol, index));
+                (classSymbols ??= []).Add((symbol, index));
+        }
+
+        if (classSymbols is not { Count: > 0 })
+            return [];
+
+        if (classSymbols.Count == 1)
+        {
+            var symbol = classSymbols[0].Symbol;
+            return
+            [
+                CreateJavaScriptClassScanTarget(
+                    lines,
+                    lang,
+                    symbol.StartLine - 1,
+                    FindJavaScriptTypeScriptSymbolStartColumn(lines[symbol.StartLine - 1], symbol.Signature),
+                    symbol.BodyStartLine,
+                    symbol.BodyEndLine,
+                    symbol.Kind,
+                    symbol.Name),
+            ];
         }
 
         classSymbols.Sort(CompareJavaScriptTypeScriptClassSymbolEntries);
