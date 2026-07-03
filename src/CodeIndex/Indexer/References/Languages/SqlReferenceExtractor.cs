@@ -8,7 +8,6 @@ namespace CodeIndex.Indexer;
 
 internal static partial class SqlReferenceExtractor
 {
-    private static readonly char[] QualifiedNameSourceSegmentSpecialChars = ['.', '[', '"', '`'];
     private readonly record struct CteBodySpan(int StartIndex, int EndIndexExclusive);
     private readonly record struct DefinitionLeafPattern(string LeafName, string Pattern);
     public static State CreateState() => new();
@@ -3647,40 +3646,24 @@ internal static partial class SqlReferenceExtractor
         if (string.IsNullOrWhiteSpace(leafName))
             return false;
 
-        var rawSegments = SplitQualifiedNameSourceSegments(qualifiedName);
-        if (rawSegments.Count == 0)
+        if (!TryBuildQualifiedNameSourcePattern(qualifiedName, out var pattern))
             return false;
 
-        var patternCapacity = Math.Max(0, rawSegments.Count - 1) * @"\s*\.\s*".Length;
-        for (var i = 0; i < rawSegments.Count; i++)
-            patternCapacity += rawSegments[i].Length + (i == rawSegments.Count - 1 ? "(?<leaf>)".Length : 0);
-
-        var pattern = new StringBuilder(patternCapacity);
-        for (var i = 0; i < rawSegments.Count; i++)
-        {
-            if (i > 0)
-                pattern.Append(@"\s*\.\s*");
-
-            var escaped = Regex.Escape(rawSegments[i]);
-            if (i == rawSegments.Count - 1)
-                pattern.Append("(?<leaf>").Append(escaped).Append(')');
-            else
-                pattern.Append(escaped);
-        }
-
-        leafPattern = new DefinitionLeafPattern(leafName, pattern.ToString());
+        leafPattern = new DefinitionLeafPattern(leafName, pattern);
         patternCache[qualifiedName] = leafPattern;
         return true;
     }
 
-    private static List<string> SplitQualifiedNameSourceSegments(string qualifiedName)
+    private static bool TryBuildQualifiedNameSourcePattern(string qualifiedName, out string pattern)
     {
+        pattern = string.Empty;
         var trimmed = qualifiedName.Trim();
-        if (trimmed.IndexOfAny(QualifiedNameSourceSegmentSpecialChars) < 0)
-            return trimmed.Length == 0 ? [] : [trimmed];
+        if (trimmed.Length == 0)
+            return false;
 
-        var segments = new List<string>();
-        var current = new StringBuilder(trimmed.Length);
+        var builder = new StringBuilder(trimmed.Length + "(?<leaf>)".Length);
+        string? pendingSegment = null;
+        var segmentStart = 0;
         char quote = '\0';
 
         for (var i = 0; i < trimmed.Length; i++)
@@ -3688,20 +3671,14 @@ internal static partial class SqlReferenceExtractor
             var ch = trimmed[i];
             if (quote != '\0')
             {
-                current.Append(ch);
                 if (quote == '[')
                 {
                     if (ch == ']')
                     {
                         if (i + 1 < trimmed.Length && trimmed[i + 1] == ']')
-                        {
-                            current.Append(trimmed[i + 1]);
                             i++;
-                        }
                         else
-                        {
                             quote = '\0';
-                        }
                     }
 
                     continue;
@@ -3710,14 +3687,9 @@ internal static partial class SqlReferenceExtractor
                 if (ch == quote)
                 {
                     if (i + 1 < trimmed.Length && trimmed[i + 1] == quote)
-                    {
-                        current.Append(trimmed[i + 1]);
                         i++;
-                    }
                     else
-                    {
                         quote = '\0';
-                    }
                 }
 
                 continue;
@@ -3726,29 +3698,57 @@ internal static partial class SqlReferenceExtractor
             if (ch is '[' or '"' or '`')
             {
                 quote = ch;
-                current.Append(ch);
                 continue;
             }
 
             if (ch == '.')
             {
-                AppendQualifiedNameSourceSegment(segments, current);
+                QueueQualifiedNameSourcePatternSegment(builder, trimmed, segmentStart, i, ref pendingSegment);
+                segmentStart = i + 1;
                 continue;
             }
 
-            current.Append(ch);
         }
 
-        AppendQualifiedNameSourceSegment(segments, current);
-        return segments;
+        QueueQualifiedNameSourcePatternSegment(builder, trimmed, segmentStart, trimmed.Length, ref pendingSegment);
+        if (pendingSegment is null)
+            return false;
+
+        AppendQualifiedNameSourcePatternSegment(builder, pendingSegment, isLeaf: true);
+        pattern = builder.ToString();
+        return true;
     }
 
-    private static void AppendQualifiedNameSourceSegment(List<string> segments, StringBuilder current)
+    private static void QueueQualifiedNameSourcePatternSegment(
+        StringBuilder builder,
+        string text,
+        int segmentStart,
+        int segmentEnd,
+        ref string? pendingSegment)
     {
-        var value = current.ToString().Trim();
-        if (value.Length > 0)
-            segments.Add(value);
-        current.Clear();
+        while (segmentStart < segmentEnd && char.IsWhiteSpace(text[segmentStart]))
+            segmentStart++;
+        while (segmentEnd > segmentStart && char.IsWhiteSpace(text[segmentEnd - 1]))
+            segmentEnd--;
+        if (segmentStart >= segmentEnd)
+            return;
+
+        if (pendingSegment is not null)
+            AppendQualifiedNameSourcePatternSegment(builder, pendingSegment, isLeaf: false);
+
+        pendingSegment = text[segmentStart..segmentEnd];
+    }
+
+    private static void AppendQualifiedNameSourcePatternSegment(StringBuilder builder, string segment, bool isLeaf)
+    {
+        if (builder.Length > 0)
+            builder.Append(@"\s*\.\s*");
+
+        var escaped = Regex.Escape(segment);
+        if (isLeaf)
+            builder.Append("(?<leaf>").Append(escaped).Append(')');
+        else
+            builder.Append(escaped);
     }
 
     private static string PrepareLineForIdentifierScan(
