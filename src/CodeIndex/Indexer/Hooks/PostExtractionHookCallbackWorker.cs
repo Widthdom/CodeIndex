@@ -66,8 +66,8 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
             var request = new PostExtractionHookCallbackProtocol.WorkerRequest(
                 callback,
                 context,
-                symbols?.ToList(),
-                references?.ToList(),
+                AsList(symbols),
+                AsList(references),
                 maxSymbols,
                 maxReferences);
             var requestJson = PostExtractionHookCallbackProtocol.SerializeRequest(request);
@@ -305,6 +305,14 @@ internal sealed class PostExtractionHookCallbackWorkerClient : IDisposable
         await input.WriteLineAsync(requestJson).ConfigureAwait(false);
         await input.FlushAsync().ConfigureAwait(false);
     }
+
+    private static List<T>? AsList<T>(IReadOnlyList<T>? items)
+        => items switch
+        {
+            null => null,
+            List<T> list => list,
+            _ => items.ToList(),
+        };
 
     private bool WaitForTask(Task task, int milliseconds, CancellationToken cancellationToken, out Exception? exception)
     {
