@@ -1991,7 +1991,7 @@ public static partial class ReferenceExtractor
                 }
             }
 
-            if (parenDepth == 0 && bracketDepth == 0 && !line.TrimEnd().EndsWith('\\'))
+            if (parenDepth == 0 && bracketDepth == 0 && !HasPythonLineContinuationBackslash(line))
                 break;
         }
 
@@ -2074,7 +2074,7 @@ public static partial class ReferenceExtractor
                     bracketDepth--;
             }
 
-            if (parenDepth == 0 && bracketDepth == 0 && !line.TrimEnd().EndsWith('\\'))
+            if (parenDepth == 0 && bracketDepth == 0 && !HasPythonLineContinuationBackslash(line))
                 break;
         }
 
@@ -2106,6 +2106,19 @@ public static partial class ReferenceExtractor
             return 0;
 
         return Math.Min(256, Math.Max(0, lines[startLineIndex].Length - startColumn));
+    }
+
+    private static bool HasPythonLineContinuationBackslash(string line)
+    {
+        for (var index = line.Length - 1; index >= 0; index--)
+        {
+            if (char.IsWhiteSpace(line[index]))
+                continue;
+
+            return line[index] == '\\';
+        }
+
+        return false;
     }
 
     private static bool TryAppendPythonLogicalReferenceChar(
