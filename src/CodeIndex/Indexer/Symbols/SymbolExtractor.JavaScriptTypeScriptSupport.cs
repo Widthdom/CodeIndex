@@ -41,8 +41,8 @@ public static partial class SymbolExtractor
         if (!LinesContain(lines, "{", StringComparison.Ordinal))
             return [];
 
-        var targets = new List<JavaScriptClassScanTarget>();
-        var targetIdentities = new HashSet<(int StartIndex, int ScanStartIndex, int ScanEndExclusive, string ContainerName)>();
+        List<JavaScriptClassScanTarget>? targets = null;
+        HashSet<(int StartIndex, int ScanStartIndex, int ScanEndExclusive, string ContainerName)>? targetIdentities = null;
         var lexState = new JavaScriptLexState();
         for (int i = 0; i < lines.Length; i++)
         {
@@ -127,9 +127,12 @@ public static partial class SymbolExtractor
                 isExported: isExported);
 
             var targetIdentity = (candidate.StartIndex, candidate.ScanStartIndex, candidate.ScanEndExclusive, candidate.ContainerName);
-            if (targetIdentities.Add(targetIdentity))
-                targets.Add(candidate);
+            if ((targetIdentities ??= []).Add(targetIdentity))
+                (targets ??= []).Add(candidate);
         }
+
+        if (targets is null)
+            return [];
 
         SortJavaScriptTypeScriptClassScanTargets(targets);
         return targets;
