@@ -463,6 +463,9 @@ public static partial class SymbolExtractor
 
     private static IReadOnlyList<TypeScriptPathAliasRule> SortTypeScriptPathAliasRules(IReadOnlyList<TypeScriptPathAliasRule> rules)
     {
+        if (rules.Count < 2)
+            return rules;
+
         var indexedRules = new List<(TypeScriptPathAliasRule Rule, int Index, int WildcardRank, int LiteralLength)>(rules.Count);
         for (var i = 0; i < rules.Count; i++)
         {
