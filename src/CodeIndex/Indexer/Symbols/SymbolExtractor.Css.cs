@@ -56,9 +56,8 @@ public static partial class SymbolExtractor
 
             if (ch == '{')
             {
-                var maskedSegment = maskedLine[segmentStart..i].Trim();
-                var rawSegment = rawLine[segmentStart..i].Trim();
-                var isGroupingAtRule = maskedSegment.StartsWith('@');
+                var maskedSegment = maskedLine.AsSpan(segmentStart, i - segmentStart).Trim();
+                var isGroupingAtRule = !maskedSegment.IsEmpty && maskedSegment[0] == '@';
 
                 if (isGroupingAtRule)
                     groupingDepth++;
