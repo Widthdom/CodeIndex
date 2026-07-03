@@ -19,6 +19,9 @@ public static partial class SymbolExtractor
             listEnd = patternMatchLine.Length;
 
         var list = patternMatchLine[listStart..listEnd];
+        if (list.IndexOf(',') < 0)
+            return null;
+
         (string Name, int StartColumn)? firstResult = null;
         List<(string Name, int StartColumn)>? results = null;
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(list))
@@ -71,6 +74,9 @@ public static partial class SymbolExtractor
             listEnd = patternMatchLine.Length;
 
         var list = patternMatchLine[listStart..listEnd];
+        if (list.IndexOf(',') < 0)
+            return null;
+
         (string Name, int StartColumn)? firstResult = null;
         List<(string Name, int StartColumn)>? results = null;
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(list))
