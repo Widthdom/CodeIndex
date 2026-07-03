@@ -23,6 +23,8 @@ internal static class PowerShellReferenceExtractor
     private static readonly Regex HashtableKeyRegex = new(
         @"(?<![$@])(?:'(?<quoted>[A-Za-z_][A-Za-z0-9_]*)'|""(?<quoted>[A-Za-z_][A-Za-z0-9_]*)""|(?<bare>[A-Za-z_][A-Za-z0-9_]*))\s*=",
         RegexOptions.Compiled | RegexOptions.Multiline);
+    private static readonly IReadOnlyDictionary<string, List<SplatAssignment>> EmptySplatAssignments =
+        new Dictionary<string, List<SplatAssignment>>(StringComparer.OrdinalIgnoreCase);
 
     public static void EmitCallReferences(string preparedLine, Action<string, int> addCallLikeReference)
     {
@@ -41,7 +43,7 @@ internal static class PowerShellReferenceExtractor
         }
     }
 
-    public static Dictionary<string, List<SplatAssignment>> BuildSplatAssignments(string[] preparedLines)
+    public static IReadOnlyDictionary<string, List<SplatAssignment>> BuildSplatAssignments(string[] preparedLines)
     {
         Dictionary<string, List<SplatAssignment>>? assignments = null;
         for (var index = 0; index < preparedLines.Length; index++)
@@ -106,12 +108,12 @@ internal static class PowerShellReferenceExtractor
             }
         }
 
-        return assignments ?? [];
+        return assignments ?? EmptySplatAssignments;
     }
 
     public static void EmitSplatParameterReferences(
         string preparedLine,
-        Dictionary<string, List<SplatAssignment>> splatAssignments,
+        IReadOnlyDictionary<string, List<SplatAssignment>> splatAssignments,
         int lineNumber,
         Action<string, int> addParameterReference)
     {
