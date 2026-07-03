@@ -570,7 +570,7 @@ public class PreparedCommandCacheTests : IDisposable
     public void DbWriter_WithCache_PurgeDirectoryStemScanReusesCacheAcrossCalls()
     {
         var writer = new DbWriter(_db);
-        var projectRoot = Path.Combine(Path.GetTempPath(), $"prepcache_purge_stem_{Guid.NewGuid():N}");
+        var projectRoot = TestProjectHelper.CreateTempProject("prepcache_purge_stem");
         try
         {
             Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
@@ -615,8 +615,7 @@ public class PreparedCommandCacheTests : IDisposable
         }
         finally
         {
-            if (Directory.Exists(projectRoot))
-                TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 

@@ -2241,7 +2241,7 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void PurgeStaleFilesSharingChecksum_RemovesDeletedRenameRowsOnly()
     {
-        var projectRoot = Path.Combine(Path.GetTempPath(), $"cdidx_checksum_purge_{Guid.NewGuid():N}");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_checksum_purge");
         try
         {
             Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
@@ -2294,8 +2294,7 @@ public class DatabaseTests : IDisposable
         }
         finally
         {
-            if (Directory.Exists(projectRoot))
-                TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 
