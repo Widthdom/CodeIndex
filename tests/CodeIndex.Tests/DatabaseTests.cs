@@ -3059,8 +3059,7 @@ public class DatabaseTests : IDisposable
     {
         // Simulate branch switch: insert a file, then purge when file doesn't exist
         // ブランチ切り替えをシミュレート: ファイルを挿入後、存在しないファイルをパージ
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_purge_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_purge");
 
         try
         {
