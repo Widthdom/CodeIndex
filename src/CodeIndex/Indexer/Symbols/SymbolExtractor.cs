@@ -6639,7 +6639,7 @@ public static partial class SymbolExtractor
     {
         var lineStartInsideParameterList = new bool[structuralLines.Length];
         var transitions = new List<(int Column, bool IsInsideParameterList)>?[structuralLines.Length];
-        var declarationBuffer = new StringBuilder();
+        var declarationBuffer = new StringBuilder(256);
         var parameterParenDepth = 0;
 
         for (int lineIndex = 0; lineIndex < structuralLines.Length; lineIndex++)
@@ -6851,7 +6851,7 @@ public static partial class SymbolExtractor
         var lineStartInsideClassBody = new bool[structuralLines.Length];
         var scopeStack = new Stack<bool>();
         scopeStack.Push(false);
-        var declBuffer = new StringBuilder();
+        var declBuffer = new StringBuilder(256);
 
         for (int lineIndex = 0; lineIndex < structuralLines.Length; lineIndex++)
         {

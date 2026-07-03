@@ -54,7 +54,7 @@ public static partial class SymbolExtractor
         var transitions = new List<(int Column, bool IsTypeBody)>?[structuralLines.Length];
         var scopeStack = new Stack<bool>();
         scopeStack.Push(false);
-        var declBuffer = new StringBuilder();
+        var declBuffer = new StringBuilder(256);
 
         for (int lineIndex = 0; lineIndex < structuralLines.Length; lineIndex++)
         {
