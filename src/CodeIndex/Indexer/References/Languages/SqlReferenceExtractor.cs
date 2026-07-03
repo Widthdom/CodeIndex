@@ -2534,9 +2534,8 @@ internal static partial class SqlReferenceExtractor
         return leafStart;
     }
 
-    private static List<TextSegment> SplitTopLevelCommaSegments(string text, int textStart)
+    private static IEnumerable<TextSegment> SplitTopLevelCommaSegments(string text, int textStart)
     {
-        var segments = new List<TextSegment>();
         var segmentStart = 0;
         var depth = 0;
         var quote = '\0';
@@ -2586,12 +2585,11 @@ internal static partial class SqlReferenceExtractor
             if (ch != ',' || depth != 0)
                 continue;
 
-            segments.Add(new TextSegment(text[segmentStart..i], textStart + segmentStart));
+            yield return new TextSegment(text[segmentStart..i], textStart + segmentStart);
             segmentStart = i + 1;
         }
 
-        segments.Add(new TextSegment(text[segmentStart..], textStart + segmentStart));
-        return segments;
+        yield return new TextSegment(text[segmentStart..], textStart + segmentStart);
     }
 
     private static int IndexOfTopLevelChar(string text, char value)
