@@ -119,6 +119,7 @@ public partial class FileIndexer
         if (directoryPathLength < 0)
             directoryPathLength = 0;
 
+        var hasSubmodulePaths = _submodulePaths.Count != 0;
         var cumulativeRelPath = string.Empty;
         for (var segmentStart = 0; segmentStart < directoryPathLength;)
         {
@@ -132,11 +133,16 @@ public partial class FileIndexer
 
             var directoryName = relativePath.Substring(segmentStart, segmentEnd - segmentStart);
             var childDirectory = Path.Combine(currentDirectory, directoryName);
-            cumulativeRelPath = cumulativeRelPath.Length == 0
-                ? directoryName
-                : string.Concat(cumulativeRelPath, "/", directoryName);
-            var isSubmodule = _submodulePaths.Contains(cumulativeRelPath);
-            var isSubmoduleAncestor = _submoduleAncestorPaths.Contains(cumulativeRelPath);
+            var isSubmodule = false;
+            var isSubmoduleAncestor = false;
+            if (hasSubmodulePaths)
+            {
+                cumulativeRelPath = cumulativeRelPath.Length == 0
+                    ? directoryName
+                    : string.Concat(cumulativeRelPath, "/", directoryName);
+                isSubmodule = _submodulePaths.Contains(cumulativeRelPath);
+                isSubmoduleAncestor = _submoduleAncestorPaths.Contains(cumulativeRelPath);
+            }
 
             if (IsNestedGitRepository(childDirectory) && !isSubmodule && !isSubmoduleAncestor)
                 return CreatePathFilterResult(PathFilterKind.ExcludedByDefaultDirectory, errors);
