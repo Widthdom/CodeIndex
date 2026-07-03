@@ -739,7 +739,7 @@ public static partial class SymbolExtractor
         if (TryGetXmlStructureIssue(rawText, out _))
             return [];
 
-        var lineStarts = BuildLineStarts(lines);
+        int[]? lineStarts = null;
 
         var symbols = new List<SymbolRecord>();
         for (var i = 0; i < lines.Length; i++)
@@ -890,34 +890,59 @@ public static partial class SymbolExtractor
         if (symbols.Count < StructuredDataMaxSymbols
             && rawText.Contains("x:TypeArguments", StringComparison.Ordinal))
         {
-            AddWrappedXamlTypeArgumentSymbols(fileId, rawText, lines, lineStarts, symbols);
+            AddWrappedXamlTypeArgumentSymbols(fileId, rawText, lines, lineStarts ??= BuildLineStarts(lines), symbols);
         }
         if (symbols.Count < StructuredDataMaxSymbols
             && MayContainWrappedXamlTypeBearingAttribute(rawText))
         {
-            AddWrappedXamlTypeBearingAttributeSymbols(fileId, rawText, lines, lineStarts, symbols);
+            AddWrappedXamlTypeBearingAttributeSymbols(fileId, rawText, lines, lineStarts ??= BuildLineStarts(lines), symbols);
         }
         if (symbols.Count < StructuredDataMaxSymbols
             && MayContainWrappedXamlSearchAttribute(rawText))
         {
-            AddWrappedXamlSearchAttributeSymbols(fileId, rawText, lines, lineStarts, symbols);
+            AddWrappedXamlSearchAttributeSymbols(fileId, rawText, lines, lineStarts ??= BuildLineStarts(lines), symbols);
         }
-        if (symbols.Count < StructuredDataMaxSymbols)
-            AddXamlTypeObjectElementSymbols(fileId, rawText, lines, lineStarts, symbols);
-        if (symbols.Count < StructuredDataMaxSymbols)
-            AddXamlTypePropertyElementSymbols(fileId, rawText, lines, lineStarts, symbols);
-        if (symbols.Count < StructuredDataMaxSymbols)
-            AddXamlTypeMarkupSymbols(fileId, rawText, lines, lineStarts, symbols);
-        if (symbols.Count < StructuredDataMaxSymbols)
-            AddXamlStaticMemberTypeSymbols(fileId, rawText, lines, lineStarts, symbols);
-        if (symbols.Count < StructuredDataMaxSymbols)
-            AddXamlReferenceSymbols(fileId, rawText, lines, lineStarts, symbols);
-        if (symbols.Count < StructuredDataMaxSymbols)
-            AddXamlResourceReferenceSymbols(fileId, rawText, lines, lineStarts, symbols);
-        if (symbols.Count < StructuredDataMaxSymbols)
-            AddXamlBindingElementNameSymbols(fileId, rawText, lines, lineStarts, symbols);
-        if (symbols.Count < StructuredDataMaxSymbols)
-            AddXamlBindingObjectElementSymbols(fileId, rawText, lines, lineStarts, symbols);
+        if (symbols.Count < StructuredDataMaxSymbols
+            && rawText.Contains("x:Type", StringComparison.Ordinal)
+            && rawText.Contains("TypeName", StringComparison.Ordinal))
+        {
+            AddXamlTypeObjectElementSymbols(fileId, rawText, lines, lineStarts ??= BuildLineStarts(lines), symbols);
+        }
+        if (symbols.Count < StructuredDataMaxSymbols
+            && rawText.Contains(".TypeName", StringComparison.Ordinal))
+        {
+            AddXamlTypePropertyElementSymbols(fileId, rawText, lines, lineStarts ??= BuildLineStarts(lines), symbols);
+        }
+        if (symbols.Count < StructuredDataMaxSymbols
+            && rawText.Contains("{x:Type", StringComparison.Ordinal))
+        {
+            AddXamlTypeMarkupSymbols(fileId, rawText, lines, lineStarts ??= BuildLineStarts(lines), symbols);
+        }
+        if (symbols.Count < StructuredDataMaxSymbols
+            && rawText.Contains("{x:Static", StringComparison.Ordinal))
+        {
+            AddXamlStaticMemberTypeSymbols(fileId, rawText, lines, lineStarts ??= BuildLineStarts(lines), symbols);
+        }
+        if (symbols.Count < StructuredDataMaxSymbols
+            && MayContainXamlReferenceSymbol(rawText))
+        {
+            AddXamlReferenceSymbols(fileId, rawText, lines, lineStarts ??= BuildLineStarts(lines), symbols);
+        }
+        if (symbols.Count < StructuredDataMaxSymbols
+            && TextContainsAny(rawText, XamlResourceReferenceMarkupPrefixes))
+        {
+            AddXamlResourceReferenceSymbols(fileId, rawText, lines, lineStarts ??= BuildLineStarts(lines), symbols);
+        }
+        if (symbols.Count < StructuredDataMaxSymbols
+            && MayContainXamlBindingElementNameSymbol(rawText))
+        {
+            AddXamlBindingElementNameSymbols(fileId, rawText, lines, lineStarts ??= BuildLineStarts(lines), symbols);
+        }
+        if (symbols.Count < StructuredDataMaxSymbols
+            && MayContainXamlBindingObjectElementSymbol(rawText))
+        {
+            AddXamlBindingObjectElementSymbols(fileId, rawText, lines, lineStarts ??= BuildLineStarts(lines), symbols);
+        }
 
         if (MayContainXamlBindingMarkup(rawText))
         {
@@ -930,7 +955,8 @@ public static partial class SymbolExtractor
                 if (value.Length == 0)
                     continue;
 
-                var startLine = FindHtmlLineNumber(lineStarts, bindingMatch.Index);
+                var currentLineStarts = lineStarts ??= BuildLineStarts(lines);
+                var startLine = FindHtmlLineNumber(currentLineStarts, bindingMatch.Index);
                 var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
                 symbols.Add(new SymbolRecord
                 {
@@ -968,6 +994,34 @@ public static partial class SymbolExtractor
         || rawText.Contains("{TemplateBinding", StringComparison.Ordinal)
         || rawText.Contains("{CompiledBinding", StringComparison.Ordinal)
         || rawText.Contains("{ReflectionBinding", StringComparison.Ordinal);
+
+    private static bool MayContainXamlReferenceSymbol(string rawText)
+        => TextContainsAny(rawText, XamlReferenceMarkupPrefixes)
+        || TextContainsAny(rawText, XamlReferenceObjectElementPrefixes)
+        || (rawText.Contains("x:Reference", StringComparison.Ordinal)
+            && rawText.Contains(".Name", StringComparison.Ordinal));
+
+    private static bool MayContainXamlBindingElementNameSymbol(string rawText)
+        => rawText.Contains("ElementName", StringComparison.Ordinal)
+        && (MayContainXamlBindingMarkup(rawText)
+            || rawText.Contains("<Binding", StringComparison.Ordinal)
+            || rawText.Contains("Binding.ElementName", StringComparison.Ordinal));
+
+    private static bool MayContainXamlBindingObjectElementSymbol(string rawText)
+        => (rawText.Contains("<Binding", StringComparison.Ordinal)
+            && rawText.Contains("Path", StringComparison.Ordinal))
+        || rawText.Contains("Binding.Path", StringComparison.Ordinal);
+
+    private static bool TextContainsAny(string text, IReadOnlyList<string> values)
+    {
+        for (var i = 0; i < values.Count; i++)
+        {
+            if (text.Contains(values[i], StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
 
     private static bool MayContainWrappedXamlTypeBearingAttribute(string rawText) =>
         rawText.Contains("x:Class", StringComparison.Ordinal)
