@@ -10,6 +10,9 @@ public static partial class SymbolExtractor
 {
     private static void ExtractRustUseSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
     {
+        if (!LinesContain(lines, "use", StringComparison.Ordinal))
+            return;
+
         var symbolLineIdentities = BuildSymbolLineIdentities(symbols);
         for (var i = 0; i < lines.Length; i++)
         {
@@ -78,6 +81,9 @@ public static partial class SymbolExtractor
 
     private static void ExtractRustMultilineImplSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
     {
+        if (!LinesContain(lines, "impl", StringComparison.Ordinal))
+            return;
+
         var symbolLineIdentities = BuildSymbolLineIdentities(symbols);
         for (var i = 0; i < lines.Length; i++)
         {
