@@ -1406,8 +1406,7 @@ public class LegacySchemaMigrationTests : IDisposable
         // と本ファイルの `TryMigrateForRead_LegacyDb_ReadPathsDoNotCrash` が押さえており、
         // 本テストは `_symbolColumns` に signature が入らないまま deps / impact を呼んだ時に
         // `no such column: s.signature` で落ちないことを確認する。
-        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_issue431_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
+        var dir = TestProjectHelper.CreateTempProject("codeindex_issue431");
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
@@ -1577,8 +1576,7 @@ public class LegacySchemaMigrationTests : IDisposable
         // #1532 回帰: 旧 catch は英語固有のメッセージ文字列に依存していたためロケール差や
         // 文言変更で再帰経路を取りこぼし、半適用スキーマが残り再実行でも修復できなかった。
         // 新しい復旧経路は PRAGMA table_info 相当で列存在を再確認し、メッセージに依存しない。
-        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_ensure_column_race_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
+        var dir = TestProjectHelper.CreateTempProject("codeindex_ensure_column_race");
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
@@ -1635,8 +1633,7 @@ public class LegacySchemaMigrationTests : IDisposable
         // non-duplicate-column failure mode — including one with localized/future wording.
         // ALTER が duplicate-column 以外の理由で失敗し、かつカラムが実在しない場合は、
         // 新 catch（ColumnExists 判定）でも握り潰されず伝播する必要がある。
-        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_ensure_column_propagate_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
+        var dir = TestProjectHelper.CreateTempProject("codeindex_ensure_column_propagate");
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
@@ -1681,8 +1678,7 @@ public class LegacySchemaMigrationTests : IDisposable
     [Fact]
     public void SetMeta_MissingMetaTable_IsBestEffortNoOp_Issue2025()
     {
-        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_missing_meta_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
+        var dir = TestProjectHelper.CreateTempProject("codeindex_missing_meta");
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
@@ -1708,8 +1704,7 @@ public class LegacySchemaMigrationTests : IDisposable
     [Fact]
     public void InitializeSchema_PrunesKnownDeprecatedNullMetaKeysAndStampsMetaSchemaVersion_Issue2026()
     {
-        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_meta_schema_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
+        var dir = TestProjectHelper.CreateTempProject("codeindex_meta_schema");
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
@@ -1753,8 +1748,7 @@ public class LegacySchemaMigrationTests : IDisposable
     [Fact]
     public void TryMigrateForRead_CurrentSchema_DoesNotTakeWriterLockDuringActiveWrite_Issue2932()
     {
-        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_read_migration_current_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
+        var dir = TestProjectHelper.CreateTempProject("codeindex_read_migration_current");
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
@@ -1791,8 +1785,7 @@ public class LegacySchemaMigrationTests : IDisposable
     [Fact]
     public async Task TryMigrateForRead_ConcurrentLegacyMigrations_SerializeAndComplete()
     {
-        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_concurrent_migration_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
+        var dir = TestProjectHelper.CreateTempProject("codeindex_concurrent_migration");
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
