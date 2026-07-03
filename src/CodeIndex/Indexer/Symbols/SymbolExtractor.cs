@@ -2328,21 +2328,52 @@ public static partial class SymbolExtractor
 
     private static string? NormalizeLanguage(string? lang)
     {
-        if (string.IsNullOrWhiteSpace(lang))
+        if (lang is null)
             return null;
 
-        lang = lang.Trim().ToLowerInvariant();
-        return lang is "vue" or "svelte"
-            ? "typescript"
-            : lang is "razor" or "blazor" or "cshtml"
-                ? "csharp"
-                : lang == "cuda"
-                    ? "cpp"
-                    : lang;
+        var trimmed = lang.AsSpan().Trim();
+        if (trimmed.IsEmpty)
+            return null;
+
+        if (trimmed.Equals("vue", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("svelte", StringComparison.OrdinalIgnoreCase))
+        {
+            return "typescript";
+        }
+
+        if (trimmed.Equals("razor", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("blazor", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("cshtml", StringComparison.OrdinalIgnoreCase))
+        {
+            return "csharp";
+        }
+
+        return trimmed.Equals("cuda", StringComparison.OrdinalIgnoreCase)
+            ? "cpp"
+            : NormalizeLanguageKey(lang, trimmed);
     }
 
     private static string? NormalizePluginLanguage(string? lang)
-        => string.IsNullOrWhiteSpace(lang) ? null : lang.Trim().ToLowerInvariant();
+    {
+        if (lang is null)
+            return null;
+
+        var trimmed = lang.AsSpan().Trim();
+        return trimmed.IsEmpty ? null : NormalizeLanguageKey(lang, trimmed);
+    }
+
+    private static string NormalizeLanguageKey(string original, ReadOnlySpan<char> trimmed)
+    {
+        for (var i = 0; i < trimmed.Length; i++)
+        {
+            if (char.ToLowerInvariant(trimmed[i]) != trimmed[i])
+                return trimmed.ToString().ToLowerInvariant();
+        }
+
+        return trimmed.Length == original.Length && trimmed.SequenceEqual(original.AsSpan())
+            ? original
+            : trimmed.ToString();
+    }
 
 
     private static readonly HashSet<string> ContainerKinds =
