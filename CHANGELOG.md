@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.36.2] - 2026-07-04
+
+#### Fixed
+
+- Fixed the release container build so Docker multi-arch locked restore uses `RuntimeIdentifier` without tripping NuGet's single-RID lock-file mismatch.
+
 ### [1.36.1] - 2026-07-04
 
 #### Internal
@@ -5456,6 +5462,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.36.2] - 2026-07-04
+
+#### 修正
+
+- release container build の multi-arch locked restore が NuGet の single-RID lock-file mismatch で失敗しないよう、`RuntimeIdentifier` 指定に修正しました。
+
 ### [1.36.1] - 2026-07-04
 
 #### 内部変更
@@ -10883,7 +10895,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.36.1...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.36.2...HEAD
+[1.36.2]: https://github.com/Widthdom/CodeIndex/compare/v1.36.1...v1.36.2
 [1.36.1]: https://github.com/Widthdom/CodeIndex/compare/v1.36.0...v1.36.1
 [1.36.0]: https://github.com/Widthdom/CodeIndex/compare/v1.35.0...v1.36.0
 [1.35.0]: https://github.com/Widthdom/CodeIndex/compare/v1.34.5...v1.35.0
