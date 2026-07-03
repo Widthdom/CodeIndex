@@ -367,7 +367,7 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFiles_SkipsBuiltInDirectoriesWithCaseInsensitiveNames()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-skipdir-case-{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-skipdir-case");
         try
         {
             Directory.CreateDirectory(Path.Combine(tempDir, "Node_Modules"));
@@ -391,7 +391,7 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFiles_PerDirectoryCdidxIgnore_AppliesChildRulesWithoutLeakingToSiblings()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-per-dir-ignore-{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-per-dir-ignore");
         try
         {
             Directory.CreateDirectory(Path.Combine(tempDir, "left"));
@@ -421,10 +421,9 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFilesDetailed_OversizedGitignoreFailsClosedWithError()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-oversize-gitignore-{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-oversize-gitignore");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "generated.py\n" + new string('x', 300 * 1024));
             File.WriteAllText(Path.Combine(tempDir, "generated.py"), "print('generated')\n");
 
@@ -450,10 +449,9 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFilesDetailed_GitignoreRuleCountCapFailsClosedWithError()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-gitignore-rule-cap-{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-gitignore-rule-cap");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var rules = Enumerable.Range(0, 4096)
                 .Select(i => $"unused{i}.py")
                 .Concat(["late.py"]);
@@ -485,8 +483,7 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-hardlink-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-hardlink");
         try
         {
             var original = Path.Combine(tempDir, "original.cs");
