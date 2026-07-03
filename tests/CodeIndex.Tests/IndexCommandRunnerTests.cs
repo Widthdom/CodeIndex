@@ -4707,7 +4707,7 @@ public sealed class Caller
     [Fact]
     public void RunBackfillFold_BackfillsLegacyRowsAndStampsFoldReady()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_fold_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_backfill_fold");
         try
         {
             using (var db = new DbContext(dbPath))
@@ -4798,7 +4798,7 @@ public sealed class Caller
     [Fact]
     public void RunBackfillFold_DryRunReportsRowsWithoutWriting()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_fold_dry_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_backfill_fold_dry");
         try
         {
             using (var db = new DbContext(dbPath))
@@ -4869,7 +4869,7 @@ public sealed class Caller
     [Fact]
     public void RunBackfillFold_DryRunReportsEffectiveFoldReadyWhenMetadataStale()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_fold_stale_dry_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_backfill_fold_stale_dry");
         try
         {
             using (var db = new DbContext(dbPath))
@@ -4932,7 +4932,7 @@ public sealed class Caller
     [Fact]
     public void RunBackfillFold_RewritesAllWhenOnlyFingerprintDrifted()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_fold_fp_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_backfill_fold_fp");
         try
         {
             using (var db = new DbContext(dbPath))
@@ -6855,6 +6855,9 @@ public sealed class Caller
 
     private static void DeleteFile(string path)
         => TestProjectHelper.DeleteFile(path);
+
+    private static string CreateTempDbPath(string prefix)
+        => Path.Combine(Path.GetTempPath(), $"{prefix}_{Guid.NewGuid():N}.db");
 
     [Fact]
     public void IndexLock_Acquire_OnPosix_WritesPrivateInfoFile()
