@@ -27,6 +27,7 @@ internal static class TypeScriptReferenceExtractor
     private static readonly string[] TypeOperatorKeywords = ["satisfies", "instanceof"];
     private static readonly string[] TypeAliasTargetStopKeywords = ["extends", "implements"];
     private static readonly string[] LiteralKeywords = ["true", "false", "null", "undefined"];
+    private static readonly IReadOnlySet<string> EmptyTypeParameters = new HashSet<string>(StringComparer.Ordinal);
     private static readonly Regex NamespaceImportExportRegex = new(
         @"^\s*(?:import|export)\s+(?:type\s+)?\*\s*as\s*(?<alias>[A-Za-z_$][\w$]*)\s+from\s*[""'](?<module>[^""']+)[""']",
         RegexOptions.Compiled);
@@ -494,20 +495,20 @@ internal static class TypeScriptReferenceExtractor
 
     private static IReadOnlySet<string> ExtractGenericTypeParameters(string parameters)
     {
-        var names = new HashSet<string>(StringComparer.Ordinal);
         var openAngle = parameters.IndexOf('<');
         var closeAngle = parameters.LastIndexOf('>');
         if (openAngle < 0 || closeAngle <= openAngle)
-            return names;
+            return EmptyTypeParameters;
 
+        HashSet<string>? names = null;
         var genericParameters = parameters.AsSpan(openAngle + 1, closeAngle - openAngle - 1);
         var start = 0;
         while (TryReadTypeScriptGenericParameterName(genericParameters, ref start, includeColonDelimiter: true, out var name))
         {
-            names.Add(name.ToString());
+            (names ??= new HashSet<string>(StringComparer.Ordinal)).Add(name.ToString());
         }
 
-        return names;
+        return names ?? EmptyTypeParameters;
     }
 
     private static bool TryReadTypeScriptGenericParameterName(
