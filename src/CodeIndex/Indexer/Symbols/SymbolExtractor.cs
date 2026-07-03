@@ -5371,7 +5371,7 @@ public static partial class SymbolExtractor
 
     private static HashSet<string> BuildSymbolLineKeySet(IReadOnlyList<SymbolRecord> symbols)
     {
-        var existing = new HashSet<string>(StringComparer.Ordinal);
+        var existing = new HashSet<string>(symbols.Count, StringComparer.Ordinal);
         foreach (var symbol in symbols)
             existing.Add($"{symbol.Kind}:{symbol.Name}:{symbol.Line}");
         return existing;
