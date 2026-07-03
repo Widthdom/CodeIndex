@@ -2827,7 +2827,12 @@ public static partial class SymbolExtractor
         // verbatim 文字列リテラルの改行と行頭インデントを保持する。専用サニタイザが
         // lex モード（Code / String / Verbatim / Raw / Char / LineComment / BlockComment）
         // と補間ホールを 1 パスで処理する。
-        var rawSlice = new StringBuilder();
+        var rawSlice = new StringBuilder(EstimateCSharpSourceSpanLength(
+            lines,
+            startLineIndex,
+            startColumn,
+            lastLineIndex,
+            lastLineExclusiveEndColumn ?? int.MaxValue));
         for (int i = startLineIndex; i <= lastLineIndex && i < lines.Length; i++)
         {
             var line = lines[i];
@@ -3876,7 +3881,12 @@ public static partial class SymbolExtractor
             return line[startColumn..endColumn];
         }
 
-        var builder = new StringBuilder();
+        var builder = new StringBuilder(EstimateCSharpSourceSpanLength(
+            lines,
+            start.LineIndex,
+            start.Column,
+            endExclusive.LineIndex,
+            endExclusive.Column));
         for (int lineIndex = start.LineIndex; lineIndex <= endExclusive.LineIndex; lineIndex++)
         {
             var line = lines[lineIndex];
@@ -3894,12 +3904,41 @@ public static partial class SymbolExtractor
                 ? Math.Min(Math.Max(endExclusive.Column, startColumn), effectiveLength)
                 : effectiveLength;
 
-            builder.Append(line[startColumn..endColumn]);
+            if (endColumn > startColumn)
+                builder.Append(line, startColumn, endColumn - startColumn);
             if (lineIndex < endExclusive.LineIndex)
                 builder.Append('\n');
         }
 
         return builder.ToString();
+    }
+
+    private static int EstimateCSharpSourceSpanLength(
+        string[] lines,
+        int startLineIndex,
+        int startColumn,
+        int endLineIndex,
+        int endExclusiveColumn)
+    {
+        var length = 0;
+        for (int lineIndex = startLineIndex; lineIndex <= endLineIndex && lineIndex < lines.Length; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            var effectiveLength = GetLineLengthExcludingTrailingCr(line);
+            var from = lineIndex == startLineIndex
+                ? Math.Clamp(startColumn, 0, effectiveLength)
+                : 0;
+            var to = lineIndex == endLineIndex
+                ? Math.Clamp(endExclusiveColumn, 0, effectiveLength)
+                : effectiveLength;
+            if (to < from)
+                to = from;
+            length += to - from;
+            if (lineIndex < endLineIndex)
+                length++;
+        }
+
+        return length;
     }
 
     private static int GetLineLengthExcludingTrailingCr(string line)
