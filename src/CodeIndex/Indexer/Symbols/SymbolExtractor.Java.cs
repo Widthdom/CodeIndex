@@ -295,6 +295,9 @@ public static partial class SymbolExtractor
 
     private static void ExtractJavaEnumMembers(long fileId, string[] rawLines, List<SymbolRecord> symbols)
     {
+        if (!LinesContain(rawLines, "enum", StringComparison.Ordinal))
+            return;
+
         // Snapshot enum declarations first — we mutate the list during iteration.
         // 反復中に list を書き換えるため、先に enum 宣言を snapshot しておく。
         var enumDeclarations = BuildEnumDeclarationSnapshot(symbols);
