@@ -1153,7 +1153,7 @@ public static partial class SymbolExtractor
         if (rawText.Contains("x:Name", StringComparison.Ordinal))
         {
             foreach (var occurrence in EnumerateWrappedXamlAttributeValues(rawText, lineStarts, "x:Name"))
-                AddXamlAttributeSymbol(fileId, lines, lineStarts, symbols, occurrence.AttributeIndex, "property", occurrence.Value.Trim());
+                AddXamlAttributeSymbol(fileId, lines, lineStarts, symbols, occurrence.AttributeIndex, "property", occurrence.Value);
         }
 
         if (rawText.Contains("x:Key", StringComparison.Ordinal))
@@ -1168,7 +1168,7 @@ public static partial class SymbolExtractor
                 continue;
 
             foreach (var occurrence in EnumerateWrappedXamlAttributeValues(rawText, lineStarts, attributeName))
-                AddXamlAttributeSymbol(fileId, lines, lineStarts, symbols, occurrence.AttributeIndex, "function", occurrence.Value.Trim());
+                AddXamlAttributeSymbol(fileId, lines, lineStarts, symbols, occurrence.AttributeIndex, "function", occurrence.Value);
         }
     }
 
