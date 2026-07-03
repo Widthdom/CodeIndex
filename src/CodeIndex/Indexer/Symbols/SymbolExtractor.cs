@@ -6684,9 +6684,9 @@ public static partial class SymbolExtractor
     private sealed class CSharpCallableParameterScope
     {
         private readonly bool[] _lineStartInsideParameterList;
-        private readonly List<(int Column, bool IsInsideParameterList)>?[] _transitions;
+        private readonly List<(int Column, bool IsInsideParameterList)>?[]? _transitions;
 
-        public CSharpCallableParameterScope(bool[] lineStartInsideParameterList, List<(int Column, bool IsInsideParameterList)>?[] transitions)
+        public CSharpCallableParameterScope(bool[] lineStartInsideParameterList, List<(int Column, bool IsInsideParameterList)>?[]? transitions)
         {
             _lineStartInsideParameterList = lineStartInsideParameterList;
             _transitions = transitions;
@@ -6695,7 +6695,7 @@ public static partial class SymbolExtractor
         public bool IsInsideParameterListAt(int lineIndex, int column)
         {
             var state = _lineStartInsideParameterList[lineIndex];
-            var transitions = _transitions[lineIndex];
+            var transitions = _transitions?[lineIndex];
             if (transitions == null)
                 return state;
 
@@ -6715,7 +6715,7 @@ public static partial class SymbolExtractor
         CSharpTypeBodyScope typeBodyScope)
     {
         var lineStartInsideParameterList = new bool[structuralLines.Length];
-        var transitions = new List<(int Column, bool IsInsideParameterList)>?[structuralLines.Length];
+        List<(int Column, bool IsInsideParameterList)>?[]? transitions = null;
         var declarationBuffer = new StringBuilder(256);
         var parameterParenDepth = 0;
 
@@ -6737,7 +6737,7 @@ public static partial class SymbolExtractor
                     {
                         parameterParenDepth--;
                         if (parameterParenDepth == 0)
-                            (transitions[lineIndex] ??= new List<(int, bool)>()).Add((cursor, false));
+                            AddCSharpCallableParameterTransition(ref transitions, structuralLines.Length, lineIndex, cursor, false);
                     }
 
                     declarationBuffer.Append(ch);
@@ -6749,7 +6749,7 @@ public static partial class SymbolExtractor
                     && IsCSharpCallableHeaderBeforeParameterList(declarationBuffer.ToString()))
                 {
                     parameterParenDepth = 1;
-                    (transitions[lineIndex] ??= new List<(int, bool)>()).Add((cursor, true));
+                    AddCSharpCallableParameterTransition(ref transitions, structuralLines.Length, lineIndex, cursor, true);
                     declarationBuffer.Append(ch);
                     continue;
                 }
@@ -6765,6 +6765,17 @@ public static partial class SymbolExtractor
         }
 
         return new CSharpCallableParameterScope(lineStartInsideParameterList, transitions);
+    }
+
+    private static void AddCSharpCallableParameterTransition(
+        ref List<(int Column, bool IsInsideParameterList)>?[]? transitions,
+        int lineCount,
+        int lineIndex,
+        int column,
+        bool isInsideParameterList)
+    {
+        var transitionsByLine = transitions ??= new List<(int, bool)>?[lineCount];
+        (transitionsByLine[lineIndex] ??= []).Add((column, isInsideParameterList));
     }
 
     private static bool IsCSharpCallableHeaderBeforeParameterList(string header)
