@@ -1155,12 +1155,14 @@ public static partial class ReferenceExtractor
             Dictionary<string, int>? definitionNameIndices = null;
             if (definitionNames != null && language != "sql")
             {
-                definitionNameIndices = new Dictionary<string, int>(definitionNamesComparer);
                 foreach (var definitionName in definitionNames)
                 {
                     var definitionIndex = preparedLine.IndexOf(definitionName, StringComparison.Ordinal);
                     if (definitionIndex >= 0)
+                    {
+                        definitionNameIndices ??= new Dictionary<string, int>(definitionNamesComparer);
                         definitionNameIndices[definitionName] = definitionIndex;
+                    }
                 }
             }
             List<SqlReferenceExtractor.DefinitionLeafSpan>? sqlDefinitionLeafSpans = null;
