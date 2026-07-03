@@ -14,6 +14,7 @@ namespace CodeIndex.Tests;
 [Collection("SQLite pool sensitive")]
 public partial class DbReaderTests : IDisposable
 {
+    private readonly string _dbDir;
     private readonly string _dbPath;
     private readonly DbContext _db;
     private readonly DbWriter _writer;
@@ -21,7 +22,8 @@ public partial class DbReaderTests : IDisposable
 
     public DbReaderTests()
     {
-        _dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_reader_test_{Guid.NewGuid():N}.db");
+        _dbDir = TestProjectHelper.CreateTempProject("codeindex_reader_test");
+        _dbPath = Path.Combine(_dbDir, "codeindex.db");
         _db = new DbContext(_dbPath);
         _db.InitializeSchema();
         _writer = new DbWriter(_db.Connection);
@@ -5377,10 +5379,7 @@ public partial class DbReaderTests : IDisposable
         DeleteDbPath();
     }
 
-    private void DeleteDbPath()
-    {
-        TestProjectHelper.DeleteFile(_dbPath);
-    }
+    private void DeleteDbPath() => TestProjectHelper.DeleteDirectory(_dbDir);
 
     // --- Outline tests / アウトラインテスト ---
 
