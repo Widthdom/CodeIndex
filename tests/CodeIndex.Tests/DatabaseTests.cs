@@ -1275,7 +1275,8 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void Constructor_WritableOpenRejectsNewerUserVersion()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_newer_schema_test_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_newer_schema");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
             using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
@@ -1304,23 +1305,7 @@ public class DatabaseTests : IDisposable
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-            {
-                try
-                {
-                    File.Delete(dbPath);
-                }
-                catch (IOException) when (OperatingSystem.IsWindows())
-                {
-                    SqliteConnection.ClearAllPools();
-                    File.Delete(dbPath);
-                }
-                catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows())
-                {
-                    SqliteConnection.ClearAllPools();
-                    File.Delete(dbPath);
-                }
-            }
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
