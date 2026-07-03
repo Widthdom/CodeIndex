@@ -1648,6 +1648,9 @@ public static partial class ReferenceExtractor
             return;
 
         var parameters = signature[(openParen + 1)..closeParen];
+        if (string.IsNullOrWhiteSpace(parameters))
+            return;
+
         foreach (var segment in SplitTopLevelCSharpParameterSegments(parameters))
         {
             if (TryExtractTrailingCSharpParameterName(segment, out var name))
