@@ -141,7 +141,7 @@ public static partial class SymbolExtractor
         var emittedAny = false;
         foreach (var segment in EnumerateTrimmedFSharpSegments(line, ';'))
         {
-            var candidate = segment.Trim().TrimStart('{').TrimEnd('}').TrimStart();
+            var candidate = TrimFSharpDelimitedSegmentCandidate(segment);
             if (candidate.Length == 0)
                 continue;
 
@@ -175,7 +175,7 @@ public static partial class SymbolExtractor
 
     private static bool TryAddFSharpRecordFieldsFromContext(List<SymbolRecord> symbols, long fileId, string[] lines, int lineIndex, string line, int lineNumber)
     {
-        var candidate = line.TrimStart().TrimStart('{').TrimEnd('}').TrimStart();
+        var candidate = TrimFSharpDelimitedContextCandidate(line);
         if (candidate.Length == 0 || candidate.IndexOf(':') < 0 || !FSharpRecordFieldRegex.IsMatch(candidate))
             return false;
 
@@ -210,7 +210,7 @@ public static partial class SymbolExtractor
         var emittedAny = false;
         foreach (var segment in EnumerateTrimmedFSharpSegments(line, '|'))
         {
-            var candidate = segment.Trim().TrimStart('{').TrimEnd('}').TrimStart();
+            var candidate = TrimFSharpDelimitedSegmentCandidate(segment);
             if (candidate.Length == 0)
                 continue;
 
@@ -288,6 +288,27 @@ public static partial class SymbolExtractor
         }
 
         return emittedAny;
+    }
+
+    private static string TrimFSharpDelimitedSegmentCandidate(string value)
+    {
+        var span = value.AsSpan().Trim();
+        return TrimFSharpDelimitedCandidate(span).ToString();
+    }
+
+    private static string TrimFSharpDelimitedContextCandidate(string value)
+    {
+        var span = value.AsSpan().TrimStart();
+        return TrimFSharpDelimitedCandidate(span).ToString();
+    }
+
+    private static ReadOnlySpan<char> TrimFSharpDelimitedCandidate(ReadOnlySpan<char> span)
+    {
+        while (span.Length > 0 && span[0] == '{')
+            span = span[1..];
+        while (span.Length > 0 && span[^1] == '}')
+            span = span[..^1];
+        return span.TrimStart();
     }
 
     private static IEnumerable<string> EnumerateTrimmedFSharpSegments(string value, char separator)
