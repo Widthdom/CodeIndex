@@ -6683,10 +6683,10 @@ public static partial class SymbolExtractor
 
     private sealed class CSharpCallableParameterScope
     {
-        private readonly bool[] _lineStartInsideParameterList;
+        private readonly bool[]? _lineStartInsideParameterList;
         private readonly List<(int Column, bool IsInsideParameterList)>?[]? _transitions;
 
-        public CSharpCallableParameterScope(bool[] lineStartInsideParameterList, List<(int Column, bool IsInsideParameterList)>?[]? transitions)
+        public CSharpCallableParameterScope(bool[]? lineStartInsideParameterList, List<(int Column, bool IsInsideParameterList)>?[]? transitions)
         {
             _lineStartInsideParameterList = lineStartInsideParameterList;
             _transitions = transitions;
@@ -6694,7 +6694,7 @@ public static partial class SymbolExtractor
 
         public bool IsInsideParameterListAt(int lineIndex, int column)
         {
-            var state = _lineStartInsideParameterList[lineIndex];
+            var state = _lineStartInsideParameterList?[lineIndex] ?? false;
             var transitions = _transitions?[lineIndex];
             if (transitions == null)
                 return state;
@@ -6714,14 +6714,15 @@ public static partial class SymbolExtractor
         string[] structuralLines,
         CSharpTypeBodyScope typeBodyScope)
     {
-        var lineStartInsideParameterList = new bool[structuralLines.Length];
+        bool[]? lineStartInsideParameterList = null;
         List<(int Column, bool IsInsideParameterList)>?[]? transitions = null;
         var declarationBuffer = new StringBuilder(256);
         var parameterParenDepth = 0;
 
         for (int lineIndex = 0; lineIndex < structuralLines.Length; lineIndex++)
         {
-            lineStartInsideParameterList[lineIndex] = parameterParenDepth > 0;
+            if (parameterParenDepth > 0)
+                (lineStartInsideParameterList ??= new bool[structuralLines.Length])[lineIndex] = true;
             var line = structuralLines[lineIndex];
 
             for (int cursor = 0; cursor < line.Length; cursor++)
