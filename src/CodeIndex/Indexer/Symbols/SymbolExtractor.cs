@@ -5703,6 +5703,9 @@ public static partial class SymbolExtractor
 
     private static void ExtractCppFriendDeclarationSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
     {
+        if (!LinesContain(lines, "friend", StringComparison.Ordinal))
+            return;
+
         var declared = BuildSymbolKindNameKeySet(symbols);
         var inBlockComment = false;
 
