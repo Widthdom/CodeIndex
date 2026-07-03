@@ -109,9 +109,13 @@ public static partial class ReferenceExtractor
 
         var interfaceGenericParameters = staticInterfaceMemberLookups.InterfaceGenericParameters;
         var implementationLookups = BuildCSharpStaticInterfaceImplementationLookups(symbols);
-        var staticMembersByContainer = implementationLookups.StaticMembersByContainer;
+        if (implementationLookups.TypeSymbols is not { Count: > 0 } typeSymbols
+            || implementationLookups.StaticMembersByContainer is not { Count: > 0 } staticMembersByContainer)
+        {
+            return;
+        }
 
-        foreach (var typeSymbol in implementationLookups.TypeSymbols)
+        foreach (var typeSymbol in typeSymbols)
         {
             var implementedInterfaces = ExtractCSharpImplementedInterfaces(
                 CollectCSharpRecordHeader(structuralLines, typeSymbol.StartLine).Text,
@@ -223,18 +227,18 @@ public static partial class ReferenceExtractor
     }
 
     private static (
-        List<SymbolRecord> TypeSymbols,
-        Dictionary<string, List<SymbolRecord>> StaticMembersByContainer) BuildCSharpStaticInterfaceImplementationLookups(IReadOnlyList<SymbolRecord> symbols)
+        IReadOnlyList<SymbolRecord>? TypeSymbols,
+        IReadOnlyDictionary<string, List<SymbolRecord>>? StaticMembersByContainer) BuildCSharpStaticInterfaceImplementationLookups(IReadOnlyList<SymbolRecord> symbols)
     {
-        var typeSymbols = new List<SymbolRecord>();
-        var staticMembersByContainer = new Dictionary<string, List<SymbolRecord>>(StringComparer.Ordinal);
+        List<SymbolRecord>? typeSymbols = null;
+        Dictionary<string, List<SymbolRecord>>? staticMembersByContainer = null;
         foreach (var symbol in symbols)
         {
             if (symbol.Kind is ("class" or "struct")
                 && symbol.BodyStartLine != null
                 && symbol.BodyEndLine != null)
             {
-                typeSymbols.Add(symbol);
+                (typeSymbols ??= []).Add(symbol);
             }
 
             if (symbol.Kind is not ("function" or "operator" or "property")
@@ -246,6 +250,7 @@ public static partial class ReferenceExtractor
             }
 
             var containerName = symbol.ContainerName!;
+            staticMembersByContainer ??= new Dictionary<string, List<SymbolRecord>>(StringComparer.Ordinal);
             if (!staticMembersByContainer.TryGetValue(containerName, out var staticMembers))
             {
                 staticMembers = new List<SymbolRecord>();
