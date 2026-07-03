@@ -70,8 +70,8 @@ internal static class CppReferenceExtractor
 
     private static string LastQualifiedSegment(string value)
     {
-        var text = value.Trim();
-        var qualifierIndex = text.LastIndexOf("::", StringComparison.Ordinal);
+        var text = value.AsSpan().Trim();
+        var qualifierIndex = LastIndexOfCppQualifier(text);
         var leaf = qualifierIndex >= 0 ? text[(qualifierIndex + 2)..].Trim() : text;
         if (!leaf.StartsWith("operator", StringComparison.Ordinal))
         {
@@ -80,6 +80,17 @@ internal static class CppReferenceExtractor
                 text = text[..genericIndex].TrimEnd();
         }
 
-        return qualifierIndex >= 0 ? text[(qualifierIndex + 2)..].Trim() : text;
+        return (qualifierIndex >= 0 ? text[(qualifierIndex + 2)..].Trim() : text).ToString();
+    }
+
+    private static int LastIndexOfCppQualifier(ReadOnlySpan<char> text)
+    {
+        for (var index = text.Length - 2; index >= 0; index--)
+        {
+            if (text[index] == ':' && text[index + 1] == ':')
+                return index;
+        }
+
+        return -1;
     }
 }
