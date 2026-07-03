@@ -246,22 +246,22 @@ internal static class SwiftReferenceExtractor
         IReadOnlyList<int> braceDepths,
         string alias)
     {
-        var ranges = new List<LineRange>();
+        List<LineRange>? ranges = null;
         for (var index = 0; index < preparedLines.Count; index++)
         {
             var line = preparedLines[index];
             var typeDeclaration = TypeDeclarationShadowRegex.Match(line);
             if (typeDeclaration.Success && string.Equals(TrimSwiftBackticks(typeDeclaration.Groups["name"].Value), alias, StringComparison.Ordinal))
             {
-                ranges.Add(new LineRange(index + 1, FindScopedAliasEndLine(preparedLines, braceDepths, index) ?? preparedLines.Count));
+                (ranges ??= []).Add(new LineRange(index + 1, FindScopedAliasEndLine(preparedLines, braceDepths, index) ?? preparedLines.Count));
                 continue;
             }
 
             if (DeclaresGenericTypeParameter(line, alias))
-                ranges.Add(new LineRange(index + 1, FindScopedAliasEndLine(preparedLines, braceDepths, index) ?? index + 1));
+                (ranges ??= []).Add(new LineRange(index + 1, FindScopedAliasEndLine(preparedLines, braceDepths, index) ?? index + 1));
         }
 
-        return ranges;
+        return ranges is null ? Array.Empty<LineRange>() : ranges;
     }
 
     private static bool DeclaresGenericTypeParameter(string line, string alias)
