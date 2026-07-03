@@ -1917,7 +1917,7 @@ public static partial class ReferenceExtractor
         int startColumn,
         out PythonLogicalHeaderReferenceLine header)
     {
-        var builder = new StringBuilder();
+        var builder = new StringBuilder(GetPythonLogicalLineInitialCapacity(lines, startLineIndex, startColumn));
         List<int>? physicalLines = null;
         List<int>? physicalColumns = null;
         var singlePhysicalLine = -1;
@@ -2005,7 +2005,7 @@ public static partial class ReferenceExtractor
         int startColumn,
         out PythonLogicalHeaderReferenceLine header)
     {
-        var builder = new StringBuilder();
+        var builder = new StringBuilder(GetPythonLogicalLineInitialCapacity(lines, startLineIndex, startColumn));
         List<int>? physicalLines = null;
         List<int>? physicalColumns = null;
         var singlePhysicalLine = -1;
@@ -2098,6 +2098,14 @@ public static partial class ReferenceExtractor
             singlePhysicalColumn,
             physicalLines.ToArray(),
             physicalColumns.ToArray());
+    }
+
+    private static int GetPythonLogicalLineInitialCapacity(string[] lines, int startLineIndex, int startColumn)
+    {
+        if (startLineIndex < 0 || startLineIndex >= lines.Length)
+            return 0;
+
+        return Math.Min(256, Math.Max(0, lines[startLineIndex].Length - startColumn));
     }
 
     private static bool TryAppendPythonLogicalReferenceChar(
