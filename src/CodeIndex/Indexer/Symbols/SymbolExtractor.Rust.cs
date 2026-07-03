@@ -44,6 +44,18 @@ public static partial class SymbolExtractor
             var body = bodySpan.ToString();
             var occurrences = new List<RustUseSymbolOccurrence>();
             CollectRustUseSymbolOccurrences(body, bodyOffset, lineStarts, i + 1, occurrences);
+            if (occurrences.Count == 0)
+            {
+                i = endLineIndex;
+                continue;
+            }
+
+            if (occurrences.Count == 1)
+            {
+                AddRustUseSymbolOccurrence(fileId, lines, symbols, symbolLineIdentities, statement, occurrences[0]);
+                i = endLineIndex;
+                continue;
+            }
 
             var seen = new HashSet<string>(StringComparer.Ordinal);
             foreach (var occurrence in occurrences)
@@ -51,32 +63,43 @@ public static partial class SymbolExtractor
                 if (!seen.Add($"{occurrence.Name}@{occurrence.Line}:{occurrence.Column}"))
                     continue;
 
-                var name = occurrence.Name;
-                if (HasSymbolLineIdentity(symbolLineIdentities, fileId, occurrence.Line, "import", name))
-                    continue;
-
-                var symbol = new SymbolRecord
-                {
-                    FileId = fileId,
-                    Kind = "import",
-                    Name = name,
-                    Line = occurrence.Line,
-                    StartLine = occurrence.Line,
-                    StartColumn = occurrence.Column,
-                    EndLine = occurrence.Line,
-                    Signature = statement.Trim(),
-                };
-                AddSymbolRecord(
-                    symbols,
-                    cssSeenSymbols: null,
-                    occurrence.Line,
-                    symbol,
-                    lines[occurrence.Line - 1]);
-                RecordSymbolLineIdentity(symbolLineIdentities, symbol);
+                AddRustUseSymbolOccurrence(fileId, lines, symbols, symbolLineIdentities, statement, occurrence);
             }
 
             i = endLineIndex;
         }
+    }
+
+    private static void AddRustUseSymbolOccurrence(
+        long fileId,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        HashSet<SymbolLineIdentity> symbolLineIdentities,
+        string statement,
+        RustUseSymbolOccurrence occurrence)
+    {
+        var name = occurrence.Name;
+        if (HasSymbolLineIdentity(symbolLineIdentities, fileId, occurrence.Line, "import", name))
+            return;
+
+        var symbol = new SymbolRecord
+        {
+            FileId = fileId,
+            Kind = "import",
+            Name = name,
+            Line = occurrence.Line,
+            StartLine = occurrence.Line,
+            StartColumn = occurrence.Column,
+            EndLine = occurrence.Line,
+            Signature = statement.Trim(),
+        };
+        AddSymbolRecord(
+            symbols,
+            cssSeenSymbols: null,
+            occurrence.Line,
+            symbol,
+            lines[occurrence.Line - 1]);
+        RecordSymbolLineIdentity(symbolLineIdentities, symbol);
     }
 
     private static void ExtractRustMultilineImplSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
