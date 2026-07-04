@@ -237,6 +237,7 @@ public partial class IndexCommandRunnerTests
         var priorTimeout = IndexCommandRunner.IndexExtractionStallTimeoutForTesting;
         IndexCommandRunner.IndexExtractionStallTimeoutForTesting = () => TimeSpan.FromMilliseconds(1);
         var projectRoot = CreateTempProject();
+        var dbPath = CreateTempDbPath("cdidx_symbol_timeout");
         try
         {
             var source = Path.Combine(
@@ -248,7 +249,6 @@ public partial class IndexCommandRunnerTests
                 "SymbolExtractor.JavaScriptTypeScriptSupport.cs");
             File.Copy(source, Path.Combine(projectRoot, "slow.cs"));
 
-            var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_symbol_timeout_{Guid.NewGuid():N}.db");
             var (exitCode, json, stderr) = RunAndCaptureJsonWithStderr([projectRoot, "--files", "slow.cs", "--db", dbPath, "--json", "--force"]);
 
             Assert.Equal(CommandExitCodes.CancelledBySignal, exitCode);
@@ -261,6 +261,7 @@ public partial class IndexCommandRunnerTests
             IndexCommandRunner.IndexExtractionStallTimeoutForTesting = priorTimeout;
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
+            DeleteFile(dbPath);
         }
     }
 
@@ -1095,7 +1096,7 @@ public partial class IndexCommandRunnerTests
     {
         var projectRoot = CreateTempProject();
         var publishDir = Path.Combine(Path.GetTempPath(), $"cdidx_single_file_publish_{Guid.NewGuid():N}");
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_single_file_index_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_single_file_index");
         try
         {
             File.WriteAllText(
