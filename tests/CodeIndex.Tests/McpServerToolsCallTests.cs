@@ -7751,7 +7751,7 @@ public partial class McpServerTests
     public void ToolsCall_ProjectScopeFallbackReportsEffectiveRoot_Issue3461()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_project_scope_fallback_root");
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_project_scope_fallback_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_project_scope_fallback");
         var originalCurrentDirectory = Environment.CurrentDirectory;
         try
         {
@@ -7780,7 +7780,7 @@ public partial class McpServerTests
         finally
         {
             Environment.CurrentDirectory = originalCurrentDirectory;
-            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
@@ -7789,7 +7789,7 @@ public partial class McpServerTests
     public void ToolsCall_ProjectScopeErrorSanitizesCaughtExceptionMessage_Issue3660()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_project_scope_sanitized_exception");
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_project_scope_sanitized_exception_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_project_scope_sanitized_exception");
         var originalCurrentDirectory = Environment.CurrentDirectory;
         var secretProject = "secret-project-token-ghp_1234567890abcdef-private";
         try
@@ -7826,7 +7826,7 @@ public partial class McpServerTests
         finally
         {
             Environment.CurrentDirectory = originalCurrentDirectory;
-            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
@@ -7835,7 +7835,7 @@ public partial class McpServerTests
     public void ToolsCall_ProjectScopeErrorDoesNotLeakRootDiagnosticToNextResult_Issue3461()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_project_scope_error_root");
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_project_scope_error_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_project_scope_error");
         var originalCurrentDirectory = Environment.CurrentDirectory;
         try
         {
@@ -7862,7 +7862,7 @@ public partial class McpServerTests
         finally
         {
             Environment.CurrentDirectory = originalCurrentDirectory;
-            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
