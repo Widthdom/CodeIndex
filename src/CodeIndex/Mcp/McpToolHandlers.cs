@@ -6124,8 +6124,9 @@ public partial class McpServer
             // refresh `worktree_head_changed`; partial / failed runs leave the prior HEAD
             // untouched and surface staleness until the next clean refresh. Issues #1508 / #1512.
             // CLI full-scan と同じく成功時のみ HEAD を記録する。partial / 失敗は旧 HEAD を残す。
+            var currentHeadBranch = GitHelper.TryGetHeadBranch(projectPath, requestToken);
             writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, currentHeadCommit);
-            writer.SetMeta(DbContext.IndexedHeadCommitBranchMetaKey, GitHelper.TryGetHeadBranch(projectPath, requestToken));
+            writer.SetMeta(DbContext.IndexedHeadCommitBranchMetaKey, currentHeadBranch);
             // #1509: also persist the always-updated HEAD/branch/timestamp triple so
             // status / consumers can detect cross-session staleness via
             // `commits_ahead_of_indexed_head`. Same best-effort contract — git unavailability
@@ -6133,12 +6134,11 @@ public partial class McpServer
             // #1509: HEAD / branch / timestamp を保存し、cross-session staleness 検出を可能にする。
             try
             {
-                var headBranch = GitHelper.TryGetHeadBranch(projectPath, requestToken);
                 var timestamp = currentHeadCommit != null
                     ? GetUtcNow().ToString("o", System.Globalization.CultureInfo.InvariantCulture)
                     : null;
                 writer.SetMeta(DbContext.IndexedHeadShaMetaKey, currentHeadCommit);
-                writer.SetMeta(DbContext.IndexedHeadBranchMetaKey, headBranch);
+                writer.SetMeta(DbContext.IndexedHeadBranchMetaKey, currentHeadBranch);
                 writer.SetMeta(DbContext.IndexedHeadTimestampMetaKey, timestamp);
             }
             catch (OperationCanceledException) when (requestToken.IsCancellationRequested)

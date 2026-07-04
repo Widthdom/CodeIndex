@@ -1000,12 +1000,7 @@ public static partial class IndexCommandRunner
         {
             var headSha = GitHelper.TryGetHeadCommit(projectRoot, cancellationToken);
             var headBranch = GitHelper.TryGetHeadBranch(projectRoot, cancellationToken);
-            var timestamp = headSha != null
-                ? GetUtcNow().ToString("o", System.Globalization.CultureInfo.InvariantCulture)
-                : null;
-            writer.SetMeta(DbContext.IndexedHeadShaMetaKey, headSha);
-            writer.SetMeta(DbContext.IndexedHeadBranchMetaKey, headBranch);
-            writer.SetMeta(DbContext.IndexedHeadTimestampMetaKey, timestamp);
+            StampIndexedHeadMetadata(writer, headSha, headBranch);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1018,6 +1013,30 @@ public static partial class IndexCommandRunner
             RecordIndexRunDiagnostic(diagnostics, "indexed_head_metadata_write_failed", ex);
         }
         StampWorkspacePathCaseSensitivity(writer, projectRoot, diagnostics, cancellationToken);
+    }
+
+    private static void StampIndexedHeadMetadata(DbWriter writer, string? headSha, string? headBranch)
+    {
+        var timestamp = headSha != null
+            ? GetUtcNow().ToString("o", System.Globalization.CultureInfo.InvariantCulture)
+            : null;
+        writer.SetMeta(DbContext.IndexedHeadShaMetaKey, headSha);
+        writer.SetMeta(DbContext.IndexedHeadBranchMetaKey, headBranch);
+        writer.SetMeta(DbContext.IndexedHeadTimestampMetaKey, timestamp);
+    }
+
+    private static void TryStampIndexedHeadMetadata(DbWriter writer, string? headSha, string? headBranch, List<string>? diagnostics)
+    {
+        try
+        {
+            StampIndexedHeadMetadata(writer, headSha, headBranch);
+        }
+        catch (Exception ex)
+        {
+            // Best-effort metadata only; never fail an otherwise-successful index run.
+            // best-effort であり、stamp の失敗で index 全体を失敗扱いにしない。
+            RecordIndexRunDiagnostic(diagnostics, "indexed_head_metadata_write_failed", ex);
+        }
     }
 
     private static void StampCommitScopedFreshHeadMetadata(

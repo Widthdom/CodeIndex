@@ -2215,8 +2215,9 @@ public static partial class IndexCommandRunner
             // フル成功時のみ HEAD を記録する。partial update は HEAD を触らないので、後続の
             // full scan が「直近 full scan からブランチが動いた」をきちんと検知できる。
             // 非 git workspace で null になった場合はキーごとクリアされる。Issue #1508。
+            var currentHeadBranch = GitHelper.TryGetHeadBranch(projectRoot, cancellationToken);
             writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, currentHeadCommit);
-            writer.SetMeta(DbContext.IndexedHeadCommitBranchMetaKey, GitHelper.TryGetHeadBranch(projectRoot, cancellationToken));
+            writer.SetMeta(DbContext.IndexedHeadCommitBranchMetaKey, currentHeadBranch);
             writer.SetMeta(
                 DbContext.LastFullScanElapsedMsMetaKey,
                 stopwatch.ElapsedMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -2227,7 +2228,8 @@ public static partial class IndexCommandRunner
             // reflects the true HEAD at the time of the most recent successful index.
             // #1509: あらゆる成功 index の終端で更新する HEAD トリプル (SHA + branch + 時刻) も
             // ここで stamp する。full scan / partial update を問わず最新の HEAD を保存する。
-            StampIndexedHeadMetadata(writer, projectRoot, indexRunDiagnostics, cancellationToken);
+            TryStampIndexedHeadMetadata(writer, currentHeadCommit, currentHeadBranch, indexRunDiagnostics);
+            StampWorkspacePathCaseSensitivity(writer, projectRoot, indexRunDiagnostics, cancellationToken);
             if (options.MemoryTrace)
                 memorySamples.Add(CaptureMemorySample("finalize", stopwatch));
             var memoryTimelineForStamp = BuildMemoryTimeline(memorySamples);
