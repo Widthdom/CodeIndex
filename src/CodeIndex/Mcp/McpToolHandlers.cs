@@ -5630,7 +5630,13 @@ public partial class McpServer
             memorySamples.Add(CaptureMcpIndexMemorySample("scan", runStopwatch));
         var files = scanResult.Files;
         var fileTargets = new CSharpStaticInterfacePrepass.FileTarget[files.Count];
-        var csharpPrepassTargets = new List<CSharpStaticInterfacePrepass.FileTarget>();
+        var csharpPrepassTargetCapacity = 0;
+        foreach (var language in scanResult.FileLanguages.Values)
+        {
+            if (language == "csharp")
+                csharpPrepassTargetCapacity++;
+        }
+        var csharpPrepassTargets = new List<CSharpStaticInterfacePrepass.FileTarget>(csharpPrepassTargetCapacity);
         var hasSqlTargets = false;
         var hasTypeScriptTargets = false;
         var hasGeneratedCodeExtractionSuppressionPatterns = indexer.HasGeneratedCodeExtractionSuppressionPatterns;
