@@ -377,28 +377,35 @@ internal static class TypeScriptReferenceExtractor
             return;
         }
 
-        HashSet<string>? emittedAliases = aliases.Count > 1
-            ? new HashSet<string>(StringComparer.Ordinal)
-            : null;
+        HashSet<string>? emittedAliases = null;
         foreach (var bindingCandidate in aliases)
         {
             var alias = bindingCandidate.Alias;
-            if (emittedAliases is not null && !emittedAliases.Add(alias))
+            var index = preparedLine.IndexOf(alias, StringComparison.Ordinal);
+            if (index < 0)
                 continue;
 
-            var searchStart = 0;
-            while (searchStart < preparedLine.Length)
+            if (aliases.Count > 1
+                && !(emittedAliases ??= new HashSet<string>(StringComparer.Ordinal)).Add(alias))
             {
-                var index = preparedLine.IndexOf(alias, searchStart, StringComparison.Ordinal);
-                if (index < 0)
-                    break;
+                continue;
+            }
 
-                searchStart = index + alias.Length;
+            while (true)
+            {
                 if (!HasIdentifierBoundaries(preparedLine, index, alias.Length))
+                {
+                    if (!TryAdvanceToNextAliasOccurrence(preparedLine, alias, ref index))
+                        break;
                     continue;
+                }
                 var binding = FindActiveTypeAliasBinding(aliases, alias, lineNumber);
                 if (binding is null)
+                {
+                    if (!TryAdvanceToNextAliasOccurrence(preparedLine, alias, ref index))
+                        break;
                     continue;
+                }
 
                 var column = index + 1;
                 var container = resolveContainerForColumn(index);
@@ -411,6 +418,8 @@ internal static class TypeScriptReferenceExtractor
                         alias,
                         container)))
                 {
+                    if (!TryAdvanceToNextAliasOccurrence(preparedLine, alias, ref index))
+                        break;
                     continue;
                 }
 
@@ -425,8 +434,17 @@ internal static class TypeScriptReferenceExtractor
                     lineNumber,
                     container,
                     binding.Value.TypeParameters);
+
+                if (!TryAdvanceToNextAliasOccurrence(preparedLine, alias, ref index))
+                    break;
             }
         }
+    }
+
+    private static bool TryAdvanceToNextAliasOccurrence(string preparedLine, string alias, ref int index)
+    {
+        index = preparedLine.IndexOf(alias, index + alias.Length, StringComparison.Ordinal);
+        return index >= 0;
     }
 
     private static TypeAliasBinding? FindActiveTypeAliasBinding(
