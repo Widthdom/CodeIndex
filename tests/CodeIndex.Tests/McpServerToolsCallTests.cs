@@ -6645,7 +6645,7 @@ public partial class McpServerTests
     public void ToolsCall_Index_NullByteFilePersistsNullByteIssue_Issue3835()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_null_byte_{Guid.NewGuid():N}");
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_null_byte_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_null_byte");
         try
         {
             Directory.CreateDirectory(fixtureDir);
@@ -6684,7 +6684,7 @@ public partial class McpServerTests
         finally
         {
             TestProjectHelper.DeleteDirectory(fixtureDir);
-            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
@@ -6692,7 +6692,7 @@ public partial class McpServerTests
     public void ToolsCall_Index_MaxReferencesPerFilePersistsReferenceCountExceededIssue_Issue3719()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_reference_cap_{Guid.NewGuid():N}");
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_reference_cap_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_reference_cap");
         try
         {
             Directory.CreateDirectory(fixtureDir);
