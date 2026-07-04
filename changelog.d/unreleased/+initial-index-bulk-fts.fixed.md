@@ -35,6 +35,7 @@ affected:
 - **Index startup batches fixed metadata reads** — CLI index startup now reads fixed prior-run metadata keys with one multi-key query instead of issuing one metadata lookup per field.
 - **Index startup batches hotspot metadata snapshots** — CLI and MCP index startup now read per-language hotspot-family version and marker fingerprints with multi-key queries instead of one lookup per language and field.
 - **Fresh bytes-read accounting pre-sizes file-size caches** — CLI and MCP indexing now allocate the known-readable-size cache with the discovered file count, avoiding dictionary growth churn on large first scans.
+- **Fresh scans skip empty unknown-extension classification** — successful full scans now stamp known empty unknown-extension metadata without running sample construction or classification when no unknown-extension files were found.
 
 ## 日本語
 
@@ -65,3 +66,4 @@ affected:
 - **index startup の固定 metadata read をまとめます** — CLI index startup は prior-run metadata の固定キーをフィールドごとの個別 lookup ではなく、1回の multi-key query で読み出すようになりました。
 - **index startup の hotspot metadata snapshot をまとめます** — CLI と MCP の index startup は言語別 hotspot-family version と marker fingerprint を、言語/フィールドごとの個別 lookup ではなく multi-key query で読み出すようになりました。
 - **fresh bytes-read accounting の file-size cache を事前確保します** — CLI と MCP の index は known-readable-size cache を発見済み file count で確保し、大規模初回 scan での dictionary growth churn を避けるようになりました。
+- **fresh scan で空の unknown-extension classification を省きます** — 成功した full scan は未知拡張子ファイルが見つからなかった場合、sample 構築や分類を実行せず既知の空 metadata を stamp するようになりました。

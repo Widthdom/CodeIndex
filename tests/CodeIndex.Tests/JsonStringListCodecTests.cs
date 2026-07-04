@@ -107,4 +107,33 @@ public class JsonStringListCodecTests
                 File.Delete(dbPath);
         }
     }
+
+    [Fact]
+    public void WriteUnknownExtensionFileMetadata_EmptyPathsStampsEmptyMetadata()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_json_string_list_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var db = new DbContext(dbPath);
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+
+            writer.WriteUnknownExtensionFileMetadata([]);
+
+            var status = new DbReader(db.Connection).GetStatus();
+            Assert.Equal(0, status.UnknownExtensionFileCount);
+            Assert.Empty(Assert.IsType<List<string>>(status.UnknownExtensionFiles));
+            Assert.False(status.UnknownExtensionFilesTruncated);
+            Assert.Equal((long)DbContext.UnknownExtensionFilePathSampleLimit, status.UnknownExtensionFilePathLimit);
+            Assert.Empty(Assert.IsType<Dictionary<string, long>>(status.UnknownExtensionExtensionCounts));
+            Assert.Empty(Assert.IsType<Dictionary<string, long>>(status.UnknownExtensionCategoryCounts));
+            Assert.Empty(Assert.IsType<List<StatusUnknownExtensionGroup>>(status.UnknownExtensionGroups));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
 }

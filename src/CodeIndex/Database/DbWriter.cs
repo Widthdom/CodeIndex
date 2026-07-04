@@ -3201,6 +3201,19 @@ public class DbWriter
     {
         ArgumentNullException.ThrowIfNull(paths);
 
+        if (paths.Count == 0)
+        {
+            SetMetaValues(
+                (DbContext.UnknownExtensionFileCountMetaKey, "0"),
+                (DbContext.UnknownExtensionFilePathsMetaKey, "[]"),
+                (DbContext.UnknownExtensionFilesTruncatedMetaKey, false.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.UnknownExtensionFilePathLimitMetaKey, DbContext.UnknownExtensionFilePathSampleLimit.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.UnknownExtensionExtensionCountsMetaKey, "{}"),
+                (DbContext.UnknownExtensionCategoryCountsMetaKey, "{}"),
+                (DbContext.UnknownExtensionGroupsMetaKey, "[]"));
+            return;
+        }
+
         var sample = JsonStringListCodec.TakeSerializableSample(
             paths,
             DbContext.UnknownExtensionFilePathSampleLimit);
