@@ -916,10 +916,18 @@ public static partial class IndexCommandRunner
         if (!options.Json && !options.Quiet)
             purgeCts = ConsoleUi.StartSpinner("Cleaning up stale entries...", spinnerFrames);
         var purged = 0;
-        var retainedPaths = new HashSet<string>(fileTargets.Length, StringComparer.Ordinal);
-        foreach (var target in fileTargets)
-            retainedPaths.Add(target.IndexPath);
-        var indexedJavaScriptTypeScriptConfigPathsBeforePurge = writer.GetIndexedJavaScriptTypeScriptConfigPaths();
+        var existingFileCount = writer.GetCounts().files;
+        var startedWithNoIndexedFiles = existingFileCount == 0;
+        var retainedPaths = startedWithNoIndexedFiles
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : new HashSet<string>(fileTargets.Length, StringComparer.Ordinal);
+        IReadOnlyList<string> indexedJavaScriptTypeScriptConfigPathsBeforePurge = [];
+        if (!startedWithNoIndexedFiles)
+        {
+            foreach (var target in fileTargets)
+                retainedPaths.Add(target.IndexPath);
+            indexedJavaScriptTypeScriptConfigPathsBeforePurge = writer.GetIndexedJavaScriptTypeScriptConfigPaths();
+        }
         if (scanResult.HadErrors)
         {
             SaveScanCheckpoint(
@@ -929,27 +937,30 @@ public static partial class IndexCommandRunner
                 warningList,
                 options.Json,
                 options.Quiet);
-            retainedPaths.UnionWith(scanResult.ProbeFailedFilePaths.Select(FileIndexer.NormalizeIndexPath));
-
-            foreach (var relPath in scanResult.NonIndexablePaths)
+            if (!startedWithNoIndexedFiles)
             {
-                var dbPath = FileIndexer.NormalizeIndexPath(relPath);
-                if (writer.DeleteFileByPath(dbPath))
-                    purged++;
-            }
+                retainedPaths.UnionWith(scanResult.ProbeFailedFilePaths.Select(FileIndexer.NormalizeIndexPath));
 
-            var authoritativeDirectories = scanResult.ListedDirectories
-                .Select(FileIndexer.NormalizeIndexPath)
-                .ToHashSet(StringComparer.Ordinal);
-            var attributePrunedDirectories = scanResult.AttributePrunedDirectories
-                .Select(FileIndexer.NormalizeIndexPath)
-                .ToHashSet(StringComparer.Ordinal);
-            attributePrunedDirectories.UnionWith(scanResult.NestedRepositories.Select(FileIndexer.NormalizeIndexPath));
-            purged += writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retainedPaths, authoritativeDirectories, attributePrunedDirectories);
+                foreach (var relPath in scanResult.NonIndexablePaths)
+                {
+                    var dbPath = FileIndexer.NormalizeIndexPath(relPath);
+                    if (writer.DeleteFileByPath(dbPath))
+                        purged++;
+                }
+
+                var authoritativeDirectories = scanResult.ListedDirectories
+                    .Select(FileIndexer.NormalizeIndexPath)
+                    .ToHashSet(StringComparer.Ordinal);
+                var attributePrunedDirectories = scanResult.AttributePrunedDirectories
+                    .Select(FileIndexer.NormalizeIndexPath)
+                    .ToHashSet(StringComparer.Ordinal);
+                attributePrunedDirectories.UnionWith(scanResult.NestedRepositories.Select(FileIndexer.NormalizeIndexPath));
+                purged += writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retainedPaths, authoritativeDirectories, attributePrunedDirectories);
+            }
         }
         else
         {
-            if (checkpointedDirectories.Count > 0)
+            if (!startedWithNoIndexedFiles && checkpointedDirectories.Count > 0)
             {
                 var authoritativeDirectories = scanResult.ListedDirectories
                     .Select(FileIndexer.NormalizeIndexPath)
@@ -960,7 +971,7 @@ public static partial class IndexCommandRunner
                 attributePrunedDirectories.UnionWith(scanResult.NestedRepositories.Select(FileIndexer.NormalizeIndexPath));
                 purged = writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retainedPaths, authoritativeDirectories, attributePrunedDirectories);
             }
-            else
+            else if (!startedWithNoIndexedFiles)
             {
                 purged = writer.PurgeFilesOutsideRetainedSet(retainedPaths);
             }
@@ -992,9 +1003,11 @@ public static partial class IndexCommandRunner
         // グラフ非対応になった言語の参照をパージする。symbols-only では古い graph 行が
         // degraded readiness の裏に残らないよう全参照を消す。
         ThrowIfFullScanCancelled(0, files.Count);
-        var purgedRefs = options.SymbolsOnly
-            ? writer.PurgeAllReferences()
-            : writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
+        var purgedRefs = startedWithNoIndexedFiles
+            ? 0
+            : options.SymbolsOnly
+                ? writer.PurgeAllReferences()
+                : writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
         if (purgedRefs > 0 && !options.Json && !options.Quiet)
         {
             var reason = options.SymbolsOnly ? "symbols-only mode" : "unsupported language";
@@ -1018,8 +1031,6 @@ public static partial class IndexCommandRunner
         CancellationTokenSource? jsonHeartbeatCts = null;
         Task? jsonHeartbeatTask = null;
         var extractionParallelism = Math.Max(1, options.Parallelism);
-        var existingFileCount = writer.GetCounts().files;
-        var startedWithNoIndexedFiles = existingFileCount == 0;
         var typeScriptAugmentationVersionMatchesCurrent = writer.TypeScriptAugmentationVersionMatchesCurrent();
         var typeScriptAugmentationNeedsRefresh = !options.SymbolsOnly
             && (options.Rebuild

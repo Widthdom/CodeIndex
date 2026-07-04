@@ -13,6 +13,7 @@ affected:
 - **Fresh indexing skips empty issue cleanup writes** — CLI fresh indexes and MCP rebuild/empty indexes now avoid per-file `file_issues` cleanup DELETEs for newly-created file rows that cannot have existing validation issues.
 - **MCP empty indexes skip stale file-data cleanup probes** — MCP `index` now matches the CLI fresh-index path by avoiding per-file stale chunk/symbol cleanup lookups when the database started empty or was just rebuilt.
 - **MCP empty indexes skip stale purge queries** — MCP `index` now skips stale-file purge, unsupported-reference purge, and pre-purge C# contract reads when the database started empty or was just rebuilt.
+- **CLI fresh indexes skip stale purge queries** — CLI full scans that start from an empty database now skip retained-set construction, stale-file purge, and unsupported-reference purge while still preserving scan checkpoint cleanup semantics.
 
 ## 日本語
 
@@ -21,3 +22,4 @@ affected:
 - **fresh index の空 issue cleanup 書き込みを省きます** — CLI の fresh index と MCP の rebuild / 空DB index では、既存の検証 issue が存在し得ない新規ファイル行に対するファイル単位の `file_issues` DELETE を避けるようになりました。
 - **MCP の空DB index で古いファイルデータ cleanup probe を省きます** — MCP `index` は、DB が空の状態または rebuild 直後に始まった場合、CLI fresh-index 経路と同じくファイル単位の古い chunk / symbol cleanup lookup を避けるようになりました。
 - **MCP の空DB index で stale purge query を省きます** — MCP `index` は、DB が空の状態または rebuild 直後に始まった場合、stale file purge、unsupported reference purge、purge 前の C# contract 読み出しをスキップするようになりました。
+- **CLI fresh index で stale purge query を省きます** — 空DBから始まる CLI full scan は、scan checkpoint の保存/削除 semantics を保ったまま、retained set 構築、stale file purge、unsupported reference purge をスキップするようになりました。
