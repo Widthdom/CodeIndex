@@ -2039,17 +2039,20 @@ public sealed class Caller
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fresh_no_ts_augmentation");
         var dbPath = CreateTempDbPath("cdidx_fresh_no_ts_augmentation");
         var rebuiltTypeScriptAugmentation = false;
+        var foldBackfillVerifications = 0;
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "tool.py"), "def run():\n    return 1\n");
 
             IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting = () => rebuiltTypeScriptAugmentation = true;
+            DbWriter.FoldBackfillVerificationForTesting = () => foldBackfillVerifications++;
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("success", json.GetProperty("status").GetString());
             Assert.False(rebuiltTypeScriptAugmentation);
+            Assert.Equal(1, foldBackfillVerifications);
             using var db = new DbContext(dbPath);
             Assert.Equal(
                 DbContext.TypeScriptAugmentationVersion.ToString(CultureInfo.InvariantCulture),
@@ -2058,6 +2061,7 @@ public sealed class Caller
         finally
         {
             IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting = null;
+            DbWriter.FoldBackfillVerificationForTesting = null;
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
             DeleteDirectory(projectRoot);
         }

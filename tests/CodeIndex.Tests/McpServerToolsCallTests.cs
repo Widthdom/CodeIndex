@@ -6067,17 +6067,20 @@ public partial class McpServerTests
         Directory.CreateDirectory(fixtureDir);
         var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_fresh_no_ts_augmentation");
         var rebuiltTypeScriptAugmentation = false;
+        var foldBackfillVerifications = 0;
         try
         {
             File.WriteAllText(Path.Combine(fixtureDir, "tool.py"), "def run():\n    return 1\n");
             using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
 
             McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = () => rebuiltTypeScriptAugmentation = true;
+            DbWriter.FoldBackfillVerificationForTesting = () => foldBackfillVerifications++;
 
             var response = CallIndex(server, fixtureDir);
 
             Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
             Assert.False(rebuiltTypeScriptAugmentation);
+            Assert.Equal(1, foldBackfillVerifications);
             using var db = new DbContext(dbPath);
             db.TryMigrateForRead();
             Assert.Equal(
@@ -6087,6 +6090,7 @@ public partial class McpServerTests
         finally
         {
             McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = null;
+            DbWriter.FoldBackfillVerificationForTesting = null;
             TestProjectHelper.DeleteDirectory(fixtureDir);
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }

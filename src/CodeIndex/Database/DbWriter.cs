@@ -31,6 +31,7 @@ public class DbWriter
     private readonly PreparedCommandCache? _commandCache;
     private readonly Action? _markWriteWork;
     private static readonly AsyncLocal<Action?> ScopedFoldBackfillRowUpdatedForTesting = new();
+    private static readonly AsyncLocal<Action?> ScopedFoldBackfillVerificationForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedBatchRowSkipWarningForTesting = new();
     private static readonly AsyncLocal<Action<DbWriterBatchProgress>?> ScopedBatchProgressCheckpointForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedMutualRecursionRefreshForTesting = new();
@@ -38,6 +39,12 @@ public class DbWriter
     {
         get => ScopedFoldBackfillRowUpdatedForTesting.Value;
         set => ScopedFoldBackfillRowUpdatedForTesting.Value = value;
+    }
+
+    internal static Action? FoldBackfillVerificationForTesting
+    {
+        get => ScopedFoldBackfillVerificationForTesting.Value;
+        set => ScopedFoldBackfillVerificationForTesting.Value = value;
     }
 
     internal static Action<string>? BatchRowSkipWarningForTesting
@@ -4309,6 +4316,7 @@ public class DbWriter
         if (requireCurrentSymbolExtractorVersions && !SymbolExtractorVersionsMatchCurrent())
             return false;
 
+        FoldBackfillVerificationForTesting?.Invoke();
         var cmd = RentCommand(
             @"
             SELECT

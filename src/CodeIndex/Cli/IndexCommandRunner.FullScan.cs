@@ -2135,9 +2135,7 @@ public static partial class IndexCommandRunner
             // guarantee 100% backfill on a legacy DB).
             // fold は実検証が通ったときだけ stamp。legacy DB で skip された行は NULL のため、
             // 黙って stamp すると reader が fold 経路で legacy 行を見逃す。codex #86 レビュー。
-            var backfillReady = skipped == 0
-                ? writer.AllFoldedColumnsBackfilled()
-                : writer.AllFoldedColumnsBackfilled(skippedSymbolExtractorLanguages);
+            var backfillReady = skipped == 0 || writer.AllFoldedColumnsBackfilled(skippedSymbolExtractorLanguages);
             var foldedKeysCurrent = skipped == 0 || writer.AllFoldedColumnValuesMatchCurrentFold();
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var currentFoldFingerprint = NameFold.Fingerprint();
