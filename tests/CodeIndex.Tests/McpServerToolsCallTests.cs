@@ -7875,7 +7875,7 @@ public partial class McpServerTests
 
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_unreadable_marker_{Guid.NewGuid():N}");
         Directory.CreateDirectory(fixtureDir);
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_unreadable_marker_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_unreadable_marker");
         var unreadableDir = Path.Combine(fixtureDir, "secret");
         UnixFileMode? originalMode = null;
         try
@@ -7912,7 +7912,7 @@ public partial class McpServerTests
         {
             if (originalMode.HasValue && Directory.Exists(unreadableDir))
                 File.SetUnixFileMode(unreadableDir, originalMode.Value);
-            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
             TestProjectHelper.DeleteDirectory(fixtureDir);
         }
     }
