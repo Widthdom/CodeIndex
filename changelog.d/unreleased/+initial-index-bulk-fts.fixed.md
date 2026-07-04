@@ -18,6 +18,7 @@ affected:
 - **Fresh full scans avoid duplicate fold-readiness verification** — CLI and MCP fresh/rebuild-style full scans now rely on the guarded `MarkFoldReady` re-verification instead of running an identical folded-column table scan immediately before it.
 - **Fresh full scans reuse scan language metadata** — CLI and MCP successful fresh indexes now use the scan target language set for C#/SQL finalizer readiness instead of probing the newly-written `files` table.
 - **MCP fresh indexes skip impossible file-reuse lookups** — MCP fresh/rebuild indexes now match the CLI path by disabling existing-symbol/stat/content reuse probes when the database started empty.
+- **Fresh index summaries avoid table-wide count probes** — CLI and MCP successful fresh indexes now derive summary totals from committed insert counts, including TypeScript augmentation references, instead of running four final `COUNT(*)` scans.
 
 ## 日本語
 
@@ -31,3 +32,4 @@ affected:
 - **fresh full scan の fold-readiness 重複検証を省きます** — CLI と MCP の fresh / rebuild 相当の full scan は、直後に guarded な `MarkFoldReady` 再検証を行うため、その前の同種の folded-column 全表 scan を省くようになりました。
 - **fresh full scan で scan 済みの言語 metadata を再利用します** — CLI と MCP の成功した fresh index は、C# / SQL finalizer readiness の判定に新しく書いた `files` table への probe ではなく scan target の言語集合を使うようになりました。
 - **MCP fresh index で成立しない file reuse lookup を省きます** — MCP の fresh / rebuild index は、DB が空で始まった場合に既存 symbol / stat / content reuse probe を無効化し、CLI 経路と同じ挙動になりました。
+- **fresh index summary でテーブル全体の count probe を避けます** — CLI と MCP の成功した fresh index は、TypeScript augmentation references を含む commit 済み挿入件数から summary totals を作り、最後の4本の `COUNT(*)` scan を省くようになりました。

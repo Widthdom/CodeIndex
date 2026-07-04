@@ -34,6 +34,7 @@ public class DbWriter
     private static readonly AsyncLocal<Action?> ScopedFoldBackfillVerificationForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedLanguagePresenceCheckForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedReusableUnchangedFileLookupForTesting = new();
+    private static readonly AsyncLocal<Action?> ScopedCountsReadForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedBatchRowSkipWarningForTesting = new();
     private static readonly AsyncLocal<Action<DbWriterBatchProgress>?> ScopedBatchProgressCheckpointForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedMutualRecursionRefreshForTesting = new();
@@ -59,6 +60,12 @@ public class DbWriter
     {
         get => ScopedReusableUnchangedFileLookupForTesting.Value;
         set => ScopedReusableUnchangedFileLookupForTesting.Value = value;
+    }
+
+    internal static Action? CountsReadForTesting
+    {
+        get => ScopedCountsReadForTesting.Value;
+        set => ScopedCountsReadForTesting.Value = value;
     }
 
     internal static Action<string>? BatchRowSkipWarningForTesting
@@ -2805,6 +2812,7 @@ public class DbWriter
     /// </summary>
     public (long files, long chunks, long symbols, long references) GetCounts()
     {
+        CountsReadForTesting?.Invoke();
         long files = ExecuteScalar("SELECT COUNT(*) FROM files");
         long chunks = ExecuteScalar("SELECT COUNT(*) FROM chunks");
         long symbols = ExecuteScalar("SELECT COUNT(*) FROM symbols");

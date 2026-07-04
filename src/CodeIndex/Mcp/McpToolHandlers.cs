@@ -5702,6 +5702,23 @@ public partial class McpServer
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
         var symbolsDroppedByKindFilter = 0;
         var mutualRecursionRefreshNeeded = false;
+        var freshCountFiles = 0L;
+        var freshCountChunks = 0L;
+        var freshCountSymbols = 0L;
+        var freshCountReferences = 0L;
+        void CountFreshInsertedRows(
+            int chunkCount = 0,
+            int symbolCount = 0,
+            int referenceCount = 0)
+        {
+            if (!startedWithNoIndexedFiles)
+                return;
+
+            freshCountFiles++;
+            freshCountChunks += chunkCount;
+            freshCountSymbols += symbolCount;
+            freshCountReferences += referenceCount;
+        }
         using var ftsBulkLoad = FtsBulkLoadTriggerGuard.Start(writer, rebuild || startedWithNoIndexedFiles, () => ftsMutated);
 
         foreach (var target in fileTargets)
@@ -5805,6 +5822,7 @@ public partial class McpServer
                     WriteProjectRootOnce();
                     writer.ClearBatchInProgress();
                     txn.Commit();
+                    CountFreshInsertedRows(chunkCount: chunks.Count);
                     ftsMutated = true;
                     processed++;
                     await EmitProgressNotificationAsync(progressToken, processed, files.Count).ConfigureAwait(false);
@@ -5830,6 +5848,9 @@ public partial class McpServer
                 var fileContext = new FileContext(projectPath, record.Path, filePath, record.Lang);
                 postExtractionHooks.Value.OnSymbolsExtracted(fileContext, symbols);
                 symbolsDroppedByKindFilter += symbolKindFilter.Apply(symbols);
+                var committedChunkCount = 0;
+                var committedSymbolCount = 0;
+                var committedReferenceCount = 0;
                 if (symbols.Count > maxSymbolsPerFile)
                 {
                     var issue = BuildMcpSymbolCountExceededIssue(record.Path, symbols.Count, maxSymbolsPerFile);
@@ -5871,6 +5892,9 @@ public partial class McpServer
                     writer.InsertReferences(references, refreshMutualRecursionFlags: false, requestToken);
                     if (references.Count > 0)
                         mutualRecursionRefreshNeeded = true;
+                    committedChunkCount = chunks.Count;
+                    committedSymbolCount = symbols.Count;
+                    committedReferenceCount = references.Count;
                     // Keep MCP index parity with CLI index: persist file-level validation issues too.
                     // MCPインデックスもCLIインデックスと同等に、ファイル検証issueを保存する。
                     IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine, loaded.ConflictMarkerLine);
@@ -5885,6 +5909,7 @@ public partial class McpServer
                 WriteProjectRootOnce();
                 writer.ClearBatchInProgress();
                 txn.Commit();
+                CountFreshInsertedRows(committedChunkCount, committedSymbolCount, committedReferenceCount);
                 ftsMutated = true;
                 McpIndexFileCommittedForTesting?.Invoke(record.Path);
             }
@@ -5907,6 +5932,7 @@ public partial class McpServer
                     InsertIssuesForIndexedFile(fileId, [IndexCommandRunner.BuildNullByteIssue(ex)]);
                     WriteProjectRootOnce();
                     txn.Commit();
+                    CountFreshInsertedRows();
                     ftsMutated = true;
                 }
                 catch (Exception cleanupEx)
@@ -6024,7 +6050,9 @@ public partial class McpServer
                 else
                 {
                     McpIndexTypeScriptAugmentationRebuildForTesting?.Invoke();
-                    writer.RebuildTypeScriptAugmentationReferences(projectPath);
+                    var augmentationReferences = writer.RebuildTypeScriptAugmentationReferences(projectPath);
+                    if (startedWithNoIndexedFiles)
+                        freshCountReferences += augmentationReferences;
                 }
             }
             RestampHotspotFamilyTrust(
@@ -6152,7 +6180,10 @@ public partial class McpServer
             if (plannerMaintenanceFailure != null)
                 IndexCommandRunner.TryStampPlannerStatisticsMaintenanceDiagnostic(writer, indexRunDiagnostics, plannerMaintenanceFailure);
         }
-        var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
+        var (totalFiles, totalChunks, totalSymbols, totalReferences) =
+            startedWithNoIndexedFiles && !scanResult.HadErrors && errors == 0
+                ? (freshCountFiles, freshCountChunks, freshCountSymbols, freshCountReferences)
+                : writer.GetCounts();
         await EmitProgressNotificationAsync(progressToken, files.Count, files.Count, errors == 0 ? "Indexing complete." : "Indexing completed with errors.").ConfigureAwait(false);
         if (memorySamples != null)
             memorySamples.Add(CaptureMcpIndexMemorySample("finalize", runStopwatch));

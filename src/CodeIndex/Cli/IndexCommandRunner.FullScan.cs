@@ -1322,6 +1322,24 @@ public static partial class IndexCommandRunner
             }
         }
 
+        var freshCountFiles = 0L;
+        var freshCountChunks = 0L;
+        var freshCountSymbols = 0L;
+        var freshCountReferences = 0L;
+        void CountFreshInsertedRows(
+            int chunkCount = 0,
+            int symbolCount = 0,
+            int referenceCount = 0)
+        {
+            if (!startedWithNoIndexedFiles)
+                return;
+
+            freshCountFiles++;
+            freshCountChunks += chunkCount;
+            freshCountSymbols += symbolCount;
+            freshCountReferences += referenceCount;
+        }
+
         bool TrySkipFullScanTargetBeforeContentLoad(int fileIndex)
         {
             if (options.Rebuild || startedWithNoIndexedFiles || options.SymbolsOnly)
@@ -1815,6 +1833,7 @@ public static partial class IndexCommandRunner
                             currentJsonIndexFile = FormatIndexPhasePath(record.Path, "committing");
                             WriteProjectRootOnce();
                             txn.Commit();
+                            CountFreshInsertedRows(chunkCount: chunks.Count);
 
                             processed++;
                             if (!options.Json && !options.Quiet)
@@ -1857,6 +1876,7 @@ public static partial class IndexCommandRunner
                             if (options.Verbose)
                                 WriteIndexVerboseStatus($"  [SKIP] {record.Path} ({issue.Message})");
                             txn.Commit();
+                            CountFreshInsertedRows();
                             processed++;
                             if (!options.Json && !options.Quiet)
                             {
@@ -1887,6 +1907,7 @@ public static partial class IndexCommandRunner
                             if (options.Verbose)
                                 WriteIndexVerboseStatus($"  [SKIP] {record.Path} ({issue.Message})");
                             txn.Commit();
+                            CountFreshInsertedRows();
                             processed++;
                             if (!options.Json && !options.Quiet)
                             {
@@ -1968,6 +1989,7 @@ public static partial class IndexCommandRunner
                         currentJsonIndexFile = FormatIndexPhasePath(record.Path, "committing");
                         WriteProjectRootOnce();
                         txn.Commit();
+                        CountFreshInsertedRows(chunks.Count, symbols.Count, references.Count);
 
                         WriteIndexVerboseStatus($"  [OK  ] {record.Path} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
                     }
@@ -2118,7 +2140,9 @@ public static partial class IndexCommandRunner
                     else
                     {
                         FullScanTypeScriptAugmentationRebuildForTesting?.Invoke();
-                        writer.RebuildTypeScriptAugmentationReferences(projectRoot);
+                        var augmentationReferences = writer.RebuildTypeScriptAugmentationReferences(projectRoot);
+                        if (startedWithNoIndexedFiles)
+                            freshCountReferences += augmentationReferences;
                     }
                 }
             }
@@ -2240,7 +2264,10 @@ public static partial class IndexCommandRunner
             warnings++;
         }
         warnings += AddPostExtractionHookWarnings(postExtractionHooks, warningList);
-        var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
+        var (totalFiles, totalChunks, totalSymbols, totalReferences) =
+            startedWithNoIndexedFiles && !scanResult.HadErrors && errors == 0
+                ? (freshCountFiles, freshCountChunks, freshCountSymbols, freshCountReferences)
+                : writer.GetCounts();
         var signalReader = new DbReader(writer.Connection);
         var sqlGraphContractSignalAfter = signalReader.GetSqlGraphContractSignal(lang: null);
         var hotspotFamilySignalAfter = signalReader.GetHotspotFamilySignal(lang: null);

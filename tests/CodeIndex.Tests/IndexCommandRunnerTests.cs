@@ -2043,6 +2043,7 @@ public sealed class Caller
         var languagePresenceChecks = 0;
         var statReuseLookups = 0;
         var reusableLookups = 0;
+        var countReads = 0;
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
@@ -2052,6 +2053,7 @@ public sealed class Caller
             DbWriter.FoldBackfillVerificationForTesting = () => foldBackfillVerifications++;
             DbWriter.LanguagePresenceCheckForTesting = _ => languagePresenceChecks++;
             DbWriter.ReusableUnchangedFileLookupForTesting = _ => reusableLookups++;
+            DbWriter.CountsReadForTesting = () => countReads++;
             IndexedFileStatReuse.LookupForTesting = _ => statReuseLookups++;
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--json"]);
@@ -2063,6 +2065,8 @@ public sealed class Caller
             Assert.Equal(0, languagePresenceChecks);
             Assert.Equal(0, statReuseLookups);
             Assert.Equal(0, reusableLookups);
+            Assert.Equal(1, countReads);
+            Assert.Equal(2, json.GetProperty("summary").GetProperty("files_total").GetInt64());
             using var db = new DbContext(dbPath);
             Assert.Equal(
                 DbContext.TypeScriptAugmentationVersion.ToString(CultureInfo.InvariantCulture),
@@ -2074,6 +2078,7 @@ public sealed class Caller
             DbWriter.FoldBackfillVerificationForTesting = null;
             DbWriter.LanguagePresenceCheckForTesting = null;
             DbWriter.ReusableUnchangedFileLookupForTesting = null;
+            DbWriter.CountsReadForTesting = null;
             IndexedFileStatReuse.LookupForTesting = null;
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
             DeleteDirectory(projectRoot);

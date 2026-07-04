@@ -6071,6 +6071,7 @@ public partial class McpServerTests
         var languagePresenceChecks = 0;
         var statReuseLookups = 0;
         var reusableLookups = 0;
+        var countReads = 0;
         try
         {
             File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { public void Run() { } }\n");
@@ -6081,6 +6082,7 @@ public partial class McpServerTests
             DbWriter.FoldBackfillVerificationForTesting = () => foldBackfillVerifications++;
             DbWriter.LanguagePresenceCheckForTesting = _ => languagePresenceChecks++;
             DbWriter.ReusableUnchangedFileLookupForTesting = _ => reusableLookups++;
+            DbWriter.CountsReadForTesting = () => countReads++;
             IndexedFileStatReuse.LookupForTesting = _ => statReuseLookups++;
 
             var response = CallIndex(server, fixtureDir);
@@ -6091,6 +6093,8 @@ public partial class McpServerTests
             Assert.Equal(0, languagePresenceChecks);
             Assert.Equal(0, statReuseLookups);
             Assert.Equal(0, reusableLookups);
+            Assert.Equal(1, countReads);
+            Assert.Equal(2, response["result"]!["structuredContent"]!["summary"]!["files"]!.GetValue<long>());
             using var db = new DbContext(dbPath);
             db.TryMigrateForRead();
             Assert.Equal(
@@ -6103,6 +6107,7 @@ public partial class McpServerTests
             DbWriter.FoldBackfillVerificationForTesting = null;
             DbWriter.LanguagePresenceCheckForTesting = null;
             DbWriter.ReusableUnchangedFileLookupForTesting = null;
+            DbWriter.CountsReadForTesting = null;
             IndexedFileStatReuse.LookupForTesting = null;
             TestProjectHelper.DeleteDirectory(fixtureDir);
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
