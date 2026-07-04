@@ -19,6 +19,7 @@ public partial class FileIndexer
         cancellationToken.ThrowIfCancellationRequested();
         var files = new List<string>();
         var fileLanguages = new Dictionary<string, string>(StringComparer.Ordinal);
+        var languageCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         var errors = new List<ScanError>(_submoduleLoadWarnings.Count);
         var nonIndexablePaths = new HashSet<string>(StringComparer.Ordinal);
         var unknownExtensionFiles = new HashSet<string>(StringComparer.Ordinal);
@@ -36,6 +37,7 @@ public partial class FileIndexer
         var scanState = new DirectoryScanState(
             files,
             fileLanguages,
+            languageCounts,
             errors,
             nonIndexablePaths,
             unknownExtensionFiles,
@@ -68,10 +70,18 @@ public partial class FileIndexer
             new List<string>(_ancestorIgnoreDirectories),
             MaterializePathSet(scanState.AttributePrunedDirectories),
             MaterializeSortedPathSet(scanState.NestedRepositories),
-            MaterializeSortedPathSet(scanState.DanglingSymlinks));
+            MaterializeSortedPathSet(scanState.DanglingSymlinks))
+        {
+            LanguageCounts = MaterializeLanguageCounts(scanState.LanguageCounts),
+        };
     }
 
     private static List<string> MaterializePathSet(HashSet<string> paths) => paths.Count == 0 ? [] : new List<string>(paths);
+
+    private static IReadOnlyDictionary<string, int> MaterializeLanguageCounts(Dictionary<string, int> counts)
+        => counts.Count == 0
+            ? EmptyLanguageCounts
+            : new Dictionary<string, int>(counts, StringComparer.Ordinal);
 
     private static List<string> MaterializeSortedPathSet(HashSet<string> paths)
     {

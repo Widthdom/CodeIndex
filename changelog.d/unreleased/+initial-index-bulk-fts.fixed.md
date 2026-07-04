@@ -38,6 +38,7 @@ affected:
 - **Fresh scans skip empty unknown-extension classification** — successful full scans now stamp known empty unknown-extension metadata without running sample construction or classification when no unknown-extension files were found.
 - **MCP full scans pre-size C# prepass targets** — MCP indexing now sizes its C# static-interface prepass target list from scan language metadata, matching the CLI path and avoiding list growth churn on C#-heavy first indexes.
 - **Fresh C# prepass skips unused stat-reuse caches** — CLI and MCP fresh/rebuild scans now avoid allocating the C# prepass stat-reuse cache until a reusable existing C# file can actually populate it.
+- **Full scans reuse scanner language counts** — the scanner now returns per-language counts with the file list, letting CLI and MCP full-index finalization reuse scan metadata instead of recounting target languages.
 
 ## 日本語
 
@@ -71,3 +72,4 @@ affected:
 - **fresh scan で空の unknown-extension classification を省きます** — 成功した full scan は未知拡張子ファイルが見つからなかった場合、sample 構築や分類を実行せず既知の空 metadata を stamp するようになりました。
 - **MCP full scan の C# prepass targets を事前確保します** — MCP index は scan 済みの言語 metadata から C# static-interface prepass target list の容量を決め、CLI 経路と同様に C# が多い初回 index での list growth churn を避けるようになりました。
 - **fresh C# prepass で未使用の stat-reuse cache を作りません** — CLI と MCP の fresh / rebuild scan は、再利用可能な既存 C# ファイルで実際に埋められるまで C# prepass stat-reuse cache の確保を避けるようになりました。
+- **full scan で scanner の言語カウントを再利用します** — scanner が file list と一緒に言語別件数を返すようになり、CLI と MCP の full-index finalization は target 言語を数え直さず scan metadata を再利用します。

@@ -870,7 +870,7 @@ public static partial class IndexCommandRunner
         var scanResult = discovery.ScanResult;
         var files = discovery.Files;
         var fileTargets = new FullScanFileTarget[files.Count];
-        var languageCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var languageCounts = scanResult.LanguageCounts;
         var hasGeneratedCodeExtractionSuppressionPatterns = indexer.HasGeneratedCodeExtractionSuppressionPatterns;
         for (var i = 0; i < files.Count; i++)
         {
@@ -880,10 +880,6 @@ public static partial class IndexCommandRunner
             fileTargets[i] = hasGeneratedCodeExtractionSuppressionPatterns
                 ? target with { GeneratedExtractionSuppressed = indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath) }
                 : target;
-            if (language == null)
-                continue;
-
-            languageCounts[language] = languageCounts.TryGetValue(language, out var count) ? count + 1 : 1;
         }
         var knownReadableFileSizes = new Dictionary<string, long>(files.Count, StringComparer.Ordinal);
         var errorList = discovery.ErrorList;

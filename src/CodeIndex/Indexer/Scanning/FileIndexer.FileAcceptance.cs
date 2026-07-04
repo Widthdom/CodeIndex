@@ -130,7 +130,12 @@ public partial class FileIndexer
         }
 
         if (language.Language is { Length: > 0 } acceptedLanguage)
+        {
             scanState.FileLanguages[file] = acceptedLanguage;
+            scanState.LanguageCounts[acceptedLanguage] = scanState.LanguageCounts.TryGetValue(acceptedLanguage, out var count)
+                ? count + 1
+                : 1;
+        }
         return true;
     }
 }

@@ -5630,15 +5630,11 @@ public partial class McpServer
             memorySamples.Add(CaptureMcpIndexMemorySample("scan", runStopwatch));
         var files = scanResult.Files;
         var fileTargets = new CSharpStaticInterfacePrepass.FileTarget[files.Count];
-        var csharpPrepassTargetCapacity = 0;
-        foreach (var language in scanResult.FileLanguages.Values)
-        {
-            if (language == "csharp")
-                csharpPrepassTargetCapacity++;
-        }
+        var languageCounts = scanResult.LanguageCounts;
+        var csharpPrepassTargetCapacity = languageCounts.TryGetValue("csharp", out var csharpFileCount) ? csharpFileCount : 0;
         var csharpPrepassTargets = new List<CSharpStaticInterfacePrepass.FileTarget>(csharpPrepassTargetCapacity);
-        var hasSqlTargets = false;
-        var hasTypeScriptTargets = false;
+        var hasSqlTargets = languageCounts.ContainsKey("sql");
+        var hasTypeScriptTargets = languageCounts.ContainsKey("typescript");
         var hasGeneratedCodeExtractionSuppressionPatterns = indexer.HasGeneratedCodeExtractionSuppressionPatterns;
         for (var i = 0; i < files.Count; i++)
         {
@@ -5653,10 +5649,6 @@ public partial class McpServer
             fileTargets[i] = target;
             if (language == "csharp")
                 csharpPrepassTargets.Add(target);
-            else if (language == "sql")
-                hasSqlTargets = true;
-            else if (language == "typescript")
-                hasTypeScriptTargets = true;
         }
         var knownReadableFileSizes = new Dictionary<string, long>(files.Count, StringComparer.Ordinal);
         await EmitProgressNotificationAsync(progressToken, 0, files.Count, "Index scan complete; indexing files.").ConfigureAwait(false);

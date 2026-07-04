@@ -47,6 +47,8 @@ public partial class FileIndexer
         IReadOnlyList<string> NestedRepositories,
         IReadOnlyList<string> DanglingSymlinks)
     {
+        public IReadOnlyDictionary<string, int> LanguageCounts { get; init; } = EmptyLanguageCounts;
+
         public bool HadErrors
         {
             get
