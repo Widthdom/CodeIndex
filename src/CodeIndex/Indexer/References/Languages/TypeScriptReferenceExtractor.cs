@@ -396,6 +396,10 @@ internal static class TypeScriptReferenceExtractor
                 searchStart = index + alias.Length;
                 if (!HasIdentifierBoundaries(preparedLine, index, alias.Length))
                     continue;
+                var binding = FindActiveTypeAliasBinding(aliases, alias, lineNumber);
+                if (binding is null)
+                    continue;
+
                 var column = index + 1;
                 var container = resolveContainerForColumn(index);
                 if (!seen.Contains(ReferenceExtractor.BuildReferenceDedupeKey(
@@ -409,10 +413,6 @@ internal static class TypeScriptReferenceExtractor
                 {
                     continue;
                 }
-
-                var binding = FindActiveTypeAliasBinding(aliases, alias, lineNumber);
-                if (binding is null)
-                    continue;
 
                 TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
                     binding.Value.Target,
