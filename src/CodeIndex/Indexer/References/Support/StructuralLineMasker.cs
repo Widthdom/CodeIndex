@@ -129,12 +129,14 @@ internal static class StructuralLineMasker
 
     private static bool MayContainStructuralMaskingDelimiter(string? lang, string[] lines)
     {
+        var isPerl = lang == "perl";
+        var supportsBacktickTemplates = lang is "javascript" or "typescript";
         foreach (var line in lines)
         {
             if (line.Length == 0)
                 continue;
 
-            if (lang == "perl")
+            if (isPerl)
             {
                 var trimmed = line.AsSpan().TrimStart();
                 if (!trimmed.IsEmpty && trimmed[0] == '=')
@@ -145,7 +147,7 @@ internal static class StructuralLineMasker
             var span = line.AsSpan();
             if (span.IndexOfAny('"', '\'', '/') >= 0)
                 return true;
-            if (lang is ("javascript" or "typescript") && span.IndexOf('`') >= 0)
+            if (supportsBacktickTemplates && span.IndexOf('`') >= 0)
                 return true;
         }
 
