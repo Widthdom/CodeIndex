@@ -300,27 +300,40 @@ public static partial class IndexCommandRunner
                 // casing-table drift. Issue #97.
                 // fold metadata を事前 snapshot する。version だけでなく fingerprint のズレでも
                 // partial update で FoldReady を restamp しない。
-                var priorFoldVersion = db.GetMetaString("fold_key_version");
-                var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
+                var priorMeta = db.GetMetaStrings(
+                [
+                    "fold_key_version",
+                    "fold_key_fingerprint",
+                    DbContext.CSharpSymbolNameContractVersionMetaKey,
+                    DbContext.GetMetadataTargetVersionMetaKey("csharp"),
+                    DbContext.SqlGraphContractVersionMetaKey,
+                    DbContext.SymbolsOnlyGraphOmittedMetaKey,
+                    DbContext.IndexedProjectRootMetaKey,
+                    SymbolKindFilterMetaKey,
+                    DbContext.IndexedHeadCommitMetaKey,
+                ]);
+                string? PriorMeta(string key) => priorMeta.TryGetValue(key, out var value) ? value : null;
+                var priorFoldVersion = PriorMeta("fold_key_version");
+                var priorFoldFingerprint = PriorMeta("fold_key_fingerprint");
                 var priorSymbolExtractorVersionsMatchCurrent = new DbWriter(db).SymbolExtractorVersionsMatchCurrent();
-                var priorCSharpSymbolNameContractVersion = db.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey);
-                var priorMetadataTargetCsharp = db.GetMetaString(DbContext.GetMetadataTargetVersionMetaKey("csharp"));
-                var priorSqlGraphContractVersion = db.GetMetaString(DbContext.SqlGraphContractVersionMetaKey);
+                var priorCSharpSymbolNameContractVersion = PriorMeta(DbContext.CSharpSymbolNameContractVersionMetaKey);
+                var priorMetadataTargetCsharp = PriorMeta(DbContext.GetMetadataTargetVersionMetaKey("csharp"));
+                var priorSqlGraphContractVersion = PriorMeta(DbContext.SqlGraphContractVersionMetaKey);
                 var priorSymbolsOnlyGraphOmitted = string.Equals(
-                    db.GetMetaString(DbContext.SymbolsOnlyGraphOmittedMetaKey),
+                    PriorMeta(DbContext.SymbolsOnlyGraphOmittedMetaKey),
                     "true",
                     StringComparison.OrdinalIgnoreCase);
                 var priorHotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyVersionMetaKey);
                 var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
-                var priorIndexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
-                var priorSymbolKindFilterSignature = db.GetMetaString(SymbolKindFilterMetaKey);
+                var priorIndexedProjectRoot = PriorMeta(DbContext.IndexedProjectRootMetaKey);
+                var priorSymbolKindFilterSignature = PriorMeta(SymbolKindFilterMetaKey);
                 // Captured BEFORE `--rebuild` drops the DB so an incremental run can warn the user when
                 // the worktree's HEAD has moved since the previously indexed snapshot. The same value
                 // is read at `status` time (without `--check`) to surface a worktree branch / HEAD
                 // switch via `worktree_head_changed`. Issues #1508 and #1512.
                 // `--rebuild` が DB を消す前に取り出す。incremental 経路で HEAD 差分を検知し、`status`
                 // (no `--check`) でも worktree の HEAD 切替検出に利用する。
-                var priorIndexedHeadCommit = db.GetMetaString(DbContext.IndexedHeadCommitMetaKey);
+                var priorIndexedHeadCommit = PriorMeta(DbContext.IndexedHeadCommitMetaKey);
                 var currentHeadCommit = GitHelper.TryGetHeadCommit(options.ProjectPath, indexCancellation.Token);
 
                 // Don't demote readiness yet. A transient usage error in update-mode preflight

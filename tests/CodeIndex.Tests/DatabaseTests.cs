@@ -3653,6 +3653,20 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void GetMetaStrings_ReturnsRequestedKeysWithNullsForMissingOrDbNull()
+    {
+        _writer.SetMetaValues(
+            ("batch_read_a", "1"),
+            ("batch_read_b", null));
+
+        var values = _db.GetMetaStrings(["batch_read_a", "batch_read_b", "batch_read_missing"]);
+
+        Assert.Equal("1", values["batch_read_a"]);
+        Assert.Null(values["batch_read_b"]);
+        Assert.Null(values["batch_read_missing"]);
+    }
+
+    [Fact]
     public void SetMetaValues_InsideWriterTransaction_RollsBackWithDependentRows()
     {
         using (var transaction = _writer.BeginTransaction())

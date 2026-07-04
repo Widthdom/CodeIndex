@@ -1719,6 +1719,34 @@ public class DbContext : IDisposable
         return raw is string s ? s : null;
     }
 
+    public IReadOnlyDictionary<string, string?> GetMetaStrings(IReadOnlyList<string> keys)
+    {
+        var values = new Dictionary<string, string?>(keys.Count, StringComparer.Ordinal);
+        foreach (var key in keys)
+            values[key] = null;
+
+        if (keys.Count == 0 || !TableExists("codeindex_meta"))
+            return values;
+
+        var parameterNames = new string[keys.Count];
+        for (var i = 0; i < keys.Count; i++)
+            parameterNames[i] = "@key" + i.ToString(CultureInfo.InvariantCulture);
+
+        using var cmd = SqliteConnectionPolicy.CreateCommand(_connection);
+        cmd.CommandText = "SELECT key, value FROM codeindex_meta WHERE key IN (" + string.Join(", ", parameterNames) + ")";
+        for (var i = 0; i < keys.Count; i++)
+            SqliteCommandPolicy.Add(cmd, parameterNames[i], keys[i]);
+
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            var key = reader.GetString(0);
+            values[key] = reader.IsDBNull(1) ? null : reader.GetString(1);
+        }
+
+        return values;
+    }
+
     public bool TryValidateIsCodeIndexDb(out string? reason)
     {
         var requiredTables = new[] { "files", "symbols" };
