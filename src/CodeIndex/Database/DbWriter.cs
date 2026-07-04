@@ -3089,16 +3089,19 @@ public class DbWriter
     /// </summary>
     public void ClearHotspotFamilyReady()
     {
-        if (!TableExists("codeindex_meta"))
-            return;
+        var languages = FileIndexer.GetHotspotFamilyMarkerLanguages();
+        var keys = new string[2 + (languages.Count * 2)];
+        var index = 0;
 
-        SetMeta(DbContext.HotspotFamilyVersionMetaKey, null);
-        SetMeta(DbContext.HotspotFamilyMarkerFingerprintMetaKey, null);
-        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+        keys[index++] = DbContext.HotspotFamilyVersionMetaKey;
+        keys[index++] = DbContext.HotspotFamilyMarkerFingerprintMetaKey;
+        foreach (var lang in languages)
         {
-            SetMeta(DbContext.GetHotspotFamilyVersionMetaKey(lang), null);
-            SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang), null);
+            keys[index++] = DbContext.GetHotspotFamilyVersionMetaKey(lang);
+            keys[index++] = DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang);
         }
+
+        ClearMetaKeys(keys);
     }
 
     /// <summary>
@@ -3145,16 +3148,17 @@ public class DbWriter
 
     public void ClearLastFailedIndexRunMetadata()
     {
-        SetMeta(DbContext.LastFailedIndexRunStatusMetaKey, null);
-        SetMeta(DbContext.LastFailedIndexRunModeMetaKey, null);
-        SetMeta(DbContext.LastFailedIndexRunStartedAtMetaKey, null);
-        SetMeta(DbContext.LastFailedIndexRunDurationMsMetaKey, null);
-        SetMeta(DbContext.LastFailedIndexRunFilesProcessedMetaKey, null);
-        SetMeta(DbContext.LastFailedIndexRunFilesTotalMetaKey, null);
-        SetMeta(DbContext.LastFailedIndexRunErrorCodeMetaKey, null);
-        SetMeta(DbContext.LastFailedIndexRunReasonMetaKey, null);
-        SetMeta(DbContext.LastFailedIndexRunProgressPersistedMetaKey, null);
-        SetMeta(DbContext.LastFailedIndexRunRecoveryHintMetaKey, null);
+        ClearMetaKeys(
+            DbContext.LastFailedIndexRunStatusMetaKey,
+            DbContext.LastFailedIndexRunModeMetaKey,
+            DbContext.LastFailedIndexRunStartedAtMetaKey,
+            DbContext.LastFailedIndexRunDurationMsMetaKey,
+            DbContext.LastFailedIndexRunFilesProcessedMetaKey,
+            DbContext.LastFailedIndexRunFilesTotalMetaKey,
+            DbContext.LastFailedIndexRunErrorCodeMetaKey,
+            DbContext.LastFailedIndexRunReasonMetaKey,
+            DbContext.LastFailedIndexRunProgressPersistedMetaKey,
+            DbContext.LastFailedIndexRunRecoveryHintMetaKey);
     }
 
     /// <summary>
@@ -4266,6 +4270,62 @@ public class DbWriter
         {
             cmd.Parameters["@key"].Value = key;
             cmd.Parameters["@value"].Value = (object?)value ?? DBNull.Value;
+            cmd.ExecuteNonQuery();
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
+    }
+
+    private void ClearMetaKeys(params string[] keys)
+    {
+        if (keys.Length == 0 || !HasMetaTable())
+            return;
+
+        if (!IsInTransaction())
+        {
+            Execute("SAVEPOINT clear_meta_keys_atomic");
+            try
+            {
+                ClearMetaKeysCore(keys);
+                Execute("RELEASE SAVEPOINT clear_meta_keys_atomic");
+            }
+            catch
+            {
+                try { Execute("ROLLBACK TO SAVEPOINT clear_meta_keys_atomic"); } catch (SqliteException) { /* best effort */ }
+                try { Execute("RELEASE SAVEPOINT clear_meta_keys_atomic"); } catch (SqliteException) { /* best effort */ }
+                throw;
+            }
+            return;
+        }
+
+        ClearMetaKeysCore(keys);
+    }
+
+    private void ClearMetaKeysCore(IReadOnlyList<string> keys)
+    {
+        var parameterNames = new string[keys.Count];
+        var values = new string[keys.Count];
+        for (var i = 0; i < parameterNames.Length; i++)
+        {
+            parameterNames[i] = "@key" + i.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            values[i] = "(" + parameterNames[i] + ", NULL)";
+        }
+
+        var sql = "INSERT INTO codeindex_meta (key, value) VALUES " + string.Join(", ", values)
+            + " ON CONFLICT(key) DO UPDATE SET value = excluded.value";
+        var cmd = RentCommand(
+            sql,
+            c =>
+            {
+                foreach (var parameterName in parameterNames)
+                    c.Parameters.Add(parameterName, SqliteType.Text);
+            });
+        try
+        {
+            for (var i = 0; i < keys.Count; i++)
+                cmd.Parameters[parameterNames[i]].Value = keys[i];
             cmd.ExecuteNonQuery();
         }
         finally

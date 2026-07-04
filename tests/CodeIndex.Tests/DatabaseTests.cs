@@ -3626,6 +3626,64 @@ public class DatabaseTests : IDisposable
         Assert.Null(ReadMeta("raw_phase"));
     }
 
+    [Fact]
+    public void ClearLastFailedIndexRunMetadata_NullsOnlyFailureMetadata()
+    {
+        string[] keys =
+        [
+            DbContext.LastFailedIndexRunStatusMetaKey,
+            DbContext.LastFailedIndexRunModeMetaKey,
+            DbContext.LastFailedIndexRunStartedAtMetaKey,
+            DbContext.LastFailedIndexRunDurationMsMetaKey,
+            DbContext.LastFailedIndexRunFilesProcessedMetaKey,
+            DbContext.LastFailedIndexRunFilesTotalMetaKey,
+            DbContext.LastFailedIndexRunErrorCodeMetaKey,
+            DbContext.LastFailedIndexRunReasonMetaKey,
+            DbContext.LastFailedIndexRunProgressPersistedMetaKey,
+            DbContext.LastFailedIndexRunRecoveryHintMetaKey,
+        ];
+        foreach (var key in keys)
+            _writer.SetMeta(key, "stale");
+        _writer.SetMeta("unrelated_meta", "keep");
+
+        _writer.ClearLastFailedIndexRunMetadata();
+
+        foreach (var key in keys)
+        {
+            Assert.Null(ReadMeta(key));
+            Assert.True(MetaRowExists(key), key);
+        }
+        Assert.Equal("keep", ReadMeta("unrelated_meta"));
+    }
+
+    [Fact]
+    public void ClearHotspotFamilyReady_NullsGlobalAndLanguageMetadata()
+    {
+        var languages = FileIndexer.GetHotspotFamilyMarkerLanguages();
+        var keys = new List<string>
+        {
+            DbContext.HotspotFamilyVersionMetaKey,
+            DbContext.HotspotFamilyMarkerFingerprintMetaKey,
+        };
+        foreach (var lang in languages)
+        {
+            keys.Add(DbContext.GetHotspotFamilyVersionMetaKey(lang));
+            keys.Add(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang));
+        }
+        foreach (var key in keys)
+            _writer.SetMeta(key, "ready");
+        _writer.SetMeta("unrelated_meta", "keep");
+
+        _writer.ClearHotspotFamilyReady();
+
+        foreach (var key in keys)
+        {
+            Assert.Null(ReadMeta(key));
+            Assert.True(MetaRowExists(key), key);
+        }
+        Assert.Equal("keep", ReadMeta("unrelated_meta"));
+    }
+
     private void DeleteDbPath() => TestProjectHelper.DeleteDirectory(_dbDir);
 
     private string ExecuteScalarString(string sql)
@@ -3647,6 +3705,14 @@ public class DatabaseTests : IDisposable
         cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
         cmd.Parameters.AddWithValue("@key", key);
         return cmd.ExecuteScalar() as string;
+    }
+
+    private bool MetaRowExists(string key)
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM codeindex_meta WHERE key = @key";
+        cmd.Parameters.AddWithValue("@key", key);
+        return cmd.ExecuteScalar() is not null;
     }
 
     private static long ExecuteScalarLong(SqliteConnection connection, string sql)

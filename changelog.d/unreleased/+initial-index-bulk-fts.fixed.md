@@ -21,6 +21,7 @@ affected:
 - **Fresh index summaries avoid table-wide count probes** — CLI and MCP successful fresh indexes now derive summary totals from committed insert counts, including TypeScript augmentation references, instead of running four final `COUNT(*)` scans.
 - **Successful full indexes reuse captured Git branch metadata** — CLI and MCP successful full-index finalization now reuse one captured HEAD branch value across both index-head stamps instead of invoking git twice.
 - **Fresh-index empty checks use a single existence probe** — CLI and MCP now decide whether a database started empty with `SELECT 1 FROM files LIMIT 1` instead of calling the four-table summary count helper.
+- **Index-start metadata cleanup batches related keys** — CLI and MCP index startup now clear failed-run and hotspot-family metadata with one multi-key upsert per group instead of issuing one metadata write per key.
 
 ## 日本語
 
@@ -37,3 +38,4 @@ affected:
 - **fresh index summary でテーブル全体の count probe を避けます** — CLI と MCP の成功した fresh index は、TypeScript augmentation references を含む commit 済み挿入件数から summary totals を作り、最後の4本の `COUNT(*)` scan を省くようになりました。
 - **成功した full index で取得済み Git branch metadata を再利用します** — CLI と MCP の成功時 finalization は、2種類の index-head stamp で同じ HEAD branch 値を再利用し、git 呼び出しを重複させないようになりました。
 - **fresh index の空DB判定を単一の存在確認にします** — CLI と MCP は DB が空で始まったかを4テーブル summary count helper ではなく `SELECT 1 FROM files LIMIT 1` で判定するようになりました。
+- **index start の metadata cleanup で関連キーをまとめます** — CLI と MCP の index startup は、failed-run metadata と hotspot-family metadata のクリアをキーごとの個別 metadata write ではなく、グループごとに1回の multi-key upsert で行うようになりました。
