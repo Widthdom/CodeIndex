@@ -1958,6 +1958,43 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void InsertIssuesForNewFile_DoesNotDeleteExistingIssues()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/new-file-issues.py",
+            Lang = "python",
+            Size = 20,
+            Lines = 3,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        _writer.InsertIssues(fileId,
+        [
+            new FileIssue
+            {
+                Path = "src/new-file-issues.py",
+                Kind = "replacement_char",
+                Line = 1,
+                Message = "replacement char",
+                Origin = FileIssue.OriginSourceLiteral,
+                Severity = FileIssue.SeverityInfo,
+            },
+        ]);
+
+        using var countCmd = _db.Connection.CreateCommand();
+        countCmd.CommandText = "SELECT COUNT(*) FROM file_issues WHERE file_id = @file_id";
+        countCmd.Parameters.AddWithValue("@file_id", fileId);
+        Assert.Equal(1L, countCmd.ExecuteScalar());
+
+        _writer.InsertIssuesForNewFile(fileId, []);
+        Assert.Equal(1L, countCmd.ExecuteScalar());
+
+        _writer.InsertIssues(fileId, []);
+        Assert.Equal(0L, countCmd.ExecuteScalar());
+    }
+
+    [Fact]
     public void GetUnchangedFileId_WithNullChecksumUsesModifiedAndSize()
     {
         var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);

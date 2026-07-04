@@ -1216,6 +1216,14 @@ public static partial class IndexCommandRunner
             writer,
             options.Rebuild || startedWithNoIndexedFiles);
 
+        void InsertIssuesForIndexedFile(long fileId, IReadOnlyList<FileIssue> issues)
+        {
+            if (startedWithNoIndexedFiles)
+                writer.InsertIssuesForNewFile(fileId, issues);
+            else
+                writer.InsertIssues(fileId, issues);
+        }
+
         var csharpPrepassStatReuse = new Dictionary<string, IndexedFileStatReuseResult?>(StringComparer.Ordinal);
 
         bool CanReuseCSharpPrepassTargetWithoutRead(CSharpStaticInterfacePrepass.FileTarget target)
@@ -1790,7 +1798,7 @@ public static partial class IndexCommandRunner
                             var generatedIssues = AppendIssueIfMissing(
                                 RequireWorkItemIssues(item),
                                 generatedSuppressionIssue);
-                            writer.InsertIssues(fileId, generatedIssues);
+                            InsertIssuesForIndexedFile(fileId, generatedIssues);
                             if (options.Verbose)
                                 WriteIndexVerboseStatus($"  [OK  ] {record.Path} ({chunks.Count} chunks, generated-code extraction skipped)");
                             currentJsonIndexFile = FormatIndexPhasePath(record.Path, "committing");
@@ -1834,7 +1842,7 @@ public static partial class IndexCommandRunner
                                 : AppendIssue([symbolRegexTimeoutIssue], issue);
                             writer.InsertSymbols([], cancellationToken);
                             writer.InsertReferences([], cancellationToken);
-                            writer.InsertIssues(fileId, capIssues);
+                            InsertIssuesForIndexedFile(fileId, capIssues);
                             if (options.Verbose)
                                 WriteIndexVerboseStatus($"  [SKIP] {record.Path} ({issue.Message})");
                             txn.Commit();
@@ -1945,7 +1953,7 @@ public static partial class IndexCommandRunner
                             mutualRecursionRefreshNeeded = true;
                         currentJsonIndexFile = FormatIndexPhasePath(record.Path, "validating");
                         var issues = RequireWorkItemIssues(item);
-                        writer.InsertIssues(fileId, issues);
+                        InsertIssuesForIndexedFile(fileId, issues);
                         currentJsonIndexFile = FormatIndexPhasePath(record.Path, "committing");
                         WriteProjectRootOnce();
                         txn.Commit();

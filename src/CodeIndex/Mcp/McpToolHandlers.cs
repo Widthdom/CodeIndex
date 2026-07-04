@@ -5482,6 +5482,14 @@ public partial class McpServer
         var ftsMutated = false;
         var startedWithNoIndexedFiles = writer.GetCounts().files == 0;
 
+        void InsertIssuesForIndexedFile(long fileId, IReadOnlyList<FileIssue> issues)
+        {
+            if (startedWithNoIndexedFiles)
+                writer.InsertIssuesForNewFile(fileId, issues);
+            else
+                writer.InsertIssues(fileId, issues);
+        }
+
         static bool PathsEqual(string? left, string? right)
         {
             if (left == null || right == null)
@@ -5779,7 +5787,7 @@ public partial class McpServer
                     var issues = IndexCommandRunner.AppendIssueIfMissing(
                         FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine, loaded.ConflictMarkerLine),
                         generatedSuppressionIssue);
-                    writer.InsertIssues(fileId, issues);
+                    InsertIssuesForIndexedFile(fileId, issues);
                     WriteProjectRootOnce();
                     writer.ClearBatchInProgress();
                     txn.Commit();
@@ -5816,7 +5824,7 @@ public partial class McpServer
                         : IndexCommandRunner.AppendIssue([symbolRegexTimeoutIssue], issue);
                     writer.InsertSymbols([], requestToken);
                     writer.InsertReferences([], requestToken);
-                    writer.InsertIssues(fileId, capIssues);
+                    InsertIssuesForIndexedFile(fileId, capIssues);
                 }
                 else
                 {
@@ -5858,7 +5866,7 @@ public partial class McpServer
                         issues = IndexCommandRunner.AppendIssue(issues, regexTimeoutIssue);
                     if (referenceCapIssue != null)
                         issues = IndexCommandRunner.AppendIssue(issues, referenceCapIssue);
-                    writer.InsertIssues(fileId, issues);
+                    InsertIssuesForIndexedFile(fileId, issues);
                 }
                 WriteProjectRootOnce();
                 writer.ClearBatchInProgress();
@@ -5882,7 +5890,7 @@ public partial class McpServer
                     writer.InsertChunks([], requestToken);
                     writer.InsertSymbols([], requestToken);
                     writer.InsertReferences([], requestToken);
-                    writer.InsertIssues(fileId, [IndexCommandRunner.BuildNullByteIssue(ex)]);
+                    InsertIssuesForIndexedFile(fileId, [IndexCommandRunner.BuildNullByteIssue(ex)]);
                     WriteProjectRootOnce();
                     txn.Commit();
                     ftsMutated = true;

@@ -2363,20 +2363,33 @@ public class DbWriter
     /// ファイル検証問題を挿入する。
     /// </summary>
     public void InsertIssues(long fileId, IReadOnlyList<CodeIndex.Models.FileIssue> issues)
+        => InsertIssues(fileId, issues, deleteExisting: true);
+
+    /// <summary>
+    /// Insert validation issues for a newly-created file row that cannot have existing issues.
+    /// 既存 issue が存在しない新規ファイル行向けに検証問題を挿入する。
+    /// </summary>
+    public void InsertIssuesForNewFile(long fileId, IReadOnlyList<CodeIndex.Models.FileIssue> issues)
+        => InsertIssues(fileId, issues, deleteExisting: false);
+
+    private void InsertIssues(long fileId, IReadOnlyList<CodeIndex.Models.FileIssue> issues, bool deleteExisting)
     {
-        // Always delete existing issues — if the file is now clean, old issues must be removed
-        // 常に既存問題を削除 — ファイルが修正済みなら古い問題を残さない
-        var delCmd = RentCommand(
-            "DELETE FROM file_issues WHERE file_id = @fid",
-            static c => c.Parameters.Add("@fid", SqliteType.Integer));
-        try
+        if (deleteExisting)
         {
-            delCmd.Parameters["@fid"].Value = fileId;
-            delCmd.ExecuteNonQuery();
-        }
-        finally
-        {
-            ReleaseCommand(delCmd);
+            // Always delete existing issues — if the file is now clean, old issues must be removed.
+            // 常に既存問題を削除 — ファイルが修正済みなら古い問題を残さない。
+            var delCmd = RentCommand(
+                "DELETE FROM file_issues WHERE file_id = @fid",
+                static c => c.Parameters.Add("@fid", SqliteType.Integer));
+            try
+            {
+                delCmd.Parameters["@fid"].Value = fileId;
+                delCmd.ExecuteNonQuery();
+            }
+            finally
+            {
+                ReleaseCommand(delCmd);
+            }
         }
 
         if (issues.Count == 0) return;
