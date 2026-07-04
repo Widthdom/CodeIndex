@@ -2062,7 +2062,9 @@ public static partial class IndexCommandRunner
         // degraded rather than authoritative. Interrupted runs also stay unstamped because
         // ClearReadyFlags() ran at the start.
         // errors==0 の成功 run のみマーカーを打つ。途中失敗は未 stamp のままで縮退扱い。
-        var hasCSharpFilesAfter = writer.HasAnyFilesWithLanguage("csharp");
+        var hasCSharpFilesAfter = startedWithNoIndexedFiles && !scanResult.HadErrors && errors == 0
+            ? languageCounts.ContainsKey("csharp")
+            : writer.HasAnyFilesWithLanguage("csharp");
         var graphTableAvailableAfter = false;
         var issuesTableAvailableAfter = false;
         var csharpSymbolNameReadyAfter = !hasCSharpFilesAfter;

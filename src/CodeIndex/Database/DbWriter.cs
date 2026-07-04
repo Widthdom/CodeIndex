@@ -32,6 +32,7 @@ public class DbWriter
     private readonly Action? _markWriteWork;
     private static readonly AsyncLocal<Action?> ScopedFoldBackfillRowUpdatedForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedFoldBackfillVerificationForTesting = new();
+    private static readonly AsyncLocal<Action<string>?> ScopedLanguagePresenceCheckForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedBatchRowSkipWarningForTesting = new();
     private static readonly AsyncLocal<Action<DbWriterBatchProgress>?> ScopedBatchProgressCheckpointForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedMutualRecursionRefreshForTesting = new();
@@ -45,6 +46,12 @@ public class DbWriter
     {
         get => ScopedFoldBackfillVerificationForTesting.Value;
         set => ScopedFoldBackfillVerificationForTesting.Value = value;
+    }
+
+    internal static Action<string>? LanguagePresenceCheckForTesting
+    {
+        get => ScopedLanguagePresenceCheckForTesting.Value;
+        set => ScopedLanguagePresenceCheckForTesting.Value = value;
     }
 
     internal static Action<string>? BatchRowSkipWarningForTesting
@@ -1060,6 +1067,7 @@ public class DbWriter
     /// </summary>
     public bool HasAnyFilesWithLanguage(string lang)
     {
+        LanguagePresenceCheckForTesting?.Invoke(lang);
         var cmd = RentCommand(
             "SELECT 1 FROM files WHERE lang = @lang LIMIT 1",
             static c => c.Parameters.Add("@lang", SqliteType.Text));

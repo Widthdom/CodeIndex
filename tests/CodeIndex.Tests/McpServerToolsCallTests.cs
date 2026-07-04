@@ -6068,6 +6068,7 @@ public partial class McpServerTests
         var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_fresh_no_ts_augmentation");
         var rebuiltTypeScriptAugmentation = false;
         var foldBackfillVerifications = 0;
+        var languagePresenceChecks = 0;
         try
         {
             File.WriteAllText(Path.Combine(fixtureDir, "tool.py"), "def run():\n    return 1\n");
@@ -6075,12 +6076,14 @@ public partial class McpServerTests
 
             McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = () => rebuiltTypeScriptAugmentation = true;
             DbWriter.FoldBackfillVerificationForTesting = () => foldBackfillVerifications++;
+            DbWriter.LanguagePresenceCheckForTesting = _ => languagePresenceChecks++;
 
             var response = CallIndex(server, fixtureDir);
 
             Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
             Assert.False(rebuiltTypeScriptAugmentation);
             Assert.Equal(1, foldBackfillVerifications);
+            Assert.Equal(0, languagePresenceChecks);
             using var db = new DbContext(dbPath);
             db.TryMigrateForRead();
             Assert.Equal(
@@ -6091,6 +6094,7 @@ public partial class McpServerTests
         {
             McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = null;
             DbWriter.FoldBackfillVerificationForTesting = null;
+            DbWriter.LanguagePresenceCheckForTesting = null;
             TestProjectHelper.DeleteDirectory(fixtureDir);
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }

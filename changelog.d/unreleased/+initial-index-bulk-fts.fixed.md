@@ -16,6 +16,7 @@ affected:
 - **CLI fresh indexes skip stale purge queries** — CLI full scans that start from an empty database now skip retained-set construction, stale-file purge, and unsupported-reference purge while still preserving scan checkpoint cleanup semantics.
 - **Fresh non-TypeScript indexes skip augmentation rebuilds** — CLI and MCP fresh indexes now stamp the current TypeScript augmentation contract without running the augmentation DELETE/SELECT rebuild when the scan found no TypeScript files.
 - **Fresh full scans avoid duplicate fold-readiness verification** — CLI and MCP fresh/rebuild-style full scans now rely on the guarded `MarkFoldReady` re-verification instead of running an identical folded-column table scan immediately before it.
+- **Fresh full scans reuse scan language metadata** — CLI and MCP successful fresh indexes now use the scan target language set for C#/SQL finalizer readiness instead of probing the newly-written `files` table.
 
 ## 日本語
 
@@ -27,3 +28,4 @@ affected:
 - **CLI fresh index で stale purge query を省きます** — 空DBから始まる CLI full scan は、scan checkpoint の保存/削除 semantics を保ったまま、retained set 構築、stale file purge、unsupported reference purge をスキップするようになりました。
 - **TypeScript を含まない fresh index で augmentation rebuild を省きます** — CLI と MCP の fresh index は、scan で TypeScript ファイルが見つからなかった場合、augmentation の DELETE/SELECT rebuild を実行せず current contract だけを stamp するようになりました。
 - **fresh full scan の fold-readiness 重複検証を省きます** — CLI と MCP の fresh / rebuild 相当の full scan は、直後に guarded な `MarkFoldReady` 再検証を行うため、その前の同種の folded-column 全表 scan を省くようになりました。
+- **fresh full scan で scan 済みの言語 metadata を再利用します** — CLI と MCP の成功した fresh index は、C# / SQL finalizer readiness の判定に新しく書いた `files` table への probe ではなく scan target の言語集合を使うようになりました。

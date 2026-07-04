@@ -5620,6 +5620,7 @@ public partial class McpServer
         var files = scanResult.Files;
         var fileTargets = new CSharpStaticInterfacePrepass.FileTarget[files.Count];
         var csharpPrepassTargets = new List<CSharpStaticInterfacePrepass.FileTarget>();
+        var hasSqlTargets = false;
         var hasTypeScriptTargets = false;
         var hasGeneratedCodeExtractionSuppressionPatterns = indexer.HasGeneratedCodeExtractionSuppressionPatterns;
         for (var i = 0; i < files.Count; i++)
@@ -5635,6 +5636,8 @@ public partial class McpServer
             fileTargets[i] = target;
             if (language == "csharp")
                 csharpPrepassTargets.Add(target);
+            else if (language == "sql")
+                hasSqlTargets = true;
             else if (language == "typescript")
                 hasTypeScriptTargets = true;
         }
@@ -5970,8 +5973,13 @@ public partial class McpServer
         // path is no longer accurate. Bits are only stamped when every file committed without
         // throwing, so a partial failure leaves trust degraded and `validate` still surfaces it.
         // MCP index は CLI と同等に file_issues を永続化するため、成功時は graph / issues の両方を stamp する。
-        var hasCSharpFilesAfter = writer.HasAnyFilesWithLanguage("csharp");
-        var hasSqlFilesAfter = writer.HasAnyFilesWithLanguage("sql");
+        var useFreshTargetLanguages = startedWithNoIndexedFiles && !scanResult.HadErrors && errors == 0;
+        var hasCSharpFilesAfter = useFreshTargetLanguages
+            ? csharpPrepassTargets.Count > 0
+            : writer.HasAnyFilesWithLanguage("csharp");
+        var hasSqlFilesAfter = useFreshTargetLanguages
+            ? hasSqlTargets
+            : writer.HasAnyFilesWithLanguage("sql");
         var csharpSymbolNameReadyAfter = !hasCSharpFilesAfter;
         var csharpMetadataTargetReadyAfter = !hasCSharpFilesAfter;
         var sqlGraphContractReadyAfter = !hasSqlFilesAfter;
