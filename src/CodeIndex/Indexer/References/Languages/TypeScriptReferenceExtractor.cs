@@ -110,19 +110,15 @@ internal static class TypeScriptReferenceExtractor
             if (!match.Success)
                 continue;
 
-            foreach (var alias in ExtractNamedImportExportAliases(match.Groups["body"].Value))
-            {
-                AddNamespaceAliasBinding(
-                    bindings,
-                    preparedLines,
-                    alias,
-                    match.Groups["module"].Value,
-                    index + 1,
-                    null,
-                    braceDepths ??= BuildBraceDepthsBeforeLine(preparedLines),
-                    localDeclarationLinesByName ??= BuildLocalDeclarationLinesByName(preparedLines),
-                    parameterShadowRangesByAlias ??= new Dictionary<string, IReadOnlyList<LineRange>>(StringComparer.Ordinal));
-            }
+            AddNamedImportExportAliasBindings(
+                bindings,
+                preparedLines,
+                match.Groups["body"].Value,
+                match.Groups["module"].Value,
+                index + 1,
+                ref braceDepths,
+                ref localDeclarationLinesByName,
+                ref parameterShadowRangesByAlias);
         }
 
         return bindings;
@@ -164,9 +160,16 @@ internal static class TypeScriptReferenceExtractor
         bindings.Add(new NamespaceAliasBinding(alias, module, bindingLine, shadowLine, endLine, scopedShadowRanges));
     }
 
-    private static List<string> ExtractNamedImportExportAliases(string body)
+    private static void AddNamedImportExportAliasBindings(
+        List<NamespaceAliasBinding> bindings,
+        IReadOnlyList<string> preparedLines,
+        string body,
+        string module,
+        int bindingLine,
+        ref int[]? braceDepths,
+        ref IReadOnlyDictionary<string, List<int>>? localDeclarationLinesByName,
+        ref Dictionary<string, IReadOnlyList<LineRange>>? parameterShadowRangesByAlias)
     {
-        var aliases = new List<string>();
         var remaining = body.AsSpan();
         while (true)
         {
@@ -185,15 +188,24 @@ internal static class TypeScriptReferenceExtractor
             var asIndex = item.LastIndexOf(" as ".AsSpan());
             var alias = asIndex >= 0 ? item[(asIndex + 4)..].Trim() : item;
             if (IsTypeScriptIdentifier(alias))
-                aliases.Add(alias.ToString());
+            {
+                AddNamespaceAliasBinding(
+                    bindings,
+                    preparedLines,
+                    alias.ToString(),
+                    module,
+                    bindingLine,
+                    null,
+                    braceDepths ??= BuildBraceDepthsBeforeLine(preparedLines),
+                    localDeclarationLinesByName ??= BuildLocalDeclarationLinesByName(preparedLines),
+                    parameterShadowRangesByAlias ??= new Dictionary<string, IReadOnlyList<LineRange>>(StringComparer.Ordinal));
+            }
 
             if (commaIndex < 0)
                 break;
 
             remaining = remaining[(commaIndex + 1)..];
         }
-
-        return aliases;
     }
 
     public static void EmitTypePositionReferences(
