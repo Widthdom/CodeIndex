@@ -26,6 +26,9 @@ internal static class StructuralLineMasker
 
     private sealed class CharLiteralFrame : ScannerFrame;
 
+    private static readonly BlockCommentFrame SharedBlockCommentFrame = new();
+    private static readonly CharLiteralFrame SharedCharLiteralFrame = new();
+
     private sealed class StringFrame : ScannerFrame
     {
         public required StringKind Kind { get; init; }
@@ -333,7 +336,7 @@ internal static class StructuralLineMasker
                         if (StartsWith(line, searchStart, "/*"))
                         {
                             MaskRange(searchStart, 2);
-                            frames.Push(new BlockCommentFrame());
+                            frames.Push(SharedBlockCommentFrame);
                             searchStart += 2;
                             continue;
                         }
@@ -348,7 +351,7 @@ internal static class StructuralLineMasker
 
                         if (line[searchStart] == '\'')
                         {
-                            frames.Push(new CharLiteralFrame());
+                            frames.Push(SharedCharLiteralFrame);
                             searchStart++;
                             continue;
                         }
@@ -387,7 +390,7 @@ internal static class StructuralLineMasker
                 if (StartsWith(line, searchStart, "/*"))
                 {
                     MaskRange(searchStart, 2);
-                    frames.Push(new BlockCommentFrame());
+                    frames.Push(SharedBlockCommentFrame);
                     searchStart += 2;
                     continue;
                 }
@@ -402,7 +405,7 @@ internal static class StructuralLineMasker
 
                 if (line[searchStart] == '\'')
                 {
-                    frames.Push(new CharLiteralFrame());
+                    frames.Push(SharedCharLiteralFrame);
                     searchStart++;
                     continue;
                 }
