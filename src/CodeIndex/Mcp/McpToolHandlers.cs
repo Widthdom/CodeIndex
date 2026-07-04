@@ -5595,11 +5595,13 @@ public partial class McpServer
         writer.ClearHotspotFamilyReady();
         writer.ClearMetadataTargetReady();
 
-        var hadCSharpStaticInterfaceContractsBeforePurge =
-            writer.LoadCSharpStaticInterfaceContractSymbols().Count > 0;
+        var hadCSharpStaticInterfaceContractsBeforePurge = !startedWithNoIndexedFiles
+            && writer.LoadCSharpStaticInterfaceContractSymbols().Count > 0;
 
         // Purge stale files / 古いファイルをパージ
-        var purged = writer.PurgeStaleFiles(projectPath, beforeCommit: RequireTypeScriptAugmentationRefresh);
+        var purged = startedWithNoIndexedFiles
+            ? 0
+            : writer.PurgeStaleFiles(projectPath, beforeCommit: RequireTypeScriptAugmentationRefresh);
         if (purged > 0)
         {
             csharpMetadataTargetsNeedRefresh = true;
@@ -5608,7 +5610,8 @@ public partial class McpServer
         }
 
         // Purge references for languages no longer graph-supported / グラフ非対応になった言語の参照をパージ
-        writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
+        if (!startedWithNoIndexedFiles)
+            writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
 
         // Scan and index / スキャン・インデックス
         var scanResult = indexer.ScanFilesDetailed(cancellationToken: requestToken);
