@@ -213,12 +213,11 @@ public class ProgramRunnerTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var directory = Path.Combine(Path.GetTempPath(), $"cdidx_install_probe_cleanup_{Guid.NewGuid():N}");
+            var directory = TestProjectHelper.CreateTempProject("cdidx_install_probe_cleanup");
             var originalError = Console.Error;
             using var stderr = new StringWriter(CultureInfo.InvariantCulture);
             try
             {
-                Directory.CreateDirectory(directory);
                 ProgramRunner.DeleteInstallDirectoryWriteProbeForTesting = _ => throw new IOException("simulated probe cleanup failure");
                 Console.SetError(stderr);
 
@@ -303,10 +302,9 @@ public class ProgramRunnerTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_test_extractor_{Guid.NewGuid():N}");
+            var tempDir = TestProjectHelper.CreateTempProject("cdidx_test_extractor");
             try
             {
-                Directory.CreateDirectory(tempDir);
                 var file = Path.Combine(tempDir, "app.py");
                 File.WriteAllText(file, "def hello():\n    pass\n");
 
@@ -333,10 +331,9 @@ public class ProgramRunnerTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_test_extractor_large_source_{Guid.NewGuid():N}");
+            var tempDir = TestProjectHelper.CreateTempProject("cdidx_test_extractor_large_source");
             try
             {
-                Directory.CreateDirectory(tempDir);
                 var file = Path.Combine(tempDir, "large.py");
                 File.WriteAllText(file, new string('x', (int)ProgramRunner.TestExtractorMaxInputBytes + 1));
 
@@ -364,10 +361,9 @@ public class ProgramRunnerTests
 
         lock (TestConsoleLock.Gate)
         {
-            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_test_extractor_growing_source_{Guid.NewGuid():N}");
+            var tempDir = TestProjectHelper.CreateTempProject("cdidx_test_extractor_growing_source");
             try
             {
-                Directory.CreateDirectory(tempDir);
                 var file = Path.Combine(tempDir, "growing.py");
                 File.WriteAllText(file, new string('x', (int)ProgramRunner.TestExtractorMaxInputBytes - 1));
                 ProgramRunner.TestExtractorFileLengthCheckedForTesting = checkedPath =>
@@ -398,10 +394,9 @@ public class ProgramRunnerTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_test_extractor_large_expect_{Guid.NewGuid():N}");
+            var tempDir = TestProjectHelper.CreateTempProject("cdidx_test_extractor_large_expect");
             try
             {
-                Directory.CreateDirectory(tempDir);
                 var file = Path.Combine(tempDir, "app.py");
                 var expect = Path.Combine(tempDir, "expected.json");
                 File.WriteAllText(file, "def hello():\n    pass\n");
@@ -428,10 +423,9 @@ public class ProgramRunnerTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_test_extractor_deep_expect_{Guid.NewGuid():N}");
+            var tempDir = TestProjectHelper.CreateTempProject("cdidx_test_extractor_deep_expect");
             try
             {
-                Directory.CreateDirectory(tempDir);
                 var file = Path.Combine(tempDir, "app.py");
                 var expect = Path.Combine(tempDir, "expected.json");
                 File.WriteAllText(file, "def hello():\n    pass\n");
@@ -929,7 +923,7 @@ public class ProgramRunnerTests
     public void Run_QueryTraceFile_AppendsDailyJsonl()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("query-trace-file");
-        var logRoot = Path.Combine(Path.GetTempPath(), $"cdidx_query_trace_{Guid.NewGuid():N}");
+        var logRoot = TestProjectHelper.CreateTempProject("cdidx_query_trace");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
@@ -962,10 +956,9 @@ public class ProgramRunnerTests
     public void Run_QueryTraceFile_PrunesToThirtyTraceFiles()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("query-trace-prune");
-        var logRoot = Path.Combine(Path.GetTempPath(), $"cdidx_query_trace_prune_{Guid.NewGuid():N}");
+        var logRoot = TestProjectHelper.CreateTempProject("cdidx_query_trace_prune");
         try
         {
-            Directory.CreateDirectory(logRoot);
             for (var i = 0; i < 35; i++)
             {
                 var date = new DateTime(2024, 1, 1).AddDays(i);
@@ -1305,7 +1298,7 @@ public class ProgramRunnerTests
     [Fact]
     public void UpdateChecker_Check_ReportsNewerRelease()
     {
-        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        var cachePath = TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json");
         try
         {
             var result = UpdateChecker.Check(
@@ -1327,7 +1320,7 @@ public class ProgramRunnerTests
     [Fact]
     public void UpdateChecker_Check_IgnoresOversizedCache()
     {
-        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        var cachePath = TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json");
         try
         {
             File.WriteAllText(cachePath, new string('x', UpdateChecker.MaxUpdateCheckCacheBytes + 1));
@@ -1351,7 +1344,7 @@ public class ProgramRunnerTests
     [Fact]
     public void UpdateChecker_Check_IgnoresOverDepthCache()
     {
-        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        var cachePath = TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json");
         try
         {
             var depth = UpdateChecker.MaxUpdateCheckCacheJsonDepth + 8;
@@ -1378,8 +1371,8 @@ public class ProgramRunnerTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var cachePathWithoutDiagnostics = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
-            var cachePathWithDiagnostics = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+            var cachePathWithoutDiagnostics = TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json");
+            var cachePathWithDiagnostics = TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json");
             using var env = EnvironmentVariableScope.Capture(UpdateChecker.DiagnosticsEnvVar);
             var diagnostics = new List<string>();
             UpdateChecker.CacheDiagnosticSinkForTesting = diagnostics.Add;
@@ -1425,8 +1418,7 @@ public class ProgramRunnerTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_dir_{Guid.NewGuid():N}");
-            Directory.CreateDirectory(cachePath);
+            var cachePath = TestProjectHelper.CreateTempProject("cdidx_update_check_dir");
             using var env = EnvironmentVariableScope.Capture(UpdateChecker.DiagnosticsEnvVar);
             env.Set(UpdateChecker.DiagnosticsEnvVar, "1");
             var diagnostics = new List<string>();
@@ -1455,7 +1447,7 @@ public class ProgramRunnerTests
     [Fact]
     public void UpdateChecker_Check_TransientFailureDoesNotRefreshStaleCache_Issue3822()
     {
-        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        var cachePath = TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json");
         var checkedAt = DateTimeOffset.Parse("2025-12-31T00:00:00Z", CultureInfo.InvariantCulture);
         var originalCache =
             $$"""{"checked_at":"{{checkedAt.UtcDateTime.ToString("O", CultureInfo.InvariantCulture)}}","latest_tag":"v9.9.9"}""";
@@ -1484,7 +1476,7 @@ public class ProgramRunnerTests
     [Fact]
     public void UpdateChecker_Check_NullFetchDoesNotCreateCache_Issue3822()
     {
-        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        var cachePath = TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json");
         try
         {
             var result = UpdateChecker.Check(
@@ -1550,7 +1542,7 @@ public class ProgramRunnerTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+            var cachePath = TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json");
             var now = new DateTimeOffset(2026, 6, 20, 12, 0, 0, TimeSpan.Zero);
             var expectedRetryAt = now.UtcDateTime.AddSeconds(90);
             var previousTimeProvider = UpdateChecker.TimeProvider;
@@ -1595,7 +1587,7 @@ public class ProgramRunnerTests
     [Fact]
     public void UpdateChecker_Check_PassesCallerCancellationTokenToFetch()
     {
-        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        var cachePath = TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json");
         using var cts = new CancellationTokenSource();
         CancellationToken observedToken = default;
         try
@@ -1623,7 +1615,7 @@ public class ProgramRunnerTests
     [Fact]
     public void UpdateChecker_Check_PropagatesCallerCancellation()
     {
-        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        var cachePath = TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json");
         using var cts = new CancellationTokenSource();
         cts.Cancel();
         try
@@ -1645,7 +1637,7 @@ public class ProgramRunnerTests
     [Fact]
     public void UpdateChecker_Check_ClassifiesTimeoutFailureWithoutRawMessage_Issue3453()
     {
-        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        var cachePath = TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json");
         try
         {
             var result = UpdateChecker.Check(
@@ -1668,7 +1660,7 @@ public class ProgramRunnerTests
     [Fact]
     public void UpdateChecker_Check_ClassifiesNetworkFailureWithoutRawMessage_Issue3453()
     {
-        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        var cachePath = TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json");
         try
         {
             var result = UpdateChecker.Check(
@@ -1691,7 +1683,7 @@ public class ProgramRunnerTests
     [Fact]
     public void UpdateChecker_Check_SerializesStructuredFailureFields_Issue3453()
     {
-        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        var cachePath = TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json");
         try
         {
             var result = UpdateChecker.Check(
@@ -1757,7 +1749,7 @@ public class ProgramRunnerTests
     [Fact]
     public void VerifyFileSha256_AcceptsExpectedDigest()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"cdidx-install-checksum-{Guid.NewGuid():N}.sh");
+        var path = TestProjectHelper.CreateTempFilePath("cdidx-install-checksum", ".sh");
         var content = Encoding.UTF8.GetBytes("#!/bin/sh\necho ok\n");
         File.WriteAllBytes(path, content);
         try
@@ -1775,7 +1767,7 @@ public class ProgramRunnerTests
     [Fact]
     public void VerifyFileSha256_RejectsMismatchedDigest()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"cdidx-install-checksum-{Guid.NewGuid():N}.sh");
+        var path = TestProjectHelper.CreateTempFilePath("cdidx-install-checksum", ".sh");
         File.WriteAllText(path, "#!/bin/sh\necho ok\n");
         try
         {
@@ -1850,8 +1842,7 @@ public class ProgramRunnerTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var root = Path.Combine(Path.GetTempPath(), $"cdidx_installer_start_{Guid.NewGuid():N}");
-            Directory.CreateDirectory(root);
+            var root = TestProjectHelper.CreateTempProject("cdidx_installer_start");
             try
             {
                 var startInfo = new ProcessStartInfo
@@ -1884,8 +1875,7 @@ public class ProgramRunnerTests
 
         lock (TestConsoleLock.Gate)
         {
-            var root = Path.Combine(Path.GetTempPath(), $"cdidx_installer_timeout_{Guid.NewGuid():N}");
-            Directory.CreateDirectory(root);
+            var root = TestProjectHelper.CreateTempProject("cdidx_installer_timeout");
             var script = Path.Combine(root, "install.sh");
             try
             {
@@ -1919,8 +1909,7 @@ sleep 5
 
         lock (TestConsoleLock.Gate)
         {
-            var root = Path.Combine(Path.GetTempPath(), $"cdidx_installer_cancel_{Guid.NewGuid():N}");
-            Directory.CreateDirectory(root);
+            var root = TestProjectHelper.CreateTempProject("cdidx_installer_cancel");
             var script = Path.Combine(root, "install.sh");
             var pidFile = Path.Combine(root, "installer.pid");
             try
@@ -1956,8 +1945,7 @@ sleep 30
 
         lock (TestConsoleLock.Gate)
         {
-            var root = Path.Combine(Path.GetTempPath(), $"cdidx_installer_output_{Guid.NewGuid():N}");
-            Directory.CreateDirectory(root);
+            var root = TestProjectHelper.CreateTempProject("cdidx_installer_output");
             var script = Path.Combine(root, "install.sh");
             try
             {
@@ -1999,8 +1987,7 @@ exit 0
 
         lock (TestConsoleLock.Gate)
         {
-            var root = Path.Combine(Path.GetTempPath(), $"cdidx_installer_tail_{Guid.NewGuid():N}");
-            Directory.CreateDirectory(root);
+            var root = TestProjectHelper.CreateTempProject("cdidx_installer_tail");
             var script = Path.Combine(root, "install.sh");
             try
             {
@@ -2047,7 +2034,7 @@ exit 7
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture("XDG_CACHE_HOME", UpdateChecker.DisableEnvVar);
-            var cacheRoot = Path.Combine(Path.GetTempPath(), $"cdidx_update_cache_{Guid.NewGuid():N}");
+            var cacheRoot = TestProjectHelper.CreateTempProject("cdidx_update_cache");
             env.Set("XDG_CACHE_HOME", cacheRoot);
             env.Set(UpdateChecker.DisableEnvVar, null);
             WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
@@ -2083,7 +2070,7 @@ exit 7
     [Fact]
     public async Task DownloadInstallerScriptAsync_CancelsStalledBody()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"cdidx-install-timeout-{Guid.NewGuid():N}.sh");
+        var path = TestProjectHelper.CreateTempFilePath("cdidx-install-timeout", ".sh");
         using var client = new HttpClient(new StaticResponseHandler(new StalledContent()))
         {
             Timeout = Timeout.InfiniteTimeSpan,
@@ -2113,7 +2100,7 @@ exit 7
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture("XDG_CACHE_HOME", UpdateChecker.DisableEnvVar);
-            var cacheRoot = Path.Combine(Path.GetTempPath(), $"cdidx_update_cache_{Guid.NewGuid():N}");
+            var cacheRoot = TestProjectHelper.CreateTempProject("cdidx_update_cache");
             env.Set("XDG_CACHE_HOME", cacheRoot);
             env.Set(UpdateChecker.DisableEnvVar, null);
             WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
@@ -2164,7 +2151,7 @@ exit 7
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture("XDG_CACHE_HOME", UpdateChecker.DisableEnvVar);
-            var cacheRoot = Path.Combine(Path.GetTempPath(), $"cdidx_update_cache_{Guid.NewGuid():N}");
+            var cacheRoot = TestProjectHelper.CreateTempProject("cdidx_update_cache");
             env.Set("XDG_CACHE_HOME", cacheRoot);
             env.Set(UpdateChecker.DisableEnvVar, null);
             WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
@@ -2223,7 +2210,7 @@ exit 0
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture("XDG_CACHE_HOME", UpdateChecker.DisableEnvVar);
-            var cacheRoot = Path.Combine(Path.GetTempPath(), $"cdidx_update_cache_{Guid.NewGuid():N}");
+            var cacheRoot = TestProjectHelper.CreateTempProject("cdidx_update_cache");
             env.Set("XDG_CACHE_HOME", cacheRoot);
             env.Set(UpdateChecker.DisableEnvVar, null);
             WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
@@ -2286,7 +2273,7 @@ exit 7
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture("XDG_CACHE_HOME", UpdateChecker.DisableEnvVar);
-            var cacheRoot = Path.Combine(Path.GetTempPath(), $"cdidx_update_cache_{Guid.NewGuid():N}");
+            var cacheRoot = TestProjectHelper.CreateTempProject("cdidx_update_cache");
             env.Set("XDG_CACHE_HOME", cacheRoot);
             env.Set(UpdateChecker.DisableEnvVar, null);
             WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
@@ -2336,7 +2323,7 @@ exit 7
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture("XDG_CACHE_HOME", UpdateChecker.DisableEnvVar);
-            var cacheRoot = Path.Combine(Path.GetTempPath(), $"cdidx_update_cache_{Guid.NewGuid():N}");
+            var cacheRoot = TestProjectHelper.CreateTempProject("cdidx_update_cache");
             env.Set("XDG_CACHE_HOME", cacheRoot);
             env.Set(UpdateChecker.DisableEnvVar, null);
             WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
@@ -2391,7 +2378,7 @@ exit 7
     {
         using var env = EnvironmentVariableScope.Capture(UpdateChecker.DisableEnvVar);
         env.Set(UpdateChecker.DisableEnvVar, null);
-        var cacheRoot = Path.Combine(Path.GetTempPath(), $"cdidx_update_cache_private_{Guid.NewGuid():N}");
+        var cacheRoot = TestProjectHelper.CreateTempProject("cdidx_update_cache_private");
         var cachePath = Path.Combine(cacheRoot, "cdidx", "update-check.json");
         try
         {
@@ -2473,7 +2460,7 @@ exit 7
     [Fact]
     public void TryCheckInstallDirectoryWritable_FilePathReportsDiagnostic_Issue3831()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"cdidx_install_dir_file_{Guid.NewGuid():N}");
+        var path = TestProjectHelper.CreateTempFilePath("cdidx_install_dir_file", string.Empty);
         try
         {
             File.WriteAllText(path, "");
@@ -2507,7 +2494,7 @@ exit 7
         if (OperatingSystem.IsWindows())
             return;
 
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_install_dir_link_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_install_dir_link");
         var target = Path.Combine(root, "target");
         var link = Path.Combine(root, "link");
         try
@@ -2534,10 +2521,9 @@ exit 7
         if (OperatingSystem.IsWindows())
             return;
 
-        var path = Path.Combine(Path.GetTempPath(), $"cdidx_install_dir_mode_{Guid.NewGuid():N}");
+        var path = TestProjectHelper.CreateTempProject("cdidx_install_dir_mode");
         try
         {
-            Directory.CreateDirectory(path);
             File.SetUnixFileMode(
                 path,
                 DataDirectorySecurity.PrivateDirectoryMode | UnixFileMode.GroupWrite);
@@ -2583,7 +2569,7 @@ exit 7
     [Fact]
     public void TryValidateUpgradeInstallerDirectoryCleanupTarget_RejectsUnexpectedPrefix_Issue3659()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"cdidx-other-{Guid.NewGuid():N}");
+        var path = TestProjectHelper.CreateTempFilePath("cdidx-other", string.Empty);
 
         var valid = ProgramRunner.TryValidateUpgradeInstallerDirectoryCleanupTarget(
             path,
@@ -2600,9 +2586,9 @@ exit 7
         if (OperatingSystem.IsWindows())
             return;
 
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_cleanup_link_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_cleanup_link");
         var target = Path.Combine(root, "target");
-        var link = Path.Combine(Path.GetTempPath(), $"cdidx-install-link-{Guid.NewGuid():N}");
+        var link = TestProjectHelper.CreateTempFilePath("cdidx-install-link", string.Empty);
         try
         {
             Directory.CreateDirectory(target);
@@ -2776,7 +2762,7 @@ exit 7
         {
             Timeout = Timeout.InfiniteTimeSpan,
         };
-        var scriptPath = Path.Combine(Path.GetTempPath(), $"cdidx_install_header_{Guid.NewGuid():N}.sh");
+        var scriptPath = TestProjectHelper.CreateTempFilePath("cdidx_install_header", ".sh");
         try
         {
             await ProgramRunner.DownloadInstallerScriptAsync(
@@ -2916,7 +2902,7 @@ exit 7
         env.Set("XDG_STATE_HOME", null);
         env.Set("XDG_CACHE_HOME", null);
         env.Set("XDG_RUNTIME_DIR", null);
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_xdg_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_global_tool_log_xdg");
         var selected = Path.Combine(root, directoryName);
         try
         {
@@ -2940,7 +2926,7 @@ exit 7
             "XDG_STATE_HOME",
             "XDG_CACHE_HOME",
             "XDG_RUNTIME_DIR");
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_xdg_precedence_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_global_tool_log_xdg_precedence");
         try
         {
             env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", null);
@@ -2965,8 +2951,7 @@ exit 7
             "CDIDX_FORCE_GLOBAL_TOOL_LOG",
             "CDIDX_DISABLE_PERSISTENT_LOG",
             "CDIDX_GLOBAL_TOOL_LOG_DIR");
-        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_fault_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(logDir);
+        var logDir = TestProjectHelper.CreateTempProject("cdidx_global_tool_log_fault");
         var writer = new TrackingStreamWriter();
 
         try
@@ -3011,8 +2996,7 @@ exit 7
     [Fact]
     public void Run_ForcedGlobalToolLogging_WritesLifecycleAndMirrorsStderr()
     {
-        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(logDir);
+        var logDir = TestProjectHelper.CreateTempProject("cdidx_global_tool_log");
         using var env = EnvironmentVariableScope.Capture(
             "CDIDX_FORCE_GLOBAL_TOOL_LOG",
             "CDIDX_DISABLE_PERSISTENT_LOG",
@@ -3048,8 +3032,7 @@ exit 7
     [Fact]
     public void Run_ForcedGlobalToolLogging_JsonFormatWritesJsonLines()
     {
-        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_json_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(logDir);
+        var logDir = TestProjectHelper.CreateTempProject("cdidx_global_tool_log_json");
         using var env = EnvironmentVariableScope.Capture(
             "CDIDX_FORCE_GLOBAL_TOOL_LOG",
             "CDIDX_DISABLE_PERSISTENT_LOG",
@@ -3293,8 +3276,7 @@ exit 7
         if (OperatingSystem.IsWindows())
             return;
 
-        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_permissions_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(logDir);
+        var logDir = TestProjectHelper.CreateTempProject("cdidx_global_tool_log_permissions");
         using var env = EnvironmentVariableScope.Capture(
             "CDIDX_FORCE_GLOBAL_TOOL_LOG",
             "CDIDX_DISABLE_PERSISTENT_LOG",
@@ -3336,8 +3318,7 @@ exit 7
     [Fact]
     public void Run_ForcedGlobalToolLogging_WritesUnhandledExceptionChain()
     {
-        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_exception_chain_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(logDir);
+        var logDir = TestProjectHelper.CreateTempProject("cdidx_global_tool_log_exception_chain");
         using var env = EnvironmentVariableScope.Capture(
             "CDIDX_FORCE_GLOBAL_TOOL_LOG",
             "CDIDX_DISABLE_PERSISTENT_LOG",
@@ -3378,8 +3359,7 @@ exit 7
     [Fact]
     public void Run_ForcedGlobalToolLogging_PrunesToThirtyDailyFiles()
     {
-        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_prune_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(logDir);
+        var logDir = TestProjectHelper.CreateTempProject("cdidx_global_tool_log_prune");
         using var env = EnvironmentVariableScope.Capture(
             "CDIDX_FORCE_GLOBAL_TOOL_LOG",
             "CDIDX_DISABLE_PERSISTENT_LOG",
@@ -3423,8 +3403,7 @@ exit 7
     [Fact]
     public void Run_ForcedGlobalToolLogging_HonorsRetainCountAndSizeRotation()
     {
-        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_rotation_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(logDir);
+        var logDir = TestProjectHelper.CreateTempProject("cdidx_global_tool_log_rotation");
         using var env = EnvironmentVariableScope.Capture(
             "CDIDX_FORCE_GLOBAL_TOOL_LOG",
             "CDIDX_DISABLE_PERSISTENT_LOG",
@@ -3491,8 +3470,7 @@ exit 7
     [Fact]
     public void Run_ForcedGlobalToolLogging_RotatesByDefaultMaxBytesEnvironmentVariable()
     {
-        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_max_bytes_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(logDir);
+        var logDir = TestProjectHelper.CreateTempProject("cdidx_global_tool_log_max_bytes");
         using var env = EnvironmentVariableScope.Capture(
             "CDIDX_FORCE_GLOBAL_TOOL_LOG",
             "CDIDX_DISABLE_PERSISTENT_LOG",
@@ -3534,8 +3512,7 @@ exit 7
     [Fact]
     public void Run_ForcedGlobalToolLogging_CanBeDisabledExplicitly()
     {
-        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_disabled_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(logDir);
+        var logDir = TestProjectHelper.CreateTempProject("cdidx_global_tool_log_disabled");
         using var env = EnvironmentVariableScope.Capture(
             "CDIDX_FORCE_GLOBAL_TOOL_LOG",
             "CDIDX_DISABLE_PERSISTENT_LOG",
@@ -3570,8 +3547,7 @@ exit 7
     [InlineData("1")]
     public void Run_ForcedGlobalToolLogging_DisableEnvAcceptsTruthyValues(string disabledValue)
     {
-        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_disabled_bool_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(logDir);
+        var logDir = TestProjectHelper.CreateTempProject("cdidx_global_tool_log_disabled_bool");
         using var env = EnvironmentVariableScope.Capture(
             "CDIDX_FORCE_GLOBAL_TOOL_LOG",
             "CDIDX_DISABLE_PERSISTENT_LOG",
@@ -4103,9 +4079,8 @@ exit 7
     {
         using var env = EnvironmentVariableScope.Capture(UpdateChecker.DisableEnvVar);
         env.Set(UpdateChecker.DisableEnvVar, null);
-        var cacheDir = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}");
+        var cacheDir = TestProjectHelper.CreateTempProject("cdidx_update_check");
         var cachePath = Path.Combine(cacheDir, "update-check.json");
-        Directory.CreateDirectory(cacheDir);
         try
         {
             File.WriteAllText(cachePath, """
@@ -4134,7 +4109,7 @@ exit 7
 
         var hint = UpdateChecker.GetNewerReleaseHint(
             "1.10.0",
-            Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json"),
+            TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json"),
             DateTimeOffset.UtcNow,
             _ => throw new InvalidOperationException("should not fetch"));
 
@@ -4152,7 +4127,7 @@ exit 7
         Assert.Throws<OperationCanceledException>(() =>
             UpdateChecker.GetNewerReleaseHint(
                 "1.10.0",
-                Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json"),
+                TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json"),
                 DateTimeOffset.UtcNow,
                 token => throw new OperationCanceledException(token),
                 cts.Token));

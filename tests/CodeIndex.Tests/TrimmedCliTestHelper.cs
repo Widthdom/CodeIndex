@@ -8,9 +8,8 @@ internal readonly record struct PublishedCli(string EntryPointPath, string Publi
 
 internal static class TrimmedCliTestHelper
 {
-    private static readonly string SharedPublishDirectory = Path.Combine(
-        Path.GetTempPath(),
-        $"cdidx_trimmed_publish_shared_{Environment.ProcessId}_{Guid.NewGuid():N}");
+    private static readonly string SharedPublishDirectory = TestProjectHelper.CreateTempProject(
+        $"cdidx_trimmed_publish_shared_{Environment.ProcessId}");
 
     private static readonly Lazy<PublishedCli> SharedTrimmedCliLazy = new(
         () => PublishTrimmedCli(SharedPublishDirectory),

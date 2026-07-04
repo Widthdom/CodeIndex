@@ -5783,8 +5783,7 @@ public sealed class InstallScriptTests : IDisposable
         // install.sh の CLI dispatcher が --doctor を run_doctor に振ることを
         // 確認する。curl と uname を PATH shim で差し替え、実ネットワークや
         // ホスト platform 依存に触れずに dispatcher を end-to-end で走らせる。
-        var shimDir = Path.Combine(Path.GetTempPath(), $"cdidx_doctor_shim_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(shimDir);
+        var shimDir = TestProjectHelper.CreateTempProject("cdidx_doctor_shim");
         try
         {
             var curlStub = Path.Combine(shimDir, "curl");

@@ -80,8 +80,7 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFilesDetailed_CancelledToken_ThrowsBeforeEnumeration()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-cancel-scan-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-cancel-scan");
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
         try
@@ -98,8 +97,7 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFilesDetailed_DanglingFileSystemEntryScanCapsCandidatesWithWarning()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-dangling-cap-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-dangling-cap");
         try
         {
             for (var i = 0; i < 5; i++)
@@ -130,8 +128,7 @@ public partial class FileIndexerTests
     [Fact]
     public void Constructor_CaseProbeAvoidsRootProbeArtifacts_Issue3174()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-probe-indexer-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-case-probe-indexer");
         try
         {
             _ = new FileIndexer(tempDir);
@@ -148,8 +145,7 @@ public partial class FileIndexerTests
     [Fact]
     public void Constructor_CaseProbePreservesExistingCdidxDirectory_Issue3174()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-probe-existing-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-case-probe-existing");
         try
         {
             var dataDirectory = Path.Combine(tempDir, CaseSensitivityProbeDirectory.DataDirectoryName);
@@ -169,8 +165,7 @@ public partial class FileIndexerTests
     [Fact]
     public void Constructor_CaseProbeFailureThrowsInsteadOfOsFallback_Issue3439()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-probe-failure-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-case-probe-failure");
         var previousProbe = FileIndexer.FileSystemIgnoreCaseProbeForTesting;
         FileIndexer.FileSystemIgnoreCaseProbeForTesting = _ => throw new IOException("probe blocked");
         try
@@ -190,8 +185,7 @@ public partial class FileIndexerTests
     [Fact]
     public void CaseSensitivityProbeDirectory_CleanupFailureDowngradesToDiagnostic_Issue3828()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-probe-cleanup-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-case-probe-cleanup");
         var previousDelete = CaseSensitivityProbeDirectory.DeleteCreatedEmptyDirectoryForTesting;
         var previousSink = CaseSensitivityProbeDirectory.CleanupDiagnosticSinkForTesting;
         var diagnostics = new List<CaseSensitivityProbeCleanupDiagnostic>();
@@ -223,14 +217,12 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-probe-boundary-{Guid.NewGuid():N}");
-        var externalDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-probe-external-{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-case-probe-boundary");
+        var externalDir = TestProjectHelper.CreateTempProject("cdidx-case-probe-external");
         var probeDirectory = Path.Combine(
             tempDir,
             CaseSensitivityProbeDirectory.DataDirectoryName,
             CaseSensitivityProbeDirectory.ProbeDirectoryName);
-        Directory.CreateDirectory(tempDir);
-        Directory.CreateDirectory(externalDir);
         var previousSink = CaseSensitivityProbeDirectory.CleanupDiagnosticSinkForTesting;
         var diagnostics = new List<CaseSensitivityProbeCleanupDiagnostic>();
         try
@@ -260,8 +252,7 @@ public partial class FileIndexerTests
     [Fact]
     public void FileWriteProbe_TryWriteAndDeleteEmptyFile_RemovesProbeAfterSuccess_Issue3689()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-write-probe-success-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-write-probe-success");
         try
         {
             var probePath = Path.Combine(tempDir, ".cdidx-write-probe.tmp");
@@ -293,8 +284,7 @@ public partial class FileIndexerTests
     [Fact]
     public void FileWriteProbe_TryWriteAndDeleteEmptyFile_ReturnsFalseForDirectoryPath_Issue3689()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-write-probe-failure-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-write-probe-failure");
         try
         {
             var result = FileWriteProbe.TryWriteAndDeleteEmptyFile(tempDir, Encoding.UTF8);
@@ -311,8 +301,7 @@ public partial class FileIndexerTests
     [Fact]
     public void FileWriteProbe_TryWriteAndDeleteEmptyFile_DoesNotOverwriteOrDeleteExistingProbe_Issue3777()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-write-probe-existing-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-write-probe-existing");
         try
         {
             var probePath = Path.Combine(tempDir, ".cdidx-write-probe.tmp");
@@ -333,8 +322,7 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFilesDetailed_CaseInsensitiveChildDirectory_SkipsCaseOnlyDuplicatePathWithWarning()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-dedupe-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-case-dedupe");
         try
         {
             var childDir = Path.Combine(tempDir, "LinkedVolume");
@@ -379,7 +367,7 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFiles_SkipsBuiltInDirectoriesWithCaseInsensitiveNames()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-skipdir-case-{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-skipdir-case");
         try
         {
             Directory.CreateDirectory(Path.Combine(tempDir, "Node_Modules"));
@@ -403,7 +391,7 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFiles_PerDirectoryCdidxIgnore_AppliesChildRulesWithoutLeakingToSiblings()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-per-dir-ignore-{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-per-dir-ignore");
         try
         {
             Directory.CreateDirectory(Path.Combine(tempDir, "left"));
@@ -433,10 +421,9 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFilesDetailed_OversizedGitignoreFailsClosedWithError()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-oversize-gitignore-{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-oversize-gitignore");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "generated.py\n" + new string('x', 300 * 1024));
             File.WriteAllText(Path.Combine(tempDir, "generated.py"), "print('generated')\n");
 
@@ -462,10 +449,9 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFilesDetailed_GitignoreRuleCountCapFailsClosedWithError()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-gitignore-rule-cap-{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-gitignore-rule-cap");
         try
         {
-            Directory.CreateDirectory(tempDir);
             var rules = Enumerable.Range(0, 4096)
                 .Select(i => $"unused{i}.py")
                 .Concat(["late.py"]);
@@ -497,8 +483,7 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-hardlink-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-hardlink");
         try
         {
             var original = Path.Combine(tempDir, "original.cs");
@@ -739,11 +724,10 @@ public partial class FileIndexerTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_{Guid.NewGuid():N}");
+            var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap");
             var originalDirectory = Environment.CurrentDirectory;
             try
             {
-                Directory.CreateDirectory(tempDir);
                 File.WriteAllText(
                     Path.Combine(tempDir, LanguageMapOverrides.WorkspaceFileName),
                     "entries:\n  - extension: \".in\"\n    language: \"text\"\n  - extension: \".kts.in\"\n    language: \"kotlin\"\n");
@@ -938,8 +922,7 @@ public partial class FileIndexerTests
     [Fact]
     public void LanguageMapOverrides_LoadEffectiveMapReloadsWhenWorkspaceConfigChanges()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_cache_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_cache");
         LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
         try
         {
@@ -965,8 +948,7 @@ public partial class FileIndexerTests
     [Fact]
     public void LanguageMapOverrides_OversizedFileSkipsOverridesWithWarning()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_caps_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_caps");
         try
         {
             var oversizedPath = Path.Combine(tempDir, "large-langmap.yaml");
@@ -992,8 +974,7 @@ public partial class FileIndexerTests
     [Fact]
     public void LanguageMapOverrides_ReadFailureSkipsOverridesWithWarning()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_read_failure_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_read_failure");
         try
         {
             var unreadablePath = Path.Combine(tempDir, "unreadable-langmap.yaml");
@@ -1027,8 +1008,7 @@ public partial class FileIndexerTests
     [Fact]
     public void LanguageMapOverrides_TooManyLinesSkipsOverridesWithWarning()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_lines_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_lines");
         try
         {
             var tooManyLinesPath = Path.Combine(tempDir, "many-lines-langmap.yaml");
@@ -1053,8 +1033,7 @@ public partial class FileIndexerTests
     [Fact]
     public void LanguageMapOverrides_OverlongLineSkipsOverridesWithWarning_Issue3706()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_line_length_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_line_length");
         try
         {
             var overlongLinePath = Path.Combine(tempDir, "long-line-langmap.yaml");
@@ -1079,8 +1058,7 @@ public partial class FileIndexerTests
     [Fact]
     public void LanguageMapOverrides_WarningsSanitizeConfigPath_Issue3819()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_sanitize_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_sanitize");
         try
         {
             var configPath = Path.Combine(tempDir, "secret-langmap.yaml");
@@ -1103,8 +1081,7 @@ public partial class FileIndexerTests
     [Fact]
     public void LanguageMapOverrides_EntryCountCapTruncatesRemainingOverridesWithWarning()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_entries_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_entries");
         try
         {
             var configPath = Path.Combine(tempDir, "langmap.yaml");
@@ -1132,8 +1109,7 @@ public partial class FileIndexerTests
     [Fact]
     public void LanguageMapOverrides_PatternCountCapTruncatesRemainingOverridesWithWarning_Issue3764()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_patterns_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_patterns");
         try
         {
             const int maxPatterns = 8192;
@@ -1160,8 +1136,7 @@ public partial class FileIndexerTests
     [Fact]
     public void LanguageMapOverrides_EntryCountCapIsPerFileSoWorkspaceOverridesStillLoad()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_per_file_entries_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_per_file_entries");
         try
         {
             var userConfigPath = Path.Combine(tempDir, "user-langmap.yaml");
@@ -1193,8 +1168,7 @@ public partial class FileIndexerTests
     [Fact]
     public void LanguageMapOverrides_BomPrefixedFileLoadsOverrides()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_bom_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_bom");
         try
         {
             var configPath = Path.Combine(tempDir, LanguageMapOverrides.WorkspaceFileName);
@@ -1218,8 +1192,7 @@ public partial class FileIndexerTests
     [InlineData("Project.vbproj")]
     public void GetProjectMarkerFingerprint_RecognizesMsbuildProjectMarkers(string markerFileName)
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_msbuild_marker");
         try
         {
             File.WriteAllText(Path.Combine(tempDir, markerFileName), "<Project />");
@@ -1238,8 +1211,7 @@ public partial class FileIndexerTests
     [Fact]
     public void GetProjectMarkerFingerprint_UsesJoinedSortedMarkerPaths()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_exact_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_msbuild_marker_exact");
         try
         {
             File.WriteAllText(Path.Combine(tempDir, "Directory.Build.props"), "<Project />");
@@ -1260,8 +1232,7 @@ public partial class FileIndexerTests
     [Fact]
     public void GetProjectMarkerFingerprint_CancelledToken_ThrowsBeforeTraversal()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_cancel_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_msbuild_marker_cancel");
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
         try
@@ -1280,7 +1251,7 @@ public partial class FileIndexerTests
     [Fact]
     public void GetProjectMarkerFingerprint_DirectoryCapTruncatesTraversal()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_dir_cap_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_msbuild_marker_dir_cap");
         try
         {
             var nestedDir = Path.Combine(tempDir, "src", "App");
@@ -1305,10 +1276,9 @@ public partial class FileIndexerTests
     [Fact]
     public void GetProjectMarkerFingerprint_DirectoryCapReportsIncompleteTraversal()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_incomplete_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_msbuild_marker_incomplete");
         try
         {
-            Directory.CreateDirectory(tempDir);
             for (var i = 0; i < 4; i++)
                 Directory.CreateDirectory(Path.Combine(tempDir, $"project-{i}"));
 
@@ -1343,11 +1313,10 @@ public partial class FileIndexerTests
     [MemberData(nameof(ProjectMarkerTraversalFailures))]
     public void GetProjectMarkerFingerprint_TraversalFailureReportsWarning_Issue3473(Exception exception)
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_warning_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_msbuild_marker_warning");
         var previousEnumerator = FileIndexer.EnumerateProjectMarkerDirectoriesForTesting;
         try
         {
-            Directory.CreateDirectory(tempDir);
             FileIndexer.EnumerateProjectMarkerDirectoriesForTesting = _ => throw exception;
             var indexer = new FileIndexer(tempDir, ignoreCase: false);
 
@@ -1369,10 +1338,9 @@ public partial class FileIndexerTests
     [Fact]
     public void GetProjectMarkerFingerprint_IgnoredGeneratedTreeDoesNotExhaustDirectoryCap()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_ignored_cap_{Guid.NewGuid():N}");
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_msbuild_marker_ignored_cap");
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "generated/\n");
             var generatedDir = Path.Combine(tempDir, "generated");
             Directory.CreateDirectory(generatedDir);
@@ -1399,8 +1367,7 @@ public partial class FileIndexerTests
     [Fact]
     public void GetProjectMarkerFingerprint_FileCapTruncatesMarkerCollection()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_file_cap_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx_msbuild_marker_file_cap");
         try
         {
             File.WriteAllText(Path.Combine(tempDir, "App.csproj"), "<Project />");
@@ -1851,16 +1818,14 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFiles_LoadsProjectRootPatternConfigsBeforeLanguageDetection_3190()
     {
-        var projectRoot = Path.Combine(Path.GetTempPath(), $"cdidx-pattern-scan-project-{Guid.NewGuid():N}");
-        var cwdRoot = Path.Combine(Path.GetTempPath(), $"cdidx-pattern-scan-cwd-{Guid.NewGuid():N}");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx-pattern-scan-project");
+        var cwdRoot = TestProjectHelper.CreateTempProject("cdidx-pattern-scan-cwd");
         lock (TestConsoleLock.Gate)
         {
             var originalDirectory = Environment.CurrentDirectory;
             try
             {
                 ExtractorPluginRegistry.ResetForTests();
-                Directory.CreateDirectory(projectRoot);
-                Directory.CreateDirectory(cwdRoot);
                 WriteFileIndexerPatternConfig(
                     projectRoot,
                     "project.yaml",
@@ -2538,11 +2503,9 @@ public partial class FileIndexerTests
             return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
 
         var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        var outsideDir = Path.Combine(Path.GetTempPath(), $"codeindex_outside_{Guid.NewGuid():N}");
+        var outsideDir = TestProjectHelper.CreateTempProject("codeindex_outside");
         try
         {
-            Directory.CreateDirectory(tempDir);
-            Directory.CreateDirectory(outsideDir);
             File.WriteAllText(Path.Combine(outsideDir, "outside.cs"), "class Outside { }\n");
 
             var linkDir = Path.Combine(tempDir, "linked");
@@ -2704,11 +2667,9 @@ public partial class FileIndexerTests
             return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
 
         var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        var externalDir = Path.Combine(Path.GetTempPath(), $"codeindex_external_{Guid.NewGuid():N}");
+        var externalDir = TestProjectHelper.CreateTempProject("codeindex_external");
         try
         {
-            Directory.CreateDirectory(tempDir);
-            Directory.CreateDirectory(externalDir);
             var realFile = Path.Combine(tempDir, "real.py");
             File.WriteAllText(realFile, "x = 1\n");
             var externalFile = Path.Combine(externalDir, "external.py");
@@ -2747,11 +2708,9 @@ public partial class FileIndexerTests
             return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
 
         var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        var externalDir = Path.Combine(Path.GetTempPath(), $"codeindex_external_{Guid.NewGuid():N}");
+        var externalDir = TestProjectHelper.CreateTempProject("codeindex_external");
         try
         {
-            Directory.CreateDirectory(tempDir);
-            Directory.CreateDirectory(externalDir);
             var realFile = Path.Combine(externalDir, "real.py");
             File.WriteAllText(realFile, "x = 1\n");
             File.CreateSymbolicLink(Path.Combine(tempDir, "alias.py"), realFile);
@@ -2915,7 +2874,8 @@ public partial class FileIndexerTests
             // Dangling symlinks (target does not exist) must be skipped without aborting the scan.
             // target が存在しない dangling symlink は、scan 全体を落とさずスキップする。
             File.CreateSymbolicLink(Path.Combine(tempDir, "dangling.py"), "missing_target.py");
-            Directory.CreateSymbolicLink(Path.Combine(tempDir, "dangling_dir"), Path.Combine(Path.GetTempPath(), $"missing_{Guid.NewGuid():N}"));
+            var missingDirectoryTarget = Path.Combine(tempDir, "missing_directory_target");
+            Directory.CreateSymbolicLink(Path.Combine(tempDir, "dangling_dir"), missingDirectoryTarget);
 
             var indexer = new FileIndexer(tempDir);
             var files = indexer.ScanFiles()
@@ -3179,7 +3139,6 @@ public partial class FileIndexerTests
         UnixFileMode? originalMode = null;
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(ignorePath, "secret.py\n");
             File.WriteAllText(Path.Combine(tempDir, "secret.py"), "print('secret')");
             File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('keep')");
@@ -4626,8 +4585,7 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFilesDetailed_FileDeletedAfterEnumeration_RecordsWarning()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-delete-race-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-delete-race");
         try
         {
             var scriptPath = Path.Combine(tempDir, "script");
@@ -4671,8 +4629,7 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-dangling-symlink-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-dangling-symlink");
         try
         {
             var linkPath = Path.Combine(tempDir, "missing-link");
@@ -4700,8 +4657,7 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-symlink-permission-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-symlink-permission");
         try
         {
             var targetDir = Path.Combine(tempDir, "src");
@@ -4750,10 +4706,8 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-symlink-policy-{Guid.NewGuid():N}");
-        var externalDir = Path.Combine(Path.GetTempPath(), $"cdidx-symlink-external-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
-        Directory.CreateDirectory(externalDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-symlink-policy");
+        var externalDir = TestProjectHelper.CreateTempProject("cdidx-symlink-external");
         try
         {
             File.WriteAllText(Path.Combine(externalDir, "external.py"), "print('external')\n");
@@ -4792,8 +4746,7 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-symlink-internal-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-symlink-internal");
         try
         {
             var targetDir = Path.Combine(tempDir, "src");
@@ -4829,8 +4782,7 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-symlink-cycle-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("cdidx-symlink-cycle");
         try
         {
             File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('app')\n");
@@ -5175,7 +5127,6 @@ public partial class FileIndexerTests
         var previousReader = FileIndexer.ReadGitmodulesLinesForTesting;
         try
         {
-            Directory.CreateDirectory(tempDir);
             File.WriteAllText(
                 Path.Combine(tempDir, ".gitmodules"),
                 "[submodule \"foo\"]\n\tpath = vendor/foo\n\turl = https://example.invalid/foo.git\n");

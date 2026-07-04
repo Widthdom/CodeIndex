@@ -134,7 +134,7 @@ public partial class IndexCommandRunnerTests
     [Fact]
     public void RunBackfillFold_UnknownOption_ReturnsUsageError()
     {
-        var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_unknown_{Guid.NewGuid():N}.db");
+        var missingDb = CreateTempDbPath("cdidx_backfill_unknown");
 
         lock (TestConsoleLock.Gate)
         {
@@ -166,7 +166,7 @@ public partial class IndexCommandRunnerTests
     [Fact]
     public void RunBackfillFold_UnknownOptionBeforeJson_ReturnsJsonUsageError()
     {
-        var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_unknown_json_{Guid.NewGuid():N}.db");
+        var missingDb = CreateTempDbPath("cdidx_backfill_unknown_json");
 
         lock (TestConsoleLock.Gate)
         {
@@ -237,6 +237,7 @@ public partial class IndexCommandRunnerTests
         var priorTimeout = IndexCommandRunner.IndexExtractionStallTimeoutForTesting;
         IndexCommandRunner.IndexExtractionStallTimeoutForTesting = () => TimeSpan.FromMilliseconds(1);
         var projectRoot = CreateTempProject();
+        var dbPath = CreateTempDbPath("cdidx_symbol_timeout");
         try
         {
             var source = Path.Combine(
@@ -248,7 +249,6 @@ public partial class IndexCommandRunnerTests
                 "SymbolExtractor.JavaScriptTypeScriptSupport.cs");
             File.Copy(source, Path.Combine(projectRoot, "slow.cs"));
 
-            var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_symbol_timeout_{Guid.NewGuid():N}.db");
             var (exitCode, json, stderr) = RunAndCaptureJsonWithStderr([projectRoot, "--files", "slow.cs", "--db", dbPath, "--json", "--force"]);
 
             Assert.Equal(CommandExitCodes.CancelledBySignal, exitCode);
@@ -261,6 +261,7 @@ public partial class IndexCommandRunnerTests
             IndexCommandRunner.IndexExtractionStallTimeoutForTesting = priorTimeout;
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
+            DeleteFile(dbPath);
         }
     }
 
@@ -1095,7 +1096,7 @@ public partial class IndexCommandRunnerTests
     {
         var projectRoot = CreateTempProject();
         var publishDir = Path.Combine(Path.GetTempPath(), $"cdidx_single_file_publish_{Guid.NewGuid():N}");
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_single_file_index_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_single_file_index");
         try
         {
             File.WriteAllText(
@@ -3731,7 +3732,7 @@ public sealed class Caller
     public void Run_ExplicitDb_PersistsIndexedProjectRootMetadata()
     {
         var projectRoot = CreateTempProject();
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_explicit_root_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_explicit_root");
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
@@ -3968,7 +3969,7 @@ public sealed class Caller
     public void Run_GitRepo_PersistsIndexedHeadMetadata()
     {
         var projectRoot = CreateTempProject();
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_head_meta_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_head_meta");
         var fixedNow = new DateTimeOffset(2026, 6, 20, 12, 34, 56, TimeSpan.Zero);
         IndexCommandRunner.TimeProvider = new ManualTimeProvider(fixedNow);
         try
@@ -4009,7 +4010,7 @@ public sealed class Caller
     public void Run_NonGitRepo_DoesNotPersistIndexedHeadMetadata()
     {
         var projectRoot = CreateTempProject();
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_head_meta_none_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_head_meta_none");
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
@@ -4040,7 +4041,7 @@ public sealed class Caller
         // `PathsEqual` / `IsPathEqualOrParent` made at index time.
         // #1546: index 成功時に case-sensitivity を stamp し、status から監査可能にする。
         var projectRoot = CreateTempProject();
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_path_case_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_path_case");
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hi')\n");
@@ -4067,7 +4068,7 @@ public sealed class Caller
     public void Run_GitRepo_DetachedHead_PersistsShaButNotBranch()
     {
         var projectRoot = CreateTempProject();
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_head_meta_detached_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_head_meta_detached");
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
@@ -4220,8 +4221,8 @@ public sealed class Caller
     [SkipOnMacOsArm64Fact]
     public void RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_trimmed_backfill_{Guid.NewGuid():N}.db");
-        var missingDbPath = Path.Combine(Path.GetTempPath(), $"cdidx_trimmed_missing_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_trimmed_backfill");
+        var missingDbPath = CreateTempDbPath("cdidx_trimmed_missing");
         try
         {
             using (var db = new DbContext(dbPath))
@@ -4455,8 +4456,7 @@ public sealed class Caller
             return;
 
         var projectRoot = CreateTempProject();
-        var dbParent = Path.Combine(Path.GetTempPath(), $"cdidx_readonly_db_parent_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dbParent);
+        var dbParent = TestProjectHelper.CreateTempProject("cdidx_readonly_db_parent");
         var dbPath = Path.Combine(dbParent, "codeindex.db");
         try
         {
@@ -4486,7 +4486,7 @@ public sealed class Caller
     [Fact]
     public void RunOptimizeFts_ExistingDb_ResetsCounterAndEmitsJson()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_optimize_fts_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_optimize_fts");
         try
         {
             using (var db = new DbContext(dbPath))
@@ -4535,7 +4535,7 @@ public sealed class Caller
     [Fact]
     public void RunOptimizeFts_LockHeld_ReportsDbLocked()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_optimize_locked_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_optimize_locked");
         var lockPath = dbPath + ".lock";
         try
         {
@@ -4583,7 +4583,7 @@ public sealed class Caller
     [Fact]
     public void RunOptimizeFts_ReadOnlyUri_ReturnsDbNotWritable()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_optimize_readonly_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_optimize_readonly");
         try
         {
             using (var db = new DbContext(dbPath))
@@ -4631,7 +4631,7 @@ public sealed class Caller
     [Fact]
     public void RunOptimizeFts_OversizedFileUriQuery_ReturnsBoundedJsonError_Issue3140()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_optimize_uri_cap_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_optimize_uri_cap");
         var dbUri = new Uri(dbPath).AbsoluteUri + "?" + new string('a', SqliteFileUri.MaxQueryLength + 1);
         int exitCode;
         JsonElement json;
@@ -4707,7 +4707,7 @@ public sealed class Caller
     [Fact]
     public void RunBackfillFold_BackfillsLegacyRowsAndStampsFoldReady()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_fold_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_backfill_fold");
         try
         {
             using (var db = new DbContext(dbPath))
@@ -4798,7 +4798,7 @@ public sealed class Caller
     [Fact]
     public void RunBackfillFold_DryRunReportsRowsWithoutWriting()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_fold_dry_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_backfill_fold_dry");
         try
         {
             using (var db = new DbContext(dbPath))
@@ -4869,7 +4869,7 @@ public sealed class Caller
     [Fact]
     public void RunBackfillFold_DryRunReportsEffectiveFoldReadyWhenMetadataStale()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_fold_stale_dry_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_backfill_fold_stale_dry");
         try
         {
             using (var db = new DbContext(dbPath))
@@ -4932,7 +4932,7 @@ public sealed class Caller
     [Fact]
     public void RunBackfillFold_RewritesAllWhenOnlyFingerprintDrifted()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_fold_fp_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_backfill_fold_fp");
         try
         {
             using (var db = new DbContext(dbPath))
@@ -5014,7 +5014,7 @@ public sealed class Caller
     [Fact]
     public void BackfillFoldedColumns_CancelledDuringSymbolLoop_KeepsCompletedRowsForResume()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_cancel_symbols_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_backfill_cancel_symbols");
         var cts = new CancellationTokenSource();
         try
         {
@@ -5062,7 +5062,7 @@ public sealed class Caller
     [Fact]
     public void BackfillFoldedColumns_CancelledDuringReferenceLoop_KeepsCompletedRowsForResume()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_cancel_refs_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_backfill_cancel_refs");
         var cts = new CancellationTokenSource();
         try
         {
@@ -5110,7 +5110,7 @@ public sealed class Caller
     [Fact]
     public void BackfillFoldedColumns_RewriteAllResumesAfterCheckpoint()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_rewrite_resume_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_backfill_rewrite_resume");
         var cts = new CancellationTokenSource();
         try
         {
@@ -5155,7 +5155,7 @@ public sealed class Caller
     [Fact]
     public void BackfillFoldedColumns_RewriteAllResumesReferencePhaseCheckpoint()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_rewrite_refs_resume_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_backfill_rewrite_refs_resume");
         var cts = new CancellationTokenSource();
         try
         {
@@ -5201,7 +5201,7 @@ public sealed class Caller
     [Fact]
     public void RunBackfillFold_Cancelled_ReturnsInterruptedErrorCode()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_cancel_cli_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_backfill_cancel_cli");
         using var cts = new CancellationTokenSource();
         try
         {
@@ -5261,7 +5261,7 @@ public sealed class Caller
     [Fact]
     public void RunBackfillFold_BlankFile_ReturnsDatabaseError()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_blank_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_backfill_blank");
         File.WriteAllText(dbPath, string.Empty);
 
         try
@@ -5299,7 +5299,7 @@ public sealed class Caller
     [Fact]
     public void RunBackfillFold_NonexistentFileUri_ReturnsNotFound()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_missing_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_backfill_missing");
         var dbUri = new Uri(dbPath).AbsoluteUri;
 
         JsonElement json;
@@ -5329,7 +5329,7 @@ public sealed class Caller
     [Fact]
     public void RunBackfillFold_LegacyDbWithoutCodeIndexMeta_Succeeds()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_legacy_no_meta_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_backfill_legacy_no_meta");
         try
         {
             using (var db = new DbContext(dbPath))
@@ -5832,10 +5832,9 @@ public sealed class Caller
     public void Run_WithAbsoluteDbPathOutsideProject_DoesNotWriteAbsolutePathToGitExclude()
     {
         var projectRoot = CreateTempProject();
-        var outsideDir = Path.Combine(Path.GetTempPath(), $"cdidx_external_db_{Guid.NewGuid():N}");
+        var outsideDir = TestProjectHelper.CreateTempProject("cdidx_external_db");
         try
         {
-            Directory.CreateDirectory(outsideDir);
             RunGit(projectRoot, "init");
             var dbPath = Path.Combine(outsideDir, "external.db");
 
@@ -5897,8 +5896,7 @@ public sealed class Caller
     [Fact]
     public void Run_InWorktreeWithAbsoluteDbPathInsideProject_WritesRelativePatternToSharedExclude()
     {
-        var tempRoot = Path.Combine(Path.GetTempPath(), $"cdidx_worktree_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempRoot);
+        var tempRoot = TestProjectHelper.CreateTempProject("cdidx_worktree");
         var mainGitDir = Path.Combine(tempRoot, "main", ".git");
         var worktreeRoot = Path.Combine(tempRoot, "wt");
         try
@@ -6691,8 +6689,7 @@ public sealed class Caller
 
     private static string CreateTemporaryDotnetHostPath()
     {
-        var hostDir = Path.Combine(Path.GetTempPath(), $"cdidx_dotnet_host_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(hostDir);
+        var hostDir = TestProjectHelper.CreateTempProject("cdidx_dotnet_host");
         var hostPath = Path.Combine(hostDir, OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
         File.WriteAllText(hostPath, string.Empty);
         return hostPath;
@@ -6701,7 +6698,7 @@ public sealed class Caller
     private static void DeleteTemporaryDotnetHostPath(string hostPath)
     {
         var hostDir = Path.GetDirectoryName(hostPath);
-        if (!string.IsNullOrWhiteSpace(hostDir) && Directory.Exists(hostDir))
+        if (!string.IsNullOrWhiteSpace(hostDir))
             TestProjectHelper.DeleteDirectory(hostDir);
     }
 
@@ -6856,6 +6853,9 @@ public sealed class Caller
     private static void DeleteFile(string path)
         => TestProjectHelper.DeleteFile(path);
 
+    private static string CreateTempDbPath(string prefix)
+        => TestProjectHelper.CreateTempDbPath(prefix);
+
     [Fact]
     public void IndexLock_Acquire_OnPosix_WritesPrivateInfoFile()
     {
@@ -6863,7 +6863,7 @@ public sealed class Caller
             return;
 
         var projectRoot = CreateTempProject();
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_private_lock_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_private_lock");
         var lockPath = dbPath + ".lock";
         var infoPath = lockPath + ".info";
         try
@@ -6894,7 +6894,7 @@ public sealed class Caller
     public void IndexLock_Dispose_WhenMetadataCleanupFails_ReportsSanitizedDiagnostic_Issue3462()
     {
         var projectRoot = CreateTempProject();
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_cleanup_diag_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_cleanup_diag");
         var lockPath = dbPath + ".lock";
         var infoPath = lockPath + ".info";
         var diagnostics = new List<LockCleanupDiagnostic>();
@@ -6933,7 +6933,7 @@ public sealed class Caller
     [Fact]
     public void IndexLock_TryReadHolderInfo_WhenInfoFileTooLarge_ReturnsNull()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_large_lock_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_large_lock");
         var lockPath = dbPath + ".lock";
         var infoPath = lockPath + ".info";
         try
@@ -6954,7 +6954,7 @@ public sealed class Caller
     [Fact]
     public void IndexLock_TryReadHolderInfo_WhenProcessDoesNotMatch_MarksMetadataStale_Issue3825()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_stale_holder_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_stale_holder");
         var lockPath = dbPath + ".lock";
         var infoPath = lockPath + ".info";
         try
@@ -6980,7 +6980,7 @@ public sealed class Caller
     public void Run_LockHeldByAnotherHolder_RejectedWithHolderInfo()
     {
         var projectRoot = CreateTempProject();
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_lock_held_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_lock_held");
         var lockPath = dbPath + ".lock";
         var infoPath = lockPath + ".info";
         try
@@ -7016,7 +7016,7 @@ public sealed class Caller
     public void Run_LockHeldByAnotherHolder_JsonIncludesHint()
     {
         var projectRoot = CreateTempProject();
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_lock_json_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_lock_json");
         var lockPath = dbPath + ".lock";
         var infoPath = lockPath + ".info";
         try
@@ -7054,7 +7054,7 @@ public sealed class Caller
     public void Run_LockHeldWithoutHolderInfo_ReportsDbLocked()
     {
         var projectRoot = CreateTempProject();
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_lock_no_info_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_lock_no_info");
         var lockPath = dbPath + ".lock";
         try
         {
@@ -7086,7 +7086,7 @@ public sealed class Caller
     public void Run_ForceFlag_BypassesLockEvenWhenHeld()
     {
         var projectRoot = CreateTempProject();
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_lock_force_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_lock_force");
         var lockPath = dbPath + ".lock";
         var infoPath = lockPath + ".info";
         try
@@ -7115,7 +7115,7 @@ public sealed class Caller
     public void Run_StaleLockFile_ReclaimedWithoutDeletingLockFileAfterSuccess_Issue3825()
     {
         var projectRoot = CreateTempProject();
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_lock_stale_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_lock_stale");
         var lockPath = dbPath + ".lock";
         var infoPath = lockPath + ".info";
         try
@@ -7170,7 +7170,7 @@ public sealed class Caller
     public void Run_ReadOnlyFlag_ReturnsUsageError()
     {
         var projectRoot = CreateTempProject();
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_index_readonly_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_index_readonly");
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hi')\n");

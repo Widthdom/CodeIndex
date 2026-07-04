@@ -41,7 +41,7 @@ public class PathCasingTests
 
             // Removing the directory after the cache is populated must not flip the
             // answer — probes happen at most once per anchor.
-            Directory.Delete(tempDir, recursive: true);
+            TestProjectHelper.DeleteDirectory(tempDir);
 
             Assert.Equal(initial, PathCasing.IsIgnoreCase(tempDir));
         }

@@ -6688,12 +6688,12 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunSymbols_SqlExactNamePreservesLeadingAt()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_query_runner_sql_verbatim_{Guid.NewGuid():N}.db");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_verbatim");
         try
         {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             using (var db = new DbContext(dbPath))
             {
-                db.InitializeSchema();
                 var writer = new DbWriter(db.Connection);
                 var fileId = writer.UpsertFile(new FileRecord
                 {
@@ -6736,7 +6736,7 @@ public partial class QueryCommandRunnerTests
         finally
         {
             SqliteConnection.ClearAllPools();
-            try { File.Delete(dbPath); } catch { }
+            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 

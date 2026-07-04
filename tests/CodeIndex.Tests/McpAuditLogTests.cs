@@ -27,13 +27,9 @@ public class McpAuditLogTests : IDisposable
 
     public void Dispose()
     {
-        if (File.Exists(_dbPath))
-            File.Delete(_dbPath);
+        TestProjectHelper.DeleteFile(_dbPath);
         foreach (var p in new[] { _auditPath, _auditPath + ".1", _auditPath + ".2", _auditPath + ".3" })
-        {
-            if (File.Exists(p))
-                File.Delete(p);
-        }
+            TestProjectHelper.DeleteFile(p);
     }
 
     private McpServer CreateServer(AuditLogSink sink)

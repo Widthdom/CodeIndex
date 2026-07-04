@@ -10,14 +10,12 @@ public sealed class GitProcessRunnerTests : IDisposable
 
     public GitProcessRunnerTests()
     {
-        tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_git_process_runner_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        tempDir = TestProjectHelper.CreateTempProject("cdidx_git_process_runner");
     }
 
     public void Dispose()
     {
-        if (Directory.Exists(tempDir))
-            TestProjectHelper.DeleteDirectory(tempDir);
+        TestProjectHelper.DeleteDirectory(tempDir);
     }
 
     [Fact]

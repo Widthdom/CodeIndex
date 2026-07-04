@@ -11,7 +11,7 @@ public class DataDirectorySecurityTests
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             return;
 
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_data_dir_security_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_data_dir_security");
         var cdidxDir = Path.Combine(root, ".cdidx");
         try
         {
@@ -42,7 +42,7 @@ public class DataDirectorySecurityTests
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             return;
 
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_sensitive_dir_security_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_sensitive_dir_security");
         var sensitiveDir = Path.Combine(root, "state");
         try
         {
@@ -64,7 +64,7 @@ public class DataDirectorySecurityTests
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             return;
 
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_sensitive_parent_security_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_sensitive_parent_security");
         var path = Path.Combine(root, "audit", "events.jsonl");
         try
         {
@@ -178,10 +178,9 @@ public class DataDirectorySecurityTests
         if (Directory.Exists(scopeRoot) || File.Exists(scopeRoot))
             return;
 
-        var attackRoot = Path.Combine(Path.GetTempPath(), $"cdidx_sensitive_fallback_attack_{Guid.NewGuid():N}");
+        var attackRoot = TestProjectHelper.CreateTempProject("cdidx_sensitive_fallback_attack");
         try
         {
-            Directory.CreateDirectory(attackRoot);
             File.CreateSymbolicLink(scopeRoot, attackRoot);
 
             var ex = Assert.Throws<IOException>(() => DataDirectorySecurity.CreateSensitiveDirectory(directory));
@@ -202,12 +201,10 @@ public class DataDirectorySecurityTests
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             return;
 
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_sensitive_file_security_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_sensitive_file_security");
         var path = Path.Combine(root, "metadata.info");
         try
         {
-            Directory.CreateDirectory(root);
-
             DataDirectorySecurity.WritePrivateText(path, "secret");
 
             Assert.Equal("secret", File.ReadAllText(path));
@@ -227,10 +224,9 @@ public class DataDirectorySecurityTests
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             return;
 
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_private_create_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_private_create");
         try
         {
-            Directory.CreateDirectory(root);
             var createNewPath = Path.Combine(root, "watch-spool.jsonl");
             using (var stream = DataDirectorySecurity.OpenPrivateFileStream(
                 createNewPath,
@@ -262,7 +258,7 @@ public class DataDirectorySecurityTests
     [Fact]
     public void WritePrivateText_MoveFailure_DoesNotLeaveTempFile()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_sensitive_file_atomic_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_sensitive_file_atomic");
         var path = Path.Combine(root, "metadata.info");
         try
         {
@@ -284,11 +280,10 @@ public class DataDirectorySecurityTests
     [Fact]
     public void ReadTextWithinLimit_WhenFileExceedsLimit_ReturnsNull()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_bounded_read_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_bounded_read");
         var path = Path.Combine(root, "metadata.info");
         try
         {
-            Directory.CreateDirectory(root);
             File.WriteAllText(path, new string('x', 17));
 
             Assert.Null(DataDirectorySecurity.ReadTextWithinLimit(path, maxBytes: 16));

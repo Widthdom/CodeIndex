@@ -26,8 +26,7 @@ public class LegacySchemaMigrationTests : IDisposable
 
     public LegacySchemaMigrationTests()
     {
-        _dbDir = Path.Combine(Path.GetTempPath(), $"codeindex_legacy_upgrade_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_dbDir);
+        _dbDir = TestProjectHelper.CreateTempProject("codeindex_legacy_upgrade");
         _dbPath = Path.Combine(_dbDir, "codeindex.db");
         _sqlitePoolOwner = SqlitePoolCleanup.EnterExclusiveOwner();
         SeedLegacyDb(_dbPath);
@@ -756,8 +755,7 @@ public class LegacySchemaMigrationTests : IDisposable
     {
         // backfill-fold validation must use the same retry/backoff path as the main open.
         // backfill-fold の validation も main open と同じ retry/backoff を使う必要がある。
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_validation_retry_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_validation_retry");
         var dbPath = Path.Combine(tempDir, "codeindex.db");
         try
         {
@@ -805,8 +803,7 @@ public class LegacySchemaMigrationTests : IDisposable
     {
         // The public validation path should go through the same open logic and accept a real DB.
         // 公開 validation 経路も同じ open ロジックを通り、実在する DB を受け入れること。
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_validation_public_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_validation_public");
         var dbPath = Path.Combine(tempDir, "codeindex.db");
         try
         {
@@ -849,8 +846,7 @@ public class LegacySchemaMigrationTests : IDisposable
         // the empty graph/issues tables as degraded rather than "clean".
         // InitializeSchema だけ走って MarkIndexComplete に到達しなかった index は、
         // user_version=0 のまま残り、readers は空テーブルを縮退扱いにしなければならない。
-        var interruptedDir = Path.Combine(Path.GetTempPath(), $"codeindex_interrupted_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(interruptedDir);
+        var interruptedDir = TestProjectHelper.CreateTempProject("codeindex_interrupted");
         var interruptedDb = Path.Combine(interruptedDir, "codeindex.db");
         try
         {
@@ -888,8 +884,7 @@ public class LegacySchemaMigrationTests : IDisposable
         // must trust graph data but still flag issues as degraded. This locks in the split
         // so MCP-built DBs cannot silently pass `validate` with a false clean signal.
         // MCP は graph のみ stamp するため、issues は縮退のまま残さねばならない。
-        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_partial_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
+        var dir = TestProjectHelper.CreateTempProject("codeindex_partial");
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
@@ -919,8 +914,7 @@ public class LegacySchemaMigrationTests : IDisposable
         // degraded at the start (ClearReadyFlags), so an interrupted refresh does not leave
         // mixed/partial state looking authoritative.
         // 既に stamp 済みの DB でも reindex 開始時に ClearReadyFlags() で degraded に戻すこと。
-        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_refresh_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
+        var dir = TestProjectHelper.CreateTempProject("codeindex_refresh");
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
@@ -973,8 +967,7 @@ public class LegacySchemaMigrationTests : IDisposable
     [Fact]
     public void ReadOnlyDb_MissingExactGraphFallbackIndexes_SurfacesDegradedSignal()
     {
-        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_exact_signal_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
+        var dir = TestProjectHelper.CreateTempProject("codeindex_exact_signal");
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
@@ -1016,8 +1009,7 @@ public class LegacySchemaMigrationTests : IDisposable
     [Fact]
     public void ReadOnlyDb_MissingExactSymbolFallbackIndex_SurfacesDegradedSignal()
     {
-        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_symbol_exact_signal_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
+        var dir = TestProjectHelper.CreateTempProject("codeindex_symbol_exact_signal");
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
@@ -1050,8 +1042,7 @@ public class LegacySchemaMigrationTests : IDisposable
     [Fact]
     public void WritableLegacyDb_MissingExactSymbolFallbackIndex_SelfHealsDuringReadMigration()
     {
-        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_symbol_exact_writable_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
+        var dir = TestProjectHelper.CreateTempProject("codeindex_symbol_exact_writable");
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
@@ -1083,8 +1074,7 @@ public class LegacySchemaMigrationTests : IDisposable
     [Fact]
     public void ReadOnlyDb_NonExactAnalyzeSymbol_DoesNotDependOnHiddenExactAnchor()
     {
-        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_symbol_nonexact_hidden_exact_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
+        var dir = TestProjectHelper.CreateTempProject("codeindex_symbol_nonexact_hidden_exact");
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
@@ -1192,8 +1182,7 @@ public class LegacySchemaMigrationTests : IDisposable
         // to authoritative. This test stamps `canStampReadiness=false`-equivalent semantics
         // at the DbWriter boundary and verifies no ready bit flips on.
         // update モードが legacy DB を trusted に昇格させないことを確認。
-        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_update_legacy_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
+        var dir = TestProjectHelper.CreateTempProject("codeindex_update_legacy");
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
@@ -1241,7 +1230,7 @@ public class LegacySchemaMigrationTests : IDisposable
         // to local paths before the `.cdidx` heuristic, so workspace / git lookups recover
         // the same project root as a plain filesystem path.
         // --db が file: URI の場合でも、.cdidx 判定前にローカルパス化して正しい project root を返す。
-        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_uri_root_{Guid.NewGuid():N}");
+        var dir = TestProjectHelper.CreateTempProject("codeindex_uri_root");
         var cdidxDir = Path.Combine(dir, ".cdidx");
         Directory.CreateDirectory(cdidxDir);
         var dbPath = Path.Combine(cdidxDir, "codeindex.db");
@@ -1284,8 +1273,7 @@ public class LegacySchemaMigrationTests : IDisposable
         // empty tables and end-of-run stamping cannot leave old bits blessing empty data.
         // This mirrors the ordering in IndexCommandRunner / McpToolHandlers.
         // rebuild 開始時は DropAll より前に readiness をクリアする順序の固定。
-        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_rebuild_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
+        var dir = TestProjectHelper.CreateTempProject("codeindex_rebuild");
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
@@ -1332,8 +1320,7 @@ public class LegacySchemaMigrationTests : IDisposable
         // (InitializeSchema → writes → MarkIndexComplete) stamps user_version and the tables
         // are then trusted even if empty (legitimate docs-only repo).
         // 成功 index では MarkIndexComplete が版印を打ち、空テーブルでも trusted になる。
-        var completedDir = Path.Combine(Path.GetTempPath(), $"codeindex_completed_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(completedDir);
+        var completedDir = TestProjectHelper.CreateTempProject("codeindex_completed");
         var completedDb = Path.Combine(completedDir, "codeindex.db");
         try
         {
@@ -1361,8 +1348,7 @@ public class LegacySchemaMigrationTests : IDisposable
     [Fact]
     public void ReadyBitStamps_ShareUserVersionHelperAcrossRawAndTrackedTransactions_Issue3716()
     {
-        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_ready_bits_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
+        var dir = TestProjectHelper.CreateTempProject("codeindex_ready_bits");
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
@@ -1420,8 +1406,7 @@ public class LegacySchemaMigrationTests : IDisposable
         // と本ファイルの `TryMigrateForRead_LegacyDb_ReadPathsDoNotCrash` が押さえており、
         // 本テストは `_symbolColumns` に signature が入らないまま deps / impact を呼んだ時に
         // `no such column: s.signature` で落ちないことを確認する。
-        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_issue431_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
+        var dir = TestProjectHelper.CreateTempProject("codeindex_issue431");
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
@@ -1591,8 +1576,7 @@ public class LegacySchemaMigrationTests : IDisposable
         // #1532 回帰: 旧 catch は英語固有のメッセージ文字列に依存していたためロケール差や
         // 文言変更で再帰経路を取りこぼし、半適用スキーマが残り再実行でも修復できなかった。
         // 新しい復旧経路は PRAGMA table_info 相当で列存在を再確認し、メッセージに依存しない。
-        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_ensure_column_race_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
+        var dir = TestProjectHelper.CreateTempProject("codeindex_ensure_column_race");
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
@@ -1649,8 +1633,7 @@ public class LegacySchemaMigrationTests : IDisposable
         // non-duplicate-column failure mode — including one with localized/future wording.
         // ALTER が duplicate-column 以外の理由で失敗し、かつカラムが実在しない場合は、
         // 新 catch（ColumnExists 判定）でも握り潰されず伝播する必要がある。
-        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_ensure_column_propagate_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
+        var dir = TestProjectHelper.CreateTempProject("codeindex_ensure_column_propagate");
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
@@ -1695,8 +1678,7 @@ public class LegacySchemaMigrationTests : IDisposable
     [Fact]
     public void SetMeta_MissingMetaTable_IsBestEffortNoOp_Issue2025()
     {
-        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_missing_meta_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
+        var dir = TestProjectHelper.CreateTempProject("codeindex_missing_meta");
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
@@ -1722,8 +1704,7 @@ public class LegacySchemaMigrationTests : IDisposable
     [Fact]
     public void InitializeSchema_PrunesKnownDeprecatedNullMetaKeysAndStampsMetaSchemaVersion_Issue2026()
     {
-        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_meta_schema_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
+        var dir = TestProjectHelper.CreateTempProject("codeindex_meta_schema");
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
@@ -1767,8 +1748,7 @@ public class LegacySchemaMigrationTests : IDisposable
     [Fact]
     public void TryMigrateForRead_CurrentSchema_DoesNotTakeWriterLockDuringActiveWrite_Issue2932()
     {
-        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_read_migration_current_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
+        var dir = TestProjectHelper.CreateTempProject("codeindex_read_migration_current");
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {
@@ -1805,8 +1785,7 @@ public class LegacySchemaMigrationTests : IDisposable
     [Fact]
     public async Task TryMigrateForRead_ConcurrentLegacyMigrations_SerializeAndComplete()
     {
-        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_concurrent_migration_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
+        var dir = TestProjectHelper.CreateTempProject("codeindex_concurrent_migration");
         var dbPath = Path.Combine(dir, "codeindex.db");
         try
         {

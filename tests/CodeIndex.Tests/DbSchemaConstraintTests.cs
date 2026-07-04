@@ -18,7 +18,8 @@ public class DbSchemaConstraintTests
     {
         Assert.False(string.IsNullOrWhiteSpace(tableName));
 
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_schema_constraints_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_schema_constraints");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
             using var db = new DbContext(dbPath);
@@ -33,15 +34,15 @@ public class DbSchemaConstraintTests
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
     [Fact]
     public void InitializeSchema_LegacyNullableFileForeignKeys_AreCleanedAndConstrained()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_schema_migration_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_schema_migration");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
             SeedLegacyNullableFileIdSchema(dbPath);
@@ -64,15 +65,15 @@ public class DbSchemaConstraintTests
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
     [Fact]
     public void InitializeSchema_KindCheckConstraintsMatchCatalog_Issue4178()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_schema_kind_checks_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_schema_kind_checks");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
             using (var db = new DbContext(dbPath))
@@ -91,8 +92,7 @@ public class DbSchemaConstraintTests
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                TestProjectHelper.DeleteFile(dbPath);
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 

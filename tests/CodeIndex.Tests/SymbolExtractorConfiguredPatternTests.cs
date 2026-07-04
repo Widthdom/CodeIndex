@@ -14,8 +14,8 @@ public partial class SymbolExtractorTests
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture(ExtractorPluginRegistry.TrustWorkspacePluginsEnvironmentVariable);
-            var projectRoot = Path.Combine(Path.GetTempPath(), $"cdidx_workspace_plugins_project_{Guid.NewGuid():N}");
-            var cwdRoot = Path.Combine(Path.GetTempPath(), $"cdidx_workspace_plugins_cwd_{Guid.NewGuid():N}");
+            var projectRoot = TestProjectHelper.CreateTempProject("cdidx_workspace_plugins_project");
+            var cwdRoot = TestProjectHelper.CreateTempProject("cdidx_workspace_plugins_cwd");
             var originalDirectory = Environment.CurrentDirectory;
             try
             {
@@ -57,7 +57,7 @@ public partial class SymbolExtractorTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_patterns_candidate_cap_{Guid.NewGuid():N}");
+            var tempDir = TestProjectHelper.CreateTempProject("cdidx_patterns_candidate_cap");
             try
             {
                 var patternDir = Path.Combine(tempDir, ".cdidx", "patterns");
@@ -91,7 +91,7 @@ public partial class SymbolExtractorTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_patterns_invalid_{Guid.NewGuid():N}");
+            var tempDir = TestProjectHelper.CreateTempProject("cdidx_patterns_invalid");
             try
             {
                 WritePatternConfig(
@@ -121,7 +121,7 @@ public partial class SymbolExtractorTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_patterns_bounded_{Guid.NewGuid():N}");
+            var tempDir = TestProjectHelper.CreateTempProject("cdidx_patterns_bounded");
             try
             {
                 WritePatternConfig(
@@ -151,7 +151,7 @@ public partial class SymbolExtractorTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_patterns_many_lines_{Guid.NewGuid():N}");
+            var tempDir = TestProjectHelper.CreateTempProject("cdidx_patterns_many_lines");
             try
             {
                 var commentLines = string.Join("\n", Enumerable.Repeat("#", 4096));
@@ -179,7 +179,7 @@ public partial class SymbolExtractorTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_patterns_source_lines_{Guid.NewGuid():N}");
+            var tempDir = TestProjectHelper.CreateTempProject("cdidx_patterns_source_lines");
             try
             {
                 WritePatternConfig(
@@ -228,7 +228,7 @@ public partial class SymbolExtractorTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_patterns_large_{Guid.NewGuid():N}");
+            var tempDir = TestProjectHelper.CreateTempProject("cdidx_patterns_large");
             try
             {
                 WritePatternConfig(tempDir, new string('x', ExtractorPluginRegistry.MaxPatternConfigBytes + 1));
@@ -256,7 +256,7 @@ public partial class SymbolExtractorTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_patterns_symlink_{Guid.NewGuid():N}");
+            var tempDir = TestProjectHelper.CreateTempProject("cdidx_patterns_symlink");
             try
             {
                 var patternDir = Path.Combine(tempDir, ".cdidx", "patterns");
@@ -302,7 +302,7 @@ public partial class SymbolExtractorTests
 
         lock (TestConsoleLock.Gate)
         {
-            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_patterns_fifo_{Guid.NewGuid():N}");
+            var tempDir = TestProjectHelper.CreateTempProject("cdidx_patterns_fifo");
             try
             {
                 var patternDir = Path.Combine(tempDir, ".cdidx", "patterns");
@@ -342,7 +342,7 @@ public partial class SymbolExtractorTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_patterns_dir_symlink_{Guid.NewGuid():N}");
+            var tempDir = TestProjectHelper.CreateTempProject("cdidx_patterns_dir_symlink");
             try
             {
                 var externalPatternDir = Path.Combine(tempDir, "external-patterns");
@@ -387,10 +387,9 @@ public partial class SymbolExtractorTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_patterns_parent_symlink_{Guid.NewGuid():N}");
+            var tempDir = TestProjectHelper.CreateTempProject("cdidx_patterns_parent_symlink");
             try
             {
-                Directory.CreateDirectory(tempDir);
                 var externalCdidxDir = Path.Combine(tempDir, "external-cdidx");
                 var externalPatternDir = Path.Combine(externalCdidxDir, "patterns");
                 Directory.CreateDirectory(externalPatternDir);
@@ -432,7 +431,7 @@ public partial class SymbolExtractorTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_patterns_count_{Guid.NewGuid():N}");
+            var tempDir = TestProjectHelper.CreateTempProject("cdidx_patterns_count");
             try
             {
                 var rules = string.Join(
@@ -466,7 +465,7 @@ public partial class SymbolExtractorTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_patterns_total_count_{Guid.NewGuid():N}");
+            var tempDir = TestProjectHelper.CreateTempProject("cdidx_patterns_total_count");
             try
             {
                 var rules = string.Join(
@@ -505,7 +504,7 @@ public partial class SymbolExtractorTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_patterns_timeout_{Guid.NewGuid():N}");
+            var tempDir = TestProjectHelper.CreateTempProject("cdidx_patterns_timeout");
             try
             {
                 WritePatternConfig(

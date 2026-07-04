@@ -17,13 +17,15 @@ namespace CodeIndex.Tests;
 [Collection("SQLite pool sensitive")]
 public class DatabaseTests : IDisposable
 {
+    private readonly string _dbDir;
     private readonly string _dbPath;
     private readonly DbContext _db;
     private readonly DbWriter _writer;
 
     public DatabaseTests()
     {
-        _dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}.db");
+        _dbDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        _dbPath = Path.Combine(_dbDir, "codeindex.db");
         _db = new DbContext(_dbPath);
         _db.InitializeSchema();
         _writer = new DbWriter(_db.Connection);
@@ -553,7 +555,8 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void InitializeSchema_RefreshesLegacyKindCheckConstraints()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_kind_check_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_kind_check");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
             SeedLegacyKindCheckSchema(dbPath);
@@ -601,14 +604,16 @@ public class DatabaseTests : IDisposable
         }
         finally
         {
-            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
     [Fact]
     public void InitializeSchema_ForeignKeyCheckDetectsRebuildViolations_Issue3717()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_fk_check_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_fk_check");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
             SeedLegacyKindCheckSchema(dbPath);
@@ -636,7 +641,8 @@ public class DatabaseTests : IDisposable
         finally
         {
             DbContext.ForeignKeyValidationBeforeCheckForTesting = null;
-            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
@@ -668,7 +674,8 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void Dispose_AfterWriteWork_AttemptsWalCheckpoint()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_checkpoint_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("cdidx_checkpoint");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         var checkpointAttempted = false;
         DbContext.WalCheckpointTruncateExecutedForTesting = _ => checkpointAttempted = true;
         try
@@ -685,15 +692,15 @@ public class DatabaseTests : IDisposable
         {
             DbContext.WalCheckpointTruncateExecutedForTesting = null;
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
     [Fact]
     public void Dispose_AfterSchemaInitializationOnly_DoesNotCheckpointWal()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_schema_checkpoint_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("cdidx_schema_checkpoint");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         var checkpointAttempted = false;
         DbContext.WalCheckpointTruncateExecutedForTesting = _ => checkpointAttempted = true;
         try
@@ -709,8 +716,7 @@ public class DatabaseTests : IDisposable
         {
             DbContext.WalCheckpointTruncateExecutedForTesting = null;
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
@@ -929,7 +935,8 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void RunIncrementalVacuum_ReclaimsFreelistPages()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_vacuum_test_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_vacuum");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
             VacuumResult result;
@@ -968,14 +975,16 @@ public class DatabaseTests : IDisposable
         }
         finally
         {
-            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
     [Fact]
     public void RunIncrementalVacuum_CancellationBeforeMetrics_ThrowsOperationCanceled_Issue3811()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_vacuum_cancel_test_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_vacuum_cancel");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
             using var db = new DbContext(dbPath);
@@ -987,14 +996,16 @@ public class DatabaseTests : IDisposable
         }
         finally
         {
-            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
     [Fact]
     public void RunIncrementalVacuum_ReportsProgressBoundaries_Issue3811()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_vacuum_progress_test_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_vacuum_progress");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         var progress = new List<string>();
         try
         {
@@ -1011,7 +1022,8 @@ public class DatabaseTests : IDisposable
         finally
         {
             DbContext.MaintenanceProgressForTesting = null;
-            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
@@ -1077,7 +1089,8 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void RunIncrementalVacuum_ConvertsLegacyNoAutoVacuumDatabase()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_legacy_vacuum_test_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_legacy_vacuum");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
             using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
@@ -1117,14 +1130,16 @@ public class DatabaseTests : IDisposable
         }
         finally
         {
-            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
     [Fact]
     public void Dispose_AfterWriteWork_RunsOptimizePragma()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_optimize_write_test_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_optimize_write");
+        var dbPath = Path.Combine(dbDir, $"codeindex_optimize_write_{Guid.NewGuid():N}.db");
         var optimizeCount = 0;
         DbContext.OptimizePragmaExecutedForTesting = dataSource =>
         {
@@ -1143,14 +1158,16 @@ public class DatabaseTests : IDisposable
         finally
         {
             DbContext.OptimizePragmaExecutedForTesting = null;
-            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
     [Fact]
     public void Dispose_WithoutWriteWork_SkipsOptimizePragma()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_optimize_read_test_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_optimize_read");
+        var dbPath = Path.Combine(dbDir, $"codeindex_optimize_read_{Guid.NewGuid():N}.db");
         var optimizeCount = 0;
         DbContext.OptimizePragmaExecutedForTesting = dataSource =>
         {
@@ -1168,7 +1185,8 @@ public class DatabaseTests : IDisposable
         finally
         {
             DbContext.OptimizePragmaExecutedForTesting = null;
-            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
@@ -1197,7 +1215,8 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void TryMigrateForRead_CreatesReferenceCompositeIndexesForGraphLookups()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_legacy_index_test_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_legacy_index");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
             using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
@@ -1249,30 +1268,15 @@ public class DatabaseTests : IDisposable
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-            {
-                try
-                {
-                    File.Delete(dbPath);
-                }
-                catch (IOException) when (OperatingSystem.IsWindows())
-                {
-                    SqliteConnection.ClearAllPools();
-                    File.Delete(dbPath);
-                }
-                catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows())
-                {
-                    SqliteConnection.ClearAllPools();
-                    File.Delete(dbPath);
-                }
-            }
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
     [Fact]
     public void Constructor_WritableOpenRejectsNewerUserVersion()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_newer_schema_test_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_newer_schema");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
             using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
@@ -1301,30 +1305,15 @@ public class DatabaseTests : IDisposable
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-            {
-                try
-                {
-                    File.Delete(dbPath);
-                }
-                catch (IOException) when (OperatingSystem.IsWindows())
-                {
-                    SqliteConnection.ClearAllPools();
-                    File.Delete(dbPath);
-                }
-                catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows())
-                {
-                    SqliteConnection.ClearAllPools();
-                    File.Delete(dbPath);
-                }
-            }
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
     [Fact]
     public void TryMigrateForRead_InsideExistingTransaction_DoesNotStartNestedTransaction()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_nested_migration_test_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_nested_migration");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
             using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
@@ -1373,30 +1362,15 @@ public class DatabaseTests : IDisposable
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-            {
-                try
-                {
-                    File.Delete(dbPath);
-                }
-                catch (IOException) when (OperatingSystem.IsWindows())
-                {
-                    SqliteConnection.ClearAllPools();
-                    File.Delete(dbPath);
-                }
-                catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows())
-                {
-                    SqliteConnection.ClearAllPools();
-                    File.Delete(dbPath);
-                }
-            }
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
     [Fact]
     public void TryMigrateForRead_EnforcesForeignKeysAfterAddingReferenceLineColumn()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_legacy_fk_test_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_legacy_fk");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
             using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
@@ -1454,23 +1428,7 @@ public class DatabaseTests : IDisposable
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-            {
-                try
-                {
-                    File.Delete(dbPath);
-                }
-                catch (IOException) when (OperatingSystem.IsWindows())
-                {
-                    SqliteConnection.ClearAllPools();
-                    File.Delete(dbPath);
-                }
-                catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows())
-                {
-                    SqliteConnection.ClearAllPools();
-                    File.Delete(dbPath);
-                }
-            }
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
@@ -1535,7 +1493,8 @@ public class DatabaseTests : IDisposable
     {
         lock (TestConsoleLock.Gate)
         {
-            var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_perf_pragmas_{Guid.NewGuid():N}.db");
+            var dbDir = TestProjectHelper.CreateTempProject("codeindex_perf_pragmas");
+            var dbPath = Path.Combine(dbDir, "codeindex.db");
             using var env = EnvironmentVariableScope.Capture(
                 DbContext.CacheSizeEnvironmentVariable,
                 DbContext.MmapSizeEnvironmentVariable);
@@ -1553,8 +1512,7 @@ public class DatabaseTests : IDisposable
             finally
             {
                 SqliteConnection.ClearAllPools();
-                if (File.Exists(dbPath))
-                    File.Delete(dbPath);
+                TestProjectHelper.DeleteDirectory(dbDir);
             }
         }
     }
@@ -2241,7 +2199,7 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void PurgeStaleFilesSharingChecksum_RemovesDeletedRenameRowsOnly()
     {
-        var projectRoot = Path.Combine(Path.GetTempPath(), $"cdidx_checksum_purge_{Guid.NewGuid():N}");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_checksum_purge");
         try
         {
             Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
@@ -2294,8 +2252,7 @@ public class DatabaseTests : IDisposable
         }
         finally
         {
-            if (Directory.Exists(projectRoot))
-                TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 
@@ -2569,151 +2526,156 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void RebuildTypeScriptAugmentationReferences_LinksMergedInterfacesOnly()
     {
-        var projectRoot = Path.Combine(Path.GetTempPath(), $"cdidx_ts_aug_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-        File.WriteAllText(Path.Combine(projectRoot, "src/module-c.ts"), "export {}\ninterface Ambient {}\n");
-        File.WriteAllText(Path.Combine(projectRoot, "src/module-d.ts"), "import \"./setup\";\ninterface Ambient {}\n");
-        File.WriteAllText(Path.Combine(projectRoot, "src/express-a.ts"), "declare module \"express\" { interface Request { user: string } }\n");
-        File.WriteAllText(Path.Combine(projectRoot, "src/express-b.ts"), "declare module \"express\" { interface Request { account: string } }\n");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_ts_aug");
+        try
+        {
+            TestProjectHelper.CreateDirectory(projectRoot, "src");
+            TestProjectHelper.WriteTextFile(projectRoot, "src/module-c.ts", "export {}\ninterface Ambient {}\n");
+            TestProjectHelper.WriteTextFile(projectRoot, "src/module-d.ts", "import \"./setup\";\ninterface Ambient {}\n");
+            TestProjectHelper.WriteTextFile(projectRoot, "src/express-a.ts", "declare module \"express\" { interface Request { user: string } }\n");
+            TestProjectHelper.WriteTextFile(projectRoot, "src/express-b.ts", "declare module \"express\" { interface Request { account: string } }\n");
 
-        var firstFileId = _writer.UpsertFile(new FileRecord
-        {
-            Path = "src/a.ts",
-            Lang = "typescript",
-            Size = 80,
-            Lines = 4,
-            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
-        });
-        var secondFileId = _writer.UpsertFile(new FileRecord
-        {
-            Path = "src/b.ts",
-            Lang = "typescript",
-            Size = 80,
-            Lines = 4,
-            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
-        });
-        var thirdFileId = _writer.UpsertFile(new FileRecord
-        {
-            Path = "src/c.ts",
-            Lang = "typescript",
-            Size = 80,
-            Lines = 4,
-            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
-        });
-        var moduleOneFileId = _writer.UpsertFile(new FileRecord
-        {
-            Path = "src/module-a.ts",
-            Lang = "typescript",
-            Size = 80,
-            Lines = 4,
-            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
-        });
-        var moduleTwoFileId = _writer.UpsertFile(new FileRecord
-        {
-            Path = "src/module-b.ts",
-            Lang = "typescript",
-            Size = 80,
-            Lines = 4,
-            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
-        });
-        var moduleMarkerFileId = _writer.UpsertFile(new FileRecord
-        {
-            Path = "src/module-c.ts",
-            Lang = "typescript",
-            Size = 80,
-            Lines = 2,
-            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
-        });
-        var sideEffectImportFileId = _writer.UpsertFile(new FileRecord
-        {
-            Path = "src/module-d.ts",
-            Lang = "typescript",
-            Size = 80,
-            Lines = 2,
-            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
-        });
-        var ambientGlobalFileId = _writer.UpsertFile(new FileRecord
-        {
-            Path = "src/ambient-global.ts",
-            Lang = "typescript",
-            Size = 80,
-            Lines = 1,
-            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
-        });
-        var ambientModuleFirstFileId = _writer.UpsertFile(new FileRecord
-        {
-            Path = "src/express-a.ts",
-            Lang = "typescript",
-            Size = 80,
-            Lines = 1,
-            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
-        });
-        var ambientModuleSecondFileId = _writer.UpsertFile(new FileRecord
-        {
-            Path = "src/express-b.ts",
-            Lang = "typescript",
-            Size = 80,
-            Lines = 1,
-            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
-        });
+            var firstFileId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/a.ts",
+                Lang = "typescript",
+                Size = 80,
+                Lines = 4,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            var secondFileId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/b.ts",
+                Lang = "typescript",
+                Size = 80,
+                Lines = 4,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            var thirdFileId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/c.ts",
+                Lang = "typescript",
+                Size = 80,
+                Lines = 4,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            var moduleOneFileId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/module-a.ts",
+                Lang = "typescript",
+                Size = 80,
+                Lines = 4,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            var moduleTwoFileId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/module-b.ts",
+                Lang = "typescript",
+                Size = 80,
+                Lines = 4,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            var moduleMarkerFileId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/module-c.ts",
+                Lang = "typescript",
+                Size = 80,
+                Lines = 2,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            var sideEffectImportFileId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/module-d.ts",
+                Lang = "typescript",
+                Size = 80,
+                Lines = 2,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            var ambientGlobalFileId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/ambient-global.ts",
+                Lang = "typescript",
+                Size = 80,
+                Lines = 1,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            var ambientModuleFirstFileId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/express-a.ts",
+                Lang = "typescript",
+                Size = 80,
+                Lines = 1,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            var ambientModuleSecondFileId = _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/express-b.ts",
+                Lang = "typescript",
+                Size = 80,
+                Lines = 1,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
 
-        _writer.InsertSymbols([
-            new SymbolRecord { FileId = firstFileId, Kind = "interface", Name = "Widget", Line = 1, StartLine = 1, StartColumn = 7, EndLine = 3, Signature = "interface Widget { a: number }" },
-            new SymbolRecord { FileId = secondFileId, Kind = "interface", Name = "Widget", Line = 1, StartLine = 1, StartColumn = 17, EndLine = 3, Signature = "declare global { interface Widget { b: string } }" },
-            new SymbolRecord { FileId = firstFileId, Kind = "import", Name = "Options", Line = 4, StartLine = 4, StartColumn = 5, EndLine = 4, Signature = "type Options = { a: number }" },
-            new SymbolRecord { FileId = secondFileId, Kind = "import", Name = "Options", Line = 4, StartLine = 4, StartColumn = 5, EndLine = 4, Signature = "type Options = { b: string }" },
-            new SymbolRecord { FileId = thirdFileId, Kind = "interface", Name = "LocalOnly", Line = 1, StartLine = 1, StartColumn = 11, EndLine = 1, Signature = "interface LocalOnly {}" },
-            new SymbolRecord { FileId = moduleOneFileId, Kind = "interface", Name = "Props", Line = 2, StartLine = 2, StartColumn = 17, EndLine = 2, Signature = "export interface Props { a: number }", Visibility = "export" },
-            new SymbolRecord { FileId = moduleTwoFileId, Kind = "interface", Name = "Props", Line = 2, StartLine = 2, StartColumn = 17, EndLine = 2, Signature = "export interface Props { b: string }", Visibility = "export" },
-            new SymbolRecord { FileId = moduleMarkerFileId, Kind = "interface", Name = "Ambient", Line = 2, StartLine = 2, StartColumn = 11, EndLine = 2, Signature = "interface Ambient {}" },
-            new SymbolRecord { FileId = sideEffectImportFileId, Kind = "interface", Name = "Ambient", Line = 2, StartLine = 2, StartColumn = 11, EndLine = 2, Signature = "interface Ambient {}" },
-            new SymbolRecord { FileId = ambientGlobalFileId, Kind = "interface", Name = "Ambient", Line = 1, StartLine = 1, StartColumn = 11, EndLine = 1, Signature = "interface Ambient {}" },
-            new SymbolRecord { FileId = ambientModuleFirstFileId, Kind = "interface", Name = "Request", Line = 1, StartLine = 1, StartColumn = 28, EndLine = 1, Signature = "interface Request { user: string }", ContainerName = "\"express\"" },
-            new SymbolRecord { FileId = ambientModuleSecondFileId, Kind = "interface", Name = "Request", Line = 1, StartLine = 1, StartColumn = 28, EndLine = 1, Signature = "interface Request { account: string }", ContainerName = "\"express\"" },
-        ]);
+            _writer.InsertSymbols([
+                new SymbolRecord { FileId = firstFileId, Kind = "interface", Name = "Widget", Line = 1, StartLine = 1, StartColumn = 7, EndLine = 3, Signature = "interface Widget { a: number }" },
+                new SymbolRecord { FileId = secondFileId, Kind = "interface", Name = "Widget", Line = 1, StartLine = 1, StartColumn = 17, EndLine = 3, Signature = "declare global { interface Widget { b: string } }" },
+                new SymbolRecord { FileId = firstFileId, Kind = "import", Name = "Options", Line = 4, StartLine = 4, StartColumn = 5, EndLine = 4, Signature = "type Options = { a: number }" },
+                new SymbolRecord { FileId = secondFileId, Kind = "import", Name = "Options", Line = 4, StartLine = 4, StartColumn = 5, EndLine = 4, Signature = "type Options = { b: string }" },
+                new SymbolRecord { FileId = thirdFileId, Kind = "interface", Name = "LocalOnly", Line = 1, StartLine = 1, StartColumn = 11, EndLine = 1, Signature = "interface LocalOnly {}" },
+                new SymbolRecord { FileId = moduleOneFileId, Kind = "interface", Name = "Props", Line = 2, StartLine = 2, StartColumn = 17, EndLine = 2, Signature = "export interface Props { a: number }", Visibility = "export" },
+                new SymbolRecord { FileId = moduleTwoFileId, Kind = "interface", Name = "Props", Line = 2, StartLine = 2, StartColumn = 17, EndLine = 2, Signature = "export interface Props { b: string }", Visibility = "export" },
+                new SymbolRecord { FileId = moduleMarkerFileId, Kind = "interface", Name = "Ambient", Line = 2, StartLine = 2, StartColumn = 11, EndLine = 2, Signature = "interface Ambient {}" },
+                new SymbolRecord { FileId = sideEffectImportFileId, Kind = "interface", Name = "Ambient", Line = 2, StartLine = 2, StartColumn = 11, EndLine = 2, Signature = "interface Ambient {}" },
+                new SymbolRecord { FileId = ambientGlobalFileId, Kind = "interface", Name = "Ambient", Line = 1, StartLine = 1, StartColumn = 11, EndLine = 1, Signature = "interface Ambient {}" },
+                new SymbolRecord { FileId = ambientModuleFirstFileId, Kind = "interface", Name = "Request", Line = 1, StartLine = 1, StartColumn = 28, EndLine = 1, Signature = "interface Request { user: string }", ContainerName = "\"express\"" },
+                new SymbolRecord { FileId = ambientModuleSecondFileId, Kind = "interface", Name = "Request", Line = 1, StartLine = 1, StartColumn = 28, EndLine = 1, Signature = "interface Request { account: string }", ContainerName = "\"express\"" },
+            ]);
 
-        var inserted = _writer.RebuildTypeScriptAugmentationReferences(projectRoot);
+            var inserted = _writer.RebuildTypeScriptAugmentationReferences(projectRoot);
 
-        Assert.Equal(4, inserted);
-        using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = @"
+            Assert.Equal(4, inserted);
+            using var cmd = _db.Connection.CreateCommand();
+            cmd.CommandText = @"
             SELECT symbol_name, container_kind, COUNT(*)
             FROM symbol_references
             WHERE reference_kind = 'augmentation'
             GROUP BY symbol_name, container_kind
             ORDER BY symbol_name, container_kind";
 
-        using var reader = cmd.ExecuteReader();
-        Assert.True(reader.Read());
-        Assert.Equal("Request", reader.GetString(0));
-        Assert.Equal("interface", reader.GetString(1));
-        Assert.Equal(2, reader.GetInt32(2));
-        Assert.True(reader.Read());
-        Assert.Equal("Widget", reader.GetString(0));
-        Assert.Equal("interface", reader.GetString(1));
-        Assert.Equal(2, reader.GetInt32(2));
-        Assert.False(reader.Read());
+            using var reader = cmd.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.Equal("Request", reader.GetString(0));
+            Assert.Equal("interface", reader.GetString(1));
+            Assert.Equal(2, reader.GetInt32(2));
+            Assert.True(reader.Read());
+            Assert.Equal("Widget", reader.GetString(0));
+            Assert.Equal("interface", reader.GetString(1));
+            Assert.Equal(2, reader.GetInt32(2));
+            Assert.False(reader.Read());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Fact]
     public void TypeScriptFileHasModuleSyntaxForTests_UsesBoundedFallbackRead_Issue3179()
     {
-        var projectRoot = Path.Combine(Path.GetTempPath(), $"cdidx_ts_module_fallback_{Guid.NewGuid():N}");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_ts_module_fallback");
         try
         {
-            Directory.CreateDirectory(projectRoot);
-            var normalFile = Path.Combine(projectRoot, "normal.ts");
-            File.WriteAllText(normalFile, "// comment\nexport {}\n");
+            var normalFile = TestProjectHelper.WriteTextFile(projectRoot, "normal.ts", "// comment\nexport {}\n");
+            var oversizedFile = TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "oversized.ts",
+                "export {}\n" + new string('x', (int)FileIndexer.DefaultMaxFileSizeBytes));
 
-            var oversizedFile = Path.Combine(projectRoot, "oversized.ts");
-            File.WriteAllText(oversizedFile, "export {}\n" + new string('x', (int)FileIndexer.DefaultMaxFileSizeBytes));
-
-            var lateMarkerFile = Path.Combine(projectRoot, "late-marker.ts");
             var lateMarkerBuilder = new StringBuilder();
             for (var i = 0; i < 17000; i++)
                 lateMarkerBuilder.Append("// filler\n");
             lateMarkerBuilder.Append("export {}\n");
-            File.WriteAllText(lateMarkerFile, lateMarkerBuilder.ToString());
+            var lateMarkerFile = TestProjectHelper.WriteTextFile(projectRoot, "late-marker.ts", lateMarkerBuilder.ToString());
 
             Assert.True(DbWriter.TypeScriptFileHasModuleSyntaxForTests(normalFile));
             Assert.False(DbWriter.TypeScriptFileHasModuleSyntaxForTests(oversizedFile));
@@ -2839,7 +2801,8 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void InitializeSchema_MigratesReferenceLinesToContextKey()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_ref_line_context_key_{Guid.NewGuid():N}.db");
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_ref_line_context_key");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
         try
         {
             using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
@@ -2901,7 +2864,8 @@ public class DatabaseTests : IDisposable
         }
         finally
         {
-            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(dbDir);
         }
     }
 
@@ -3059,8 +3023,7 @@ public class DatabaseTests : IDisposable
     {
         // Simulate branch switch: insert a file, then purge when file doesn't exist
         // ブランチ切り替えをシミュレート: ファイルを挿入後、存在しないファイルをパージ
-        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_purge_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_purge");
 
         try
         {
@@ -3507,10 +3470,7 @@ public class DatabaseTests : IDisposable
         Assert.Null(ReadMeta("raw_phase"));
     }
 
-    private void DeleteDbPath()
-    {
-        TestProjectHelper.DeleteSqliteDatabaseFiles(_dbPath);
-    }
+    private void DeleteDbPath() => TestProjectHelper.DeleteDirectory(_dbDir);
 
     private string ExecuteScalarString(string sql)
     {

@@ -25,8 +25,7 @@ public class ExportImportCommandRunnerIssue3818Tests
     [Fact]
     public void ReplaceImportedDatabase_PostMoveCancellationRollsBackDestination_Issue3818()
     {
-        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_import_cancel_rollback_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(workDir);
+        var workDir = TestProjectHelper.CreateTempProject("cdidx_import_cancel_rollback");
         try
         {
             var dbPath = Path.Combine(workDir, "codeindex.db");

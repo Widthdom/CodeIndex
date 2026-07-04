@@ -237,7 +237,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_MissingDb_ReturnsNotFoundWithHint()
     {
-        var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_db_missing_{Guid.NewGuid():N}.db");
+        var missingDb = TestProjectHelper.CreateTempDbPath("cdidx_db_missing");
 
         var (exitCode, _, stderr) = RunAndCaptureStreams(["--integrity-check", "--db", missingDb]);
 
@@ -249,7 +249,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_IntegrityCheck_FileUriSemicolonPayloadDoesNotCreateDatabase_Issue3220()
     {
-        var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_db_uri_injection_{Guid.NewGuid():N}.db");
+        var missingDb = TestProjectHelper.CreateTempDbPath("cdidx_db_uri_injection");
         var uri = new Uri(missingDb).AbsoluteUri + ";Mode=ReadWriteCreate";
         try
         {
@@ -268,7 +268,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_IntegrityCheck_FileUriJsonReportsUriWithoutPathNormalization_Issue3221()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_uri_display_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_uri_display");
         try
         {
             InitializeEmptyDb(dbPath);
@@ -288,7 +288,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_Schema_FileUriHumanOutputReportsUriWithoutPathNormalization_Issue3221()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_uri_schema_display_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_uri_schema_display");
         try
         {
             InitializeEmptyDb(dbPath);
@@ -308,7 +308,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_MissingDb_JsonShapeIncludesHint()
     {
-        var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_db_missing_{Guid.NewGuid():N}.db");
+        var missingDb = TestProjectHelper.CreateTempDbPath("cdidx_db_missing");
 
         var (exitCode, json) = RunAndCaptureJson(["--integrity-check", "--db", missingDb, "--json"]);
 
@@ -321,7 +321,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_CleanDb_ReturnsOk()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_clean_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_clean");
         try
         {
             InitializeEmptyDb(dbPath);
@@ -341,7 +341,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_CleanDb_JsonReportsOkTrueAndEmptyIssues()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_clean_json_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_clean_json");
         try
         {
             InitializeEmptyDb(dbPath);
@@ -364,7 +364,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_IntegritySubcommand_JsonReportsOk_Issue3958()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_integrity_alias_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_integrity_alias");
         try
         {
             InitializeEmptyDb(dbPath);
@@ -384,7 +384,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_IntegrityCheck_JsonCancellationReturnsInterrupted_Issue3811()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_integrity_cancel_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_integrity_cancel");
         try
         {
             InitializeEmptyDb(dbPath);
@@ -409,7 +409,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_IntegrityCheck_JsonReportsStableErrorSeverity()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_integrity_error_json_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_integrity_error_json");
         DbCommandRunner.IntegrityCheckRowsForTesting = () => ["simulated corruption"];
         try
         {
@@ -433,7 +433,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_Schema_JsonIncludesTablesAndUserVersion()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_schema_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_schema");
         try
         {
             InitializeEmptyDb(dbPath);
@@ -460,7 +460,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_Schema_JsonFiltersByTypeAndName_Issue3958()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_schema_filter_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_schema_filter");
         try
         {
             InitializeEmptyDb(dbPath);
@@ -486,7 +486,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_Schema_SummaryOnlyOmitsEntriesButKeepsCounts_Issue3958()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_schema_summary_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_schema_summary");
         try
         {
             InitializeEmptyDb(dbPath);
@@ -511,7 +511,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_Schema_JsonReportsObjectTypeOmissionsWhenEntryLimitTruncates()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_schema_truncated_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_schema_truncated");
         try
         {
             using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
@@ -540,7 +540,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_Prune_DryRunCountsAndApplyDeletesOrphans()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_prune_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_prune");
         try
         {
             InitializeDbWithOrphans(dbPath);
@@ -572,7 +572,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_PruneApply_JsonReportsWalCheckpointWarning_Issue3514()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_prune_wal_warning_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_prune_wal_warning");
         try
         {
             InitializeDbWithOrphans(dbPath);
@@ -596,7 +596,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_PruneDryRun_ReportsMaintenanceProgress_Issue3811()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_prune_progress_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_prune_progress");
         var progress = new List<string>();
         try
         {
@@ -623,9 +623,8 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_CheckpointAndRestore_RestoresDatabaseBytes()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint");
         var dbPath = Path.Combine(root, "codeindex.db");
-        Directory.CreateDirectory(root);
         try
         {
             InitializeEmptyDb(dbPath);
@@ -653,9 +652,8 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_CheckpointDryRun_JsonPreviewsFilesWithoutCreatingCheckpoint_Issue3937()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_dry_run_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_dry_run");
         var dbPath = Path.Combine(root, "codeindex.db");
-        Directory.CreateDirectory(root);
         try
         {
             File.WriteAllText(dbPath, "db");
@@ -683,12 +681,11 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_CheckpointRejectsOversizedNameBeforePathConstruction_Issue3124()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_name_cap_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_name_cap");
         var dbPath = Path.Combine(root, "codeindex.db");
         var name = new string('a', DbCommandRunner.MaxCheckpointNameLength + 1);
         try
         {
-            Directory.CreateDirectory(root);
             File.WriteAllText(dbPath, "db");
 
             var (exitCode, _, stderr) = RunAndCaptureStreams(["checkpoint", name, "--db", dbPath]);
@@ -711,11 +708,10 @@ public class DbCommandRunnerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_private_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_private");
         var dbPath = Path.Combine(root, "codeindex.db");
         try
         {
-            Directory.CreateDirectory(root);
             File.WriteAllText(dbPath, "db");
             File.WriteAllText(dbPath + "-wal", "wal");
             File.WriteAllText(dbPath + "-shm", "shm");
@@ -741,11 +737,10 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_CheckpointManifestOmitsAbsoluteDbPath_Issue3833()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_manifest_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_manifest");
         var dbPath = Path.Combine(root, "codeindex.db");
         try
         {
-            Directory.CreateDirectory(root);
             File.WriteAllText(dbPath, "db");
 
             var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "manifest", "--db", dbPath]);
@@ -765,11 +760,10 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_CheckpointJsonSuccessKeepsDiagnosticsArray_Issue3812()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_json_contract_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_json_contract");
         var dbPath = Path.Combine(root, "codeindex.db");
         try
         {
-            Directory.CreateDirectory(root);
             File.WriteAllText(dbPath, "db");
 
             var (checkpointExit, json) = RunAndCaptureJson(["checkpoint", "contract", "--db", dbPath, "--json"]);
@@ -788,12 +782,11 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_CheckpointInjectedClockControlsNameAndManifest_Issue3963()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_clock_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_clock");
         var dbPath = Path.Combine(root, "codeindex.db");
         var fixedTime = new DateTimeOffset(2026, 6, 23, 4, 5, 6, 789, TimeSpan.Zero);
         try
         {
-            Directory.CreateDirectory(root);
             File.WriteAllText(dbPath, "db");
             DbCommandRunner.UtcNowForTesting = () => fixedTime;
 
@@ -819,12 +812,11 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_CheckpointAutomaticNameAvoidsInjectedClockCollision_Issue3987()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_collision_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_collision");
         var dbPath = Path.Combine(root, "codeindex.db");
         var fixedTime = new DateTimeOffset(2026, 6, 23, 4, 5, 6, 789, TimeSpan.Zero);
         try
         {
-            Directory.CreateDirectory(root);
             File.WriteAllText(dbPath, "db");
             DbCommandRunner.UtcNowForTesting = () => fixedTime;
 
@@ -853,11 +845,10 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_CheckpointJsonReportsRecoverableFileNameEnumerationFailure_Issue3833()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_enum_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_enum");
         var dbPath = Path.Combine(root, "codeindex.db");
         try
         {
-            Directory.CreateDirectory(root);
             File.WriteAllText(dbPath, "db");
             DbCommandRunner.EnumerateCheckpointFileNamesForTesting = _ => throw new IOException("secret local enumeration path");
 
@@ -879,11 +870,10 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_Checkpoint_JsonReportsFileEnumerationDiagnostic_Issue3812()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_file_enum_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_file_enum");
         var dbPath = Path.Combine(root, "codeindex.db");
         try
         {
-            Directory.CreateDirectory(root);
             File.WriteAllText(dbPath, "db");
             DbCommandRunner.EnumerateCheckpointFilesForTesting = _ => throw new UnauthorizedAccessException("checkpoint file enumeration denied");
 
@@ -909,12 +899,11 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_CheckpointTempCleanupFailurePreservesOriginalFailure_Issue3029()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_cleanup_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_cleanup");
         var dbPath = Path.Combine(root, "codeindex.db");
         string? cleanupPath = null;
         try
         {
-            Directory.CreateDirectory(root);
             InitializeEmptyDb(dbPath);
 
             var checkpointRoot = dbPath + ".checkpoints";
@@ -945,7 +934,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void TryDeleteTemporaryDirectory_RejectsTargetOutsideSafeRoot_Issue3379()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_cleanup_safe_root_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_cleanup_safe_root");
         var safeRoot = Path.Combine(root, "safe");
         var outsideRoot = Path.Combine(root, "outside");
         var outsideTarget = Path.Combine(outsideRoot, ".tmp-malformed");
@@ -981,7 +970,7 @@ public class DbCommandRunnerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_cleanup_reparse_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_cleanup_reparse");
         var safeRoot = Path.Combine(root, "safe");
         var outsideTarget = Path.Combine(root, "outside-target");
         var cleanupTarget = Path.Combine(safeRoot, ".tmp-linked");
@@ -1016,9 +1005,8 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_CheckpointsList_JsonIncludesCreatedCheckpoint()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_list_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_list");
         var dbPath = Path.Combine(root, "codeindex.db");
-        Directory.CreateDirectory(root);
         try
         {
             InitializeEmptyDb(dbPath);
@@ -1042,7 +1030,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_CheckpointsList_CapsCheckpointAndFileEnumeration_Issue2880()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_list_cap_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_list_cap");
         var dbPath = Path.Combine(root, "codeindex.db");
         var checkpointRoot = dbPath + ".checkpoints";
         Directory.CreateDirectory(checkpointRoot);
@@ -1081,9 +1069,8 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_RestoreIncompleteCheckpoint_ReturnsErrorAndKeepsDatabase()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_bad_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_bad");
         var dbPath = Path.Combine(root, "codeindex.db");
-        Directory.CreateDirectory(root);
         try
         {
             InitializeEmptyDb(dbPath);
@@ -1110,9 +1097,8 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_RestoreFailureAfterBackup_RestoresOriginalDatabase()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_fail_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_fail");
         var dbPath = Path.Combine(root, "codeindex.db");
-        Directory.CreateDirectory(root);
         try
         {
             InitializeEmptyDb(dbPath);
@@ -1143,9 +1129,8 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_RestoreRollbackFailurePreservesPrimaryFailure_Issue3514()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_rollback_fail_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_rollback_fail");
         var dbPath = Path.Combine(root, "codeindex.db");
-        Directory.CreateDirectory(root);
         try
         {
             InitializeEmptyDb(dbPath);
@@ -1181,9 +1166,8 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_RestoreRollbackFailureJsonIncludesStructuredMetadata_Issue3833()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_rollback_json_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_rollback_json");
         var dbPath = Path.Combine(root, "codeindex.db");
-        Directory.CreateDirectory(root);
         try
         {
             InitializeEmptyDb(dbPath);
@@ -1220,9 +1204,8 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_RestoreBackupsListAndPruneOrdersByRecency_Issue3833()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_restore_backups_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_restore_backups");
         var dbPath = Path.Combine(root, "codeindex.db");
-        Directory.CreateDirectory(root);
         try
         {
             File.WriteAllText(dbPath, "current");
@@ -1260,9 +1243,8 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_RestoreBackupsRejectsDryRunWithoutDeleting_Issue3833()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_restore_backups_dry_run_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_restore_backups_dry_run");
         var dbPath = Path.Combine(root, "codeindex.db");
-        Directory.CreateDirectory(root);
         try
         {
             File.WriteAllText(dbPath, "current");
@@ -1285,9 +1267,8 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_RestoreBackupsPruneSkipsDeletionWhenScanTruncated_Issue3833()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_restore_backups_truncated_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_restore_backups_truncated");
         var dbPath = Path.Combine(root, "codeindex.db");
-        Directory.CreateDirectory(root);
         try
         {
             File.WriteAllText(dbPath, "current");
@@ -1320,9 +1301,8 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_RestoreBackupsPruneDeletesWhenOnlyFileInspectionTruncated_Issue3833()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_restore_backups_file_truncated_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_restore_backups_file_truncated");
         var dbPath = Path.Combine(root, "codeindex.db");
-        Directory.CreateDirectory(root);
         try
         {
             File.WriteAllText(dbPath, "current");
@@ -1362,9 +1342,8 @@ public class DbCommandRunnerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_symlink_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_symlink");
         var dbPath = Path.Combine(root, "codeindex.db");
-        Directory.CreateDirectory(root);
         try
         {
             InitializeEmptyDb(dbPath);
@@ -1398,9 +1377,8 @@ public class DbCommandRunnerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_sidecar_symlink_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_sidecar_symlink");
         var dbPath = Path.Combine(root, "codeindex.db");
-        Directory.CreateDirectory(root);
         try
         {
             InitializeEmptyDb(dbPath);
@@ -1433,10 +1411,9 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_RestoreTemporaryNamesIncludeCollisionResistantSuffix_Issue3031()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_restore_suffix_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_restore_suffix");
         var dbPath = Path.Combine(root, "codeindex.db");
         var inspected = false;
-        Directory.CreateDirectory(root);
         try
         {
             InitializeEmptyDb(dbPath);
@@ -1468,10 +1445,9 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_RestoreTempCleanupFailureWarnsWithoutFailing_Issue3030()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_restore_cleanup_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_restore_cleanup");
         var dbPath = Path.Combine(root, "codeindex.db");
         string? cleanupPath = null;
-        Directory.CreateDirectory(root);
         try
         {
             InitializeEmptyDb(dbPath);
@@ -1514,12 +1490,11 @@ public class DbCommandRunnerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_restore_private_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_restore_private");
         var dbPath = Path.Combine(root, "codeindex.db");
         var inspected = false;
         try
         {
-            Directory.CreateDirectory(root);
             File.WriteAllText(dbPath, "original");
             var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
             Assert.Equal(CommandExitCodes.Success, checkpointExit);
@@ -1617,7 +1592,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_Schema_JsonCapsEntriesAndSqlText_Issue2881()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_schema_cap_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_schema_cap");
         try
         {
             using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder

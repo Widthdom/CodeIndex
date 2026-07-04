@@ -1067,9 +1067,7 @@ public class CdidxConfigFileTests
 
     private static string CreateTempDir()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"cdidx_config_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(path);
-        return path;
+        return TestProjectHelper.CreateTempProject("cdidx_config");
     }
 
     private static (int ExitCode, string Stdout, string Stderr) CaptureConsole(Func<int> action)

@@ -2725,8 +2725,7 @@ public partial class IndexCommandRunnerTests
     public void Run_UpdateMode_DegradedWarningUsesResolvedProjectDbPathWhenCwdDiffers()
     {
         var projectRoot = CreateTempProject();
-        var otherCwd = Path.Combine(Path.GetTempPath(), $"cdidx_other_cwd_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(otherCwd);
+        var otherCwd = TestProjectHelper.CreateTempProject("cdidx_other_cwd");
         try
         {
             var sourcePath = Path.Combine(projectRoot, "app.cs");
@@ -2767,8 +2766,7 @@ public partial class IndexCommandRunnerTests
     public void Run_UpdateMode_DegradedWarningUsesExplicitDbPath()
     {
         var projectRoot = CreateTempProject();
-        var customDbDir = Path.Combine(Path.GetTempPath(), $"cdidx_custom_db_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(customDbDir);
+        var customDbDir = TestProjectHelper.CreateTempProject("cdidx_custom_db");
         try
         {
             var sourcePath = Path.Combine(projectRoot, "app.cs");

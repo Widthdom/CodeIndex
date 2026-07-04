@@ -7,8 +7,7 @@ public sealed class ReportLogTailBuilderTests
     [Fact]
     public void ReadResultReportsLineCharTruncation_Issue4179()
     {
-        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_report_log_tail_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(workDir);
+        var workDir = TestProjectHelper.CreateTempProject("cdidx_report_log_tail");
         var path = Path.Combine(workDir, "stderr-20260629.log");
         try
         {

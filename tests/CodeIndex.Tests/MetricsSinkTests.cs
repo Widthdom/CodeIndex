@@ -186,10 +186,7 @@ public class MetricsSinkTests
         finally
         {
             foreach (var path in new[] { metricsPath, metricsPath + ".1", metricsPath + ".2", metricsPath + ".3" })
-            {
-                if (File.Exists(path))
-                    File.Delete(path);
-            }
+                TestProjectHelper.DeleteFile(path);
         }
     }
 
@@ -229,10 +226,7 @@ public class MetricsSinkTests
         finally
         {
             foreach (var path in new[] { metricsPath, metricsPath + ".1", metricsPath + ".2" })
-            {
-                if (File.Exists(path))
-                    File.Delete(path);
-            }
+                TestProjectHelper.DeleteFile(path);
         }
     }
 
@@ -268,10 +262,8 @@ public class MetricsSinkTests
         }
         finally
         {
-            if (File.Exists(metricsPath))
-                File.Delete(metricsPath);
-            if (Directory.Exists(metricsPath))
-                TestProjectHelper.DeleteDirectory(metricsPath);
+            TestProjectHelper.DeleteFile(metricsPath);
+            TestProjectHelper.DeleteDirectory(metricsPath);
         }
     }
 
@@ -300,8 +292,7 @@ public class MetricsSinkTests
         finally
         {
             Environment.SetEnvironmentVariable(MetricsSink.EnvVarName, original);
-            if (File.Exists(metricsPath))
-                File.Delete(metricsPath);
+            TestProjectHelper.DeleteFile(metricsPath);
         }
     }
 

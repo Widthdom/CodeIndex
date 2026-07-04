@@ -10,6 +10,7 @@ using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Diagnostics;
 using CodeIndex.Mcp;
+using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
@@ -25,12 +26,14 @@ namespace CodeIndex.Tests;
 [Collection("SQLite pool sensitive")]
 public class HttpMcpTransportTests : IDisposable
 {
+    private readonly string _dbDir;
     private readonly string _dbPath;
     private readonly DbContext _db;
 
     public HttpMcpTransportTests()
     {
-        _dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_http_{Guid.NewGuid():N}.db");
+        _dbDir = TestProjectHelper.CreateTempProject("cdidx_mcp_http");
+        _dbPath = Path.Combine(_dbDir, "codeindex.db");
         _db = new DbContext(_dbPath);
         _db.InitializeSchema();
     }
@@ -1648,7 +1651,8 @@ public class HttpMcpTransportTests : IDisposable
     public void Dispose()
     {
         _db.Dispose();
-        try { File.Delete(_dbPath); } catch { /* best-effort cleanup */ }
+        SqliteConnection.ClearAllPools();
+        TestProjectHelper.DeleteDirectory(_dbDir);
         GC.SuppressFinalize(this);
     }
 

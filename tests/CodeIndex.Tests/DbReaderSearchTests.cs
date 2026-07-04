@@ -1758,7 +1758,8 @@ public partial class DbReaderTests
         // Simulate by writing a mismatched `fold_key_version` into codeindex_meta and
         // confirming the reader falls back to NOCASE. Rebuild would restamp to current.
         // #86 3rd pass: fold_key_version 不一致時は NOCASE fallback に降格することを固定する。
-        var mismatchPath = Path.Combine(Path.GetTempPath(), $"codeindex_fold_version_{Guid.NewGuid():N}.db");
+        var mismatchDir = TestProjectHelper.CreateTempProject("codeindex_fold_version");
+        var mismatchPath = Path.Combine(mismatchDir, "codeindex.db");
         try
         {
             using var db = new DbContext(mismatchPath);
@@ -1793,7 +1794,7 @@ public partial class DbReaderTests
         finally
         {
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            if (File.Exists(mismatchPath)) File.Delete(mismatchPath);
+            TestProjectHelper.DeleteDirectory(mismatchDir);
         }
     }
 
@@ -1805,7 +1806,8 @@ public partial class DbReaderTests
         // match the current runtime's observable fold output before folded keys are trusted.
         // #97: version が同じでも runtime drift はあり得るため、fingerprint 不一致時は
         // fold trusted を外して NOCASE fallback に降格する。
-        var mismatchPath = Path.Combine(Path.GetTempPath(), $"codeindex_fold_fingerprint_{Guid.NewGuid():N}.db");
+        var mismatchDir = TestProjectHelper.CreateTempProject("codeindex_fold_fingerprint");
+        var mismatchPath = Path.Combine(mismatchDir, "codeindex.db");
         try
         {
             using var db = new DbContext(mismatchPath);
@@ -1835,7 +1837,7 @@ public partial class DbReaderTests
         finally
         {
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            if (File.Exists(mismatchPath)) File.Delete(mismatchPath);
+            TestProjectHelper.DeleteDirectory(mismatchDir);
         }
     }
 
@@ -1846,7 +1848,8 @@ public partial class DbReaderTests
         // fall back to the ASCII `COLLATE NOCASE` path and still return correct ASCII results.
         // Non-ASCII casing is expected to miss (documented limitation until reindex).
         // Legacy DB は fold フラグ未設定なら NOCASE fallback。ASCII は動き続ける。
-        var legacyPath = Path.Combine(Path.GetTempPath(), $"codeindex_fold_legacy_{Guid.NewGuid():N}.db");
+        var legacyDir = TestProjectHelper.CreateTempProject("codeindex_fold_legacy");
+        var legacyPath = Path.Combine(legacyDir, "codeindex.db");
         try
         {
             using var legacyDb = new DbContext(legacyPath);
@@ -1875,7 +1878,7 @@ public partial class DbReaderTests
         finally
         {
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            if (File.Exists(legacyPath)) File.Delete(legacyPath);
+            TestProjectHelper.DeleteDirectory(legacyDir);
         }
     }
 
@@ -2090,7 +2093,8 @@ public partial class DbReaderTests
     [Fact]
     public void SearchReferences_LegacyDatabaseWithoutReferenceLinesTableStillWorks()
     {
-        var legacyPath = Path.Combine(Path.GetTempPath(), $"codeindex_legacy_reader_{Guid.NewGuid():N}.db");
+        var legacyDir = TestProjectHelper.CreateTempProject("codeindex_legacy_reader");
+        var legacyPath = Path.Combine(legacyDir, "codeindex.db");
         try
         {
             using var connection = CreateLegacyReferenceConnection(legacyPath);
@@ -2105,7 +2109,7 @@ public partial class DbReaderTests
         }
         finally
         {
-            try { File.Delete(legacyPath); } catch { }
+            TestProjectHelper.DeleteDirectory(legacyDir);
         }
     }
 
