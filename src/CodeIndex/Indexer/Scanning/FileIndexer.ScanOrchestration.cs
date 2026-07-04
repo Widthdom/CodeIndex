@@ -76,17 +76,18 @@ public partial class FileIndexer
         };
     }
 
-    private static List<string> MaterializePathSet(HashSet<string> paths) => paths.Count == 0 ? [] : new List<string>(paths);
+    private static IReadOnlyList<string> MaterializePathSet(HashSet<string> paths)
+        => paths.Count == 0 ? Array.Empty<string>() : new List<string>(paths);
 
     private static IReadOnlyDictionary<string, int> MaterializeLanguageCounts(Dictionary<string, int> counts)
         => counts.Count == 0
             ? EmptyLanguageCounts
             : new Dictionary<string, int>(counts, StringComparer.Ordinal);
 
-    private static List<string> MaterializeSortedPathSet(HashSet<string> paths)
+    private static IReadOnlyList<string> MaterializeSortedPathSet(HashSet<string> paths)
     {
         if (paths.Count == 0)
-            return [];
+            return Array.Empty<string>();
 
         var sorted = new List<string>(paths);
         sorted.Sort(StringComparer.Ordinal);
