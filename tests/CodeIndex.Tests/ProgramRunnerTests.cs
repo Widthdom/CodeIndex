@@ -1749,7 +1749,7 @@ public class ProgramRunnerTests
     [Fact]
     public void VerifyFileSha256_AcceptsExpectedDigest()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"cdidx-install-checksum-{Guid.NewGuid():N}.sh");
+        var path = TestProjectHelper.CreateTempFilePath("cdidx-install-checksum", ".sh");
         var content = Encoding.UTF8.GetBytes("#!/bin/sh\necho ok\n");
         File.WriteAllBytes(path, content);
         try
@@ -1767,7 +1767,7 @@ public class ProgramRunnerTests
     [Fact]
     public void VerifyFileSha256_RejectsMismatchedDigest()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"cdidx-install-checksum-{Guid.NewGuid():N}.sh");
+        var path = TestProjectHelper.CreateTempFilePath("cdidx-install-checksum", ".sh");
         File.WriteAllText(path, "#!/bin/sh\necho ok\n");
         try
         {
@@ -2070,7 +2070,7 @@ exit 7
     [Fact]
     public async Task DownloadInstallerScriptAsync_CancelsStalledBody()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"cdidx-install-timeout-{Guid.NewGuid():N}.sh");
+        var path = TestProjectHelper.CreateTempFilePath("cdidx-install-timeout", ".sh");
         using var client = new HttpClient(new StaticResponseHandler(new StalledContent()))
         {
             Timeout = Timeout.InfiniteTimeSpan,
@@ -2460,7 +2460,7 @@ exit 7
     [Fact]
     public void TryCheckInstallDirectoryWritable_FilePathReportsDiagnostic_Issue3831()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"cdidx_install_dir_file_{Guid.NewGuid():N}");
+        var path = TestProjectHelper.CreateTempFilePath("cdidx_install_dir_file", string.Empty);
         try
         {
             File.WriteAllText(path, "");
