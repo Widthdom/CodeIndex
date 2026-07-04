@@ -4456,8 +4456,7 @@ public sealed class Caller
             return;
 
         var projectRoot = CreateTempProject();
-        var dbParent = Path.Combine(Path.GetTempPath(), $"cdidx_readonly_db_parent_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dbParent);
+        var dbParent = TestProjectHelper.CreateTempProject("cdidx_readonly_db_parent");
         var dbPath = Path.Combine(dbParent, "codeindex.db");
         try
         {
