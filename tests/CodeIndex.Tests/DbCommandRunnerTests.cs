@@ -783,12 +783,11 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_CheckpointInjectedClockControlsNameAndManifest_Issue3963()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_clock_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_clock");
         var dbPath = Path.Combine(root, "codeindex.db");
         var fixedTime = new DateTimeOffset(2026, 6, 23, 4, 5, 6, 789, TimeSpan.Zero);
         try
         {
-            Directory.CreateDirectory(root);
             File.WriteAllText(dbPath, "db");
             DbCommandRunner.UtcNowForTesting = () => fixedTime;
 
@@ -814,12 +813,11 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_CheckpointAutomaticNameAvoidsInjectedClockCollision_Issue3987()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_collision_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_collision");
         var dbPath = Path.Combine(root, "codeindex.db");
         var fixedTime = new DateTimeOffset(2026, 6, 23, 4, 5, 6, 789, TimeSpan.Zero);
         try
         {
-            Directory.CreateDirectory(root);
             File.WriteAllText(dbPath, "db");
             DbCommandRunner.UtcNowForTesting = () => fixedTime;
 
