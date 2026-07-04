@@ -288,12 +288,14 @@ public static partial class SymbolExtractor
         SymbolRecord? activeTarget)
     {
         var line = GetLineOrEmpty(lines, lineNumber);
-        var name = GetMsBuildAttributeValue(line, "Name");
-        if (string.Equals(elementName, "Target", StringComparison.OrdinalIgnoreCase)
-            && !string.IsNullOrWhiteSpace(name))
+        if (string.Equals(elementName, "Target", StringComparison.OrdinalIgnoreCase))
         {
-            (symbols ??= []).Add(CreateMsBuildSymbol(fileId, "function", name, lineNumber, line, activeTarget));
-            return symbols.Count - 1;
+            var name = GetMsBuildAttributeValue(line, "Name");
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                (symbols ??= []).Add(CreateMsBuildSymbol(fileId, "function", name, lineNumber, line, activeTarget));
+                return symbols.Count - 1;
+            }
         }
 
         if (string.Equals(elementName, "Import", StringComparison.OrdinalIgnoreCase))
