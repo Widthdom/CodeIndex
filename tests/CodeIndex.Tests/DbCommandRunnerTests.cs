@@ -433,7 +433,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_Schema_JsonIncludesTablesAndUserVersion()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_schema_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_schema");
         try
         {
             InitializeEmptyDb(dbPath);
@@ -460,7 +460,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_Schema_JsonFiltersByTypeAndName_Issue3958()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_schema_filter_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_schema_filter");
         try
         {
             InitializeEmptyDb(dbPath);
@@ -486,7 +486,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_Schema_SummaryOnlyOmitsEntriesButKeepsCounts_Issue3958()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_schema_summary_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_schema_summary");
         try
         {
             InitializeEmptyDb(dbPath);
