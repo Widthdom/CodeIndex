@@ -5641,7 +5641,7 @@ public partial class McpServer
             else if (language == "typescript")
                 hasTypeScriptTargets = true;
         }
-        var knownReadableFileSizes = new Dictionary<string, long>(StringComparer.Ordinal);
+        var knownReadableFileSizes = new Dictionary<string, long>(files.Count, StringComparer.Ordinal);
         await EmitProgressNotificationAsync(progressToken, 0, files.Count, "Index scan complete; indexing files.").ConfigureAwait(false);
         var csharpPrepassStatReuse = new Dictionary<string, IndexedFileStatReuseResult?>(StringComparer.Ordinal);
         bool IsGeneratedExtractionSuppressed(CSharpStaticInterfacePrepass.FileTarget target)

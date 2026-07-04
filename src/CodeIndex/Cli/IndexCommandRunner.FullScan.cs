@@ -885,7 +885,7 @@ public static partial class IndexCommandRunner
 
             languageCounts[language] = languageCounts.TryGetValue(language, out var count) ? count + 1 : 1;
         }
-        var knownReadableFileSizes = new Dictionary<string, long>(StringComparer.Ordinal);
+        var knownReadableFileSizes = new Dictionary<string, long>(files.Count, StringComparer.Ordinal);
         var errorList = discovery.ErrorList;
         var warningList = discovery.WarningList;
         AddProjectMarkerFingerprintWarnings(currentHotspotFamilyMarkerFingerprints, warningList, options);

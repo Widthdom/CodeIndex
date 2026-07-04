@@ -34,6 +34,7 @@ affected:
 - **Reader contract readiness stamps batch related metadata** — CLI full scans and MCP indexes now persist C# symbol-name, SQL graph, and symbols-only graph contract metadata with grouped upserts during successful finalization.
 - **Index startup batches fixed metadata reads** — CLI index startup now reads fixed prior-run metadata keys with one multi-key query instead of issuing one metadata lookup per field.
 - **Index startup batches hotspot metadata snapshots** — CLI index startup now reads per-language hotspot-family version and marker fingerprints with multi-key queries instead of one lookup per language and field.
+- **Fresh bytes-read accounting pre-sizes file-size caches** — CLI and MCP indexing now allocate the known-readable-size cache with the discovered file count, avoiding dictionary growth churn on large first scans.
 
 ## 日本語
 
@@ -63,3 +64,4 @@ affected:
 - **reader contract readiness stamp の関連 metadata をまとめます** — CLI full scan と MCP index は成功時 finalization で C# symbol-name、SQL graph、symbols-only graph contract metadata を grouped upsert で保存するようになりました。
 - **index startup の固定 metadata read をまとめます** — CLI index startup は prior-run metadata の固定キーをフィールドごとの個別 lookup ではなく、1回の multi-key query で読み出すようになりました。
 - **index startup の hotspot metadata snapshot をまとめます** — CLI index startup は言語別 hotspot-family version と marker fingerprint を、言語/フィールドごとの個別 lookup ではなく multi-key query で読み出すようになりました。
+- **fresh bytes-read accounting の file-size cache を事前確保します** — CLI と MCP の index は known-readable-size cache を発見済み file count で確保し、大規模初回 scan での dictionary growth churn を避けるようになりました。
