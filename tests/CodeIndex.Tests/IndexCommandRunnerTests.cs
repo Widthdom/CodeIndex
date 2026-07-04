@@ -6857,7 +6857,7 @@ public sealed class Caller
         => TestProjectHelper.DeleteFile(path);
 
     private static string CreateTempDbPath(string prefix)
-        => Path.Combine(Path.GetTempPath(), $"{prefix}_{Guid.NewGuid():N}.db");
+        => TestProjectHelper.CreateTempDbPath(prefix);
 
     [Fact]
     public void IndexLock_Acquire_OnPosix_WritesPrivateInfoFile()
