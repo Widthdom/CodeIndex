@@ -2035,7 +2035,7 @@ exit 7
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture("XDG_CACHE_HOME", UpdateChecker.DisableEnvVar);
-            var cacheRoot = Path.Combine(Path.GetTempPath(), $"cdidx_update_cache_{Guid.NewGuid():N}");
+            var cacheRoot = TestProjectHelper.CreateTempProject("cdidx_update_cache");
             env.Set("XDG_CACHE_HOME", cacheRoot);
             env.Set(UpdateChecker.DisableEnvVar, null);
             WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
@@ -2101,7 +2101,7 @@ exit 7
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture("XDG_CACHE_HOME", UpdateChecker.DisableEnvVar);
-            var cacheRoot = Path.Combine(Path.GetTempPath(), $"cdidx_update_cache_{Guid.NewGuid():N}");
+            var cacheRoot = TestProjectHelper.CreateTempProject("cdidx_update_cache");
             env.Set("XDG_CACHE_HOME", cacheRoot);
             env.Set(UpdateChecker.DisableEnvVar, null);
             WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
@@ -2152,7 +2152,7 @@ exit 7
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture("XDG_CACHE_HOME", UpdateChecker.DisableEnvVar);
-            var cacheRoot = Path.Combine(Path.GetTempPath(), $"cdidx_update_cache_{Guid.NewGuid():N}");
+            var cacheRoot = TestProjectHelper.CreateTempProject("cdidx_update_cache");
             env.Set("XDG_CACHE_HOME", cacheRoot);
             env.Set(UpdateChecker.DisableEnvVar, null);
             WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
@@ -2211,7 +2211,7 @@ exit 0
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture("XDG_CACHE_HOME", UpdateChecker.DisableEnvVar);
-            var cacheRoot = Path.Combine(Path.GetTempPath(), $"cdidx_update_cache_{Guid.NewGuid():N}");
+            var cacheRoot = TestProjectHelper.CreateTempProject("cdidx_update_cache");
             env.Set("XDG_CACHE_HOME", cacheRoot);
             env.Set(UpdateChecker.DisableEnvVar, null);
             WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
@@ -2274,7 +2274,7 @@ exit 7
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture("XDG_CACHE_HOME", UpdateChecker.DisableEnvVar);
-            var cacheRoot = Path.Combine(Path.GetTempPath(), $"cdidx_update_cache_{Guid.NewGuid():N}");
+            var cacheRoot = TestProjectHelper.CreateTempProject("cdidx_update_cache");
             env.Set("XDG_CACHE_HOME", cacheRoot);
             env.Set(UpdateChecker.DisableEnvVar, null);
             WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
@@ -2324,7 +2324,7 @@ exit 7
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture("XDG_CACHE_HOME", UpdateChecker.DisableEnvVar);
-            var cacheRoot = Path.Combine(Path.GetTempPath(), $"cdidx_update_cache_{Guid.NewGuid():N}");
+            var cacheRoot = TestProjectHelper.CreateTempProject("cdidx_update_cache");
             env.Set("XDG_CACHE_HOME", cacheRoot);
             env.Set(UpdateChecker.DisableEnvVar, null);
             WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
@@ -2379,7 +2379,7 @@ exit 7
     {
         using var env = EnvironmentVariableScope.Capture(UpdateChecker.DisableEnvVar);
         env.Set(UpdateChecker.DisableEnvVar, null);
-        var cacheRoot = Path.Combine(Path.GetTempPath(), $"cdidx_update_cache_private_{Guid.NewGuid():N}");
+        var cacheRoot = TestProjectHelper.CreateTempProject("cdidx_update_cache_private");
         var cachePath = Path.Combine(cacheRoot, "cdidx", "update-check.json");
         try
         {
