@@ -752,6 +752,9 @@ public static partial class SymbolExtractor
         {
             var line = lines[i];
             var hasAttributeAssignment = line.IndexOf('=') >= 0;
+            string? signature = null;
+            string Signature() => signature ??= line.Trim();
+
             if (hasAttributeAssignment && line.Contains("x:Class", StringComparison.Ordinal))
             {
                 foreach (Match classMatch in XamlClassRegex.Matches(line))
@@ -767,7 +770,7 @@ public static partial class SymbolExtractor
                         Line = i + 1,
                         StartLine = i + 1,
                         EndLine = i + 1,
-                        Signature = line.Trim(),
+                        Signature = Signature(),
                     });
                 }
             }
@@ -787,7 +790,7 @@ public static partial class SymbolExtractor
                         Line = i + 1,
                         StartLine = i + 1,
                         EndLine = i + 1,
-                        Signature = line.Trim(),
+                        Signature = Signature(),
                     });
                 }
             }
@@ -806,7 +809,7 @@ public static partial class SymbolExtractor
                             Line = i + 1,
                             StartLine = i + 1,
                             EndLine = i + 1,
-                            Signature = line.Trim(),
+                            Signature = Signature(),
                         });
                     }
                 }
@@ -827,7 +830,7 @@ public static partial class SymbolExtractor
                         Line = i + 1,
                         StartLine = i + 1,
                         EndLine = i + 1,
-                        Signature = line.Trim(),
+                        Signature = Signature(),
                     });
                 }
             }
@@ -847,7 +850,7 @@ public static partial class SymbolExtractor
                         Line = i + 1,
                         StartLine = i + 1,
                         EndLine = i + 1,
-                        Signature = line.Trim(),
+                        Signature = Signature(),
                     });
                 }
             }
@@ -867,7 +870,7 @@ public static partial class SymbolExtractor
                         Line = i + 1,
                         StartLine = i + 1,
                         EndLine = i + 1,
-                        Signature = line.Trim(),
+                        Signature = Signature(),
                     });
                 }
             }
@@ -887,7 +890,7 @@ public static partial class SymbolExtractor
                         Line = i + 1,
                         StartLine = i + 1,
                         EndLine = i + 1,
-                        Signature = line.Trim(),
+                        Signature = Signature(),
                     });
                 }
             }
