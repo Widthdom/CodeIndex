@@ -653,9 +653,8 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_CheckpointDryRun_JsonPreviewsFilesWithoutCreatingCheckpoint_Issue3937()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_dry_run_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_dry_run");
         var dbPath = Path.Combine(root, "codeindex.db");
-        Directory.CreateDirectory(root);
         try
         {
             File.WriteAllText(dbPath, "db");
@@ -683,12 +682,11 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_CheckpointRejectsOversizedNameBeforePathConstruction_Issue3124()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_name_cap_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_name_cap");
         var dbPath = Path.Combine(root, "codeindex.db");
         var name = new string('a', DbCommandRunner.MaxCheckpointNameLength + 1);
         try
         {
-            Directory.CreateDirectory(root);
             File.WriteAllText(dbPath, "db");
 
             var (exitCode, _, stderr) = RunAndCaptureStreams(["checkpoint", name, "--db", dbPath]);
@@ -711,11 +709,10 @@ public class DbCommandRunnerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_private_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_private");
         var dbPath = Path.Combine(root, "codeindex.db");
         try
         {
-            Directory.CreateDirectory(root);
             File.WriteAllText(dbPath, "db");
             File.WriteAllText(dbPath + "-wal", "wal");
             File.WriteAllText(dbPath + "-shm", "shm");
@@ -741,11 +738,10 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_CheckpointManifestOmitsAbsoluteDbPath_Issue3833()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_manifest_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_manifest");
         var dbPath = Path.Combine(root, "codeindex.db");
         try
         {
-            Directory.CreateDirectory(root);
             File.WriteAllText(dbPath, "db");
 
             var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "manifest", "--db", dbPath]);
@@ -765,11 +761,10 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_CheckpointJsonSuccessKeepsDiagnosticsArray_Issue3812()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_json_contract_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_json_contract");
         var dbPath = Path.Combine(root, "codeindex.db");
         try
         {
-            Directory.CreateDirectory(root);
             File.WriteAllText(dbPath, "db");
 
             var (checkpointExit, json) = RunAndCaptureJson(["checkpoint", "contract", "--db", dbPath, "--json"]);
