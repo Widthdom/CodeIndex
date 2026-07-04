@@ -2903,7 +2903,7 @@ exit 7
         env.Set("XDG_STATE_HOME", null);
         env.Set("XDG_CACHE_HOME", null);
         env.Set("XDG_RUNTIME_DIR", null);
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_xdg_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_global_tool_log_xdg");
         var selected = Path.Combine(root, directoryName);
         try
         {
@@ -2927,7 +2927,7 @@ exit 7
             "XDG_STATE_HOME",
             "XDG_CACHE_HOME",
             "XDG_RUNTIME_DIR");
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_xdg_precedence_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_global_tool_log_xdg_precedence");
         try
         {
             env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", null);
