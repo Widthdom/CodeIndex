@@ -260,8 +260,8 @@ public static partial class SymbolExtractor
             if ((stack?.Count ?? 0) >= StructuredDataMaxYamlDepth || path.Length > StructuredDataMaxPathLength)
                 continue;
 
-            var value = StripYamlInlineComment(match.Groups["value"].Value).Trim();
-            var isContainer = value.Length == 0 || value is "|" or ">" or "|-" or ">-" or "|+" or ">+";
+            var value = StripYamlInlineComment(match.Groups["value"].ValueSpan).Trim();
+            var isContainer = IsYamlContainerValue(value);
             var kind = isContainer ? "namespace" : "property";
 
             traversalNodes++;
@@ -271,7 +271,7 @@ public static partial class SymbolExtractor
             if (isContainer)
             {
                 (stack ??= []).Add(new YamlPathFrame(indent, path));
-                if (value.StartsWith('|') || value.StartsWith('>'))
+                if (!value.IsEmpty && (value[0] == '|' || value[0] == '>'))
                     blockScalarIndent = indent;
             }
         }
@@ -532,7 +532,16 @@ public static partial class SymbolExtractor
         return match.Groups["plain"].ValueSpan.Trim().ToString();
     }
 
-    private static string StripYamlInlineComment(string value)
+    private static bool IsYamlContainerValue(ReadOnlySpan<char> value)
+        => value.IsEmpty
+           || value.SequenceEqual("|")
+           || value.SequenceEqual(">")
+           || value.SequenceEqual("|-")
+           || value.SequenceEqual(">-")
+           || value.SequenceEqual("|+")
+           || value.SequenceEqual(">+");
+
+    private static ReadOnlySpan<char> StripYamlInlineComment(ReadOnlySpan<char> value)
     {
         var inSingle = false;
         var inDouble = false;
