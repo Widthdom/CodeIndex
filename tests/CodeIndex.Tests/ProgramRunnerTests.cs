@@ -3277,8 +3277,7 @@ exit 7
         if (OperatingSystem.IsWindows())
             return;
 
-        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_permissions_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(logDir);
+        var logDir = TestProjectHelper.CreateTempProject("cdidx_global_tool_log_permissions");
         using var env = EnvironmentVariableScope.Capture(
             "CDIDX_FORCE_GLOBAL_TOOL_LOG",
             "CDIDX_DISABLE_PERSISTENT_LOG",
@@ -3320,8 +3319,7 @@ exit 7
     [Fact]
     public void Run_ForcedGlobalToolLogging_WritesUnhandledExceptionChain()
     {
-        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_exception_chain_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(logDir);
+        var logDir = TestProjectHelper.CreateTempProject("cdidx_global_tool_log_exception_chain");
         using var env = EnvironmentVariableScope.Capture(
             "CDIDX_FORCE_GLOBAL_TOOL_LOG",
             "CDIDX_DISABLE_PERSISTENT_LOG",
