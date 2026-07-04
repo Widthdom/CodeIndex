@@ -868,6 +868,7 @@ public static partial class IndexCommandRunner
 
         var discovery = DiscoverFullScanFiles(indexer, projectRoot, options, spinnerFrames, cancellationToken);
         var scanResult = discovery.ScanResult;
+        var scanHadErrors = scanResult.HadErrors;
         var files = discovery.Files;
         var fileTargets = new FullScanFileTarget[files.Count];
         var languageCounts = scanResult.LanguageCounts;
@@ -923,7 +924,7 @@ public static partial class IndexCommandRunner
                 retainedPaths.Add(target.IndexPath);
             indexedJavaScriptTypeScriptConfigPathsBeforePurge = writer.GetIndexedJavaScriptTypeScriptConfigPaths();
         }
-        if (scanResult.HadErrors)
+        if (scanHadErrors)
         {
             SaveScanCheckpoint(
                 scanCheckpointPath,
@@ -984,12 +985,12 @@ public static partial class IndexCommandRunner
         {
             if (purged > 0)
             {
-                var purgeMessage = scanResult.HadErrors
+                var purgeMessage = scanHadErrors
                     ? $"  Purged {purged:N0} previously indexed files that were positively observed as no longer indexable or missing from directories whose file listing completed successfully"
                     : $"  Purged {purged:N0} stale files (missing or no longer indexable)";
                 Console.WriteLine(purgeMessage);
             }
-            if (scanResult.HadErrors)
+            if (scanHadErrors)
                 ConsoleUi.PrintWarning("Skipped authoritative purge outside directories whose file listing completed successfully because some paths could not be scanned.");
         }
 
@@ -2087,7 +2088,7 @@ public static partial class IndexCommandRunner
         // degraded rather than authoritative. Interrupted runs also stay unstamped because
         // ClearReadyFlags() ran at the start.
         // errors==0 の成功 run のみマーカーを打つ。途中失敗は未 stamp のままで縮退扱い。
-        var hasCSharpFilesAfter = startedWithNoIndexedFiles && !scanResult.HadErrors && errors == 0
+        var hasCSharpFilesAfter = startedWithNoIndexedFiles && !scanHadErrors && errors == 0
             ? languageCounts.ContainsKey("csharp")
             : writer.HasAnyFilesWithLanguage("csharp");
         var graphTableAvailableAfter = false;
@@ -2266,7 +2267,7 @@ public static partial class IndexCommandRunner
         }
         warnings += AddPostExtractionHookWarnings(postExtractionHooks, warningList);
         var (totalFiles, totalChunks, totalSymbols, totalReferences) =
-            startedWithNoIndexedFiles && !scanResult.HadErrors && errors == 0
+            startedWithNoIndexedFiles && !scanHadErrors && errors == 0
                 ? (freshCountFiles, freshCountChunks, freshCountSymbols, freshCountReferences)
                 : writer.GetCounts();
         var signalReader = new DbReader(writer.Connection);

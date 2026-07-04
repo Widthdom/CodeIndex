@@ -5626,6 +5626,7 @@ public partial class McpServer
 
         // Scan and index / スキャン・インデックス
         var scanResult = indexer.ScanFilesDetailed(cancellationToken: requestToken);
+        var scanHadErrors = scanResult.HadErrors;
         if (memorySamples != null)
             memorySamples.Add(CaptureMcpIndexMemorySample("scan", runStopwatch));
         var files = scanResult.Files;
@@ -6021,7 +6022,7 @@ public partial class McpServer
         // path is no longer accurate. Bits are only stamped when every file committed without
         // throwing, so a partial failure leaves trust degraded and `validate` still surfaces it.
         // MCP index は CLI と同等に file_issues を永続化するため、成功時は graph / issues の両方を stamp する。
-        var useFreshTargetLanguages = startedWithNoIndexedFiles && !scanResult.HadErrors && errors == 0;
+        var useFreshTargetLanguages = startedWithNoIndexedFiles && !scanHadErrors && errors == 0;
         var hasCSharpFilesAfter = useFreshTargetLanguages
             ? csharpPrepassTargets.Count > 0
             : writer.HasAnyFilesWithLanguage("csharp");
@@ -6033,7 +6034,7 @@ public partial class McpServer
         var sqlGraphContractReadyAfter = !hasSqlFilesAfter;
         var foldReadyAfter = false;
         string? foldReadyReason = null;
-        if (!scanResult.HadErrors && errors == 0)
+        if (!scanHadErrors && errors == 0)
         {
             await EmitProgressNotificationAsync(progressToken, processed, files.Count, "Finalizing index metadata.").ConfigureAwait(false);
             writer.MarkBatchInProgress();
@@ -6200,7 +6201,7 @@ public partial class McpServer
                 IndexCommandRunner.TryStampPlannerStatisticsMaintenanceDiagnostic(writer, indexRunDiagnostics, plannerMaintenanceFailure);
         }
         var (totalFiles, totalChunks, totalSymbols, totalReferences) =
-            startedWithNoIndexedFiles && !scanResult.HadErrors && errors == 0
+            startedWithNoIndexedFiles && !scanHadErrors && errors == 0
                 ? (freshCountFiles, freshCountChunks, freshCountSymbols, freshCountReferences)
                 : writer.GetCounts();
         await EmitProgressNotificationAsync(progressToken, files.Count, files.Count, errors == 0 ? "Indexing complete." : "Indexing completed with errors.").ConfigureAwait(false);
