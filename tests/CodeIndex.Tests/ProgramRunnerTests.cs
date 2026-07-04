@@ -1844,8 +1844,7 @@ public class ProgramRunnerTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var root = Path.Combine(Path.GetTempPath(), $"cdidx_installer_start_{Guid.NewGuid():N}");
-            Directory.CreateDirectory(root);
+            var root = TestProjectHelper.CreateTempProject("cdidx_installer_start");
             try
             {
                 var startInfo = new ProcessStartInfo
@@ -1878,8 +1877,7 @@ public class ProgramRunnerTests
 
         lock (TestConsoleLock.Gate)
         {
-            var root = Path.Combine(Path.GetTempPath(), $"cdidx_installer_timeout_{Guid.NewGuid():N}");
-            Directory.CreateDirectory(root);
+            var root = TestProjectHelper.CreateTempProject("cdidx_installer_timeout");
             var script = Path.Combine(root, "install.sh");
             try
             {
@@ -1913,8 +1911,7 @@ sleep 5
 
         lock (TestConsoleLock.Gate)
         {
-            var root = Path.Combine(Path.GetTempPath(), $"cdidx_installer_cancel_{Guid.NewGuid():N}");
-            Directory.CreateDirectory(root);
+            var root = TestProjectHelper.CreateTempProject("cdidx_installer_cancel");
             var script = Path.Combine(root, "install.sh");
             var pidFile = Path.Combine(root, "installer.pid");
             try
@@ -1950,8 +1947,7 @@ sleep 30
 
         lock (TestConsoleLock.Gate)
         {
-            var root = Path.Combine(Path.GetTempPath(), $"cdidx_installer_output_{Guid.NewGuid():N}");
-            Directory.CreateDirectory(root);
+            var root = TestProjectHelper.CreateTempProject("cdidx_installer_output");
             var script = Path.Combine(root, "install.sh");
             try
             {
@@ -1993,8 +1989,7 @@ exit 0
 
         lock (TestConsoleLock.Gate)
         {
-            var root = Path.Combine(Path.GetTempPath(), $"cdidx_installer_tail_{Guid.NewGuid():N}");
-            Directory.CreateDirectory(root);
+            var root = TestProjectHelper.CreateTempProject("cdidx_installer_tail");
             var script = Path.Combine(root, "install.sh");
             try
             {
