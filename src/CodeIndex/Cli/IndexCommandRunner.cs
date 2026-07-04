@@ -461,9 +461,20 @@ public static partial class IndexCommandRunner
     }
     private static Dictionary<string, string?> GetHotspotFamilyMetaSnapshot(DbContext db, Func<string, string> keyFactory)
     {
+        var languages = FileIndexer.GetHotspotFamilyMarkerLanguages();
         var values = new Dictionary<string, string?>(StringComparer.Ordinal);
-        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
-            values[lang] = db.GetMetaString(keyFactory(lang));
+        var keys = new string[languages.Count];
+        for (var i = 0; i < languages.Count; i++)
+        {
+            var lang = languages[i];
+            keys[i] = keyFactory(lang);
+            values[lang] = null;
+        }
+
+        var metaValues = db.GetMetaStrings(keys);
+        for (var i = 0; i < languages.Count; i++)
+            values[languages[i]] = metaValues.TryGetValue(keys[i], out var value) ? value : null;
+
         return values;
     }
 
