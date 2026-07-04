@@ -2034,6 +2034,36 @@ public sealed class Caller
 
 
     [Fact]
+    public void Run_FreshFullScanWithoutTypeScript_SkipsTypeScriptAugmentationRebuild()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fresh_no_ts_augmentation");
+        var dbPath = CreateTempDbPath("cdidx_fresh_no_ts_augmentation");
+        var rebuiltTypeScriptAugmentation = false;
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "tool.py"), "def run():\n    return 1\n");
+
+            IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting = () => rebuiltTypeScriptAugmentation = true;
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.False(rebuiltTypeScriptAugmentation);
+            using var db = new DbContext(dbPath);
+            Assert.Equal(
+                DbContext.TypeScriptAugmentationVersion.ToString(CultureInfo.InvariantCulture),
+                db.GetMetaString(DbContext.TypeScriptAugmentationVersionMetaKey));
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting = null;
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_NoOpFullScan_DoesNotOptimizeFts()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_noop_fullscan_no_fts_optimize");

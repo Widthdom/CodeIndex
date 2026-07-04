@@ -6061,6 +6061,38 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Index_FreshWithoutTypeScriptSkipsTypeScriptAugmentationRebuild()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_fresh_no_ts_augmentation_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_fresh_no_ts_augmentation");
+        var rebuiltTypeScriptAugmentation = false;
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "tool.py"), "def run():\n    return 1\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = () => rebuiltTypeScriptAugmentation = true;
+
+            var response = CallIndex(server, fixtureDir);
+
+            Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
+            Assert.False(rebuiltTypeScriptAugmentation);
+            using var db = new DbContext(dbPath);
+            db.TryMigrateForRead();
+            Assert.Equal(
+                DbContext.TypeScriptAugmentationVersion.ToString(CultureInfo.InvariantCulture),
+                db.GetMetaString(DbContext.TypeScriptAugmentationVersionMetaKey));
+        }
+        finally
+        {
+            McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = null;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_NoOpSkipsUnchangedFinalizers()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_noop_ts_augmentation_{Guid.NewGuid():N}");

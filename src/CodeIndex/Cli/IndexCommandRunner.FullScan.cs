@@ -2109,8 +2109,15 @@ public static partial class IndexCommandRunner
             {
                 if (typeScriptAugmentationNeedsRefresh)
                 {
-                    FullScanTypeScriptAugmentationRebuildForTesting?.Invoke();
-                    writer.RebuildTypeScriptAugmentationReferences(projectRoot);
+                    if (startedWithNoIndexedFiles && !languageCounts.ContainsKey("typescript"))
+                    {
+                        writer.MarkTypeScriptAugmentationReady();
+                    }
+                    else
+                    {
+                        FullScanTypeScriptAugmentationRebuildForTesting?.Invoke();
+                        writer.RebuildTypeScriptAugmentationReferences(projectRoot);
+                    }
                 }
             }
             RestampHotspotFamilyTrustForFullScan(

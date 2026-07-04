@@ -2244,11 +2244,16 @@ public class DbWriter
         }
 
         InsertReferences(references);
+        MarkTypeScriptAugmentationReady();
+        transaction.Commit();
+        return references.Count;
+    }
+
+    public void MarkTypeScriptAugmentationReady()
+    {
         SetMeta(
             DbContext.TypeScriptAugmentationVersionMetaKey,
             DbContext.TypeScriptAugmentationVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        transaction.Commit();
-        return references.Count;
     }
 
     private static HashSet<long> FindTypeScriptModuleFileIds(

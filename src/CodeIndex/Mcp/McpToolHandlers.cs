@@ -5620,6 +5620,7 @@ public partial class McpServer
         var files = scanResult.Files;
         var fileTargets = new CSharpStaticInterfacePrepass.FileTarget[files.Count];
         var csharpPrepassTargets = new List<CSharpStaticInterfacePrepass.FileTarget>();
+        var hasTypeScriptTargets = false;
         var hasGeneratedCodeExtractionSuppressionPatterns = indexer.HasGeneratedCodeExtractionSuppressionPatterns;
         for (var i = 0; i < files.Count; i++)
         {
@@ -5634,6 +5635,8 @@ public partial class McpServer
             fileTargets[i] = target;
             if (language == "csharp")
                 csharpPrepassTargets.Add(target);
+            else if (language == "typescript")
+                hasTypeScriptTargets = true;
         }
         var knownReadableFileSizes = new Dictionary<string, long>(StringComparer.Ordinal);
         await EmitProgressNotificationAsync(progressToken, 0, files.Count, "Index scan complete; indexing files.").ConfigureAwait(false);
@@ -6001,8 +6004,15 @@ public partial class McpServer
             sqlGraphContractReadyAfter = true;
             if (typeScriptAugmentationNeedsRefresh)
             {
-                McpIndexTypeScriptAugmentationRebuildForTesting?.Invoke();
-                writer.RebuildTypeScriptAugmentationReferences(projectPath);
+                if (startedWithNoIndexedFiles && !hasTypeScriptTargets)
+                {
+                    writer.MarkTypeScriptAugmentationReady();
+                }
+                else
+                {
+                    McpIndexTypeScriptAugmentationRebuildForTesting?.Invoke();
+                    writer.RebuildTypeScriptAugmentationReferences(projectPath);
+                }
             }
             RestampHotspotFamilyTrust(
                 writer,
