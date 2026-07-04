@@ -990,7 +990,7 @@ public static partial class SymbolExtractor
             var line = lines[i];
             if (line.IndexOf('=') >= 0
                 || line.Contains("x:", StringComparison.Ordinal)
-                || line.Contains("{", StringComparison.Ordinal)
+                || line.IndexOf('{') >= 0
                 || line.Contains(".TypeName", StringComparison.Ordinal)
                 || line.Contains("Binding", StringComparison.Ordinal)
                 || line.Contains("Resource", StringComparison.Ordinal))
