@@ -731,6 +731,9 @@ internal static class RReferenceExtractor
         if (!SourceFileReferenceStartRegex.IsMatch(preparedLine))
             return;
 
+        if (!ContainsRQuotedArgument(originalLine))
+            return;
+
         var line = StripRNamespaceDirectiveComment(originalLine);
         var match = SourceFileReferenceRegex.Match(line);
         if (!match.Success)
@@ -763,6 +766,9 @@ internal static class RReferenceExtractor
         {
             return;
         }
+
+        if (!ContainsRQuotedArgument(originalLine))
+            return;
 
         var line = StripRNamespaceDirectiveComment(originalLine);
         var match = LoadAllReferenceRegex.Match(line);
@@ -799,6 +805,9 @@ internal static class RReferenceExtractor
         }
 
         if (!DataCallStartRegex.IsMatch(preparedLine))
+            return;
+
+        if (!ContainsRQuotedArgument(originalLine))
             return;
 
         var line = StripRNamespaceDirectiveComment(originalLine);
@@ -851,6 +860,9 @@ internal static class RReferenceExtractor
         }
 
         if (!SystemFileCallStartRegex.IsMatch(preparedLine))
+            return;
+
+        if (!ContainsRQuotedArgument(originalLine))
             return;
 
         var line = StripRNamespaceDirectiveComment(originalLine);
@@ -955,6 +967,9 @@ internal static class RReferenceExtractor
         Regex startRegex)
     {
         if (!startRegex.IsMatch(preparedLine))
+            return;
+
+        if (!ContainsRQuotedArgument(originalLine))
             return;
 
         var line = StripRNamespaceDirectiveComment(originalLine);
@@ -1088,6 +1103,9 @@ internal static class RReferenceExtractor
         if (!startRegex.IsMatch(preparedLine))
             return;
 
+        if (!ContainsRQuotedArgument(originalLine))
+            return;
+
         var line = StripRNamespaceDirectiveComment(originalLine);
         foreach (Match match in InstallPackagesNameRegex.Matches(line))
         {
@@ -1104,6 +1122,9 @@ internal static class RReferenceExtractor
                 container);
         }
     }
+
+    private static bool ContainsRQuotedArgument(string line)
+        => line.IndexOf('"') >= 0 || line.IndexOf('\'') >= 0;
 
     public static void EmitDollarMemberReferences(
         string preparedLine,
