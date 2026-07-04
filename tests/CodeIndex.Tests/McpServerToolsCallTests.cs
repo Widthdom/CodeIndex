@@ -6432,7 +6432,7 @@ public partial class McpServerTests
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_scan_error_{Guid.NewGuid():N}");
         Directory.CreateDirectory(fixtureDir);
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_scan_error_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_scan_error");
         try
         {
             File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { }\n");
@@ -6499,7 +6499,7 @@ public partial class McpServerTests
         {
             SqliteConnection.ClearAllPools();
             TestProjectHelper.DeleteDirectory(fixtureDir);
-            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
@@ -6508,7 +6508,7 @@ public partial class McpServerTests
     {
         var projectRootA = TestProjectHelper.CreateTempProject("cdidx_mcp_index_root_a");
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_root_b_{Guid.NewGuid():N}");
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_root_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_root");
         try
         {
             TestProjectHelper.InitializeGitRepo(projectRootA);
@@ -6574,7 +6574,7 @@ public partial class McpServerTests
         {
             TestProjectHelper.DeleteDirectory(projectRootA);
             TestProjectHelper.DeleteDirectory(fixtureDir);
-            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
@@ -6582,7 +6582,7 @@ public partial class McpServerTests
     public void ToolsCall_Index_SuccessfulNoOpBackfillsMissingIndexedProjectRootMetadata()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_noop_{Guid.NewGuid():N}");
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_noop_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_noop");
         try
         {
             Directory.CreateDirectory(fixtureDir);
@@ -6637,7 +6637,7 @@ public partial class McpServerTests
         finally
         {
             TestProjectHelper.DeleteDirectory(fixtureDir);
-            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
