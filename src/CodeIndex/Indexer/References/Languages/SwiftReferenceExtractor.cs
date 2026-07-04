@@ -250,6 +250,9 @@ internal static class SwiftReferenceExtractor
         for (var index = 0; index < preparedLines.Count; index++)
         {
             var line = preparedLines[index];
+            if (!line.Contains(alias, StringComparison.Ordinal))
+                continue;
+
             var typeDeclaration = TypeDeclarationShadowRegex.Match(line);
             if (typeDeclaration.Success && string.Equals(TrimSwiftBackticks(typeDeclaration.Groups["name"].Value), alias, StringComparison.Ordinal))
             {
