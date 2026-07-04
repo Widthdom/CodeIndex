@@ -6102,8 +6102,7 @@ public partial class McpServer
                 foldReadyReason = DegradationReasonCodes.StaleFoldKeyFingerprint;
             }
 
-            writer.WriteCdidxWriterVersion(_version);
-            writer.SetMeta(IndexCommandRunner.SymbolKindFilterMetaKey, symbolKindFilter.Signature);
+            IndexCommandRunner.StampWriterVersionAndSymbolKindFilter(writer, _version, symbolKindFilter.Signature);
 
             // Successful no-op MCP full scans should repair explicit-DB roots only after
             // readiness is stamped, preserving the failure-path safety contract.

@@ -1174,8 +1174,7 @@ public static partial class IndexCommandRunner
                 // 書き込みで NULL 行が残った場合は foldReadyAfter=false のまま。Issue #1535。
                 foldReadyAfter = writer.MarkFoldReady();
             }
-            writer.WriteCdidxWriterVersion(ConsoleUi.LoadVersion());
-            writer.SetMeta(SymbolKindFilterMetaKey, options.SymbolKindFilter.Signature);
+            StampWriterVersionAndSymbolKindFilter(writer, ConsoleUi.LoadVersion(), options.SymbolKindFilter.Signature);
             writer.ClearBatchInProgress();
             readinessTxn.Commit();
         }

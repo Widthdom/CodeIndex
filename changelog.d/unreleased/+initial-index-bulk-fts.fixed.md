@@ -30,6 +30,7 @@ affected:
 - **FTS bulk-load finalization avoids duplicate counter resets** — normal bulk-load completion now lets FTS optimize reset incremental-write metadata once, while recovery and abandon rebuilds still reset it when no optimize follows.
 - **FTS bulk-load trigger changes execute as grouped SQL** — suspending and restoring FTS sync triggers now issue one grouped trigger statement set instead of three separate database commands.
 - **Hotspot-family readiness stamps batch related metadata** — successful hotspot-family finalization now writes per-language version, marker fingerprint, and superseded global-key clears with one grouped upsert.
+- **Writer-version and symbol-filter stamps share one write** — CLI full scans, CLI updates, and MCP indexes now persist the writer version and symbol-kind filter signature with one grouped upsert when the writer version is available.
 
 ## 日本語
 
@@ -55,3 +56,4 @@ affected:
 - **FTS bulk-load finalization の counter reset 重複を省きます** — 通常の bulk-load 完了では FTS optimize が incremental-write metadata を一度だけ reset し、recovery / abandon rebuild では optimize が続かない場合も従来通り reset するようになりました。
 - **FTS bulk-load trigger 変更を grouped SQL で実行します** — FTS sync trigger の一時停止と復元は、3回の個別 database command ではなく1つの grouped trigger statement set で実行するようになりました。
 - **hotspot-family readiness stamp の関連 metadata をまとめます** — 成功時 hotspot-family finalization は、言語別 version、marker fingerprint、廃止済み global key clear を1回の grouped upsert で保存するようになりました。
+- **writer-version と symbol-filter stamp を1回の write にします** — CLI full scan、CLI update、MCP index は writer version がある場合、writer version と symbol-kind filter signature を1回の grouped upsert で保存するようになりました。

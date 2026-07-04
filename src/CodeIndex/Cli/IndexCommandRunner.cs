@@ -39,6 +39,22 @@ public static partial class IndexCommandRunner
 
     internal readonly record struct FileByteReadSummary(long BytesRead, long SkippedFileCount);
 
+    internal static void StampWriterVersionAndSymbolKindFilter(
+        DbWriter writer,
+        string? writerVersion,
+        string symbolKindFilterSignature)
+    {
+        if (string.IsNullOrWhiteSpace(writerVersion))
+        {
+            writer.SetMeta(SymbolKindFilterMetaKey, symbolKindFilterSignature);
+            return;
+        }
+
+        writer.SetMetaValues(
+            (DbContext.CdidxWriterVersionMetaKey, writerVersion),
+            (SymbolKindFilterMetaKey, symbolKindFilterSignature));
+    }
+
     private sealed record ScanCheckpoint(
         int Version,
         string? GitHead,

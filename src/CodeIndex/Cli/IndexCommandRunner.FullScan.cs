@@ -2202,8 +2202,7 @@ public static partial class IndexCommandRunner
             else
                 foldReadyReasonAfter = GetFoldReadyReason(backfillReady, foldVersionMatchesCurrent, foldFingerprintMatchesCurrent);
 
-            writer.WriteCdidxWriterVersion(ConsoleUi.LoadVersion());
-            writer.SetMeta(SymbolKindFilterMetaKey, options.SymbolKindFilter.Signature);
+            StampWriterVersionAndSymbolKindFilter(writer, ConsoleUi.LoadVersion(), options.SymbolKindFilter.Signature);
 
             // Successful no-op full scans should repair stale / missing explicit-DB roots
             // only after readiness stamps succeed, so an interruption cannot rewrite trust
