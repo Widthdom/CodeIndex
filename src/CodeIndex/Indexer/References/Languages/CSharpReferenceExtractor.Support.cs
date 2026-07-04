@@ -292,6 +292,14 @@ public static partial class ReferenceExtractor
             return string.Empty;
 
         var trimmed = targetQualifiedName.Trim();
+        if (trimmed.IndexOf('<') < 0
+            && trimmed.IndexOf('>') < 0
+            && !trimmed.EndsWith("?", StringComparison.Ordinal)
+            && !trimmed.EndsWith("[]", StringComparison.Ordinal))
+        {
+            return trimmed;
+        }
+
         var builder = new System.Text.StringBuilder(trimmed.Length);
         var genericDepth = 0;
         for (var i = 0; i < trimmed.Length; i++)
