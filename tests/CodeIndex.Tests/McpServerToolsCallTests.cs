@@ -9086,7 +9086,7 @@ public partial class McpServerTests
         var originalCurrentDirectory = Environment.CurrentDirectory;
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_symlink_root");
         var outsideRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_symlink_outside");
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_symlink_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_symlink");
         var linkPath = Path.Combine(projectRoot, "outside-link");
         try
         {
@@ -9120,7 +9120,7 @@ public partial class McpServerTests
             Environment.CurrentDirectory = originalCurrentDirectory;
             TestProjectHelper.DeleteDirectory(projectRoot);
             TestProjectHelper.DeleteDirectory(outsideRoot);
-            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
