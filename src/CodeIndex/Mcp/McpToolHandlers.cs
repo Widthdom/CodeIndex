@@ -5663,6 +5663,15 @@ public partial class McpServer
                 csharpPrepassTargets.Add(target);
         }
         var knownReadableFileSizes = new Dictionary<string, long>(files.Count, StringComparer.Ordinal);
+        long knownReadableBytesRead = 0;
+        void RememberReadableFileSize(string path, long size)
+        {
+            if (knownReadableFileSizes.TryGetValue(path, out var priorSize))
+                knownReadableBytesRead += size - priorSize;
+            else
+                knownReadableBytesRead += size;
+            knownReadableFileSizes[path] = size;
+        }
         await EmitProgressNotificationAsync(progressToken, 0, files.Count, "Index scan complete; indexing files.").ConfigureAwait(false);
         Dictionary<string, IndexedFileStatReuseResult?>? csharpPrepassStatReuse = null;
         bool IsGeneratedExtractionSuppressed(CSharpStaticInterfacePrepass.FileTarget target)
@@ -5782,7 +5791,7 @@ public partial class McpServer
                 {
                     skipped++;
                     processed++;
-                    knownReadableFileSizes[filePath] = statMatchedFile.Value.Size;
+                    RememberReadableFileSize(filePath, statMatchedFile.Value.Size);
                     if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(target.Language) && target.Language != null)
                         reusedHotspotFamilyLanguages.Add(target.Language);
                     await EmitProgressNotificationAsync(progressToken, processed, files.Count).ConfigureAwait(false);
@@ -5796,7 +5805,7 @@ public partial class McpServer
                     target.Language,
                     requestToken);
                 var record = loaded.Record;
-                knownReadableFileSizes[filePath] = record.Size;
+                RememberReadableFileSize(filePath, record.Size);
                 var content = loaded.Content;
                 var rawBytes = loaded.RawBytes;
                 var generatedSuppressionIssue = IsGeneratedExtractionSuppressed(target)
@@ -5950,7 +5959,7 @@ public partial class McpServer
                 try
                 {
                     var skippedRecord = indexer.BuildSkippedFileRecord(filePath, target.RelativePath, target.Language);
-                    knownReadableFileSizes[filePath] = skippedRecord.Size;
+                    RememberReadableFileSize(filePath, skippedRecord.Size);
                     if (skippedRecord.Lang == "csharp")
                         csharpMetadataTargetsNeedRefresh = true;
                     var skippedRecordRequiresTypeScriptAugmentationRefresh = skippedRecord.Lang == "typescript";
@@ -6137,7 +6146,9 @@ public partial class McpServer
             // MCP の no-op full-scan root backfill も readiness stamp 後に限定する。
             WriteProjectRootOnce();
             writer.WriteUnknownExtensionFileMetadata(scanResult.UnknownExtensionFiles);
-            var bytesRead = SumReadableFileBytes(files, projectPath, indexRunDiagnostics, mcpIndexDiagnostics, knownReadableFileSizes);
+            var bytesRead = knownReadableFileSizes.Count == files.Count
+                ? (BytesRead: knownReadableBytesRead, SkippedFileCount: 0)
+                : SumReadableFileBytes(files, projectPath, indexRunDiagnostics, mcpIndexDiagnostics, knownReadableFileSizes);
             writer.SetMetaValues(
                 (DbContext.LastIndexRunModeMetaKey, rebuild ? "rebuild" : "mcp"),
                 (DbContext.LastIndexRunStartedAtMetaKey, runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture)),

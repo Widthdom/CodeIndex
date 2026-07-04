@@ -899,6 +899,15 @@ public static partial class IndexCommandRunner
             }
         }
         var knownReadableFileSizes = new Dictionary<string, long>(files.Count, StringComparer.Ordinal);
+        long knownReadableBytesRead = 0;
+        void RememberReadableFileSize(string path, long size)
+        {
+            if (knownReadableFileSizes.TryGetValue(path, out var priorSize))
+                knownReadableBytesRead += size - priorSize;
+            else
+                knownReadableBytesRead += size;
+            knownReadableFileSizes[path] = size;
+        }
         var errorList = discovery.ErrorList;
         var warningList = discovery.WarningList;
         AddProjectMarkerFingerprintWarnings(currentHotspotFamilyMarkerFingerprints, warningList, options);
@@ -1375,7 +1384,7 @@ public static partial class IndexCommandRunner
 
             skipped++;
             processed++;
-            knownReadableFileSizes[target.FilePath] = existingFile.Value.Size;
+            RememberReadableFileSize(target.FilePath, existingFile.Value.Size);
             if (!string.IsNullOrWhiteSpace(language))
                 skippedSymbolExtractorLanguages.Add(language);
             if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(language) && language != null)
@@ -1729,7 +1738,7 @@ public static partial class IndexCommandRunner
                         }
 
                         var record = item.Record!;
-                        knownReadableFileSizes[item.FilePath] = record.Size;
+                        RememberReadableFileSize(item.FilePath, record.Size);
                         if (item.Warning != null && !options.Json && !options.Quiet)
                         {
                             PauseIndexSpinnerForConsoleWrite();
@@ -2232,7 +2241,9 @@ public static partial class IndexCommandRunner
             if (options.MemoryTrace)
                 memorySamples.Add(CaptureMemorySample("finalize", stopwatch));
             var memoryTimelineForStamp = BuildMemoryTimeline(memorySamples);
-            var bytesRead = MeasureReadableFileBytes(files, projectRoot, indexRunDiagnostics, knownReadableFileSizes);
+            var bytesRead = knownReadableFileSizes.Count == files.Count
+                ? new FileByteReadSummary(knownReadableBytesRead, 0)
+                : MeasureReadableFileBytes(files, projectRoot, indexRunDiagnostics, knownReadableFileSizes);
             StampLastIndexRunMetadata(
                 writer,
                 options.Rebuild ? "rebuild" : "incremental",
