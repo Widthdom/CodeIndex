@@ -511,7 +511,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_Schema_JsonReportsObjectTypeOmissionsWhenEntryLimitTruncates()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_schema_truncated_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_schema_truncated");
         try
         {
             using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
@@ -1617,7 +1617,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_Schema_JsonCapsEntriesAndSqlText_Issue2881()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_schema_cap_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_schema_cap");
         try
         {
             using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
