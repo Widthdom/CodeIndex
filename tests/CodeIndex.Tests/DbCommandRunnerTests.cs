@@ -1006,9 +1006,8 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_CheckpointsList_JsonIncludesCreatedCheckpoint()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_list_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_list");
         var dbPath = Path.Combine(root, "codeindex.db");
-        Directory.CreateDirectory(root);
         try
         {
             InitializeEmptyDb(dbPath);
@@ -1032,7 +1031,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_CheckpointsList_CapsCheckpointAndFileEnumeration_Issue2880()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_list_cap_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_list_cap");
         var dbPath = Path.Combine(root, "codeindex.db");
         var checkpointRoot = dbPath + ".checkpoints";
         Directory.CreateDirectory(checkpointRoot);
