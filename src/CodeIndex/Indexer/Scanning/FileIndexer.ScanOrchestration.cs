@@ -26,9 +26,9 @@ public partial class FileIndexer
         var probeFailedFilePaths = new HashSet<string>(StringComparer.Ordinal);
         var listedDirectories = new HashSet<string>(StringComparer.Ordinal);
         var fullyScannedDirectories = new HashSet<string>(StringComparer.Ordinal);
-        var activeCheckpointedDirectories = checkpointedDirectories is { Count: > 0 }
+        IReadOnlySet<string> activeCheckpointedDirectories = checkpointedDirectories is { Count: > 0 }
             ? new HashSet<string>(checkpointedDirectories, StringComparer.Ordinal)
-            : new HashSet<string>(StringComparer.Ordinal);
+            : EmptyCheckpointedDirectorySet;
         var attributePrunedDirectories = new HashSet<string>(StringComparer.Ordinal);
         var nestedRepositories = new HashSet<string>(StringComparer.Ordinal);
         var danglingSymlinks = new HashSet<string>(StringComparer.Ordinal);
@@ -99,10 +99,17 @@ public partial class FileIndexer
         return sorted;
     }
 
-    private static HashSet<string> MaterializeCheckpointedDirectorySet(
-        HashSet<string> checkpointedDirectories,
+    private static IReadOnlySet<string> MaterializeCheckpointedDirectorySet(
+        IReadOnlySet<string> checkpointedDirectories,
         HashSet<string> fullyScannedDirectories)
     {
+        if (checkpointedDirectories.Count == 0)
+        {
+            return fullyScannedDirectories.Count == 0
+                ? EmptyCheckpointedDirectorySet
+                : new HashSet<string>(fullyScannedDirectories, StringComparer.Ordinal);
+        }
+
         var result = new HashSet<string>(
             checkpointedDirectories.Count + fullyScannedDirectories.Count,
             StringComparer.Ordinal);

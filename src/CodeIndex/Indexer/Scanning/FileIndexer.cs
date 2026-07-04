@@ -76,6 +76,8 @@ public partial class FileIndexer
     internal static Func<string, IEnumerable<string>>? EnumerateProjectMarkerDirectoriesForTesting { get; set; }
     internal static Func<string, IReadOnlyList<string>>? ReadGitmodulesLinesForTesting { get; set; }
 
+    private static readonly IReadOnlySet<string> EmptyCheckpointedDirectorySet = new HashSet<string>(StringComparer.Ordinal);
+
     private sealed record DirectoryScanState(
         List<string> Results,
         Dictionary<string, string> FileLanguages,
@@ -86,7 +88,7 @@ public partial class FileIndexer
         HashSet<string> ProbeFailedFilePaths,
         HashSet<string> ListedDirectories,
         HashSet<string> FullyScannedDirectories,
-        HashSet<string> CheckpointedDirectories,
+        IReadOnlySet<string> CheckpointedDirectories,
         HashSet<string> AttributePrunedDirectories,
         HashSet<string> NestedRepositories,
         HashSet<string> DanglingSymlinks,
