@@ -623,9 +623,8 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_CheckpointAndRestore_RestoresDatabaseBytes()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint");
         var dbPath = Path.Combine(root, "codeindex.db");
-        Directory.CreateDirectory(root);
         try
         {
             InitializeEmptyDb(dbPath);
@@ -1070,9 +1069,8 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_RestoreIncompleteCheckpoint_ReturnsErrorAndKeepsDatabase()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_bad_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_bad");
         var dbPath = Path.Combine(root, "codeindex.db");
-        Directory.CreateDirectory(root);
         try
         {
             InitializeEmptyDb(dbPath);
@@ -1099,9 +1097,8 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_RestoreFailureAfterBackup_RestoresOriginalDatabase()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_fail_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_fail");
         var dbPath = Path.Combine(root, "codeindex.db");
-        Directory.CreateDirectory(root);
         try
         {
             InitializeEmptyDb(dbPath);
@@ -1132,9 +1129,8 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_RestoreRollbackFailurePreservesPrimaryFailure_Issue3514()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_rollback_fail_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_rollback_fail");
         var dbPath = Path.Combine(root, "codeindex.db");
-        Directory.CreateDirectory(root);
         try
         {
             InitializeEmptyDb(dbPath);
@@ -1170,9 +1166,8 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_RestoreRollbackFailureJsonIncludesStructuredMetadata_Issue3833()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_rollback_json_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_rollback_json");
         var dbPath = Path.Combine(root, "codeindex.db");
-        Directory.CreateDirectory(root);
         try
         {
             InitializeEmptyDb(dbPath);
@@ -1347,9 +1342,8 @@ public class DbCommandRunnerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_symlink_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_symlink");
         var dbPath = Path.Combine(root, "codeindex.db");
-        Directory.CreateDirectory(root);
         try
         {
             InitializeEmptyDb(dbPath);
@@ -1383,9 +1377,8 @@ public class DbCommandRunnerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_sidecar_symlink_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_sidecar_symlink");
         var dbPath = Path.Combine(root, "codeindex.db");
-        Directory.CreateDirectory(root);
         try
         {
             InitializeEmptyDb(dbPath);
@@ -1418,10 +1411,9 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_RestoreTemporaryNamesIncludeCollisionResistantSuffix_Issue3031()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_restore_suffix_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_restore_suffix");
         var dbPath = Path.Combine(root, "codeindex.db");
         var inspected = false;
-        Directory.CreateDirectory(root);
         try
         {
             InitializeEmptyDb(dbPath);
@@ -1453,10 +1445,9 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_RestoreTempCleanupFailureWarnsWithoutFailing_Issue3030()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_restore_cleanup_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_restore_cleanup");
         var dbPath = Path.Combine(root, "codeindex.db");
         string? cleanupPath = null;
-        Directory.CreateDirectory(root);
         try
         {
             InitializeEmptyDb(dbPath);
@@ -1499,12 +1490,11 @@ public class DbCommandRunnerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_restore_private_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_restore_private");
         var dbPath = Path.Combine(root, "codeindex.db");
         var inspected = false;
         try
         {
-            Directory.CreateDirectory(root);
             File.WriteAllText(dbPath, "original");
             var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
             Assert.Equal(CommandExitCodes.Success, checkpointExit);

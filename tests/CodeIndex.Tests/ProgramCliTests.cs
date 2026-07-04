@@ -1555,8 +1555,7 @@ public class ProgramCliTests
 
         public static SuggestionFixture Create()
         {
-            var root = Path.Combine(Path.GetTempPath(), $"cdidx_suggestions_cli_{Guid.NewGuid():N}");
-            Directory.CreateDirectory(root);
+            var root = TestProjectHelper.CreateTempProject("cdidx_suggestions_cli");
             return new SuggestionFixture(root);
         }
 

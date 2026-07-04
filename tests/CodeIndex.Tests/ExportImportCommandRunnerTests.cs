@@ -27,8 +27,7 @@ public class ExportImportCommandRunnerTests
     [Fact]
     public void RunImport_JsonManifestErrorIncludesPhaseAndCode_Issue3548()
     {
-        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_manifest_json_error_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(workDir);
+        var workDir = TestProjectHelper.CreateTempProject("cdidx_manifest_json_error");
         try
         {
             var archivePath = CreateArchiveWithManifest(workDir, "{");
@@ -52,8 +51,7 @@ public class ExportImportCommandRunnerTests
     [Fact]
     public void RunImport_JsonSqliteValidationErrorIncludesPhaseAndCode_Issue3548()
     {
-        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_import_sqlite_json_error_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(workDir);
+        var workDir = TestProjectHelper.CreateTempProject("cdidx_import_sqlite_json_error");
         try
         {
             var databaseBytes = new byte[] { 1, 2, 3, 4 };
@@ -82,8 +80,7 @@ public class ExportImportCommandRunnerTests
     [Fact]
     public void RunImport_RejectsOversizedManifestBeforeDatabaseEntry()
     {
-        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_manifest_size_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(workDir);
+        var workDir = TestProjectHelper.CreateTempProject("cdidx_manifest_size");
         try
         {
             var manifest = new string(' ', ExportImportCommandRunner.MaxImportManifestBytes + 1);
@@ -108,8 +105,7 @@ public class ExportImportCommandRunnerTests
     [Fact]
     public void RunImport_RejectsDeepManifestBeforeDatabaseEntry()
     {
-        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_manifest_depth_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(workDir);
+        var workDir = TestProjectHelper.CreateTempProject("cdidx_manifest_depth");
         try
         {
             var depth = ExportImportCommandRunner.MaxImportManifestJsonDepth + 4;
@@ -148,8 +144,7 @@ public class ExportImportCommandRunnerTests
         string expectedErrorCode,
         string expectedMessage)
     {
-        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_import_entries_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(workDir);
+        var workDir = TestProjectHelper.CreateTempProject("cdidx_import_entries");
         try
         {
             var archivePath = CreateArchiveWithTextEntries(workDir, "unsafe-entry.cdidx.zip", (entryName, "{}"));
@@ -175,8 +170,7 @@ public class ExportImportCommandRunnerTests
     [Fact]
     public void RunImport_RejectsDuplicateArchiveEntriesBeforeReadingManifest()
     {
-        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_import_duplicate_entries_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(workDir);
+        var workDir = TestProjectHelper.CreateTempProject("cdidx_import_duplicate_entries");
         try
         {
             var archivePath = CreateArchiveWithTextEntries(
@@ -245,8 +239,7 @@ public class ExportImportCommandRunnerTests
     [Fact]
     public void RunExportCtags_MissingDatabaseDoesNotCreateDatabase_Issue3368()
     {
-        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_ctags_missing_db_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(workDir);
+        var workDir = TestProjectHelper.CreateTempProject("cdidx_ctags_missing_db");
         try
         {
             var dbPath = Path.Combine(workDir, "missing.db");
@@ -967,8 +960,7 @@ public class ExportImportCommandRunnerTests
     [Fact]
     public void WriteExportArchiveFile_FailurePreservesExistingArchive()
     {
-        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_export_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(workDir);
+        var workDir = TestProjectHelper.CreateTempProject("cdidx_export");
         try
         {
             var outputPath = Path.Combine(workDir, "codeindex.cdidx.zip");
@@ -1002,8 +994,7 @@ public class ExportImportCommandRunnerTests
     [Fact]
     public void WriteCtagsFile_FailurePreservesExistingTagfile()
     {
-        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_ctags_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(workDir);
+        var workDir = TestProjectHelper.CreateTempProject("cdidx_ctags");
         try
         {
             var outputPath = Path.Combine(workDir, "tags");
@@ -1059,8 +1050,7 @@ public class ExportImportCommandRunnerTests
     [Fact]
     public void ReplaceImportedDatabase_MoveFailurePreservesExistingSidecars()
     {
-        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_import_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(workDir);
+        var workDir = TestProjectHelper.CreateTempProject("cdidx_import");
         try
         {
             var dbPath = Path.Combine(workDir, "codeindex.db");
@@ -1085,8 +1075,7 @@ public class ExportImportCommandRunnerTests
     [Fact]
     public void ReplaceImportedDatabase_SuccessDeletesDestinationSidecarsAfterMove()
     {
-        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_import_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(workDir);
+        var workDir = TestProjectHelper.CreateTempProject("cdidx_import");
         try
         {
             var dbPath = Path.Combine(workDir, "codeindex.db");
@@ -1112,8 +1101,7 @@ public class ExportImportCommandRunnerTests
     [Fact]
     public void ReplaceImportedDatabase_SidecarBackupCleanupFailureLeavesReplacementActive_Issue3410()
     {
-        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_import_cleanup_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(workDir);
+        var workDir = TestProjectHelper.CreateTempProject("cdidx_import_cleanup");
         try
         {
             var dbPath = Path.Combine(workDir, "codeindex.db");
@@ -1146,8 +1134,7 @@ public class ExportImportCommandRunnerTests
     [Fact]
     public void ReplaceImportedDatabase_PostMoveFailureRollsBackDestination_Issue3410()
     {
-        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_import_rollback_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(workDir);
+        var workDir = TestProjectHelper.CreateTempProject("cdidx_import_rollback");
         try
         {
             var dbPath = Path.Combine(workDir, "codeindex.db");
@@ -1181,8 +1168,7 @@ public class ExportImportCommandRunnerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_import_mode_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(workDir);
+        var workDir = TestProjectHelper.CreateTempProject("cdidx_import_mode");
         try
         {
             var dbPath = Path.Combine(workDir, "codeindex.db");

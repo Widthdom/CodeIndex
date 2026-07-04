@@ -11,8 +11,7 @@ public sealed class ChangelogToolTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var unrelatedDirectory = Path.Combine(Path.GetTempPath(), "codeindex-changelog-main-test", Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(unrelatedDirectory);
+            var unrelatedDirectory = TestProjectHelper.CreateTempProject("codeindex-changelog-main-test");
             var previousDirectory = Directory.GetCurrentDirectory();
             var previousOut = Console.Out;
             var previousError = Console.Error;
@@ -813,8 +812,7 @@ public sealed class ChangelogToolTests
 
         public TestRepositoryScope()
         {
-            Root = Path.Combine(Path.GetTempPath(), "codeindex-changelog-tests", Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(Root);
+            Root = TestProjectHelper.CreateTempProject("codeindex-changelog-tests");
             _previousDirectory = Directory.GetCurrentDirectory();
             Directory.SetCurrentDirectory(Root);
         }

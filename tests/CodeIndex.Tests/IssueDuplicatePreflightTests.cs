@@ -16,8 +16,7 @@ public sealed class IssueDuplicatePreflightTests : IDisposable
 
     public IssueDuplicatePreflightTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_issue_preflight_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_tempDir);
+        _tempDir = TestProjectHelper.CreateTempProject("cdidx_issue_preflight");
     }
 
     [Fact]

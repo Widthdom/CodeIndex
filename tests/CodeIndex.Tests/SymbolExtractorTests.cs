@@ -643,7 +643,7 @@ public partial class SymbolExtractorTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_patterns_{Guid.NewGuid():N}");
+            var tempDir = TestProjectHelper.CreateTempProject("cdidx_patterns");
             var originalDirectory = Environment.CurrentDirectory;
             try
             {

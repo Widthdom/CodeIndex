@@ -48,12 +48,11 @@ public class GlobalToolLogTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var directory = Path.Combine(Path.GetTempPath(), $"cdidx_private_log_symlink_{Guid.NewGuid():N}");
+        var directory = TestProjectHelper.CreateTempProject("cdidx_private_log_symlink");
         var target = Path.Combine(directory, "target.log");
         var link = Path.Combine(directory, "link.log");
         try
         {
-            Directory.CreateDirectory(directory);
             File.WriteAllText(target, "target");
             File.CreateSymbolicLink(link, target);
 
@@ -77,8 +76,7 @@ public class GlobalToolLogTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var directory = Path.Combine(Path.GetTempPath(), $"cdidx_private_log_harden_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(directory);
+        var directory = TestProjectHelper.CreateTempProject("cdidx_private_log_harden");
         var fileCount = PrivateLogFile.MaxExistingFilesToHarden + 2;
         var diagnostics = new List<PrivateLogFileDiagnostic>();
         try
@@ -134,8 +132,7 @@ public class GlobalToolLogTests
     [Fact]
     public void PrivateLogFile_PruneOldFiles_KeepsNewestFilesWithoutMaterializingAll_Issue3028()
     {
-        var directory = Path.Combine(Path.GetTempPath(), $"cdidx_private_log_prune_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(directory);
+        var directory = TestProjectHelper.CreateTempProject("cdidx_private_log_prune");
         const int retainedFileCount = 5;
         const int fileCount = retainedFileCount + 17;
         var timestamp = DateTime.UtcNow.AddHours(-1);
@@ -169,8 +166,7 @@ public class GlobalToolLogTests
     [Fact]
     public void PrivateLogFile_PruneOldFiles_DeleteFailureReportsDiagnosticAndContinues_Issue3962()
     {
-        var directory = Path.Combine(Path.GetTempPath(), $"cdidx_private_log_prune_diag_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(directory);
+        var directory = TestProjectHelper.CreateTempProject("cdidx_private_log_prune_diag");
         var diagnostics = new List<PrivateLogFileDiagnostic>();
         try
         {
@@ -212,8 +208,7 @@ public class GlobalToolLogTests
     [Fact]
     public void PrivateLogFile_TryRotateSlots_ReplacesExistingSlotsAtomicallyWherePossible()
     {
-        var directory = Path.Combine(Path.GetTempPath(), $"cdidx_private_log_rotate_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(directory);
+        var directory = TestProjectHelper.CreateTempProject("cdidx_private_log_rotate");
         var path = Path.Combine(directory, "metrics.jsonl");
         try
         {
@@ -237,8 +232,7 @@ public class GlobalToolLogTests
     [Fact]
     public void PrivateLogFile_TryRotateSlots_ReportsPostReplaceFlushFailure_Issue3776()
     {
-        var directory = Path.Combine(Path.GetTempPath(), $"cdidx_private_log_rotate_flush_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(directory);
+        var directory = TestProjectHelper.CreateTempProject("cdidx_private_log_rotate_flush");
         var path = Path.Combine(directory, "metrics.jsonl");
         var failures = new List<Exception>();
         try
@@ -545,12 +539,11 @@ public class GlobalToolLogTests
     [Fact]
     public void ResolveLogDirectoryForStatus_SkipsUnwritableCandidate()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_log_probe_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_log_probe");
         var fileCandidate = Path.Combine(root, "not-a-directory");
         var stateHome = Path.Combine(root, "state");
         try
         {
-            Directory.CreateDirectory(root);
             File.WriteAllText(fileCandidate, "occupied");
             using var env = EnvironmentVariableScope.Capture(
                 "CDIDX_GLOBAL_TOOL_LOG_DIR",

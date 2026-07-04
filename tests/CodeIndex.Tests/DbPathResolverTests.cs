@@ -96,7 +96,7 @@ public class DbPathResolverTests
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_xdg_root_db");
         var configHome = TestProjectHelper.CreateTempProject("cdidx_query_xdg_config");
-        var xdgDir = Path.Combine(Path.GetTempPath(), $"cdidx_xdg_dir_{Guid.NewGuid():N}");
+        var xdgDir = TestProjectHelper.CreateTempProject("cdidx_xdg_dir");
         try
         {
             using var env = IsolateActiveWorkspace(configHome);

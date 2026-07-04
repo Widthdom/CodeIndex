@@ -1344,9 +1344,7 @@ public class ReportCommandRunnerTests
 
     private static string CreateWorkDir()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"cdidx_report_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(path);
-        return path;
+        return TestProjectHelper.CreateTempProject("cdidx_report");
     }
 
     private static string QuoteIdentifier(string value) => "\"" + value.Replace("\"", "\"\"") + "\"";

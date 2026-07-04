@@ -5832,10 +5832,9 @@ public sealed class Caller
     public void Run_WithAbsoluteDbPathOutsideProject_DoesNotWriteAbsolutePathToGitExclude()
     {
         var projectRoot = CreateTempProject();
-        var outsideDir = Path.Combine(Path.GetTempPath(), $"cdidx_external_db_{Guid.NewGuid():N}");
+        var outsideDir = TestProjectHelper.CreateTempProject("cdidx_external_db");
         try
         {
-            Directory.CreateDirectory(outsideDir);
             RunGit(projectRoot, "init");
             var dbPath = Path.Combine(outsideDir, "external.db");
 
@@ -5897,8 +5896,7 @@ public sealed class Caller
     [Fact]
     public void Run_InWorktreeWithAbsoluteDbPathInsideProject_WritesRelativePatternToSharedExclude()
     {
-        var tempRoot = Path.Combine(Path.GetTempPath(), $"cdidx_worktree_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempRoot);
+        var tempRoot = TestProjectHelper.CreateTempProject("cdidx_worktree");
         var mainGitDir = Path.Combine(tempRoot, "main", ".git");
         var worktreeRoot = Path.Combine(tempRoot, "wt");
         try
@@ -6691,8 +6689,7 @@ public sealed class Caller
 
     private static string CreateTemporaryDotnetHostPath()
     {
-        var hostDir = Path.Combine(Path.GetTempPath(), $"cdidx_dotnet_host_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(hostDir);
+        var hostDir = TestProjectHelper.CreateTempProject("cdidx_dotnet_host");
         var hostPath = Path.Combine(hostDir, OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
         File.WriteAllText(hostPath, string.Empty);
         return hostPath;

@@ -572,7 +572,7 @@ public partial class IndexCommandRunnerTests
     [Fact]
     public void Run_DryRun_WithFiles_IgnoresTraversalOutsideProjectRoot()
     {
-        var parentDir = Path.Combine(Path.GetTempPath(), $"cdidx_dryrun_parent_{Guid.NewGuid():N}");
+        var parentDir = TestProjectHelper.CreateTempProject("cdidx_dryrun_parent");
         var projectRoot = Path.Combine(parentDir, "project");
         var outsidePath = Path.Combine(parentDir, "outside.cs");
         try

@@ -873,8 +873,7 @@ public class AuditLogSinkTests
         // events. The probe-open inside the constructor must surface the failure up front.
         // #1562 codex レビュー回帰テスト: 構築時に append open を試行し、書き込み不可な
         // パスは即座に失敗させる（旧実装は最初の Record まで失敗を握り潰していた）。
-        var path = Path.Combine(Path.GetTempPath(), $"cdidx_audit_ctor_dir_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(path);
+        var path = TestProjectHelper.CreateTempProject("cdidx_audit_ctor_dir");
         try
         {
             // .NET surfaces this as UnauthorizedAccessException on macOS/Linux and as
