@@ -46,9 +46,10 @@ internal sealed class FtsBulkLoadTriggerGuard : IDisposable
         try
         {
             // Restore triggers even on interrupted bulk loads. If any rows committed while
-            // triggers were disabled, rebuild FTS so partial MCP progress stays searchable.
+            // triggers were disabled, callers can request a rebuild so committed progress
+            // stays searchable even when the normal Complete path is abandoned.
             // bulk load 中断時も trigger を復元する。trigger 無効中に commit 済み行があれば
-            // FTS を再構築し、MCP の partial progress も検索可能に保つ。
+            // FTS を再構築し、Complete まで進まなかった commit 済み progress も検索可能に保つ。
             writer.RestoreFtsSyncTriggers();
             if (_shouldRebuildOnAbandon?.Invoke() == true)
                 writer.RebuildFtsFromChunks();

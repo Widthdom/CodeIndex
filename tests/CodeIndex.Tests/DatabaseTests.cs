@@ -495,6 +495,35 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void FtsBulkLoadTriggerGuard_AbandonedOuterTransaction_RollsBackRowsAndRestoresTriggers()
+    {
+        var fileId = UpsertTestFile("src/rolled-back-bulk-fts.cs", checksum: "rolled-back-bulk-fts");
+
+        using (var txn = _writer.BeginTransaction())
+        {
+            using var guard = FtsBulkLoadTriggerGuard.Start(_writer, enabled: true);
+            Assert.NotNull(guard);
+            Assert.Equal(0L, CountFtsSyncTriggers());
+
+            _writer.InsertChunks(
+            [
+                new ChunkRecord
+                {
+                    FileId = fileId,
+                    ChunkIndex = 0,
+                    StartLine = 1,
+                    EndLine = 1,
+                    Content = "rolledbackbulktoken",
+                },
+            ]);
+        }
+
+        Assert.Equal(3L, CountFtsSyncTriggers());
+        Assert.Equal(0L, ExecuteScalarLong("SELECT COUNT(*) FROM chunks WHERE content = 'rolledbackbulktoken'"));
+        Assert.Equal(0L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'rolledbackbulktoken'"));
+    }
+
+    [Fact]
     public void InsertReferences_ReportsProgressCheckpoints_Issue3738()
     {
         var fileId = UpsertTestFile("src/progress-reference.cs", checksum: "progress-reference");
