@@ -935,7 +935,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void TryDeleteTemporaryDirectory_RejectsTargetOutsideSafeRoot_Issue3379()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_cleanup_safe_root_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_cleanup_safe_root");
         var safeRoot = Path.Combine(root, "safe");
         var outsideRoot = Path.Combine(root, "outside");
         var outsideTarget = Path.Combine(outsideRoot, ".tmp-malformed");
@@ -971,7 +971,7 @@ public class DbCommandRunnerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_cleanup_reparse_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_cleanup_reparse");
         var safeRoot = Path.Combine(root, "safe");
         var outsideTarget = Path.Combine(root, "outside-target");
         var cleanupTarget = Path.Combine(safeRoot, ".tmp-linked");
