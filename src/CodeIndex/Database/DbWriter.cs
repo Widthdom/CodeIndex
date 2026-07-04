@@ -33,6 +33,7 @@ public class DbWriter
     private static readonly AsyncLocal<Action?> ScopedFoldBackfillRowUpdatedForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedFoldBackfillVerificationForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedLanguagePresenceCheckForTesting = new();
+    private static readonly AsyncLocal<Action<string>?> ScopedReusableUnchangedFileLookupForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedBatchRowSkipWarningForTesting = new();
     private static readonly AsyncLocal<Action<DbWriterBatchProgress>?> ScopedBatchProgressCheckpointForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedMutualRecursionRefreshForTesting = new();
@@ -52,6 +53,12 @@ public class DbWriter
     {
         get => ScopedLanguagePresenceCheckForTesting.Value;
         set => ScopedLanguagePresenceCheckForTesting.Value = value;
+    }
+
+    internal static Action<string>? ReusableUnchangedFileLookupForTesting
+    {
+        get => ScopedReusableUnchangedFileLookupForTesting.Value;
+        set => ScopedReusableUnchangedFileLookupForTesting.Value = value;
     }
 
     internal static Action<string>? BatchRowSkipWarningForTesting
@@ -707,6 +714,7 @@ public class DbWriter
     {
         if (!allowReuse)
             return null;
+        ReusableUnchangedFileLookupForTesting?.Invoke(relativePath);
         if (!SymbolExtractorVersionMatchesCurrent(language))
             return null;
         if (HasStaleIssueMetadata(relativePath))

@@ -2041,13 +2041,18 @@ public sealed class Caller
         var rebuiltTypeScriptAugmentation = false;
         var foldBackfillVerifications = 0;
         var languagePresenceChecks = 0;
+        var statReuseLookups = 0;
+        var reusableLookups = 0;
         try
         {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
             File.WriteAllText(Path.Combine(projectRoot, "tool.py"), "def run():\n    return 1\n");
 
             IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting = () => rebuiltTypeScriptAugmentation = true;
             DbWriter.FoldBackfillVerificationForTesting = () => foldBackfillVerifications++;
             DbWriter.LanguagePresenceCheckForTesting = _ => languagePresenceChecks++;
+            DbWriter.ReusableUnchangedFileLookupForTesting = _ => reusableLookups++;
+            IndexedFileStatReuse.LookupForTesting = _ => statReuseLookups++;
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--json"]);
 
@@ -2056,6 +2061,8 @@ public sealed class Caller
             Assert.False(rebuiltTypeScriptAugmentation);
             Assert.Equal(1, foldBackfillVerifications);
             Assert.Equal(0, languagePresenceChecks);
+            Assert.Equal(0, statReuseLookups);
+            Assert.Equal(0, reusableLookups);
             using var db = new DbContext(dbPath);
             Assert.Equal(
                 DbContext.TypeScriptAugmentationVersion.ToString(CultureInfo.InvariantCulture),
@@ -2066,6 +2073,8 @@ public sealed class Caller
             IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting = null;
             DbWriter.FoldBackfillVerificationForTesting = null;
             DbWriter.LanguagePresenceCheckForTesting = null;
+            DbWriter.ReusableUnchangedFileLookupForTesting = null;
+            IndexedFileStatReuse.LookupForTesting = null;
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
             DeleteDirectory(projectRoot);
         }

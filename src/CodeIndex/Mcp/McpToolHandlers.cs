@@ -5685,6 +5685,7 @@ public partial class McpServer
                 writer,
                 indexer,
                 csharpPrepassTargets,
+                includeExistingSymbols: !rebuild && !startedWithNoIndexedFiles,
                 canReuseExistingSymbolsWithoutRead: CanReuseCSharpPrepassTargetWithoutRead,
                 isGeneratedCodeExtractionSuppressed: IsGeneratedExtractionSuppressed,
                 cancellationToken: requestToken);
@@ -5710,7 +5711,9 @@ public partial class McpServer
             try
             {
                 requestToken.ThrowIfCancellationRequested();
-                var allowStatReuse = symbolKindFilterMatchesPrior
+                var allowStatReuse = !rebuild
+                    && !startedWithNoIndexedFiles
+                    && symbolKindFilterMatchesPrior
                     && (target.Language != "csharp" || csharpSymbolNameContractMatchesCurrent)
                     && (target.Language != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                     && (target.Language != "sql" || sqlGraphContractMatchesCurrent)
@@ -5763,7 +5766,9 @@ public partial class McpServer
                     maxSymbolsPerFile: maxSymbolsPerFile,
                     maxReferencesPerFile: maxReferencesPerFile,
                     generatedExtractionSuppressed: generatedSuppressionIssue != null,
-                    allowReuse: symbolKindFilterMatchesPrior
+                    allowReuse: !rebuild
+                        && !startedWithNoIndexedFiles
+                        && symbolKindFilterMatchesPrior
                         && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                         && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                         && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)

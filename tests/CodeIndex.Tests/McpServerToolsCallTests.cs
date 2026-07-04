@@ -6069,14 +6069,19 @@ public partial class McpServerTests
         var rebuiltTypeScriptAugmentation = false;
         var foldBackfillVerifications = 0;
         var languagePresenceChecks = 0;
+        var statReuseLookups = 0;
+        var reusableLookups = 0;
         try
         {
+            File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { public void Run() { } }\n");
             File.WriteAllText(Path.Combine(fixtureDir, "tool.py"), "def run():\n    return 1\n");
             using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
 
             McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = () => rebuiltTypeScriptAugmentation = true;
             DbWriter.FoldBackfillVerificationForTesting = () => foldBackfillVerifications++;
             DbWriter.LanguagePresenceCheckForTesting = _ => languagePresenceChecks++;
+            DbWriter.ReusableUnchangedFileLookupForTesting = _ => reusableLookups++;
+            IndexedFileStatReuse.LookupForTesting = _ => statReuseLookups++;
 
             var response = CallIndex(server, fixtureDir);
 
@@ -6084,6 +6089,8 @@ public partial class McpServerTests
             Assert.False(rebuiltTypeScriptAugmentation);
             Assert.Equal(1, foldBackfillVerifications);
             Assert.Equal(0, languagePresenceChecks);
+            Assert.Equal(0, statReuseLookups);
+            Assert.Equal(0, reusableLookups);
             using var db = new DbContext(dbPath);
             db.TryMigrateForRead();
             Assert.Equal(
@@ -6095,6 +6102,8 @@ public partial class McpServerTests
             McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = null;
             DbWriter.FoldBackfillVerificationForTesting = null;
             DbWriter.LanguagePresenceCheckForTesting = null;
+            DbWriter.ReusableUnchangedFileLookupForTesting = null;
+            IndexedFileStatReuse.LookupForTesting = null;
             TestProjectHelper.DeleteDirectory(fixtureDir);
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
