@@ -4688,7 +4688,7 @@ public partial class McpServerTests
     public void ToolsCall_Status_ReadOnlyUriForExplicitDb_UsesPersistedProjectRootMetadata()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_status_uri");
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_status_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_status");
         try
         {
             TestProjectHelper.InitializeGitRepo(projectRoot);
@@ -4727,7 +4727,7 @@ public partial class McpServerTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
-            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
