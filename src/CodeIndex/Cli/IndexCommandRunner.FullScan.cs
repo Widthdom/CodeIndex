@@ -2106,14 +2106,8 @@ public static partial class IndexCommandRunner
             if (!options.SymbolsOnly)
             {
                 writer.MarkGraphReady();
-                writer.MarkSqlGraphContractReady();
-                writer.SetMeta(DbContext.SymbolsOnlyGraphOmittedMetaKey, null);
             }
-            else
-            {
-                writer.SetMeta(DbContext.SymbolsOnlyGraphOmittedMetaKey, "true");
-            }
-            writer.MarkCSharpSymbolNameContractReady();
+            writer.MarkIndexReaderContractsReady(options.SymbolsOnly);
             if (hasCSharpFilesAfter)
             {
                 if (csharpMetadataTargetsNeedRefresh)

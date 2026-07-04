@@ -31,6 +31,7 @@ affected:
 - **FTS bulk-load trigger changes execute as grouped SQL** — suspending and restoring FTS sync triggers now issue one grouped trigger statement set instead of three separate database commands.
 - **Hotspot-family readiness stamps batch related metadata** — successful hotspot-family finalization now writes per-language version, marker fingerprint, and superseded global-key clears with one grouped upsert.
 - **Writer-version and symbol-filter stamps share one write** — CLI full scans, CLI updates, and MCP indexes now persist the writer version and symbol-kind filter signature with one grouped upsert when the writer version is available.
+- **Reader contract readiness stamps batch related metadata** — CLI full scans and MCP indexes now persist C# symbol-name, SQL graph, and symbols-only graph contract metadata with grouped upserts during successful finalization.
 
 ## 日本語
 
@@ -57,3 +58,4 @@ affected:
 - **FTS bulk-load trigger 変更を grouped SQL で実行します** — FTS sync trigger の一時停止と復元は、3回の個別 database command ではなく1つの grouped trigger statement set で実行するようになりました。
 - **hotspot-family readiness stamp の関連 metadata をまとめます** — 成功時 hotspot-family finalization は、言語別 version、marker fingerprint、廃止済み global key clear を1回の grouped upsert で保存するようになりました。
 - **writer-version と symbol-filter stamp を1回の write にします** — CLI full scan、CLI update、MCP index は writer version がある場合、writer version と symbol-kind filter signature を1回の grouped upsert で保存するようになりました。
+- **reader contract readiness stamp の関連 metadata をまとめます** — CLI full scan と MCP index は成功時 finalization で C# symbol-name、SQL graph、symbols-only graph contract metadata を grouped upsert で保存するようになりました。

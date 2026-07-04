@@ -3062,6 +3062,24 @@ public class DbWriter
             DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
     }
 
+    public void MarkIndexReaderContractsReady(bool symbolsOnlyGraphOmitted)
+    {
+        var csharpVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var sqlVersion = DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (symbolsOnlyGraphOmitted)
+        {
+            SetMetaValues(
+                (DbContext.CSharpSymbolNameContractVersionMetaKey, csharpVersion),
+                (DbContext.SymbolsOnlyGraphOmittedMetaKey, "true"));
+            return;
+        }
+
+        SetMetaValues(
+            (DbContext.CSharpSymbolNameContractVersionMetaKey, csharpVersion),
+            (DbContext.SqlGraphContractVersionMetaKey, sqlVersion),
+            (DbContext.SymbolsOnlyGraphOmittedMetaKey, null));
+    }
+
     public void ClearSqlGraphContractReady()
     {
         SetMeta(DbContext.SqlGraphContractVersionMetaKey, null);

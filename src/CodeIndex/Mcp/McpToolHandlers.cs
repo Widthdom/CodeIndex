@@ -6026,8 +6026,7 @@ public partial class McpServer
             using var readinessTxn = writer.BeginTransaction(requestToken, "mcp index readiness");
             writer.MarkGraphReady();
             writer.MarkIssuesReady();
-            writer.MarkSqlGraphContractReady();
-            writer.MarkCSharpSymbolNameContractReady();
+            writer.MarkIndexReaderContractsReady(symbolsOnlyGraphOmitted: false);
             csharpSymbolNameReadyAfter = true;
             if (hasCSharpFilesAfter)
             {
