@@ -2041,6 +2041,7 @@ public sealed class Caller
         var rebuiltTypeScriptAugmentation = false;
         var foldBackfillVerifications = 0;
         var languagePresenceChecks = 0;
+        var indexedLanguageReads = 0;
         var statReuseLookups = 0;
         var reusableLookups = 0;
         var countReads = 0;
@@ -2052,6 +2053,7 @@ public sealed class Caller
             IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting = () => rebuiltTypeScriptAugmentation = true;
             DbWriter.FoldBackfillVerificationForTesting = () => foldBackfillVerifications++;
             DbWriter.LanguagePresenceCheckForTesting = _ => languagePresenceChecks++;
+            DbWriter.IndexedLanguagesReadForTesting = () => indexedLanguageReads++;
             DbWriter.ReusableUnchangedFileLookupForTesting = _ => reusableLookups++;
             DbWriter.CountsReadForTesting = () => countReads++;
             IndexedFileStatReuse.LookupForTesting = _ => statReuseLookups++;
@@ -2063,6 +2065,7 @@ public sealed class Caller
             Assert.False(rebuiltTypeScriptAugmentation);
             Assert.Equal(1, foldBackfillVerifications);
             Assert.Equal(0, languagePresenceChecks);
+            Assert.Equal(0, indexedLanguageReads);
             Assert.Equal(0, statReuseLookups);
             Assert.Equal(0, reusableLookups);
             Assert.Equal(0, countReads);
@@ -2077,6 +2080,7 @@ public sealed class Caller
             IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting = null;
             DbWriter.FoldBackfillVerificationForTesting = null;
             DbWriter.LanguagePresenceCheckForTesting = null;
+            DbWriter.IndexedLanguagesReadForTesting = null;
             DbWriter.ReusableUnchangedFileLookupForTesting = null;
             DbWriter.CountsReadForTesting = null;
             IndexedFileStatReuse.LookupForTesting = null;

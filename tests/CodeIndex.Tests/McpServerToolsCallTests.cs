@@ -6069,6 +6069,7 @@ public partial class McpServerTests
         var rebuiltTypeScriptAugmentation = false;
         var foldBackfillVerifications = 0;
         var languagePresenceChecks = 0;
+        var indexedLanguageReads = 0;
         var statReuseLookups = 0;
         var reusableLookups = 0;
         var countReads = 0;
@@ -6081,6 +6082,7 @@ public partial class McpServerTests
             McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = () => rebuiltTypeScriptAugmentation = true;
             DbWriter.FoldBackfillVerificationForTesting = () => foldBackfillVerifications++;
             DbWriter.LanguagePresenceCheckForTesting = _ => languagePresenceChecks++;
+            DbWriter.IndexedLanguagesReadForTesting = () => indexedLanguageReads++;
             DbWriter.ReusableUnchangedFileLookupForTesting = _ => reusableLookups++;
             DbWriter.CountsReadForTesting = () => countReads++;
             IndexedFileStatReuse.LookupForTesting = _ => statReuseLookups++;
@@ -6091,6 +6093,7 @@ public partial class McpServerTests
             Assert.False(rebuiltTypeScriptAugmentation);
             Assert.Equal(1, foldBackfillVerifications);
             Assert.Equal(0, languagePresenceChecks);
+            Assert.Equal(0, indexedLanguageReads);
             Assert.Equal(0, statReuseLookups);
             Assert.Equal(0, reusableLookups);
             Assert.Equal(0, countReads);
@@ -6106,6 +6109,7 @@ public partial class McpServerTests
             McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = null;
             DbWriter.FoldBackfillVerificationForTesting = null;
             DbWriter.LanguagePresenceCheckForTesting = null;
+            DbWriter.IndexedLanguagesReadForTesting = null;
             DbWriter.ReusableUnchangedFileLookupForTesting = null;
             DbWriter.CountsReadForTesting = null;
             IndexedFileStatReuse.LookupForTesting = null;

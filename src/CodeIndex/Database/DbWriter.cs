@@ -33,6 +33,7 @@ public class DbWriter
     private static readonly AsyncLocal<Action?> ScopedFoldBackfillRowUpdatedForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedFoldBackfillVerificationForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedLanguagePresenceCheckForTesting = new();
+    private static readonly AsyncLocal<Action?> ScopedIndexedLanguagesReadForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedReusableUnchangedFileLookupForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedCountsReadForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedBatchRowSkipWarningForTesting = new();
@@ -54,6 +55,12 @@ public class DbWriter
     {
         get => ScopedLanguagePresenceCheckForTesting.Value;
         set => ScopedLanguagePresenceCheckForTesting.Value = value;
+    }
+
+    internal static Action? IndexedLanguagesReadForTesting
+    {
+        get => ScopedIndexedLanguagesReadForTesting.Value;
+        set => ScopedIndexedLanguagesReadForTesting.Value = value;
     }
 
     internal static Action<string>? ReusableUnchangedFileLookupForTesting
@@ -1232,6 +1239,7 @@ public class DbWriter
         if (!TableExists("files"))
             return languages;
 
+        IndexedLanguagesReadForTesting?.Invoke();
         var cmd = RentCommand(
             @"
             SELECT DISTINCT f.lang
@@ -2958,7 +2966,9 @@ public class DbWriter
     /// fold_ready が嘘になるのを防ぐ。Issue #1535。
     /// </summary>
     /// <returns>True when the bit was actually stamped; false when re-verification failed.</returns>
-    public bool MarkFoldReady(bool stampCurrentSymbolExtractorVersions = false)
+    public bool MarkFoldReady(
+        bool stampCurrentSymbolExtractorVersions = false,
+        IReadOnlyCollection<string>? symbolExtractorLanguagesToStamp = null)
     {
         var gateLease = EnterTransactionGate();
         try
@@ -2969,7 +2979,7 @@ public class DbWriter
             try
             {
                 if (stampCurrentSymbolExtractorVersions)
-                    StampSymbolExtractorVersions();
+                    StampSymbolExtractorVersions(symbolExtractorLanguagesToStamp);
 
                 if (!AllFoldedColumnsBackfilledCore(
                         requireCurrentSymbolExtractorVersions: false,
@@ -2987,7 +2997,7 @@ public class DbWriter
 
                 SetMeta("fold_key_version", NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 SetMeta("fold_key_fingerprint", NameFold.Fingerprint());
-                StampSymbolExtractorVersions();
+                StampSymbolExtractorVersions(symbolExtractorLanguagesToStamp);
 
                 if (ownTransaction)
                 {
@@ -3011,10 +3021,13 @@ public class DbWriter
         }
     }
 
-    public void StampSymbolExtractorVersions()
+    public void StampSymbolExtractorVersions(IReadOnlyCollection<string>? languagesToStamp = null)
     {
-        foreach (var lang in GetIndexedLanguages())
+        foreach (var lang in languagesToStamp ?? GetIndexedLanguages())
         {
+            if (string.IsNullOrWhiteSpace(lang))
+                continue;
+
             SetMeta(
                 DbContext.GetSymbolExtractorVersionMetaKey(lang),
                 SymbolExtractor.GetContractVersion(lang).ToString(System.Globalization.CultureInfo.InvariantCulture));

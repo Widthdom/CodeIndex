@@ -1024,6 +1024,7 @@ public static partial class IndexCommandRunner
         var indexProgressVisible = false;
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
         var skippedSymbolExtractorLanguages = new HashSet<string>(StringComparer.Ordinal);
+        var indexedSymbolExtractorLanguages = new HashSet<string>(StringComparer.Ordinal);
         var lastJsonProgressAt = Stopwatch.GetTimestamp();
         string? currentJsonIndexFile = null;
         var activeJsonExtractionPhases = new ConcurrentDictionary<int, string>();
@@ -1988,6 +1989,8 @@ public static partial class IndexCommandRunner
                         currentJsonIndexFile = FormatIndexPhasePath(record.Path, "committing");
                         WriteProjectRootOnce();
                         txn.Commit();
+                        if (symbols.Count > 0 && !string.IsNullOrWhiteSpace(record.Lang))
+                            indexedSymbolExtractorLanguages.Add(record.Lang);
                         CountFreshInsertedRows(chunks.Count, symbols.Count, references.Count);
 
                         WriteIndexVerboseStatus($"  [OK  ] {record.Path} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
@@ -2187,7 +2190,9 @@ public static partial class IndexCommandRunner
                 // Issue #1535.
                 // BEGIN IMMEDIATE 内で再検証するため、concurrent writer による NULL 差し込みで
                 // stamp は失敗し、silent な fold-trust 誤広告ではなく legacy 理由に降格する。Issue #1535。
-                foldReadyAfter = writer.MarkFoldReady(stampCurrentSymbolExtractorVersions: skipped == 0);
+                foldReadyAfter = writer.MarkFoldReady(
+                    stampCurrentSymbolExtractorVersions: skipped == 0,
+                    symbolExtractorLanguagesToStamp: skipped == 0 ? indexedSymbolExtractorLanguages : null);
                 if (!foldReadyAfter)
                 {
                     backfillReady = false;

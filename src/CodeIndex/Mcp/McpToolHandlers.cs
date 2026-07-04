@@ -5700,6 +5700,7 @@ public partial class McpServer
             .Select(BuildScanFailure)
             .ToList();
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
+        var indexedSymbolExtractorLanguages = new HashSet<string>(StringComparer.Ordinal);
         var symbolsDroppedByKindFilter = 0;
         var mutualRecursionRefreshNeeded = false;
         var freshCountFiles = 0L;
@@ -5909,6 +5910,8 @@ public partial class McpServer
                 WriteProjectRootOnce();
                 writer.ClearBatchInProgress();
                 txn.Commit();
+                if (committedSymbolCount > 0 && !string.IsNullOrWhiteSpace(record.Lang))
+                    indexedSymbolExtractorLanguages.Add(record.Lang);
                 CountFreshInsertedRows(committedChunkCount, committedSymbolCount, committedReferenceCount);
                 ftsMutated = true;
                 McpIndexFileCommittedForTesting?.Invoke(record.Path);
@@ -6081,7 +6084,8 @@ public partial class McpServer
                 // Issue #1535.
                 // BEGIN IMMEDIATE 内で再検証する。concurrent NULL 差し込みで stamp が失敗した
                 // 場合は missing_fold_backfill に降格する。Issue #1535。
-                foldReadyAfter = writer.MarkFoldReady();
+                foldReadyAfter = writer.MarkFoldReady(
+                    symbolExtractorLanguagesToStamp: skipped == 0 ? indexedSymbolExtractorLanguages : null);
                 if (!foldReadyAfter)
                     foldReadyReason = DegradationReasonCodes.MissingFoldBackfill;
             }
