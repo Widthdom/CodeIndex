@@ -1299,7 +1299,7 @@ public class ProgramRunnerTests
     [Fact]
     public void UpdateChecker_Check_ReportsNewerRelease()
     {
-        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        var cachePath = TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json");
         try
         {
             var result = UpdateChecker.Check(
@@ -1321,7 +1321,7 @@ public class ProgramRunnerTests
     [Fact]
     public void UpdateChecker_Check_IgnoresOversizedCache()
     {
-        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        var cachePath = TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json");
         try
         {
             File.WriteAllText(cachePath, new string('x', UpdateChecker.MaxUpdateCheckCacheBytes + 1));
@@ -1345,7 +1345,7 @@ public class ProgramRunnerTests
     [Fact]
     public void UpdateChecker_Check_IgnoresOverDepthCache()
     {
-        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        var cachePath = TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json");
         try
         {
             var depth = UpdateChecker.MaxUpdateCheckCacheJsonDepth + 8;
@@ -1372,8 +1372,8 @@ public class ProgramRunnerTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var cachePathWithoutDiagnostics = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
-            var cachePathWithDiagnostics = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+            var cachePathWithoutDiagnostics = TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json");
+            var cachePathWithDiagnostics = TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json");
             using var env = EnvironmentVariableScope.Capture(UpdateChecker.DiagnosticsEnvVar);
             var diagnostics = new List<string>();
             UpdateChecker.CacheDiagnosticSinkForTesting = diagnostics.Add;
@@ -1449,7 +1449,7 @@ public class ProgramRunnerTests
     [Fact]
     public void UpdateChecker_Check_TransientFailureDoesNotRefreshStaleCache_Issue3822()
     {
-        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        var cachePath = TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json");
         var checkedAt = DateTimeOffset.Parse("2025-12-31T00:00:00Z", CultureInfo.InvariantCulture);
         var originalCache =
             $$"""{"checked_at":"{{checkedAt.UtcDateTime.ToString("O", CultureInfo.InvariantCulture)}}","latest_tag":"v9.9.9"}""";
@@ -1478,7 +1478,7 @@ public class ProgramRunnerTests
     [Fact]
     public void UpdateChecker_Check_NullFetchDoesNotCreateCache_Issue3822()
     {
-        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        var cachePath = TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json");
         try
         {
             var result = UpdateChecker.Check(
@@ -1544,7 +1544,7 @@ public class ProgramRunnerTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+            var cachePath = TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json");
             var now = new DateTimeOffset(2026, 6, 20, 12, 0, 0, TimeSpan.Zero);
             var expectedRetryAt = now.UtcDateTime.AddSeconds(90);
             var previousTimeProvider = UpdateChecker.TimeProvider;
@@ -1589,7 +1589,7 @@ public class ProgramRunnerTests
     [Fact]
     public void UpdateChecker_Check_PassesCallerCancellationTokenToFetch()
     {
-        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        var cachePath = TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json");
         using var cts = new CancellationTokenSource();
         CancellationToken observedToken = default;
         try
@@ -1617,7 +1617,7 @@ public class ProgramRunnerTests
     [Fact]
     public void UpdateChecker_Check_PropagatesCallerCancellation()
     {
-        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        var cachePath = TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json");
         using var cts = new CancellationTokenSource();
         cts.Cancel();
         try
@@ -1639,7 +1639,7 @@ public class ProgramRunnerTests
     [Fact]
     public void UpdateChecker_Check_ClassifiesTimeoutFailureWithoutRawMessage_Issue3453()
     {
-        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        var cachePath = TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json");
         try
         {
             var result = UpdateChecker.Check(
@@ -1662,7 +1662,7 @@ public class ProgramRunnerTests
     [Fact]
     public void UpdateChecker_Check_ClassifiesNetworkFailureWithoutRawMessage_Issue3453()
     {
-        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        var cachePath = TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json");
         try
         {
             var result = UpdateChecker.Check(
@@ -1685,7 +1685,7 @@ public class ProgramRunnerTests
     [Fact]
     public void UpdateChecker_Check_SerializesStructuredFailureFields_Issue3453()
     {
-        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        var cachePath = TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json");
         try
         {
             var result = UpdateChecker.Check(
@@ -4123,7 +4123,7 @@ exit 7
 
         var hint = UpdateChecker.GetNewerReleaseHint(
             "1.10.0",
-            Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json"),
+            TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json"),
             DateTimeOffset.UtcNow,
             _ => throw new InvalidOperationException("should not fetch"));
 
@@ -4141,7 +4141,7 @@ exit 7
         Assert.Throws<OperationCanceledException>(() =>
             UpdateChecker.GetNewerReleaseHint(
                 "1.10.0",
-                Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json"),
+                TestProjectHelper.CreateTempFilePath("cdidx_update_check", ".json"),
                 DateTimeOffset.UtcNow,
                 token => throw new OperationCanceledException(token),
                 cts.Token));
