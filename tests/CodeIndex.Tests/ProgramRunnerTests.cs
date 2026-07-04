@@ -1419,8 +1419,7 @@ public class ProgramRunnerTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_dir_{Guid.NewGuid():N}");
-            Directory.CreateDirectory(cachePath);
+            var cachePath = TestProjectHelper.CreateTempProject("cdidx_update_check_dir");
             using var env = EnvironmentVariableScope.Capture(UpdateChecker.DiagnosticsEnvVar);
             env.Set(UpdateChecker.DiagnosticsEnvVar, "1");
             var diagnostics = new List<string>();
@@ -4092,9 +4091,8 @@ exit 7
     {
         using var env = EnvironmentVariableScope.Capture(UpdateChecker.DisableEnvVar);
         env.Set(UpdateChecker.DisableEnvVar, null);
-        var cacheDir = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}");
+        var cacheDir = TestProjectHelper.CreateTempProject("cdidx_update_check");
         var cachePath = Path.Combine(cacheDir, "update-check.json");
-        Directory.CreateDirectory(cacheDir);
         try
         {
             File.WriteAllText(cachePath, """
