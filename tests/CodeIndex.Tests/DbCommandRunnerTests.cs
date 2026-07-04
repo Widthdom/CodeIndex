@@ -384,7 +384,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_IntegrityCheck_JsonCancellationReturnsInterrupted_Issue3811()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_integrity_cancel_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_integrity_cancel");
         try
         {
             InitializeEmptyDb(dbPath);
@@ -409,7 +409,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_IntegrityCheck_JsonReportsStableErrorSeverity()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_integrity_error_json_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_integrity_error_json");
         DbCommandRunner.IntegrityCheckRowsForTesting = () => ["simulated corruption"];
         try
         {
