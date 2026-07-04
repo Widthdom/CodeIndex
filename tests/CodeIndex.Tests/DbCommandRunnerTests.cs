@@ -268,7 +268,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_IntegrityCheck_FileUriJsonReportsUriWithoutPathNormalization_Issue3221()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_uri_display_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_uri_display");
         try
         {
             InitializeEmptyDb(dbPath);
@@ -288,7 +288,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_Schema_FileUriHumanOutputReportsUriWithoutPathNormalization_Issue3221()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_uri_schema_display_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_uri_schema_display");
         try
         {
             InitializeEmptyDb(dbPath);
