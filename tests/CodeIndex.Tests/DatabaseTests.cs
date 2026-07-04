@@ -451,6 +451,20 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void RebuildFtsFromChunks_CanLeaveIncrementalCounterForImmediateOptimize()
+    {
+        _writer.SetMeta(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey, "7");
+
+        _writer.RebuildFtsFromChunks(resetIncrementalWriteCounter: false);
+
+        Assert.Equal(7, _writer.GetFtsIncrementalWritesSinceOptimize());
+
+        _writer.RebuildFtsFromChunks();
+
+        Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceOptimize());
+    }
+
+    [Fact]
     public void SuspendFtsSyncTriggersForBulkLoad_RollsBackWithTransaction()
     {
         Assert.Equal(3L, CountFtsSyncTriggers());

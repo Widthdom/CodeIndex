@@ -28,7 +28,7 @@ internal sealed class FtsBulkLoadTriggerGuard : IDisposable
         {
             writer.RestoreFtsSyncTriggers();
             if (rebuild)
-                writer.RebuildFtsFromChunks();
+                writer.RebuildFtsFromChunks(resetIncrementalWriteCounter: false);
 
             if (rebuild)
             {

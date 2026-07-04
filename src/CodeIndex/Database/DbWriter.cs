@@ -2848,8 +2848,9 @@ public class DbWriter
     public void OptimizeFts()
     {
         Execute("INSERT INTO fts_chunks(fts_chunks) VALUES('optimize')");
-        SetMeta(FtsIncrementalWritesSinceOptimizeMetaKey, "0");
-        SetMeta(FtsLastOptimizedAtMetaKey, DateTimeOffset.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture));
+        SetMetaValues(
+            (FtsIncrementalWritesSinceOptimizeMetaKey, "0"),
+            (FtsLastOptimizedAtMetaKey, DateTimeOffset.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture)));
     }
 
     /// <summary>
@@ -2883,10 +2884,11 @@ public class DbWriter
     /// Rebuild the external-content FTS table from the current chunks table.
     /// 現在の chunks テーブルから external-content FTS テーブルを再構築する。
     /// </summary>
-    public void RebuildFtsFromChunks()
+    public void RebuildFtsFromChunks(bool resetIncrementalWriteCounter = true)
     {
         Execute("INSERT INTO fts_chunks(fts_chunks) VALUES('rebuild')");
-        SetMeta(FtsIncrementalWritesSinceOptimizeMetaKey, "0");
+        if (resetIncrementalWriteCounter)
+            SetMeta(FtsIncrementalWritesSinceOptimizeMetaKey, "0");
     }
 
     public void ClearFtsBulkLoadInProgress()
