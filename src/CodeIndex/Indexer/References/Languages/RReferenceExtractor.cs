@@ -1189,6 +1189,9 @@ internal static class RReferenceExtractor
         if (!preparedLine.Contains("[[", StringComparison.Ordinal))
             return;
 
+        if (!ContainsRQuotedArgument(originalLine))
+            return;
+
         var line = StripRNamespaceDirectiveComment(originalLine);
         foreach (Match match in BracketMemberReferenceRegex.Matches(line))
         {
