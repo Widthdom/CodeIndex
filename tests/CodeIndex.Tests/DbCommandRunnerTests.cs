@@ -321,7 +321,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_CleanDb_ReturnsOk()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_clean_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_clean");
         try
         {
             InitializeEmptyDb(dbPath);
@@ -341,7 +341,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_CleanDb_JsonReportsOkTrueAndEmptyIssues()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_clean_json_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_clean_json");
         try
         {
             InitializeEmptyDb(dbPath);
@@ -364,7 +364,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_IntegritySubcommand_JsonReportsOk_Issue3958()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_integrity_alias_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_integrity_alias");
         try
         {
             InitializeEmptyDb(dbPath);
