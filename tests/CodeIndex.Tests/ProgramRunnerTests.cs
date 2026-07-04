@@ -3360,8 +3360,7 @@ exit 7
     [Fact]
     public void Run_ForcedGlobalToolLogging_PrunesToThirtyDailyFiles()
     {
-        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_prune_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(logDir);
+        var logDir = TestProjectHelper.CreateTempProject("cdidx_global_tool_log_prune");
         using var env = EnvironmentVariableScope.Capture(
             "CDIDX_FORCE_GLOBAL_TOOL_LOG",
             "CDIDX_DISABLE_PERSISTENT_LOG",
@@ -3405,8 +3404,7 @@ exit 7
     [Fact]
     public void Run_ForcedGlobalToolLogging_HonorsRetainCountAndSizeRotation()
     {
-        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_rotation_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(logDir);
+        var logDir = TestProjectHelper.CreateTempProject("cdidx_global_tool_log_rotation");
         using var env = EnvironmentVariableScope.Capture(
             "CDIDX_FORCE_GLOBAL_TOOL_LOG",
             "CDIDX_DISABLE_PERSISTENT_LOG",
@@ -3473,8 +3471,7 @@ exit 7
     [Fact]
     public void Run_ForcedGlobalToolLogging_RotatesByDefaultMaxBytesEnvironmentVariable()
     {
-        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_max_bytes_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(logDir);
+        var logDir = TestProjectHelper.CreateTempProject("cdidx_global_tool_log_max_bytes");
         using var env = EnvironmentVariableScope.Capture(
             "CDIDX_FORCE_GLOBAL_TOOL_LOG",
             "CDIDX_DISABLE_PERSISTENT_LOG",
@@ -3516,8 +3513,7 @@ exit 7
     [Fact]
     public void Run_ForcedGlobalToolLogging_CanBeDisabledExplicitly()
     {
-        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_disabled_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(logDir);
+        var logDir = TestProjectHelper.CreateTempProject("cdidx_global_tool_log_disabled");
         using var env = EnvironmentVariableScope.Capture(
             "CDIDX_FORCE_GLOBAL_TOOL_LOG",
             "CDIDX_DISABLE_PERSISTENT_LOG",
@@ -3552,8 +3548,7 @@ exit 7
     [InlineData("1")]
     public void Run_ForcedGlobalToolLogging_DisableEnvAcceptsTruthyValues(string disabledValue)
     {
-        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_disabled_bool_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(logDir);
+        var logDir = TestProjectHelper.CreateTempProject("cdidx_global_tool_log_disabled_bool");
         using var env = EnvironmentVariableScope.Capture(
             "CDIDX_FORCE_GLOBAL_TOOL_LOG",
             "CDIDX_DISABLE_PERSISTENT_LOG",
