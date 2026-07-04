@@ -923,7 +923,7 @@ public class ProgramRunnerTests
     public void Run_QueryTraceFile_AppendsDailyJsonl()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("query-trace-file");
-        var logRoot = Path.Combine(Path.GetTempPath(), $"cdidx_query_trace_{Guid.NewGuid():N}");
+        var logRoot = TestProjectHelper.CreateTempProject("cdidx_query_trace");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
@@ -956,10 +956,9 @@ public class ProgramRunnerTests
     public void Run_QueryTraceFile_PrunesToThirtyTraceFiles()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("query-trace-prune");
-        var logRoot = Path.Combine(Path.GetTempPath(), $"cdidx_query_trace_prune_{Guid.NewGuid():N}");
+        var logRoot = TestProjectHelper.CreateTempProject("cdidx_query_trace_prune");
         try
         {
-            Directory.CreateDirectory(logRoot);
             for (var i = 0; i < 35; i++)
             {
                 var date = new DateTime(2024, 1, 1).AddDays(i);
