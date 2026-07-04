@@ -2862,9 +2862,7 @@ public class DbWriter
     public void SuspendFtsSyncTriggersForBulkLoad()
     {
         SetMeta(FtsBulkLoadInProgressMetaKey, "true");
-        Execute(DbContext.DropFtsChunksInsertTriggerSql);
-        Execute(DbContext.DropFtsChunksDeleteTriggerSql);
-        Execute(DbContext.DropFtsChunksUpdateTriggerSql);
+        Execute(DbContext.DropFtsChunksSyncTriggersSql);
         _markWriteWork?.Invoke();
     }
 
@@ -2874,9 +2872,7 @@ public class DbWriter
     /// </summary>
     public void RestoreFtsSyncTriggers()
     {
-        Execute(DbContext.CreateFtsChunksInsertTriggerSql);
-        Execute(DbContext.CreateFtsChunksDeleteTriggerSql);
-        Execute(DbContext.CreateFtsChunksUpdateTriggerSql);
+        Execute(DbContext.CreateFtsChunksSyncTriggersSql);
         _markWriteWork?.Invoke();
     }
 

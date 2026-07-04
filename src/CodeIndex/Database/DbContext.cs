@@ -30,6 +30,10 @@ public class DbContext : IDisposable
     internal const string DropFtsChunksInsertTriggerSql = "DROP TRIGGER IF EXISTS fts_chunks_ai";
     internal const string DropFtsChunksDeleteTriggerSql = "DROP TRIGGER IF EXISTS fts_chunks_ad";
     internal const string DropFtsChunksUpdateTriggerSql = "DROP TRIGGER IF EXISTS fts_chunks_au";
+    internal const string DropFtsChunksSyncTriggersSql =
+        DropFtsChunksInsertTriggerSql + ";\n"
+        + DropFtsChunksDeleteTriggerSql + ";\n"
+        + DropFtsChunksUpdateTriggerSql;
     internal const string CreateFtsChunksInsertTriggerSql = """
         CREATE TRIGGER IF NOT EXISTS fts_chunks_ai AFTER INSERT ON chunks BEGIN
             INSERT INTO fts_chunks(rowid, content) VALUES (new.id, new.content);
@@ -46,6 +50,10 @@ public class DbContext : IDisposable
             INSERT INTO fts_chunks(rowid, content) VALUES (new.id, new.content);
         END
         """;
+    internal const string CreateFtsChunksSyncTriggersSql =
+        CreateFtsChunksInsertTriggerSql + ";\n"
+        + CreateFtsChunksDeleteTriggerSql + ";\n"
+        + CreateFtsChunksUpdateTriggerSql;
 
     private static readonly string[] RequiredCodeIndexTables =
     [
