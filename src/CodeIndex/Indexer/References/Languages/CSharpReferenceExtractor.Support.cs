@@ -83,13 +83,12 @@ public static partial class ReferenceExtractor
                     ? aliasScanLines[i]
                     : lines[i];
                 if (scanLine.IndexOf("using", StringComparison.Ordinal) < 0
-                    || scanLine.IndexOf('=') < 0
-                    || !CSharpUsingAliasRegex.IsMatch(scanLine))
+                    || scanLine.IndexOf('=') < 0)
                 {
                     continue;
                 }
 
-                var match = CSharpUsingAliasRegex.Match(lines[i]);
+                var match = CSharpUsingAliasRegex.Match(scanLine);
                 if (!match.Success)
                     continue;
 
