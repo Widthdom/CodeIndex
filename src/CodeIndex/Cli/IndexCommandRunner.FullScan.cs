@@ -161,8 +161,12 @@ public static partial class IndexCommandRunner
 
     internal static IReadOnlyList<FileIssue> AppendIssueIfMissing(IReadOnlyList<FileIssue> issues, FileIssue issue)
     {
-        if (issues.Any(existing => string.Equals(existing.Kind, issue.Kind, StringComparison.Ordinal)))
-            return issues;
+        for (var i = 0; i < issues.Count; i++)
+        {
+            if (string.Equals(issues[i].Kind, issue.Kind, StringComparison.Ordinal))
+                return issues;
+        }
+
         return AppendIssue(issues, issue);
     }
 
