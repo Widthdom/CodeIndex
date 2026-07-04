@@ -4583,7 +4583,7 @@ public partial class McpServerTests
     [Fact]
     public void ToolsCall_Status_ReportsDegradedHotspotFamilyTrust()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_status_hotspots_family_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_status_hotspots_family");
         try
         {
             using (var db = new DbContext(dbPath))
@@ -4612,14 +4612,14 @@ public partial class McpServerTests
         }
         finally
         {
-            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
     [Fact]
     public void ToolsCall_Status_ReportsDegradedSqlGraphContractTrust()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_status_sql_graph_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_status_sql_graph");
         try
         {
             using (var db = new DbContext(dbPath))
@@ -4676,13 +4676,11 @@ public partial class McpServerTests
             Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
             var structured = response["result"]!["structuredContent"]!;
             Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
-            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
-            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
             Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
         }
         finally
         {
-            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
