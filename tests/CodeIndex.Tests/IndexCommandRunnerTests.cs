@@ -4221,8 +4221,8 @@ public sealed class Caller
     [SkipOnMacOsArm64Fact]
     public void RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_trimmed_backfill_{Guid.NewGuid():N}.db");
-        var missingDbPath = Path.Combine(Path.GetTempPath(), $"cdidx_trimmed_missing_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_trimmed_backfill");
+        var missingDbPath = CreateTempDbPath("cdidx_trimmed_missing");
         try
         {
             using (var db = new DbContext(dbPath))
@@ -4487,7 +4487,7 @@ public sealed class Caller
     [Fact]
     public void RunOptimizeFts_ExistingDb_ResetsCounterAndEmitsJson()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_optimize_fts_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_optimize_fts");
         try
         {
             using (var db = new DbContext(dbPath))
@@ -4536,7 +4536,7 @@ public sealed class Caller
     [Fact]
     public void RunOptimizeFts_LockHeld_ReportsDbLocked()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_optimize_locked_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_optimize_locked");
         var lockPath = dbPath + ".lock";
         try
         {
@@ -4584,7 +4584,7 @@ public sealed class Caller
     [Fact]
     public void RunOptimizeFts_ReadOnlyUri_ReturnsDbNotWritable()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_optimize_readonly_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_optimize_readonly");
         try
         {
             using (var db = new DbContext(dbPath))
@@ -4632,7 +4632,7 @@ public sealed class Caller
     [Fact]
     public void RunOptimizeFts_OversizedFileUriQuery_ReturnsBoundedJsonError_Issue3140()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_optimize_uri_cap_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_optimize_uri_cap");
         var dbUri = new Uri(dbPath).AbsoluteUri + "?" + new string('a', SqliteFileUri.MaxQueryLength + 1);
         int exitCode;
         JsonElement json;
