@@ -5683,6 +5683,7 @@ public partial class McpServer
             .ToList();
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
         var symbolsDroppedByKindFilter = 0;
+        var mutualRecursionRefreshNeeded = false;
         using var ftsBulkLoad = FtsBulkLoadTriggerGuard.Start(writer, rebuild || startedWithNoIndexedFiles, () => ftsMutated);
 
         foreach (var target in fileTargets)
@@ -5845,7 +5846,9 @@ public partial class McpServer
                         referenceCapIssue = BuildMcpReferenceCountExceededIssue(record.Path, references.Count, maxReferencesPerFile);
                         references = [];
                     }
-                    writer.InsertReferences(references, requestToken);
+                    writer.InsertReferences(references, refreshMutualRecursionFlags: false, requestToken);
+                    if (references.Count > 0)
+                        mutualRecursionRefreshNeeded = true;
                     // Keep MCP index parity with CLI index: persist file-level validation issues too.
                     // MCPインデックスもCLIインデックスと同等に、ファイル検証issueを保存する。
                     IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine, loaded.ConflictMarkerLine);
@@ -5930,6 +5933,13 @@ public partial class McpServer
             }
             processed++;
             await EmitProgressNotificationAsync(progressToken, processed, files.Count).ConfigureAwait(false);
+        }
+
+        if (mutualRecursionRefreshNeeded)
+        {
+            requestToken.ThrowIfCancellationRequested();
+            await EmitProgressNotificationAsync(progressToken, processed, files.Count, "Finalizing reference graph.").ConfigureAwait(false);
+            writer.RefreshMutualRecursionFlags();
         }
 
         if (ftsBulkLoad != null)

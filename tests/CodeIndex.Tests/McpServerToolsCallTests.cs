@@ -6729,6 +6729,59 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Index_RefreshesMutualRecursionOnceAfterBulkReferenceInsert()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_mutual_recursion_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_mutual_recursion");
+        var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
+        var refreshCount = 0;
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "MutualRecursionA.cs"),
+                """
+                public static class MutualRecursionA
+                {
+                    public static void CrossCycleA() { CrossCycleB(); }
+                }
+                """);
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "MutualRecursionB.cs"),
+                """
+                public static class MutualRecursionB
+                {
+                    public static void CrossCycleB() { CrossCycleA(); }
+                }
+                """);
+
+            DbWriter.MutualRecursionRefreshForTesting = () =>
+            {
+                refreshCount++;
+                previousRefreshHook?.Invoke();
+            };
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var response = CallIndex(server, fixtureDir);
+
+            Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
+            Assert.Equal(1, refreshCount);
+
+            using var db = new DbContext(dbPath);
+            db.TryMigrateForRead();
+            using var command = db.Connection.CreateCommand();
+            command.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE is_mutual_recursion = 1";
+            Assert.Equal(2L, (long)command.ExecuteScalar()!);
+        }
+        finally
+        {
+            DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_BackfillFold_StampsFoldReady()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"backfill_fold","arguments":{}}}""")!;

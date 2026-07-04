@@ -33,6 +33,7 @@ public class DbWriter
     private static readonly AsyncLocal<Action?> ScopedFoldBackfillRowUpdatedForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedBatchRowSkipWarningForTesting = new();
     private static readonly AsyncLocal<Action<DbWriterBatchProgress>?> ScopedBatchProgressCheckpointForTesting = new();
+    private static readonly AsyncLocal<Action?> ScopedMutualRecursionRefreshForTesting = new();
     internal static Action? FoldBackfillRowUpdatedForTesting
     {
         get => ScopedFoldBackfillRowUpdatedForTesting.Value;
@@ -49,6 +50,12 @@ public class DbWriter
     {
         get => ScopedBatchProgressCheckpointForTesting.Value;
         set => ScopedBatchProgressCheckpointForTesting.Value = value;
+    }
+
+    internal static Action? MutualRecursionRefreshForTesting
+    {
+        get => ScopedMutualRecursionRefreshForTesting.Value;
+        set => ScopedMutualRecursionRefreshForTesting.Value = value;
     }
 
     // Transaction ownership (#4154): the semaphore is held for the outermost writer
@@ -2103,6 +2110,7 @@ public class DbWriter
 
     internal void RefreshMutualRecursionFlags()
     {
+        MutualRecursionRefreshForTesting?.Invoke();
         var cmd = RentCommand(
             @"
             UPDATE symbol_references AS r
