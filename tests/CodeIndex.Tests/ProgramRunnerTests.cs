@@ -2952,8 +2952,7 @@ exit 7
             "CDIDX_FORCE_GLOBAL_TOOL_LOG",
             "CDIDX_DISABLE_PERSISTENT_LOG",
             "CDIDX_GLOBAL_TOOL_LOG_DIR");
-        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_fault_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(logDir);
+        var logDir = TestProjectHelper.CreateTempProject("cdidx_global_tool_log_fault");
         var writer = new TrackingStreamWriter();
 
         try
@@ -2998,8 +2997,7 @@ exit 7
     [Fact]
     public void Run_ForcedGlobalToolLogging_WritesLifecycleAndMirrorsStderr()
     {
-        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(logDir);
+        var logDir = TestProjectHelper.CreateTempProject("cdidx_global_tool_log");
         using var env = EnvironmentVariableScope.Capture(
             "CDIDX_FORCE_GLOBAL_TOOL_LOG",
             "CDIDX_DISABLE_PERSISTENT_LOG",
@@ -3035,8 +3033,7 @@ exit 7
     [Fact]
     public void Run_ForcedGlobalToolLogging_JsonFormatWritesJsonLines()
     {
-        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_json_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(logDir);
+        var logDir = TestProjectHelper.CreateTempProject("cdidx_global_tool_log_json");
         using var env = EnvironmentVariableScope.Capture(
             "CDIDX_FORCE_GLOBAL_TOOL_LOG",
             "CDIDX_DISABLE_PERSISTENT_LOG",
