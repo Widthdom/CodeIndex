@@ -540,7 +540,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_Prune_DryRunCountsAndApplyDeletesOrphans()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_prune_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_prune");
         try
         {
             InitializeDbWithOrphans(dbPath);
@@ -572,7 +572,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_PruneApply_JsonReportsWalCheckpointWarning_Issue3514()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_prune_wal_warning_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_prune_wal_warning");
         try
         {
             InitializeDbWithOrphans(dbPath);
@@ -596,7 +596,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_PruneDryRun_ReportsMaintenanceProgress_Issue3811()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_prune_progress_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_db_prune_progress");
         var progress = new List<string>();
         try
         {
