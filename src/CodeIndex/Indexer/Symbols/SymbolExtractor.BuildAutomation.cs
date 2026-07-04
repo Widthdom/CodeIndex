@@ -287,9 +287,9 @@ public static partial class SymbolExtractor
         int lineNumber,
         SymbolRecord? activeTarget)
     {
-        var line = GetLineOrEmpty(lines, lineNumber);
         if (string.Equals(elementName, "Target", StringComparison.OrdinalIgnoreCase))
         {
+            var line = GetLineOrEmpty(lines, lineNumber);
             var name = GetMsBuildAttributeValue(line, "Name");
             if (!string.IsNullOrWhiteSpace(name))
             {
@@ -300,6 +300,7 @@ public static partial class SymbolExtractor
 
         if (string.Equals(elementName, "Import", StringComparison.OrdinalIgnoreCase))
         {
+            var line = GetLineOrEmpty(lines, lineNumber);
             var project = GetMsBuildAttributeValue(line, "Project");
             if (!string.IsNullOrWhiteSpace(project))
                 (symbols ??= []).Add(CreateMsBuildSymbol(fileId, "import", project, lineNumber, line, activeTarget));
@@ -308,6 +309,7 @@ public static partial class SymbolExtractor
 
         if (MsBuildImportItemElements.Contains(elementName))
         {
+            var line = GetLineOrEmpty(lines, lineNumber);
             var include = GetMsBuildAttributeValue(line, "Include");
             if (!string.IsNullOrWhiteSpace(include))
                 (symbols ??= []).Add(CreateMsBuildSymbol(fileId, "import", include, lineNumber, line, activeTarget));
@@ -317,6 +319,7 @@ public static partial class SymbolExtractor
         if (string.Equals(parentName, "PropertyGroup", StringComparison.OrdinalIgnoreCase)
             && !MsBuildContainerElements.Contains(elementName))
         {
+            var line = GetLineOrEmpty(lines, lineNumber);
             (symbols ??= []).Add(CreateMsBuildSymbol(fileId, "property", elementName, lineNumber, line, activeTarget));
         }
 
