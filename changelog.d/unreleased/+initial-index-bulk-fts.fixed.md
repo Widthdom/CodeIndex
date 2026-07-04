@@ -23,6 +23,7 @@ affected:
 - **Fresh-index empty checks use a single existence probe** — CLI and MCP now decide whether a database started empty with `SELECT 1 FROM files LIMIT 1` instead of calling the four-table summary count helper.
 - **Index-start metadata cleanup batches related keys** — CLI and MCP index startup now clear failed-run and hotspot-family metadata with one multi-key upsert per group instead of issuing one metadata write per key.
 - **Fresh fold readiness stamps reuse indexed symbol languages** — CLI and MCP fresh/rebuild full scans now stamp symbol-extractor contract versions from the languages committed during the run instead of querying distinct indexed languages from the database.
+- **Successful index metadata stamps batch related writes** — CLI and MCP successful index finalization now persist unknown-extension and last-index-run metadata with grouped upserts instead of one metadata statement per field.
 
 ## 日本語
 
@@ -41,3 +42,4 @@ affected:
 - **fresh index の空DB判定を単一の存在確認にします** — CLI と MCP は DB が空で始まったかを4テーブル summary count helper ではなく `SELECT 1 FROM files LIMIT 1` で判定するようになりました。
 - **index start の metadata cleanup で関連キーをまとめます** — CLI と MCP の index startup は、failed-run metadata と hotspot-family metadata のクリアをキーごとの個別 metadata write ではなく、グループごとに1回の multi-key upsert で行うようになりました。
 - **fresh fold readiness stamp で index 済み symbol 言語を再利用します** — CLI と MCP の fresh / rebuild full scan は、symbol-extractor contract version を DB から distinct indexed language として読み直さず、その run で commit した言語集合から stamp するようになりました。
+- **成功時 index metadata stamp の関連 write をまとめます** — CLI と MCP の成功時 finalization は、unknown-extension metadata と last-index-run metadata をフィールドごとの個別 metadata statement ではなく grouped upsert で保存するようになりました。

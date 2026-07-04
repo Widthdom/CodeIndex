@@ -6111,17 +6111,18 @@ public partial class McpServer
             WriteProjectRootOnce();
             writer.WriteUnknownExtensionFileMetadata(scanResult.UnknownExtensionFiles);
             var bytesRead = SumReadableFileBytes(files, projectPath, indexRunDiagnostics, mcpIndexDiagnostics, knownReadableFileSizes);
-            writer.SetMeta(DbContext.LastIndexRunModeMetaKey, rebuild ? "rebuild" : "mcp");
-            writer.SetMeta(DbContext.LastIndexRunStartedAtMetaKey, runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastIndexRunDurationMsMetaKey, runStopwatch.ElapsedMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastIndexRunFilesScannedMetaKey, files.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastIndexRunFilesSkippedMetaKey, skipped.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastIndexRunParseErrorsMetaKey, errors.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastIndexRunBytesReadMetaKey, bytesRead.BytesRead.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastIndexRunBytesReadSkippedFileCountMetaKey, bytesRead.SkippedFileCount.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastIndexRunBytesReadIncompleteMetaKey, (bytesRead.SkippedFileCount > 0).ToString(System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastIndexRunRowsUpsertedMetaKey, processed.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastIndexRunRowsDeletedMetaKey, purged.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMetaValues(
+                (DbContext.LastIndexRunModeMetaKey, rebuild ? "rebuild" : "mcp"),
+                (DbContext.LastIndexRunStartedAtMetaKey, runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastIndexRunDurationMsMetaKey, runStopwatch.ElapsedMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastIndexRunFilesScannedMetaKey, files.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastIndexRunFilesSkippedMetaKey, skipped.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastIndexRunParseErrorsMetaKey, errors.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastIndexRunBytesReadMetaKey, bytesRead.BytesRead.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastIndexRunBytesReadSkippedFileCountMetaKey, bytesRead.SkippedFileCount.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastIndexRunBytesReadIncompleteMetaKey, (bytesRead.SkippedFileCount > 0).ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastIndexRunRowsUpsertedMetaKey, processed.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastIndexRunRowsDeletedMetaKey, purged.ToString(System.Globalization.CultureInfo.InvariantCulture)));
             writer.ClearLastFailedIndexRunMetadata();
             // Persist the current HEAD only after the run is fully successful (errors == 0).
             // Mirrors the CLI full-scan contract (Issue #1508) so MCP-driven re-indexes also

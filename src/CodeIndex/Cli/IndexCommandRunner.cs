@@ -523,20 +523,21 @@ public static partial class IndexCommandRunner
         IndexMemoryTimelineJsonResult? memoryTimeline,
         IReadOnlyList<string>? diagnostics)
     {
-        writer.SetMeta(DbContext.LastIndexRunModeMetaKey, mode);
-        writer.SetMeta(DbContext.LastIndexRunStartedAtMetaKey, startedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
-        writer.SetMeta(DbContext.LastIndexRunDurationMsMetaKey, durationMs.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        writer.SetMeta(DbContext.LastIndexRunFilesScannedMetaKey, filesScanned.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        writer.SetMeta(DbContext.LastIndexRunFilesSkippedMetaKey, filesSkipped.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        writer.SetMeta(DbContext.LastIndexRunParseErrorsMetaKey, parseErrors.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        writer.SetMeta(DbContext.LastIndexRunBytesReadMetaKey, bytesRead.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        writer.SetMeta(DbContext.LastIndexRunBytesReadSkippedFileCountMetaKey, bytesReadSkippedFileCount.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        writer.SetMeta(DbContext.LastIndexRunBytesReadIncompleteMetaKey, (bytesReadSkippedFileCount > 0).ToString(System.Globalization.CultureInfo.InvariantCulture));
-        writer.SetMeta(DbContext.LastIndexRunRowsUpsertedMetaKey, rowsUpserted.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        writer.SetMeta(DbContext.LastIndexRunRowsDeletedMetaKey, rowsDeleted.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        writer.SetMeta(DbContext.LastIndexRunPeakMemoryMbMetaKey, memoryTimeline == null
-            ? null
-            : (memoryTimeline.PeakWorkingSetBytes / (1024 * 1024)).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        writer.SetMetaValues(
+            (DbContext.LastIndexRunModeMetaKey, mode),
+            (DbContext.LastIndexRunStartedAtMetaKey, startedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.LastIndexRunDurationMsMetaKey, durationMs.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.LastIndexRunFilesScannedMetaKey, filesScanned.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.LastIndexRunFilesSkippedMetaKey, filesSkipped.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.LastIndexRunParseErrorsMetaKey, parseErrors.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.LastIndexRunBytesReadMetaKey, bytesRead.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.LastIndexRunBytesReadSkippedFileCountMetaKey, bytesReadSkippedFileCount.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.LastIndexRunBytesReadIncompleteMetaKey, (bytesReadSkippedFileCount > 0).ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.LastIndexRunRowsUpsertedMetaKey, rowsUpserted.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.LastIndexRunRowsDeletedMetaKey, rowsDeleted.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.LastIndexRunPeakMemoryMbMetaKey, memoryTimeline == null
+                ? null
+                : (memoryTimeline.PeakWorkingSetBytes / (1024 * 1024)).ToString(System.Globalization.CultureInfo.InvariantCulture)));
         StampLastIndexRunDiagnostics(writer, diagnostics);
         writer.ClearLastFailedIndexRunMetadata();
     }

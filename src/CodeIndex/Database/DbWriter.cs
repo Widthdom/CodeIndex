@@ -3188,27 +3188,14 @@ public class DbWriter
             paths,
             DbContext.UnknownExtensionFilePathSampleLimit);
         var classification = UnknownExtensionClassifier.Classify(paths);
-        SetMeta(
-            DbContext.UnknownExtensionFileCountMetaKey,
-            paths.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        SetMeta(
-            DbContext.UnknownExtensionFilePathsMetaKey,
-            JsonStringListCodec.Serialize(sample));
-        SetMeta(
-            DbContext.UnknownExtensionFilesTruncatedMetaKey,
-            (paths.Count > sample.Count).ToString(System.Globalization.CultureInfo.InvariantCulture));
-        SetMeta(
-            DbContext.UnknownExtensionFilePathLimitMetaKey,
-            DbContext.UnknownExtensionFilePathSampleLimit.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        SetMeta(
-            DbContext.UnknownExtensionExtensionCountsMetaKey,
-            UnknownExtensionClassifier.SerializeCounts(classification.ExtensionCounts));
-        SetMeta(
-            DbContext.UnknownExtensionCategoryCountsMetaKey,
-            UnknownExtensionClassifier.SerializeCounts(classification.CategoryCounts));
-        SetMeta(
-            DbContext.UnknownExtensionGroupsMetaKey,
-            UnknownExtensionClassifier.SerializeGroups(classification.Groups));
+        SetMetaValues(
+            (DbContext.UnknownExtensionFileCountMetaKey, paths.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.UnknownExtensionFilePathsMetaKey, JsonStringListCodec.Serialize(sample)),
+            (DbContext.UnknownExtensionFilesTruncatedMetaKey, (paths.Count > sample.Count).ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.UnknownExtensionFilePathLimitMetaKey, DbContext.UnknownExtensionFilePathSampleLimit.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.UnknownExtensionExtensionCountsMetaKey, UnknownExtensionClassifier.SerializeCounts(classification.ExtensionCounts)),
+            (DbContext.UnknownExtensionCategoryCountsMetaKey, UnknownExtensionClassifier.SerializeCounts(classification.CategoryCounts)),
+            (DbContext.UnknownExtensionGroupsMetaKey, UnknownExtensionClassifier.SerializeGroups(classification.Groups)));
     }
 
     /// <summary>
@@ -4291,6 +4278,72 @@ public class DbWriter
         }
     }
 
+    public void SetMetaValues(params (string Key, string? Value)[] values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        if (values.Length == 0 || !HasMetaTable())
+            return;
+
+        if (!IsInTransaction())
+        {
+            Execute("SAVEPOINT set_meta_values_atomic");
+            try
+            {
+                SetMetaValuesCore(values);
+                Execute("RELEASE SAVEPOINT set_meta_values_atomic");
+            }
+            catch
+            {
+                try { Execute("ROLLBACK TO SAVEPOINT set_meta_values_atomic"); } catch (SqliteException) { /* best effort */ }
+                try { Execute("RELEASE SAVEPOINT set_meta_values_atomic"); } catch (SqliteException) { /* best effort */ }
+                throw;
+            }
+            return;
+        }
+
+        SetMetaValuesCore(values);
+    }
+
+    private void SetMetaValuesCore(IReadOnlyList<(string Key, string? Value)> values)
+    {
+        var keyParameterNames = new string[values.Count];
+        var valueParameterNames = new string[values.Count];
+        var rows = new string[values.Count];
+        for (var i = 0; i < values.Count; i++)
+        {
+            var suffix = i.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            keyParameterNames[i] = "@meta_key" + suffix;
+            valueParameterNames[i] = "@meta_value" + suffix;
+            rows[i] = "(" + keyParameterNames[i] + ", " + valueParameterNames[i] + ")";
+        }
+
+        var sql = "INSERT INTO codeindex_meta (key, value) VALUES " + string.Join(", ", rows)
+            + " ON CONFLICT(key) DO UPDATE SET value = excluded.value";
+        var cmd = RentCommand(
+            sql,
+            c =>
+            {
+                for (var i = 0; i < keyParameterNames.Length; i++)
+                {
+                    c.Parameters.Add(keyParameterNames[i], SqliteType.Text);
+                    c.Parameters.Add(valueParameterNames[i], SqliteType.Text);
+                }
+            });
+        try
+        {
+            for (var i = 0; i < values.Count; i++)
+            {
+                cmd.Parameters[keyParameterNames[i]].Value = values[i].Key;
+                cmd.Parameters[valueParameterNames[i]].Value = (object?)values[i].Value ?? DBNull.Value;
+            }
+            cmd.ExecuteNonQuery();
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
+    }
+
     private void ClearMetaKeys(params string[] keys)
     {
         if (keys.Length == 0 || !HasMetaTable())
@@ -4318,33 +4371,11 @@ public class DbWriter
 
     private void ClearMetaKeysCore(IReadOnlyList<string> keys)
     {
-        var parameterNames = new string[keys.Count];
-        var values = new string[keys.Count];
-        for (var i = 0; i < parameterNames.Length; i++)
-        {
-            parameterNames[i] = "@key" + i.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            values[i] = "(" + parameterNames[i] + ", NULL)";
-        }
+        var values = new (string Key, string? Value)[keys.Count];
+        for (var i = 0; i < keys.Count; i++)
+            values[i] = (keys[i], null);
 
-        var sql = "INSERT INTO codeindex_meta (key, value) VALUES " + string.Join(", ", values)
-            + " ON CONFLICT(key) DO UPDATE SET value = excluded.value";
-        var cmd = RentCommand(
-            sql,
-            c =>
-            {
-                foreach (var parameterName in parameterNames)
-                    c.Parameters.Add(parameterName, SqliteType.Text);
-            });
-        try
-        {
-            for (var i = 0; i < keys.Count; i++)
-                cmd.Parameters[parameterNames[i]].Value = keys[i];
-            cmd.ExecuteNonQuery();
-        }
-        finally
-        {
-            ReleaseCommand(cmd);
-        }
+        SetMetaValuesCore(values);
     }
 
     private string? GetMetaString(string key)

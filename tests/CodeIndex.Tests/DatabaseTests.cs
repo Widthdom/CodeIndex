@@ -3627,6 +3627,42 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void SetMetaValues_UpsertsNullValuesInOneBatch()
+    {
+        _writer.SetMetaValues(
+            ("batch_meta_a", "1"),
+            ("batch_meta_b", null));
+
+        Assert.Equal("1", ReadMeta("batch_meta_a"));
+        Assert.Null(ReadMeta("batch_meta_b"));
+        Assert.True(MetaRowExists("batch_meta_b"));
+    }
+
+    [Fact]
+    public void SetMetaValues_InsideWriterTransaction_RollsBackWithDependentRows()
+    {
+        using (var transaction = _writer.BeginTransaction())
+        {
+            _writer.SetMetaValues(
+                ("batch_phase", "new"),
+                ("batch_phase_null", null));
+            _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/batch_partial.cs",
+                Lang = "csharp",
+                Size = 12,
+                Lines = 1,
+                Modified = new DateTime(2026, 5, 31, 0, 0, 0, DateTimeKind.Utc),
+                Checksum = "batch_partial",
+            });
+        }
+
+        Assert.Null(ReadMeta("batch_phase"));
+        Assert.False(MetaRowExists("batch_phase_null"));
+        Assert.False(_writer.HasFileAtPath("src/batch_partial.cs"));
+    }
+
+    [Fact]
     public void ClearLastFailedIndexRunMetadata_NullsOnlyFailureMetadata()
     {
         string[] keys =
