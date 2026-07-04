@@ -5706,13 +5706,16 @@ public partial class McpServer
         }
         if (purged > 0 && hadCSharpStaticInterfaceContractsBeforePurge)
             csharpWorkspace = csharpWorkspace with { HasStaticInterfaceContracts = true };
-        var fatalScanErrors = scanResult.Errors
-            .Where(error => error.IsFatal)
-            .ToList();
-        int processed = 0, skipped = 0, errors = fatalScanErrors.Count;
-        var failures = fatalScanErrors
-            .Select(BuildScanFailure)
-            .ToList();
+        var failures = new List<IndexFileFailure>();
+        if (scanHadErrors)
+        {
+            foreach (var error in scanResult.Errors)
+            {
+                if (error.IsFatal)
+                    failures.Add(BuildScanFailure(error));
+            }
+        }
+        int processed = 0, skipped = 0, errors = failures.Count;
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
         var indexedSymbolExtractorLanguages = new HashSet<string>(StringComparer.Ordinal);
         var symbolsDroppedByKindFilter = 0;

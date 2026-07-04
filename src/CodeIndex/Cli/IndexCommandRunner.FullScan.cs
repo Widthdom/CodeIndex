@@ -712,18 +712,16 @@ public static partial class IndexCommandRunner
         var files = scanResult.Files;
         ConsoleUi.StopSpinner(spinnerCts);
         WriteFullScanJsonLiveness(options, $"found {ConsoleUi.Counted(files.Count, "file", format: "N0")}; preparing database...");
-        var fatalScanErrors = scanResult.Errors
-            .Where(error => error.IsFatal)
-            .ToList();
-        var warningScanErrors = scanResult.Errors
-            .Where(error => !error.IsFatal)
-            .ToList();
-        var errorList = fatalScanErrors
-            .Select(error => new CliJsonMessage(error.Path, error.Message))
-            .ToList();
-        var warningList = warningScanErrors
-            .Select(error => new CliJsonMessage(error.Path, error.Message))
-            .ToList();
+        var errorList = new List<CliJsonMessage>();
+        var warningList = new List<CliJsonMessage>();
+        foreach (var error in scanResult.Errors)
+        {
+            var message = new CliJsonMessage(error.Path, error.Message);
+            if (error.IsFatal)
+                errorList.Add(message);
+            else
+                warningList.Add(message);
+        }
         if (checkpointLoadResult.WarningMessage != null)
             warningList.Add(new CliJsonMessage("<scan_checkpoint>", checkpointLoadResult.WarningMessage));
         if (!options.Json && !options.Quiet)

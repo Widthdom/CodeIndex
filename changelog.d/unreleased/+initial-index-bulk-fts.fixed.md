@@ -40,6 +40,7 @@ affected:
 - **Fresh C# prepass skips unused stat-reuse caches** — CLI and MCP fresh/rebuild scans now avoid allocating the C# prepass stat-reuse cache until a reusable existing C# file can actually populate it.
 - **Full scans reuse scanner language counts** — the scanner now returns per-language counts with the file list, letting CLI and MCP full-index finalization reuse scan metadata instead of recounting target languages.
 - **Full scans cache scan-error state** — CLI and MCP full-index finalization now evaluate the scan error flag once and reuse it across purge, readiness, and summary decisions.
+- **Full scans avoid scan-error LINQ staging** — CLI and MCP full-index setup now split scan errors directly into their output lists, avoiding intermediate `Where`/`Select`/`ToList` allocations on large scans.
 
 ## 日本語
 
@@ -75,3 +76,4 @@ affected:
 - **fresh C# prepass で未使用の stat-reuse cache を作りません** — CLI と MCP の fresh / rebuild scan は、再利用可能な既存 C# ファイルで実際に埋められるまで C# prepass stat-reuse cache の確保を避けるようになりました。
 - **full scan で scanner の言語カウントを再利用します** — scanner が file list と一緒に言語別件数を返すようになり、CLI と MCP の full-index finalization は target 言語を数え直さず scan metadata を再利用します。
 - **full scan で scan-error state をキャッシュします** — CLI と MCP の full-index finalization は scan error flag を一度だけ評価し、purge、readiness、summary の判定で再利用するようになりました。
+- **full scan で scan-error の LINQ 中間リストを避けます** — CLI と MCP の full-index setup は scan errors を出力用リストへ直接振り分け、大規模 scan での中間 `Where` / `Select` / `ToList` 確保を避けるようになりました。
