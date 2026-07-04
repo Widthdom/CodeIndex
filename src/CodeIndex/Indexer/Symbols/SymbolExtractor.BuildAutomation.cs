@@ -36,6 +36,13 @@ public static partial class SymbolExtractor
         "Reference",
     };
 
+    private const string MsBuildNameDoubleQuoteAttribute = "Name=\"";
+    private const string MsBuildNameSingleQuoteAttribute = "Name='";
+    private const string MsBuildProjectDoubleQuoteAttribute = "Project=\"";
+    private const string MsBuildProjectSingleQuoteAttribute = "Project='";
+    private const string MsBuildIncludeDoubleQuoteAttribute = "Include=\"";
+    private const string MsBuildIncludeSingleQuoteAttribute = "Include='";
+
     private static List<SymbolRecord> ExtractMsBuildSymbols(long fileId, string content, string[] lines)
     {
         List<SymbolRecord>? symbols = null;
@@ -350,12 +357,24 @@ public static partial class SymbolExtractor
 
     private static string? GetMsBuildAttributeValue(string line, string attributeName)
     {
-        var ordinalPattern = attributeName + "=\"";
+        var ordinalPattern = attributeName switch
+        {
+            "Name" => MsBuildNameDoubleQuoteAttribute,
+            "Project" => MsBuildProjectDoubleQuoteAttribute,
+            "Include" => MsBuildIncludeDoubleQuoteAttribute,
+            _ => attributeName + "=\"",
+        };
         var ordinalIndex = line.IndexOf(ordinalPattern, StringComparison.OrdinalIgnoreCase);
         if (ordinalIndex >= 0)
             return ReadQuotedMsBuildAttributeValue(line, ordinalIndex + ordinalPattern.Length, '"');
 
-        var singlePattern = attributeName + "='";
+        var singlePattern = attributeName switch
+        {
+            "Name" => MsBuildNameSingleQuoteAttribute,
+            "Project" => MsBuildProjectSingleQuoteAttribute,
+            "Include" => MsBuildIncludeSingleQuoteAttribute,
+            _ => attributeName + "='",
+        };
         var singleIndex = line.IndexOf(singlePattern, StringComparison.OrdinalIgnoreCase);
         return singleIndex >= 0
             ? ReadQuotedMsBuildAttributeValue(line, singleIndex + singlePattern.Length, '\'')
