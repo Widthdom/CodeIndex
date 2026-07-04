@@ -715,7 +715,7 @@ public static partial class ReferenceExtractor
 
     private static bool IsCSharpQualifiedConstantPatternReferenceSite(
         string preparedLine,
-        (List<(int Start, int End)> Segments, int NextIndex, bool LastSeparatorWasDot, bool HasLeadingGlobalQualifier) parsed)
+        (IReadOnlyList<(int Start, int End)> Segments, int NextIndex, bool LastSeparatorWasDot, bool HasLeadingGlobalQualifier) parsed)
     {
         if (!parsed.LastSeparatorWasDot || parsed.Segments.Count < 2)
             return false;
@@ -961,9 +961,9 @@ public static partial class ReferenceExtractor
     private static bool TryReadCSharpQualifiedAccess(
         string preparedLine,
         int start,
-        out (List<(int Start, int End)> Segments, int NextIndex, bool LastSeparatorWasDot, bool HasLeadingGlobalQualifier) parsed)
+        out (IReadOnlyList<(int Start, int End)> Segments, int NextIndex, bool LastSeparatorWasDot, bool HasLeadingGlobalQualifier) parsed)
     {
-        parsed = (new List<(int Start, int End)>(), start, false, false);
+        parsed = (Array.Empty<(int Start, int End)>(), start, false, false);
 
         if (start > 0 && IsCSharpIdentifierPart(preparedLine[start - 1]))
             return false;
@@ -1342,7 +1342,7 @@ public static partial class ReferenceExtractor
 
     private static string ResolveCSharpQualifiedConstantPatternQualifier(
         string typeExpression,
-        (List<(int Start, int End)> Segments, int NextIndex, bool LastSeparatorWasDot, bool HasLeadingGlobalQualifier) parsed,
+        (IReadOnlyList<(int Start, int End)> Segments, int NextIndex, bool LastSeparatorWasDot, bool HasLeadingGlobalQualifier) parsed,
         int lineNumber,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
     {
