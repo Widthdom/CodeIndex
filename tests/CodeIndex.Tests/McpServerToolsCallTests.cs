@@ -7405,7 +7405,7 @@ public partial class McpServerTests
     [Fact]
     public void ToolsCall_SymbolHotspots_ReportsDegradedHotspotFamilyTrust()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_hotspots_family_signal_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_hotspots_family_signal");
         try
         {
             using (var db = new DbContext(dbPath))
@@ -7436,14 +7436,14 @@ public partial class McpServerTests
         }
         finally
         {
-            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
     [Fact]
     public void ToolsCall_SymbolHotspots_ReportsLegacyNullFamilyKeysAsDegraded()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_hotspots_family_legacy_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_hotspots_family_legacy");
         try
         {
             using (var db = new DbContext(dbPath))
@@ -7485,14 +7485,14 @@ public partial class McpServerTests
         }
         finally
         {
-            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
     [Fact]
     public void ToolsCall_SymbolHotspots_ReportsMissingMarkerFingerprintAsDegraded()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_hotspots_family_missing_fingerprint_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_hotspots_family_missing_fingerprint");
         try
         {
             using (var db = new DbContext(dbPath))
@@ -7524,7 +7524,7 @@ public partial class McpServerTests
         }
         finally
         {
-            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
