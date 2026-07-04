@@ -213,12 +213,11 @@ public class ProgramRunnerTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var directory = Path.Combine(Path.GetTempPath(), $"cdidx_install_probe_cleanup_{Guid.NewGuid():N}");
+            var directory = TestProjectHelper.CreateTempProject("cdidx_install_probe_cleanup");
             var originalError = Console.Error;
             using var stderr = new StringWriter(CultureInfo.InvariantCulture);
             try
             {
-                Directory.CreateDirectory(directory);
                 ProgramRunner.DeleteInstallDirectoryWriteProbeForTesting = _ => throw new IOException("simulated probe cleanup failure");
                 Console.SetError(stderr);
 
