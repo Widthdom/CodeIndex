@@ -846,11 +846,10 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_CheckpointJsonReportsRecoverableFileNameEnumerationFailure_Issue3833()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_enum_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_enum");
         var dbPath = Path.Combine(root, "codeindex.db");
         try
         {
-            Directory.CreateDirectory(root);
             File.WriteAllText(dbPath, "db");
             DbCommandRunner.EnumerateCheckpointFileNamesForTesting = _ => throw new IOException("secret local enumeration path");
 
@@ -872,11 +871,10 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_Checkpoint_JsonReportsFileEnumerationDiagnostic_Issue3812()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_file_enum_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_file_enum");
         var dbPath = Path.Combine(root, "codeindex.db");
         try
         {
-            Directory.CreateDirectory(root);
             File.WriteAllText(dbPath, "db");
             DbCommandRunner.EnumerateCheckpointFilesForTesting = _ => throw new UnauthorizedAccessException("checkpoint file enumeration denied");
 
@@ -902,12 +900,11 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_CheckpointTempCleanupFailurePreservesOriginalFailure_Issue3029()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_cleanup_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_cleanup");
         var dbPath = Path.Combine(root, "codeindex.db");
         string? cleanupPath = null;
         try
         {
-            Directory.CreateDirectory(root);
             InitializeEmptyDb(dbPath);
 
             var checkpointRoot = dbPath + ".checkpoints";
