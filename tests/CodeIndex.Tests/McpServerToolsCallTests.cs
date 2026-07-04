@@ -444,7 +444,7 @@ public partial class McpServerTests
         // failing against a stale handle.
         // DB ファイルが消えた場合はキャッシュをクリアし、外部で再作成された後の呼び出しで
         // 古いハンドルに失敗せず再オープンできることを確認する。
-        var missingPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_reopen_{Guid.NewGuid():N}.db");
+        var missingPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_reopen");
         using var server = new McpServer(missingPath, ConsoleUi.LoadVersion());
         try
         {
@@ -466,7 +466,7 @@ public partial class McpServerTests
         finally
         {
             server.Dispose();
-            DeleteFileRobust(missingPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(missingPath);
         }
     }
 
@@ -991,7 +991,7 @@ public partial class McpServerTests
     [Fact]
     public void ToolsCall_Files_NoResults_OnEmptyIndex_EmitsNullIndexedAt()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_empty_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_empty");
         try
         {
             using (var db = new DbContext(dbPath))
@@ -1013,7 +1013,7 @@ public partial class McpServerTests
         }
         finally
         {
-            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
@@ -3920,7 +3920,7 @@ public partial class McpServerTests
     [InlineData("files", """{"query":"nonexistent_xyz_123"}""", "results")]
     public void ToolsCall_ZeroResults_EmptyIndexIncludesNullFreshnessTimestamp(string toolName, string argsJson, string resultsKey)
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_empty_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_empty");
         try
         {
             using (var db = new DbContext(dbPath))
@@ -3941,7 +3941,7 @@ public partial class McpServerTests
         }
         finally
         {
-            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
