@@ -1209,9 +1209,8 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_RestoreBackupsListAndPruneOrdersByRecency_Issue3833()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_restore_backups_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_restore_backups");
         var dbPath = Path.Combine(root, "codeindex.db");
-        Directory.CreateDirectory(root);
         try
         {
             File.WriteAllText(dbPath, "current");
@@ -1249,9 +1248,8 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_RestoreBackupsRejectsDryRunWithoutDeleting_Issue3833()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_restore_backups_dry_run_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_restore_backups_dry_run");
         var dbPath = Path.Combine(root, "codeindex.db");
-        Directory.CreateDirectory(root);
         try
         {
             File.WriteAllText(dbPath, "current");
@@ -1274,9 +1272,8 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_RestoreBackupsPruneSkipsDeletionWhenScanTruncated_Issue3833()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_restore_backups_truncated_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_restore_backups_truncated");
         var dbPath = Path.Combine(root, "codeindex.db");
-        Directory.CreateDirectory(root);
         try
         {
             File.WriteAllText(dbPath, "current");
@@ -1309,9 +1306,8 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_RestoreBackupsPruneDeletesWhenOnlyFileInspectionTruncated_Issue3833()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_restore_backups_file_truncated_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_restore_backups_file_truncated");
         var dbPath = Path.Combine(root, "codeindex.db");
-        Directory.CreateDirectory(root);
         try
         {
             File.WriteAllText(dbPath, "current");
