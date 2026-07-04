@@ -237,7 +237,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_MissingDb_ReturnsNotFoundWithHint()
     {
-        var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_db_missing_{Guid.NewGuid():N}.db");
+        var missingDb = TestProjectHelper.CreateTempDbPath("cdidx_db_missing");
 
         var (exitCode, _, stderr) = RunAndCaptureStreams(["--integrity-check", "--db", missingDb]);
 
@@ -249,7 +249,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_IntegrityCheck_FileUriSemicolonPayloadDoesNotCreateDatabase_Issue3220()
     {
-        var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_db_uri_injection_{Guid.NewGuid():N}.db");
+        var missingDb = TestProjectHelper.CreateTempDbPath("cdidx_db_uri_injection");
         var uri = new Uri(missingDb).AbsoluteUri + ";Mode=ReadWriteCreate";
         try
         {
@@ -308,7 +308,7 @@ public class DbCommandRunnerTests
     [Fact]
     public void Run_MissingDb_JsonShapeIncludesHint()
     {
-        var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_db_missing_{Guid.NewGuid():N}.db");
+        var missingDb = TestProjectHelper.CreateTempDbPath("cdidx_db_missing");
 
         var (exitCode, json) = RunAndCaptureJson(["--integrity-check", "--db", missingDb, "--json"]);
 
