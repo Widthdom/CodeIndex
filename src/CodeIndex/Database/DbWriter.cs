@@ -1080,6 +1080,19 @@ public class DbWriter
     /// Check whether the DB currently contains any indexed files for the given language.
     /// 指定言語の indexed file が DB に存在するか確認する。
     /// </summary>
+    public bool HasAnyIndexedFiles()
+    {
+        var cmd = RentCommand("SELECT 1 FROM files LIMIT 1", static _ => { });
+        try
+        {
+            return cmd.ExecuteScalar() != null;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
+    }
+
     public bool HasAnyFilesWithLanguage(string lang)
     {
         LanguagePresenceCheckForTesting?.Invoke(lang);

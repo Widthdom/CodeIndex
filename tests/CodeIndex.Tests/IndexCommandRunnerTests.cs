@@ -2065,7 +2065,7 @@ public sealed class Caller
             Assert.Equal(0, languagePresenceChecks);
             Assert.Equal(0, statReuseLookups);
             Assert.Equal(0, reusableLookups);
-            Assert.Equal(1, countReads);
+            Assert.Equal(0, countReads);
             Assert.Equal(2, json.GetProperty("summary").GetProperty("files_total").GetInt64());
             using var db = new DbContext(dbPath);
             Assert.Equal(

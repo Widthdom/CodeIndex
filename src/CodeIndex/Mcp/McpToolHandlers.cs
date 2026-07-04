@@ -5480,7 +5480,7 @@ public partial class McpServer
             || !typeScriptAugmentationVersionMatchesCurrent;
         var typeScriptAugmentationReadyCleared = !typeScriptAugmentationVersionMatchesCurrent;
         var ftsMutated = false;
-        var startedWithNoIndexedFiles = writer.GetCounts().files == 0;
+        var startedWithNoIndexedFiles = !writer.HasAnyIndexedFiles();
 
         void InsertIssuesForIndexedFile(long fileId, IReadOnlyList<FileIssue> issues)
         {

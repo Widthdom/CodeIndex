@@ -6093,7 +6093,7 @@ public partial class McpServerTests
             Assert.Equal(0, languagePresenceChecks);
             Assert.Equal(0, statReuseLookups);
             Assert.Equal(0, reusableLookups);
-            Assert.Equal(1, countReads);
+            Assert.Equal(0, countReads);
             Assert.Equal(2, response["result"]!["structuredContent"]!["summary"]!["files"]!.GetValue<long>());
             using var db = new DbContext(dbPath);
             db.TryMigrateForRead();

@@ -916,8 +916,7 @@ public static partial class IndexCommandRunner
         if (!options.Json && !options.Quiet)
             purgeCts = ConsoleUi.StartSpinner("Cleaning up stale entries...", spinnerFrames);
         var purged = 0;
-        var existingFileCount = writer.GetCounts().files;
-        var startedWithNoIndexedFiles = existingFileCount == 0;
+        var startedWithNoIndexedFiles = !writer.HasAnyIndexedFiles();
         var retainedPaths = startedWithNoIndexedFiles
             ? new HashSet<string>(StringComparer.Ordinal)
             : new HashSet<string>(fileTargets.Length, StringComparer.Ordinal);
