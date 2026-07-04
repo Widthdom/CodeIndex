@@ -5412,15 +5412,26 @@ public partial class McpServer
         // index 呼び出しごとに新しい接続を開かず、セッション共有 DbContext を再利用する（#1494）。
         // 後段の InitializeSchema は冪等なので共有接続でもレガシー DB の移行は正しく走る。
         var db = GetOrOpenSharedDb();
-        var priorFoldVersion = db.GetMetaString("fold_key_version");
-        var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
-        var priorCSharpSymbolNameContractVersion = db.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey);
-        var priorMetadataTargetCsharp = db.GetMetaString(DbContext.GetMetadataTargetVersionMetaKey("csharp"));
-        var priorSqlGraphContractVersion = db.GetMetaString(DbContext.SqlGraphContractVersionMetaKey);
+        var csharpMetadataTargetVersionMetaKey = DbContext.GetMetadataTargetVersionMetaKey("csharp");
+        var priorMeta = db.GetMetaStrings(
+        [
+            "fold_key_version",
+            "fold_key_fingerprint",
+            DbContext.CSharpSymbolNameContractVersionMetaKey,
+            csharpMetadataTargetVersionMetaKey,
+            DbContext.SqlGraphContractVersionMetaKey,
+            DbContext.IndexedProjectRootMetaKey,
+            IndexCommandRunner.SymbolKindFilterMetaKey,
+        ]);
+        var priorFoldVersion = priorMeta["fold_key_version"];
+        var priorFoldFingerprint = priorMeta["fold_key_fingerprint"];
+        var priorCSharpSymbolNameContractVersion = priorMeta[DbContext.CSharpSymbolNameContractVersionMetaKey];
+        var priorMetadataTargetCsharp = priorMeta[csharpMetadataTargetVersionMetaKey];
+        var priorSqlGraphContractVersion = priorMeta[DbContext.SqlGraphContractVersionMetaKey];
         var priorHotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyVersionMetaKey);
         var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
-        var priorIndexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
-        var priorSymbolKindFilterSignature = db.GetMetaString(IndexCommandRunner.SymbolKindFilterMetaKey);
+        var priorIndexedProjectRoot = priorMeta[DbContext.IndexedProjectRootMetaKey];
+        var priorSymbolKindFilterSignature = priorMeta[IndexCommandRunner.SymbolKindFilterMetaKey];
         var requestToken = _currentRequestToken.Value;
         requestToken.ThrowIfCancellationRequested();
         // Capture git HEAD so subsequent queries can detect a worktree branch / HEAD switch
