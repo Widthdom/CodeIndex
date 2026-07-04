@@ -6191,7 +6191,7 @@ public partial class McpServerTests
         var language = new string('l', McpBoundedText.MaxDiagnosticDisplayChars + 25);
         var toolDisplay = McpBoundedText.ForDisplay(toolName, McpBoundedText.MaxToolNameChars);
         var languageDisplay = McpBoundedText.ForDisplay(language);
-        var metricsPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_metrics_{Guid.NewGuid():N}.jsonl");
+        var metricsPath = TestProjectHelper.CreateTempFilePath("cdidx_mcp_metrics", ".jsonl");
         try
         {
             using var session = MetricsSink.TryStartForTesting(metricsPath, maxBytes: 1024 * 1024);

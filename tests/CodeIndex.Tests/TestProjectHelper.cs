@@ -19,6 +19,9 @@ internal static class TestProjectHelper
     internal static string CreateTempDbPath(string prefix)
         => Path.Combine(Path.GetTempPath(), $"{prefix}_{Guid.NewGuid():N}.db");
 
+    internal static string CreateTempFilePath(string prefix, string extension)
+        => Path.Combine(Path.GetTempPath(), $"{prefix}_{Guid.NewGuid():N}{extension}");
+
     internal static string ProjectPath(string projectRoot, params string[] relativeSegments)
     {
         if (string.IsNullOrWhiteSpace(projectRoot))
