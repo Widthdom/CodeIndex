@@ -547,24 +547,20 @@ public static partial class IndexCommandRunner
         var total = diagnostics?.Count ?? 0;
         if (total == 0)
         {
-            writer.SetMeta(DbContext.LastIndexRunDiagnosticsMetaKey, null);
-            writer.SetMeta(DbContext.LastIndexRunDiagnosticCountMetaKey, null);
-            writer.SetMeta(DbContext.LastIndexRunDiagnosticsTruncatedMetaKey, null);
+            writer.SetMetaValues(
+                (DbContext.LastIndexRunDiagnosticsMetaKey, null),
+                (DbContext.LastIndexRunDiagnosticCountMetaKey, null),
+                (DbContext.LastIndexRunDiagnosticsTruncatedMetaKey, null));
             return;
         }
 
         var sample = JsonStringListCodec.TakeSerializableSample(
             diagnostics!,
             DbContext.LastIndexRunDiagnosticSampleLimit);
-        writer.SetMeta(
-            DbContext.LastIndexRunDiagnosticsMetaKey,
-            JsonStringListCodec.Serialize(sample));
-        writer.SetMeta(
-            DbContext.LastIndexRunDiagnosticCountMetaKey,
-            total.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        writer.SetMeta(
-            DbContext.LastIndexRunDiagnosticsTruncatedMetaKey,
-            (total > sample.Count).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        writer.SetMetaValues(
+            (DbContext.LastIndexRunDiagnosticsMetaKey, JsonStringListCodec.Serialize(sample)),
+            (DbContext.LastIndexRunDiagnosticCountMetaKey, total.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.LastIndexRunDiagnosticsTruncatedMetaKey, (total > sample.Count).ToString(System.Globalization.CultureInfo.InvariantCulture)));
     }
 
     internal static Action<DbWriter, IReadOnlyList<string>>? PlannerStatisticsMaintenanceDiagnosticStampingForTesting
@@ -658,16 +654,17 @@ public static partial class IndexCommandRunner
             using var db = new DbContext(dbPath);
             db.InitializeSchema();
             var writer = new DbWriter(db);
-            writer.SetMeta(DbContext.LastFailedIndexRunStatusMetaKey, status);
-            writer.SetMeta(DbContext.LastFailedIndexRunModeMetaKey, mode);
-            writer.SetMeta(DbContext.LastFailedIndexRunStartedAtMetaKey, startedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastFailedIndexRunDurationMsMetaKey, durationMs.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastFailedIndexRunFilesProcessedMetaKey, filesProcessed?.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastFailedIndexRunFilesTotalMetaKey, filesTotal?.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastFailedIndexRunErrorCodeMetaKey, errorCode);
-            writer.SetMeta(DbContext.LastFailedIndexRunReasonMetaKey, reason);
-            writer.SetMeta(DbContext.LastFailedIndexRunProgressPersistedMetaKey, progressPersisted?.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastFailedIndexRunRecoveryHintMetaKey, recoveryHint);
+            writer.SetMetaValues(
+                (DbContext.LastFailedIndexRunStatusMetaKey, status),
+                (DbContext.LastFailedIndexRunModeMetaKey, mode),
+                (DbContext.LastFailedIndexRunStartedAtMetaKey, startedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastFailedIndexRunDurationMsMetaKey, durationMs.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastFailedIndexRunFilesProcessedMetaKey, filesProcessed?.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastFailedIndexRunFilesTotalMetaKey, filesTotal?.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastFailedIndexRunErrorCodeMetaKey, errorCode),
+                (DbContext.LastFailedIndexRunReasonMetaKey, reason),
+                (DbContext.LastFailedIndexRunProgressPersistedMetaKey, progressPersisted?.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastFailedIndexRunRecoveryHintMetaKey, recoveryHint));
         }
         catch (Exception ex) when (ex is CodeIndexException or IOException or UnauthorizedAccessException or NotSupportedException or SqliteException)
         {

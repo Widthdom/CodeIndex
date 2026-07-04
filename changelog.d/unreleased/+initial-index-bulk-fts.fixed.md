@@ -26,6 +26,7 @@ affected:
 - **Successful index metadata stamps batch related writes** — CLI and MCP successful index finalization now persist unknown-extension and last-index-run metadata with grouped upserts instead of one metadata statement per field.
 - **Successful index HEAD stamps batch related writes** — CLI and MCP now persist indexed HEAD commit/branch and HEAD freshness metadata with grouped upserts during successful finalization.
 - **Fold readiness metadata stamps batch version writes** — successful fold readiness finalization now persists fold-key and symbol-extractor contract metadata with grouped upserts instead of per-key metadata writes.
+- **Index diagnostic metadata batches related writes** — successful diagnostic cleanup and failed/partial run metadata persistence now use grouped upserts instead of writing each diagnostic field separately.
 
 ## 日本語
 
@@ -47,3 +48,4 @@ affected:
 - **成功時 index metadata stamp の関連 write をまとめます** — CLI と MCP の成功時 finalization は、unknown-extension metadata と last-index-run metadata をフィールドごとの個別 metadata statement ではなく grouped upsert で保存するようになりました。
 - **成功時 index HEAD stamp の関連 write をまとめます** — CLI と MCP は成功時 finalization で indexed HEAD commit / branch と HEAD freshness metadata を grouped upsert で保存するようになりました。
 - **fold readiness metadata stamp の version write をまとめます** — 成功時の fold readiness finalization は、fold-key と symbol-extractor contract metadata をキーごとの個別 metadata write ではなく grouped upsert で保存するようになりました。
+- **index diagnostic metadata の関連 write をまとめます** — 成功時の diagnostic cleanup と失敗 / partial run metadata 保存は、diagnostic field ごとの個別 write ではなく grouped upsert を使うようになりました。
