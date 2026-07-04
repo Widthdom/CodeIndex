@@ -67,7 +67,7 @@ public partial class FileIndexer
             MaterializePathSet(scanState.ListedDirectories),
             MaterializePathSet(scanState.FullyScannedDirectories),
             MaterializeCheckpointedDirectorySet(scanState.CheckpointedDirectories, scanState.FullyScannedDirectories),
-            new List<string>(_ancestorIgnoreDirectories),
+            MaterializeAncestorIgnoreDirectories(),
             MaterializePathSet(scanState.AttributePrunedDirectories),
             MaterializeSortedPathSet(scanState.NestedRepositories),
             MaterializeSortedPathSet(scanState.DanglingSymlinks))
@@ -78,6 +78,11 @@ public partial class FileIndexer
 
     private static IReadOnlyList<string> MaterializePathSet(HashSet<string> paths)
         => paths.Count == 0 ? Array.Empty<string>() : new List<string>(paths);
+
+    private IReadOnlyList<string> MaterializeAncestorIgnoreDirectories()
+        => _ancestorIgnoreDirectories.Count == 0
+            ? Array.Empty<string>()
+            : new List<string>(_ancestorIgnoreDirectories);
 
     private static IReadOnlyDictionary<string, int> MaterializeLanguageCounts(Dictionary<string, int> counts)
         => counts.Count == 0
