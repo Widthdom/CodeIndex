@@ -2569,7 +2569,7 @@ exit 7
     [Fact]
     public void TryValidateUpgradeInstallerDirectoryCleanupTarget_RejectsUnexpectedPrefix_Issue3659()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"cdidx-other-{Guid.NewGuid():N}");
+        var path = TestProjectHelper.CreateTempFilePath("cdidx-other", string.Empty);
 
         var valid = ProgramRunner.TryValidateUpgradeInstallerDirectoryCleanupTarget(
             path,
@@ -2586,9 +2586,9 @@ exit 7
         if (OperatingSystem.IsWindows())
             return;
 
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_cleanup_link_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_cleanup_link");
         var target = Path.Combine(root, "target");
-        var link = Path.Combine(Path.GetTempPath(), $"cdidx-install-link-{Guid.NewGuid():N}");
+        var link = TestProjectHelper.CreateTempFilePath("cdidx-install-link", string.Empty);
         try
         {
             Directory.CreateDirectory(target);
