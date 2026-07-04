@@ -27,6 +27,25 @@ public class DbContext : IDisposable
     public const string SymbolExtractorVersionMetaPrefix = "symbol_extractor_version_";
     private const int MigrationDiagnosticTextLimit = 240;
     private const int MigrationForeignKeyViolationSampleLimit = 5;
+    internal const string DropFtsChunksInsertTriggerSql = "DROP TRIGGER IF EXISTS fts_chunks_ai";
+    internal const string DropFtsChunksDeleteTriggerSql = "DROP TRIGGER IF EXISTS fts_chunks_ad";
+    internal const string DropFtsChunksUpdateTriggerSql = "DROP TRIGGER IF EXISTS fts_chunks_au";
+    internal const string CreateFtsChunksInsertTriggerSql = """
+        CREATE TRIGGER IF NOT EXISTS fts_chunks_ai AFTER INSERT ON chunks BEGIN
+            INSERT INTO fts_chunks(rowid, content) VALUES (new.id, new.content);
+        END
+        """;
+    internal const string CreateFtsChunksDeleteTriggerSql = """
+        CREATE TRIGGER IF NOT EXISTS fts_chunks_ad AFTER DELETE ON chunks BEGIN
+            INSERT INTO fts_chunks(fts_chunks, rowid, content) VALUES('delete', old.id, old.content);
+        END
+        """;
+    internal const string CreateFtsChunksUpdateTriggerSql = """
+        CREATE TRIGGER IF NOT EXISTS fts_chunks_au AFTER UPDATE ON chunks BEGIN
+            INSERT INTO fts_chunks(fts_chunks, rowid, content) VALUES('delete', old.id, old.content);
+            INSERT INTO fts_chunks(rowid, content) VALUES (new.id, new.content);
+        END
+        """;
 
     private static readonly string[] RequiredCodeIndexTables =
     [
@@ -1939,19 +1958,9 @@ public class DbContext : IDisposable
                 // Without these, CASCADE DELETEs on chunks leave orphan entries in fts_chunks.
                 // FTS5 content-synced トリガー — fts_chunksをchunksテーブルと同期する。
                 // これがないとchunksのCASCADE DELETEでfts_chunksに孤立エントリが残る。
-                Execute(@"
-            CREATE TRIGGER IF NOT EXISTS fts_chunks_ai AFTER INSERT ON chunks BEGIN
-                INSERT INTO fts_chunks(rowid, content) VALUES (new.id, new.content);
-            END");
-                Execute(@"
-            CREATE TRIGGER IF NOT EXISTS fts_chunks_ad AFTER DELETE ON chunks BEGIN
-                INSERT INTO fts_chunks(fts_chunks, rowid, content) VALUES('delete', old.id, old.content);
-            END");
-                Execute(@"
-            CREATE TRIGGER IF NOT EXISTS fts_chunks_au AFTER UPDATE ON chunks BEGIN
-                INSERT INTO fts_chunks(fts_chunks, rowid, content) VALUES('delete', old.id, old.content);
-                INSERT INTO fts_chunks(rowid, content) VALUES (new.id, new.content);
-            END");
+                Execute(CreateFtsChunksInsertTriggerSql);
+                Execute(CreateFtsChunksDeleteTriggerSql);
+                Execute(CreateFtsChunksUpdateTriggerSql);
                 transaction.Commit();
             }
             finally
@@ -2491,9 +2500,9 @@ public class DbContext : IDisposable
         var quotedTableName = SqliteIdentifier.Quote(tableName);
         var quotedOldTableName = SqliteIdentifier.Quote(oldTableName);
         Execute($"DROP TABLE IF EXISTS {quotedOldTableName}");
-        Execute($"DROP TRIGGER IF EXISTS fts_chunks_ai");
-        Execute($"DROP TRIGGER IF EXISTS fts_chunks_ad");
-        Execute($"DROP TRIGGER IF EXISTS fts_chunks_au");
+        Execute(DropFtsChunksInsertTriggerSql);
+        Execute(DropFtsChunksDeleteTriggerSql);
+        Execute(DropFtsChunksUpdateTriggerSql);
         if (string.Equals(tableName, "chunks", StringComparison.Ordinal))
         {
             Execute("DROP TABLE IF EXISTS fts_chunks");
@@ -2530,9 +2539,9 @@ public class DbContext : IDisposable
     /// </summary>
     public void DropAll()
     {
-        Execute("DROP TRIGGER IF EXISTS fts_chunks_ai");
-        Execute("DROP TRIGGER IF EXISTS fts_chunks_ad");
-        Execute("DROP TRIGGER IF EXISTS fts_chunks_au");
+        Execute(DropFtsChunksInsertTriggerSql);
+        Execute(DropFtsChunksDeleteTriggerSql);
+        Execute(DropFtsChunksUpdateTriggerSql);
         Execute("DROP TABLE IF EXISTS fts_chunks");
         Execute("DROP TABLE IF EXISTS file_issues");
         Execute("DROP TABLE IF EXISTS symbol_references");

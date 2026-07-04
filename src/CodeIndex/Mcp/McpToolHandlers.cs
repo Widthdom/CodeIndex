@@ -5479,6 +5479,7 @@ public partial class McpServer
             || !typeScriptAugmentationVersionMatchesCurrent;
         var typeScriptAugmentationReadyCleared = !typeScriptAugmentationVersionMatchesCurrent;
         var ftsMutated = false;
+        var startedWithNoIndexedFiles = writer.GetCounts().files == 0;
 
         static bool PathsEqual(string? left, string? right)
         {
@@ -5681,6 +5682,7 @@ public partial class McpServer
             .ToList();
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
         var symbolsDroppedByKindFilter = 0;
+        using var ftsBulkLoad = FtsBulkLoadTriggerGuard.Start(writer, rebuild || startedWithNoIndexedFiles, () => ftsMutated);
 
         foreach (var target in fileTargets)
         {
@@ -5929,7 +5931,11 @@ public partial class McpServer
             await EmitProgressNotificationAsync(progressToken, processed, files.Count).ConfigureAwait(false);
         }
 
-        if (ftsMutated)
+        if (ftsBulkLoad != null)
+        {
+            ftsBulkLoad.Complete(ftsMutated, McpIndexFtsOptimizeForTesting);
+        }
+        else if (ftsMutated)
         {
             McpIndexFtsOptimizeForTesting?.Invoke();
             writer.OptimizeFts();

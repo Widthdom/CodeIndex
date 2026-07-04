@@ -1212,6 +1212,10 @@ public static partial class IndexCommandRunner
             => javaScriptTypeScriptRefreshRequired
                && (IsJavaScriptTypeScriptLanguage(language) || IsJavaScriptTypeScriptConfigPath(indexPath));
 
+        using var ftsBulkLoad = FtsBulkLoadTriggerGuard.Start(
+            writer,
+            options.Rebuild || startedWithNoIndexedFiles);
+
         var csharpPrepassStatReuse = new Dictionary<string, IndexedFileStatReuseResult?>(StringComparer.Ordinal);
 
         bool CanReuseCSharpPrepassTargetWithoutRead(CSharpStaticInterfacePrepass.FileTarget target)
@@ -2005,7 +2009,21 @@ public static partial class IndexCommandRunner
             }
         }
         ThrowIfFullScanCancelled(processed, files.Count);
-        if (ftsMutated)
+        if (ftsBulkLoad != null)
+        {
+            var phase = ftsMutated ? "rebuilding text index" : "restoring text index triggers";
+            WriteFullScanJsonLiveness(options, $"{phase}...");
+            var ftsHeartbeat = StartFullScanJsonPhaseHeartbeat(options, phase);
+            try
+            {
+                ftsBulkLoad.Complete(ftsMutated, FullScanFtsOptimizeForTesting);
+            }
+            finally
+            {
+                StopFullScanJsonPhaseHeartbeat(ftsHeartbeat);
+            }
+        }
+        else if (ftsMutated)
         {
             WriteFullScanJsonLiveness(options, "optimizing index...");
             var optimizeHeartbeat = StartFullScanJsonPhaseHeartbeat(options, "optimizing index");

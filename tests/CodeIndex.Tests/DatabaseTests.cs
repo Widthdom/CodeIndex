@@ -407,6 +407,94 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void RebuildFtsFromChunks_AfterBulkLoadSuspension_PopulatesFtsAndRestoresTriggers()
+    {
+        var bulkFileId = UpsertTestFile("src/bulk-fts.cs", checksum: "bulk-fts");
+
+        _writer.SuspendFtsSyncTriggersForBulkLoad();
+        Assert.Equal(0L, CountFtsSyncTriggers());
+
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = bulkFileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 1,
+                Content = "bulkuniquetoken",
+            },
+        ]);
+
+        Assert.Equal(0L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'bulkuniquetoken'"));
+
+        _writer.RestoreFtsSyncTriggers();
+        _writer.RebuildFtsFromChunks();
+
+        Assert.Equal(3L, CountFtsSyncTriggers());
+        Assert.Equal(1L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'bulkuniquetoken'"));
+
+        var incrementalFileId = UpsertTestFile("src/incremental-fts.cs", checksum: "incremental-fts");
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = incrementalFileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 1,
+                Content = "incrementaluniquetoken",
+            },
+        ]);
+
+        Assert.Equal(1L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'incrementaluniquetoken'"));
+    }
+
+    [Fact]
+    public void SuspendFtsSyncTriggersForBulkLoad_RollsBackWithTransaction()
+    {
+        Assert.Equal(3L, CountFtsSyncTriggers());
+
+        using (var txn = _writer.BeginTransaction())
+        {
+            _writer.SuspendFtsSyncTriggersForBulkLoad();
+
+            Assert.Equal(0L, CountFtsSyncTriggers());
+        }
+
+        Assert.Equal(3L, CountFtsSyncTriggers());
+    }
+
+    [Fact]
+    public void FtsBulkLoadTriggerGuard_DisposeAfterMutation_RebuildsFtsAndRestoresTriggers()
+    {
+        var fileId = UpsertTestFile("src/abandoned-bulk-fts.cs", checksum: "abandoned-bulk-fts");
+        var ftsMutated = false;
+
+        using (var guard = FtsBulkLoadTriggerGuard.Start(_writer, enabled: true, () => ftsMutated))
+        {
+            Assert.NotNull(guard);
+            Assert.Equal(0L, CountFtsSyncTriggers());
+
+            _writer.InsertChunks(
+            [
+                new ChunkRecord
+                {
+                    FileId = fileId,
+                    ChunkIndex = 0,
+                    StartLine = 1,
+                    EndLine = 1,
+                    Content = "abandonedbulktoken",
+                },
+            ]);
+            ftsMutated = true;
+        }
+
+        Assert.Equal(3L, CountFtsSyncTriggers());
+        Assert.Equal(1L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'abandonedbulktoken'"));
+    }
+
+    [Fact]
     public void InsertReferences_ReportsProgressCheckpoints_Issue3738()
     {
         var fileId = UpsertTestFile("src/progress-reference.cs", checksum: "progress-reference");
@@ -3481,6 +3569,9 @@ public class DatabaseTests : IDisposable
 
     private long ExecuteScalarLong(string sql)
         => ExecuteScalarLong(_db.Connection, sql);
+
+    private long CountFtsSyncTriggers()
+        => ExecuteScalarLong("SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name IN ('fts_chunks_ai', 'fts_chunks_ad', 'fts_chunks_au')");
 
     private string? ReadMeta(string key)
     {

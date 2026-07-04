@@ -2773,6 +2773,42 @@ public class DbWriter
         SetMeta(FtsLastOptimizedAtMetaKey, DateTimeOffset.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture));
     }
 
+    /// <summary>
+    /// Temporarily disable per-row FTS synchronization before a full bulk rewrite.
+    /// The caller must restore the triggers and rebuild FTS from `chunks` before commit.
+    /// full bulk rewrite の前に、行ごとの FTS 同期を一時停止する。
+    /// caller は commit 前に trigger 復元と chunks からの FTS rebuild を行う。
+    /// </summary>
+    public void SuspendFtsSyncTriggersForBulkLoad()
+    {
+        Execute(DbContext.DropFtsChunksInsertTriggerSql);
+        Execute(DbContext.DropFtsChunksDeleteTriggerSql);
+        Execute(DbContext.DropFtsChunksUpdateTriggerSql);
+        _markWriteWork?.Invoke();
+    }
+
+    /// <summary>
+    /// Restore FTS synchronization triggers after a bulk load.
+    /// bulk load 後に FTS 同期 trigger を復元する。
+    /// </summary>
+    public void RestoreFtsSyncTriggers()
+    {
+        Execute(DbContext.CreateFtsChunksInsertTriggerSql);
+        Execute(DbContext.CreateFtsChunksDeleteTriggerSql);
+        Execute(DbContext.CreateFtsChunksUpdateTriggerSql);
+        _markWriteWork?.Invoke();
+    }
+
+    /// <summary>
+    /// Rebuild the external-content FTS table from the current chunks table.
+    /// 現在の chunks テーブルから external-content FTS テーブルを再構築する。
+    /// </summary>
+    public void RebuildFtsFromChunks()
+    {
+        Execute("INSERT INTO fts_chunks(fts_chunks) VALUES('rebuild')");
+        SetMeta(FtsIncrementalWritesSinceOptimizeMetaKey, "0");
+    }
+
     public int GetFtsIncrementalWritesSinceOptimize()
     {
         var raw = GetMetaString(FtsIncrementalWritesSinceOptimizeMetaKey);
