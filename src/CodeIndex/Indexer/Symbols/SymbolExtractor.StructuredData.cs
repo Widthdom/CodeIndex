@@ -232,9 +232,14 @@ public static partial class SymbolExtractor
                 blockScalarIndent = null;
             }
 
-            var trimmed = line.TrimStart();
-            if (trimmed.StartsWith('#') || trimmed is "---" or "...")
+            var trimmed = line.AsSpan().TrimStart();
+            if (trimmed.IsEmpty
+                || trimmed[0] == '#'
+                || trimmed.SequenceEqual("---")
+                || trimmed.SequenceEqual("..."))
+            {
                 continue;
+            }
 
             if (line.IndexOf(':') < 0)
                 continue;
