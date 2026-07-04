@@ -270,9 +270,7 @@ public static partial class ReferenceExtractor
             if (symbol.Kind != "function" || string.IsNullOrWhiteSpace(symbol.Name))
                 continue;
 
-            var name = language == "csharp"
-                ? NormalizeCSharpIdentifier(symbol.Name)
-                : symbol.Name;
+            var name = NormalizeCSharpIdentifier(symbol.Name);
             if (!string.IsNullOrWhiteSpace(name))
                 (names ??= new HashSet<string>(StringComparer.Ordinal)).Add(name);
         }
