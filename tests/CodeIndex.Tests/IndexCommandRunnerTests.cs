@@ -3732,7 +3732,7 @@ public sealed class Caller
     public void Run_ExplicitDb_PersistsIndexedProjectRootMetadata()
     {
         var projectRoot = CreateTempProject();
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_explicit_root_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_explicit_root");
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
@@ -3969,7 +3969,7 @@ public sealed class Caller
     public void Run_GitRepo_PersistsIndexedHeadMetadata()
     {
         var projectRoot = CreateTempProject();
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_head_meta_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_head_meta");
         var fixedNow = new DateTimeOffset(2026, 6, 20, 12, 34, 56, TimeSpan.Zero);
         IndexCommandRunner.TimeProvider = new ManualTimeProvider(fixedNow);
         try
@@ -4010,7 +4010,7 @@ public sealed class Caller
     public void Run_NonGitRepo_DoesNotPersistIndexedHeadMetadata()
     {
         var projectRoot = CreateTempProject();
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_head_meta_none_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_head_meta_none");
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
@@ -4041,7 +4041,7 @@ public sealed class Caller
         // `PathsEqual` / `IsPathEqualOrParent` made at index time.
         // #1546: index 成功時に case-sensitivity を stamp し、status から監査可能にする。
         var projectRoot = CreateTempProject();
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_path_case_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_path_case");
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hi')\n");
@@ -4068,7 +4068,7 @@ public sealed class Caller
     public void Run_GitRepo_DetachedHead_PersistsShaButNotBranch()
     {
         var projectRoot = CreateTempProject();
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_head_meta_detached_{Guid.NewGuid():N}.db");
+        var dbPath = CreateTempDbPath("cdidx_head_meta_detached");
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
