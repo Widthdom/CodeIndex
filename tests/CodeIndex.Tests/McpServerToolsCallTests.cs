@@ -5184,7 +5184,7 @@ public partial class McpServerTests
     public void ToolsCall_BatchQuery_SanitizesSlotExceptionMessage_Issue2849()
     {
         const string secret = "SECRET_BATCH_SLOT_2849";
-        var corruptDbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_corrupt_{Guid.NewGuid():N}.db");
+        var corruptDbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_corrupt");
         File.WriteAllText(corruptDbPath, $"not a sqlite database {secret}");
         var previous = Environment.GetEnvironmentVariable(McpServer.DebugEnvironmentVariable);
         try
@@ -5207,7 +5207,7 @@ public partial class McpServerTests
         finally
         {
             Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, previous);
-            DeleteFileRobust(corruptDbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(corruptDbPath);
         }
     }
 
@@ -7920,7 +7920,7 @@ public partial class McpServerTests
     [Fact]
     public void ToolsCall_BackfillFold_BlankFile_ReturnsError()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_backfill_blank_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_backfill_blank");
         File.WriteAllText(dbPath, string.Empty);
 
         try
@@ -7935,14 +7935,14 @@ public partial class McpServerTests
         }
         finally
         {
-            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
     [Fact]
     public void ToolsCall_BackfillFold_NonexistentFileUri_ReturnsError()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_backfill_missing_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_backfill_missing");
         var dbUri = new Uri(dbPath).AbsoluteUri;
         using var server = new McpServer(dbUri, ConsoleUi.LoadVersion());
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"backfill_fold","arguments":{}}}""")!;
