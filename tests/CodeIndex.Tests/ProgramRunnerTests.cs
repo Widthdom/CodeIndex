@@ -2762,7 +2762,7 @@ exit 7
         {
             Timeout = Timeout.InfiniteTimeSpan,
         };
-        var scriptPath = Path.Combine(Path.GetTempPath(), $"cdidx_install_header_{Guid.NewGuid():N}.sh");
+        var scriptPath = TestProjectHelper.CreateTempFilePath("cdidx_install_header", ".sh");
         try
         {
             await ProgramRunner.DownloadInstallerScriptAsync(
