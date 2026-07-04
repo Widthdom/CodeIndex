@@ -7167,7 +7167,7 @@ public partial class McpServerTests
         Directory.CreateDirectory(fixtureDir);
         var srcDir = Path.Combine(fixtureDir, "src");
         Directory.CreateDirectory(srcDir);
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_marker_fingerprint_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_marker_fingerprint");
         try
         {
             File.WriteAllText(Path.Combine(fixtureDir, "App.csproj"), "<Project />");
@@ -7245,7 +7245,7 @@ public partial class McpServerTests
         }
         finally
         {
-            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
             TestProjectHelper.DeleteDirectory(fixtureDir);
         }
     }
@@ -7257,7 +7257,7 @@ public partial class McpServerTests
         Directory.CreateDirectory(fixtureDir);
         var srcDir = Path.Combine(fixtureDir, "src");
         Directory.CreateDirectory(srcDir);
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_marker_isolation_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_marker_isolation");
         try
         {
             File.WriteAllText(Path.Combine(fixtureDir, "App.csproj"), "<Project />");
@@ -7315,7 +7315,7 @@ public partial class McpServerTests
         }
         finally
         {
-            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
             TestProjectHelper.DeleteDirectory(fixtureDir);
         }
     }
@@ -7327,7 +7327,7 @@ public partial class McpServerTests
         Directory.CreateDirectory(fixtureDir);
         var srcDir = Path.Combine(fixtureDir, "src");
         Directory.CreateDirectory(srcDir);
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_marker_metadata_only_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_marker_metadata_only");
         try
         {
             File.WriteAllText(Path.Combine(fixtureDir, "App.csproj"), "<Project />");
@@ -7397,7 +7397,7 @@ public partial class McpServerTests
         }
         finally
         {
-            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
             TestProjectHelper.DeleteDirectory(fixtureDir);
         }
     }
