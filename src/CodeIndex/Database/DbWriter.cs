@@ -2995,8 +2995,9 @@ public class DbWriter
 
                 ApplyReadyBitToUserVersion(DbContext.FoldReadyFlag, ownTransaction ? null : _activeTransaction);
 
-                SetMeta("fold_key_version", NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                SetMeta("fold_key_fingerprint", NameFold.Fingerprint());
+                SetMetaValues(
+                    ("fold_key_version", NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                    ("fold_key_fingerprint", NameFold.Fingerprint()));
                 StampSymbolExtractorVersions(symbolExtractorLanguagesToStamp);
 
                 if (ownTransaction)
@@ -3023,15 +3024,19 @@ public class DbWriter
 
     public void StampSymbolExtractorVersions(IReadOnlyCollection<string>? languagesToStamp = null)
     {
-        foreach (var lang in languagesToStamp ?? GetIndexedLanguages())
+        var languages = languagesToStamp ?? GetIndexedLanguages();
+        var values = new List<(string Key, string? Value)>(languages.Count);
+        foreach (var lang in languages)
         {
             if (string.IsNullOrWhiteSpace(lang))
                 continue;
 
-            SetMeta(
+            values.Add((
                 DbContext.GetSymbolExtractorVersionMetaKey(lang),
-                SymbolExtractor.GetContractVersion(lang).ToString(System.Globalization.CultureInfo.InvariantCulture));
+                SymbolExtractor.GetContractVersion(lang).ToString(System.Globalization.CultureInfo.InvariantCulture)));
         }
+
+        SetMetaValues(values.ToArray());
     }
 
     /// <summary>

@@ -25,6 +25,7 @@ affected:
 - **Fresh fold readiness stamps reuse indexed symbol languages** — CLI and MCP fresh/rebuild full scans now stamp symbol-extractor contract versions from the languages committed during the run instead of querying distinct indexed languages from the database.
 - **Successful index metadata stamps batch related writes** — CLI and MCP successful index finalization now persist unknown-extension and last-index-run metadata with grouped upserts instead of one metadata statement per field.
 - **Successful index HEAD stamps batch related writes** — CLI and MCP now persist indexed HEAD commit/branch and HEAD freshness metadata with grouped upserts during successful finalization.
+- **Fold readiness metadata stamps batch version writes** — successful fold readiness finalization now persists fold-key and symbol-extractor contract metadata with grouped upserts instead of per-key metadata writes.
 
 ## 日本語
 
@@ -45,3 +46,4 @@ affected:
 - **fresh fold readiness stamp で index 済み symbol 言語を再利用します** — CLI と MCP の fresh / rebuild full scan は、symbol-extractor contract version を DB から distinct indexed language として読み直さず、その run で commit した言語集合から stamp するようになりました。
 - **成功時 index metadata stamp の関連 write をまとめます** — CLI と MCP の成功時 finalization は、unknown-extension metadata と last-index-run metadata をフィールドごとの個別 metadata statement ではなく grouped upsert で保存するようになりました。
 - **成功時 index HEAD stamp の関連 write をまとめます** — CLI と MCP は成功時 finalization で indexed HEAD commit / branch と HEAD freshness metadata を grouped upsert で保存するようになりました。
+- **fold readiness metadata stamp の version write をまとめます** — 成功時の fold readiness finalization は、fold-key と symbol-extractor contract metadata をキーごとの個別 metadata write ではなく grouped upsert で保存するようになりました。
