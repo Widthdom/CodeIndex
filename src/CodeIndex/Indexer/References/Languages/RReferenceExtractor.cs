@@ -475,19 +475,31 @@ internal static class RReferenceExtractor
 
         var line = StripRNamespaceDirectiveComment(originalLine);
 
-        var genericMatch = S4SetGenericCallRegex.Match(line);
-        if (genericMatch.Success)
+        var mayContainSetGeneric = line.IndexOf("setGeneric", StringComparison.Ordinal) >= 0;
+        var mayContainSetClass = line.IndexOf("setClass", StringComparison.Ordinal) >= 0;
+        var mayContainSetMethod = line.IndexOf("setMethod", StringComparison.Ordinal) >= 0;
+        if (mayContainSetGeneric)
         {
-            AddS4Reference(genericMatch, "backtickName", "quotedName", "name", "reference");
-            return;
+            var genericMatch = S4SetGenericCallRegex.Match(line);
+            if (genericMatch.Success)
+            {
+                AddS4Reference(genericMatch, "backtickName", "quotedName", "name", "reference");
+                return;
+            }
         }
 
-        var classMatch = S4SetClassCallRegex.Match(line);
-        if (classMatch.Success)
+        if (mayContainSetClass)
         {
-            AddS4Reference(classMatch, "backtickName", "quotedName", "name", "type_reference");
-            return;
+            var classMatch = S4SetClassCallRegex.Match(line);
+            if (classMatch.Success)
+            {
+                AddS4Reference(classMatch, "backtickName", "quotedName", "name", "type_reference");
+                return;
+            }
         }
+
+        if (!mayContainSetMethod)
+            return;
 
         var methodMatch = S4SetMethodCallRegex.Match(line);
         if (!methodMatch.Success)
