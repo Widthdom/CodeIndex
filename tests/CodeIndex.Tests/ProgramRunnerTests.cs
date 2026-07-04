@@ -2521,10 +2521,9 @@ exit 7
         if (OperatingSystem.IsWindows())
             return;
 
-        var path = Path.Combine(Path.GetTempPath(), $"cdidx_install_dir_mode_{Guid.NewGuid():N}");
+        var path = TestProjectHelper.CreateTempProject("cdidx_install_dir_mode");
         try
         {
-            Directory.CreateDirectory(path);
             File.SetUnixFileMode(
                 path,
                 DataDirectorySecurity.PrivateDirectoryMode | UnixFileMode.GroupWrite);
