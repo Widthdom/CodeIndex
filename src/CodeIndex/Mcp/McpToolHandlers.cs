@@ -5660,7 +5660,7 @@ public partial class McpServer
         }
         var knownReadableFileSizes = new Dictionary<string, long>(files.Count, StringComparer.Ordinal);
         await EmitProgressNotificationAsync(progressToken, 0, files.Count, "Index scan complete; indexing files.").ConfigureAwait(false);
-        var csharpPrepassStatReuse = new Dictionary<string, IndexedFileStatReuseResult?>(StringComparer.Ordinal);
+        Dictionary<string, IndexedFileStatReuseResult?>? csharpPrepassStatReuse = null;
         bool IsGeneratedExtractionSuppressed(CSharpStaticInterfacePrepass.FileTarget target)
             => target.GeneratedExtractionSuppressed == true;
 
@@ -5682,11 +5682,15 @@ public partial class McpServer
                 allowReuse: true);
             if (existingFile == null)
             {
-                csharpPrepassStatReuse[target.IndexPath] = null;
+                (csharpPrepassStatReuse ??= new Dictionary<string, IndexedFileStatReuseResult?>(
+                    csharpPrepassTargetCapacity,
+                    StringComparer.Ordinal))[target.IndexPath] = null;
                 return false;
             }
 
-            csharpPrepassStatReuse[target.IndexPath] = existingFile.Value;
+            (csharpPrepassStatReuse ??= new Dictionary<string, IndexedFileStatReuseResult?>(
+                csharpPrepassTargetCapacity,
+                StringComparer.Ordinal))[target.IndexPath] = existingFile.Value;
             return true;
         }
 
@@ -5755,6 +5759,7 @@ public partial class McpServer
                     && AllowReuseWithCurrentHotspotFamilyTrust(target.Language, hotspotFamilyTrustMatchesCurrent);
                 var statMatchedFile = allowStatReuse
                     && target.Language == "csharp"
+                    && csharpPrepassStatReuse != null
                     && csharpPrepassStatReuse.TryGetValue(target.IndexPath, out var cachedCSharpPrepassReuse)
                         ? cachedCSharpPrepassReuse
                         : IndexedFileStatReuse.TryGetReusableUnchangedFile(
