@@ -43,6 +43,7 @@ affected:
 - **Full scans avoid scan-error LINQ staging** — CLI and MCP full-index setup now split scan errors directly into their output lists, avoiding intermediate `Where`/`Select`/`ToList` allocations on large scans.
 - **Scanner reuses empty result lists** — scan result materialization now returns shared empty arrays for empty optional path sets instead of allocating empty lists for every full scan.
 - **Root scans skip empty ancestor-ignore copies** — scan result materialization now reuses an empty ancestor-ignore list when the index root has no parent ignore-chain entries, while preserving defensive copies for non-empty chains.
+- **CLI full scans build C# prepass targets during target setup** — CLI full indexing now fills C# static-interface prepass targets while creating per-file scan targets, matching the MCP path and avoiding a second pass over every file.
 
 ## 日本語
 
@@ -81,3 +82,4 @@ affected:
 - **full scan で scan-error の LINQ 中間リストを避けます** — CLI と MCP の full-index setup は scan errors を出力用リストへ直接振り分け、大規模 scan での中間 `Where` / `Select` / `ToList` 確保を避けるようになりました。
 - **scanner が空の result list を再利用します** — scan result materialization は空の optional path set に対して scan ごとに空 list を確保せず、共有空配列を返すようになりました。
 - **root scan で空の ancestor-ignore copy を省きます** — scan result materialization は index root に親 ignore-chain entry が無い場合に空の ancestor-ignore list を再利用し、非空 chain では従来通り defensive copy を維持します。
+- **CLI full scan で C# prepass targets を target setup 中に作ります** — CLI full index はファイルごとの scan target 作成時に C# static-interface prepass targets も埋めるようになり、MCP 経路と同様に全ファイル2回目の走査を避けます。

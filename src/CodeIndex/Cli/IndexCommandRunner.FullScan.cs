@@ -870,6 +870,9 @@ public static partial class IndexCommandRunner
         var files = discovery.Files;
         var fileTargets = new FullScanFileTarget[files.Count];
         var languageCounts = scanResult.LanguageCounts;
+        var csharpPrepassCapacity = languageCounts.TryGetValue("csharp", out var csharpFileCount) ? csharpFileCount : 0;
+        var csharpPrepassTargets = new List<CSharpStaticInterfacePrepass.FileTarget>(
+            options.SymbolsOnly ? 0 : csharpPrepassCapacity);
         var hasGeneratedCodeExtractionSuppressionPatterns = indexer.HasGeneratedCodeExtractionSuppressionPatterns;
         for (var i = 0; i < files.Count; i++)
         {
@@ -879,6 +882,17 @@ public static partial class IndexCommandRunner
             fileTargets[i] = hasGeneratedCodeExtractionSuppressionPatterns
                 ? target with { GeneratedExtractionSuppressed = indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath) }
                 : target;
+            if (!options.SymbolsOnly && language == "csharp")
+            {
+                var indexedTarget = fileTargets[i];
+                csharpPrepassTargets.Add(new CSharpStaticInterfacePrepass.FileTarget(
+                    indexedTarget.FilePath,
+                    indexedTarget.RelativePath,
+                    indexedTarget.DisplayRelativePath,
+                    indexedTarget.IndexPath,
+                    indexedTarget.Language,
+                    indexedTarget.GeneratedExtractionSuppressed));
+            }
         }
         var knownReadableFileSizes = new Dictionary<string, long>(files.Count, StringComparer.Ordinal);
         var errorList = discovery.ErrorList;
@@ -1230,7 +1244,6 @@ public static partial class IndexCommandRunner
                 writer.InsertIssues(fileId, issues);
         }
 
-        var csharpPrepassCapacity = languageCounts.TryGetValue("csharp", out var csharpFileCount) ? csharpFileCount : 0;
         Dictionary<string, IndexedFileStatReuseResult?>? csharpPrepassStatReuse = null;
 
         bool CanReuseCSharpPrepassTargetWithoutRead(CSharpStaticInterfacePrepass.FileTarget target)
@@ -1278,21 +1291,6 @@ public static partial class IndexCommandRunner
                 () => currentCSharpWorkspaceFile);
             try
             {
-                var csharpPrepassTargets = new List<CSharpStaticInterfacePrepass.FileTarget>(csharpPrepassCapacity);
-                foreach (var target in fileTargets)
-                {
-                    if (target.Language != "csharp")
-                        continue;
-
-                    csharpPrepassTargets.Add(new CSharpStaticInterfacePrepass.FileTarget(
-                        target.FilePath,
-                        target.RelativePath,
-                        target.DisplayRelativePath,
-                        target.IndexPath,
-                        target.Language,
-                        target.GeneratedExtractionSuppressed));
-                }
-
                 if (csharpPrepassTargets.Count == 0)
                 {
                     csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols([], false);
