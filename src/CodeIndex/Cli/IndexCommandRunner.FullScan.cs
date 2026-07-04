@@ -2220,8 +2220,9 @@ public static partial class IndexCommandRunner
             // full scan が「直近 full scan からブランチが動いた」をきちんと検知できる。
             // 非 git workspace で null になった場合はキーごとクリアされる。Issue #1508。
             var currentHeadBranch = GitHelper.TryGetHeadBranch(projectRoot, cancellationToken);
-            writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, currentHeadCommit);
-            writer.SetMeta(DbContext.IndexedHeadCommitBranchMetaKey, currentHeadBranch);
+            writer.SetMetaValues(
+                (DbContext.IndexedHeadCommitMetaKey, currentHeadCommit),
+                (DbContext.IndexedHeadCommitBranchMetaKey, currentHeadBranch));
             writer.SetMeta(
                 DbContext.LastFullScanElapsedMsMetaKey,
                 stopwatch.ElapsedMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture));

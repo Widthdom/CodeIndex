@@ -1021,9 +1021,10 @@ public static partial class IndexCommandRunner
         var timestamp = headSha != null
             ? GetUtcNow().ToString("o", System.Globalization.CultureInfo.InvariantCulture)
             : null;
-        writer.SetMeta(DbContext.IndexedHeadShaMetaKey, headSha);
-        writer.SetMeta(DbContext.IndexedHeadBranchMetaKey, headBranch);
-        writer.SetMeta(DbContext.IndexedHeadTimestampMetaKey, timestamp);
+        writer.SetMetaValues(
+            (DbContext.IndexedHeadShaMetaKey, headSha),
+            (DbContext.IndexedHeadBranchMetaKey, headBranch),
+            (DbContext.IndexedHeadTimestampMetaKey, timestamp));
     }
 
     private static void TryStampIndexedHeadMetadata(DbWriter writer, string? headSha, string? headBranch, List<string>? diagnostics)
