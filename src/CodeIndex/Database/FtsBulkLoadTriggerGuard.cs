@@ -24,17 +24,24 @@ internal sealed class FtsBulkLoadTriggerGuard : IDisposable
         if (writer == null)
             return;
 
-        writer.RestoreFtsSyncTriggers();
-        if (rebuild)
-            writer.RebuildFtsFromChunks();
+        try
+        {
+            writer.RestoreFtsSyncTriggers();
+            if (rebuild)
+                writer.RebuildFtsFromChunks();
 
-        _writer = null;
+            if (rebuild)
+            {
+                beforeOptimize?.Invoke();
+                writer.OptimizeFts();
+            }
 
-        if (!rebuild)
-            return;
-
-        beforeOptimize?.Invoke();
-        writer.OptimizeFts();
+            writer.ClearFtsBulkLoadInProgress();
+        }
+        finally
+        {
+            _writer = null;
+        }
     }
 
     public void Dispose()
@@ -50,9 +57,13 @@ internal sealed class FtsBulkLoadTriggerGuard : IDisposable
             // stays searchable even when the normal Complete path is abandoned.
             // bulk load 中断時も trigger を復元する。trigger 無効中に commit 済み行があれば
             // FTS を再構築し、Complete まで進まなかった commit 済み progress も検索可能に保つ。
+            var hasAbandonPolicy = _shouldRebuildOnAbandon != null;
+            var rebuild = _shouldRebuildOnAbandon?.Invoke() == true;
             writer.RestoreFtsSyncTriggers();
-            if (_shouldRebuildOnAbandon?.Invoke() == true)
+            if (rebuild)
                 writer.RebuildFtsFromChunks();
+            if (hasAbandonPolicy)
+                writer.ClearFtsBulkLoadInProgress();
         }
         finally
         {

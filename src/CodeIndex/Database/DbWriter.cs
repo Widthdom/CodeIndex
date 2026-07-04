@@ -24,6 +24,7 @@ public class DbWriter
 
     public const string FtsIncrementalWritesSinceOptimizeMetaKey = "fts_incremental_writes_since_optimize";
     public const string FtsLastOptimizedAtMetaKey = "fts_last_optimized_at";
+    public const string FtsBulkLoadInProgressMetaKey = "fts_bulk_load_in_progress";
     public const int DefaultFtsOptimizeIncrementalWriteThreshold = 25;
 
     private readonly SqliteConnection _conn;
@@ -2781,6 +2782,7 @@ public class DbWriter
     /// </summary>
     public void SuspendFtsSyncTriggersForBulkLoad()
     {
+        SetMeta(FtsBulkLoadInProgressMetaKey, "true");
         Execute(DbContext.DropFtsChunksInsertTriggerSql);
         Execute(DbContext.DropFtsChunksDeleteTriggerSql);
         Execute(DbContext.DropFtsChunksUpdateTriggerSql);
@@ -2807,6 +2809,20 @@ public class DbWriter
     {
         Execute("INSERT INTO fts_chunks(fts_chunks) VALUES('rebuild')");
         SetMeta(FtsIncrementalWritesSinceOptimizeMetaKey, "0");
+    }
+
+    public void ClearFtsBulkLoadInProgress()
+        => SetMeta(FtsBulkLoadInProgressMetaKey, null);
+
+    public bool RecoverInterruptedFtsBulkLoadIfNeeded()
+    {
+        if (!string.Equals(GetMetaString(FtsBulkLoadInProgressMetaKey), "true", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        RestoreFtsSyncTriggers();
+        RebuildFtsFromChunks();
+        ClearFtsBulkLoadInProgress();
+        return true;
     }
 
     public int GetFtsIncrementalWritesSinceOptimize()

@@ -5440,6 +5440,7 @@ public partial class McpServer
         MarkSharedDbMigrated();
 
         var writer = new DbWriter(db);
+        writer.RecoverInterruptedFtsBulkLoadIfNeeded();
         var indexer = new FileIndexer(
             projectPath,
             GitHelper.ResolveIgnoreCase(projectPath, requestToken),
@@ -5682,11 +5683,7 @@ public partial class McpServer
             .ToList();
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
         var symbolsDroppedByKindFilter = 0;
-        var ftsBulkLoadEnabled = rebuild || startedWithNoIndexedFiles;
-        using var ftsBulkLoadTransaction = ftsBulkLoadEnabled
-            ? writer.BeginTransaction(requestToken, "mcp fts bulk load")
-            : null;
-        using var ftsBulkLoad = FtsBulkLoadTriggerGuard.Start(writer, ftsBulkLoadEnabled);
+        using var ftsBulkLoad = FtsBulkLoadTriggerGuard.Start(writer, rebuild || startedWithNoIndexedFiles, () => ftsMutated);
 
         foreach (var target in fileTargets)
         {
@@ -5938,7 +5935,6 @@ public partial class McpServer
         if (ftsBulkLoad != null)
         {
             ftsBulkLoad.Complete(ftsMutated, McpIndexFtsOptimizeForTesting);
-            ftsBulkLoadTransaction?.Commit();
         }
         else if (ftsMutated)
         {

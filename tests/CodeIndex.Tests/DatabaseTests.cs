@@ -495,32 +495,34 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
-    public void FtsBulkLoadTriggerGuard_AbandonedOuterTransaction_RollsBackRowsAndRestoresTriggers()
+    public void RecoverInterruptedFtsBulkLoadIfNeeded_RebuildsCommittedRowsAndClearsMarker()
     {
-        var fileId = UpsertTestFile("src/rolled-back-bulk-fts.cs", checksum: "rolled-back-bulk-fts");
+        var fileId = UpsertTestFile("src/recovered-bulk-fts.cs", checksum: "recovered-bulk-fts");
 
-        using (var txn = _writer.BeginTransaction())
-        {
-            using var guard = FtsBulkLoadTriggerGuard.Start(_writer, enabled: true);
-            Assert.NotNull(guard);
-            Assert.Equal(0L, CountFtsSyncTriggers());
+        _writer.SuspendFtsSyncTriggersForBulkLoad();
+        Assert.Equal("true", ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+        Assert.Equal(0L, CountFtsSyncTriggers());
 
-            _writer.InsertChunks(
-            [
-                new ChunkRecord
-                {
-                    FileId = fileId,
-                    ChunkIndex = 0,
-                    StartLine = 1,
-                    EndLine = 1,
-                    Content = "rolledbackbulktoken",
-                },
-            ]);
-        }
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 1,
+                Content = "recoveredbulktoken",
+            },
+        ]);
+
+        Assert.Equal(0L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'recoveredbulktoken'"));
+
+        Assert.True(_writer.RecoverInterruptedFtsBulkLoadIfNeeded());
 
         Assert.Equal(3L, CountFtsSyncTriggers());
-        Assert.Equal(0L, ExecuteScalarLong("SELECT COUNT(*) FROM chunks WHERE content = 'rolledbackbulktoken'"));
-        Assert.Equal(0L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'rolledbackbulktoken'"));
+        Assert.Null(ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+        Assert.Equal(1L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'recoveredbulktoken'"));
+        Assert.False(_writer.RecoverInterruptedFtsBulkLoadIfNeeded());
     }
 
     [Fact]

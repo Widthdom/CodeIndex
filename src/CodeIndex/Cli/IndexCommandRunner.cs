@@ -319,6 +319,7 @@ public static partial class IndexCommandRunner
                 AddToGitExclude(options.ProjectPath, dbPath, indexRunDiagnostics, indexCancellation.Token);
 
                 var writer = new DbWriter(db);
+                writer.RecoverInterruptedFtsBulkLoadIfNeeded();
                 var indexer = new FileIndexer(
                     options.ProjectPath,
                     ignoreCase,
