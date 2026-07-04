@@ -69,6 +69,9 @@ public static partial class ReferenceExtractor
         int lineNumber,
         InnermostContainerResolver containerResolver)
     {
+        if (line.IndexOf(" is ", StringComparison.Ordinal) < 0)
+            return;
+
         var match = SolidityInheritanceRegex.Match(line);
         if (!match.Success)
             return;
@@ -102,6 +105,12 @@ public static partial class ReferenceExtractor
         int lineNumber,
         InnermostContainerResolver containerResolver)
     {
+        if (line.IndexOf("using", StringComparison.Ordinal) < 0
+            || line.IndexOf("for", StringComparison.Ordinal) < 0)
+        {
+            return;
+        }
+
         var match = SolidityUsingLibraryRegex.Match(line);
         if (!match.Success)
             return;
@@ -119,6 +128,12 @@ public static partial class ReferenceExtractor
         int lineNumber,
         InnermostContainerResolver containerResolver)
     {
+        if (line.IndexOf('(') < 0
+            || !MayContainSolidityCallableHeader(line))
+        {
+            return;
+        }
+
         var header = SolidityCallableHeaderRegex.Match(line);
         if (!header.Success)
             return;
@@ -152,6 +167,12 @@ public static partial class ReferenceExtractor
         int lineNumber,
         InnermostContainerResolver containerResolver)
     {
+        if (line.IndexOf("emit", StringComparison.Ordinal) < 0
+            || line.IndexOf('(') < 0)
+        {
+            return;
+        }
+
         foreach (Match match in SolidityEmitRegex.Matches(line))
         {
             var name = match.Groups["name"];
@@ -168,6 +189,9 @@ public static partial class ReferenceExtractor
         int lineNumber,
         InnermostContainerResolver containerResolver)
     {
+        if (line.IndexOf('.') < 0 || line.IndexOf('(') < 0)
+            return;
+
         foreach (Match match in SolidityInterfaceCastCallRegex.Matches(line))
         {
             var type = match.Groups["type"];
@@ -177,6 +201,12 @@ public static partial class ReferenceExtractor
             AddSolidityReference(references, seen, fileId, method.Value, method.Index, "call", context, lineNumber, containerResolver);
         }
     }
+
+    private static bool MayContainSolidityCallableHeader(string line)
+        => line.IndexOf("function", StringComparison.Ordinal) >= 0
+           || line.IndexOf("constructor", StringComparison.Ordinal) >= 0
+           || line.IndexOf("fallback", StringComparison.Ordinal) >= 0
+           || line.IndexOf("receive", StringComparison.Ordinal) >= 0;
 
     private static void AddSolidityReference(
         List<ReferenceRecord> references,
