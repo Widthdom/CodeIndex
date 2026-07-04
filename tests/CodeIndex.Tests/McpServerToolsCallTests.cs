@@ -6237,7 +6237,7 @@ public partial class McpServerTests
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_lock_fixture_{Guid.NewGuid():N}");
         Directory.CreateDirectory(fixtureDir);
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_lock_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_lock");
         var lockPath = McpIndexRunLock.ResolveLockPath(dbPath);
         Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
         var infoPath = lockPath + ".info";
@@ -6277,7 +6277,7 @@ public partial class McpServerTests
             TestProjectHelper.DeleteFile(infoPath);
             TestProjectHelper.DeleteFile(lockPath);
             TestProjectHelper.DeleteDirectory(fixtureDir);
-            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
@@ -6286,7 +6286,7 @@ public partial class McpServerTests
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_large_lock_fixture_{Guid.NewGuid():N}");
         Directory.CreateDirectory(fixtureDir);
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_large_lock_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_large_lock");
         var lockPath = McpIndexRunLock.ResolveLockPath(dbPath);
         Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
         var infoPath = lockPath + ".info";
@@ -6324,7 +6324,7 @@ public partial class McpServerTests
             TestProjectHelper.DeleteFile(infoPath);
             TestProjectHelper.DeleteFile(lockPath);
             TestProjectHelper.DeleteDirectory(fixtureDir);
-            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
@@ -6333,7 +6333,7 @@ public partial class McpServerTests
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_deep_lock_fixture_{Guid.NewGuid():N}");
         Directory.CreateDirectory(fixtureDir);
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_deep_lock_{Guid.NewGuid():N}.db");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_deep_lock");
         var lockPath = McpIndexRunLock.ResolveLockPath(dbPath);
         Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
         var infoPath = lockPath + ".info";
@@ -6374,7 +6374,7 @@ public partial class McpServerTests
             TestProjectHelper.DeleteFile(infoPath);
             TestProjectHelper.DeleteFile(lockPath);
             TestProjectHelper.DeleteDirectory(fixtureDir);
-            DeleteFileRobust(dbPath);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 
