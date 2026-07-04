@@ -2494,7 +2494,7 @@ exit 7
         if (OperatingSystem.IsWindows())
             return;
 
-        var root = Path.Combine(Path.GetTempPath(), $"cdidx_install_dir_link_{Guid.NewGuid():N}");
+        var root = TestProjectHelper.CreateTempProject("cdidx_install_dir_link");
         var target = Path.Combine(root, "target");
         var link = Path.Combine(root, "link");
         try
