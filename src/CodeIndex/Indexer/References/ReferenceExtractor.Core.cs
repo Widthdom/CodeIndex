@@ -112,7 +112,8 @@ public static partial class ReferenceExtractor
         // プロパティ自身に帰属させる (issue #233 参照)。
         var containerCandidates = BuildReferenceContainerCandidates(symbols, request.ReportDiagnostic);
         var containerResolver = new InnermostContainerResolver(containerCandidates);
-        var csharpSameLineContainerCandidatesByLine = BuildCSharpSameLineContainerCandidatesByLine(language, containerCandidates);
+        Dictionary<int, List<SymbolRecord>>? csharpSameLineContainerCandidatesByLine = null;
+        var csharpSameLineContainerCandidatesResolved = false;
         if (language == "solidity")
             return ExtractSolidityReferences(fileId, lines, preparedLines, containerResolver);
 
@@ -147,7 +148,8 @@ public static partial class ReferenceExtractor
         // later line are covered. Later lines inside the body keep their real innermost containers.
         // C# のプライマリコンストラクタ宣言（record / class / struct）で base primary-ctor を呼んでいる場合、
         // 宣言ヘッダー全体を合成コンテナで上書きする。`{` / `;` 以降の本体行は通常の container に戻す。
-        var recordPrimaryCtorRanges = BuildCSharpPrimaryCtorContainers(language, symbols, structuralLines);
+        List<(int StartLine, int StartColumn, int EndLine, int EndColumn, SymbolRecord Container)>? recordPrimaryCtorRanges = null;
+        var recordPrimaryCtorRangesResolved = false;
         var csharpTypeNameSets = BuildCSharpTypeNameSets(language, symbols);
         var csharpKnownTypeNames = csharpTypeNameSets.KnownTypeNames;
         var csharpNonEnumTypeNames = csharpTypeNameSets.NonEnumTypeNames;
@@ -220,6 +222,28 @@ public static partial class ReferenceExtractor
             }
 
             return false;
+        }
+
+        Dictionary<int, List<SymbolRecord>>? GetCSharpSameLineContainerCandidatesByLine()
+        {
+            if (!csharpSameLineContainerCandidatesResolved)
+            {
+                csharpSameLineContainerCandidatesByLine = BuildCSharpSameLineContainerCandidatesByLine(language, containerCandidates);
+                csharpSameLineContainerCandidatesResolved = true;
+            }
+
+            return csharpSameLineContainerCandidatesByLine;
+        }
+
+        List<(int StartLine, int StartColumn, int EndLine, int EndColumn, SymbolRecord Container)> GetRecordPrimaryCtorRanges()
+        {
+            if (!recordPrimaryCtorRangesResolved)
+            {
+                recordPrimaryCtorRanges = BuildCSharpPrimaryCtorContainers(language, symbols, structuralLines);
+                recordPrimaryCtorRangesResolved = true;
+            }
+
+            return recordPrimaryCtorRanges!;
         }
 
         (
@@ -1223,15 +1247,18 @@ public static partial class ReferenceExtractor
             // ヘッダ範囲（end line の end column より前）に入っているかを判定して差し替える。
             SymbolRecord? ResolveContainerForCall(int column)
             {
-                foreach (var (rangeStart, rangeStartColumn, rangeEnd, rangeEndColumn, syntheticRecordCtor) in recordPrimaryCtorRanges)
+                if (language == "csharp")
                 {
-                    if (lineNumber < rangeStart || lineNumber > rangeEnd)
-                        continue;
-                    if (lineNumber == rangeStart && column < rangeStartColumn)
-                        continue;
-                    if (lineNumber == rangeEnd && column >= rangeEndColumn)
-                        continue;
-                    return syntheticRecordCtor;
+                    foreach (var (rangeStart, rangeStartColumn, rangeEnd, rangeEndColumn, syntheticRecordCtor) in GetRecordPrimaryCtorRanges())
+                    {
+                        if (lineNumber < rangeStart || lineNumber > rangeEnd)
+                            continue;
+                        if (lineNumber == rangeStart && column < rangeStartColumn)
+                            continue;
+                        if (lineNumber == rangeEnd && column >= rangeEndColumn)
+                            continue;
+                        return syntheticRecordCtor;
+                    }
                 }
 
                 // Java same-line ctor body override: calls whose column sits strictly inside the
@@ -1267,7 +1294,7 @@ public static partial class ReferenceExtractor
                     }
 
                     var sameLineContainer = FindInnermostSameLineCSharpContainer(
-                        csharpSameLineContainerCandidatesByLine,
+                        GetCSharpSameLineContainerCandidatesByLine(),
                         structuralLines[i],
                         lineNumber,
                         column);
