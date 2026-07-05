@@ -312,11 +312,8 @@ internal static class TypeScriptReferenceExtractor
 
     public static IReadOnlyList<TypeAliasBinding> BuildTypeAliasTargets(IReadOnlyList<string> preparedLines)
     {
-        if (!MayContainTypeAliasDeclaration(preparedLines))
-            return Array.Empty<TypeAliasBinding>();
-
-        var aliases = new List<TypeAliasBinding>();
-        var braceDepths = BuildBraceDepthsBeforeLine(preparedLines);
+        List<TypeAliasBinding>? aliases = null;
+        int[]? braceDepths = null;
         for (var index = 0; index < preparedLines.Count; index++)
         {
             var line = preparedLines[index];
@@ -332,31 +329,20 @@ internal static class TypeScriptReferenceExtractor
 
             var target = TrimAliasTarget(match.Groups["target"].Value);
             if (target.Length > 0)
-                aliases.Add(new TypeAliasBinding(
+            {
+                var sharedBraceDepths = braceDepths ??= BuildBraceDepthsBeforeLine(preparedLines);
+                (aliases ??= []).Add(new TypeAliasBinding(
                     match.Groups["alias"].Value,
                     target,
                     index + 1,
-                    FindScopedAliasEndLine(preparedLines, braceDepths, index),
-                    braceDepths[index],
-                    BuildTypeAliasShadowRanges(preparedLines, braceDepths, match.Groups["alias"].Value),
+                    FindScopedAliasEndLine(preparedLines, sharedBraceDepths, index),
+                    sharedBraceDepths[index],
+                    BuildTypeAliasShadowRanges(preparedLines, sharedBraceDepths, match.Groups["alias"].Value),
                     ExtractGenericTypeParameters(match.Groups["params"].Value)));
-        }
-
-        return aliases;
-    }
-
-    private static bool MayContainTypeAliasDeclaration(IReadOnlyList<string> preparedLines)
-    {
-        foreach (var line in preparedLines)
-        {
-            if (line.Contains("type", StringComparison.Ordinal)
-                && line.IndexOf('=') >= 0)
-            {
-                return true;
             }
         }
 
-        return false;
+        return aliases is null ? Array.Empty<TypeAliasBinding>() : aliases;
     }
 
     public static void EmitAliasTargetReferences(
