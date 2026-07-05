@@ -2552,10 +2552,7 @@ public static partial class SymbolExtractor
     private static readonly Regex MarkdownReferenceDefinitionRegex = new(@"^\s{0,3}\[(?<label>[^\]]+)\]:\s*(?<target>.+?)\s*$", RegexOptions.Compiled);
     private static readonly Regex MarkdownReferenceLinkRegex = new(@"(?<!\!)\[[^\]]+\]\[(?<label>[^\]]*)\]", RegexOptions.Compiled);
 
-    private static readonly HashSet<string> HtmlRawTextElementNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "script", "style", "textarea", "title",
-    };
+    private static readonly string[] HtmlRawTextElementNames = ["script", "style", "textarea", "title"];
 
     // Native HTML/SVG/MathML tag names that happen to contain a hyphen but are
     // reserved by the spec, so they must NOT be treated as custom-element class
