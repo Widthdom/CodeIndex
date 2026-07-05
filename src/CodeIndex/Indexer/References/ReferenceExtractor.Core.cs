@@ -182,14 +182,10 @@ public static partial class ReferenceExtractor
         var csharpUsingAliases = csharpUsingImports.Aliases;
         var csharpUsingNamespaces = csharpUsingImports.Namespaces;
         var csharpUsingStatics = csharpUsingImports.Statics;
-        var csharpValueReceiverLookups = BuildCSharpValueReceiverNameLookups(
-            language,
-            symbols,
-            structuralLines,
-            csharpKnownTypeNames,
-            csharpUsingAliases);
-        var csharpValueReceiverNames = csharpValueReceiverLookups.ByContainingType;
-        var csharpFunctionValueReceiverNames = csharpValueReceiverLookups.ByFunctionStartLine;
+        (
+            IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames> ByContainingType,
+            IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> ByFunctionStartLine)? csharpValueReceiverLookups = null;
+        var csharpValueReceiverLookupsResolved = false;
         var powershellSplatAssignments = language == "powershell"
             ? PowerShellReferenceExtractor.BuildSplatAssignments(preparedLines)
             : null;
@@ -225,6 +221,30 @@ public static partial class ReferenceExtractor
 
             return false;
         }
+
+        (
+            IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames> ByContainingType,
+            IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> ByFunctionStartLine) GetCSharpValueReceiverLookups()
+        {
+            if (!csharpValueReceiverLookupsResolved)
+            {
+                csharpValueReceiverLookups = BuildCSharpValueReceiverNameLookups(
+                    language,
+                    symbols,
+                    structuralLines,
+                    csharpKnownTypeNames,
+                    csharpUsingAliases);
+                csharpValueReceiverLookupsResolved = true;
+            }
+
+            return csharpValueReceiverLookups!.Value;
+        }
+
+        IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames> GetCSharpValueReceiverNames() =>
+            GetCSharpValueReceiverLookups().ByContainingType;
+
+        IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> GetCSharpFunctionValueReceiverNames() =>
+            GetCSharpValueReceiverLookups().ByFunctionStartLine;
 
         string ResolveCSharpUsingAliasReferenceName(string referenceName, int lineNumber)
         {
@@ -2517,8 +2537,8 @@ public static partial class ReferenceExtractor
                     csharpQualifiedEnumMemberLookup,
                     csharpAttrRangesOnLine,
                     csharpUsingAliases,
-                    csharpValueReceiverNames,
-                    csharpFunctionValueReceiverNames,
+                    GetCSharpValueReceiverNames,
+                    GetCSharpFunctionValueReceiverNames,
                     references,
                     seen,
                     fileId,

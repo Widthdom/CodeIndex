@@ -652,8 +652,8 @@ public static partial class ReferenceExtractor
         IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> enumMemberLookup,
         IReadOnlyList<(int start, int end)>? csharpAttrRangesOnLine,
         IReadOnlyList<CSharpUsingAliasRecord> usingAliases,
-        IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames> valueReceiverNamesByContainingType,
-        IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> valueReceiverNamesByFunctionStartLine,
+        Func<IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames>> getValueReceiverNamesByContainingType,
+        Func<IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>>> getValueReceiverNamesByFunctionStartLine,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -685,8 +685,17 @@ public static partial class ReferenceExtractor
                 ? qualifier
                 : ResolveCSharpQualifiedAliasTarget(qualifier, lineNumber, usingAliases);
             if (!parsed.HasLeadingGlobalQualifier
-                && HasCSharpValueReceiverConflict(qualifier, resolvedQualifier, lineNumber, member.Start, callContainer, valueReceiverNamesByContainingType, valueReceiverNamesByFunctionStartLine))
+                && HasCSharpValueReceiverConflict(
+                    qualifier,
+                    resolvedQualifier,
+                    lineNumber,
+                    member.Start,
+                    callContainer,
+                    getValueReceiverNamesByContainingType(),
+                    getValueReceiverNamesByFunctionStartLine()))
+            {
                 continue;
+            }
             if (!MatchesQualifiedConstantContainer(
                     resolvedQualifier,
                     targets,
