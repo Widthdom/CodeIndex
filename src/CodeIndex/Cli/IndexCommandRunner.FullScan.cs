@@ -940,13 +940,13 @@ public static partial class IndexCommandRunner
         var purged = 0;
         var startedWithNoIndexedFiles = !writer.HasAnyIndexedFiles();
         var retainedPaths = startedWithNoIndexedFiles
-            ? new HashSet<string>(StringComparer.Ordinal)
+            ? null
             : new HashSet<string>(fileTargets.Length, StringComparer.Ordinal);
         IReadOnlyList<string> indexedJavaScriptTypeScriptConfigPathsBeforePurge = [];
         if (!startedWithNoIndexedFiles)
         {
             foreach (var target in fileTargets)
-                retainedPaths.Add(target.IndexPath);
+                retainedPaths!.Add(target.IndexPath);
             indexedJavaScriptTypeScriptConfigPathsBeforePurge = writer.GetIndexedJavaScriptTypeScriptConfigPaths();
         }
         if (scanHadErrors)
@@ -960,7 +960,7 @@ public static partial class IndexCommandRunner
                 options.Quiet);
             if (!startedWithNoIndexedFiles)
             {
-                retainedPaths.UnionWith(scanResult.ProbeFailedFilePaths.Select(FileIndexer.NormalizeIndexPath));
+                retainedPaths!.UnionWith(scanResult.ProbeFailedFilePaths.Select(FileIndexer.NormalizeIndexPath));
 
                 foreach (var relPath in scanResult.NonIndexablePaths)
                 {
@@ -976,7 +976,7 @@ public static partial class IndexCommandRunner
                     .Select(FileIndexer.NormalizeIndexPath)
                     .ToHashSet(StringComparer.Ordinal);
                 attributePrunedDirectories.UnionWith(scanResult.NestedRepositories.Select(FileIndexer.NormalizeIndexPath));
-                purged += writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retainedPaths, authoritativeDirectories, attributePrunedDirectories);
+                purged += writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retainedPaths!, authoritativeDirectories, attributePrunedDirectories);
             }
         }
         else
@@ -990,11 +990,11 @@ public static partial class IndexCommandRunner
                     .Select(FileIndexer.NormalizeIndexPath)
                     .ToHashSet(StringComparer.Ordinal);
                 attributePrunedDirectories.UnionWith(scanResult.NestedRepositories.Select(FileIndexer.NormalizeIndexPath));
-                purged = writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retainedPaths, authoritativeDirectories, attributePrunedDirectories);
+                purged = writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retainedPaths!, authoritativeDirectories, attributePrunedDirectories);
             }
             else if (!startedWithNoIndexedFiles)
             {
-                purged = writer.PurgeFilesOutsideRetainedSet(retainedPaths);
+                purged = writer.PurgeFilesOutsideRetainedSet(retainedPaths!);
             }
             DeleteScanCheckpoint(scanCheckpointPath, warningList, options.Json, options.Quiet);
         }
@@ -1219,7 +1219,7 @@ public static partial class IndexCommandRunner
         {
             foreach (var indexedConfigPath in indexedJavaScriptTypeScriptConfigPathsBeforePurge)
             {
-                if (!retainedPaths.Contains(indexedConfigPath))
+                if (!retainedPaths!.Contains(indexedConfigPath))
                     return true;
             }
 

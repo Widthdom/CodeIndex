@@ -53,6 +53,7 @@ affected:
 - **Fresh CLI extraction skips index staging lists** — CLI fresh, rebuild, and symbols-only full scans now schedule extraction directly from the target array instead of allocating a full file-index list that can never filter anything in those modes.
 - **Fresh full scans defer reuse-language tracking** — CLI and MCP fresh/rebuild scans now allocate hotspot and fold reuse language sets only after an existing file is actually reused, and pre-size committed-language tracking from scan metadata.
 - **MCP fresh indexes use one batch marker** — MCP fresh/rebuild scans now keep the in-progress batch marker for the scan instead of rewriting it around every committed file, matching the CLI full-scan crash signal while cutting per-file metadata writes.
+- **CLI fresh purge skips retained-set allocation** — CLI full scans that start from an empty database now avoid allocating the retained path set that only existing-database stale purge paths consume.
 
 ## 日本語
 
@@ -98,3 +99,4 @@ affected:
 - **fresh CLI extraction で index staging list を省きます** — CLI の fresh / rebuild / symbols-only full scan は、その mode では何も除外できない全ファイル分の index list を確保せず、target 配列から直接 extraction を schedule するようになりました。
 - **fresh full scan の reuse language tracking を遅延確保します** — CLI と MCP の fresh / rebuild scan は、既存ファイルを実際に再利用するまで hotspot / fold 用の言語 set を確保せず、commit 済み言語 tracking も scan metadata から事前サイズ指定するようになりました。
 - **MCP fresh index の batch marker を1回にします** — MCP の fresh / rebuild scan は、file commit ごとに in-progress batch marker を書き直さず scan 中に維持するようになり、CLI full-scan と同じ crash signal を保ちながらファイル単位の metadata write を減らします。
+- **CLI fresh purge の retained set 確保を省きます** — 空DBから始まる CLI full scan は、既存DBの stale purge 経路だけが使う retained path set を確保しないようになりました。
