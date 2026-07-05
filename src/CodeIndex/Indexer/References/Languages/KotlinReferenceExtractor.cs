@@ -93,11 +93,8 @@ internal static class KotlinReferenceExtractor
     public static bool IsConstructorCallName(string name, IReadOnlySet<string> constructorTypeNames)
         => constructorTypeNames.Contains(name);
 
-    public static void AddDeclaredInfixFunctionNames(string language, IEnumerable<string> lines, HashSet<string> names)
+    public static void AddDeclaredInfixFunctionNames(IEnumerable<string> lines, HashSet<string> names)
     {
-        if (language != "kotlin")
-            return;
-
         foreach (var line in lines)
         {
             var match = InfixFunctionNameRegex.Match(line);

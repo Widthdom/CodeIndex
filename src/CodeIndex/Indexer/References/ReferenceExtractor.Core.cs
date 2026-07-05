@@ -153,10 +153,15 @@ public static partial class ReferenceExtractor
         var csharpQualifiedEnumMemberLookup = csharpQualifiedPatternLookups.EnumMemberLookup;
         var csharpQualifiedConstantPatternMemberLookup = csharpQualifiedPatternLookups.ConstantPatternMemberLookup;
         var csharpQualifiedTypePatternLookup = csharpQualifiedPatternLookups.TypePatternLookup;
-        var kotlinNameSets = KotlinReferenceExtractor.BuildNameSets(language, symbols);
-        var kotlinConstructorTypeNames = kotlinNameSets.ConstructorTypeNames;
-        var kotlinInfixFunctionNames = kotlinNameSets.InfixFunctionNames;
-        KotlinReferenceExtractor.AddDeclaredInfixFunctionNames(language, lines, kotlinInfixFunctionNames);
+        HashSet<string>? kotlinConstructorTypeNames = null;
+        HashSet<string>? kotlinInfixFunctionNames = null;
+        if (language == "kotlin")
+        {
+            var kotlinNameSets = KotlinReferenceExtractor.BuildNameSets(language, symbols);
+            kotlinConstructorTypeNames = kotlinNameSets.ConstructorTypeNames;
+            kotlinInfixFunctionNames = kotlinNameSets.InfixFunctionNames;
+            KotlinReferenceExtractor.AddDeclaredInfixFunctionNames(lines, kotlinInfixFunctionNames);
+        }
         var callableDefinitionNames = language == "csharp"
             ? BuildCallableDefinitionNames(language, symbols)
             : null;
@@ -1603,7 +1608,7 @@ public static partial class ReferenceExtractor
                     container);
                 KotlinReferenceExtractor.EmitBacktickConstructorReferences(
                     preparedLine,
-                    kotlinConstructorTypeNames,
+                    kotlinConstructorTypeNames!,
                     references,
                     seen,
                     fileId,
@@ -2290,7 +2295,7 @@ public static partial class ReferenceExtractor
                     return true;
                 }
 
-                if (language == "kotlin" && KotlinReferenceExtractor.IsConstructorCallName(normalizedName, kotlinConstructorTypeNames))
+                if (language == "kotlin" && KotlinReferenceExtractor.IsConstructorCallName(normalizedName, kotlinConstructorTypeNames!))
                 {
                     AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer);
                     return true;
@@ -2453,7 +2458,7 @@ public static partial class ReferenceExtractor
                     KotlinReferenceExtractor.EmitInfixCallReferences(
                         preparedLine,
                         originalLine,
-                        kotlinInfixFunctionNames,
+                        kotlinInfixFunctionNames!,
                         AddCallLikeReference);
                     KotlinReferenceExtractor.EmitTrailingLambdaReferences(preparedLine, AddCallLikeReference);
                 }
