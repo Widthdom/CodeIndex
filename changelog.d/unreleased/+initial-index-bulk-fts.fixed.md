@@ -2,6 +2,7 @@
 category: fixed
 affected:
   - src/CodeIndex/Cli/IndexCommandRunner.FullScan.cs
+  - src/CodeIndex/Cli/IndexCommandRunner.cs
   - src/CodeIndex/Database/DbReader.cs
   - src/CodeIndex/Database/FtsBulkLoadTriggerGuard.cs
   - src/CodeIndex/Database/DbWriter.cs
@@ -50,6 +51,7 @@ affected:
 - **CLI full scans build C# prepass targets during target setup** — CLI full indexing now fills C# static-interface prepass targets while creating per-file scan targets, matching the MCP path and avoiding a second pass over every file.
 - **Fresh file writes use insert-only SQL** — CLI and MCP full scans that start from an empty database now insert new `files` rows with a conflict-free statement instead of paying UPSERT conflict handling for paths that cannot exist yet.
 - **Fresh CLI extraction skips index staging lists** — CLI fresh, rebuild, and symbols-only full scans now schedule extraction directly from the target array instead of allocating a full file-index list that can never filter anything in those modes.
+- **Fresh full scans defer reuse-language tracking** — CLI and MCP fresh/rebuild scans now allocate hotspot and fold reuse language sets only after an existing file is actually reused, and pre-size committed-language tracking from scan metadata.
 
 ## 日本語
 
@@ -93,3 +95,4 @@ affected:
 - **CLI full scan で C# prepass targets を target setup 中に作ります** — CLI full index はファイルごとの scan target 作成時に C# static-interface prepass targets も埋めるようになり、MCP 経路と同様に全ファイル2回目の走査を避けます。
 - **fresh file write で insert-only SQL を使います** — 空DBから始まる CLI / MCP full scan は、まだ存在し得ない path に対して UPSERT の conflict 処理を使わず、新規 `files` 行専用の INSERT で書き込むようになりました。
 - **fresh CLI extraction で index staging list を省きます** — CLI の fresh / rebuild / symbols-only full scan は、その mode では何も除外できない全ファイル分の index list を確保せず、target 配列から直接 extraction を schedule するようになりました。
+- **fresh full scan の reuse language tracking を遅延確保します** — CLI と MCP の fresh / rebuild scan は、既存ファイルを実際に再利用するまで hotspot / fold 用の言語 set を確保せず、commit 済み言語 tracking も scan metadata から事前サイズ指定するようになりました。

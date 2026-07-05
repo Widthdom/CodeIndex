@@ -3054,7 +3054,7 @@ public partial class McpServer
 
     private static void RestampHotspotFamilyTrust(
         DbWriter writer,
-        IReadOnlySet<string> reusedLanguages,
+        IReadOnlySet<string>? reusedLanguages,
         IReadOnlyDictionary<string, string?> priorVersions,
         IReadOnlyDictionary<string, string?> priorFingerprints,
         IReadOnlyDictionary<string, FileIndexer.ProjectMarkerFingerprintResult> currentFingerprints)
@@ -3073,7 +3073,7 @@ public partial class McpServer
 
             priorVersions.TryGetValue(lang, out var priorVersion);
             priorFingerprints.TryGetValue(lang, out var priorFingerprint);
-            if (!reusedLanguages.Contains(lang) || (priorVersion == currentVersion && priorFingerprint == currentFingerprint.Fingerprint))
+            if (reusedLanguages?.Contains(lang) != true || (priorVersion == currentVersion && priorFingerprint == currentFingerprint.Fingerprint))
                 writer.MarkHotspotFamilyReady(lang, currentFingerprint.Fingerprint);
         }
     }
@@ -5736,8 +5736,8 @@ public partial class McpServer
             }
         }
         int processed = 0, skipped = 0, errors = failures.Count;
-        var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
-        var indexedSymbolExtractorLanguages = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string>? reusedHotspotFamilyLanguages = null;
+        var indexedSymbolExtractorLanguages = new HashSet<string>(languageCounts.Count, StringComparer.Ordinal);
         var symbolsDroppedByKindFilter = 0;
         var mutualRecursionRefreshNeeded = false;
         var freshCountFiles = 0L;
@@ -5793,7 +5793,10 @@ public partial class McpServer
                     processed++;
                     RememberReadableFileSize(filePath, statMatchedFile.Value.Size);
                     if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(target.Language) && target.Language != null)
+                    {
+                        reusedHotspotFamilyLanguages ??= new HashSet<string>(StringComparer.Ordinal);
                         reusedHotspotFamilyLanguages.Add(target.Language);
+                    }
                     await EmitProgressNotificationAsync(progressToken, processed, files.Count).ConfigureAwait(false);
                     continue;
                 }
@@ -5834,7 +5837,10 @@ public partial class McpServer
                     skipped++;
                     processed++;
                     if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(record.Lang) && record.Lang != null)
+                    {
+                        reusedHotspotFamilyLanguages ??= new HashSet<string>(StringComparer.Ordinal);
                         reusedHotspotFamilyLanguages.Add(record.Lang);
+                    }
                     continue;
                 }
 

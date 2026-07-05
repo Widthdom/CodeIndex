@@ -1044,9 +1044,9 @@ public static partial class IndexCommandRunner
         var interactiveIndexSpinner = !options.Json && !options.Quiet && ConsoleUi.ShouldUseInteractiveConsole();
         var redirectedIndexingMessagePrinted = false;
         var indexProgressVisible = false;
-        var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
-        var skippedSymbolExtractorLanguages = new HashSet<string>(StringComparer.Ordinal);
-        var indexedSymbolExtractorLanguages = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string>? reusedHotspotFamilyLanguages = null;
+        HashSet<string>? skippedSymbolExtractorLanguages = null;
+        var indexedSymbolExtractorLanguages = new HashSet<string>(languageCounts.Count, StringComparer.Ordinal);
         var lastJsonProgressAt = Stopwatch.GetTimestamp();
         string? currentJsonIndexFile = null;
         var activeJsonExtractionPhases = new ConcurrentDictionary<int, string>();
@@ -1390,9 +1390,15 @@ public static partial class IndexCommandRunner
             processed++;
             RememberReadableFileSize(target.FilePath, existingFile.Value.Size);
             if (!string.IsNullOrWhiteSpace(language))
+            {
+                skippedSymbolExtractorLanguages ??= new HashSet<string>(StringComparer.Ordinal);
                 skippedSymbolExtractorLanguages.Add(language);
+            }
             if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(language) && language != null)
+            {
+                reusedHotspotFamilyLanguages ??= new HashSet<string>(StringComparer.Ordinal);
                 reusedHotspotFamilyLanguages.Add(language);
+            }
             if (options.Verbose && !options.Json && !options.Quiet)
                 Console.WriteLine($"  [SKIP] {target.IndexPath} (unchanged)");
             return true;
@@ -1801,9 +1807,15 @@ public static partial class IndexCommandRunner
                             skipped++;
                             processed++;
                             if (!string.IsNullOrWhiteSpace(record.Lang))
+                            {
+                                skippedSymbolExtractorLanguages ??= new HashSet<string>(StringComparer.Ordinal);
                                 skippedSymbolExtractorLanguages.Add(record.Lang);
+                            }
                             if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(record.Lang) && record.Lang != null)
+                            {
+                                reusedHotspotFamilyLanguages ??= new HashSet<string>(StringComparer.Ordinal);
                                 reusedHotspotFamilyLanguages.Add(record.Lang);
+                            }
                             if (options.Verbose && !options.Json && !options.Quiet)
                             {
                                 PauseIndexSpinnerForConsoleWrite();
@@ -2187,7 +2199,10 @@ public static partial class IndexCommandRunner
             // guarantee 100% backfill on a legacy DB).
             // fold は実検証が通ったときだけ stamp。legacy DB で skip された行は NULL のため、
             // 黙って stamp すると reader が fold 経路で legacy 行を見逃す。codex #86 レビュー。
-            var backfillReady = skipped == 0 || writer.AllFoldedColumnsBackfilled(skippedSymbolExtractorLanguages);
+            IReadOnlyCollection<string> skippedSymbolExtractorLanguageSet = skippedSymbolExtractorLanguages is null
+                ? Array.Empty<string>()
+                : skippedSymbolExtractorLanguages;
+            var backfillReady = skipped == 0 || writer.AllFoldedColumnsBackfilled(skippedSymbolExtractorLanguageSet);
             var foldedKeysCurrent = skipped == 0 || writer.AllFoldedColumnValuesMatchCurrentFold();
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var currentFoldFingerprint = NameFold.Fingerprint();
@@ -2195,7 +2210,7 @@ public static partial class IndexCommandRunner
             var foldFingerprintMatchesCurrent = priorFoldFingerprint == currentFoldFingerprint;
             var canRestampExistingFoldTrust = foldVersionMatchesCurrent
                 && foldFingerprintMatchesCurrent
-                && writer.SymbolExtractorVersionsMatchCurrent(skippedSymbolExtractorLanguages);
+                && writer.SymbolExtractorVersionsMatchCurrent(skippedSymbolExtractorLanguageSet);
             // A normal `index .` run still skips unchanged files. If the prior fold metadata
             // is stale, those skipped rows keep the old physical folded keys, so stamping the
             // NEW metadata for the whole DB would silently misadvertise trust. Only stamp when
