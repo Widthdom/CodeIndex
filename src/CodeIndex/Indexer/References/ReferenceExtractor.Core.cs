@@ -184,9 +184,8 @@ public static partial class ReferenceExtractor
             IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames> ByContainingType,
             IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> ByFunctionStartLine)? csharpValueReceiverLookups = null;
         var csharpValueReceiverLookupsResolved = false;
-        var powershellSplatAssignments = language == "powershell"
-            ? PowerShellReferenceExtractor.BuildSplatAssignments(preparedLines)
-            : null;
+        IReadOnlyDictionary<string, List<PowerShellReferenceExtractor.SplatAssignment>>? powershellSplatAssignments = null;
+        var powershellSplatAssignmentsResolved = false;
         // Workspace-wide same-name type rescue needs cross-file visibility, so the
         // extractor leaves ambiguous unqualified using-static pattern heads for the
         // read path to disambiguate.
@@ -290,6 +289,17 @@ public static partial class ReferenceExtractor
 
         IReadOnlyDictionary<int, SymbolRecord>? GetPythonHeaderSymbolsByLine() =>
             GetPythonSymbolLookups().HeaderSymbolsByLine;
+
+        IReadOnlyDictionary<string, List<PowerShellReferenceExtractor.SplatAssignment>> GetPowerShellSplatAssignments()
+        {
+            if (!powershellSplatAssignmentsResolved)
+            {
+                powershellSplatAssignments = PowerShellReferenceExtractor.BuildSplatAssignments(preparedLines);
+                powershellSplatAssignmentsResolved = true;
+            }
+
+            return powershellSplatAssignments!;
+        }
 
         List<(int StartLine, int StartColumn, int EndLine, int EndColumn, SymbolRecord Container)> GetRecordPrimaryCtorRanges()
         {
@@ -2339,7 +2349,7 @@ public static partial class ReferenceExtractor
                 PowerShellReferenceExtractor.EmitCallReferences(preparedLine, AddCallLikeReference);
                 PowerShellReferenceExtractor.EmitSplatParameterReferences(
                     preparedLine,
-                    powershellSplatAssignments!,
+                    GetPowerShellSplatAssignments,
                     lineNumber,
                     AddPowerShellParameterReference);
             }
