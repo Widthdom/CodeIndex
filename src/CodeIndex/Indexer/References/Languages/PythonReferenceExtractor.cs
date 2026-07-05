@@ -1633,6 +1633,9 @@ internal static class PythonReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf('(') < 0)
+            return;
+
         if (preparedLine.IndexOf("importlib", StringComparison.Ordinal) >= 0)
         {
             foreach (Match match in ImportlibDynamicImportRegex.Matches(preparedLine))
