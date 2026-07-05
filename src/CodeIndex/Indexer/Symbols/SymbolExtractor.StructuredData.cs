@@ -260,7 +260,7 @@ public static partial class SymbolExtractor
                 continue;
 
             var key = ExtractYamlKey(match);
-            if (string.IsNullOrWhiteSpace(key))
+            if (key.Length == 0)
                 continue;
 
             while (stack != null && stack.Count > 0 && indent <= stack[^1].Indent)
@@ -503,10 +503,19 @@ public static partial class SymbolExtractor
     private static string ExtractYamlKey(Match match)
     {
         if (match.Groups["double"].Success)
-            return match.Groups["double"].Value.Replace("\"\"", "\"", StringComparison.Ordinal).Trim();
+            return UnescapeYamlQuotedKey(match.Groups["double"].ValueSpan, "\"\"", "\"");
         if (match.Groups["single"].Success)
-            return match.Groups["single"].Value.Replace("''", "'", StringComparison.Ordinal).Trim();
+            return UnescapeYamlQuotedKey(match.Groups["single"].ValueSpan, "''", "'");
         return match.Groups["plain"].ValueSpan.Trim().ToString();
+    }
+
+    private static string UnescapeYamlQuotedKey(ReadOnlySpan<char> value, string escaped, string replacement)
+    {
+        var trimmed = value.Trim();
+        if (!trimmed.Contains(escaped, StringComparison.Ordinal))
+            return trimmed.ToString();
+
+        return trimmed.ToString().Replace(escaped, replacement, StringComparison.Ordinal);
     }
 
     private static bool IsYamlContainerValue(ReadOnlySpan<char> value)
