@@ -117,9 +117,8 @@ public static partial class ReferenceExtractor
         if (language == "solidity")
             return ExtractSolidityReferences(fileId, lines, preparedLines, containerResolver);
 
-        var csharpXmlDocAttachmentScopeCandidates = csharpLinesInsideMultilineStringContent != null
-            ? BuildCSharpXmlDocAttachmentScopeCandidates(language, symbols, request.ReportDiagnostic)
-            : null;
+        IReadOnlyList<SymbolRecord>? csharpXmlDocAttachmentScopeCandidates = null;
+        var csharpXmlDocAttachmentScopeCandidatesResolved = false;
         // Enclosing-type candidates for constructor-chain rewrites (class/struct/record; namespace excluded).
         // Ordered innermost-first via ascending body range. Java enums can declare constructors and
         // chain via `this(...)` so `enum` is included; C# enums cannot declare constructors, and
@@ -233,6 +232,19 @@ public static partial class ReferenceExtractor
             }
 
             return csharpSameLineContainerCandidatesByLine;
+        }
+
+        IReadOnlyList<SymbolRecord>? GetCSharpXmlDocAttachmentScopeCandidates()
+        {
+            if (!csharpXmlDocAttachmentScopeCandidatesResolved)
+            {
+                csharpXmlDocAttachmentScopeCandidates = csharpLinesInsideMultilineStringContent != null
+                    ? BuildCSharpXmlDocAttachmentScopeCandidates(language, symbols, request.ReportDiagnostic)
+                    : null;
+                csharpXmlDocAttachmentScopeCandidatesResolved = true;
+            }
+
+            return csharpXmlDocAttachmentScopeCandidates;
         }
 
         List<(int StartLine, int StartColumn, int EndLine, int EndColumn, SymbolRecord Container)> GetRecordPrimaryCtorRanges()
@@ -1048,7 +1060,7 @@ public static partial class ReferenceExtractor
                         && (docContainer.StartLine == lineNumber
                             || CanAttachCSharpXmlDocCommentToNextDeclaration(
                                 innermostContainer,
-                                csharpXmlDocAttachmentScopeCandidates,
+                                GetCSharpXmlDocAttachmentScopeCandidates(),
                                 csharpAttrRanges,
                                 preparedLines,
                                 lineNumber,
