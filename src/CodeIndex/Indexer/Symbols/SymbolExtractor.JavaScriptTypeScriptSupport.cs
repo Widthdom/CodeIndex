@@ -8717,8 +8717,26 @@ public static partial class SymbolExtractor
 
     private static JavaScriptLexedLine LexJavaScriptLine(string line, JavaScriptLexState state)
     {
-        var sanitized = new char[line.Length];
+        char[]? sanitized = null;
         var i = 0;
+
+        char[] GetSanitizedBuffer()
+        {
+            return sanitized ??= line.ToCharArray();
+        }
+
+        void SetSanitized(int index, char value)
+        {
+            if (sanitized is null)
+            {
+                if (line[index] == value)
+                    return;
+
+                sanitized = line.ToCharArray();
+            }
+
+            sanitized[index] = value;
+        }
 
         while (i < line.Length)
         {
@@ -8727,10 +8745,10 @@ public static partial class SymbolExtractor
 
             if (state.Mode == JavaScriptLexMode.BlockComment)
             {
-                sanitized[i] = ' ';
+                SetSanitized(i, ' ');
                 if (ch == '*' && next == '/')
                 {
-                    sanitized[i + 1] = ' ';
+                    SetSanitized(i + 1, ' ');
                     state = state with { Mode = JavaScriptLexMode.Code };
                     i++;
                 }
@@ -8741,7 +8759,8 @@ public static partial class SymbolExtractor
 
             if (state.Mode == JavaScriptLexMode.SingleQuote)
             {
-                sanitized[i] = ch is '\'' or '\\' ? ch : ' ';
+                if (ch is not '\'' and not '\\')
+                    SetSanitized(i, ' ');
 
                 if (state.EscapeNext)
                 {
@@ -8766,7 +8785,8 @@ public static partial class SymbolExtractor
 
             if (state.Mode == JavaScriptLexMode.DoubleQuote)
             {
-                sanitized[i] = ch is '"' or '\\' ? ch : ' ';
+                if (ch is not '"' and not '\\')
+                    SetSanitized(i, ' ');
 
                 if (state.EscapeNext)
                 {
@@ -8791,7 +8811,8 @@ public static partial class SymbolExtractor
 
             if (state.Mode == JavaScriptLexMode.TemplateString)
             {
-                sanitized[i] = ch is '`' or '\\' ? ch : ' ';
+                if (ch is not '`' and not '\\')
+                    SetSanitized(i, ' ');
 
                 if (state.EscapeNext)
                 {
@@ -8818,7 +8839,7 @@ public static partial class SymbolExtractor
             {
                 while (i < line.Length)
                 {
-                    sanitized[i] = ' ';
+                    SetSanitized(i, ' ');
                     i++;
                 }
 
@@ -8827,8 +8848,8 @@ public static partial class SymbolExtractor
 
             if (ch == '/' && next == '*')
             {
-                sanitized[i] = ' ';
-                sanitized[i + 1] = ' ';
+                SetSanitized(i, ' ');
+                SetSanitized(i + 1, ' ');
                 state = state with { Mode = JavaScriptLexMode.BlockComment };
                 i++;
                 i++;
@@ -8837,7 +8858,6 @@ public static partial class SymbolExtractor
 
             if (char.IsWhiteSpace(ch))
             {
-                sanitized[i] = ch;
                 i++;
                 continue;
             }
@@ -8855,7 +8875,6 @@ public static partial class SymbolExtractor
 
             if (ch == '\'')
             {
-                sanitized[i] = ch;
                 state = state with { Mode = JavaScriptLexMode.SingleQuote, EscapeNext = false };
                 i++;
                 continue;
@@ -8863,7 +8882,6 @@ public static partial class SymbolExtractor
 
             if (ch == '"')
             {
-                sanitized[i] = ch;
                 state = state with { Mode = JavaScriptLexMode.DoubleQuote, EscapeNext = false };
                 i++;
                 continue;
@@ -8871,7 +8889,6 @@ public static partial class SymbolExtractor
 
             if (ch == '`')
             {
-                sanitized[i] = ch;
                 state = state with { Mode = JavaScriptLexMode.TemplateString, EscapeNext = false };
                 i++;
                 continue;
@@ -8879,8 +8896,8 @@ public static partial class SymbolExtractor
 
             if (ch == '/' && CanStartJavaScriptRegexLiteral(state))
             {
-                sanitized[i] = ' ';
-                i = SkipJavaScriptRegexLiteral(line, sanitized, i);
+                SetSanitized(i, ' ');
+                i = SkipJavaScriptRegexLiteral(line, GetSanitizedBuffer(), i);
                 state = state with
                 {
                     PreviousTokenKind = JavaScriptPrevTokenKind.Other,
@@ -8894,10 +8911,7 @@ public static partial class SymbolExtractor
             {
                 var tokenStart = i;
                 while (i < line.Length && (char.IsLetterOrDigit(line[i]) || line[i] == '_' || line[i] == '$'))
-                {
-                    sanitized[i] = line[i];
                     i++;
-                }
 
                 state = state with
                 {
@@ -8910,13 +8924,9 @@ public static partial class SymbolExtractor
 
             if (char.IsDigit(ch))
             {
-                sanitized[i] = ch;
                 i++;
                 while (i < line.Length && (char.IsLetterOrDigit(line[i]) || line[i] == '_' || line[i] == '.'))
-                {
-                    sanitized[i] = line[i];
                     i++;
-                }
 
                 state = state with
                 {
@@ -8927,7 +8937,6 @@ public static partial class SymbolExtractor
                 continue;
             }
 
-            sanitized[i] = ch;
             if (!char.IsWhiteSpace(ch))
             {
                 var controlFlowParenDepth = state.ControlFlowParenDepth;
@@ -8971,7 +8980,7 @@ public static partial class SymbolExtractor
             i++;
         }
 
-        return new JavaScriptLexedLine(new string(sanitized), state);
+        return new JavaScriptLexedLine(sanitized is null ? line : new string(sanitized), state);
     }
 
     // Sanitize a contiguous block of C# source lines for cross-line structural
