@@ -41,8 +41,8 @@ public static partial class ReferenceExtractor
         InnermostContainerResolver containerResolver)
     {
         var matchLines = SolidityLanguageSupport.MaskCommentsAndStrings(preparedLines);
-        var references = new List<ReferenceRecord>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        List<ReferenceRecord>? references = null;
+        HashSet<string>? seen = null;
 
         for (var i = 0; i < matchLines.Length; i++)
         {
@@ -50,19 +50,19 @@ public static partial class ReferenceExtractor
             var line = matchLines[i];
             var context = rawLines[i].Trim();
 
-            AddSolidityInheritanceReferences(references, seen, fileId, line, context, lineNumber, containerResolver);
-            AddSolidityLibraryReferences(references, seen, fileId, line, context, lineNumber, containerResolver);
-            AddSolidityModifierReferences(references, seen, fileId, line, context, lineNumber, containerResolver);
-            AddSolidityEventReferences(references, seen, fileId, line, context, lineNumber, containerResolver);
-            AddSolidityInterfaceCallReferences(references, seen, fileId, line, context, lineNumber, containerResolver);
+            AddSolidityInheritanceReferences(ref references, ref seen, fileId, line, context, lineNumber, containerResolver);
+            AddSolidityLibraryReferences(ref references, ref seen, fileId, line, context, lineNumber, containerResolver);
+            AddSolidityModifierReferences(ref references, ref seen, fileId, line, context, lineNumber, containerResolver);
+            AddSolidityEventReferences(ref references, ref seen, fileId, line, context, lineNumber, containerResolver);
+            AddSolidityInterfaceCallReferences(ref references, ref seen, fileId, line, context, lineNumber, containerResolver);
         }
 
-        return references;
+        return references ?? [];
     }
 
     private static void AddSolidityInheritanceReferences(
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ref List<ReferenceRecord>? references,
+        ref HashSet<string>? seen,
         long fileId,
         string line,
         string context,
@@ -84,8 +84,8 @@ public static partial class ReferenceExtractor
                 continue;
 
             AddSolidityReference(
-                references,
-                seen,
+                ref references,
+                ref seen,
                 fileId,
                 name,
                 bases.Index + baseMatch.Groups["name"].Index,
@@ -118,8 +118,8 @@ public static partial class ReferenceExtractor
     }
 
     private static void AddSolidityLibraryReferences(
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ref List<ReferenceRecord>? references,
+        ref HashSet<string>? seen,
         long fileId,
         string line,
         string context,
@@ -137,12 +137,12 @@ public static partial class ReferenceExtractor
             return;
 
         var name = match.Groups["name"];
-        AddSolidityReference(references, seen, fileId, name.Value, name.Index, "use", context, lineNumber, containerResolver);
+        AddSolidityReference(ref references, ref seen, fileId, name.Value, name.Index, "use", context, lineNumber, containerResolver);
     }
 
     private static void AddSolidityModifierReferences(
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ref List<ReferenceRecord>? references,
+        ref HashSet<string>? seen,
         long fileId,
         string line,
         string context,
@@ -167,8 +167,8 @@ public static partial class ReferenceExtractor
                 continue;
 
             AddSolidityReference(
-                references,
-                seen,
+                ref references,
+                ref seen,
                 fileId,
                 name.Value,
                 tail.Index + name.Index,
@@ -180,8 +180,8 @@ public static partial class ReferenceExtractor
     }
 
     private static void AddSolidityEventReferences(
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ref List<ReferenceRecord>? references,
+        ref HashSet<string>? seen,
         long fileId,
         string line,
         string context,
@@ -197,13 +197,13 @@ public static partial class ReferenceExtractor
         foreach (Match match in SolidityEmitRegex.Matches(line))
         {
             var name = match.Groups["name"];
-            AddSolidityReference(references, seen, fileId, name.Value, name.Index, "call", context, lineNumber, containerResolver);
+            AddSolidityReference(ref references, ref seen, fileId, name.Value, name.Index, "call", context, lineNumber, containerResolver);
         }
     }
 
     private static void AddSolidityInterfaceCallReferences(
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ref List<ReferenceRecord>? references,
+        ref HashSet<string>? seen,
         long fileId,
         string line,
         string context,
@@ -216,10 +216,10 @@ public static partial class ReferenceExtractor
         foreach (Match match in SolidityInterfaceCastCallRegex.Matches(line))
         {
             var type = match.Groups["type"];
-            AddSolidityReference(references, seen, fileId, type.Value, type.Index, "type_reference", context, lineNumber, containerResolver);
+            AddSolidityReference(ref references, ref seen, fileId, type.Value, type.Index, "type_reference", context, lineNumber, containerResolver);
 
             var method = match.Groups["method"];
-            AddSolidityReference(references, seen, fileId, method.Value, method.Index, "call", context, lineNumber, containerResolver);
+            AddSolidityReference(ref references, ref seen, fileId, method.Value, method.Index, "call", context, lineNumber, containerResolver);
         }
     }
 
@@ -230,8 +230,8 @@ public static partial class ReferenceExtractor
            || line.IndexOf("receive", StringComparison.Ordinal) >= 0;
 
     private static void AddSolidityReference(
-        List<ReferenceRecord> references,
-        HashSet<string> seen,
+        ref List<ReferenceRecord>? references,
+        ref HashSet<string>? seen,
         long fileId,
         string name,
         int nameIndex,
@@ -241,8 +241,8 @@ public static partial class ReferenceExtractor
         InnermostContainerResolver containerResolver)
     {
         AddReference(
-            references,
-            seen,
+            references ??= [],
+            seen ??= new HashSet<string>(StringComparer.Ordinal),
             fileId,
             name,
             nameIndex,
