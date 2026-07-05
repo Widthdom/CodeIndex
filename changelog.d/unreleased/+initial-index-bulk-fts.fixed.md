@@ -92,6 +92,7 @@ affected:
 - **Symbol extraction skips trivial container assignment work** — container assignment now returns before sorting or allocating a stack for empty, single-symbol, or container-free symbol lists.
 - **Symbol extraction caches allocate lazily** — line-based symbol extraction now creates duplicate-tracking dictionaries and symbol-line identity caches only after symbols or identity checks actually need them.
 - **C# symbol extraction defers line-start lexing** — C# line-start lex states are now built only when root-code or same-line container checks actually require them, avoiding a full-file lexical pass for files that never reach those paths.
+- **C# symbol extraction defers scope scans** — C# type-body and callable-parameter scope maps are now built only when field-like candidate checks need them, avoiding extra full-file scans for files without those patterns.
 
 ## 日本語
 
@@ -155,3 +156,4 @@ affected:
 - **symbol extraction の自明な container assignment 作業を省きます** — container assignment は空、単一 symbol、または container 候補を持たない symbol list では sort や stack 確保へ進まずに戻ります。
 - **symbol extraction cache を遅延確保します** — line-based symbol extraction は重複追跡用 dictionary と symbol-line identity cache を、symbol や identity check が実際に必要になってから作るようになりました。
 - **C# symbol extraction の line-start lexing を遅延します** — C# の line-start lex state は root-code 判定や same-line container 判定で実際に必要になった時だけ作るようになり、その経路へ到達しないファイルで全ファイル lexical pass を避けます。
+- **C# symbol extraction の scope scan を遅延します** — C# の type-body と callable-parameter scope map は field-like candidate 判定で必要になった時だけ作るようになり、それらの pattern が出ないファイルで追加の全ファイル scan を避けます。

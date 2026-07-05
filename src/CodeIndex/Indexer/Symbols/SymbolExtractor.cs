@@ -2732,12 +2732,12 @@ public static partial class SymbolExtractor
         var privateScopeColumns = lang is "javascript" or "typescript"
             ? BuildJavaScriptTypeScriptPrivateScopeColumns(lines, lang)
             : null;
-        var csharpInsideTypeBody = lang == "csharp"
-            ? BuildCSharpTypeBodyScope(structuralLines)
-            : null;
-        var csharpCallableParameterScope = lang == "csharp"
-            ? BuildCSharpCallableParameterScope(structuralLines, csharpInsideTypeBody!)
-            : null;
+        CSharpTypeBodyScope? csharpInsideTypeBody = null;
+        CSharpTypeBodyScope GetCSharpInsideTypeBody() =>
+            csharpInsideTypeBody ??= BuildCSharpTypeBodyScope(structuralLines);
+        CSharpCallableParameterScope? csharpCallableParameterScope = null;
+        CSharpCallableParameterScope GetCSharpCallableParameterScope() =>
+            csharpCallableParameterScope ??= BuildCSharpCallableParameterScope(structuralLines, GetCSharpInsideTypeBody());
         var csharpSwitchExpressionLines = lang == "csharp"
             && LinesContain(structuralLines, "switch", StringComparison.Ordinal)
             ? FindCSharpSwitchExpressionLines(structuralLines)
@@ -3183,8 +3183,7 @@ public static partial class SymbolExtractor
                         if (lang == "csharp"
                             && pattern.BodyStyle == BodyStyle.None
                           && (pattern.Kind == "property" || IsCSharpFieldLikeFunctionPattern(pattern))
-                          && csharpCallableParameterScope != null
-                          && csharpCallableParameterScope.IsInsideParameterListAt(i, csharpGateRawStartColumn))
+                          && GetCSharpCallableParameterScope().IsInsideParameterListAt(i, csharpGateRawStartColumn))
                         {
                             lineOffset = FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang);
                             continue;
@@ -3192,8 +3191,7 @@ public static partial class SymbolExtractor
                         if (lang == "csharp"
                             && pattern.BodyStyle == BodyStyle.None
                           && (pattern.Kind == "property" || IsCSharpFieldLikeFunctionPattern(pattern))
-                          && csharpInsideTypeBody != null
-                          && !csharpInsideTypeBody.IsInsideTypeBodyAt(i, csharpGateRawStartColumn))
+                          && !GetCSharpInsideTypeBody().IsInsideTypeBodyAt(i, csharpGateRawStartColumn))
                         {
                             // Move the cursor past this same-line candidate so a later
                             // column on the same line (e.g. a real field that lives after
