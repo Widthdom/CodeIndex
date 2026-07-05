@@ -2429,6 +2429,7 @@ public static partial class SymbolExtractor
         int? conflictMarkerLine,
         string? filePath,
         string? projectRoot,
+        bool patternConfigsAlreadyLoaded,
         CancellationToken cancellationToken,
         out string? lang,
         out string preparedContent,
@@ -2486,7 +2487,8 @@ public static partial class SymbolExtractor
         }
         preparedContent = content;
         cancellationToken.ThrowIfCancellationRequested();
-        ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
+        if (!patternConfigsAlreadyLoaded)
+            ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
 
         if (pluginLanguage != null
             && !PatternCache.ContainsKey(pluginLanguage)
@@ -2530,7 +2532,27 @@ public static partial class SymbolExtractor
             conflictMarkerLine: null,
             filePath,
             projectRoot,
-            cancellationToken);
+            patternConfigsAlreadyLoaded: false,
+            cancellationToken: cancellationToken);
+
+    internal static List<SymbolRecord> ExtractWithPatternConfigsLoaded(
+        long fileId,
+        string? lang,
+        string content,
+        string? filePath = null,
+        string? projectRoot = null,
+        CancellationToken cancellationToken = default)
+        => ExtractCore(
+            fileId,
+            lang,
+            content,
+            contentIsNormalized: false,
+            hasOversizeLine: null,
+            conflictMarkerLine: null,
+            filePath,
+            projectRoot,
+            patternConfigsAlreadyLoaded: true,
+            cancellationToken: cancellationToken);
 
     internal static List<SymbolRecord> ExtractNormalized(
         long fileId,
@@ -2540,7 +2562,8 @@ public static partial class SymbolExtractor
         string? filePath = null,
         string? projectRoot = null,
         CancellationToken cancellationToken = default,
-        int? conflictMarkerLine = null)
+        int? conflictMarkerLine = null,
+        bool patternConfigsAlreadyLoaded = false)
         => ExtractCore(
             fileId,
             lang,
@@ -2550,6 +2573,7 @@ public static partial class SymbolExtractor
             conflictMarkerLine,
             filePath,
             projectRoot,
+            patternConfigsAlreadyLoaded,
             cancellationToken);
 
     private static List<SymbolRecord> ExtractCore(
@@ -2561,6 +2585,7 @@ public static partial class SymbolExtractor
         int? conflictMarkerLine,
         string? filePath = null,
         string? projectRoot = null,
+        bool patternConfigsAlreadyLoaded = false,
         CancellationToken cancellationToken = default)
     {
         var originalLang = lang;
@@ -2573,6 +2598,7 @@ public static partial class SymbolExtractor
             conflictMarkerLine,
             filePath,
             projectRoot,
+            patternConfigsAlreadyLoaded,
             cancellationToken,
             out lang,
             out content,

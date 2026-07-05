@@ -247,8 +247,8 @@ public static partial class IndexCommandRunner
         {
             using var regexTimeouts = BoundedRegex.CaptureTimeouts(lang, "symbol_extraction");
             var symbols = contentIsNormalized && hasOversizeLine is { } knownHasOversizeLine
-                ? SymbolExtractor.ExtractNormalized(fileId, lang, content, knownHasOversizeLine, filePath, projectRoot, cancellationToken, conflictMarkerLine)
-                : SymbolExtractor.Extract(fileId, lang, content, filePath, projectRoot, cancellationToken);
+                ? SymbolExtractor.ExtractNormalized(fileId, lang, content, knownHasOversizeLine, filePath, projectRoot, cancellationToken, conflictMarkerLine, patternConfigsAlreadyLoaded: true)
+                : SymbolExtractor.ExtractWithPatternConfigsLoaded(fileId, lang, content, filePath, projectRoot, cancellationToken);
             return new SymbolExtractionResult(symbols, BuildRegexTimeoutIssue(issuePath, regexTimeouts));
         }
 

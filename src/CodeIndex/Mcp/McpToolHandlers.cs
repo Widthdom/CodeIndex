@@ -5895,7 +5895,8 @@ public partial class McpServer
                         filePath,
                         projectPath,
                         requestToken,
-                        loaded.ConflictMarkerLine);
+                        loaded.ConflictMarkerLine,
+                        patternConfigsAlreadyLoaded: true);
                     symbolRegexTimeoutIssue = IndexCommandRunner.BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                 }
                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
