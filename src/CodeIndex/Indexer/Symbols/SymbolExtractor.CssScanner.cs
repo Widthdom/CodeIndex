@@ -4,19 +4,45 @@ public static partial class SymbolExtractor
 {
     private static string[] MaskSassStylusBlockCommentLines(string language, string[] originalLines)
     {
-        var maskedLines = new string[originalLines.Length];
+        string[]? maskedLines = null;
         if (language == "sass")
         {
             var state = new CssReferenceExtractor.SassLoudCommentState();
             for (var i = 0; i < originalLines.Length; i++)
-                maskedLines[i] = CssReferenceExtractor.MaskSassBlockCommentLine(originalLines[i], state);
-            return maskedLines;
+            {
+                var maskedLine = CssReferenceExtractor.MaskSassBlockCommentLine(originalLines[i], state);
+                if (maskedLines == null)
+                {
+                    if (string.Equals(maskedLine, originalLines[i], StringComparison.Ordinal))
+                        continue;
+
+                    maskedLines = new string[originalLines.Length];
+                    Array.Copy(originalLines, maskedLines, i);
+                }
+
+                maskedLines[i] = maskedLine;
+            }
+
+            return maskedLines ?? originalLines;
         }
 
         var inBlockComment = false;
         for (var i = 0; i < originalLines.Length; i++)
-            maskedLines[i] = CssReferenceExtractor.MaskSassStylusBlockCommentLine(originalLines[i], ref inBlockComment);
-        return maskedLines;
+        {
+            var maskedLine = CssReferenceExtractor.MaskSassStylusBlockCommentLine(originalLines[i], ref inBlockComment);
+            if (maskedLines == null)
+            {
+                if (string.Equals(maskedLine, originalLines[i], StringComparison.Ordinal))
+                    continue;
+
+                maskedLines = new string[originalLines.Length];
+                Array.Copy(originalLines, maskedLines, i);
+            }
+
+            maskedLines[i] = maskedLine;
+        }
+
+        return maskedLines ?? originalLines;
     }
 
     private static bool[] FindCssQualifiedRuleAncestors(string[] lines)
@@ -61,7 +87,37 @@ public static partial class SymbolExtractor
     }
 
     private static string[] MaskCssScannerLines(string[] originalLines)
-        => MaskCssScannerLines(originalLines, 0, originalLines.Length);
+    {
+        string[]? maskedLines = null;
+        var inBlockComment = false;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var inUrlToken = false;
+        var urlParenDepth = 0;
+
+        for (int lineIndex = 0; lineIndex < originalLines.Length; lineIndex++)
+        {
+            var maskedLine = MaskCssScannerLine(
+                originalLines[lineIndex],
+                ref inBlockComment,
+                ref inSingleQuote,
+                ref inDoubleQuote,
+                ref inUrlToken,
+                ref urlParenDepth);
+            if (maskedLines == null)
+            {
+                if (string.Equals(maskedLine, originalLines[lineIndex], StringComparison.Ordinal))
+                    continue;
+
+                maskedLines = new string[originalLines.Length];
+                Array.Copy(originalLines, maskedLines, lineIndex);
+            }
+
+            maskedLines[lineIndex] = maskedLine;
+        }
+
+        return maskedLines ?? originalLines;
+    }
 
     private static string[] MaskCssScannerLines(IReadOnlyList<string> originalLines, int startIndex, int lineCount)
     {
