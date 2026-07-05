@@ -263,7 +263,8 @@ internal static class PythonReferenceExtractor
         if (preparedLine.IndexOf('@') < 0)
             return;
 
-        if (preparedLine.IndexOf('(') >= 0)
+        var mayBeDecoratorCall = MayBePythonDecoratorCall(preparedLine);
+        if (mayBeDecoratorCall)
         {
             foreach (Match match in DecoratorCallRegex.Matches(preparedLine))
             {
@@ -287,15 +288,18 @@ internal static class PythonReferenceExtractor
             }
         }
 
-        foreach (Match match in DecoratorRegex.Matches(preparedLine))
+        if (!mayBeDecoratorCall)
         {
-            var name = match.Groups["name"].Value;
-            if (isIgnoredName(name))
-                continue;
-            if (definitionNames != null && definitionNames.Contains(name))
-                continue;
+            foreach (Match match in DecoratorRegex.Matches(preparedLine))
+            {
+                var name = match.Groups["name"].Value;
+                if (isIgnoredName(name))
+                    continue;
+                if (definitionNames != null && definitionNames.Contains(name))
+                    continue;
 
-            ReferenceExtractor.AddReference(references, seen, fileId, match, "decorator", context, lineNumber, container);
+                ReferenceExtractor.AddReference(references, seen, fileId, match, "decorator", context, lineNumber, container);
+            }
         }
     }
 
@@ -339,6 +343,16 @@ internal static class PythonReferenceExtractor
                 container,
                 "python");
         }
+    }
+
+    private static bool MayBePythonDecoratorCall(string preparedLine)
+    {
+        var parenIndex = preparedLine.IndexOf('(');
+        if (parenIndex < 0)
+            return false;
+
+        var commentIndex = preparedLine.IndexOf('#');
+        return commentIndex < 0 || parenIndex < commentIndex;
     }
 
     private static bool IsKeywordArgumentName(string value, int afterNameIndex)
