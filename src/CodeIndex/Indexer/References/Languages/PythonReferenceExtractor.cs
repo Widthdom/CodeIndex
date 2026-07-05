@@ -1261,6 +1261,8 @@ internal static class PythonReferenceExtractor
         var preparedLine = preparedLines[lineIndex];
         if (preparedLine.IndexOf("field", StringComparison.Ordinal) < 0)
             return;
+        if (preparedLine.IndexOf('=') < 0 || preparedLine.IndexOf('(') < 0)
+            return;
         if (!DataclassFieldCallRegex.IsMatch(preparedLine))
             return;
 
