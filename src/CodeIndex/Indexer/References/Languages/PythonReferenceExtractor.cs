@@ -974,12 +974,11 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
-        if (preparedLine.IndexOf('=') < 0
-            || (preparedLine.IndexOf("TypeAlias", StringComparison.Ordinal) < 0
-                && preparedLine.IndexOf("type", StringComparison.Ordinal) < 0))
-        {
+        if (preparedLine.IndexOf('=') < 0)
             return;
-        }
+        if (preparedLine.IndexOf("TypeAlias", StringComparison.Ordinal) < 0
+            && !MayStartPythonTypeAliasStatement(preparedLine))
+            return;
 
         foreach (Match match in TypeAliasRhsExpressionRegex.Matches(preparedLine))
         {
@@ -995,6 +994,21 @@ internal static class PythonReferenceExtractor
                 resolveContainerForReference: null,
                 isIgnoredName);
         }
+    }
+
+    private static bool MayStartPythonTypeAliasStatement(string preparedLine)
+    {
+        var index = 0;
+        while (index < preparedLine.Length && char.IsWhiteSpace(preparedLine[index]))
+            index++;
+
+        if (index + "type".Length >= preparedLine.Length)
+            return false;
+
+        if (!preparedLine.AsSpan(index).StartsWith("type", StringComparison.Ordinal))
+            return false;
+
+        return char.IsWhiteSpace(preparedLine[index + "type".Length]);
     }
 
     public static void EmitNewTypeReferences(
