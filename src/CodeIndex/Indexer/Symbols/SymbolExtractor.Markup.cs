@@ -131,7 +131,6 @@ public static partial class SymbolExtractor
                 while (cursor < maskedText.Length && IsHtmlAttrNameChar(maskedText[cursor]))
                     cursor++;
                 var attrName = maskedText[attrNameStart..cursor];
-                var attrNameLower = attrName.ToLowerInvariant();
 
                 // Skip whitespace between name and `=`.
                 while (cursor < maskedText.Length && char.IsWhiteSpace(maskedText[cursor]))
@@ -188,7 +187,7 @@ public static partial class SymbolExtractor
                     }
                 }
 
-                if (IsHtmlSemanticStateAttributeName(attrNameLower))
+                if (IsHtmlSemanticStateAttributeName(attrName))
                 {
                     var attrStartLine = FindHtmlLineNumber(lineStarts ??= BuildLineStarts(lines), attrNameStart);
                     var attrSignatureIndex = Math.Clamp(attrStartLine - 1, 0, lines.Length - 1);
@@ -196,7 +195,7 @@ public static partial class SymbolExtractor
                     {
                         FileId = fileId,
                         Kind = "property",
-                        Name = attrNameLower,
+                        Name = NormalizeHtmlAttributeName(attrName),
                         Line = attrStartLine,
                         StartLine = attrStartLine,
                         EndLine = attrStartLine,
@@ -210,42 +209,42 @@ public static partial class SymbolExtractor
                 string? emitKind = null;
                 string? singleEmittedName = null;
                 IEnumerable<string>? emittedNames = null;
-                if (attrNameLower == "src" && IsHtmlSrcResourceTag(tagName))
+                if (IsHtmlAttributeName(attrName, "src") && IsHtmlSrcResourceTag(tagName))
                 {
                     emitKind = "import";
                     singleEmittedName = attrValue.Trim();
                 }
-                else if (attrNameLower == "srcset" && IsHtmlSrcsetResourceTag(tagName))
+                else if (IsHtmlAttributeName(attrName, "srcset") && IsHtmlSrcsetResourceTag(tagName))
                 {
                     emitKind = "import";
                     emittedNames = EnumerateHtmlSrcsetUrls(attrValue);
                 }
-                else if ((attrNameLower == "href" || attrNameLower == "xlink:href") && IsHtmlHrefResourceTag(tagName))
+                else if ((IsHtmlAttributeName(attrName, "href") || IsHtmlAttributeName(attrName, "xlink:href")) && IsHtmlHrefResourceTag(tagName))
                 {
                     emitKind = "import";
                     singleEmittedName = attrValue.Trim();
                 }
-                else if (attrNameLower == "data" && IsHtmlTagName(tagName, "object"))
+                else if (IsHtmlAttributeName(attrName, "data") && IsHtmlTagName(tagName, "object"))
                 {
                     emitKind = "import";
                     singleEmittedName = attrValue.Trim();
                 }
-                else if (attrNameLower == "poster" && IsHtmlTagName(tagName, "video"))
+                else if (IsHtmlAttributeName(attrName, "poster") && IsHtmlTagName(tagName, "video"))
                 {
                     emitKind = "import";
                     singleEmittedName = attrValue.Trim();
                 }
-                else if (attrNameLower == "id" && !attrName.Contains(':') && !attrName.Contains('-') && !attrName.Contains('.'))
+                else if (IsHtmlAttributeName(attrName, "id") && !attrName.Contains(':') && !attrName.Contains('-') && !attrName.Contains('.'))
                 {
                     emitKind = "property";
                     singleEmittedName = attrValue.Trim();
                 }
-                else if (attrNameLower is "class" or "classname")
+                else if (IsHtmlAttributeName(attrName, "class") || IsHtmlAttributeName(attrName, "classname"))
                 {
                     emitKind = "reference";
                     emittedNames = EnumerateHtmlClassNames(attrValue);
                 }
-                else if (attrNameLower == "name" && IsHtmlTagName(tagName, "slot"))
+                else if (IsHtmlAttributeName(attrName, "name") && IsHtmlTagName(tagName, "slot"))
                 {
                     var slotName = attrValue.Trim();
                     if (slotName.Length > 0)
@@ -255,7 +254,7 @@ public static partial class SymbolExtractor
                         sawNamedSlotDeclaration = true;
                     }
                 }
-                else if (attrNameLower == "slot")
+                else if (IsHtmlAttributeName(attrName, "slot"))
                 {
                     var slotName = attrValue.Trim();
                     if (slotName.Length > 0)
@@ -352,12 +351,18 @@ public static partial class SymbolExtractor
         }
     }
 
-    private static bool IsHtmlSemanticStateAttributeName(string attrNameLower)
+    private static bool IsHtmlSemanticStateAttributeName(string attrName)
     {
-        return (attrNameLower.StartsWith("data-", StringComparison.Ordinal) ||
-                attrNameLower.StartsWith("aria-", StringComparison.Ordinal)) &&
-               attrNameLower.Length > 5;
+        return (attrName.StartsWith("data-", StringComparison.OrdinalIgnoreCase) ||
+                attrName.StartsWith("aria-", StringComparison.OrdinalIgnoreCase)) &&
+               attrName.Length > 5;
     }
+
+    private static string NormalizeHtmlAttributeName(string attrName) =>
+        attrName.ToLowerInvariant();
+
+    private static bool IsHtmlAttributeName(string attrName, string expected) =>
+        attrName.Equals(expected, StringComparison.OrdinalIgnoreCase);
 
     private static List<SymbolRecord> ExtractMarkdownSymbols(long fileId, string[] lines)
     {
