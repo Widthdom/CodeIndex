@@ -410,25 +410,28 @@ internal static class PythonReferenceExtractor
         if (preparedLine.IndexOf("except", StringComparison.Ordinal) < 0)
             return;
 
-        foreach (Match match in ExceptTupleTypeRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf('(') >= 0)
         {
-            var typesGroup = match.Groups["types"];
-            foreach (Match typeMatch in TypeNameRegex.Matches(typesGroup.Value))
+            foreach (Match match in ExceptTupleTypeRegex.Matches(preparedLine))
             {
-                var name = typeMatch.Groups["name"].Value;
-                if (isIgnoredName(name))
-                    continue;
+                var typesGroup = match.Groups["types"];
+                foreach (Match typeMatch in TypeNameRegex.Matches(typesGroup.Value))
+                {
+                    var name = typeMatch.Groups["name"].Value;
+                    if (isIgnoredName(name))
+                        continue;
 
-                ReferenceExtractor.AddTypeReferenceSegments(
-                    references,
-                    seen,
-                    fileId,
-                    name,
-                    typesGroup.Index + typeMatch.Groups["name"].Index,
-                    context,
-                    lineNumber,
-                    container,
-                    "python");
+                    ReferenceExtractor.AddTypeReferenceSegments(
+                        references,
+                        seen,
+                        fileId,
+                        name,
+                        typesGroup.Index + typeMatch.Groups["name"].Index,
+                        context,
+                        lineNumber,
+                        container,
+                        "python");
+                }
             }
         }
 
@@ -464,25 +467,28 @@ internal static class PythonReferenceExtractor
         if (preparedLine.IndexOf("isinstance", StringComparison.Ordinal) < 0)
             return;
 
-        foreach (Match match in IsInstanceTupleTypeRegex.Matches(preparedLine))
+        if (MayContainPythonTupleArgument(preparedLine))
         {
-            var typesGroup = match.Groups["types"];
-            foreach (Match typeMatch in TypeNameRegex.Matches(typesGroup.Value))
+            foreach (Match match in IsInstanceTupleTypeRegex.Matches(preparedLine))
             {
-                var name = typeMatch.Groups["name"].Value;
-                if (isIgnoredName(name))
-                    continue;
+                var typesGroup = match.Groups["types"];
+                foreach (Match typeMatch in TypeNameRegex.Matches(typesGroup.Value))
+                {
+                    var name = typeMatch.Groups["name"].Value;
+                    if (isIgnoredName(name))
+                        continue;
 
-                ReferenceExtractor.AddTypeReferenceSegments(
-                    references,
-                    seen,
-                    fileId,
-                    name,
-                    typesGroup.Index + typeMatch.Groups["name"].Index,
-                    context,
-                    lineNumber,
-                    container,
-                    "python");
+                    ReferenceExtractor.AddTypeReferenceSegments(
+                        references,
+                        seen,
+                        fileId,
+                        name,
+                        typesGroup.Index + typeMatch.Groups["name"].Index,
+                        context,
+                        lineNumber,
+                        container,
+                        "python");
+                }
             }
         }
 
@@ -518,25 +524,28 @@ internal static class PythonReferenceExtractor
         if (preparedLine.IndexOf("issubclass", StringComparison.Ordinal) < 0)
             return;
 
-        foreach (Match match in IsSubclassTupleTypeRegex.Matches(preparedLine))
+        if (MayContainPythonTupleArgument(preparedLine))
         {
-            var typesGroup = match.Groups["types"];
-            foreach (Match typeMatch in TypeNameRegex.Matches(typesGroup.Value))
+            foreach (Match match in IsSubclassTupleTypeRegex.Matches(preparedLine))
             {
-                var name = typeMatch.Groups["name"].Value;
-                if (isIgnoredName(name))
-                    continue;
+                var typesGroup = match.Groups["types"];
+                foreach (Match typeMatch in TypeNameRegex.Matches(typesGroup.Value))
+                {
+                    var name = typeMatch.Groups["name"].Value;
+                    if (isIgnoredName(name))
+                        continue;
 
-                ReferenceExtractor.AddTypeReferenceSegments(
-                    references,
-                    seen,
-                    fileId,
-                    name,
-                    typesGroup.Index + typeMatch.Groups["name"].Index,
-                    context,
-                    lineNumber,
-                    container,
-                    "python");
+                    ReferenceExtractor.AddTypeReferenceSegments(
+                        references,
+                        seen,
+                        fileId,
+                        name,
+                        typesGroup.Index + typeMatch.Groups["name"].Index,
+                        context,
+                        lineNumber,
+                        container,
+                        "python");
+                }
             }
         }
 
@@ -607,6 +616,24 @@ internal static class PythonReferenceExtractor
                 container,
                 "python");
         }
+    }
+
+    private static bool MayContainPythonTupleArgument(string preparedLine)
+    {
+        var commaIndex = preparedLine.IndexOf(',');
+        while (commaIndex >= 0)
+        {
+            var index = commaIndex + 1;
+            while (index < preparedLine.Length && char.IsWhiteSpace(preparedLine[index]))
+                index++;
+
+            if (index < preparedLine.Length && preparedLine[index] == '(')
+                return true;
+
+            commaIndex = preparedLine.IndexOf(',', commaIndex + 1);
+        }
+
+        return false;
     }
 
     public static void EmitAssertTypeReferences(
