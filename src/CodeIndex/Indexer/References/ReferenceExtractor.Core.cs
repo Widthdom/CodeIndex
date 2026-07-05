@@ -130,11 +130,10 @@ public static partial class ReferenceExtractor
         var enclosingTypeCandidatesResolved = false;
         IReadOnlyList<SymbolRecord>? rustEnumCandidates = null;
         var rustEnumCandidatesResolved = false;
-        var pythonSymbolLookups = language == "python"
-            ? BuildPythonSymbolLookups(symbols)
-            : default;
-        var pythonDefinitionContainersByLineAndKind = pythonSymbolLookups.DefinitionContainersByLineAndKind;
-        var pythonHeaderSymbolsByLine = pythonSymbolLookups.HeaderSymbolsByLine;
+        (
+            IReadOnlyDictionary<(int Line, string Kind), SymbolRecord>? DefinitionContainersByLineAndKind,
+            IReadOnlyDictionary<int, SymbolRecord>? HeaderSymbolsByLine) pythonSymbolLookups = default;
+        var pythonSymbolLookupsResolved = false;
         var swiftPropertyDefinitionsByLine = language == "swift"
             ? BuildSwiftPropertyDefinitionsByLine(language, symbols, request.ReportDiagnostic)
             : null;
@@ -270,6 +269,27 @@ public static partial class ReferenceExtractor
 
             return rustEnumCandidates;
         }
+
+        (
+            IReadOnlyDictionary<(int Line, string Kind), SymbolRecord>? DefinitionContainersByLineAndKind,
+            IReadOnlyDictionary<int, SymbolRecord>? HeaderSymbolsByLine) GetPythonSymbolLookups()
+        {
+            if (!pythonSymbolLookupsResolved)
+            {
+                pythonSymbolLookups = language == "python"
+                    ? BuildPythonSymbolLookups(symbols)
+                    : default;
+                pythonSymbolLookupsResolved = true;
+            }
+
+            return pythonSymbolLookups;
+        }
+
+        IReadOnlyDictionary<(int Line, string Kind), SymbolRecord>? GetPythonDefinitionContainersByLineAndKind() =>
+            GetPythonSymbolLookups().DefinitionContainersByLineAndKind;
+
+        IReadOnlyDictionary<int, SymbolRecord>? GetPythonHeaderSymbolsByLine() =>
+            GetPythonSymbolLookups().HeaderSymbolsByLine;
 
         List<(int StartLine, int StartColumn, int EndLine, int EndColumn, SymbolRecord Container)> GetRecordPrimaryCtorRanges()
         {
@@ -1352,6 +1372,7 @@ public static partial class ReferenceExtractor
 
             SymbolRecord? ResolvePythonDefinitionContainer(int line, string kind)
             {
+                var pythonDefinitionContainersByLineAndKind = GetPythonDefinitionContainersByLineAndKind();
                 if (pythonDefinitionContainersByLineAndKind == null)
                     return null;
                 return pythonDefinitionContainersByLineAndKind.TryGetValue((line, kind), out var symbol)
@@ -2763,7 +2784,7 @@ public static partial class ReferenceExtractor
                 var pythonPreparedLine = preparedLine;
                 var pythonHeaderMap = default(PythonLogicalHeaderReferenceLine?);
                 SymbolRecord? pythonHeaderSymbol = null;
-                pythonHeaderSymbolsByLine?.TryGetValue(lineNumber, out pythonHeaderSymbol);
+                GetPythonHeaderSymbolsByLine()?.TryGetValue(lineNumber, out pythonHeaderSymbol);
                 if (pythonHeaderSymbol?.Signature != null
                     && TryBuildPythonLogicalHeaderReferenceLine(lines, i, pythonHeaderSymbol.StartColumn ?? 0, out var builtPythonHeaderMap))
                 {
