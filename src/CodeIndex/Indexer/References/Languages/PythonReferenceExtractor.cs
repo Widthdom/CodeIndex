@@ -260,25 +260,28 @@ internal static class PythonReferenceExtractor
         if (preparedLine.IndexOf('@') < 0)
             return;
 
-        foreach (Match match in DecoratorCallRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf('(') >= 0)
         {
-            var name = match.Groups["name"].Value;
-            if (isIgnoredName(name))
-                continue;
-            if (definitionNames != null && definitionNames.Contains(name))
-                continue;
+            foreach (Match match in DecoratorCallRegex.Matches(preparedLine))
+            {
+                var name = match.Groups["name"].Value;
+                if (isIgnoredName(name))
+                    continue;
+                if (definitionNames != null && definitionNames.Contains(name))
+                    continue;
 
-            ReferenceExtractor.AddReference(references, seen, fileId, match, "decorator", context, lineNumber, container);
-            EmitDecoratorArgumentReferences(
-                preparedLine,
-                match,
-                references,
-                seen,
-                fileId,
-                context,
-                lineNumber,
-                container,
-                isIgnoredName);
+                ReferenceExtractor.AddReference(references, seen, fileId, match, "decorator", context, lineNumber, container);
+                EmitDecoratorArgumentReferences(
+                    preparedLine,
+                    match,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    isIgnoredName);
+            }
         }
 
         foreach (Match match in DecoratorRegex.Matches(preparedLine))
