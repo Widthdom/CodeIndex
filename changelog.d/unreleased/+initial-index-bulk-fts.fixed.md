@@ -94,6 +94,7 @@ affected:
 - **C# symbol extraction defers line-start lexing** — C# line-start lex states are now built only when root-code or same-line container checks actually require them, avoiding a full-file lexical pass for files that never reach those paths.
 - **C# symbol extraction defers scope scans** — C# type-body and callable-parameter scope maps are now built only when field-like candidate checks need them, avoiding extra full-file scans for files without those patterns.
 - **C# symbol extraction defers switch-expression scans** — C# switch-expression line maps are now built only when an arrow-bodied property candidate must be checked, avoiding another whole-file scan for C# files that never reach that false-positive guard.
+- **JavaScript/TypeScript symbol extraction defers private-scope scans** — JS/TS private-scope column maps are now built only after class, object-literal, export, or assignment helper guards prove they are needed, avoiding a full lexical scope pass for simpler files.
 
 ## 日本語
 
@@ -159,3 +160,4 @@ affected:
 - **C# symbol extraction の line-start lexing を遅延します** — C# の line-start lex state は root-code 判定や same-line container 判定で実際に必要になった時だけ作るようになり、その経路へ到達しないファイルで全ファイル lexical pass を避けます。
 - **C# symbol extraction の scope scan を遅延します** — C# の type-body と callable-parameter scope map は field-like candidate 判定で必要になった時だけ作るようになり、それらの pattern が出ないファイルで追加の全ファイル scan を避けます。
 - **C# symbol extraction の switch-expression scan を遅延します** — C# の switch-expression line map は arrow-bodied property 候補を確認する必要がある場合だけ作るようになり、その false-positive guard へ到達しない C# ファイルで追加の全ファイル scan を避けます。
+- **JavaScript/TypeScript symbol extraction の private-scope scan を遅延します** — JS/TS の private-scope column map は class、object literal、export、assignment helper の軽い guard で必要性が確定した後だけ作るようになり、単純なファイルで全体 lexical scope pass を避けます。

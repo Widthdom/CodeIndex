@@ -8,8 +8,8 @@ public static partial class SymbolExtractor
         long fileId,
         string[] lines,
         List<SymbolRecord> symbols,
-        JavaScriptScopePrivacyFlags[][] privateScopeColumns)
+        Func<JavaScriptScopePrivacyFlags[][]> getPrivateScopeColumns)
     {
-        ExtractJavaScriptTypeScriptBareMethods(fileId, "javascript", lines, symbols, privateScopeColumns);
+        ExtractJavaScriptTypeScriptBareMethods(fileId, "javascript", lines, symbols, getPrivateScopeColumns);
     }
 }

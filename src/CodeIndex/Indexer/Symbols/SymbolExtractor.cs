@@ -2729,8 +2729,11 @@ public static partial class SymbolExtractor
         var dartInsideClassBody = lang == "dart"
             ? BuildDartClassBodyScope(structuralLines)
             : null;
-        var privateScopeColumns = lang is "javascript" or "typescript"
-            ? BuildJavaScriptTypeScriptPrivateScopeColumns(lines, lang)
+        JavaScriptScopePrivacyFlags[][]? privateScopeColumns = null;
+        JavaScriptScopePrivacyFlags[][] GetPrivateScopeColumns() =>
+            privateScopeColumns ??= BuildJavaScriptTypeScriptPrivateScopeColumns(lines, lang!);
+        Func<JavaScriptScopePrivacyFlags[][]>? getPrivateScopeColumns = lang is "javascript" or "typescript"
+            ? GetPrivateScopeColumns
             : null;
         CSharpTypeBodyScope? csharpInsideTypeBody = null;
         CSharpTypeBodyScope GetCSharpInsideTypeBody() =>
@@ -3277,9 +3280,12 @@ public static partial class SymbolExtractor
                             lineOffset = FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang);
                             continue;
                         }
-                        if (privateScopeColumns != null
+                        var jsTsPrivateScopeColumnsForClassGate = lang is "javascript" or "typescript" && pattern.Kind == "class"
+                            ? getPrivateScopeColumns?.Invoke()
+                            : null;
+                        if (jsTsPrivateScopeColumnsForClassGate != null
                             && pattern.Kind == "class"
-                            && IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, i, absoluteStartColumn, matchLine, includeBlockScope: true))
+                            && IsJavaScriptTypeScriptMatchInPrivateScope(jsTsPrivateScopeColumnsForClassGate, i, absoluteStartColumn, matchLine, includeBlockScope: true))
                         {
                             if (lang is "javascript" or "typescript")
                             {
@@ -3295,10 +3301,10 @@ public static partial class SymbolExtractor
                             break;
                         }
 
-                        if (privateScopeColumns != null
+                        if (jsTsPrivateScopeColumnsForClassGate != null
                             && pattern.Kind == "class"
                             && TryGetGroup(match, pattern.VisibilityGroup) != "export"
-                            && IsJavaScriptTypeScriptMatchInNamespaceScope(privateScopeColumns, i, absoluteStartColumn, matchLine))
+                            && IsJavaScriptTypeScriptMatchInNamespaceScope(jsTsPrivateScopeColumnsForClassGate, i, absoluteStartColumn, matchLine))
                         {
                             if (lang is "javascript" or "typescript")
                             {
@@ -4507,9 +4513,9 @@ public static partial class SymbolExtractor
         }
 
         if (lang == "javascript")
-            ExtractJavaScriptBareMethods(fileId, lines, symbols, privateScopeColumns!);
+            ExtractJavaScriptBareMethods(fileId, lines, symbols, getPrivateScopeColumns!);
         else if (lang == "typescript")
-            ExtractTypeScriptBareMethods(fileId, lines, symbols, privateScopeColumns!);
+            ExtractTypeScriptBareMethods(fileId, lines, symbols, getPrivateScopeColumns!);
         else if (lang == "csharp")
             ExtractCSharpEnumMembers(fileId, lines, structuralLines, csharpMatchLines!, symbols);
         else if (lang == "java")
