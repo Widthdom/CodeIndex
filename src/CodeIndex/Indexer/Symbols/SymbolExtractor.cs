@@ -2759,8 +2759,11 @@ public static partial class SymbolExtractor
         Func<bool[]?>? getCSharpSwitchExpressionLines = lang == "csharp"
             ? GetCSharpSwitchExpressionLines
             : null;
-        var cssQualifiedRuleAncestors = lang == "css"
-            ? FindCssQualifiedRuleAncestors(cssScannerLines!)
+        bool[]? cssQualifiedRuleAncestors = null;
+        bool[] GetCssQualifiedRuleAncestors() =>
+            cssQualifiedRuleAncestors ??= FindCssQualifiedRuleAncestors(cssScannerLines!);
+        Func<bool[]?>? getCssQualifiedRuleAncestors = lang == "css"
+            ? GetCssQualifiedRuleAncestors
             : null;
         var fsharpTypeBodyState = FSharpTypeBodyState.None;
         var symbols = new SymbolExtractionList();
@@ -3106,7 +3109,7 @@ public static partial class SymbolExtractor
                         // ラムダの内部にあるローカル変数宣言が同じ形でマッチしてしまい、
                         // `symbols` / `definition` / `outline` / `inspect` / `unused` に
                         // 擬似シンボルが混入する。Closes #298 の codex レビュー blocker 対応。
-                        if (ShouldSkipCssNestedSelectorCandidate(lang, pattern, patternMatchLine, cssQualifiedRuleAncestors, i))
+                        if (ShouldSkipCssNestedSelectorCandidate(lang, pattern, patternMatchLine, getCssQualifiedRuleAncestors, i))
                             break;
 
                         // JS/TS HOC binding gate: the `styled.` / `styled(` / `styled\`` regex
