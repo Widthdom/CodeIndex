@@ -89,6 +89,7 @@ affected:
 - **Reference extraction allocates call-match sets lazily** — built-in reference extraction now creates per-line call/initializer match sets only when regex matches need duplicate suppression, and skips nested-generic fallback scans on lines without nested generic syntax.
 - **Non-XAML XML reference extraction returns early** — XML files that are not detected as XAML now skip reference lookup preparation entirely instead of building symbol/container lookup state and then ignoring every line.
 - **Symbol extraction defers record component staging** — line-based symbol extraction now allocates the record-primary-component staging list only after a C#/Kotlin declaration actually yields staged components.
+- **Symbol extraction skips trivial container assignment work** — container assignment now returns before sorting or allocating a stack for empty, single-symbol, or container-free symbol lists.
 
 ## 日本語
 
@@ -149,3 +150,4 @@ affected:
 - **reference extraction の call-match set を遅延確保します** — built-in reference extraction は重複抑止が必要な regex match が出た場合だけ行単位の call / initializer match set を作り、nested generic 構文のない行では fallback scan も省きます。
 - **non-XAML XML の reference extraction を早期 return します** — XAML と判定されない XML ファイルでは symbol / container lookup state を作って全行を無視するのではなく、参照 lookup 準備自体を省きます。
 - **symbol extraction の record component staging を遅延します** — line-based symbol extraction は C# / Kotlin 宣言が staging 対象の record primary component を実際に出した後だけ、一時 staging list を確保します。
+- **symbol extraction の自明な container assignment 作業を省きます** — container assignment は空、単一 symbol、または container 候補を持たない symbol list では sort や stack 確保へ進まずに戻ります。

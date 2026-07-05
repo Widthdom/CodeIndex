@@ -8908,6 +8908,22 @@ public static partial class SymbolExtractor
         string[]? rawLines = null,
         CSharpLexState[]? csharpLineStartStates = null)
     {
+        if (symbols.Count == 0)
+            return;
+
+        if (symbols.Count == 1)
+        {
+            AssignTopLevelFamilyKey(symbols[0]);
+            return;
+        }
+
+        if (!ContainsContainerCandidates(symbols))
+        {
+            foreach (var symbol in symbols)
+                AssignTopLevelFamilyKey(symbol);
+            return;
+        }
+
         var ordered = BuildContainerAssignmentOrder(symbols);
 
         var stack = new Stack<SymbolRecord>();
@@ -8976,6 +8992,20 @@ public static partial class SymbolExtractor
             if (CanContainSymbols(symbol))
                 stack.Push(symbol);
         }
+    }
+
+    private static void AssignTopLevelFamilyKey(SymbolRecord symbol)
+        => symbol.FamilyKey ??= BuildSelfFamilyKey(symbol, Array.Empty<SymbolRecord>());
+
+    private static bool ContainsContainerCandidates(IReadOnlyList<SymbolRecord> symbols)
+    {
+        foreach (var symbol in symbols)
+        {
+            if (CanContainSymbols(symbol))
+                return true;
+        }
+
+        return false;
     }
 
     private readonly record struct ContainerAssignmentSortEntry(SymbolRecord Symbol, int OriginalIndex);
