@@ -128,9 +128,8 @@ public static partial class ReferenceExtractor
         // C# の enum はコンストラクタ自体を持てず `CSharpCtorChainRegex` が一致しないので副作用は無い。
         IReadOnlyList<SymbolRecord>? enclosingTypeCandidates = null;
         var enclosingTypeCandidatesResolved = false;
-        var rustEnumCandidates = language == "rust"
-            ? BuildRustEnumCandidates(symbols)
-            : null;
+        IReadOnlyList<SymbolRecord>? rustEnumCandidates = null;
+        var rustEnumCandidatesResolved = false;
         var pythonSymbolLookups = language == "python"
             ? BuildPythonSymbolLookups(symbols)
             : default;
@@ -257,6 +256,19 @@ public static partial class ReferenceExtractor
             }
 
             return enclosingTypeCandidates!;
+        }
+
+        IReadOnlyList<SymbolRecord>? GetRustEnumCandidates()
+        {
+            if (!rustEnumCandidatesResolved)
+            {
+                rustEnumCandidates = language == "rust"
+                    ? BuildRustEnumCandidates(symbols)
+                    : null;
+                rustEnumCandidatesResolved = true;
+            }
+
+            return rustEnumCandidates;
         }
 
         List<(int StartLine, int StartColumn, int EndLine, int EndColumn, SymbolRecord Container)> GetRecordPrimaryCtorRanges()
@@ -1721,8 +1733,9 @@ public static partial class ReferenceExtractor
             }
             else if (language == "rust")
             {
-                var rustEnumContainer = rustEnumCandidates != null
-                    ? FindInnermostContainer(rustEnumCandidates, lineNumber)
+                var rustEnumCandidatesForLine = GetRustEnumCandidates();
+                var rustEnumContainer = rustEnumCandidatesForLine != null
+                    ? FindInnermostContainer(rustEnumCandidatesForLine, lineNumber)
                     : null;
                 var rustTypePositionLine = RustReferenceExtractor.MaskAttributeBodies(preparedLine);
                 RustReferenceExtractor.EmitTypePositionReferences(
