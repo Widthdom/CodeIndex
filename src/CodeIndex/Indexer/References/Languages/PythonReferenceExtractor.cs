@@ -581,22 +581,25 @@ internal static class PythonReferenceExtractor
         if (preparedLine.IndexOf("cast", StringComparison.Ordinal) < 0)
             return;
 
-        foreach (Match match in QualifiedCastTypeRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("typing", StringComparison.Ordinal) >= 0)
         {
-            var name = match.Groups["name"].Value;
-            if (isIgnoredName(name))
-                continue;
+            foreach (Match match in QualifiedCastTypeRegex.Matches(preparedLine))
+            {
+                var name = match.Groups["name"].Value;
+                if (isIgnoredName(name))
+                    continue;
 
-            ReferenceExtractor.AddTypeReferenceSegments(
-                references,
-                seen,
-                fileId,
-                name,
-                match.Groups["name"].Index,
-                context,
-                lineNumber,
-                container,
-                "python");
+                ReferenceExtractor.AddTypeReferenceSegments(
+                    references,
+                    seen,
+                    fileId,
+                    name,
+                    match.Groups["name"].Index,
+                    context,
+                    lineNumber,
+                    container,
+                    "python");
+            }
         }
 
         foreach (Match match in CastTypeRegex.Matches(preparedLine))
