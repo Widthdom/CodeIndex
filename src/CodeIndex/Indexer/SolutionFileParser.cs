@@ -24,6 +24,9 @@ internal static class SolutionFileParser
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
+            if (line.IndexOf("Project(", StringComparison.Ordinal) < 0)
+                continue;
+
             var match = ProjectLineRegex.Match(line);
             if (!match.Success)
                 continue;

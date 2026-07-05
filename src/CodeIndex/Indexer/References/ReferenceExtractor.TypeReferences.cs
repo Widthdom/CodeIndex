@@ -4660,8 +4660,9 @@ public static partial class ReferenceExtractor
 
     private static bool IsInsideCSharpAttributeRange(IReadOnlyList<(int start, int end)> ranges, int index)
     {
-        foreach (var (start, end) in ranges)
+        for (var i = 0; i < ranges.Count; i++)
         {
+            var (start, end) = ranges[i];
             if (index >= start && index < end)
                 return true;
         }

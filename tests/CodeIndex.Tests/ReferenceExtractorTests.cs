@@ -10427,6 +10427,10 @@ public partial class ReferenceExtractorTests
             setGeneric("exprs", function(object) standardGeneric("exprs"))
             setMethod("exprs", signature(object = "ExpressionSet"), function(object) object@assayData)
             methods::setMethod("show", signature("ExpressionSet"), function(object) show(object))
+            methods::setGroupGeneric(name = "transformGroup")
+            methods::setRefClass(Class = "PersonRef")
+            setClassUnion("MaybePerson", members = c("Person", "NULL"))
+            methods::setOldClass("legacyFrame")
             """;
 
         var symbols = SymbolExtractor.Extract(1, "r", content);
@@ -10446,6 +10450,18 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, reference =>
             reference.SymbolName == "show.ExpressionSet"
             && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "transformGroup"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "PersonRef"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "MaybePerson"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "legacyFrame"
+            && reference.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName is "function" or "exprs.function" or "show.function"
             && reference.ReferenceKind is "type_reference" or "reference");

@@ -83,13 +83,12 @@ public static partial class ReferenceExtractor
                     ? aliasScanLines[i]
                     : lines[i];
                 if (scanLine.IndexOf("using", StringComparison.Ordinal) < 0
-                    || scanLine.IndexOf('=') < 0
-                    || !CSharpUsingAliasRegex.IsMatch(scanLine))
+                    || scanLine.IndexOf('=') < 0)
                 {
                     continue;
                 }
 
-                var match = CSharpUsingAliasRegex.Match(lines[i]);
+                var match = CSharpUsingAliasRegex.Match(scanLine);
                 if (!match.Success)
                     continue;
 
@@ -271,9 +270,7 @@ public static partial class ReferenceExtractor
             if (symbol.Kind != "function" || string.IsNullOrWhiteSpace(symbol.Name))
                 continue;
 
-            var name = language == "csharp"
-                ? NormalizeCSharpIdentifier(symbol.Name)
-                : symbol.Name;
+            var name = NormalizeCSharpIdentifier(symbol.Name);
             if (!string.IsNullOrWhiteSpace(name))
                 (names ??= new HashSet<string>(StringComparer.Ordinal)).Add(name);
         }
@@ -293,6 +290,14 @@ public static partial class ReferenceExtractor
             return string.Empty;
 
         var trimmed = targetQualifiedName.Trim();
+        if (trimmed.IndexOf('<') < 0
+            && trimmed.IndexOf('>') < 0
+            && !trimmed.EndsWith("?", StringComparison.Ordinal)
+            && !trimmed.EndsWith("[]", StringComparison.Ordinal))
+        {
+            return trimmed;
+        }
+
         var builder = new System.Text.StringBuilder(trimmed.Length);
         var genericDepth = 0;
         for (var i = 0; i < trimmed.Length; i++)
@@ -715,7 +720,7 @@ public static partial class ReferenceExtractor
 
     private static bool IsCSharpQualifiedConstantPatternReferenceSite(
         string preparedLine,
-        (List<(int Start, int End)> Segments, int NextIndex, bool LastSeparatorWasDot, bool HasLeadingGlobalQualifier) parsed)
+        (IReadOnlyList<(int Start, int End)> Segments, int NextIndex, bool LastSeparatorWasDot, bool HasLeadingGlobalQualifier) parsed)
     {
         if (!parsed.LastSeparatorWasDot || parsed.Segments.Count < 2)
             return false;
@@ -961,9 +966,9 @@ public static partial class ReferenceExtractor
     private static bool TryReadCSharpQualifiedAccess(
         string preparedLine,
         int start,
-        out (List<(int Start, int End)> Segments, int NextIndex, bool LastSeparatorWasDot, bool HasLeadingGlobalQualifier) parsed)
+        out (IReadOnlyList<(int Start, int End)> Segments, int NextIndex, bool LastSeparatorWasDot, bool HasLeadingGlobalQualifier) parsed)
     {
-        parsed = (new List<(int Start, int End)>(), start, false, false);
+        parsed = (Array.Empty<(int Start, int End)>(), start, false, false);
 
         if (start > 0 && IsCSharpIdentifierPart(preparedLine[start - 1]))
             return false;
@@ -1342,7 +1347,7 @@ public static partial class ReferenceExtractor
 
     private static string ResolveCSharpQualifiedConstantPatternQualifier(
         string typeExpression,
-        (List<(int Start, int End)> Segments, int NextIndex, bool LastSeparatorWasDot, bool HasLeadingGlobalQualifier) parsed,
+        (IReadOnlyList<(int Start, int End)> Segments, int NextIndex, bool LastSeparatorWasDot, bool HasLeadingGlobalQualifier) parsed,
         int lineNumber,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
     {

@@ -19,15 +19,16 @@ public partial class FileIndexer
         cancellationToken.ThrowIfCancellationRequested();
         var files = new List<string>();
         var fileLanguages = new Dictionary<string, string>(StringComparer.Ordinal);
+        var languageCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         var errors = new List<ScanError>(_submoduleLoadWarnings.Count);
         var nonIndexablePaths = new HashSet<string>(StringComparer.Ordinal);
         var unknownExtensionFiles = new HashSet<string>(StringComparer.Ordinal);
         var probeFailedFilePaths = new HashSet<string>(StringComparer.Ordinal);
         var listedDirectories = new HashSet<string>(StringComparer.Ordinal);
         var fullyScannedDirectories = new HashSet<string>(StringComparer.Ordinal);
-        var activeCheckpointedDirectories = checkpointedDirectories is { Count: > 0 }
+        IReadOnlySet<string> activeCheckpointedDirectories = checkpointedDirectories is { Count: > 0 }
             ? new HashSet<string>(checkpointedDirectories, StringComparer.Ordinal)
-            : new HashSet<string>(StringComparer.Ordinal);
+            : EmptyCheckpointedDirectorySet;
         var attributePrunedDirectories = new HashSet<string>(StringComparer.Ordinal);
         var nestedRepositories = new HashSet<string>(StringComparer.Ordinal);
         var danglingSymlinks = new HashSet<string>(StringComparer.Ordinal);
@@ -36,6 +37,7 @@ public partial class FileIndexer
         var scanState = new DirectoryScanState(
             files,
             fileLanguages,
+            languageCounts,
             errors,
             nonIndexablePaths,
             unknownExtensionFiles,
@@ -65,28 +67,49 @@ public partial class FileIndexer
             MaterializePathSet(scanState.ListedDirectories),
             MaterializePathSet(scanState.FullyScannedDirectories),
             MaterializeCheckpointedDirectorySet(scanState.CheckpointedDirectories, scanState.FullyScannedDirectories),
-            new List<string>(_ancestorIgnoreDirectories),
+            MaterializeAncestorIgnoreDirectories(),
             MaterializePathSet(scanState.AttributePrunedDirectories),
             MaterializeSortedPathSet(scanState.NestedRepositories),
-            MaterializeSortedPathSet(scanState.DanglingSymlinks));
+            MaterializeSortedPathSet(scanState.DanglingSymlinks))
+        {
+            LanguageCounts = MaterializeLanguageCounts(scanState.LanguageCounts),
+        };
     }
 
-    private static List<string> MaterializePathSet(HashSet<string> paths) => paths.Count == 0 ? [] : new List<string>(paths);
+    private static IReadOnlyList<string> MaterializePathSet(HashSet<string> paths)
+        => paths.Count == 0 ? Array.Empty<string>() : new List<string>(paths);
 
-    private static List<string> MaterializeSortedPathSet(HashSet<string> paths)
+    private IReadOnlyList<string> MaterializeAncestorIgnoreDirectories()
+        => _ancestorIgnoreDirectories.Count == 0
+            ? Array.Empty<string>()
+            : new List<string>(_ancestorIgnoreDirectories);
+
+    private static IReadOnlyDictionary<string, int> MaterializeLanguageCounts(Dictionary<string, int> counts)
+        => counts.Count == 0
+            ? EmptyLanguageCounts
+            : new Dictionary<string, int>(counts, StringComparer.Ordinal);
+
+    private static IReadOnlyList<string> MaterializeSortedPathSet(HashSet<string> paths)
     {
         if (paths.Count == 0)
-            return [];
+            return Array.Empty<string>();
 
         var sorted = new List<string>(paths);
         sorted.Sort(StringComparer.Ordinal);
         return sorted;
     }
 
-    private static HashSet<string> MaterializeCheckpointedDirectorySet(
-        HashSet<string> checkpointedDirectories,
+    private static IReadOnlySet<string> MaterializeCheckpointedDirectorySet(
+        IReadOnlySet<string> checkpointedDirectories,
         HashSet<string> fullyScannedDirectories)
     {
+        if (checkpointedDirectories.Count == 0)
+        {
+            return fullyScannedDirectories.Count == 0
+                ? EmptyCheckpointedDirectorySet
+                : new HashSet<string>(fullyScannedDirectories, StringComparer.Ordinal);
+        }
+
         var result = new HashSet<string>(
             checkpointedDirectories.Count + fullyScannedDirectories.Count,
             StringComparer.Ordinal);

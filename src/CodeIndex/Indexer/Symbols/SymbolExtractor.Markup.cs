@@ -32,7 +32,9 @@ public static partial class SymbolExtractor
         // を失うため不可能。マスク済みテキストを文字単位の state machine で走査し、タグ
         // ごとに属性を列挙していく。
         var rawText = string.Join('\n', lines);
-        var maskedText = MaskHtmlRawTextRegions(rawText);
+        var maskedText = MayNeedHtmlRawTextMask(rawText)
+            ? MaskHtmlRawTextRegions(rawText)
+            : rawText;
 
         // Build per-line absolute offsets only once a symbol needs O(log n)
         // offset-to-line lookup. Plain markup with no emitted symbols can skip it.
@@ -74,7 +76,6 @@ public static partial class SymbolExtractor
                 tagNameEnd++;
 
             var tagName = maskedText[tagNameStart..tagNameEnd];
-            var tagNameLower = tagName.ToLowerInvariant();
             var sawNamedSlotDeclaration = false;
 
             // Emit custom Web Components (hyphenated opening tag) at the `<` position,
@@ -87,7 +88,7 @@ public static partial class SymbolExtractor
             // ただしハイフン付きでも仕様で予約されている `<font-face>` / `<color-profile>`
             // / `<annotation-xml>` などの標準タグは除外する。SVG / MathML を埋め込んだ
             // ファイルで `symbols` / `definition` / `outline` が汚染されるのを防ぐ。
-            if (tagName.Contains('-') && !HtmlReservedHyphenatedTags.Contains(tagNameLower))
+            if (tagName.Contains('-') && !HtmlReservedHyphenatedTags.Contains(tagName))
             {
                 var startLine = FindHtmlLineNumber(lineStarts ??= BuildLineStarts(lines), pos);
                 var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
@@ -132,7 +133,6 @@ public static partial class SymbolExtractor
                 while (cursor < maskedText.Length && IsHtmlAttrNameChar(maskedText[cursor]))
                     cursor++;
                 var attrName = maskedText[attrNameStart..cursor];
-                var attrNameLower = attrName.ToLowerInvariant();
 
                 // Skip whitespace between name and `=`.
                 while (cursor < maskedText.Length && char.IsWhiteSpace(maskedText[cursor]))
@@ -189,7 +189,7 @@ public static partial class SymbolExtractor
                     }
                 }
 
-                if (IsHtmlSemanticStateAttributeName(attrNameLower))
+                if (IsHtmlSemanticStateAttributeName(attrName))
                 {
                     var attrStartLine = FindHtmlLineNumber(lineStarts ??= BuildLineStarts(lines), attrNameStart);
                     var attrSignatureIndex = Math.Clamp(attrStartLine - 1, 0, lines.Length - 1);
@@ -197,7 +197,7 @@ public static partial class SymbolExtractor
                     {
                         FileId = fileId,
                         Kind = "property",
-                        Name = attrNameLower,
+                        Name = NormalizeHtmlAttributeName(attrName),
                         Line = attrStartLine,
                         StartLine = attrStartLine,
                         EndLine = attrStartLine,
@@ -211,42 +211,42 @@ public static partial class SymbolExtractor
                 string? emitKind = null;
                 string? singleEmittedName = null;
                 IEnumerable<string>? emittedNames = null;
-                if (attrNameLower == "src" && IsHtmlSrcResourceTag(tagNameLower))
+                if (IsHtmlAttributeName(attrName, "src") && IsHtmlSrcResourceTag(tagName))
                 {
                     emitKind = "import";
                     singleEmittedName = attrValue.Trim();
                 }
-                else if (attrNameLower == "srcset" && IsHtmlSrcsetResourceTag(tagNameLower))
+                else if (IsHtmlAttributeName(attrName, "srcset") && IsHtmlSrcsetResourceTag(tagName))
                 {
                     emitKind = "import";
                     emittedNames = EnumerateHtmlSrcsetUrls(attrValue);
                 }
-                else if ((attrNameLower == "href" || attrNameLower == "xlink:href") && IsHtmlHrefResourceTag(tagNameLower))
+                else if ((IsHtmlAttributeName(attrName, "href") || IsHtmlAttributeName(attrName, "xlink:href")) && IsHtmlHrefResourceTag(tagName))
                 {
                     emitKind = "import";
                     singleEmittedName = attrValue.Trim();
                 }
-                else if (attrNameLower == "data" && tagNameLower == "object")
+                else if (IsHtmlAttributeName(attrName, "data") && IsHtmlTagName(tagName, "object"))
                 {
                     emitKind = "import";
                     singleEmittedName = attrValue.Trim();
                 }
-                else if (attrNameLower == "poster" && tagNameLower == "video")
+                else if (IsHtmlAttributeName(attrName, "poster") && IsHtmlTagName(tagName, "video"))
                 {
                     emitKind = "import";
                     singleEmittedName = attrValue.Trim();
                 }
-                else if (attrNameLower == "id" && !attrName.Contains(':') && !attrName.Contains('-') && !attrName.Contains('.'))
+                else if (IsHtmlAttributeName(attrName, "id") && !attrName.Contains(':') && !attrName.Contains('-') && !attrName.Contains('.'))
                 {
                     emitKind = "property";
                     singleEmittedName = attrValue.Trim();
                 }
-                else if (attrNameLower is "class" or "classname")
+                else if (IsHtmlAttributeName(attrName, "class") || IsHtmlAttributeName(attrName, "classname"))
                 {
                     emitKind = "reference";
                     emittedNames = EnumerateHtmlClassNames(attrValue);
                 }
-                else if (attrNameLower == "name" && tagNameLower == "slot")
+                else if (IsHtmlAttributeName(attrName, "name") && IsHtmlTagName(tagName, "slot"))
                 {
                     var slotName = attrValue.Trim();
                     if (slotName.Length > 0)
@@ -256,7 +256,7 @@ public static partial class SymbolExtractor
                         sawNamedSlotDeclaration = true;
                     }
                 }
-                else if (attrNameLower == "slot")
+                else if (IsHtmlAttributeName(attrName, "slot"))
                 {
                     var slotName = attrValue.Trim();
                     if (slotName.Length > 0)
@@ -305,7 +305,7 @@ public static partial class SymbolExtractor
                     AddEmittedName(emittedName);
             }
 
-            if (tagNameLower == "slot" && !sawNamedSlotDeclaration)
+            if (IsHtmlTagName(tagName, "slot") && !sawNamedSlotDeclaration)
             {
                 var startLine = FindHtmlLineNumber(lineStarts ??= BuildLineStarts(lines), pos);
                 var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
@@ -353,12 +353,27 @@ public static partial class SymbolExtractor
         }
     }
 
-    private static bool IsHtmlSemanticStateAttributeName(string attrNameLower)
+    private static bool IsHtmlSemanticStateAttributeName(string attrName)
     {
-        return (attrNameLower.StartsWith("data-", StringComparison.Ordinal) ||
-                attrNameLower.StartsWith("aria-", StringComparison.Ordinal)) &&
-               attrNameLower.Length > 5;
+        return (attrName.StartsWith("data-", StringComparison.OrdinalIgnoreCase) ||
+                attrName.StartsWith("aria-", StringComparison.OrdinalIgnoreCase)) &&
+               attrName.Length > 5;
     }
+
+    private static string NormalizeHtmlAttributeName(string attrName)
+    {
+        for (var index = 0; index < attrName.Length; index++)
+        {
+            var ch = attrName[index];
+            if (ch >= 'A' && ch <= 'Z')
+                return attrName.ToLowerInvariant();
+        }
+
+        return attrName;
+    }
+
+    private static bool IsHtmlAttributeName(string attrName, string expected) =>
+        attrName.Equals(expected, StringComparison.OrdinalIgnoreCase);
 
     private static List<SymbolRecord> ExtractMarkdownSymbols(long fileId, string[] lines)
     {
@@ -752,6 +767,9 @@ public static partial class SymbolExtractor
         {
             var line = lines[i];
             var hasAttributeAssignment = line.IndexOf('=') >= 0;
+            string? signature = null;
+            string Signature() => signature ??= line.Trim();
+
             if (hasAttributeAssignment && line.Contains("x:Class", StringComparison.Ordinal))
             {
                 foreach (Match classMatch in XamlClassRegex.Matches(line))
@@ -767,7 +785,7 @@ public static partial class SymbolExtractor
                         Line = i + 1,
                         StartLine = i + 1,
                         EndLine = i + 1,
-                        Signature = line.Trim(),
+                        Signature = Signature(),
                     });
                 }
             }
@@ -787,7 +805,7 @@ public static partial class SymbolExtractor
                         Line = i + 1,
                         StartLine = i + 1,
                         EndLine = i + 1,
-                        Signature = line.Trim(),
+                        Signature = Signature(),
                     });
                 }
             }
@@ -806,7 +824,7 @@ public static partial class SymbolExtractor
                             Line = i + 1,
                             StartLine = i + 1,
                             EndLine = i + 1,
-                            Signature = line.Trim(),
+                            Signature = Signature(),
                         });
                     }
                 }
@@ -827,7 +845,7 @@ public static partial class SymbolExtractor
                         Line = i + 1,
                         StartLine = i + 1,
                         EndLine = i + 1,
-                        Signature = line.Trim(),
+                        Signature = Signature(),
                     });
                 }
             }
@@ -847,7 +865,7 @@ public static partial class SymbolExtractor
                         Line = i + 1,
                         StartLine = i + 1,
                         EndLine = i + 1,
-                        Signature = line.Trim(),
+                        Signature = Signature(),
                     });
                 }
             }
@@ -867,7 +885,7 @@ public static partial class SymbolExtractor
                         Line = i + 1,
                         StartLine = i + 1,
                         EndLine = i + 1,
-                        Signature = line.Trim(),
+                        Signature = Signature(),
                     });
                 }
             }
@@ -887,7 +905,7 @@ public static partial class SymbolExtractor
                         Line = i + 1,
                         StartLine = i + 1,
                         EndLine = i + 1,
-                        Signature = line.Trim(),
+                        Signature = Signature(),
                     });
                 }
             }
@@ -987,7 +1005,7 @@ public static partial class SymbolExtractor
             var line = lines[i];
             if (line.IndexOf('=') >= 0
                 || line.Contains("x:", StringComparison.Ordinal)
-                || line.Contains("{", StringComparison.Ordinal)
+                || line.IndexOf('{') >= 0
                 || line.Contains(".TypeName", StringComparison.Ordinal)
                 || line.Contains("Binding", StringComparison.Ordinal)
                 || line.Contains("Resource", StringComparison.Ordinal))
@@ -2536,10 +2554,7 @@ public static partial class SymbolExtractor
     private static readonly Regex MarkdownReferenceDefinitionRegex = new(@"^\s{0,3}\[(?<label>[^\]]+)\]:\s*(?<target>.+?)\s*$", RegexOptions.Compiled);
     private static readonly Regex MarkdownReferenceLinkRegex = new(@"(?<!\!)\[[^\]]+\]\[(?<label>[^\]]*)\]", RegexOptions.Compiled);
 
-    private static readonly HashSet<string> HtmlRawTextElementNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "script", "style", "textarea", "title",
-    };
+    private static readonly string[] HtmlRawTextElementNames = ["script", "style", "textarea", "title"];
 
     // Native HTML/SVG/MathML tag names that happen to contain a hyphen but are
     // reserved by the spec, so they must NOT be treated as custom-element class
@@ -2559,14 +2574,29 @@ public static partial class SymbolExtractor
         "missing-glyph",
     };
 
-    private static bool IsHtmlSrcResourceTag(string tagNameLower) =>
-        tagNameLower is "audio" or "embed" or "iframe" or "img" or "input" or "script" or "source" or "track" or "video";
+    private static bool IsHtmlTagName(string tagName, string expected) =>
+        tagName.Equals(expected, StringComparison.OrdinalIgnoreCase);
 
-    private static bool IsHtmlHrefResourceTag(string tagNameLower) =>
-        tagNameLower is "a" or "area" or "image" or "link" or "use";
+    private static bool IsHtmlSrcResourceTag(string tagName) =>
+        IsHtmlTagName(tagName, "audio")
+        || IsHtmlTagName(tagName, "embed")
+        || IsHtmlTagName(tagName, "iframe")
+        || IsHtmlTagName(tagName, "img")
+        || IsHtmlTagName(tagName, "input")
+        || IsHtmlTagName(tagName, "script")
+        || IsHtmlTagName(tagName, "source")
+        || IsHtmlTagName(tagName, "track")
+        || IsHtmlTagName(tagName, "video");
 
-    private static bool IsHtmlSrcsetResourceTag(string tagNameLower) =>
-        tagNameLower is "img" or "source";
+    private static bool IsHtmlHrefResourceTag(string tagName) =>
+        IsHtmlTagName(tagName, "a")
+        || IsHtmlTagName(tagName, "area")
+        || IsHtmlTagName(tagName, "image")
+        || IsHtmlTagName(tagName, "link")
+        || IsHtmlTagName(tagName, "use");
+
+    private static bool IsHtmlSrcsetResourceTag(string tagName) =>
+        IsHtmlTagName(tagName, "img") || IsHtmlTagName(tagName, "source");
 
     private static IEnumerable<string> EnumerateHtmlSrcsetUrls(string value)
     {
@@ -2807,7 +2837,7 @@ public static partial class SymbolExtractor
             var match = true;
             for (var j = 0; j < name.Length; j++)
             {
-                if (char.ToLowerInvariant(text[nameStart + j]) != name[j])
+                if (!EqualsHtmlAsciiIgnoreCase(text[nameStart + j], name[j]))
                 {
                     match = false;
                     break;
@@ -2821,6 +2851,14 @@ public static partial class SymbolExtractor
         }
         return null;
     }
+
+    private static bool MayNeedHtmlRawTextMask(string text)
+        => text.IndexOf("<!", StringComparison.Ordinal) >= 0
+           || text.IndexOf("<?", StringComparison.Ordinal) >= 0
+           || text.IndexOf("<script", StringComparison.OrdinalIgnoreCase) >= 0
+           || text.IndexOf("<style", StringComparison.OrdinalIgnoreCase) >= 0
+           || text.IndexOf("<textarea", StringComparison.OrdinalIgnoreCase) >= 0
+           || text.IndexOf("<title", StringComparison.OrdinalIgnoreCase) >= 0;
 
     private static int FindHtmlTagOpenerEnd(string text, int start)
     {
@@ -2988,7 +3026,7 @@ public static partial class SymbolExtractor
                 var match = true;
                 for (var j = 0; j < tagName.Length; j++)
                 {
-                    if (char.ToLowerInvariant(text[i + 2 + j]) != tagName[j])
+                    if (!EqualsHtmlAsciiIgnoreCase(text[i + 2 + j], tagName[j]))
                     {
                         match = false;
                         break;
@@ -3007,6 +3045,14 @@ public static partial class SymbolExtractor
             i++;
         }
         return -1;
+    }
+
+    private static bool EqualsHtmlAsciiIgnoreCase(char actual, char expectedLower)
+    {
+        if (actual >= 'A' && actual <= 'Z')
+            actual = (char)(actual + ('a' - 'A'));
+
+        return actual == expectedLower;
     }
 
     private static void BlankPreservingNewlines(char[] chars, int start, int end)

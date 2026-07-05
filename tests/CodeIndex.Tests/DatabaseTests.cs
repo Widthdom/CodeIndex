@@ -407,6 +407,235 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void RebuildFtsFromChunks_AfterBulkLoadSuspension_PopulatesFtsAndRestoresTriggers()
+    {
+        var bulkFileId = UpsertTestFile("src/bulk-fts.cs", checksum: "bulk-fts");
+
+        _writer.SuspendFtsSyncTriggersForBulkLoad();
+        Assert.Equal(0L, CountFtsSyncTriggers());
+
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = bulkFileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 1,
+                Content = "bulkuniquetoken",
+            },
+        ]);
+
+        Assert.Equal(0L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'bulkuniquetoken'"));
+
+        _writer.RestoreFtsSyncTriggers();
+        _writer.RebuildFtsFromChunks();
+
+        Assert.Equal(3L, CountFtsSyncTriggers());
+        Assert.Equal(1L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'bulkuniquetoken'"));
+
+        var incrementalFileId = UpsertTestFile("src/incremental-fts.cs", checksum: "incremental-fts");
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = incrementalFileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 1,
+                Content = "incrementaluniquetoken",
+            },
+        ]);
+
+        Assert.Equal(1L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'incrementaluniquetoken'"));
+    }
+
+    [Fact]
+    public void RebuildFtsFromChunks_CanLeaveIncrementalCounterForImmediateOptimize()
+    {
+        _writer.SetMeta(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey, "7");
+
+        _writer.RebuildFtsFromChunks(resetIncrementalWriteCounter: false);
+
+        Assert.Equal(7, _writer.GetFtsIncrementalWritesSinceOptimize());
+
+        _writer.RebuildFtsFromChunks();
+
+        Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceOptimize());
+    }
+
+    [Fact]
+    public void SuspendFtsSyncTriggersForBulkLoad_RollsBackWithTransaction()
+    {
+        Assert.Equal(3L, CountFtsSyncTriggers());
+
+        using (var txn = _writer.BeginTransaction())
+        {
+            _writer.SuspendFtsSyncTriggersForBulkLoad();
+
+            Assert.Equal(0L, CountFtsSyncTriggers());
+        }
+
+        Assert.Equal(3L, CountFtsSyncTriggers());
+    }
+
+    [Fact]
+    public void FtsBulkLoadTriggerGuard_DisposeAfterMutation_RebuildsFtsAndRestoresTriggers()
+    {
+        var fileId = UpsertTestFile("src/abandoned-bulk-fts.cs", checksum: "abandoned-bulk-fts");
+        var ftsMutated = false;
+
+        using (var guard = FtsBulkLoadTriggerGuard.Start(_writer, enabled: true, () => ftsMutated))
+        {
+            Assert.NotNull(guard);
+            Assert.Equal(0L, CountFtsSyncTriggers());
+
+            _writer.InsertChunks(
+            [
+                new ChunkRecord
+                {
+                    FileId = fileId,
+                    ChunkIndex = 0,
+                    StartLine = 1,
+                    EndLine = 1,
+                    Content = "abandonedbulktoken",
+                },
+            ]);
+            ftsMutated = true;
+        }
+
+        Assert.Equal(3L, CountFtsSyncTriggers());
+        Assert.Equal(1L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'abandonedbulktoken'"));
+    }
+
+    [Fact]
+    public void FtsBulkLoadTriggerGuard_CompleteFailureKeepsDisposeRecovery()
+    {
+        var fileId = UpsertTestFile("src/failed-complete-bulk-fts.cs", checksum: "failed-complete-bulk-fts");
+        var ftsMutated = false;
+
+        using (var guard = FtsBulkLoadTriggerGuard.Start(_writer, enabled: true, () => ftsMutated))
+        {
+            Assert.NotNull(guard);
+            _writer.InsertChunks(
+            [
+                new ChunkRecord
+                {
+                    FileId = fileId,
+                    ChunkIndex = 0,
+                    StartLine = 1,
+                    EndLine = 1,
+                    Content = "failedcompletebulktoken",
+                },
+            ]);
+            ftsMutated = true;
+
+            Assert.Throws<InvalidOperationException>(() => guard!.Complete(
+                rebuild: true,
+                beforeOptimize: () => throw new InvalidOperationException("simulated optimize precheck failure")));
+        }
+
+        Assert.Equal(3L, CountFtsSyncTriggers());
+        Assert.Null(ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+        Assert.Equal(1L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'failedcompletebulktoken'"));
+    }
+
+    [Fact]
+    public void RecoverInterruptedFtsBulkLoadIfNeeded_RebuildsCommittedRowsAndClearsMarker()
+    {
+        var fileId = UpsertTestFile("src/recovered-bulk-fts.cs", checksum: "recovered-bulk-fts");
+
+        _writer.SuspendFtsSyncTriggersForBulkLoad();
+        Assert.NotNull(ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+        Assert.Equal(0L, CountFtsSyncTriggers());
+
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 1,
+                Content = "recoveredbulktoken",
+            },
+        ]);
+
+        Assert.Equal(0L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'recoveredbulktoken'"));
+
+        _writer.SetMeta(DbWriter.FtsBulkLoadInProgressMetaKey, "true");
+        Assert.True(_writer.RecoverInterruptedFtsBulkLoadIfNeeded());
+
+        Assert.Equal(3L, CountFtsSyncTriggers());
+        Assert.Null(ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+        Assert.Equal(1L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'recoveredbulktoken'"));
+        Assert.False(_writer.RecoverInterruptedFtsBulkLoadIfNeeded());
+    }
+
+    [Fact]
+    public void RecoverInterruptedFtsBulkLoadIfNeeded_SkipsActiveOwner()
+    {
+        var fileId = UpsertTestFile("src/active-bulk-fts.cs", checksum: "active-bulk-fts");
+
+        _writer.SuspendFtsSyncTriggersForBulkLoad();
+        var marker = ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey);
+        Assert.NotNull(marker);
+        Assert.Equal(0L, CountFtsSyncTriggers());
+
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 1,
+                Content = "activebulktoken",
+            },
+        ]);
+
+        Assert.False(_writer.RecoverInterruptedFtsBulkLoadIfNeeded());
+
+        Assert.Equal(marker, ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+        Assert.Equal(0L, CountFtsSyncTriggers());
+        Assert.Equal(0L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'activebulktoken'"));
+
+        _writer.RestoreFtsSyncTriggers();
+        _writer.RebuildFtsFromChunks();
+        _writer.ClearFtsBulkLoadInProgress();
+    }
+
+    [Fact]
+    public void DbReader_RecoversInterruptedFtsBulkLoadBeforeServingSearch()
+    {
+        var fileId = UpsertTestFile("src/reader-recovered-bulk-fts.cs", checksum: "reader-recovered-bulk-fts");
+
+        _writer.SuspendFtsSyncTriggersForBulkLoad();
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 1,
+                Content = "readerrecoveredbulktoken",
+            },
+        ]);
+
+        Assert.Equal(0L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'readerrecoveredbulktoken'"));
+
+        _writer.SetMeta(DbWriter.FtsBulkLoadInProgressMetaKey, "pid:2147483647");
+        using var reader = new DbReader(_db.Connection);
+        var results = reader.Search("readerrecoveredbulktoken");
+
+        Assert.Contains(results, result => result.Path == "src/reader-recovered-bulk-fts.cs");
+        Assert.Equal(3L, CountFtsSyncTriggers());
+        Assert.Null(ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+        Assert.Equal(1L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'readerrecoveredbulktoken'"));
+    }
+
+    [Fact]
     public void InsertReferences_ReportsProgressCheckpoints_Issue3738()
     {
         var fileId = UpsertTestFile("src/progress-reference.cs", checksum: "progress-reference");
@@ -1835,6 +2064,43 @@ public class DatabaseTests : IDisposable
 
         _writer.InsertIssues(fileId, []);
 
+        Assert.Equal(0L, countCmd.ExecuteScalar());
+    }
+
+    [Fact]
+    public void InsertIssuesForNewFile_DoesNotDeleteExistingIssues()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/new-file-issues.py",
+            Lang = "python",
+            Size = 20,
+            Lines = 3,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        _writer.InsertIssues(fileId,
+        [
+            new FileIssue
+            {
+                Path = "src/new-file-issues.py",
+                Kind = "replacement_char",
+                Line = 1,
+                Message = "replacement char",
+                Origin = FileIssue.OriginSourceLiteral,
+                Severity = FileIssue.SeverityInfo,
+            },
+        ]);
+
+        using var countCmd = _db.Connection.CreateCommand();
+        countCmd.CommandText = "SELECT COUNT(*) FROM file_issues WHERE file_id = @file_id";
+        countCmd.Parameters.AddWithValue("@file_id", fileId);
+        Assert.Equal(1L, countCmd.ExecuteScalar());
+
+        _writer.InsertIssuesForNewFile(fileId, []);
+        Assert.Equal(1L, countCmd.ExecuteScalar());
+
+        _writer.InsertIssues(fileId, []);
         Assert.Equal(0L, countCmd.ExecuteScalar());
     }
 
@@ -3470,6 +3736,114 @@ public class DatabaseTests : IDisposable
         Assert.Null(ReadMeta("raw_phase"));
     }
 
+    [Fact]
+    public void SetMetaValues_UpsertsNullValuesInOneBatch()
+    {
+        _writer.SetMetaValues(
+            ("batch_meta_a", "1"),
+            ("batch_meta_b", null));
+
+        Assert.Equal("1", ReadMeta("batch_meta_a"));
+        Assert.Null(ReadMeta("batch_meta_b"));
+        Assert.True(MetaRowExists("batch_meta_b"));
+    }
+
+    [Fact]
+    public void GetMetaStrings_ReturnsRequestedKeysWithNullsForMissingOrDbNull()
+    {
+        _writer.SetMetaValues(
+            ("batch_read_a", "1"),
+            ("batch_read_b", null));
+
+        var values = _db.GetMetaStrings(["batch_read_a", "batch_read_b", "batch_read_missing"]);
+
+        Assert.Equal("1", values["batch_read_a"]);
+        Assert.Null(values["batch_read_b"]);
+        Assert.Null(values["batch_read_missing"]);
+    }
+
+    [Fact]
+    public void SetMetaValues_InsideWriterTransaction_RollsBackWithDependentRows()
+    {
+        using (var transaction = _writer.BeginTransaction())
+        {
+            _writer.SetMetaValues(
+                ("batch_phase", "new"),
+                ("batch_phase_null", null));
+            _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/batch_partial.cs",
+                Lang = "csharp",
+                Size = 12,
+                Lines = 1,
+                Modified = new DateTime(2026, 5, 31, 0, 0, 0, DateTimeKind.Utc),
+                Checksum = "batch_partial",
+            });
+        }
+
+        Assert.Null(ReadMeta("batch_phase"));
+        Assert.False(MetaRowExists("batch_phase_null"));
+        Assert.False(_writer.HasFileAtPath("src/batch_partial.cs"));
+    }
+
+    [Fact]
+    public void ClearLastFailedIndexRunMetadata_NullsOnlyFailureMetadata()
+    {
+        string[] keys =
+        [
+            DbContext.LastFailedIndexRunStatusMetaKey,
+            DbContext.LastFailedIndexRunModeMetaKey,
+            DbContext.LastFailedIndexRunStartedAtMetaKey,
+            DbContext.LastFailedIndexRunDurationMsMetaKey,
+            DbContext.LastFailedIndexRunFilesProcessedMetaKey,
+            DbContext.LastFailedIndexRunFilesTotalMetaKey,
+            DbContext.LastFailedIndexRunErrorCodeMetaKey,
+            DbContext.LastFailedIndexRunReasonMetaKey,
+            DbContext.LastFailedIndexRunProgressPersistedMetaKey,
+            DbContext.LastFailedIndexRunRecoveryHintMetaKey,
+        ];
+        foreach (var key in keys)
+            _writer.SetMeta(key, "stale");
+        _writer.SetMeta("unrelated_meta", "keep");
+
+        _writer.ClearLastFailedIndexRunMetadata();
+
+        foreach (var key in keys)
+        {
+            Assert.Null(ReadMeta(key));
+            Assert.True(MetaRowExists(key), key);
+        }
+        Assert.Equal("keep", ReadMeta("unrelated_meta"));
+    }
+
+    [Fact]
+    public void ClearHotspotFamilyReady_NullsGlobalAndLanguageMetadata()
+    {
+        var languages = FileIndexer.GetHotspotFamilyMarkerLanguages();
+        var keys = new List<string>
+        {
+            DbContext.HotspotFamilyVersionMetaKey,
+            DbContext.HotspotFamilyMarkerFingerprintMetaKey,
+        };
+        foreach (var lang in languages)
+        {
+            keys.Add(DbContext.GetHotspotFamilyVersionMetaKey(lang));
+            keys.Add(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang));
+        }
+        foreach (var key in keys)
+            _writer.SetMeta(key, "ready");
+        _writer.SetMeta("unrelated_meta", "keep");
+
+        _writer.ClearHotspotFamilyReady();
+
+        foreach (var key in keys)
+        {
+            Assert.Null(ReadMeta(key));
+            Assert.True(MetaRowExists(key), key);
+        }
+        Assert.Equal("keep", ReadMeta("unrelated_meta"));
+    }
+
     private void DeleteDbPath() => TestProjectHelper.DeleteDirectory(_dbDir);
 
     private string ExecuteScalarString(string sql)
@@ -3482,12 +3856,23 @@ public class DatabaseTests : IDisposable
     private long ExecuteScalarLong(string sql)
         => ExecuteScalarLong(_db.Connection, sql);
 
+    private long CountFtsSyncTriggers()
+        => ExecuteScalarLong("SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name IN ('fts_chunks_ai', 'fts_chunks_ad', 'fts_chunks_au')");
+
     private string? ReadMeta(string key)
     {
         using var cmd = _db.Connection.CreateCommand();
         cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
         cmd.Parameters.AddWithValue("@key", key);
         return cmd.ExecuteScalar() as string;
+    }
+
+    private bool MetaRowExists(string key)
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM codeindex_meta WHERE key = @key";
+        cmd.Parameters.AddWithValue("@key", key);
+        return cmd.ExecuteScalar() is not null;
     }
 
     private static long ExecuteScalarLong(SqliteConnection connection, string sql)

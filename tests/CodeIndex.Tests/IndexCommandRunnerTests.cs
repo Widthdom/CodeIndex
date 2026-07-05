@@ -2034,6 +2034,62 @@ public sealed class Caller
 
 
     [Fact]
+    public void Run_FreshFullScanWithoutTypeScript_SkipsTypeScriptAugmentationRebuild()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fresh_no_ts_augmentation");
+        var dbPath = CreateTempDbPath("cdidx_fresh_no_ts_augmentation");
+        var rebuiltTypeScriptAugmentation = false;
+        var foldBackfillVerifications = 0;
+        var languagePresenceChecks = 0;
+        var indexedLanguageReads = 0;
+        var statReuseLookups = 0;
+        var reusableLookups = 0;
+        var countReads = 0;
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "tool.py"), "def run():\n    return 1\n");
+
+            IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting = () => rebuiltTypeScriptAugmentation = true;
+            DbWriter.FoldBackfillVerificationForTesting = () => foldBackfillVerifications++;
+            DbWriter.LanguagePresenceCheckForTesting = _ => languagePresenceChecks++;
+            DbWriter.IndexedLanguagesReadForTesting = () => indexedLanguageReads++;
+            DbWriter.ReusableUnchangedFileLookupForTesting = _ => reusableLookups++;
+            DbWriter.CountsReadForTesting = () => countReads++;
+            IndexedFileStatReuse.LookupForTesting = _ => statReuseLookups++;
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.False(rebuiltTypeScriptAugmentation);
+            Assert.Equal(1, foldBackfillVerifications);
+            Assert.Equal(0, languagePresenceChecks);
+            Assert.Equal(0, indexedLanguageReads);
+            Assert.Equal(0, statReuseLookups);
+            Assert.Equal(0, reusableLookups);
+            Assert.Equal(0, countReads);
+            Assert.Equal(2, json.GetProperty("summary").GetProperty("files_total").GetInt64());
+            using var db = new DbContext(dbPath);
+            Assert.Equal(
+                DbContext.TypeScriptAugmentationVersion.ToString(CultureInfo.InvariantCulture),
+                db.GetMetaString(DbContext.TypeScriptAugmentationVersionMetaKey));
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting = null;
+            DbWriter.FoldBackfillVerificationForTesting = null;
+            DbWriter.LanguagePresenceCheckForTesting = null;
+            DbWriter.IndexedLanguagesReadForTesting = null;
+            DbWriter.ReusableUnchangedFileLookupForTesting = null;
+            DbWriter.CountsReadForTesting = null;
+            IndexedFileStatReuse.LookupForTesting = null;
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_NoOpFullScan_DoesNotOptimizeFts()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_noop_fullscan_no_fts_optimize");

@@ -39,6 +39,22 @@ public static partial class IndexCommandRunner
 
     internal readonly record struct FileByteReadSummary(long BytesRead, long SkippedFileCount);
 
+    internal static void StampWriterVersionAndSymbolKindFilter(
+        DbWriter writer,
+        string? writerVersion,
+        string symbolKindFilterSignature)
+    {
+        if (string.IsNullOrWhiteSpace(writerVersion))
+        {
+            writer.SetMeta(SymbolKindFilterMetaKey, symbolKindFilterSignature);
+            return;
+        }
+
+        writer.SetMetaValues(
+            (DbContext.CdidxWriterVersionMetaKey, writerVersion),
+            (SymbolKindFilterMetaKey, symbolKindFilterSignature));
+    }
+
     private sealed record ScanCheckpoint(
         int Version,
         string? GitHead,
@@ -284,27 +300,40 @@ public static partial class IndexCommandRunner
                 // casing-table drift. Issue #97.
                 // fold metadata を事前 snapshot する。version だけでなく fingerprint のズレでも
                 // partial update で FoldReady を restamp しない。
-                var priorFoldVersion = db.GetMetaString("fold_key_version");
-                var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
+                var priorMeta = db.GetMetaStrings(
+                [
+                    "fold_key_version",
+                    "fold_key_fingerprint",
+                    DbContext.CSharpSymbolNameContractVersionMetaKey,
+                    DbContext.GetMetadataTargetVersionMetaKey("csharp"),
+                    DbContext.SqlGraphContractVersionMetaKey,
+                    DbContext.SymbolsOnlyGraphOmittedMetaKey,
+                    DbContext.IndexedProjectRootMetaKey,
+                    SymbolKindFilterMetaKey,
+                    DbContext.IndexedHeadCommitMetaKey,
+                ]);
+                string? PriorMeta(string key) => priorMeta.TryGetValue(key, out var value) ? value : null;
+                var priorFoldVersion = PriorMeta("fold_key_version");
+                var priorFoldFingerprint = PriorMeta("fold_key_fingerprint");
                 var priorSymbolExtractorVersionsMatchCurrent = new DbWriter(db).SymbolExtractorVersionsMatchCurrent();
-                var priorCSharpSymbolNameContractVersion = db.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey);
-                var priorMetadataTargetCsharp = db.GetMetaString(DbContext.GetMetadataTargetVersionMetaKey("csharp"));
-                var priorSqlGraphContractVersion = db.GetMetaString(DbContext.SqlGraphContractVersionMetaKey);
+                var priorCSharpSymbolNameContractVersion = PriorMeta(DbContext.CSharpSymbolNameContractVersionMetaKey);
+                var priorMetadataTargetCsharp = PriorMeta(DbContext.GetMetadataTargetVersionMetaKey("csharp"));
+                var priorSqlGraphContractVersion = PriorMeta(DbContext.SqlGraphContractVersionMetaKey);
                 var priorSymbolsOnlyGraphOmitted = string.Equals(
-                    db.GetMetaString(DbContext.SymbolsOnlyGraphOmittedMetaKey),
+                    PriorMeta(DbContext.SymbolsOnlyGraphOmittedMetaKey),
                     "true",
                     StringComparison.OrdinalIgnoreCase);
                 var priorHotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyVersionMetaKey);
                 var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
-                var priorIndexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
-                var priorSymbolKindFilterSignature = db.GetMetaString(SymbolKindFilterMetaKey);
+                var priorIndexedProjectRoot = PriorMeta(DbContext.IndexedProjectRootMetaKey);
+                var priorSymbolKindFilterSignature = PriorMeta(SymbolKindFilterMetaKey);
                 // Captured BEFORE `--rebuild` drops the DB so an incremental run can warn the user when
                 // the worktree's HEAD has moved since the previously indexed snapshot. The same value
                 // is read at `status` time (without `--check`) to surface a worktree branch / HEAD
                 // switch via `worktree_head_changed`. Issues #1508 and #1512.
                 // `--rebuild` が DB を消す前に取り出す。incremental 経路で HEAD 差分を検知し、`status`
                 // (no `--check`) でも worktree の HEAD 切替検出に利用する。
-                var priorIndexedHeadCommit = db.GetMetaString(DbContext.IndexedHeadCommitMetaKey);
+                var priorIndexedHeadCommit = PriorMeta(DbContext.IndexedHeadCommitMetaKey);
                 var currentHeadCommit = GitHelper.TryGetHeadCommit(options.ProjectPath, indexCancellation.Token);
 
                 // Don't demote readiness yet. A transient usage error in update-mode preflight
@@ -319,6 +348,7 @@ public static partial class IndexCommandRunner
                 AddToGitExclude(options.ProjectPath, dbPath, indexRunDiagnostics, indexCancellation.Token);
 
                 var writer = new DbWriter(db);
+                writer.RecoverInterruptedFtsBulkLoadIfNeeded();
                 var indexer = new FileIndexer(
                     options.ProjectPath,
                     ignoreCase,
@@ -431,9 +461,20 @@ public static partial class IndexCommandRunner
     }
     private static Dictionary<string, string?> GetHotspotFamilyMetaSnapshot(DbContext db, Func<string, string> keyFactory)
     {
+        var languages = FileIndexer.GetHotspotFamilyMarkerLanguages();
         var values = new Dictionary<string, string?>(StringComparer.Ordinal);
-        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
-            values[lang] = db.GetMetaString(keyFactory(lang));
+        var keys = new string[languages.Count];
+        for (var i = 0; i < languages.Count; i++)
+        {
+            var lang = languages[i];
+            keys[i] = keyFactory(lang);
+            values[lang] = null;
+        }
+
+        var metaValues = db.GetMetaStrings(keys);
+        for (var i = 0; i < languages.Count; i++)
+            values[languages[i]] = metaValues.TryGetValue(keys[i], out var value) ? value : null;
+
         return values;
     }
 
@@ -522,20 +563,21 @@ public static partial class IndexCommandRunner
         IndexMemoryTimelineJsonResult? memoryTimeline,
         IReadOnlyList<string>? diagnostics)
     {
-        writer.SetMeta(DbContext.LastIndexRunModeMetaKey, mode);
-        writer.SetMeta(DbContext.LastIndexRunStartedAtMetaKey, startedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
-        writer.SetMeta(DbContext.LastIndexRunDurationMsMetaKey, durationMs.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        writer.SetMeta(DbContext.LastIndexRunFilesScannedMetaKey, filesScanned.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        writer.SetMeta(DbContext.LastIndexRunFilesSkippedMetaKey, filesSkipped.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        writer.SetMeta(DbContext.LastIndexRunParseErrorsMetaKey, parseErrors.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        writer.SetMeta(DbContext.LastIndexRunBytesReadMetaKey, bytesRead.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        writer.SetMeta(DbContext.LastIndexRunBytesReadSkippedFileCountMetaKey, bytesReadSkippedFileCount.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        writer.SetMeta(DbContext.LastIndexRunBytesReadIncompleteMetaKey, (bytesReadSkippedFileCount > 0).ToString(System.Globalization.CultureInfo.InvariantCulture));
-        writer.SetMeta(DbContext.LastIndexRunRowsUpsertedMetaKey, rowsUpserted.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        writer.SetMeta(DbContext.LastIndexRunRowsDeletedMetaKey, rowsDeleted.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        writer.SetMeta(DbContext.LastIndexRunPeakMemoryMbMetaKey, memoryTimeline == null
-            ? null
-            : (memoryTimeline.PeakWorkingSetBytes / (1024 * 1024)).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        writer.SetMetaValues(
+            (DbContext.LastIndexRunModeMetaKey, mode),
+            (DbContext.LastIndexRunStartedAtMetaKey, startedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.LastIndexRunDurationMsMetaKey, durationMs.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.LastIndexRunFilesScannedMetaKey, filesScanned.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.LastIndexRunFilesSkippedMetaKey, filesSkipped.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.LastIndexRunParseErrorsMetaKey, parseErrors.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.LastIndexRunBytesReadMetaKey, bytesRead.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.LastIndexRunBytesReadSkippedFileCountMetaKey, bytesReadSkippedFileCount.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.LastIndexRunBytesReadIncompleteMetaKey, (bytesReadSkippedFileCount > 0).ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.LastIndexRunRowsUpsertedMetaKey, rowsUpserted.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.LastIndexRunRowsDeletedMetaKey, rowsDeleted.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.LastIndexRunPeakMemoryMbMetaKey, memoryTimeline == null
+                ? null
+                : (memoryTimeline.PeakWorkingSetBytes / (1024 * 1024)).ToString(System.Globalization.CultureInfo.InvariantCulture)));
         StampLastIndexRunDiagnostics(writer, diagnostics);
         writer.ClearLastFailedIndexRunMetadata();
     }
@@ -545,24 +587,20 @@ public static partial class IndexCommandRunner
         var total = diagnostics?.Count ?? 0;
         if (total == 0)
         {
-            writer.SetMeta(DbContext.LastIndexRunDiagnosticsMetaKey, null);
-            writer.SetMeta(DbContext.LastIndexRunDiagnosticCountMetaKey, null);
-            writer.SetMeta(DbContext.LastIndexRunDiagnosticsTruncatedMetaKey, null);
+            writer.SetMetaValues(
+                (DbContext.LastIndexRunDiagnosticsMetaKey, null),
+                (DbContext.LastIndexRunDiagnosticCountMetaKey, null),
+                (DbContext.LastIndexRunDiagnosticsTruncatedMetaKey, null));
             return;
         }
 
         var sample = JsonStringListCodec.TakeSerializableSample(
             diagnostics!,
             DbContext.LastIndexRunDiagnosticSampleLimit);
-        writer.SetMeta(
-            DbContext.LastIndexRunDiagnosticsMetaKey,
-            JsonStringListCodec.Serialize(sample));
-        writer.SetMeta(
-            DbContext.LastIndexRunDiagnosticCountMetaKey,
-            total.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        writer.SetMeta(
-            DbContext.LastIndexRunDiagnosticsTruncatedMetaKey,
-            (total > sample.Count).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        writer.SetMetaValues(
+            (DbContext.LastIndexRunDiagnosticsMetaKey, JsonStringListCodec.Serialize(sample)),
+            (DbContext.LastIndexRunDiagnosticCountMetaKey, total.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.LastIndexRunDiagnosticsTruncatedMetaKey, (total > sample.Count).ToString(System.Globalization.CultureInfo.InvariantCulture)));
     }
 
     internal static Action<DbWriter, IReadOnlyList<string>>? PlannerStatisticsMaintenanceDiagnosticStampingForTesting
@@ -656,16 +694,17 @@ public static partial class IndexCommandRunner
             using var db = new DbContext(dbPath);
             db.InitializeSchema();
             var writer = new DbWriter(db);
-            writer.SetMeta(DbContext.LastFailedIndexRunStatusMetaKey, status);
-            writer.SetMeta(DbContext.LastFailedIndexRunModeMetaKey, mode);
-            writer.SetMeta(DbContext.LastFailedIndexRunStartedAtMetaKey, startedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastFailedIndexRunDurationMsMetaKey, durationMs.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastFailedIndexRunFilesProcessedMetaKey, filesProcessed?.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastFailedIndexRunFilesTotalMetaKey, filesTotal?.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastFailedIndexRunErrorCodeMetaKey, errorCode);
-            writer.SetMeta(DbContext.LastFailedIndexRunReasonMetaKey, reason);
-            writer.SetMeta(DbContext.LastFailedIndexRunProgressPersistedMetaKey, progressPersisted?.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastFailedIndexRunRecoveryHintMetaKey, recoveryHint);
+            writer.SetMetaValues(
+                (DbContext.LastFailedIndexRunStatusMetaKey, status),
+                (DbContext.LastFailedIndexRunModeMetaKey, mode),
+                (DbContext.LastFailedIndexRunStartedAtMetaKey, startedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastFailedIndexRunDurationMsMetaKey, durationMs.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastFailedIndexRunFilesProcessedMetaKey, filesProcessed?.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastFailedIndexRunFilesTotalMetaKey, filesTotal?.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastFailedIndexRunErrorCodeMetaKey, errorCode),
+                (DbContext.LastFailedIndexRunReasonMetaKey, reason),
+                (DbContext.LastFailedIndexRunProgressPersistedMetaKey, progressPersisted?.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastFailedIndexRunRecoveryHintMetaKey, recoveryHint));
         }
         catch (Exception ex) when (ex is CodeIndexException or IOException or UnauthorizedAccessException or NotSupportedException or SqliteException)
         {
@@ -999,12 +1038,7 @@ public static partial class IndexCommandRunner
         {
             var headSha = GitHelper.TryGetHeadCommit(projectRoot, cancellationToken);
             var headBranch = GitHelper.TryGetHeadBranch(projectRoot, cancellationToken);
-            var timestamp = headSha != null
-                ? GetUtcNow().ToString("o", System.Globalization.CultureInfo.InvariantCulture)
-                : null;
-            writer.SetMeta(DbContext.IndexedHeadShaMetaKey, headSha);
-            writer.SetMeta(DbContext.IndexedHeadBranchMetaKey, headBranch);
-            writer.SetMeta(DbContext.IndexedHeadTimestampMetaKey, timestamp);
+            StampIndexedHeadMetadata(writer, headSha, headBranch);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1017,6 +1051,31 @@ public static partial class IndexCommandRunner
             RecordIndexRunDiagnostic(diagnostics, "indexed_head_metadata_write_failed", ex);
         }
         StampWorkspacePathCaseSensitivity(writer, projectRoot, diagnostics, cancellationToken);
+    }
+
+    private static void StampIndexedHeadMetadata(DbWriter writer, string? headSha, string? headBranch)
+    {
+        var timestamp = headSha != null
+            ? GetUtcNow().ToString("o", System.Globalization.CultureInfo.InvariantCulture)
+            : null;
+        writer.SetMetaValues(
+            (DbContext.IndexedHeadShaMetaKey, headSha),
+            (DbContext.IndexedHeadBranchMetaKey, headBranch),
+            (DbContext.IndexedHeadTimestampMetaKey, timestamp));
+    }
+
+    private static void TryStampIndexedHeadMetadata(DbWriter writer, string? headSha, string? headBranch, List<string>? diagnostics)
+    {
+        try
+        {
+            StampIndexedHeadMetadata(writer, headSha, headBranch);
+        }
+        catch (Exception ex)
+        {
+            // Best-effort metadata only; never fail an otherwise-successful index run.
+            // best-effort であり、stamp の失敗で index 全体を失敗扱いにしない。
+            RecordIndexRunDiagnostic(diagnostics, "indexed_head_metadata_write_failed", ex);
+        }
     }
 
     private static void StampCommitScopedFreshHeadMetadata(

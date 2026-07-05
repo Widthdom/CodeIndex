@@ -5972,6 +5972,41 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Index_RebuildRestampsExtractorVersionForZeroSymbolLanguage()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_zero_symbol_version_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_zero_symbol_version");
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "empty.py"), "# intentionally no declarations\n");
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.GetSymbolExtractorVersionMetaKey("python"), "0");
+            }
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var response = CallIndex(server, fixtureDir, args => args["rebuild"] = true);
+
+            Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
+            Assert.Equal(0, response["result"]!["structuredContent"]!["summary"]!["symbols"]!.GetValue<long>());
+            using var verify = new DbContext(dbPath);
+            verify.TryMigrateForRead();
+            Assert.Equal(
+                SymbolExtractor.GetContractVersion("python").ToString(CultureInfo.InvariantCulture),
+                verify.GetMetaString(DbContext.GetSymbolExtractorVersionMetaKey("python")));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_ReprocessesUnchangedFilesWhenMaxSymbolsPerFileChanges_Issue3543()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_max_symbols_reuse_{Guid.NewGuid():N}");
@@ -6055,6 +6090,64 @@ public partial class McpServerTests
         finally
         {
             McpServer.McpIndexCSharpPrepassForTesting = null;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_FreshWithoutTypeScriptSkipsTypeScriptAugmentationRebuild()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_fresh_no_ts_augmentation_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_fresh_no_ts_augmentation");
+        var rebuiltTypeScriptAugmentation = false;
+        var foldBackfillVerifications = 0;
+        var languagePresenceChecks = 0;
+        var indexedLanguageReads = 0;
+        var statReuseLookups = 0;
+        var reusableLookups = 0;
+        var countReads = 0;
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { public void Run() { } }\n");
+            File.WriteAllText(Path.Combine(fixtureDir, "tool.py"), "def run():\n    return 1\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = () => rebuiltTypeScriptAugmentation = true;
+            DbWriter.FoldBackfillVerificationForTesting = () => foldBackfillVerifications++;
+            DbWriter.LanguagePresenceCheckForTesting = _ => languagePresenceChecks++;
+            DbWriter.IndexedLanguagesReadForTesting = () => indexedLanguageReads++;
+            DbWriter.ReusableUnchangedFileLookupForTesting = _ => reusableLookups++;
+            DbWriter.CountsReadForTesting = () => countReads++;
+            IndexedFileStatReuse.LookupForTesting = _ => statReuseLookups++;
+
+            var response = CallIndex(server, fixtureDir);
+
+            Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
+            Assert.False(rebuiltTypeScriptAugmentation);
+            Assert.Equal(1, foldBackfillVerifications);
+            Assert.Equal(0, languagePresenceChecks);
+            Assert.Equal(0, indexedLanguageReads);
+            Assert.Equal(0, statReuseLookups);
+            Assert.Equal(0, reusableLookups);
+            Assert.Equal(0, countReads);
+            Assert.Equal(2, response["result"]!["structuredContent"]!["summary"]!["files"]!.GetValue<long>());
+            using var db = new DbContext(dbPath);
+            db.TryMigrateForRead();
+            Assert.Equal(
+                DbContext.TypeScriptAugmentationVersion.ToString(CultureInfo.InvariantCulture),
+                db.GetMetaString(DbContext.TypeScriptAugmentationVersionMetaKey));
+        }
+        finally
+        {
+            McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = null;
+            DbWriter.FoldBackfillVerificationForTesting = null;
+            DbWriter.LanguagePresenceCheckForTesting = null;
+            DbWriter.IndexedLanguagesReadForTesting = null;
+            DbWriter.ReusableUnchangedFileLookupForTesting = null;
+            DbWriter.CountsReadForTesting = null;
+            IndexedFileStatReuse.LookupForTesting = null;
             TestProjectHelper.DeleteDirectory(fixtureDir);
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
@@ -6723,6 +6816,59 @@ public partial class McpServerTests
         }
         finally
         {
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_RefreshesMutualRecursionOnceAfterBulkReferenceInsert()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_mutual_recursion_{Guid.NewGuid():N}");
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_mutual_recursion");
+        var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
+        var refreshCount = 0;
+        try
+        {
+            Directory.CreateDirectory(fixtureDir);
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "MutualRecursionA.cs"),
+                """
+                public static class MutualRecursionA
+                {
+                    public static void CrossCycleA() { CrossCycleB(); }
+                }
+                """);
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "MutualRecursionB.cs"),
+                """
+                public static class MutualRecursionB
+                {
+                    public static void CrossCycleB() { CrossCycleA(); }
+                }
+                """);
+
+            DbWriter.MutualRecursionRefreshForTesting = () =>
+            {
+                refreshCount++;
+                previousRefreshHook?.Invoke();
+            };
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var response = CallIndex(server, fixtureDir);
+
+            Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
+            Assert.Equal(1, refreshCount);
+
+            using var db = new DbContext(dbPath);
+            db.TryMigrateForRead();
+            using var command = db.Connection.CreateCommand();
+            command.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE is_mutual_recursion = 1";
+            Assert.Equal(2L, (long)command.ExecuteScalar()!);
+        }
+        finally
+        {
+            DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
             TestProjectHelper.DeleteDirectory(fixtureDir);
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }

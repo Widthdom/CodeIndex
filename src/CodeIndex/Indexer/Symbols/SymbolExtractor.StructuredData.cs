@@ -69,7 +69,7 @@ public static partial class SymbolExtractor
             var truncated = false;
             var propertyLines = content.IndexOf('\n', StringComparison.Ordinal) < 0
                 && content.IndexOf('\r', StringComparison.Ordinal) < 0
-                ? BuildSingleLineJsonPropertyLineQueues(document.RootElement)
+                ? null
                 : BuildJsonPropertyLineQueues(content);
             ExtractJsonObjectSymbols(
                 fileId,
@@ -101,7 +101,7 @@ public static partial class SymbolExtractor
         string? parentPath,
         ref int searchOffset,
         List<SymbolRecord> symbols,
-        Dictionary<string, Queue<int>> propertyLines,
+        Dictionary<string, Queue<int>>? propertyLines,
         int depth,
         ref int traversalNodes,
         ref bool truncated)
@@ -121,18 +121,26 @@ public static partial class SymbolExtractor
             }
 
             traversalNodes++;
-            var name = string.IsNullOrEmpty(parentPath)
-                ? property.Name
-                : parentPath + "." + property.Name;
-            var line = TryDequeueJsonPropertyLine(propertyLines, property.Name, out var mappedLine)
-                ? mappedLine
-                : FindLineNumberForOffset(lineStarts ??= BuildLineStarts(lines), FindJsonPropertyOffset(content, property.Name, ref searchOffset));
-
-            if (name.Length > StructuredDataMaxPathLength)
+            var propertyName = property.Name;
+            var nameLength = string.IsNullOrEmpty(parentPath)
+                ? propertyName.Length
+                : parentPath.Length + 1 + propertyName.Length;
+            if (nameLength > StructuredDataMaxPathLength)
             {
+                if (propertyLines != null)
+                    _ = TryDequeueJsonPropertyLine(propertyLines, propertyName, out _);
                 DrainJsonPropertyLines(property.Value, propertyLines);
                 continue;
             }
+
+            var name = string.IsNullOrEmpty(parentPath)
+                ? propertyName
+                : parentPath + "." + propertyName;
+            var line = propertyLines == null
+                ? 1
+                : TryDequeueJsonPropertyLine(propertyLines, propertyName, out var mappedLine)
+                    ? mappedLine
+                    : FindLineNumberForOffset(lineStarts ??= BuildLineStarts(lines), FindJsonPropertyOffset(content, propertyName, ref searchOffset));
 
             var kind = property.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array
                 ? "namespace"
@@ -160,8 +168,11 @@ public static partial class SymbolExtractor
         }
     }
 
-    private static void DrainJsonPropertyLines(JsonElement element, Dictionary<string, Queue<int>> propertyLines)
+    private static void DrainJsonPropertyLines(JsonElement element, Dictionary<string, Queue<int>>? propertyLines)
     {
+        if (propertyLines == null)
+            return;
+
         if (element.ValueKind == JsonValueKind.Object)
         {
             foreach (var property in element.EnumerateObject())
@@ -183,7 +194,7 @@ public static partial class SymbolExtractor
         var truncated = false;
         for (var i = 0; i < lines.Length; i++)
         {
-            if (lines[i].IndexOf(':') < 0 || lines[i].IndexOf('"') < 0)
+            if (!MayStartJsonPropertyLine(lines[i]) || lines[i].IndexOf(':') < 0)
                 continue;
 
             var match = JsonFallbackPropertyRegex.Match(lines[i]);
@@ -232,9 +243,14 @@ public static partial class SymbolExtractor
                 blockScalarIndent = null;
             }
 
-            var trimmed = line.TrimStart();
-            if (trimmed.StartsWith('#') || trimmed is "---" or "...")
+            var trimmed = line.AsSpan().TrimStart();
+            if (trimmed.IsEmpty
+                || trimmed[0] == '#'
+                || trimmed.SequenceEqual("---")
+                || trimmed.SequenceEqual("..."))
+            {
                 continue;
+            }
 
             if (line.IndexOf(':') < 0)
                 continue;
@@ -244,19 +260,22 @@ public static partial class SymbolExtractor
                 continue;
 
             var key = ExtractYamlKey(match);
-            if (string.IsNullOrWhiteSpace(key))
+            if (key.Length == 0)
                 continue;
 
             while (stack != null && stack.Count > 0 && indent <= stack[^1].Indent)
                 stack.RemoveAt(stack.Count - 1);
 
             var parentPath = stack == null || stack.Count == 0 ? null : stack[^1].Path;
-            var path = string.IsNullOrEmpty(parentPath) ? key : parentPath + "." + key;
-            if ((stack?.Count ?? 0) >= StructuredDataMaxYamlDepth || path.Length > StructuredDataMaxPathLength)
+            var pathLength = string.IsNullOrEmpty(parentPath)
+                ? key.Length
+                : parentPath.Length + 1 + key.Length;
+            if ((stack?.Count ?? 0) >= StructuredDataMaxYamlDepth || pathLength > StructuredDataMaxPathLength)
                 continue;
+            var path = string.IsNullOrEmpty(parentPath) ? key : parentPath + "." + key;
 
-            var value = StripYamlInlineComment(match.Groups["value"].Value).Trim();
-            var isContainer = value.Length == 0 || value is "|" or ">" or "|-" or ">-" or "|+" or ">+";
+            var value = StripYamlInlineComment(match.Groups["value"].ValueSpan).Trim();
+            var isContainer = IsYamlContainerValue(value);
             var kind = isContainer ? "namespace" : "property";
 
             traversalNodes++;
@@ -266,7 +285,7 @@ public static partial class SymbolExtractor
             if (isContainer)
             {
                 (stack ??= []).Add(new YamlPathFrame(indent, path));
-                if (value.StartsWith('|') || value.StartsWith('>'))
+                if (!value.IsEmpty && (value[0] == '|' || value[0] == '>'))
                     blockScalarIndent = indent;
             }
         }
@@ -409,40 +428,6 @@ public static partial class SymbolExtractor
         return propertyLines;
     }
 
-    private static Dictionary<string, Queue<int>> BuildSingleLineJsonPropertyLineQueues(JsonElement element)
-    {
-        var propertyLines = new Dictionary<string, Queue<int>>(StringComparer.Ordinal);
-        AddSingleLineJsonPropertyLines(element, propertyLines);
-        return propertyLines;
-    }
-
-    private static void AddSingleLineJsonPropertyLines(JsonElement element, Dictionary<string, Queue<int>> propertyLines)
-    {
-        if (element.ValueKind == JsonValueKind.Object)
-        {
-            foreach (var property in element.EnumerateObject())
-            {
-                if (!string.IsNullOrEmpty(property.Name))
-                {
-                    if (!propertyLines.TryGetValue(property.Name, out var lines))
-                    {
-                        lines = new Queue<int>();
-                        propertyLines.Add(property.Name, lines);
-                    }
-
-                    lines.Enqueue(1);
-                }
-
-                AddSingleLineJsonPropertyLines(property.Value, propertyLines);
-            }
-        }
-        else if (element.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in element.EnumerateArray())
-                AddSingleLineJsonPropertyLines(item, propertyLines);
-        }
-    }
-
     private static int[] BuildUtf8LineStarts(byte[] bytes)
     {
         List<int>? starts = null;
@@ -472,7 +457,7 @@ public static partial class SymbolExtractor
 
     private static int FindJsonPropertyOffset(string content, string propertyName, ref int searchOffset)
     {
-        var encodedName = JsonSerializer.Serialize(propertyName);
+        var encodedName = EncodeJsonPropertySearchName(propertyName);
         var offset = content.IndexOf(encodedName, searchOffset, StringComparison.Ordinal);
         if (offset < 0 && searchOffset > 0)
             offset = content.IndexOf(encodedName, StringComparison.Ordinal);
@@ -484,6 +469,30 @@ public static partial class SymbolExtractor
         }
 
         return Math.Clamp(searchOffset, 0, Math.Max(0, content.Length - 1));
+    }
+
+    private static string EncodeJsonPropertySearchName(string propertyName)
+        => IsSimpleJsonPropertySearchName(propertyName)
+            ? "\"" + propertyName + "\""
+            : JsonSerializer.Serialize(propertyName);
+
+    private static bool IsSimpleJsonPropertySearchName(string propertyName)
+    {
+        for (var index = 0; index < propertyName.Length; index++)
+        {
+            var ch = propertyName[index];
+            if ((ch >= 'A' && ch <= 'Z')
+                || (ch >= 'a' && ch <= 'z')
+                || (ch >= '0' && ch <= '9')
+                || ch is '_' or '-' or '.' or ' ')
+            {
+                continue;
+            }
+
+            return false;
+        }
+
+        return true;
     }
 
     private static int[] BuildLineStarts(string[] lines)
@@ -510,6 +519,19 @@ public static partial class SymbolExtractor
         return index + 1;
     }
 
+    private static bool MayStartJsonPropertyLine(string line)
+    {
+        for (var index = 0; index < line.Length; index++)
+        {
+            if (char.IsWhiteSpace(line[index]))
+                continue;
+
+            return line[index] == '"';
+        }
+
+        return false;
+    }
+
     private static int CountLeadingSpaces(string line)
     {
         var count = 0;
@@ -521,13 +543,31 @@ public static partial class SymbolExtractor
     private static string ExtractYamlKey(Match match)
     {
         if (match.Groups["double"].Success)
-            return match.Groups["double"].Value.Replace("\"\"", "\"", StringComparison.Ordinal).Trim();
+            return UnescapeYamlQuotedKey(match.Groups["double"].ValueSpan, "\"\"", "\"");
         if (match.Groups["single"].Success)
-            return match.Groups["single"].Value.Replace("''", "'", StringComparison.Ordinal).Trim();
+            return UnescapeYamlQuotedKey(match.Groups["single"].ValueSpan, "''", "'");
         return match.Groups["plain"].ValueSpan.Trim().ToString();
     }
 
-    private static string StripYamlInlineComment(string value)
+    private static string UnescapeYamlQuotedKey(ReadOnlySpan<char> value, string escaped, string replacement)
+    {
+        var trimmed = value.Trim();
+        if (!trimmed.Contains(escaped, StringComparison.Ordinal))
+            return trimmed.ToString();
+
+        return trimmed.ToString().Replace(escaped, replacement, StringComparison.Ordinal);
+    }
+
+    private static bool IsYamlContainerValue(ReadOnlySpan<char> value)
+        => value.IsEmpty
+           || value.SequenceEqual("|")
+           || value.SequenceEqual(">")
+           || value.SequenceEqual("|-")
+           || value.SequenceEqual(">-")
+           || value.SequenceEqual("|+")
+           || value.SequenceEqual(">+");
+
+    private static ReadOnlySpan<char> StripYamlInlineComment(ReadOnlySpan<char> value)
     {
         var inSingle = false;
         var inDouble = false;
@@ -547,6 +587,9 @@ public static partial class SymbolExtractor
 
     private static string UnescapeJsonPropertyName(string value)
     {
+        if (value.IndexOf('\\') < 0)
+            return value;
+
         try
         {
             return BoundedJson.Deserialize<string>(

@@ -6,7 +6,12 @@ internal readonly record struct IndexedFileStatReuseResult(long FileId, long Siz
 
 internal static class IndexedFileStatReuse
 {
-    internal static Action<string>? LookupForTesting { get; set; }
+    private static readonly AsyncLocal<Action<string>?> ScopedLookupForTesting = new();
+    internal static Action<string>? LookupForTesting
+    {
+        get => ScopedLookupForTesting.Value;
+        set => ScopedLookupForTesting.Value = value;
+    }
 
     internal static IndexedFileStatReuseResult? TryGetUnchangedFile(
         DbWriter writer,

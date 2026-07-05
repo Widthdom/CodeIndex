@@ -55,4 +55,16 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, reference => reference.SymbolName == "Deposit" && reference.ReferenceKind == "call");
         Assert.DoesNotContain(references, reference => reference.SymbolName is "Phantom" or "CommentOnly");
     }
+
+    [Fact]
+    public void Extract_Solidity_DetectsInheritanceWithWhitespaceVariants()
+    {
+        const string content = "contract Tabbed\tis\tOwnable {}\ninterface Child\tis\tParent {}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "solidity", content);
+        var references = ReferenceExtractor.Extract(1, "solidity", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "Ownable" && reference.ReferenceKind == "extends" && reference.ContainerName == "Tabbed");
+        Assert.Contains(references, reference => reference.SymbolName == "Parent" && reference.ReferenceKind == "extends");
+    }
 }

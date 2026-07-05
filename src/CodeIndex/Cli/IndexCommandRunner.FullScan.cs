@@ -161,8 +161,12 @@ public static partial class IndexCommandRunner
 
     internal static IReadOnlyList<FileIssue> AppendIssueIfMissing(IReadOnlyList<FileIssue> issues, FileIssue issue)
     {
-        if (issues.Any(existing => string.Equals(existing.Kind, issue.Kind, StringComparison.Ordinal)))
-            return issues;
+        for (var i = 0; i < issues.Count; i++)
+        {
+            if (string.Equals(issues[i].Kind, issue.Kind, StringComparison.Ordinal))
+                return issues;
+        }
+
         return AppendIssue(issues, issue);
     }
 
@@ -712,18 +716,16 @@ public static partial class IndexCommandRunner
         var files = scanResult.Files;
         ConsoleUi.StopSpinner(spinnerCts);
         WriteFullScanJsonLiveness(options, $"found {ConsoleUi.Counted(files.Count, "file", format: "N0")}; preparing database...");
-        var fatalScanErrors = scanResult.Errors
-            .Where(error => error.IsFatal)
-            .ToList();
-        var warningScanErrors = scanResult.Errors
-            .Where(error => !error.IsFatal)
-            .ToList();
-        var errorList = fatalScanErrors
-            .Select(error => new CliJsonMessage(error.Path, error.Message))
-            .ToList();
-        var warningList = warningScanErrors
-            .Select(error => new CliJsonMessage(error.Path, error.Message))
-            .ToList();
+        var errorList = new List<CliJsonMessage>();
+        var warningList = new List<CliJsonMessage>();
+        foreach (var error in scanResult.Errors)
+        {
+            var message = new CliJsonMessage(error.Path, error.Message);
+            if (error.IsFatal)
+                errorList.Add(message);
+            else
+                warningList.Add(message);
+        }
         if (checkpointLoadResult.WarningMessage != null)
             warningList.Add(new CliJsonMessage("<scan_checkpoint>", checkpointLoadResult.WarningMessage));
         if (!options.Json && !options.Quiet)
@@ -868,9 +870,13 @@ public static partial class IndexCommandRunner
 
         var discovery = DiscoverFullScanFiles(indexer, projectRoot, options, spinnerFrames, cancellationToken);
         var scanResult = discovery.ScanResult;
+        var scanHadErrors = scanResult.HadErrors;
         var files = discovery.Files;
         var fileTargets = new FullScanFileTarget[files.Count];
-        var languageCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var languageCounts = scanResult.LanguageCounts;
+        var csharpPrepassCapacity = languageCounts.TryGetValue("csharp", out var csharpFileCount) ? csharpFileCount : 0;
+        var csharpPrepassTargets = new List<CSharpStaticInterfacePrepass.FileTarget>(
+            options.SymbolsOnly ? 0 : csharpPrepassCapacity);
         var hasGeneratedCodeExtractionSuppressionPatterns = indexer.HasGeneratedCodeExtractionSuppressionPatterns;
         for (var i = 0; i < files.Count; i++)
         {
@@ -880,12 +886,28 @@ public static partial class IndexCommandRunner
             fileTargets[i] = hasGeneratedCodeExtractionSuppressionPatterns
                 ? target with { GeneratedExtractionSuppressed = indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath) }
                 : target;
-            if (language == null)
-                continue;
-
-            languageCounts[language] = languageCounts.TryGetValue(language, out var count) ? count + 1 : 1;
+            if (!options.SymbolsOnly && language == "csharp")
+            {
+                var indexedTarget = fileTargets[i];
+                csharpPrepassTargets.Add(new CSharpStaticInterfacePrepass.FileTarget(
+                    indexedTarget.FilePath,
+                    indexedTarget.RelativePath,
+                    indexedTarget.DisplayRelativePath,
+                    indexedTarget.IndexPath,
+                    indexedTarget.Language,
+                    indexedTarget.GeneratedExtractionSuppressed));
+            }
         }
-        var knownReadableFileSizes = new Dictionary<string, long>(StringComparer.Ordinal);
+        var knownReadableFileSizes = new Dictionary<string, long>(files.Count, StringComparer.Ordinal);
+        long knownReadableBytesRead = 0;
+        void RememberReadableFileSize(string path, long size)
+        {
+            if (knownReadableFileSizes.TryGetValue(path, out var priorSize))
+                knownReadableBytesRead += size - priorSize;
+            else
+                knownReadableBytesRead += size;
+            knownReadableFileSizes[path] = size;
+        }
         var errorList = discovery.ErrorList;
         var warningList = discovery.WarningList;
         AddProjectMarkerFingerprintWarnings(currentHotspotFamilyMarkerFingerprints, warningList, options);
@@ -916,11 +938,18 @@ public static partial class IndexCommandRunner
         if (!options.Json && !options.Quiet)
             purgeCts = ConsoleUi.StartSpinner("Cleaning up stale entries...", spinnerFrames);
         var purged = 0;
-        var retainedPaths = new HashSet<string>(fileTargets.Length, StringComparer.Ordinal);
-        foreach (var target in fileTargets)
-            retainedPaths.Add(target.IndexPath);
-        var indexedJavaScriptTypeScriptConfigPathsBeforePurge = writer.GetIndexedJavaScriptTypeScriptConfigPaths();
-        if (scanResult.HadErrors)
+        var startedWithNoIndexedFiles = !writer.HasAnyIndexedFiles();
+        var retainedPaths = startedWithNoIndexedFiles
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : new HashSet<string>(fileTargets.Length, StringComparer.Ordinal);
+        IReadOnlyList<string> indexedJavaScriptTypeScriptConfigPathsBeforePurge = [];
+        if (!startedWithNoIndexedFiles)
+        {
+            foreach (var target in fileTargets)
+                retainedPaths.Add(target.IndexPath);
+            indexedJavaScriptTypeScriptConfigPathsBeforePurge = writer.GetIndexedJavaScriptTypeScriptConfigPaths();
+        }
+        if (scanHadErrors)
         {
             SaveScanCheckpoint(
                 scanCheckpointPath,
@@ -929,27 +958,30 @@ public static partial class IndexCommandRunner
                 warningList,
                 options.Json,
                 options.Quiet);
-            retainedPaths.UnionWith(scanResult.ProbeFailedFilePaths.Select(FileIndexer.NormalizeIndexPath));
-
-            foreach (var relPath in scanResult.NonIndexablePaths)
+            if (!startedWithNoIndexedFiles)
             {
-                var dbPath = FileIndexer.NormalizeIndexPath(relPath);
-                if (writer.DeleteFileByPath(dbPath))
-                    purged++;
-            }
+                retainedPaths.UnionWith(scanResult.ProbeFailedFilePaths.Select(FileIndexer.NormalizeIndexPath));
 
-            var authoritativeDirectories = scanResult.ListedDirectories
-                .Select(FileIndexer.NormalizeIndexPath)
-                .ToHashSet(StringComparer.Ordinal);
-            var attributePrunedDirectories = scanResult.AttributePrunedDirectories
-                .Select(FileIndexer.NormalizeIndexPath)
-                .ToHashSet(StringComparer.Ordinal);
-            attributePrunedDirectories.UnionWith(scanResult.NestedRepositories.Select(FileIndexer.NormalizeIndexPath));
-            purged += writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retainedPaths, authoritativeDirectories, attributePrunedDirectories);
+                foreach (var relPath in scanResult.NonIndexablePaths)
+                {
+                    var dbPath = FileIndexer.NormalizeIndexPath(relPath);
+                    if (writer.DeleteFileByPath(dbPath))
+                        purged++;
+                }
+
+                var authoritativeDirectories = scanResult.ListedDirectories
+                    .Select(FileIndexer.NormalizeIndexPath)
+                    .ToHashSet(StringComparer.Ordinal);
+                var attributePrunedDirectories = scanResult.AttributePrunedDirectories
+                    .Select(FileIndexer.NormalizeIndexPath)
+                    .ToHashSet(StringComparer.Ordinal);
+                attributePrunedDirectories.UnionWith(scanResult.NestedRepositories.Select(FileIndexer.NormalizeIndexPath));
+                purged += writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retainedPaths, authoritativeDirectories, attributePrunedDirectories);
+            }
         }
         else
         {
-            if (checkpointedDirectories.Count > 0)
+            if (!startedWithNoIndexedFiles && checkpointedDirectories.Count > 0)
             {
                 var authoritativeDirectories = scanResult.ListedDirectories
                     .Select(FileIndexer.NormalizeIndexPath)
@@ -960,7 +992,7 @@ public static partial class IndexCommandRunner
                 attributePrunedDirectories.UnionWith(scanResult.NestedRepositories.Select(FileIndexer.NormalizeIndexPath));
                 purged = writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retainedPaths, authoritativeDirectories, attributePrunedDirectories);
             }
-            else
+            else if (!startedWithNoIndexedFiles)
             {
                 purged = writer.PurgeFilesOutsideRetainedSet(retainedPaths);
             }
@@ -978,12 +1010,12 @@ public static partial class IndexCommandRunner
         {
             if (purged > 0)
             {
-                var purgeMessage = scanResult.HadErrors
+                var purgeMessage = scanHadErrors
                     ? $"  Purged {purged:N0} previously indexed files that were positively observed as no longer indexable or missing from directories whose file listing completed successfully"
                     : $"  Purged {purged:N0} stale files (missing or no longer indexable)";
                 Console.WriteLine(purgeMessage);
             }
-            if (scanResult.HadErrors)
+            if (scanHadErrors)
                 ConsoleUi.PrintWarning("Skipped authoritative purge outside directories whose file listing completed successfully because some paths could not be scanned.");
         }
 
@@ -992,9 +1024,11 @@ public static partial class IndexCommandRunner
         // グラフ非対応になった言語の参照をパージする。symbols-only では古い graph 行が
         // degraded readiness の裏に残らないよう全参照を消す。
         ThrowIfFullScanCancelled(0, files.Count);
-        var purgedRefs = options.SymbolsOnly
-            ? writer.PurgeAllReferences()
-            : writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
+        var purgedRefs = startedWithNoIndexedFiles
+            ? 0
+            : options.SymbolsOnly
+                ? writer.PurgeAllReferences()
+                : writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
         if (purgedRefs > 0 && !options.Json && !options.Quiet)
         {
             var reason = options.SymbolsOnly ? "symbols-only mode" : "unsupported language";
@@ -1012,14 +1046,13 @@ public static partial class IndexCommandRunner
         var indexProgressVisible = false;
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
         var skippedSymbolExtractorLanguages = new HashSet<string>(StringComparer.Ordinal);
+        var indexedSymbolExtractorLanguages = new HashSet<string>(StringComparer.Ordinal);
         var lastJsonProgressAt = Stopwatch.GetTimestamp();
         string? currentJsonIndexFile = null;
         var activeJsonExtractionPhases = new ConcurrentDictionary<int, string>();
         CancellationTokenSource? jsonHeartbeatCts = null;
         Task? jsonHeartbeatTask = null;
         var extractionParallelism = Math.Max(1, options.Parallelism);
-        var existingFileCount = writer.GetCounts().files;
-        var startedWithNoIndexedFiles = existingFileCount == 0;
         var typeScriptAugmentationVersionMatchesCurrent = writer.TypeScriptAugmentationVersionMatchesCurrent();
         var typeScriptAugmentationNeedsRefresh = !options.SymbolsOnly
             && (options.Rebuild
@@ -1212,7 +1245,19 @@ public static partial class IndexCommandRunner
             => javaScriptTypeScriptRefreshRequired
                && (IsJavaScriptTypeScriptLanguage(language) || IsJavaScriptTypeScriptConfigPath(indexPath));
 
-        var csharpPrepassStatReuse = new Dictionary<string, IndexedFileStatReuseResult?>(StringComparer.Ordinal);
+        using var ftsBulkLoad = FtsBulkLoadTriggerGuard.Start(
+            writer,
+            options.Rebuild || startedWithNoIndexedFiles);
+
+        void InsertIssuesForIndexedFile(long fileId, IReadOnlyList<FileIssue> issues)
+        {
+            if (startedWithNoIndexedFiles)
+                writer.InsertIssuesForNewFile(fileId, issues);
+            else
+                writer.InsertIssues(fileId, issues);
+        }
+
+        Dictionary<string, IndexedFileStatReuseResult?>? csharpPrepassStatReuse = null;
 
         bool CanReuseCSharpPrepassTargetWithoutRead(CSharpStaticInterfacePrepass.FileTarget target)
         {
@@ -1232,11 +1277,15 @@ public static partial class IndexCommandRunner
                 allowReuse: true);
             if (existingFile == null)
             {
-                csharpPrepassStatReuse[target.IndexPath] = null;
+                (csharpPrepassStatReuse ??= new Dictionary<string, IndexedFileStatReuseResult?>(
+                    csharpPrepassCapacity,
+                    StringComparer.Ordinal))[target.IndexPath] = null;
                 return false;
             }
 
-            csharpPrepassStatReuse[target.IndexPath] = existingFile.Value;
+            (csharpPrepassStatReuse ??= new Dictionary<string, IndexedFileStatReuseResult?>(
+                csharpPrepassCapacity,
+                StringComparer.Ordinal))[target.IndexPath] = existingFile.Value;
             return true;
         }
 
@@ -1255,22 +1304,6 @@ public static partial class IndexCommandRunner
                 () => currentCSharpWorkspaceFile);
             try
             {
-                var csharpPrepassCapacity = languageCounts.TryGetValue("csharp", out var csharpFileCount) ? csharpFileCount : 0;
-                var csharpPrepassTargets = new List<CSharpStaticInterfacePrepass.FileTarget>(csharpPrepassCapacity);
-                foreach (var target in fileTargets)
-                {
-                    if (target.Language != "csharp")
-                        continue;
-
-                    csharpPrepassTargets.Add(new CSharpStaticInterfacePrepass.FileTarget(
-                        target.FilePath,
-                        target.RelativePath,
-                        target.DisplayRelativePath,
-                        target.IndexPath,
-                        target.Language,
-                        target.GeneratedExtractionSuppressed));
-                }
-
                 if (csharpPrepassTargets.Count == 0)
                 {
                     csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols([], false);
@@ -1299,6 +1332,24 @@ public static partial class IndexCommandRunner
             }
         }
 
+        var freshCountFiles = 0L;
+        var freshCountChunks = 0L;
+        var freshCountSymbols = 0L;
+        var freshCountReferences = 0L;
+        void CountFreshInsertedRows(
+            int chunkCount = 0,
+            int symbolCount = 0,
+            int referenceCount = 0)
+        {
+            if (!startedWithNoIndexedFiles)
+                return;
+
+            freshCountFiles++;
+            freshCountChunks += chunkCount;
+            freshCountSymbols += symbolCount;
+            freshCountReferences += referenceCount;
+        }
+
         bool TrySkipFullScanTargetBeforeContentLoad(int fileIndex)
         {
             if (options.Rebuild || startedWithNoIndexedFiles || options.SymbolsOnly)
@@ -1316,6 +1367,7 @@ public static partial class IndexCommandRunner
                 && AllowReuseWithCurrentHotspotFamilyTrust(language, hotspotFamilyTrustMatchesCurrent);
             var existingFile = allowReuse
                 && language == "csharp"
+                && csharpPrepassStatReuse != null
                 && csharpPrepassStatReuse.TryGetValue(target.IndexPath, out var cachedCSharpPrepassReuse)
                     ? cachedCSharpPrepassReuse
                     : IndexedFileStatReuse.TryGetReusableUnchangedFile(
@@ -1332,7 +1384,7 @@ public static partial class IndexCommandRunner
 
             skipped++;
             processed++;
-            knownReadableFileSizes[target.FilePath] = existingFile.Value.Size;
+            RememberReadableFileSize(target.FilePath, existingFile.Value.Size);
             if (!string.IsNullOrWhiteSpace(language))
                 skippedSymbolExtractorLanguages.Add(language);
             if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(language) && language != null)
@@ -1686,7 +1738,7 @@ public static partial class IndexCommandRunner
                         }
 
                         var record = item.Record!;
-                        knownReadableFileSizes[item.FilePath] = record.Size;
+                        RememberReadableFileSize(item.FilePath, record.Size);
                         if (item.Warning != null && !options.Json && !options.Quiet)
                         {
                             PauseIndexSpinnerForConsoleWrite();
@@ -1786,12 +1838,13 @@ public static partial class IndexCommandRunner
                             var generatedIssues = AppendIssueIfMissing(
                                 RequireWorkItemIssues(item),
                                 generatedSuppressionIssue);
-                            writer.InsertIssues(fileId, generatedIssues);
+                            InsertIssuesForIndexedFile(fileId, generatedIssues);
                             if (options.Verbose)
                                 WriteIndexVerboseStatus($"  [OK  ] {record.Path} ({chunks.Count} chunks, generated-code extraction skipped)");
                             currentJsonIndexFile = FormatIndexPhasePath(record.Path, "committing");
                             WriteProjectRootOnce();
                             txn.Commit();
+                            CountFreshInsertedRows(chunkCount: chunks.Count);
 
                             processed++;
                             if (!options.Json && !options.Quiet)
@@ -1830,10 +1883,11 @@ public static partial class IndexCommandRunner
                                 : AppendIssue([symbolRegexTimeoutIssue], issue);
                             writer.InsertSymbols([], cancellationToken);
                             writer.InsertReferences([], cancellationToken);
-                            writer.InsertIssues(fileId, capIssues);
+                            InsertIssuesForIndexedFile(fileId, capIssues);
                             if (options.Verbose)
                                 WriteIndexVerboseStatus($"  [SKIP] {record.Path} ({issue.Message})");
                             txn.Commit();
+                            CountFreshInsertedRows();
                             processed++;
                             if (!options.Json && !options.Quiet)
                             {
@@ -1864,6 +1918,7 @@ public static partial class IndexCommandRunner
                             if (options.Verbose)
                                 WriteIndexVerboseStatus($"  [SKIP] {record.Path} ({issue.Message})");
                             txn.Commit();
+                            CountFreshInsertedRows();
                             processed++;
                             if (!options.Json && !options.Quiet)
                             {
@@ -1941,10 +1996,13 @@ public static partial class IndexCommandRunner
                             mutualRecursionRefreshNeeded = true;
                         currentJsonIndexFile = FormatIndexPhasePath(record.Path, "validating");
                         var issues = RequireWorkItemIssues(item);
-                        writer.InsertIssues(fileId, issues);
+                        InsertIssuesForIndexedFile(fileId, issues);
                         currentJsonIndexFile = FormatIndexPhasePath(record.Path, "committing");
                         WriteProjectRootOnce();
                         txn.Commit();
+                        if (!string.IsNullOrWhiteSpace(record.Lang))
+                            indexedSymbolExtractorLanguages.Add(record.Lang);
+                        CountFreshInsertedRows(chunks.Count, symbols.Count, references.Count);
 
                         WriteIndexVerboseStatus($"  [OK  ] {record.Path} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
                     }
@@ -2005,7 +2063,21 @@ public static partial class IndexCommandRunner
             }
         }
         ThrowIfFullScanCancelled(processed, files.Count);
-        if (ftsMutated)
+        if (ftsBulkLoad != null)
+        {
+            var phase = ftsMutated ? "rebuilding text index" : "restoring text index triggers";
+            WriteFullScanJsonLiveness(options, $"{phase}...");
+            var ftsHeartbeat = StartFullScanJsonPhaseHeartbeat(options, phase);
+            try
+            {
+                ftsBulkLoad.Complete(ftsMutated, FullScanFtsOptimizeForTesting);
+            }
+            finally
+            {
+                StopFullScanJsonPhaseHeartbeat(ftsHeartbeat);
+            }
+        }
+        else if (ftsMutated)
         {
             WriteFullScanJsonLiveness(options, "optimizing index...");
             var optimizeHeartbeat = StartFullScanJsonPhaseHeartbeat(options, "optimizing index");
@@ -2025,7 +2097,9 @@ public static partial class IndexCommandRunner
         // degraded rather than authoritative. Interrupted runs also stay unstamped because
         // ClearReadyFlags() ran at the start.
         // errors==0 の成功 run のみマーカーを打つ。途中失敗は未 stamp のままで縮退扱い。
-        var hasCSharpFilesAfter = writer.HasAnyFilesWithLanguage("csharp");
+        var hasCSharpFilesAfter = startedWithNoIndexedFiles && !scanHadErrors && errors == 0
+            ? languageCounts.ContainsKey("csharp")
+            : writer.HasAnyFilesWithLanguage("csharp");
         var graphTableAvailableAfter = false;
         var issuesTableAvailableAfter = false;
         var csharpSymbolNameReadyAfter = !hasCSharpFilesAfter;
@@ -2043,14 +2117,8 @@ public static partial class IndexCommandRunner
             if (!options.SymbolsOnly)
             {
                 writer.MarkGraphReady();
-                writer.MarkSqlGraphContractReady();
-                writer.SetMeta(DbContext.SymbolsOnlyGraphOmittedMetaKey, null);
             }
-            else
-            {
-                writer.SetMeta(DbContext.SymbolsOnlyGraphOmittedMetaKey, "true");
-            }
-            writer.MarkCSharpSymbolNameContractReady();
+            writer.MarkIndexReaderContractsReady(options.SymbolsOnly);
             if (hasCSharpFilesAfter)
             {
                 if (csharpMetadataTargetsNeedRefresh)
@@ -2072,8 +2140,17 @@ public static partial class IndexCommandRunner
             {
                 if (typeScriptAugmentationNeedsRefresh)
                 {
-                    FullScanTypeScriptAugmentationRebuildForTesting?.Invoke();
-                    writer.RebuildTypeScriptAugmentationReferences(projectRoot);
+                    if (startedWithNoIndexedFiles && !languageCounts.ContainsKey("typescript"))
+                    {
+                        writer.MarkTypeScriptAugmentationReady();
+                    }
+                    else
+                    {
+                        FullScanTypeScriptAugmentationRebuildForTesting?.Invoke();
+                        var augmentationReferences = writer.RebuildTypeScriptAugmentationReferences(projectRoot);
+                        if (startedWithNoIndexedFiles)
+                            freshCountReferences += augmentationReferences;
+                    }
                 }
             }
             RestampHotspotFamilyTrustForFullScan(
@@ -2091,9 +2168,7 @@ public static partial class IndexCommandRunner
             // guarantee 100% backfill on a legacy DB).
             // fold は実検証が通ったときだけ stamp。legacy DB で skip された行は NULL のため、
             // 黙って stamp すると reader が fold 経路で legacy 行を見逃す。codex #86 レビュー。
-            var backfillReady = skipped == 0
-                ? writer.AllFoldedColumnsBackfilled()
-                : writer.AllFoldedColumnsBackfilled(skippedSymbolExtractorLanguages);
+            var backfillReady = skipped == 0 || writer.AllFoldedColumnsBackfilled(skippedSymbolExtractorLanguages);
             var foldedKeysCurrent = skipped == 0 || writer.AllFoldedColumnValuesMatchCurrentFold();
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var currentFoldFingerprint = NameFold.Fingerprint();
@@ -2120,7 +2195,9 @@ public static partial class IndexCommandRunner
                 // Issue #1535.
                 // BEGIN IMMEDIATE 内で再検証するため、concurrent writer による NULL 差し込みで
                 // stamp は失敗し、silent な fold-trust 誤広告ではなく legacy 理由に降格する。Issue #1535。
-                foldReadyAfter = writer.MarkFoldReady(stampCurrentSymbolExtractorVersions: skipped == 0);
+                foldReadyAfter = writer.MarkFoldReady(
+                    stampCurrentSymbolExtractorVersions: skipped == 0,
+                    symbolExtractorLanguagesToStamp: skipped == 0 ? indexedSymbolExtractorLanguages : null);
                 if (!foldReadyAfter)
                 {
                     backfillReady = false;
@@ -2130,8 +2207,7 @@ public static partial class IndexCommandRunner
             else
                 foldReadyReasonAfter = GetFoldReadyReason(backfillReady, foldVersionMatchesCurrent, foldFingerprintMatchesCurrent);
 
-            writer.WriteCdidxWriterVersion(ConsoleUi.LoadVersion());
-            writer.SetMeta(SymbolKindFilterMetaKey, options.SymbolKindFilter.Signature);
+            StampWriterVersionAndSymbolKindFilter(writer, ConsoleUi.LoadVersion(), options.SymbolKindFilter.Signature);
 
             // Successful no-op full scans should repair stale / missing explicit-DB roots
             // only after readiness stamps succeed, so an interruption cannot rewrite trust
@@ -2147,11 +2223,12 @@ public static partial class IndexCommandRunner
             // フル成功時のみ HEAD を記録する。partial update は HEAD を触らないので、後続の
             // full scan が「直近 full scan からブランチが動いた」をきちんと検知できる。
             // 非 git workspace で null になった場合はキーごとクリアされる。Issue #1508。
-            writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, currentHeadCommit);
-            writer.SetMeta(DbContext.IndexedHeadCommitBranchMetaKey, GitHelper.TryGetHeadBranch(projectRoot, cancellationToken));
-            writer.SetMeta(
-                DbContext.LastFullScanElapsedMsMetaKey,
-                stopwatch.ElapsedMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            var currentHeadBranch = GitHelper.TryGetHeadBranch(projectRoot, cancellationToken);
+            var lastFullScanElapsedMs = stopwatch.ElapsedMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            writer.SetMetaValues(
+                (DbContext.IndexedHeadCommitMetaKey, currentHeadCommit),
+                (DbContext.IndexedHeadCommitBranchMetaKey, currentHeadBranch),
+                (DbContext.LastFullScanElapsedMsMetaKey, lastFullScanElapsedMs));
             // #1509: also stamp the always-updated "last indexed HEAD" triple (SHA + branch +
             // timestamp). Unlike #1508's IndexedHeadCommitMetaKey which only fires here on
             // full scans, this triple is also stamped at the end of incremental update runs
@@ -2159,11 +2236,14 @@ public static partial class IndexCommandRunner
             // reflects the true HEAD at the time of the most recent successful index.
             // #1509: あらゆる成功 index の終端で更新する HEAD トリプル (SHA + branch + 時刻) も
             // ここで stamp する。full scan / partial update を問わず最新の HEAD を保存する。
-            StampIndexedHeadMetadata(writer, projectRoot, indexRunDiagnostics, cancellationToken);
+            TryStampIndexedHeadMetadata(writer, currentHeadCommit, currentHeadBranch, indexRunDiagnostics);
+            StampWorkspacePathCaseSensitivity(writer, projectRoot, indexRunDiagnostics, cancellationToken);
             if (options.MemoryTrace)
                 memorySamples.Add(CaptureMemorySample("finalize", stopwatch));
             var memoryTimelineForStamp = BuildMemoryTimeline(memorySamples);
-            var bytesRead = MeasureReadableFileBytes(files, projectRoot, indexRunDiagnostics, knownReadableFileSizes);
+            var bytesRead = knownReadableFileSizes.Count == files.Count
+                ? new FileByteReadSummary(knownReadableBytesRead, 0)
+                : MeasureReadableFileBytes(files, projectRoot, indexRunDiagnostics, knownReadableFileSizes);
             StampLastIndexRunMetadata(
                 writer,
                 options.Rebuild ? "rebuild" : "incremental",
@@ -2196,7 +2276,10 @@ public static partial class IndexCommandRunner
             warnings++;
         }
         warnings += AddPostExtractionHookWarnings(postExtractionHooks, warningList);
-        var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
+        var (totalFiles, totalChunks, totalSymbols, totalReferences) =
+            startedWithNoIndexedFiles && !scanHadErrors && errors == 0
+                ? (freshCountFiles, freshCountChunks, freshCountSymbols, freshCountReferences)
+                : writer.GetCounts();
         var signalReader = new DbReader(writer.Connection);
         var sqlGraphContractSignalAfter = signalReader.GetSqlGraphContractSignal(lang: null);
         var hotspotFamilySignalAfter = signalReader.GetHotspotFamilySignal(lang: null);

@@ -110,19 +110,15 @@ internal static class TypeScriptReferenceExtractor
             if (!match.Success)
                 continue;
 
-            foreach (var alias in ExtractNamedImportExportAliases(match.Groups["body"].Value))
-            {
-                AddNamespaceAliasBinding(
-                    bindings,
-                    preparedLines,
-                    alias,
-                    match.Groups["module"].Value,
-                    index + 1,
-                    null,
-                    braceDepths ??= BuildBraceDepthsBeforeLine(preparedLines),
-                    localDeclarationLinesByName ??= BuildLocalDeclarationLinesByName(preparedLines),
-                    parameterShadowRangesByAlias ??= new Dictionary<string, IReadOnlyList<LineRange>>(StringComparer.Ordinal));
-            }
+            AddNamedImportExportAliasBindings(
+                bindings,
+                preparedLines,
+                match.Groups["body"].Value,
+                match.Groups["module"].Value,
+                index + 1,
+                ref braceDepths,
+                ref localDeclarationLinesByName,
+                ref parameterShadowRangesByAlias);
         }
 
         return bindings;
@@ -164,9 +160,16 @@ internal static class TypeScriptReferenceExtractor
         bindings.Add(new NamespaceAliasBinding(alias, module, bindingLine, shadowLine, endLine, scopedShadowRanges));
     }
 
-    private static List<string> ExtractNamedImportExportAliases(string body)
+    private static void AddNamedImportExportAliasBindings(
+        List<NamespaceAliasBinding> bindings,
+        IReadOnlyList<string> preparedLines,
+        string body,
+        string module,
+        int bindingLine,
+        ref int[]? braceDepths,
+        ref IReadOnlyDictionary<string, List<int>>? localDeclarationLinesByName,
+        ref Dictionary<string, IReadOnlyList<LineRange>>? parameterShadowRangesByAlias)
     {
-        var aliases = new List<string>();
         var remaining = body.AsSpan();
         while (true)
         {
@@ -185,15 +188,24 @@ internal static class TypeScriptReferenceExtractor
             var asIndex = item.LastIndexOf(" as ".AsSpan());
             var alias = asIndex >= 0 ? item[(asIndex + 4)..].Trim() : item;
             if (IsTypeScriptIdentifier(alias))
-                aliases.Add(alias.ToString());
+            {
+                AddNamespaceAliasBinding(
+                    bindings,
+                    preparedLines,
+                    alias.ToString(),
+                    module,
+                    bindingLine,
+                    null,
+                    braceDepths ??= BuildBraceDepthsBeforeLine(preparedLines),
+                    localDeclarationLinesByName ??= BuildLocalDeclarationLinesByName(preparedLines),
+                    parameterShadowRangesByAlias ??= new Dictionary<string, IReadOnlyList<LineRange>>(StringComparer.Ordinal));
+            }
 
             if (commaIndex < 0)
                 break;
 
             remaining = remaining[(commaIndex + 1)..];
         }
-
-        return aliases;
     }
 
     public static void EmitTypePositionReferences(
@@ -365,25 +377,36 @@ internal static class TypeScriptReferenceExtractor
             return;
         }
 
-        HashSet<string>? emittedAliases = aliases.Count > 1
-            ? new HashSet<string>(StringComparer.Ordinal)
-            : null;
+        HashSet<string>? emittedAliases = null;
         foreach (var bindingCandidate in aliases)
         {
             var alias = bindingCandidate.Alias;
-            if (emittedAliases is not null && !emittedAliases.Add(alias))
+            var index = preparedLine.IndexOf(alias, StringComparison.Ordinal);
+            if (index < 0)
                 continue;
 
-            var searchStart = 0;
-            while (searchStart < preparedLine.Length)
+            if (aliases.Count > 1
+                && !(emittedAliases ??= new HashSet<string>(StringComparer.Ordinal)).Add(alias))
             {
-                var index = preparedLine.IndexOf(alias, searchStart, StringComparison.Ordinal);
-                if (index < 0)
-                    break;
+                continue;
+            }
 
-                searchStart = index + alias.Length;
+            while (true)
+            {
                 if (!HasIdentifierBoundaries(preparedLine, index, alias.Length))
+                {
+                    if (!TryAdvanceToNextAliasOccurrence(preparedLine, alias, ref index))
+                        break;
                     continue;
+                }
+                var binding = FindActiveTypeAliasBinding(aliases, alias, lineNumber);
+                if (binding is null)
+                {
+                    if (!TryAdvanceToNextAliasOccurrence(preparedLine, alias, ref index))
+                        break;
+                    continue;
+                }
+
                 var column = index + 1;
                 var container = resolveContainerForColumn(index);
                 if (!seen.Contains(ReferenceExtractor.BuildReferenceDedupeKey(
@@ -395,12 +418,10 @@ internal static class TypeScriptReferenceExtractor
                         alias,
                         container)))
                 {
+                    if (!TryAdvanceToNextAliasOccurrence(preparedLine, alias, ref index))
+                        break;
                     continue;
                 }
-
-                var binding = FindActiveTypeAliasBinding(aliases, alias, lineNumber);
-                if (binding is null)
-                    continue;
 
                 TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
                     binding.Value.Target,
@@ -413,8 +434,17 @@ internal static class TypeScriptReferenceExtractor
                     lineNumber,
                     container,
                     binding.Value.TypeParameters);
+
+                if (!TryAdvanceToNextAliasOccurrence(preparedLine, alias, ref index))
+                    break;
             }
         }
+    }
+
+    private static bool TryAdvanceToNextAliasOccurrence(string preparedLine, string alias, ref int index)
+    {
+        index = preparedLine.IndexOf(alias, index + alias.Length, StringComparison.Ordinal);
+        return index >= 0;
     }
 
     private static TypeAliasBinding? FindActiveTypeAliasBinding(
@@ -453,6 +483,9 @@ internal static class TypeScriptReferenceExtractor
         for (var index = 0; index < preparedLines.Count; index++)
         {
             var line = preparedLines[index];
+            if (!line.Contains(alias, StringComparison.Ordinal))
+                continue;
+
             var typeDeclaration = TypeDeclarationShadowRegex.Match(line);
             if (typeDeclaration.Success && string.Equals(typeDeclaration.Groups["name"].Value, alias, StringComparison.Ordinal))
             {

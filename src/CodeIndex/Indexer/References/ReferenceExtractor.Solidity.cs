@@ -69,6 +69,9 @@ public static partial class ReferenceExtractor
         int lineNumber,
         InnermostContainerResolver containerResolver)
     {
+        if (!MayContainSolidityInheritanceMarker(line))
+            return;
+
         var match = SolidityInheritanceRegex.Match(line);
         if (!match.Success)
             return;
@@ -93,6 +96,27 @@ public static partial class ReferenceExtractor
         }
     }
 
+    private static bool MayContainSolidityInheritanceMarker(string line)
+    {
+        var index = line.IndexOf("is", StringComparison.Ordinal);
+        while (index >= 0)
+        {
+            var before = index - 1;
+            var after = index + "is".Length;
+            if (before >= 0
+                && after < line.Length
+                && char.IsWhiteSpace(line[before])
+                && char.IsWhiteSpace(line[after]))
+            {
+                return true;
+            }
+
+            index = line.IndexOf("is", index + "is".Length, StringComparison.Ordinal);
+        }
+
+        return false;
+    }
+
     private static void AddSolidityLibraryReferences(
         List<ReferenceRecord> references,
         HashSet<string> seen,
@@ -102,6 +126,12 @@ public static partial class ReferenceExtractor
         int lineNumber,
         InnermostContainerResolver containerResolver)
     {
+        if (line.IndexOf("using", StringComparison.Ordinal) < 0
+            || line.IndexOf("for", StringComparison.Ordinal) < 0)
+        {
+            return;
+        }
+
         var match = SolidityUsingLibraryRegex.Match(line);
         if (!match.Success)
             return;
@@ -119,6 +149,12 @@ public static partial class ReferenceExtractor
         int lineNumber,
         InnermostContainerResolver containerResolver)
     {
+        if (line.IndexOf('(') < 0
+            || !MayContainSolidityCallableHeader(line))
+        {
+            return;
+        }
+
         var header = SolidityCallableHeaderRegex.Match(line);
         if (!header.Success)
             return;
@@ -152,6 +188,12 @@ public static partial class ReferenceExtractor
         int lineNumber,
         InnermostContainerResolver containerResolver)
     {
+        if (line.IndexOf("emit", StringComparison.Ordinal) < 0
+            || line.IndexOf('(') < 0)
+        {
+            return;
+        }
+
         foreach (Match match in SolidityEmitRegex.Matches(line))
         {
             var name = match.Groups["name"];
@@ -168,6 +210,9 @@ public static partial class ReferenceExtractor
         int lineNumber,
         InnermostContainerResolver containerResolver)
     {
+        if (line.IndexOf('.') < 0 || line.IndexOf('(') < 0)
+            return;
+
         foreach (Match match in SolidityInterfaceCastCallRegex.Matches(line))
         {
             var type = match.Groups["type"];
@@ -177,6 +222,12 @@ public static partial class ReferenceExtractor
             AddSolidityReference(references, seen, fileId, method.Value, method.Index, "call", context, lineNumber, containerResolver);
         }
     }
+
+    private static bool MayContainSolidityCallableHeader(string line)
+        => line.IndexOf("function", StringComparison.Ordinal) >= 0
+           || line.IndexOf("constructor", StringComparison.Ordinal) >= 0
+           || line.IndexOf("fallback", StringComparison.Ordinal) >= 0
+           || line.IndexOf("receive", StringComparison.Ordinal) >= 0;
 
     private static void AddSolidityReference(
         List<ReferenceRecord> references,

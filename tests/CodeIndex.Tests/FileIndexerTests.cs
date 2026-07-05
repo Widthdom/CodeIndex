@@ -3350,6 +3350,28 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFilesDetailed_ReturnsLanguageCounts()
+    {
+        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        try
+        {
+            File.WriteAllText(Path.Combine(tempDir, "Program.cs"), "class Program {}");
+            File.WriteAllText(Path.Combine(tempDir, "Service.cs"), "class Service {}");
+            File.WriteAllText(Path.Combine(tempDir, "script.py"), "print('hello')");
+
+            var result = new FileIndexer(tempDir).ScanFilesDetailed();
+
+            Assert.Equal(2, result.LanguageCounts["csharp"]);
+            Assert.Equal(1, result.LanguageCounts["python"]);
+            Assert.False(result.LanguageCounts.ContainsKey("ruby"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_RespectsRootAnchoredGitignorePatterns()
     {
         var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");

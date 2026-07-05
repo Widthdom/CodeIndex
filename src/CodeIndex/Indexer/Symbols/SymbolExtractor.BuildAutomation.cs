@@ -36,6 +36,13 @@ public static partial class SymbolExtractor
         "Reference",
     };
 
+    private const string MsBuildNameDoubleQuoteAttribute = "Name=\"";
+    private const string MsBuildNameSingleQuoteAttribute = "Name='";
+    private const string MsBuildProjectDoubleQuoteAttribute = "Project=\"";
+    private const string MsBuildProjectSingleQuoteAttribute = "Project='";
+    private const string MsBuildIncludeDoubleQuoteAttribute = "Include=\"";
+    private const string MsBuildIncludeSingleQuoteAttribute = "Include='";
+
     private static List<SymbolRecord> ExtractMsBuildSymbols(long fileId, string content, string[] lines)
     {
         List<SymbolRecord>? symbols = null;
@@ -287,17 +294,20 @@ public static partial class SymbolExtractor
         int lineNumber,
         SymbolRecord? activeTarget)
     {
-        var line = GetLineOrEmpty(lines, lineNumber);
-        var name = GetMsBuildAttributeValue(line, "Name");
-        if (string.Equals(elementName, "Target", StringComparison.OrdinalIgnoreCase)
-            && !string.IsNullOrWhiteSpace(name))
+        if (string.Equals(elementName, "Target", StringComparison.OrdinalIgnoreCase))
         {
-            (symbols ??= []).Add(CreateMsBuildSymbol(fileId, "function", name, lineNumber, line, activeTarget));
-            return symbols.Count - 1;
+            var line = GetLineOrEmpty(lines, lineNumber);
+            var name = GetMsBuildAttributeValue(line, "Name");
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                (symbols ??= []).Add(CreateMsBuildSymbol(fileId, "function", name, lineNumber, line, activeTarget));
+                return symbols.Count - 1;
+            }
         }
 
         if (string.Equals(elementName, "Import", StringComparison.OrdinalIgnoreCase))
         {
+            var line = GetLineOrEmpty(lines, lineNumber);
             var project = GetMsBuildAttributeValue(line, "Project");
             if (!string.IsNullOrWhiteSpace(project))
                 (symbols ??= []).Add(CreateMsBuildSymbol(fileId, "import", project, lineNumber, line, activeTarget));
@@ -306,6 +316,7 @@ public static partial class SymbolExtractor
 
         if (MsBuildImportItemElements.Contains(elementName))
         {
+            var line = GetLineOrEmpty(lines, lineNumber);
             var include = GetMsBuildAttributeValue(line, "Include");
             if (!string.IsNullOrWhiteSpace(include))
                 (symbols ??= []).Add(CreateMsBuildSymbol(fileId, "import", include, lineNumber, line, activeTarget));
@@ -315,6 +326,7 @@ public static partial class SymbolExtractor
         if (string.Equals(parentName, "PropertyGroup", StringComparison.OrdinalIgnoreCase)
             && !MsBuildContainerElements.Contains(elementName))
         {
+            var line = GetLineOrEmpty(lines, lineNumber);
             (symbols ??= []).Add(CreateMsBuildSymbol(fileId, "property", elementName, lineNumber, line, activeTarget));
         }
 
@@ -345,12 +357,24 @@ public static partial class SymbolExtractor
 
     private static string? GetMsBuildAttributeValue(string line, string attributeName)
     {
-        var ordinalPattern = attributeName + "=\"";
+        var ordinalPattern = attributeName switch
+        {
+            "Name" => MsBuildNameDoubleQuoteAttribute,
+            "Project" => MsBuildProjectDoubleQuoteAttribute,
+            "Include" => MsBuildIncludeDoubleQuoteAttribute,
+            _ => attributeName + "=\"",
+        };
         var ordinalIndex = line.IndexOf(ordinalPattern, StringComparison.OrdinalIgnoreCase);
         if (ordinalIndex >= 0)
             return ReadQuotedMsBuildAttributeValue(line, ordinalIndex + ordinalPattern.Length, '"');
 
-        var singlePattern = attributeName + "='";
+        var singlePattern = attributeName switch
+        {
+            "Name" => MsBuildNameSingleQuoteAttribute,
+            "Project" => MsBuildProjectSingleQuoteAttribute,
+            "Include" => MsBuildIncludeSingleQuoteAttribute,
+            _ => attributeName + "='",
+        };
         var singleIndex = line.IndexOf(singlePattern, StringComparison.OrdinalIgnoreCase);
         return singleIndex >= 0
             ? ReadQuotedMsBuildAttributeValue(line, singleIndex + singlePattern.Length, '\'')

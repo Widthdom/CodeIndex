@@ -16,6 +16,8 @@ public partial class FileIndexer
     internal static Func<string, FileSystemInfo?>? ResolveDirectoryLinkTargetForTesting { get; set; }
 
     private static readonly string[] HotspotFamilyMarkerLanguages = ["csharp", "vb", "fsharp", "msbuild"];
+    private static readonly IReadOnlyDictionary<string, int> EmptyLanguageCounts =
+        new Dictionary<string, int>(StringComparer.Ordinal);
     private const int MaxDirectoryTraversalDepth = 128;
     private const int GitLfsPointerMaxBytes = 1024;
     private const int MaxGitmodulesBytes = 256 * 1024;
@@ -74,16 +76,19 @@ public partial class FileIndexer
     internal static Func<string, IEnumerable<string>>? EnumerateProjectMarkerDirectoriesForTesting { get; set; }
     internal static Func<string, IReadOnlyList<string>>? ReadGitmodulesLinesForTesting { get; set; }
 
+    private static readonly IReadOnlySet<string> EmptyCheckpointedDirectorySet = new HashSet<string>(StringComparer.Ordinal);
+
     private sealed record DirectoryScanState(
         List<string> Results,
         Dictionary<string, string> FileLanguages,
+        Dictionary<string, int> LanguageCounts,
         List<ScanError> Errors,
         HashSet<string> NonIndexablePaths,
         HashSet<string> UnknownExtensionFiles,
         HashSet<string> ProbeFailedFilePaths,
         HashSet<string> ListedDirectories,
         HashSet<string> FullyScannedDirectories,
-        HashSet<string> CheckpointedDirectories,
+        IReadOnlySet<string> CheckpointedDirectories,
         HashSet<string> AttributePrunedDirectories,
         HashSet<string> NestedRepositories,
         HashSet<string> DanglingSymlinks,

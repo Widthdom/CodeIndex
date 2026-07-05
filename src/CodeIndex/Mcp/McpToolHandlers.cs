@@ -3025,9 +3025,20 @@ public partial class McpServer
 
     private static Dictionary<string, string?> GetHotspotFamilyMetaSnapshot(DbContext db, Func<string, string> keyFactory)
     {
+        var languages = FileIndexer.GetHotspotFamilyMarkerLanguages();
         var values = new Dictionary<string, string?>(StringComparer.Ordinal);
-        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
-            values[lang] = db.GetMetaString(keyFactory(lang));
+        var keys = new string[languages.Count];
+        for (var i = 0; i < languages.Count; i++)
+        {
+            var lang = languages[i];
+            keys[i] = keyFactory(lang);
+            values[lang] = null;
+        }
+
+        var metaValues = db.GetMetaStrings(keys);
+        for (var i = 0; i < languages.Count; i++)
+            values[languages[i]] = metaValues.TryGetValue(keys[i], out var value) ? value : null;
+
         return values;
     }
 
@@ -5401,15 +5412,26 @@ public partial class McpServer
         // index 呼び出しごとに新しい接続を開かず、セッション共有 DbContext を再利用する（#1494）。
         // 後段の InitializeSchema は冪等なので共有接続でもレガシー DB の移行は正しく走る。
         var db = GetOrOpenSharedDb();
-        var priorFoldVersion = db.GetMetaString("fold_key_version");
-        var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
-        var priorCSharpSymbolNameContractVersion = db.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey);
-        var priorMetadataTargetCsharp = db.GetMetaString(DbContext.GetMetadataTargetVersionMetaKey("csharp"));
-        var priorSqlGraphContractVersion = db.GetMetaString(DbContext.SqlGraphContractVersionMetaKey);
+        var csharpMetadataTargetVersionMetaKey = DbContext.GetMetadataTargetVersionMetaKey("csharp");
+        var priorMeta = db.GetMetaStrings(
+        [
+            "fold_key_version",
+            "fold_key_fingerprint",
+            DbContext.CSharpSymbolNameContractVersionMetaKey,
+            csharpMetadataTargetVersionMetaKey,
+            DbContext.SqlGraphContractVersionMetaKey,
+            DbContext.IndexedProjectRootMetaKey,
+            IndexCommandRunner.SymbolKindFilterMetaKey,
+        ]);
+        var priorFoldVersion = priorMeta["fold_key_version"];
+        var priorFoldFingerprint = priorMeta["fold_key_fingerprint"];
+        var priorCSharpSymbolNameContractVersion = priorMeta[DbContext.CSharpSymbolNameContractVersionMetaKey];
+        var priorMetadataTargetCsharp = priorMeta[csharpMetadataTargetVersionMetaKey];
+        var priorSqlGraphContractVersion = priorMeta[DbContext.SqlGraphContractVersionMetaKey];
         var priorHotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyVersionMetaKey);
         var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
-        var priorIndexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
-        var priorSymbolKindFilterSignature = db.GetMetaString(IndexCommandRunner.SymbolKindFilterMetaKey);
+        var priorIndexedProjectRoot = priorMeta[DbContext.IndexedProjectRootMetaKey];
+        var priorSymbolKindFilterSignature = priorMeta[IndexCommandRunner.SymbolKindFilterMetaKey];
         var requestToken = _currentRequestToken.Value;
         requestToken.ThrowIfCancellationRequested();
         // Capture git HEAD so subsequent queries can detect a worktree branch / HEAD switch
@@ -5440,6 +5462,7 @@ public partial class McpServer
         MarkSharedDbMigrated();
 
         var writer = new DbWriter(db);
+        writer.RecoverInterruptedFtsBulkLoadIfNeeded();
         var indexer = new FileIndexer(
             projectPath,
             GitHelper.ResolveIgnoreCase(projectPath, requestToken),
@@ -5479,6 +5502,15 @@ public partial class McpServer
             || !typeScriptAugmentationVersionMatchesCurrent;
         var typeScriptAugmentationReadyCleared = !typeScriptAugmentationVersionMatchesCurrent;
         var ftsMutated = false;
+        var startedWithNoIndexedFiles = !writer.HasAnyIndexedFiles();
+
+        void InsertIssuesForIndexedFile(long fileId, IReadOnlyList<FileIssue> issues)
+        {
+            if (startedWithNoIndexedFiles)
+                writer.InsertIssuesForNewFile(fileId, issues);
+            else
+                writer.InsertIssues(fileId, issues);
+        }
 
         static bool PathsEqual(string? left, string? right)
         {
@@ -5585,11 +5617,13 @@ public partial class McpServer
         writer.ClearHotspotFamilyReady();
         writer.ClearMetadataTargetReady();
 
-        var hadCSharpStaticInterfaceContractsBeforePurge =
-            writer.LoadCSharpStaticInterfaceContractSymbols().Count > 0;
+        var hadCSharpStaticInterfaceContractsBeforePurge = !startedWithNoIndexedFiles
+            && writer.LoadCSharpStaticInterfaceContractSymbols().Count > 0;
 
         // Purge stale files / 古いファイルをパージ
-        var purged = writer.PurgeStaleFiles(projectPath, beforeCommit: RequireTypeScriptAugmentationRefresh);
+        var purged = startedWithNoIndexedFiles
+            ? 0
+            : writer.PurgeStaleFiles(projectPath, beforeCommit: RequireTypeScriptAugmentationRefresh);
         if (purged > 0)
         {
             csharpMetadataTargetsNeedRefresh = true;
@@ -5598,15 +5632,21 @@ public partial class McpServer
         }
 
         // Purge references for languages no longer graph-supported / グラフ非対応になった言語の参照をパージ
-        writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
+        if (!startedWithNoIndexedFiles)
+            writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
 
         // Scan and index / スキャン・インデックス
         var scanResult = indexer.ScanFilesDetailed(cancellationToken: requestToken);
+        var scanHadErrors = scanResult.HadErrors;
         if (memorySamples != null)
             memorySamples.Add(CaptureMcpIndexMemorySample("scan", runStopwatch));
         var files = scanResult.Files;
         var fileTargets = new CSharpStaticInterfacePrepass.FileTarget[files.Count];
-        var csharpPrepassTargets = new List<CSharpStaticInterfacePrepass.FileTarget>();
+        var languageCounts = scanResult.LanguageCounts;
+        var csharpPrepassTargetCapacity = languageCounts.TryGetValue("csharp", out var csharpFileCount) ? csharpFileCount : 0;
+        var csharpPrepassTargets = new List<CSharpStaticInterfacePrepass.FileTarget>(csharpPrepassTargetCapacity);
+        var hasSqlTargets = languageCounts.ContainsKey("sql");
+        var hasTypeScriptTargets = languageCounts.ContainsKey("typescript");
         var hasGeneratedCodeExtractionSuppressionPatterns = indexer.HasGeneratedCodeExtractionSuppressionPatterns;
         for (var i = 0; i < files.Count; i++)
         {
@@ -5622,9 +5662,18 @@ public partial class McpServer
             if (language == "csharp")
                 csharpPrepassTargets.Add(target);
         }
-        var knownReadableFileSizes = new Dictionary<string, long>(StringComparer.Ordinal);
+        var knownReadableFileSizes = new Dictionary<string, long>(files.Count, StringComparer.Ordinal);
+        long knownReadableBytesRead = 0;
+        void RememberReadableFileSize(string path, long size)
+        {
+            if (knownReadableFileSizes.TryGetValue(path, out var priorSize))
+                knownReadableBytesRead += size - priorSize;
+            else
+                knownReadableBytesRead += size;
+            knownReadableFileSizes[path] = size;
+        }
         await EmitProgressNotificationAsync(progressToken, 0, files.Count, "Index scan complete; indexing files.").ConfigureAwait(false);
-        var csharpPrepassStatReuse = new Dictionary<string, IndexedFileStatReuseResult?>(StringComparer.Ordinal);
+        Dictionary<string, IndexedFileStatReuseResult?>? csharpPrepassStatReuse = null;
         bool IsGeneratedExtractionSuppressed(CSharpStaticInterfacePrepass.FileTarget target)
             => target.GeneratedExtractionSuppressed == true;
 
@@ -5646,11 +5695,15 @@ public partial class McpServer
                 allowReuse: true);
             if (existingFile == null)
             {
-                csharpPrepassStatReuse[target.IndexPath] = null;
+                (csharpPrepassStatReuse ??= new Dictionary<string, IndexedFileStatReuseResult?>(
+                    csharpPrepassTargetCapacity,
+                    StringComparer.Ordinal))[target.IndexPath] = null;
                 return false;
             }
 
-            csharpPrepassStatReuse[target.IndexPath] = existingFile.Value;
+            (csharpPrepassStatReuse ??= new Dictionary<string, IndexedFileStatReuseResult?>(
+                csharpPrepassTargetCapacity,
+                StringComparer.Ordinal))[target.IndexPath] = existingFile.Value;
             return true;
         }
 
@@ -5666,21 +5719,45 @@ public partial class McpServer
                 writer,
                 indexer,
                 csharpPrepassTargets,
+                includeExistingSymbols: !rebuild && !startedWithNoIndexedFiles,
                 canReuseExistingSymbolsWithoutRead: CanReuseCSharpPrepassTargetWithoutRead,
                 isGeneratedCodeExtractionSuppressed: IsGeneratedExtractionSuppressed,
                 cancellationToken: requestToken);
         }
         if (purged > 0 && hadCSharpStaticInterfaceContractsBeforePurge)
             csharpWorkspace = csharpWorkspace with { HasStaticInterfaceContracts = true };
-        var fatalScanErrors = scanResult.Errors
-            .Where(error => error.IsFatal)
-            .ToList();
-        int processed = 0, skipped = 0, errors = fatalScanErrors.Count;
-        var failures = fatalScanErrors
-            .Select(BuildScanFailure)
-            .ToList();
+        var failures = new List<IndexFileFailure>();
+        if (scanHadErrors)
+        {
+            foreach (var error in scanResult.Errors)
+            {
+                if (error.IsFatal)
+                    failures.Add(BuildScanFailure(error));
+            }
+        }
+        int processed = 0, skipped = 0, errors = failures.Count;
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
+        var indexedSymbolExtractorLanguages = new HashSet<string>(StringComparer.Ordinal);
         var symbolsDroppedByKindFilter = 0;
+        var mutualRecursionRefreshNeeded = false;
+        var freshCountFiles = 0L;
+        var freshCountChunks = 0L;
+        var freshCountSymbols = 0L;
+        var freshCountReferences = 0L;
+        void CountFreshInsertedRows(
+            int chunkCount = 0,
+            int symbolCount = 0,
+            int referenceCount = 0)
+        {
+            if (!startedWithNoIndexedFiles)
+                return;
+
+            freshCountFiles++;
+            freshCountChunks += chunkCount;
+            freshCountSymbols += symbolCount;
+            freshCountReferences += referenceCount;
+        }
+        using var ftsBulkLoad = FtsBulkLoadTriggerGuard.Start(writer, rebuild || startedWithNoIndexedFiles, () => ftsMutated);
 
         foreach (var target in fileTargets)
         {
@@ -5689,13 +5766,16 @@ public partial class McpServer
             try
             {
                 requestToken.ThrowIfCancellationRequested();
-                var allowStatReuse = symbolKindFilterMatchesPrior
+                var allowStatReuse = !rebuild
+                    && !startedWithNoIndexedFiles
+                    && symbolKindFilterMatchesPrior
                     && (target.Language != "csharp" || csharpSymbolNameContractMatchesCurrent)
                     && (target.Language != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                     && (target.Language != "sql" || sqlGraphContractMatchesCurrent)
                     && AllowReuseWithCurrentHotspotFamilyTrust(target.Language, hotspotFamilyTrustMatchesCurrent);
                 var statMatchedFile = allowStatReuse
                     && target.Language == "csharp"
+                    && csharpPrepassStatReuse != null
                     && csharpPrepassStatReuse.TryGetValue(target.IndexPath, out var cachedCSharpPrepassReuse)
                         ? cachedCSharpPrepassReuse
                         : IndexedFileStatReuse.TryGetReusableUnchangedFile(
@@ -5711,7 +5791,7 @@ public partial class McpServer
                 {
                     skipped++;
                     processed++;
-                    knownReadableFileSizes[filePath] = statMatchedFile.Value.Size;
+                    RememberReadableFileSize(filePath, statMatchedFile.Value.Size);
                     if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(target.Language) && target.Language != null)
                         reusedHotspotFamilyLanguages.Add(target.Language);
                     await EmitProgressNotificationAsync(progressToken, processed, files.Count).ConfigureAwait(false);
@@ -5725,7 +5805,7 @@ public partial class McpServer
                     target.Language,
                     requestToken);
                 var record = loaded.Record;
-                knownReadableFileSizes[filePath] = record.Size;
+                RememberReadableFileSize(filePath, record.Size);
                 var content = loaded.Content;
                 var rawBytes = loaded.RawBytes;
                 var generatedSuppressionIssue = IsGeneratedExtractionSuppressed(target)
@@ -5742,7 +5822,9 @@ public partial class McpServer
                     maxSymbolsPerFile: maxSymbolsPerFile,
                     maxReferencesPerFile: maxReferencesPerFile,
                     generatedExtractionSuppressed: generatedSuppressionIssue != null,
-                    allowReuse: symbolKindFilterMatchesPrior
+                    allowReuse: !rebuild
+                        && !startedWithNoIndexedFiles
+                        && symbolKindFilterMatchesPrior
                         && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                         && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                         && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)
@@ -5765,7 +5847,7 @@ public partial class McpServer
                 using var txn = writer.BeginTransaction(requestToken, "mcp index file");
                 if (recordRequiresTypeScriptAugmentationRefresh)
                     RequireTypeScriptAugmentationRefresh();
-                var fileId = writer.UpsertFile(record);
+                var fileId = writer.UpsertFile(record, cleanExistingData: !startedWithNoIndexedFiles);
                 var chunks = ChunkSplitter.SplitNormalized(fileId, content, loaded.HasOversizeLine, record.Lines);
                 if (generatedSuppressionIssue != null)
                 {
@@ -5775,10 +5857,11 @@ public partial class McpServer
                     var issues = IndexCommandRunner.AppendIssueIfMissing(
                         FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine, loaded.ConflictMarkerLine),
                         generatedSuppressionIssue);
-                    writer.InsertIssues(fileId, issues);
+                    InsertIssuesForIndexedFile(fileId, issues);
                     WriteProjectRootOnce();
                     writer.ClearBatchInProgress();
                     txn.Commit();
+                    CountFreshInsertedRows(chunkCount: chunks.Count);
                     ftsMutated = true;
                     processed++;
                     await EmitProgressNotificationAsync(progressToken, processed, files.Count).ConfigureAwait(false);
@@ -5804,6 +5887,9 @@ public partial class McpServer
                 var fileContext = new FileContext(projectPath, record.Path, filePath, record.Lang);
                 postExtractionHooks.Value.OnSymbolsExtracted(fileContext, symbols);
                 symbolsDroppedByKindFilter += symbolKindFilter.Apply(symbols);
+                var committedChunkCount = 0;
+                var committedSymbolCount = 0;
+                var committedReferenceCount = 0;
                 if (symbols.Count > maxSymbolsPerFile)
                 {
                     var issue = BuildMcpSymbolCountExceededIssue(record.Path, symbols.Count, maxSymbolsPerFile);
@@ -5812,7 +5898,7 @@ public partial class McpServer
                         : IndexCommandRunner.AppendIssue([symbolRegexTimeoutIssue], issue);
                     writer.InsertSymbols([], requestToken);
                     writer.InsertReferences([], requestToken);
-                    writer.InsertIssues(fileId, capIssues);
+                    InsertIssuesForIndexedFile(fileId, capIssues);
                 }
                 else
                 {
@@ -5842,7 +5928,12 @@ public partial class McpServer
                         referenceCapIssue = BuildMcpReferenceCountExceededIssue(record.Path, references.Count, maxReferencesPerFile);
                         references = [];
                     }
-                    writer.InsertReferences(references, requestToken);
+                    writer.InsertReferences(references, refreshMutualRecursionFlags: false, requestToken);
+                    if (references.Count > 0)
+                        mutualRecursionRefreshNeeded = true;
+                    committedChunkCount = chunks.Count;
+                    committedSymbolCount = symbols.Count;
+                    committedReferenceCount = references.Count;
                     // Keep MCP index parity with CLI index: persist file-level validation issues too.
                     // MCPインデックスもCLIインデックスと同等に、ファイル検証issueを保存する。
                     IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine, loaded.ConflictMarkerLine);
@@ -5852,11 +5943,14 @@ public partial class McpServer
                         issues = IndexCommandRunner.AppendIssue(issues, regexTimeoutIssue);
                     if (referenceCapIssue != null)
                         issues = IndexCommandRunner.AppendIssue(issues, referenceCapIssue);
-                    writer.InsertIssues(fileId, issues);
+                    InsertIssuesForIndexedFile(fileId, issues);
                 }
                 WriteProjectRootOnce();
                 writer.ClearBatchInProgress();
                 txn.Commit();
+                if (!string.IsNullOrWhiteSpace(record.Lang))
+                    indexedSymbolExtractorLanguages.Add(record.Lang);
+                CountFreshInsertedRows(committedChunkCount, committedSymbolCount, committedReferenceCount);
                 ftsMutated = true;
                 McpIndexFileCommittedForTesting?.Invoke(record.Path);
             }
@@ -5865,20 +5959,23 @@ public partial class McpServer
                 try
                 {
                     var skippedRecord = indexer.BuildSkippedFileRecord(filePath, target.RelativePath, target.Language);
-                    knownReadableFileSizes[filePath] = skippedRecord.Size;
+                    RememberReadableFileSize(filePath, skippedRecord.Size);
                     if (skippedRecord.Lang == "csharp")
                         csharpMetadataTargetsNeedRefresh = true;
                     var skippedRecordRequiresTypeScriptAugmentationRefresh = skippedRecord.Lang == "typescript";
                     using var txn = writer.BeginTransaction(requestToken, "mcp index skipped binary");
                     if (skippedRecordRequiresTypeScriptAugmentationRefresh)
                         RequireTypeScriptAugmentationRefresh();
-                    var fileId = writer.UpsertFile(skippedRecord);
+                    var fileId = writer.UpsertFile(skippedRecord, cleanExistingData: !startedWithNoIndexedFiles);
                     writer.InsertChunks([], requestToken);
                     writer.InsertSymbols([], requestToken);
                     writer.InsertReferences([], requestToken);
-                    writer.InsertIssues(fileId, [IndexCommandRunner.BuildNullByteIssue(ex)]);
+                    InsertIssuesForIndexedFile(fileId, [IndexCommandRunner.BuildNullByteIssue(ex)]);
                     WriteProjectRootOnce();
                     txn.Commit();
+                    if (!string.IsNullOrWhiteSpace(skippedRecord.Lang))
+                        indexedSymbolExtractorLanguages.Add(skippedRecord.Lang);
+                    CountFreshInsertedRows();
                     ftsMutated = true;
                 }
                 catch (Exception cleanupEx)
@@ -5929,7 +6026,18 @@ public partial class McpServer
             await EmitProgressNotificationAsync(progressToken, processed, files.Count).ConfigureAwait(false);
         }
 
-        if (ftsMutated)
+        if (mutualRecursionRefreshNeeded)
+        {
+            requestToken.ThrowIfCancellationRequested();
+            await EmitProgressNotificationAsync(progressToken, processed, files.Count, "Finalizing reference graph.").ConfigureAwait(false);
+            writer.RefreshMutualRecursionFlags();
+        }
+
+        if (ftsBulkLoad != null)
+        {
+            ftsBulkLoad.Complete(ftsMutated, McpIndexFtsOptimizeForTesting);
+        }
+        else if (ftsMutated)
         {
             McpIndexFtsOptimizeForTesting?.Invoke();
             writer.OptimizeFts();
@@ -5939,22 +6047,26 @@ public partial class McpServer
         // path is no longer accurate. Bits are only stamped when every file committed without
         // throwing, so a partial failure leaves trust degraded and `validate` still surfaces it.
         // MCP index は CLI と同等に file_issues を永続化するため、成功時は graph / issues の両方を stamp する。
-        var hasCSharpFilesAfter = writer.HasAnyFilesWithLanguage("csharp");
-        var hasSqlFilesAfter = writer.HasAnyFilesWithLanguage("sql");
+        var useFreshTargetLanguages = startedWithNoIndexedFiles && !scanHadErrors && errors == 0;
+        var hasCSharpFilesAfter = useFreshTargetLanguages
+            ? csharpPrepassTargets.Count > 0
+            : writer.HasAnyFilesWithLanguage("csharp");
+        var hasSqlFilesAfter = useFreshTargetLanguages
+            ? hasSqlTargets
+            : writer.HasAnyFilesWithLanguage("sql");
         var csharpSymbolNameReadyAfter = !hasCSharpFilesAfter;
         var csharpMetadataTargetReadyAfter = !hasCSharpFilesAfter;
         var sqlGraphContractReadyAfter = !hasSqlFilesAfter;
         var foldReadyAfter = false;
         string? foldReadyReason = null;
-        if (!scanResult.HadErrors && errors == 0)
+        if (!scanHadErrors && errors == 0)
         {
             await EmitProgressNotificationAsync(progressToken, processed, files.Count, "Finalizing index metadata.").ConfigureAwait(false);
             writer.MarkBatchInProgress();
             using var readinessTxn = writer.BeginTransaction(requestToken, "mcp index readiness");
             writer.MarkGraphReady();
             writer.MarkIssuesReady();
-            writer.MarkSqlGraphContractReady();
-            writer.MarkCSharpSymbolNameContractReady();
+            writer.MarkIndexReaderContractsReady(symbolsOnlyGraphOmitted: false);
             csharpSymbolNameReadyAfter = true;
             if (hasCSharpFilesAfter)
             {
@@ -5973,8 +6085,17 @@ public partial class McpServer
             sqlGraphContractReadyAfter = true;
             if (typeScriptAugmentationNeedsRefresh)
             {
-                McpIndexTypeScriptAugmentationRebuildForTesting?.Invoke();
-                writer.RebuildTypeScriptAugmentationReferences(projectPath);
+                if (startedWithNoIndexedFiles && !hasTypeScriptTargets)
+                {
+                    writer.MarkTypeScriptAugmentationReady();
+                }
+                else
+                {
+                    McpIndexTypeScriptAugmentationRebuildForTesting?.Invoke();
+                    var augmentationReferences = writer.RebuildTypeScriptAugmentationReferences(projectPath);
+                    if (startedWithNoIndexedFiles)
+                        freshCountReferences += augmentationReferences;
+                }
             }
             RestampHotspotFamilyTrust(
                 writer,
@@ -5987,7 +6108,7 @@ public partial class McpServer
             // name_folded / *_folded. Stamp only when every row is backfilled; otherwise readers
             // would silently miss legacy rows on the folded-equality path. Codex #86 review.
             // MCP も incremental で skip される legacy 行が残るため、実検証を通してから stamp。
-            var backfillReady = writer.AllFoldedColumnsBackfilled();
+            var backfillReady = skipped == 0 || writer.AllFoldedColumnsBackfilled();
             var foldedKeysCurrent = skipped == 0 || writer.AllFoldedColumnValuesMatchCurrentFold();
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var currentFoldFingerprint = NameFold.Fingerprint();
@@ -6002,7 +6123,9 @@ public partial class McpServer
                 // Issue #1535.
                 // BEGIN IMMEDIATE 内で再検証する。concurrent NULL 差し込みで stamp が失敗した
                 // 場合は missing_fold_backfill に降格する。Issue #1535。
-                foldReadyAfter = writer.MarkFoldReady();
+                foldReadyAfter = writer.MarkFoldReady(
+                    stampCurrentSymbolExtractorVersions: skipped == 0,
+                    symbolExtractorLanguagesToStamp: skipped == 0 ? indexedSymbolExtractorLanguages : null);
                 if (!foldReadyAfter)
                     foldReadyReason = DegradationReasonCodes.MissingFoldBackfill;
             }
@@ -6019,34 +6142,38 @@ public partial class McpServer
                 foldReadyReason = DegradationReasonCodes.StaleFoldKeyFingerprint;
             }
 
-            writer.WriteCdidxWriterVersion(_version);
-            writer.SetMeta(IndexCommandRunner.SymbolKindFilterMetaKey, symbolKindFilter.Signature);
+            IndexCommandRunner.StampWriterVersionAndSymbolKindFilter(writer, _version, symbolKindFilter.Signature);
 
             // Successful no-op MCP full scans should repair explicit-DB roots only after
             // readiness is stamped, preserving the failure-path safety contract.
             // MCP の no-op full-scan root backfill も readiness stamp 後に限定する。
             WriteProjectRootOnce();
             writer.WriteUnknownExtensionFileMetadata(scanResult.UnknownExtensionFiles);
-            var bytesRead = SumReadableFileBytes(files, projectPath, indexRunDiagnostics, mcpIndexDiagnostics, knownReadableFileSizes);
-            writer.SetMeta(DbContext.LastIndexRunModeMetaKey, rebuild ? "rebuild" : "mcp");
-            writer.SetMeta(DbContext.LastIndexRunStartedAtMetaKey, runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastIndexRunDurationMsMetaKey, runStopwatch.ElapsedMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastIndexRunFilesScannedMetaKey, files.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastIndexRunFilesSkippedMetaKey, skipped.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastIndexRunParseErrorsMetaKey, errors.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastIndexRunBytesReadMetaKey, bytesRead.BytesRead.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastIndexRunBytesReadSkippedFileCountMetaKey, bytesRead.SkippedFileCount.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastIndexRunBytesReadIncompleteMetaKey, (bytesRead.SkippedFileCount > 0).ToString(System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastIndexRunRowsUpsertedMetaKey, processed.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            writer.SetMeta(DbContext.LastIndexRunRowsDeletedMetaKey, purged.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            var bytesRead = knownReadableFileSizes.Count == files.Count
+                ? (BytesRead: knownReadableBytesRead, SkippedFileCount: 0)
+                : SumReadableFileBytes(files, projectPath, indexRunDiagnostics, mcpIndexDiagnostics, knownReadableFileSizes);
+            writer.SetMetaValues(
+                (DbContext.LastIndexRunModeMetaKey, rebuild ? "rebuild" : "mcp"),
+                (DbContext.LastIndexRunStartedAtMetaKey, runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastIndexRunDurationMsMetaKey, runStopwatch.ElapsedMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastIndexRunFilesScannedMetaKey, files.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastIndexRunFilesSkippedMetaKey, skipped.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastIndexRunParseErrorsMetaKey, errors.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastIndexRunBytesReadMetaKey, bytesRead.BytesRead.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastIndexRunBytesReadSkippedFileCountMetaKey, bytesRead.SkippedFileCount.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastIndexRunBytesReadIncompleteMetaKey, (bytesRead.SkippedFileCount > 0).ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastIndexRunRowsUpsertedMetaKey, processed.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastIndexRunRowsDeletedMetaKey, purged.ToString(System.Globalization.CultureInfo.InvariantCulture)));
             writer.ClearLastFailedIndexRunMetadata();
             // Persist the current HEAD only after the run is fully successful (errors == 0).
             // Mirrors the CLI full-scan contract (Issue #1508) so MCP-driven re-indexes also
             // refresh `worktree_head_changed`; partial / failed runs leave the prior HEAD
             // untouched and surface staleness until the next clean refresh. Issues #1508 / #1512.
             // CLI full-scan と同じく成功時のみ HEAD を記録する。partial / 失敗は旧 HEAD を残す。
-            writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, currentHeadCommit);
-            writer.SetMeta(DbContext.IndexedHeadCommitBranchMetaKey, GitHelper.TryGetHeadBranch(projectPath, requestToken));
+            var currentHeadBranch = GitHelper.TryGetHeadBranch(projectPath, requestToken);
+            writer.SetMetaValues(
+                (DbContext.IndexedHeadCommitMetaKey, currentHeadCommit),
+                (DbContext.IndexedHeadCommitBranchMetaKey, currentHeadBranch));
             // #1509: also persist the always-updated HEAD/branch/timestamp triple so
             // status / consumers can detect cross-session staleness via
             // `commits_ahead_of_indexed_head`. Same best-effort contract — git unavailability
@@ -6054,13 +6181,13 @@ public partial class McpServer
             // #1509: HEAD / branch / timestamp を保存し、cross-session staleness 検出を可能にする。
             try
             {
-                var headBranch = GitHelper.TryGetHeadBranch(projectPath, requestToken);
                 var timestamp = currentHeadCommit != null
                     ? GetUtcNow().ToString("o", System.Globalization.CultureInfo.InvariantCulture)
                     : null;
-                writer.SetMeta(DbContext.IndexedHeadShaMetaKey, currentHeadCommit);
-                writer.SetMeta(DbContext.IndexedHeadBranchMetaKey, headBranch);
-                writer.SetMeta(DbContext.IndexedHeadTimestampMetaKey, timestamp);
+                writer.SetMetaValues(
+                    (DbContext.IndexedHeadShaMetaKey, currentHeadCommit),
+                    (DbContext.IndexedHeadBranchMetaKey, currentHeadBranch),
+                    (DbContext.IndexedHeadTimestampMetaKey, timestamp));
             }
             catch (OperationCanceledException) when (requestToken.IsCancellationRequested)
             {
@@ -6101,7 +6228,10 @@ public partial class McpServer
             if (plannerMaintenanceFailure != null)
                 IndexCommandRunner.TryStampPlannerStatisticsMaintenanceDiagnostic(writer, indexRunDiagnostics, plannerMaintenanceFailure);
         }
-        var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
+        var (totalFiles, totalChunks, totalSymbols, totalReferences) =
+            startedWithNoIndexedFiles && !scanHadErrors && errors == 0
+                ? (freshCountFiles, freshCountChunks, freshCountSymbols, freshCountReferences)
+                : writer.GetCounts();
         await EmitProgressNotificationAsync(progressToken, files.Count, files.Count, errors == 0 ? "Indexing complete." : "Indexing completed with errors.").ConfigureAwait(false);
         if (memorySamples != null)
             memorySamples.Add(CaptureMcpIndexMemorySample("finalize", runStopwatch));

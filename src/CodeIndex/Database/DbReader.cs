@@ -423,6 +423,7 @@ public partial class DbReader : IDisposable
     {
         _conn = connection;
         _commandCache = commandCache;
+        RecoverInterruptedFtsBulkLoadForRead(_conn, isReadOnly);
         // SQL user functions are registered once per connection by `DbContext` when the
         // connection is opened. Re-registering on every `DbReader` construction wasted CPU
         // on hot MCP/CLI paths that build a short-lived reader per request (#1564).
@@ -511,6 +512,18 @@ public partial class DbReader : IDisposable
         // Issue #1515: 旧 cdidx が新 cdidx 製 DB を開いたケースを明示的に検知する。
         _indexWriterVersion = TryGetMetaString(_conn, DbContext.CdidxWriterVersionMetaKey);
         (_indexNewerThanReader, _indexNewerThanReaderReason) = DetectNewerThanReaderContracts(_conn, userVersion);
+    }
+
+    private static void RecoverInterruptedFtsBulkLoadForRead(SqliteConnection conn, bool isReadOnly)
+    {
+        if (isReadOnly)
+            return;
+
+        if (TryGetMetaString(conn, DbWriter.FtsBulkLoadInProgressMetaKey) == null)
+            return;
+
+        var writer = new DbWriter(conn);
+        writer.RecoverInterruptedFtsBulkLoadIfNeeded();
     }
 
     public void Dispose()

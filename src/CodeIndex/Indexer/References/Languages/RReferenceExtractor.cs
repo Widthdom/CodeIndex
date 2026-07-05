@@ -475,19 +475,31 @@ internal static class RReferenceExtractor
 
         var line = StripRNamespaceDirectiveComment(originalLine);
 
-        var genericMatch = S4SetGenericCallRegex.Match(line);
-        if (genericMatch.Success)
+        var mayContainSetGeneric = MayContainS4GenericConstructor(line);
+        var mayContainSetClass = MayContainS4ClassConstructor(line);
+        var mayContainSetMethod = line.IndexOf("setMethod", StringComparison.Ordinal) >= 0;
+        if (mayContainSetGeneric)
         {
-            AddS4Reference(genericMatch, "backtickName", "quotedName", "name", "reference");
-            return;
+            var genericMatch = S4SetGenericCallRegex.Match(line);
+            if (genericMatch.Success)
+            {
+                AddS4Reference(genericMatch, "backtickName", "quotedName", "name", "reference");
+                return;
+            }
         }
 
-        var classMatch = S4SetClassCallRegex.Match(line);
-        if (classMatch.Success)
+        if (mayContainSetClass)
         {
-            AddS4Reference(classMatch, "backtickName", "quotedName", "name", "type_reference");
-            return;
+            var classMatch = S4SetClassCallRegex.Match(line);
+            if (classMatch.Success)
+            {
+                AddS4Reference(classMatch, "backtickName", "quotedName", "name", "type_reference");
+                return;
+            }
         }
+
+        if (!mayContainSetMethod)
+            return;
 
         var methodMatch = S4SetMethodCallRegex.Match(line);
         if (!methodMatch.Success)
@@ -568,6 +580,19 @@ internal static class RReferenceExtractor
                 lineNumber,
                 container);
         }
+    }
+
+    private static bool MayContainS4GenericConstructor(string line)
+    {
+        return line.IndexOf("setGeneric", StringComparison.Ordinal) >= 0
+            || line.IndexOf("setGroupGeneric", StringComparison.Ordinal) >= 0;
+    }
+
+    private static bool MayContainS4ClassConstructor(string line)
+    {
+        return line.IndexOf("setClass", StringComparison.Ordinal) >= 0
+            || line.IndexOf("setRefClass", StringComparison.Ordinal) >= 0
+            || line.IndexOf("setOldClass", StringComparison.Ordinal) >= 0;
     }
 
     public static void EmitRoxygenMethodReferences(
@@ -719,6 +744,9 @@ internal static class RReferenceExtractor
         if (!SourceFileReferenceStartRegex.IsMatch(preparedLine))
             return;
 
+        if (!ContainsRQuotedArgument(originalLine))
+            return;
+
         var line = StripRNamespaceDirectiveComment(originalLine);
         var match = SourceFileReferenceRegex.Match(line);
         if (!match.Success)
@@ -751,6 +779,9 @@ internal static class RReferenceExtractor
         {
             return;
         }
+
+        if (!ContainsRQuotedArgument(originalLine))
+            return;
 
         var line = StripRNamespaceDirectiveComment(originalLine);
         var match = LoadAllReferenceRegex.Match(line);
@@ -787,6 +818,9 @@ internal static class RReferenceExtractor
         }
 
         if (!DataCallStartRegex.IsMatch(preparedLine))
+            return;
+
+        if (!ContainsRQuotedArgument(originalLine))
             return;
 
         var line = StripRNamespaceDirectiveComment(originalLine);
@@ -839,6 +873,9 @@ internal static class RReferenceExtractor
         }
 
         if (!SystemFileCallStartRegex.IsMatch(preparedLine))
+            return;
+
+        if (!ContainsRQuotedArgument(originalLine))
             return;
 
         var line = StripRNamespaceDirectiveComment(originalLine);
@@ -943,6 +980,9 @@ internal static class RReferenceExtractor
         Regex startRegex)
     {
         if (!startRegex.IsMatch(preparedLine))
+            return;
+
+        if (!ContainsRQuotedArgument(originalLine))
             return;
 
         var line = StripRNamespaceDirectiveComment(originalLine);
@@ -1076,6 +1116,9 @@ internal static class RReferenceExtractor
         if (!startRegex.IsMatch(preparedLine))
             return;
 
+        if (!ContainsRQuotedArgument(originalLine))
+            return;
+
         var line = StripRNamespaceDirectiveComment(originalLine);
         foreach (Match match in InstallPackagesNameRegex.Matches(line))
         {
@@ -1092,6 +1135,9 @@ internal static class RReferenceExtractor
                 container);
         }
     }
+
+    private static bool ContainsRQuotedArgument(string line)
+        => line.IndexOf('"') >= 0 || line.IndexOf('\'') >= 0;
 
     public static void EmitDollarMemberReferences(
         string preparedLine,
@@ -1154,6 +1200,9 @@ internal static class RReferenceExtractor
         HashSet<string>? definitionNames)
     {
         if (!preparedLine.Contains("[[", StringComparison.Ordinal))
+            return;
+
+        if (!ContainsRQuotedArgument(originalLine))
             return;
 
         var line = StripRNamespaceDirectiveComment(originalLine);

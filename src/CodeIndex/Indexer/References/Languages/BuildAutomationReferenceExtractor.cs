@@ -82,6 +82,9 @@ internal static class BuildAutomationReferenceExtractor
         long fileId,
         SymbolRecord? container)
     {
+        if (line.IndexOf('(') < 0 || line.IndexOf(')') < 0)
+            return;
+
         var match = CMakeCommandRegex.Match(line);
         if (!match.Success)
             return;
@@ -124,12 +127,18 @@ internal static class BuildAutomationReferenceExtractor
         long fileId,
         SymbolRecord? container)
     {
-        var importMatch = JustImportRegex.Match(line);
-        if (importMatch.Success)
+        if (line.IndexOf('"') >= 0 || line.IndexOf('\'') >= 0)
         {
-            AddReference(references, seen, fileId, importMatch, "import", context, lineNumber, container, "justfile");
-            return;
+            var importMatch = JustImportRegex.Match(line);
+            if (importMatch.Success)
+            {
+                AddReference(references, seen, fileId, importMatch, "import", context, lineNumber, container, "justfile");
+                return;
+            }
         }
+
+        if (line.IndexOf(':') < 0)
+            return;
 
         var recipeMatch = JustRecipeRegex.Match(line);
         if (!recipeMatch.Success)
@@ -159,6 +168,9 @@ internal static class BuildAutomationReferenceExtractor
         long fileId,
         SymbolRecord? container)
     {
+        if (line.IndexOf('<') < 0 || line.IndexOf('=') < 0)
+            return;
+
         if (line.TrimStart().StartsWith("<!--", StringComparison.Ordinal))
             return;
 

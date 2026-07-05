@@ -24,18 +24,55 @@ public class DbWriter
 
     public const string FtsIncrementalWritesSinceOptimizeMetaKey = "fts_incremental_writes_since_optimize";
     public const string FtsLastOptimizedAtMetaKey = "fts_last_optimized_at";
+    public const string FtsBulkLoadInProgressMetaKey = "fts_bulk_load_in_progress";
     public const int DefaultFtsOptimizeIncrementalWriteThreshold = 25;
 
     private readonly SqliteConnection _conn;
     private readonly PreparedCommandCache? _commandCache;
     private readonly Action? _markWriteWork;
     private static readonly AsyncLocal<Action?> ScopedFoldBackfillRowUpdatedForTesting = new();
+    private static readonly AsyncLocal<Action?> ScopedFoldBackfillVerificationForTesting = new();
+    private static readonly AsyncLocal<Action<string>?> ScopedLanguagePresenceCheckForTesting = new();
+    private static readonly AsyncLocal<Action?> ScopedIndexedLanguagesReadForTesting = new();
+    private static readonly AsyncLocal<Action<string>?> ScopedReusableUnchangedFileLookupForTesting = new();
+    private static readonly AsyncLocal<Action?> ScopedCountsReadForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedBatchRowSkipWarningForTesting = new();
     private static readonly AsyncLocal<Action<DbWriterBatchProgress>?> ScopedBatchProgressCheckpointForTesting = new();
+    private static readonly AsyncLocal<Action?> ScopedMutualRecursionRefreshForTesting = new();
     internal static Action? FoldBackfillRowUpdatedForTesting
     {
         get => ScopedFoldBackfillRowUpdatedForTesting.Value;
         set => ScopedFoldBackfillRowUpdatedForTesting.Value = value;
+    }
+
+    internal static Action? FoldBackfillVerificationForTesting
+    {
+        get => ScopedFoldBackfillVerificationForTesting.Value;
+        set => ScopedFoldBackfillVerificationForTesting.Value = value;
+    }
+
+    internal static Action<string>? LanguagePresenceCheckForTesting
+    {
+        get => ScopedLanguagePresenceCheckForTesting.Value;
+        set => ScopedLanguagePresenceCheckForTesting.Value = value;
+    }
+
+    internal static Action? IndexedLanguagesReadForTesting
+    {
+        get => ScopedIndexedLanguagesReadForTesting.Value;
+        set => ScopedIndexedLanguagesReadForTesting.Value = value;
+    }
+
+    internal static Action<string>? ReusableUnchangedFileLookupForTesting
+    {
+        get => ScopedReusableUnchangedFileLookupForTesting.Value;
+        set => ScopedReusableUnchangedFileLookupForTesting.Value = value;
+    }
+
+    internal static Action? CountsReadForTesting
+    {
+        get => ScopedCountsReadForTesting.Value;
+        set => ScopedCountsReadForTesting.Value = value;
     }
 
     internal static Action<string>? BatchRowSkipWarningForTesting
@@ -48,6 +85,12 @@ public class DbWriter
     {
         get => ScopedBatchProgressCheckpointForTesting.Value;
         set => ScopedBatchProgressCheckpointForTesting.Value = value;
+    }
+
+    internal static Action? MutualRecursionRefreshForTesting
+    {
+        get => ScopedMutualRecursionRefreshForTesting.Value;
+        set => ScopedMutualRecursionRefreshForTesting.Value = value;
     }
 
     // Transaction ownership (#4154): the semaphore is held for the outermost writer
@@ -685,6 +728,7 @@ public class DbWriter
     {
         if (!allowReuse)
             return null;
+        ReusableUnchangedFileLookupForTesting?.Invoke(relativePath);
         if (!SymbolExtractorVersionMatchesCurrent(language))
             return null;
         if (HasStaleIssueMetadata(relativePath))
@@ -1043,8 +1087,22 @@ public class DbWriter
     /// Check whether the DB currently contains any indexed files for the given language.
     /// 指定言語の indexed file が DB に存在するか確認する。
     /// </summary>
+    public bool HasAnyIndexedFiles()
+    {
+        var cmd = RentCommand("SELECT 1 FROM files LIMIT 1", static _ => { });
+        try
+        {
+            return cmd.ExecuteScalar() != null;
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
+    }
+
     public bool HasAnyFilesWithLanguage(string lang)
     {
+        LanguagePresenceCheckForTesting?.Invoke(lang);
         var cmd = RentCommand(
             "SELECT 1 FROM files WHERE lang = @lang LIMIT 1",
             static c => c.Parameters.Add("@lang", SqliteType.Text));
@@ -1181,6 +1239,7 @@ public class DbWriter
         if (!TableExists("files"))
             return languages;
 
+        IndexedLanguagesReadForTesting?.Invoke();
         var cmd = RentCommand(
             @"
             SELECT DISTINCT f.lang
@@ -2102,6 +2161,7 @@ public class DbWriter
 
     internal void RefreshMutualRecursionFlags()
     {
+        MutualRecursionRefreshForTesting?.Invoke();
         var cmd = RentCommand(
             @"
             UPDATE symbol_references AS r
@@ -2235,11 +2295,16 @@ public class DbWriter
         }
 
         InsertReferences(references);
+        MarkTypeScriptAugmentationReady();
+        transaction.Commit();
+        return references.Count;
+    }
+
+    public void MarkTypeScriptAugmentationReady()
+    {
         SetMeta(
             DbContext.TypeScriptAugmentationVersionMetaKey,
             DbContext.TypeScriptAugmentationVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        transaction.Commit();
-        return references.Count;
     }
 
     private static HashSet<long> FindTypeScriptModuleFileIds(
@@ -2354,20 +2419,33 @@ public class DbWriter
     /// ファイル検証問題を挿入する。
     /// </summary>
     public void InsertIssues(long fileId, IReadOnlyList<CodeIndex.Models.FileIssue> issues)
+        => InsertIssues(fileId, issues, deleteExisting: true);
+
+    /// <summary>
+    /// Insert validation issues for a newly-created file row that cannot have existing issues.
+    /// 既存 issue が存在しない新規ファイル行向けに検証問題を挿入する。
+    /// </summary>
+    public void InsertIssuesForNewFile(long fileId, IReadOnlyList<CodeIndex.Models.FileIssue> issues)
+        => InsertIssues(fileId, issues, deleteExisting: false);
+
+    private void InsertIssues(long fileId, IReadOnlyList<CodeIndex.Models.FileIssue> issues, bool deleteExisting)
     {
-        // Always delete existing issues — if the file is now clean, old issues must be removed
-        // 常に既存問題を削除 — ファイルが修正済みなら古い問題を残さない
-        var delCmd = RentCommand(
-            "DELETE FROM file_issues WHERE file_id = @fid",
-            static c => c.Parameters.Add("@fid", SqliteType.Integer));
-        try
+        if (deleteExisting)
         {
-            delCmd.Parameters["@fid"].Value = fileId;
-            delCmd.ExecuteNonQuery();
-        }
-        finally
-        {
-            ReleaseCommand(delCmd);
+            // Always delete existing issues — if the file is now clean, old issues must be removed.
+            // 常に既存問題を削除 — ファイルが修正済みなら古い問題を残さない。
+            var delCmd = RentCommand(
+                "DELETE FROM file_issues WHERE file_id = @fid",
+                static c => c.Parameters.Add("@fid", SqliteType.Integer));
+            try
+            {
+                delCmd.Parameters["@fid"].Value = fileId;
+                delCmd.ExecuteNonQuery();
+            }
+            finally
+            {
+                ReleaseCommand(delCmd);
+            }
         }
 
         if (issues.Count == 0) return;
@@ -2755,6 +2833,7 @@ public class DbWriter
     /// </summary>
     public (long files, long chunks, long symbols, long references) GetCounts()
     {
+        CountsReadForTesting?.Invoke();
         long files = ExecuteScalar("SELECT COUNT(*) FROM files");
         long chunks = ExecuteScalar("SELECT COUNT(*) FROM chunks");
         long symbols = ExecuteScalar("SELECT COUNT(*) FROM symbols");
@@ -2769,8 +2848,99 @@ public class DbWriter
     public void OptimizeFts()
     {
         Execute("INSERT INTO fts_chunks(fts_chunks) VALUES('optimize')");
-        SetMeta(FtsIncrementalWritesSinceOptimizeMetaKey, "0");
-        SetMeta(FtsLastOptimizedAtMetaKey, DateTimeOffset.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture));
+        SetMetaValues(
+            (FtsIncrementalWritesSinceOptimizeMetaKey, "0"),
+            (FtsLastOptimizedAtMetaKey, DateTimeOffset.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture)));
+    }
+
+    /// <summary>
+    /// Temporarily disable per-row FTS synchronization before a full bulk rewrite.
+    /// The caller must restore the triggers and rebuild FTS from `chunks` before commit.
+    /// full bulk rewrite の前に、行ごとの FTS 同期を一時停止する。
+    /// caller は commit 前に trigger 復元と chunks からの FTS rebuild を行う。
+    /// </summary>
+    public void SuspendFtsSyncTriggersForBulkLoad()
+    {
+        SetMeta(FtsBulkLoadInProgressMetaKey, CreateFtsBulkLoadMarker());
+        Execute(DbContext.DropFtsChunksSyncTriggersSql);
+        _markWriteWork?.Invoke();
+    }
+
+    /// <summary>
+    /// Restore FTS synchronization triggers after a bulk load.
+    /// bulk load 後に FTS 同期 trigger を復元する。
+    /// </summary>
+    public void RestoreFtsSyncTriggers()
+    {
+        Execute(DbContext.CreateFtsChunksSyncTriggersSql);
+        _markWriteWork?.Invoke();
+    }
+
+    /// <summary>
+    /// Rebuild the external-content FTS table from the current chunks table.
+    /// 現在の chunks テーブルから external-content FTS テーブルを再構築する。
+    /// </summary>
+    public void RebuildFtsFromChunks(bool resetIncrementalWriteCounter = true)
+    {
+        Execute("INSERT INTO fts_chunks(fts_chunks) VALUES('rebuild')");
+        if (resetIncrementalWriteCounter)
+            SetMeta(FtsIncrementalWritesSinceOptimizeMetaKey, "0");
+    }
+
+    public void ClearFtsBulkLoadInProgress()
+        => SetMeta(FtsBulkLoadInProgressMetaKey, null);
+
+    public bool RecoverInterruptedFtsBulkLoadIfNeeded()
+    {
+        var marker = GetMetaString(FtsBulkLoadInProgressMetaKey);
+        if (!IsFtsBulkLoadMarkerSet(marker) || IsFtsBulkLoadOwnerActive(marker!))
+            return false;
+
+        RestoreFtsSyncTriggers();
+        RebuildFtsFromChunks();
+        ClearFtsBulkLoadInProgress();
+        return true;
+    }
+
+    private static string CreateFtsBulkLoadMarker()
+        => "pid:" + Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    private static bool IsFtsBulkLoadMarkerSet(string? marker)
+        => string.Equals(marker, "true", StringComparison.OrdinalIgnoreCase)
+           || TryGetFtsBulkLoadOwnerPid(marker, out _);
+
+    private static bool IsFtsBulkLoadOwnerActive(string marker)
+    {
+        if (!TryGetFtsBulkLoadOwnerPid(marker, out var pid))
+            return false;
+
+        if (pid == Environment.ProcessId)
+            return true;
+
+        try
+        {
+            using var process = Process.GetProcessById(pid);
+            return !process.HasExited;
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryGetFtsBulkLoadOwnerPid(string? marker, out int pid)
+    {
+        const string prefix = "pid:";
+        pid = 0;
+        if (marker == null || !marker.StartsWith(prefix, StringComparison.Ordinal))
+            return false;
+
+        return int.TryParse(
+            marker.AsSpan(prefix.Length),
+            System.Globalization.NumberStyles.None,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out pid)
+            && pid > 0;
     }
 
     public int GetFtsIncrementalWritesSinceOptimize()
@@ -2836,7 +3006,9 @@ public class DbWriter
     /// fold_ready が嘘になるのを防ぐ。Issue #1535。
     /// </summary>
     /// <returns>True when the bit was actually stamped; false when re-verification failed.</returns>
-    public bool MarkFoldReady(bool stampCurrentSymbolExtractorVersions = false)
+    public bool MarkFoldReady(
+        bool stampCurrentSymbolExtractorVersions = false,
+        IReadOnlyCollection<string>? symbolExtractorLanguagesToStamp = null)
     {
         var gateLease = EnterTransactionGate();
         try
@@ -2847,7 +3019,7 @@ public class DbWriter
             try
             {
                 if (stampCurrentSymbolExtractorVersions)
-                    StampSymbolExtractorVersions();
+                    StampSymbolExtractorVersions(symbolExtractorLanguagesToStamp);
 
                 if (!AllFoldedColumnsBackfilledCore(
                         requireCurrentSymbolExtractorVersions: false,
@@ -2863,9 +3035,10 @@ public class DbWriter
 
                 ApplyReadyBitToUserVersion(DbContext.FoldReadyFlag, ownTransaction ? null : _activeTransaction);
 
-                SetMeta("fold_key_version", NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                SetMeta("fold_key_fingerprint", NameFold.Fingerprint());
-                StampSymbolExtractorVersions();
+                SetMetaValues(
+                    ("fold_key_version", NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                    ("fold_key_fingerprint", NameFold.Fingerprint()));
+                StampSymbolExtractorVersions(symbolExtractorLanguagesToStamp);
 
                 if (ownTransaction)
                 {
@@ -2889,14 +3062,21 @@ public class DbWriter
         }
     }
 
-    public void StampSymbolExtractorVersions()
+    public void StampSymbolExtractorVersions(IReadOnlyCollection<string>? languagesToStamp = null)
     {
-        foreach (var lang in GetIndexedLanguages())
+        var languages = languagesToStamp ?? GetIndexedLanguages();
+        var values = new List<(string Key, string? Value)>(languages.Count);
+        foreach (var lang in languages)
         {
-            SetMeta(
+            if (string.IsNullOrWhiteSpace(lang))
+                continue;
+
+            values.Add((
                 DbContext.GetSymbolExtractorVersionMetaKey(lang),
-                SymbolExtractor.GetContractVersion(lang).ToString(System.Globalization.CultureInfo.InvariantCulture));
+                SymbolExtractor.GetContractVersion(lang).ToString(System.Globalization.CultureInfo.InvariantCulture)));
         }
+
+        SetMetaValues(values.ToArray());
     }
 
     /// <summary>
@@ -2924,6 +3104,24 @@ public class DbWriter
             DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
     }
 
+    public void MarkIndexReaderContractsReady(bool symbolsOnlyGraphOmitted)
+    {
+        var csharpVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var sqlVersion = DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (symbolsOnlyGraphOmitted)
+        {
+            SetMetaValues(
+                (DbContext.CSharpSymbolNameContractVersionMetaKey, csharpVersion),
+                (DbContext.SymbolsOnlyGraphOmittedMetaKey, "true"));
+            return;
+        }
+
+        SetMetaValues(
+            (DbContext.CSharpSymbolNameContractVersionMetaKey, csharpVersion),
+            (DbContext.SqlGraphContractVersionMetaKey, sqlVersion),
+            (DbContext.SymbolsOnlyGraphOmittedMetaKey, null));
+    }
+
     public void ClearSqlGraphContractReady()
     {
         SetMeta(DbContext.SqlGraphContractVersionMetaKey, null);
@@ -2937,26 +3135,22 @@ public class DbWriter
     /// </summary>
     public void MarkHotspotFamilyReady(string lang, string? markerFingerprint = null)
     {
-        SetMeta(
-            DbContext.GetHotspotFamilyVersionMetaKey(lang),
-            DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang), markerFingerprint);
         // Clear the superseded global keys so mixed-version DBs don't leave confusing stale metadata behind.
         // 廃止した global key を掃除し、混在 DB に紛らわしい古い metadata を残さない。
-        SetMeta(DbContext.HotspotFamilyVersionMetaKey, null);
-        SetMeta(DbContext.HotspotFamilyMarkerFingerprintMetaKey, null);
+        SetMetaValues(
+            (DbContext.GetHotspotFamilyVersionMetaKey(lang), DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang), markerFingerprint),
+            (DbContext.HotspotFamilyVersionMetaKey, null),
+            (DbContext.HotspotFamilyMarkerFingerprintMetaKey, null));
     }
 
     public void MarkHotspotFamilyMarkerFingerprintIncomplete(string lang, string? markerFingerprint)
     {
-        SetMeta(
-            DbContext.GetHotspotFamilyVersionMetaKey(lang),
-            DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        SetMeta(
-            DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang),
-            DbContext.BuildIncompleteHotspotFamilyMarkerFingerprint(markerFingerprint));
-        SetMeta(DbContext.HotspotFamilyVersionMetaKey, null);
-        SetMeta(DbContext.HotspotFamilyMarkerFingerprintMetaKey, null);
+        SetMetaValues(
+            (DbContext.GetHotspotFamilyVersionMetaKey(lang), DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang), DbContext.BuildIncompleteHotspotFamilyMarkerFingerprint(markerFingerprint)),
+            (DbContext.HotspotFamilyVersionMetaKey, null),
+            (DbContext.HotspotFamilyMarkerFingerprintMetaKey, null));
     }
 
     /// <summary>
@@ -2967,16 +3161,19 @@ public class DbWriter
     /// </summary>
     public void ClearHotspotFamilyReady()
     {
-        if (!TableExists("codeindex_meta"))
-            return;
+        var languages = FileIndexer.GetHotspotFamilyMarkerLanguages();
+        var keys = new string[2 + (languages.Count * 2)];
+        var index = 0;
 
-        SetMeta(DbContext.HotspotFamilyVersionMetaKey, null);
-        SetMeta(DbContext.HotspotFamilyMarkerFingerprintMetaKey, null);
-        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+        keys[index++] = DbContext.HotspotFamilyVersionMetaKey;
+        keys[index++] = DbContext.HotspotFamilyMarkerFingerprintMetaKey;
+        foreach (var lang in languages)
         {
-            SetMeta(DbContext.GetHotspotFamilyVersionMetaKey(lang), null);
-            SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang), null);
+            keys[index++] = DbContext.GetHotspotFamilyVersionMetaKey(lang);
+            keys[index++] = DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang);
         }
+
+        ClearMetaKeys(keys);
     }
 
     /// <summary>
@@ -3023,16 +3220,17 @@ public class DbWriter
 
     public void ClearLastFailedIndexRunMetadata()
     {
-        SetMeta(DbContext.LastFailedIndexRunStatusMetaKey, null);
-        SetMeta(DbContext.LastFailedIndexRunModeMetaKey, null);
-        SetMeta(DbContext.LastFailedIndexRunStartedAtMetaKey, null);
-        SetMeta(DbContext.LastFailedIndexRunDurationMsMetaKey, null);
-        SetMeta(DbContext.LastFailedIndexRunFilesProcessedMetaKey, null);
-        SetMeta(DbContext.LastFailedIndexRunFilesTotalMetaKey, null);
-        SetMeta(DbContext.LastFailedIndexRunErrorCodeMetaKey, null);
-        SetMeta(DbContext.LastFailedIndexRunReasonMetaKey, null);
-        SetMeta(DbContext.LastFailedIndexRunProgressPersistedMetaKey, null);
-        SetMeta(DbContext.LastFailedIndexRunRecoveryHintMetaKey, null);
+        ClearMetaKeys(
+            DbContext.LastFailedIndexRunStatusMetaKey,
+            DbContext.LastFailedIndexRunModeMetaKey,
+            DbContext.LastFailedIndexRunStartedAtMetaKey,
+            DbContext.LastFailedIndexRunDurationMsMetaKey,
+            DbContext.LastFailedIndexRunFilesProcessedMetaKey,
+            DbContext.LastFailedIndexRunFilesTotalMetaKey,
+            DbContext.LastFailedIndexRunErrorCodeMetaKey,
+            DbContext.LastFailedIndexRunReasonMetaKey,
+            DbContext.LastFailedIndexRunProgressPersistedMetaKey,
+            DbContext.LastFailedIndexRunRecoveryHintMetaKey);
     }
 
     /// <summary>
@@ -3045,31 +3243,31 @@ public class DbWriter
     {
         ArgumentNullException.ThrowIfNull(paths);
 
+        if (paths.Count == 0)
+        {
+            SetMetaValues(
+                (DbContext.UnknownExtensionFileCountMetaKey, "0"),
+                (DbContext.UnknownExtensionFilePathsMetaKey, "[]"),
+                (DbContext.UnknownExtensionFilesTruncatedMetaKey, false.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.UnknownExtensionFilePathLimitMetaKey, DbContext.UnknownExtensionFilePathSampleLimit.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.UnknownExtensionExtensionCountsMetaKey, "{}"),
+                (DbContext.UnknownExtensionCategoryCountsMetaKey, "{}"),
+                (DbContext.UnknownExtensionGroupsMetaKey, "[]"));
+            return;
+        }
+
         var sample = JsonStringListCodec.TakeSerializableSample(
             paths,
             DbContext.UnknownExtensionFilePathSampleLimit);
         var classification = UnknownExtensionClassifier.Classify(paths);
-        SetMeta(
-            DbContext.UnknownExtensionFileCountMetaKey,
-            paths.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        SetMeta(
-            DbContext.UnknownExtensionFilePathsMetaKey,
-            JsonStringListCodec.Serialize(sample));
-        SetMeta(
-            DbContext.UnknownExtensionFilesTruncatedMetaKey,
-            (paths.Count > sample.Count).ToString(System.Globalization.CultureInfo.InvariantCulture));
-        SetMeta(
-            DbContext.UnknownExtensionFilePathLimitMetaKey,
-            DbContext.UnknownExtensionFilePathSampleLimit.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        SetMeta(
-            DbContext.UnknownExtensionExtensionCountsMetaKey,
-            UnknownExtensionClassifier.SerializeCounts(classification.ExtensionCounts));
-        SetMeta(
-            DbContext.UnknownExtensionCategoryCountsMetaKey,
-            UnknownExtensionClassifier.SerializeCounts(classification.CategoryCounts));
-        SetMeta(
-            DbContext.UnknownExtensionGroupsMetaKey,
-            UnknownExtensionClassifier.SerializeGroups(classification.Groups));
+        SetMetaValues(
+            (DbContext.UnknownExtensionFileCountMetaKey, paths.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.UnknownExtensionFilePathsMetaKey, JsonStringListCodec.Serialize(sample)),
+            (DbContext.UnknownExtensionFilesTruncatedMetaKey, (paths.Count > sample.Count).ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.UnknownExtensionFilePathLimitMetaKey, DbContext.UnknownExtensionFilePathSampleLimit.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.UnknownExtensionExtensionCountsMetaKey, UnknownExtensionClassifier.SerializeCounts(classification.ExtensionCounts)),
+            (DbContext.UnknownExtensionCategoryCountsMetaKey, UnknownExtensionClassifier.SerializeCounts(classification.CategoryCounts)),
+            (DbContext.UnknownExtensionGroupsMetaKey, UnknownExtensionClassifier.SerializeGroups(classification.Groups)));
     }
 
     /// <summary>
@@ -4152,6 +4350,106 @@ public class DbWriter
         }
     }
 
+    public void SetMetaValues(params (string Key, string? Value)[] values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        if (values.Length == 0 || !HasMetaTable())
+            return;
+
+        if (!IsInTransaction())
+        {
+            Execute("SAVEPOINT set_meta_values_atomic");
+            try
+            {
+                SetMetaValuesCore(values);
+                Execute("RELEASE SAVEPOINT set_meta_values_atomic");
+            }
+            catch
+            {
+                try { Execute("ROLLBACK TO SAVEPOINT set_meta_values_atomic"); } catch (SqliteException) { /* best effort */ }
+                try { Execute("RELEASE SAVEPOINT set_meta_values_atomic"); } catch (SqliteException) { /* best effort */ }
+                throw;
+            }
+            return;
+        }
+
+        SetMetaValuesCore(values);
+    }
+
+    private void SetMetaValuesCore(IReadOnlyList<(string Key, string? Value)> values)
+    {
+        var keyParameterNames = new string[values.Count];
+        var valueParameterNames = new string[values.Count];
+        var rows = new string[values.Count];
+        for (var i = 0; i < values.Count; i++)
+        {
+            var suffix = i.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            keyParameterNames[i] = "@meta_key" + suffix;
+            valueParameterNames[i] = "@meta_value" + suffix;
+            rows[i] = "(" + keyParameterNames[i] + ", " + valueParameterNames[i] + ")";
+        }
+
+        var sql = "INSERT INTO codeindex_meta (key, value) VALUES " + string.Join(", ", rows)
+            + " ON CONFLICT(key) DO UPDATE SET value = excluded.value";
+        var cmd = RentCommand(
+            sql,
+            c =>
+            {
+                for (var i = 0; i < keyParameterNames.Length; i++)
+                {
+                    c.Parameters.Add(keyParameterNames[i], SqliteType.Text);
+                    c.Parameters.Add(valueParameterNames[i], SqliteType.Text);
+                }
+            });
+        try
+        {
+            for (var i = 0; i < values.Count; i++)
+            {
+                cmd.Parameters[keyParameterNames[i]].Value = values[i].Key;
+                cmd.Parameters[valueParameterNames[i]].Value = (object?)values[i].Value ?? DBNull.Value;
+            }
+            cmd.ExecuteNonQuery();
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
+    }
+
+    private void ClearMetaKeys(params string[] keys)
+    {
+        if (keys.Length == 0 || !HasMetaTable())
+            return;
+
+        if (!IsInTransaction())
+        {
+            Execute("SAVEPOINT clear_meta_keys_atomic");
+            try
+            {
+                ClearMetaKeysCore(keys);
+                Execute("RELEASE SAVEPOINT clear_meta_keys_atomic");
+            }
+            catch
+            {
+                try { Execute("ROLLBACK TO SAVEPOINT clear_meta_keys_atomic"); } catch (SqliteException) { /* best effort */ }
+                try { Execute("RELEASE SAVEPOINT clear_meta_keys_atomic"); } catch (SqliteException) { /* best effort */ }
+                throw;
+            }
+            return;
+        }
+
+        ClearMetaKeysCore(keys);
+    }
+
+    private void ClearMetaKeysCore(IReadOnlyList<string> keys)
+    {
+        var values = new (string Key, string? Value)[keys.Count];
+        for (var i = 0; i < keys.Count; i++)
+            values[i] = (keys[i], null);
+
+        SetMetaValuesCore(values);
+    }
+
     private string? GetMetaString(string key)
     {
         var cmd = RentCommand(
@@ -4231,6 +4529,7 @@ public class DbWriter
         if (requireCurrentSymbolExtractorVersions && !SymbolExtractorVersionsMatchCurrent())
             return false;
 
+        FoldBackfillVerificationForTesting?.Invoke();
         var cmd = RentCommand(
             @"
             SELECT
