@@ -5,12 +5,13 @@ public static partial class SymbolExtractor
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindCSharpPatternBraceRange(
         string[] lines,
         string[] csharpMatchLines,
-        CSharpLexState[]? csharpLineStartStates,
+        Func<CSharpLexState[]>? getCSharpLineStartStates,
         int lineIndex,
         int absoluteStartColumn,
         int csharpGateRawStartColumn)
     {
         var line = lines[lineIndex];
+        var csharpLineStartStates = getCSharpLineStartStates?.Invoke();
         if (csharpLineStartStates != null && IsCSharpRootCodeLineStart(csharpLineStartStates[lineIndex]))
             return FindCSharpBraceRange(lines, lineIndex, Math.Min(csharpGateRawStartColumn, line.Length));
 

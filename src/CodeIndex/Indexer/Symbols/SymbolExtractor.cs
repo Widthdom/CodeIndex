@@ -2720,8 +2720,11 @@ public static partial class SymbolExtractor
         var csharpMatchLines = lang == "csharp"
             ? BuildCSharpMatchLines(lines, out csharpMatchColumnToRaw)
             : null;
-        var csharpLineStartStates = lang == "csharp"
-            ? BuildCSharpLineStartStates(lines)
+        CSharpLexState[]? csharpLineStartStates = null;
+        CSharpLexState[] GetCSharpLineStartStates() =>
+            csharpLineStartStates ??= BuildCSharpLineStartStates(lines);
+        Func<CSharpLexState[]>? getCSharpLineStartStates = lang == "csharp"
+            ? GetCSharpLineStartStates
             : null;
         var dartInsideClassBody = lang == "dart"
             ? BuildDartClassBodyScope(structuralLines)
@@ -3157,9 +3160,11 @@ public static partial class SymbolExtractor
                         // 本物の宣言は root code から始まり、入れ子の補間コードからは始まらない。
                         // raw 行上の開始列でゲートし、補間ログ文字列内の呼び出し断片が
                         // exact definition / inspect に混入しないようにする。Closes #790.
-                        if (lang == "csharp"
-                            && csharpLineStartStates != null
-                            && !IsCSharpRootCodePosition(line, csharpLineStartStates[i], csharpGateRawStartColumn))
+                        var csharpLineStartStatesForGate = lang == "csharp"
+                            ? getCSharpLineStartStates?.Invoke()
+                            : null;
+                        if (csharpLineStartStatesForGate != null
+                            && !IsCSharpRootCodePosition(line, csharpLineStartStatesForGate[i], csharpGateRawStartColumn))
                         {
                             lineOffset = FindNextSameLineBraceStatementStart(
                                 matchLine,
@@ -3326,7 +3331,7 @@ public static partial class SymbolExtractor
                                             ? FindCSharpPatternBraceRange(
                                                 lines,
                                                 csharpMatchLines,
-                                                csharpLineStartStates,
+                                                getCSharpLineStartStates,
                                                 i,
                                                 absoluteStartColumn,
                                                 csharpGateRawStartColumn)
@@ -4564,7 +4569,7 @@ public static partial class SymbolExtractor
             ExtractSectionHeadingSymbols(fileId, lang, lines, symbols);
         if (IsRazorLanguage(originalLang) || IsRazorFilePath(filePath))
             ExtractRazorDirectiveSymbols(fileId, lines, symbols);
-        AssignContainers(symbols, lines, csharpLineStartStates);
+        AssignContainers(symbols, lines, getCSharpLineStartStates);
         if (lang == "csharp")
             NormalizeCSharpImplicitPartialConstructorReturnTypes(symbols);
         if (lang == "go")
@@ -8926,7 +8931,7 @@ public static partial class SymbolExtractor
     private static void AssignContainers(
         List<SymbolRecord> symbols,
         string[]? rawLines = null,
-        CSharpLexState[]? csharpLineStartStates = null)
+        Func<CSharpLexState[]>? getCSharpLineStartStates = null)
     {
         if (symbols.Count == 0)
             return;
@@ -8953,7 +8958,7 @@ public static partial class SymbolExtractor
             while (stack.Count > 0 && !IsFileScopedNamespace(stack.Peek()) && symbol.StartLine > stack.Peek().EndLine)
                 stack.Pop();
 
-            var containerPath = GetEffectiveContainerPath(stack, symbol, rawLines, csharpLineStartStates);
+            var containerPath = GetEffectiveContainerPath(stack, symbol, rawLines, getCSharpLineStartStates);
 
             if (containerPath.Count > 0)
             {
@@ -9077,7 +9082,7 @@ public static partial class SymbolExtractor
         Stack<SymbolRecord> containers,
         SymbolRecord symbol,
         string[]? rawLines = null,
-        CSharpLexState[]? csharpLineStartStates = null)
+        Func<CSharpLexState[]>? getCSharpLineStartStates = null)
     {
         if (containers.Count == 0)
             return [];
@@ -9085,7 +9090,7 @@ public static partial class SymbolExtractor
         if (containers.Count == 1)
         {
             var container = containers.Peek();
-            return ContainsSymbol(container, symbol, rawLines, csharpLineStartStates)
+            return ContainsSymbol(container, symbol, rawLines, getCSharpLineStartStates)
                 ? [container]
                 : [];
         }
@@ -9095,7 +9100,7 @@ public static partial class SymbolExtractor
         for (var i = orderedContainers.Length - 1; i >= 0; i--)
         {
             var container = orderedContainers[i];
-            if (ContainsSymbol(container, symbol, rawLines, csharpLineStartStates))
+            if (ContainsSymbol(container, symbol, rawLines, getCSharpLineStartStates))
                 containingContainers.Add(container);
         }
 
@@ -9222,7 +9227,7 @@ public static partial class SymbolExtractor
         SymbolRecord container,
         SymbolRecord candidate,
         string[]? rawLines = null,
-        CSharpLexState[]? csharpLineStartStates = null)
+        Func<CSharpLexState[]>? getCSharpLineStartStates = null)
     {
         if (IsFileScopedNamespace(container))
             return candidate.StartLine > container.StartLine;
@@ -9232,7 +9237,7 @@ public static partial class SymbolExtractor
 
         if (candidate.StartLine == container.StartLine)
         {
-            if (TryContainsCSharpSameLineSymbolByRawLine(container, candidate, rawLines, csharpLineStartStates, out var containsSameLineSymbol))
+            if (TryContainsCSharpSameLineSymbolByRawLine(container, candidate, rawLines, getCSharpLineStartStates, out var containsSameLineSymbol))
                 return containsSameLineSymbol;
 
             return CanContainSameLineSymbol(container, candidate)
@@ -9248,14 +9253,14 @@ public static partial class SymbolExtractor
             return true;
         }
 
-        return IsInsideCSharpClosingBraceLineContainer(container, candidate, rawLines, csharpLineStartStates);
+        return IsInsideCSharpClosingBraceLineContainer(container, candidate, rawLines, getCSharpLineStartStates);
     }
 
     private static bool TryContainsCSharpSameLineSymbolByRawLine(
         SymbolRecord container,
         SymbolRecord candidate,
         string[]? rawLines,
-        CSharpLexState[]? csharpLineStartStates,
+        Func<CSharpLexState[]>? getCSharpLineStartStates,
         out bool contains)
     {
         contains = false;
@@ -9265,14 +9270,16 @@ public static partial class SymbolExtractor
             || container.StartLine != candidate.StartLine
             || container.StartLine <= 0
             || container.StartLine > rawLines.Length
-            || csharpLineStartStates == null
-            || container.StartLine > csharpLineStartStates.Length
             || !CanContainSameLineSymbol(container, candidate))
         {
             return false;
         }
 
         var lineIndex = container.StartLine - 1;
+        var csharpLineStartStates = getCSharpLineStartStates?.Invoke();
+        if (csharpLineStartStates == null || container.StartLine > csharpLineStartStates.Length)
+            return false;
+
         var rawLine = rawLines[lineIndex];
         var lineStartState = csharpLineStartStates[lineIndex];
         var containerStartColumn = FindSignatureOccurrenceStartColumn(
@@ -9319,7 +9326,7 @@ public static partial class SymbolExtractor
         SymbolRecord container,
         SymbolRecord candidate,
         string[]? rawLines,
-        CSharpLexState[]? csharpLineStartStates)
+        Func<CSharpLexState[]>? getCSharpLineStartStates)
     {
         if (rawLines == null
             || container.BodyStartLine == null
@@ -9344,7 +9351,8 @@ public static partial class SymbolExtractor
             rawLines[lineIndex],
             candidate.Signature,
             candidate.SameLineSignatureOccurrenceIndex ?? 0,
-            csharpLineStartStates != null && lineIndex < csharpLineStartStates.Length
+            getCSharpLineStartStates?.Invoke() is { } csharpLineStartStates
+            && lineIndex < csharpLineStartStates.Length
                 ? csharpLineStartStates[lineIndex]
                 : new CSharpLexState());
         return candidateColumn >= 0 && candidateColumn < closingBraceColumn;

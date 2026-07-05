@@ -91,6 +91,7 @@ affected:
 - **Symbol extraction defers record component staging** — line-based symbol extraction now allocates the record-primary-component staging list only after a C#/Kotlin declaration actually yields staged components.
 - **Symbol extraction skips trivial container assignment work** — container assignment now returns before sorting or allocating a stack for empty, single-symbol, or container-free symbol lists.
 - **Symbol extraction caches allocate lazily** — line-based symbol extraction now creates duplicate-tracking dictionaries and symbol-line identity caches only after symbols or identity checks actually need them.
+- **C# symbol extraction defers line-start lexing** — C# line-start lex states are now built only when root-code or same-line container checks actually require them, avoiding a full-file lexical pass for files that never reach those paths.
 
 ## 日本語
 
@@ -153,3 +154,4 @@ affected:
 - **symbol extraction の record component staging を遅延します** — line-based symbol extraction は C# / Kotlin 宣言が staging 対象の record primary component を実際に出した後だけ、一時 staging list を確保します。
 - **symbol extraction の自明な container assignment 作業を省きます** — container assignment は空、単一 symbol、または container 候補を持たない symbol list では sort や stack 確保へ進まずに戻ります。
 - **symbol extraction cache を遅延確保します** — line-based symbol extraction は重複追跡用 dictionary と symbol-line identity cache を、symbol や identity check が実際に必要になってから作るようになりました。
+- **C# symbol extraction の line-start lexing を遅延します** — C# の line-start lex state は root-code 判定や same-line container 判定で実際に必要になった時だけ作るようになり、その経路へ到達しないファイルで全ファイル lexical pass を避けます。
