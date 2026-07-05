@@ -267,9 +267,12 @@ public static partial class SymbolExtractor
                 stack.RemoveAt(stack.Count - 1);
 
             var parentPath = stack == null || stack.Count == 0 ? null : stack[^1].Path;
-            var path = string.IsNullOrEmpty(parentPath) ? key : parentPath + "." + key;
-            if ((stack?.Count ?? 0) >= StructuredDataMaxYamlDepth || path.Length > StructuredDataMaxPathLength)
+            var pathLength = string.IsNullOrEmpty(parentPath)
+                ? key.Length
+                : parentPath.Length + 1 + key.Length;
+            if ((stack?.Count ?? 0) >= StructuredDataMaxYamlDepth || pathLength > StructuredDataMaxPathLength)
                 continue;
+            var path = string.IsNullOrEmpty(parentPath) ? key : parentPath + "." + key;
 
             var value = StripYamlInlineComment(match.Groups["value"].ValueSpan).Trim();
             var isContainer = IsYamlContainerValue(value);
