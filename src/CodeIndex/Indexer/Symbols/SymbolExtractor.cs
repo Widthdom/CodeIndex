@@ -2432,16 +2432,19 @@ public static partial class SymbolExtractor
         CancellationToken cancellationToken,
         out string? lang,
         out string preparedContent,
-        out List<SymbolRecord> symbols)
+        out List<SymbolRecord>? symbols)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lang = NormalizeLanguage(originalLang);
         var pluginLanguage = NormalizePluginLanguage(originalLang);
         preparedContent = content;
-        symbols = [];
+        symbols = null;
 
         if (lang == null && pluginLanguage == null)
+        {
+            symbols = [];
             return true;
+        }
 
         // Null / empty fast path — keep the direct-call null-safe contract that
         // FileIndexer.StripLineLeadingInvisibles' IsNullOrEmpty check used to provide
@@ -2450,7 +2453,10 @@ public static partial class SymbolExtractor
         // 入れたことで helper 側の IsNullOrEmpty による null 許容が効かなくなる
         // ため、direct call の null セーフ契約をここで復元する。Closes #183.
         if (string.IsNullOrEmpty(content))
+        {
+            symbols = [];
             return true;
+        }
 
         // Oversize-line skip: bail out for files that pack a multi-MB payload
         // into a single physical line (minified bundles, base64 blobs). The
@@ -2463,10 +2469,16 @@ public static partial class SymbolExtractor
         // インデクサが止まることを防ぎ、スキップは `line_too_long` FileIssue
         // として表面化させる。Closes #1542.
         if (hasOversizeLine ?? ChunkSplitter.HasOversizeLine(content))
+        {
+            symbols = [];
             return true;
+        }
 
         if ((conflictMarkerLine ?? FileIndexer.GetConflictMarkerLine(content)) > 0)
+        {
+            symbols = [];
             return true;
+        }
 
         if (!contentIsNormalized)
         {
@@ -2566,7 +2578,7 @@ public static partial class SymbolExtractor
             out content,
             out var preparedSymbols))
         {
-            return preparedSymbols;
+            return preparedSymbols!;
         }
 
         if (lang == "xml")

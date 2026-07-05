@@ -19,6 +19,7 @@ affected:
   - src/CodeIndex/Indexer/Scanning/FileIndexer.OversizeContentIssues.cs
   - src/CodeIndex/Indexer/Scanning/FileIndexer.ScanOrchestration.cs
   - src/CodeIndex/Indexer/References/ReferenceExtractor.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs
   - src/CodeIndex/Mcp/McpToolHandlers.cs
   - tests/CodeIndex.Tests/DatabaseTests.cs
   - tests/CodeIndex.Tests/NameFoldTests.cs
@@ -75,6 +76,7 @@ affected:
 - **Clean raw-byte validation avoids LF rescans** — content inspection now skips the second LF-only byte search when a file contains no CR or NUL bytes, because that path cannot emit line-ending or null-byte validation issues.
 - **ASCII folded-name writes skip Unicode work** — `NameFold.Fold` now returns already-folded ASCII names unchanged and uses a lightweight ASCII lowercase path before falling back to NFKC/Unicode casefolding, reducing symbol/reference write overhead for common identifiers.
 - **Reference extraction diagnostics allocate lazily** — built-in reference extraction now creates its diagnostic list only when an extractor reports a diagnostic, avoiding one empty list allocation per clean file.
+- **Symbol extraction skips unused empty result lists** — symbol extraction preparation now allocates empty result lists only for early-return paths, not for the common path that continues into language-specific extraction.
 
 ## 日本語
 
@@ -127,3 +129,4 @@ affected:
 - **clean な raw-byte validation で LF 再走査を避けます** — content inspection は CR / NUL を含まないファイルでは line-ending / null-byte issue が出ないため、LF-only 判定用の2回目の byte search を省くようになりました。
 - **ASCII の folded-name 書き込みで Unicode 処理を省きます** — `NameFold.Fold` は既に fold 済みの ASCII 名をそのまま返し、NFKC / Unicode casefold に入る前に軽量な ASCII lowercase 経路を使うため、一般的な identifier の symbol / reference 書き込み負荷を減らします。
 - **reference extraction の diagnostic を遅延確保します** — built-in reference extraction は extractor が diagnostic を報告した場合だけ diagnostic list を作り、clean file ごとの空 list 確保を避けるようになりました。
+- **symbol extraction で未使用の空 result list を省きます** — symbol extraction preparation は、言語別抽出へ進む通常経路ではなく early return 経路で必要になった場合だけ空 result list を確保するようになりました。
