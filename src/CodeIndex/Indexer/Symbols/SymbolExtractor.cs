@@ -2704,9 +2704,9 @@ public static partial class SymbolExtractor
             return ExtractAssemblySymbols(fileId, lines);
 
         var structuralLines = StructuralLineMasker.MaskLines(lang, lines);
-        var javaScriptTypeScriptSanitizedLines = lang is "javascript" or "typescript"
-            ? BuildJavaScriptTypeScriptSanitizedLines(lines)
-            : null;
+        string[]? javaScriptTypeScriptSanitizedLines = null;
+        string[] GetJavaScriptTypeScriptSanitizedLines() =>
+            javaScriptTypeScriptSanitizedLines ??= BuildJavaScriptTypeScriptSanitizedLines(lines);
         var cssScannerLines = lang == "css"
             ? MaskCssScannerLines(lines)
             : null;
@@ -2855,31 +2855,41 @@ public static partial class SymbolExtractor
 
             if (lang is "javascript" or "typescript")
             {
-                var jsTsSanitizedLines = javaScriptTypeScriptSanitizedLines!;
-                var sanitizedLine = jsTsSanitizedLines[i];
-                if (sanitizedLine.IndexOf("import", StringComparison.Ordinal) >= 0)
+                if (line.IndexOf("import", StringComparison.Ordinal) >= 0
+                    || line.IndexOf("require", StringComparison.Ordinal) >= 0
+                    || line.IndexOf("URL", StringComparison.Ordinal) >= 0
+                    || line.IndexOf("importScripts", StringComparison.Ordinal) >= 0
+                    || line.IndexOf("serviceWorker", StringComparison.Ordinal) >= 0
+                    || line.IndexOf("register", StringComparison.Ordinal) >= 0
+                    || line.IndexOf("addModule", StringComparison.Ordinal) >= 0
+                    || line.IndexOf("Worker", StringComparison.Ordinal) >= 0)
                 {
-                    ExtractJavaScriptTypeScriptDynamicImportSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
-                    ExtractJavaScriptTypeScriptStaticImportModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
-                    ExtractJavaScriptTypeScriptImportMetaResolveModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
-                }
+                    var jsTsSanitizedLines = GetJavaScriptTypeScriptSanitizedLines();
+                    var sanitizedLine = jsTsSanitizedLines[i];
+                    if (sanitizedLine.IndexOf("import", StringComparison.Ordinal) >= 0)
+                    {
+                        ExtractJavaScriptTypeScriptDynamicImportSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
+                        ExtractJavaScriptTypeScriptStaticImportModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
+                        ExtractJavaScriptTypeScriptImportMetaResolveModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
+                    }
 
-                if (sanitizedLine.IndexOf("require", StringComparison.Ordinal) >= 0)
-                    ExtractJavaScriptTypeScriptRequireModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
-                if (sanitizedLine.IndexOf("URL", StringComparison.Ordinal) >= 0)
-                    ExtractJavaScriptTypeScriptNewUrlModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
-                if (sanitizedLine.IndexOf("importScripts", StringComparison.Ordinal) >= 0)
-                    ExtractJavaScriptTypeScriptImportScriptsModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
-                if (sanitizedLine.IndexOf("serviceWorker", StringComparison.Ordinal) >= 0
-                    || sanitizedLine.IndexOf("register", StringComparison.Ordinal) >= 0)
-                {
-                    ExtractJavaScriptTypeScriptServiceWorkerRegisterModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
-                }
+                    if (sanitizedLine.IndexOf("require", StringComparison.Ordinal) >= 0)
+                        ExtractJavaScriptTypeScriptRequireModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
+                    if (sanitizedLine.IndexOf("URL", StringComparison.Ordinal) >= 0)
+                        ExtractJavaScriptTypeScriptNewUrlModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
+                    if (sanitizedLine.IndexOf("importScripts", StringComparison.Ordinal) >= 0)
+                        ExtractJavaScriptTypeScriptImportScriptsModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
+                    if (sanitizedLine.IndexOf("serviceWorker", StringComparison.Ordinal) >= 0
+                        || sanitizedLine.IndexOf("register", StringComparison.Ordinal) >= 0)
+                    {
+                        ExtractJavaScriptTypeScriptServiceWorkerRegisterModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
+                    }
 
-                if (sanitizedLine.IndexOf("addModule", StringComparison.Ordinal) >= 0)
-                    ExtractJavaScriptTypeScriptWorkletAddModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
-                if (sanitizedLine.IndexOf("Worker", StringComparison.Ordinal) >= 0)
-                    ExtractJavaScriptTypeScriptWorkerConstructorModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
+                    if (sanitizedLine.IndexOf("addModule", StringComparison.Ordinal) >= 0)
+                        ExtractJavaScriptTypeScriptWorkletAddModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
+                    if (sanitizedLine.IndexOf("Worker", StringComparison.Ordinal) >= 0)
+                        ExtractJavaScriptTypeScriptWorkerConstructorModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
+                }
             }
 
             if (lang is "javascript" or "typescript"
