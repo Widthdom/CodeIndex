@@ -113,7 +113,7 @@ public partial class FileIndexer
         // drive root 走査で OS 管理 cache に降りないよう Hidden/System ディレクトリもスキップする。
         // skip したディレクトリ自身を listed 扱い（immediate parent purge 用）かつ prune prefix として
         // 記録することで、以前の実行でできた深い子孫エントリも purge walker が確実に削除できる。
-        if (ShouldSkipDirectoryLink(subDir, scanState.Errors, scanState.DanglingSymlinks, knownAttributes))
+        if (ShouldSkipDirectoryLink(subDir, scanState.Errors, scanState, knownAttributes))
         {
             RecordPrunedDirectory(subDir, scanState);
             return true;
@@ -143,7 +143,7 @@ public partial class FileIndexer
             {
                 scanState.ListedDirectories.Add(subRelative);
                 scanState.FullyScannedDirectories.Add(subRelative);
-                scanState.NestedRepositories.Add(subRelative);
+                scanState.RecordNestedRepository(subRelative);
                 return true;
             }
         }
@@ -172,6 +172,6 @@ public partial class FileIndexer
         var relativeDir = ToRelativePath(dir);
         scanState.ListedDirectories.Add(relativeDir);
         scanState.FullyScannedDirectories.Add(relativeDir);
-        scanState.AttributePrunedDirectories.Add(relativeDir);
+        scanState.RecordAttributePrunedDirectory(relativeDir);
     }
 }

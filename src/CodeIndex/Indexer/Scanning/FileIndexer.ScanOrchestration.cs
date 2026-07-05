@@ -21,17 +21,11 @@ public partial class FileIndexer
         var fileLanguages = new Dictionary<string, string>(StringComparer.Ordinal);
         var languageCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         var errors = new List<ScanError>(_submoduleLoadWarnings.Count);
-        var nonIndexablePaths = new HashSet<string>(StringComparer.Ordinal);
-        var unknownExtensionFiles = new HashSet<string>(StringComparer.Ordinal);
-        var probeFailedFilePaths = new HashSet<string>(StringComparer.Ordinal);
         var listedDirectories = new HashSet<string>(StringComparer.Ordinal);
         var fullyScannedDirectories = new HashSet<string>(StringComparer.Ordinal);
         IReadOnlySet<string> activeCheckpointedDirectories = checkpointedDirectories is { Count: > 0 }
             ? new HashSet<string>(checkpointedDirectories, StringComparer.Ordinal)
             : EmptyCheckpointedDirectorySet;
-        var attributePrunedDirectories = new HashSet<string>(StringComparer.Ordinal);
-        var nestedRepositories = new HashSet<string>(StringComparer.Ordinal);
-        var danglingSymlinks = new HashSet<string>(StringComparer.Ordinal);
         var visitedFileIdentities = new HashSet<FileIdentity>();
         var visitedDirectories = new HashSet<string>(StringComparer.Ordinal) { NormalizePathForComparison(_projectRoot) };
         var scanState = new DirectoryScanState(
@@ -39,15 +33,9 @@ public partial class FileIndexer
             fileLanguages,
             languageCounts,
             errors,
-            nonIndexablePaths,
-            unknownExtensionFiles,
-            probeFailedFilePaths,
             listedDirectories,
             fullyScannedDirectories,
             activeCheckpointedDirectories,
-            attributePrunedDirectories,
-            nestedRepositories,
-            danglingSymlinks,
             visitedFileIdentities,
             visitedDirectories);
         errors.AddRange(_submoduleLoadWarnings);
@@ -76,8 +64,8 @@ public partial class FileIndexer
         };
     }
 
-    private static IReadOnlyList<string> MaterializePathSet(HashSet<string> paths)
-        => paths.Count == 0 ? Array.Empty<string>() : new List<string>(paths);
+    private static IReadOnlyList<string> MaterializePathSet(HashSet<string>? paths)
+        => paths is not { Count: > 0 } ? Array.Empty<string>() : new List<string>(paths);
 
     private IReadOnlyList<string> MaterializeAncestorIgnoreDirectories()
         => _ancestorIgnoreDirectories.Count == 0
@@ -89,9 +77,9 @@ public partial class FileIndexer
             ? EmptyLanguageCounts
             : new Dictionary<string, int>(counts, StringComparer.Ordinal);
 
-    private static IReadOnlyList<string> MaterializeSortedPathSet(HashSet<string> paths)
+    private static IReadOnlyList<string> MaterializeSortedPathSet(HashSet<string>? paths)
     {
-        if (paths.Count == 0)
+        if (paths is not { Count: > 0 })
             return Array.Empty<string>();
 
         var sorted = new List<string>(paths);

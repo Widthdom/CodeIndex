@@ -6,6 +6,12 @@ affected:
   - src/CodeIndex/Database/DbReader.cs
   - src/CodeIndex/Database/FtsBulkLoadTriggerGuard.cs
   - src/CodeIndex/Database/DbWriter.cs
+  - src/CodeIndex/Indexer/Scanning/FileIndexer.cs
+  - src/CodeIndex/Indexer/Scanning/FileIndexer.DanglingEntries.cs
+  - src/CodeIndex/Indexer/Scanning/FileIndexer.DirectoryLinks.cs
+  - src/CodeIndex/Indexer/Scanning/FileIndexer.DirectoryTraversal.cs
+  - src/CodeIndex/Indexer/Scanning/FileIndexer.FileAcceptance.cs
+  - src/CodeIndex/Indexer/Scanning/FileIndexer.ScanOrchestration.cs
   - src/CodeIndex/Mcp/McpToolHandlers.cs
 ---
 
@@ -54,6 +60,7 @@ affected:
 - **Fresh full scans defer reuse-language tracking** — CLI and MCP fresh/rebuild scans now allocate hotspot and fold reuse language sets only after an existing file is actually reused, and pre-size committed-language tracking from scan metadata.
 - **MCP fresh indexes use one batch marker** — MCP fresh/rebuild scans now keep the in-progress batch marker for the scan instead of rewriting it around every committed file, matching the CLI full-scan crash signal while cutting per-file metadata writes.
 - **CLI fresh purge skips retained-set allocation** — CLI full scans that start from an empty database now avoid allocating the retained path set that only existing-database stale purge paths consume.
+- **Scanner diagnostic sets allocate lazily** — full scans now create optional non-indexable, unknown-extension, probe-failure, pruned-directory, nested-repository, and dangling-symlink path sets only when those diagnostics are actually recorded.
 
 ## 日本語
 
@@ -100,3 +107,4 @@ affected:
 - **fresh full scan の reuse language tracking を遅延確保します** — CLI と MCP の fresh / rebuild scan は、既存ファイルを実際に再利用するまで hotspot / fold 用の言語 set を確保せず、commit 済み言語 tracking も scan metadata から事前サイズ指定するようになりました。
 - **MCP fresh index の batch marker を1回にします** — MCP の fresh / rebuild scan は、file commit ごとに in-progress batch marker を書き直さず scan 中に維持するようになり、CLI full-scan と同じ crash signal を保ちながらファイル単位の metadata write を減らします。
 - **CLI fresh purge の retained set 確保を省きます** — 空DBから始まる CLI full scan は、既存DBの stale purge 経路だけが使う retained path set を確保しないようになりました。
+- **scanner の診断用 set を遅延確保します** — full scan は non-indexable、unknown-extension、probe-failure、pruned-directory、nested-repository、dangling-symlink の各 optional path set を、実際に診断が記録された場合だけ作るようになりました。

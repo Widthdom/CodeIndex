@@ -19,7 +19,7 @@ public partial class FileIndexer
                 issuePath,
                 "Skipped file because its path contains NUL or control characters.",
                 ScanIssueSeverity.Warning));
-            scanState.NonIndexablePaths.Add(issuePath);
+            scanState.RecordNonIndexablePath(issuePath);
             return false;
         }
 
@@ -33,7 +33,7 @@ public partial class FileIndexer
                     relativePath,
                     "Skipped duplicate file path that differs only by case on a case-insensitive directory.",
                     ScanIssueSeverity.Warning));
-                scanState.NonIndexablePaths.Add(relativePath);
+                scanState.RecordNonIndexablePath(relativePath);
                 return false;
             }
         }
@@ -72,7 +72,7 @@ public partial class FileIndexer
                 relativePath,
                 "Skipped file because it was deleted during scanning.",
                 ScanIssueSeverity.Warning));
-            scanState.NonIndexablePaths.Add(relativePath);
+            scanState.RecordNonIndexablePath(relativePath);
             return false;
         }
 
@@ -80,13 +80,13 @@ public partial class FileIndexer
         {
             var relativePath = ToRelativePath(file);
             scanState.Errors.Add(new ScanError(relativePath, "Could not probe file for indexability/language."));
-            scanState.ProbeFailedFilePaths.Add(relativePath);
+            scanState.RecordProbeFailedFilePath(relativePath);
             return false;
         }
 
         if (indexability != FileProbeStatus.Supported)
         {
-            scanState.NonIndexablePaths.Add(ToRelativePath(file));
+            scanState.RecordNonIndexablePath(ToRelativePath(file));
             return false;
         }
 
@@ -100,22 +100,22 @@ public partial class FileIndexer
                 relativeFile,
                 "Skipped file because it was deleted during scanning.",
                 ScanIssueSeverity.Warning));
-            scanState.NonIndexablePaths.Add(relativeFile);
+            scanState.RecordNonIndexablePath(relativeFile);
             return false;
         }
 
         if (language.Status == FileProbeStatus.ProbeFailed)
         {
             scanState.Errors.Add(new ScanError(relativeFile, "Could not probe file for indexability/language."));
-            scanState.ProbeFailedFilePaths.Add(relativeFile);
+            scanState.RecordProbeFailedFilePath(relativeFile);
             return false;
         }
 
         if (language.Status != FileProbeStatus.Supported)
         {
-            scanState.NonIndexablePaths.Add(relativeFile);
+            scanState.RecordNonIndexablePath(relativeFile);
             if (HasUnknownExtension(file) && !IsInternalIndexArtifactPath(relativeFile))
-                scanState.UnknownExtensionFiles.Add(relativeFile);
+                scanState.RecordUnknownExtensionFile(relativeFile);
             return false;
         }
 
@@ -125,7 +125,7 @@ public partial class FileIndexer
                 relativeFile,
                 "Skipped hardlinked file because the same file content was already indexed from another path.",
                 ScanIssueSeverity.Warning));
-            scanState.NonIndexablePaths.Add(relativeFile);
+            scanState.RecordNonIndexablePath(relativeFile);
             return false;
         }
 

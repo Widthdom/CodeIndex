@@ -8,7 +8,7 @@ public partial class FileIndexer
     private bool ShouldSkipDirectoryLink(
         string subDir,
         List<ScanError> errors,
-        HashSet<string> danglingSymlinks,
+        DirectoryScanState? scanState,
         FileAttributes? knownAttributes = null)
     {
         var isReparsePoint = knownAttributes.HasValue
@@ -53,7 +53,7 @@ public partial class FileIndexer
 
         if (target?.FullName is not { Length: > 0 } targetPath || !Directory.Exists(LongPath.EnsureWindowsPrefix(targetPath)))
         {
-            danglingSymlinks.Add(relative);
+            scanState?.RecordDanglingSymlink(relative);
             errors.Add(new ScanError(relative, "Skipped dangling symlink because its target could not be resolved.", ScanIssueSeverity.Warning));
             return true;
         }
@@ -84,7 +84,7 @@ public partial class FileIndexer
         => ShouldSkipDirectoryLink(
             directory,
             errors: new List<ScanError>(),
-            danglingSymlinks: new HashSet<string>(StringComparer.Ordinal));
+            scanState: null);
 
     private static string GetDirectoryTraversalIdentity(string directory, FileAttributes? knownAttributes = null)
     {
