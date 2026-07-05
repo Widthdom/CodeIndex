@@ -1383,10 +1383,13 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
-        if (originalLines[lineIndex].IndexOf("metadata", StringComparison.Ordinal) < 0)
+        var originalLine = originalLines[lineIndex];
+        if (originalLine.IndexOf("metadata", StringComparison.Ordinal) < 0)
+            return;
+        if (originalLine.IndexOf('=') < 0 || originalLine.IndexOf('{') < 0)
             return;
 
-        var metadataMatch = DataclassFieldMetadataRegex.Match(originalLines[lineIndex]);
+        var metadataMatch = DataclassFieldMetadataRegex.Match(originalLine);
         if (!metadataMatch.Success)
             return;
 
