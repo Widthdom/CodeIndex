@@ -69,7 +69,7 @@ public static partial class SymbolExtractor
             var truncated = false;
             var propertyLines = content.IndexOf('\n', StringComparison.Ordinal) < 0
                 && content.IndexOf('\r', StringComparison.Ordinal) < 0
-                ? BuildSingleLineJsonPropertyLineQueues(document.RootElement)
+                ? null
                 : BuildJsonPropertyLineQueues(content);
             ExtractJsonObjectSymbols(
                 fileId,
@@ -101,7 +101,7 @@ public static partial class SymbolExtractor
         string? parentPath,
         ref int searchOffset,
         List<SymbolRecord> symbols,
-        Dictionary<string, Queue<int>> propertyLines,
+        Dictionary<string, Queue<int>>? propertyLines,
         int depth,
         ref int traversalNodes,
         ref bool truncated)
@@ -124,9 +124,11 @@ public static partial class SymbolExtractor
             var name = string.IsNullOrEmpty(parentPath)
                 ? property.Name
                 : parentPath + "." + property.Name;
-            var line = TryDequeueJsonPropertyLine(propertyLines, property.Name, out var mappedLine)
-                ? mappedLine
-                : FindLineNumberForOffset(lineStarts ??= BuildLineStarts(lines), FindJsonPropertyOffset(content, property.Name, ref searchOffset));
+            var line = propertyLines == null
+                ? 1
+                : TryDequeueJsonPropertyLine(propertyLines, property.Name, out var mappedLine)
+                    ? mappedLine
+                    : FindLineNumberForOffset(lineStarts ??= BuildLineStarts(lines), FindJsonPropertyOffset(content, property.Name, ref searchOffset));
 
             if (name.Length > StructuredDataMaxPathLength)
             {
@@ -160,8 +162,11 @@ public static partial class SymbolExtractor
         }
     }
 
-    private static void DrainJsonPropertyLines(JsonElement element, Dictionary<string, Queue<int>> propertyLines)
+    private static void DrainJsonPropertyLines(JsonElement element, Dictionary<string, Queue<int>>? propertyLines)
     {
+        if (propertyLines == null)
+            return;
+
         if (element.ValueKind == JsonValueKind.Object)
         {
             foreach (var property in element.EnumerateObject())
@@ -412,40 +417,6 @@ public static partial class SymbolExtractor
         }
 
         return propertyLines;
-    }
-
-    private static Dictionary<string, Queue<int>> BuildSingleLineJsonPropertyLineQueues(JsonElement element)
-    {
-        var propertyLines = new Dictionary<string, Queue<int>>(StringComparer.Ordinal);
-        AddSingleLineJsonPropertyLines(element, propertyLines);
-        return propertyLines;
-    }
-
-    private static void AddSingleLineJsonPropertyLines(JsonElement element, Dictionary<string, Queue<int>> propertyLines)
-    {
-        if (element.ValueKind == JsonValueKind.Object)
-        {
-            foreach (var property in element.EnumerateObject())
-            {
-                if (!string.IsNullOrEmpty(property.Name))
-                {
-                    if (!propertyLines.TryGetValue(property.Name, out var lines))
-                    {
-                        lines = new Queue<int>();
-                        propertyLines.Add(property.Name, lines);
-                    }
-
-                    lines.Enqueue(1);
-                }
-
-                AddSingleLineJsonPropertyLines(property.Value, propertyLines);
-            }
-        }
-        else if (element.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in element.EnumerateArray())
-                AddSingleLineJsonPropertyLines(item, propertyLines);
-        }
     }
 
     private static int[] BuildUtf8LineStarts(byte[] bytes)
