@@ -2000,7 +2000,7 @@ public static partial class IndexCommandRunner
                         currentJsonIndexFile = FormatIndexPhasePath(record.Path, "committing");
                         WriteProjectRootOnce();
                         txn.Commit();
-                        if (symbols.Count > 0 && !string.IsNullOrWhiteSpace(record.Lang))
+                        if (!string.IsNullOrWhiteSpace(record.Lang))
                             indexedSymbolExtractorLanguages.Add(record.Lang);
                         CountFreshInsertedRows(chunks.Count, symbols.Count, references.Count);
 

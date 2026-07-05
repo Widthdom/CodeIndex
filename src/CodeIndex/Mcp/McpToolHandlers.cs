@@ -5948,7 +5948,7 @@ public partial class McpServer
                 WriteProjectRootOnce();
                 writer.ClearBatchInProgress();
                 txn.Commit();
-                if (committedSymbolCount > 0 && !string.IsNullOrWhiteSpace(record.Lang))
+                if (!string.IsNullOrWhiteSpace(record.Lang))
                     indexedSymbolExtractorLanguages.Add(record.Lang);
                 CountFreshInsertedRows(committedChunkCount, committedSymbolCount, committedReferenceCount);
                 ftsMutated = true;
@@ -5973,6 +5973,8 @@ public partial class McpServer
                     InsertIssuesForIndexedFile(fileId, [IndexCommandRunner.BuildNullByteIssue(ex)]);
                     WriteProjectRootOnce();
                     txn.Commit();
+                    if (!string.IsNullOrWhiteSpace(skippedRecord.Lang))
+                        indexedSymbolExtractorLanguages.Add(skippedRecord.Lang);
                     CountFreshInsertedRows();
                     ftsMutated = true;
                 }
@@ -6122,6 +6124,7 @@ public partial class McpServer
                 // BEGIN IMMEDIATE 内で再検証する。concurrent NULL 差し込みで stamp が失敗した
                 // 場合は missing_fold_backfill に降格する。Issue #1535。
                 foldReadyAfter = writer.MarkFoldReady(
+                    stampCurrentSymbolExtractorVersions: skipped == 0,
                     symbolExtractorLanguagesToStamp: skipped == 0 ? indexedSymbolExtractorLanguages : null);
                 if (!foldReadyAfter)
                     foldReadyReason = DegradationReasonCodes.MissingFoldBackfill;

@@ -1731,6 +1731,57 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_RebuildRestampsExtractorVersionForZeroSymbolLanguage()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "empty.py"), "# intentionally no declarations\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "INSERT OR REPLACE INTO codeindex_meta(key, value) VALUES(@key, '0')";
+                cmd.Parameters.AddWithValue("@key", DbContext.GetSymbolExtractorVersionMetaKey("python"));
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--rebuild", "--yes", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+
+            using var verify = OpenNonPoolingConnection(dbPath);
+            verify.Open();
+
+            using var symbolCountCmd = verify.CreateCommand();
+            symbolCountCmd.CommandText = """
+                SELECT COUNT(*)
+                FROM symbols s
+                JOIN files f ON f.id = s.file_id
+                WHERE f.path = 'empty.py'
+                """;
+            Assert.Equal(0L, (long)symbolCountCmd.ExecuteScalar()!);
+
+            using var versionCmd = verify.CreateCommand();
+            versionCmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
+            versionCmd.Parameters.AddWithValue("@key", DbContext.GetSymbolExtractorVersionMetaKey("python"));
+            Assert.Equal(
+                SymbolExtractor.GetContractVersion("python").ToString(CultureInfo.InvariantCulture),
+                versionCmd.ExecuteScalar() as string);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_ReindexesUnchangedSqlFilesWhenSqlGraphContractChanged()
     {
         var projectRoot = CreateTempProject();

@@ -5972,6 +5972,41 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Index_RebuildRestampsExtractorVersionForZeroSymbolLanguage()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_zero_symbol_version_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_zero_symbol_version");
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "empty.py"), "# intentionally no declarations\n");
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.GetSymbolExtractorVersionMetaKey("python"), "0");
+            }
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var response = CallIndex(server, fixtureDir, args => args["rebuild"] = true);
+
+            Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
+            Assert.Equal(0, response["result"]!["structuredContent"]!["summary"]!["symbols"]!.GetValue<long>());
+            using var verify = new DbContext(dbPath);
+            verify.TryMigrateForRead();
+            Assert.Equal(
+                SymbolExtractor.GetContractVersion("python").ToString(CultureInfo.InvariantCulture),
+                verify.GetMetaString(DbContext.GetSymbolExtractorVersionMetaKey("python")));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_ReprocessesUnchangedFilesWhenMaxSymbolsPerFileChanges_Issue3543()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_max_symbols_reuse_{Guid.NewGuid():N}");
