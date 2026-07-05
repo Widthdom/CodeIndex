@@ -74,7 +74,6 @@ public static partial class SymbolExtractor
                 tagNameEnd++;
 
             var tagName = maskedText[tagNameStart..tagNameEnd];
-            var tagNameLower = tagName.ToLowerInvariant();
             var sawNamedSlotDeclaration = false;
 
             // Emit custom Web Components (hyphenated opening tag) at the `<` position,
@@ -87,7 +86,7 @@ public static partial class SymbolExtractor
             // ただしハイフン付きでも仕様で予約されている `<font-face>` / `<color-profile>`
             // / `<annotation-xml>` などの標準タグは除外する。SVG / MathML を埋め込んだ
             // ファイルで `symbols` / `definition` / `outline` が汚染されるのを防ぐ。
-            if (tagName.Contains('-') && !HtmlReservedHyphenatedTags.Contains(tagNameLower))
+            if (tagName.Contains('-') && !HtmlReservedHyphenatedTags.Contains(tagName))
             {
                 var startLine = FindHtmlLineNumber(lineStarts ??= BuildLineStarts(lines), pos);
                 var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
@@ -211,27 +210,27 @@ public static partial class SymbolExtractor
                 string? emitKind = null;
                 string? singleEmittedName = null;
                 IEnumerable<string>? emittedNames = null;
-                if (attrNameLower == "src" && IsHtmlSrcResourceTag(tagNameLower))
+                if (attrNameLower == "src" && IsHtmlSrcResourceTag(tagName))
                 {
                     emitKind = "import";
                     singleEmittedName = attrValue.Trim();
                 }
-                else if (attrNameLower == "srcset" && IsHtmlSrcsetResourceTag(tagNameLower))
+                else if (attrNameLower == "srcset" && IsHtmlSrcsetResourceTag(tagName))
                 {
                     emitKind = "import";
                     emittedNames = EnumerateHtmlSrcsetUrls(attrValue);
                 }
-                else if ((attrNameLower == "href" || attrNameLower == "xlink:href") && IsHtmlHrefResourceTag(tagNameLower))
+                else if ((attrNameLower == "href" || attrNameLower == "xlink:href") && IsHtmlHrefResourceTag(tagName))
                 {
                     emitKind = "import";
                     singleEmittedName = attrValue.Trim();
                 }
-                else if (attrNameLower == "data" && tagNameLower == "object")
+                else if (attrNameLower == "data" && IsHtmlTagName(tagName, "object"))
                 {
                     emitKind = "import";
                     singleEmittedName = attrValue.Trim();
                 }
-                else if (attrNameLower == "poster" && tagNameLower == "video")
+                else if (attrNameLower == "poster" && IsHtmlTagName(tagName, "video"))
                 {
                     emitKind = "import";
                     singleEmittedName = attrValue.Trim();
@@ -246,7 +245,7 @@ public static partial class SymbolExtractor
                     emitKind = "reference";
                     emittedNames = EnumerateHtmlClassNames(attrValue);
                 }
-                else if (attrNameLower == "name" && tagNameLower == "slot")
+                else if (attrNameLower == "name" && IsHtmlTagName(tagName, "slot"))
                 {
                     var slotName = attrValue.Trim();
                     if (slotName.Length > 0)
@@ -305,7 +304,7 @@ public static partial class SymbolExtractor
                     AddEmittedName(emittedName);
             }
 
-            if (tagNameLower == "slot" && !sawNamedSlotDeclaration)
+            if (IsHtmlTagName(tagName, "slot") && !sawNamedSlotDeclaration)
             {
                 var startLine = FindHtmlLineNumber(lineStarts ??= BuildLineStarts(lines), pos);
                 var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
@@ -2562,14 +2561,29 @@ public static partial class SymbolExtractor
         "missing-glyph",
     };
 
-    private static bool IsHtmlSrcResourceTag(string tagNameLower) =>
-        tagNameLower is "audio" or "embed" or "iframe" or "img" or "input" or "script" or "source" or "track" or "video";
+    private static bool IsHtmlTagName(string tagName, string expected) =>
+        tagName.Equals(expected, StringComparison.OrdinalIgnoreCase);
 
-    private static bool IsHtmlHrefResourceTag(string tagNameLower) =>
-        tagNameLower is "a" or "area" or "image" or "link" or "use";
+    private static bool IsHtmlSrcResourceTag(string tagName) =>
+        IsHtmlTagName(tagName, "audio")
+        || IsHtmlTagName(tagName, "embed")
+        || IsHtmlTagName(tagName, "iframe")
+        || IsHtmlTagName(tagName, "img")
+        || IsHtmlTagName(tagName, "input")
+        || IsHtmlTagName(tagName, "script")
+        || IsHtmlTagName(tagName, "source")
+        || IsHtmlTagName(tagName, "track")
+        || IsHtmlTagName(tagName, "video");
 
-    private static bool IsHtmlSrcsetResourceTag(string tagNameLower) =>
-        tagNameLower is "img" or "source";
+    private static bool IsHtmlHrefResourceTag(string tagName) =>
+        IsHtmlTagName(tagName, "a")
+        || IsHtmlTagName(tagName, "area")
+        || IsHtmlTagName(tagName, "image")
+        || IsHtmlTagName(tagName, "link")
+        || IsHtmlTagName(tagName, "use");
+
+    private static bool IsHtmlSrcsetResourceTag(string tagName) =>
+        IsHtmlTagName(tagName, "img") || IsHtmlTagName(tagName, "source");
 
     private static IEnumerable<string> EnumerateHtmlSrcsetUrls(string value)
     {
