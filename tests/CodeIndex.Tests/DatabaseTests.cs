@@ -2830,6 +2830,40 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void InsertReferencesForNewFiles_InsertsReturningReferenceLines()
+    {
+        var fileId = _writer.InsertNewFile(new FileRecord
+        {
+            Path = "src/new_refs.py",
+            Lang = "python",
+            Size = 1000,
+            Lines = 1000,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var references = Enumerable.Range(0, 120)
+            .Select(i => new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = $"callee_{i}",
+                ReferenceKind = "call",
+                Line = i % 10 + 1,
+                Column = 4,
+                Context = $"line_{i % 10}()",
+                ContainerKind = "function",
+                ContainerName = "caller",
+            })
+            .ToList();
+
+        _writer.InsertReferencesForNewFiles(references, refreshMutualRecursionFlags: false, CancellationToken.None);
+
+        var (_, _, _, referenceCount) = _writer.GetCounts();
+        Assert.Equal(120, referenceCount);
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM reference_lines";
+        Assert.Equal(10L, (long)cmd.ExecuteScalar()!);
+    }
+
+    [Fact]
     public void RebuildTypeScriptAugmentationReferences_LinksMergedInterfacesOnly()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_ts_aug");

@@ -5943,7 +5943,10 @@ public partial class McpServer
                         referenceCapIssue = BuildMcpReferenceCountExceededIssue(record.Path, references.Count, maxReferencesPerFile);
                         references = [];
                     }
-                    writer.InsertReferences(references, refreshMutualRecursionFlags: false, requestToken);
+                    if (startedWithNoIndexedFiles)
+                        writer.InsertReferencesForNewFiles(references, refreshMutualRecursionFlags: false, requestToken);
+                    else
+                        writer.InsertReferences(references, refreshMutualRecursionFlags: false, requestToken);
                     if (references.Count > 0)
                         mutualRecursionRefreshNeeded = true;
                     committedChunkCount = chunks.Count;

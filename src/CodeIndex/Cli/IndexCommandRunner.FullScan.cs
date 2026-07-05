@@ -2022,7 +2022,10 @@ public static partial class IndexCommandRunner
                                 item = item with { Issues = AppendIssue(baseIssues, issue) };
                             }
                         }
-                        writer.InsertReferences(references, refreshMutualRecursionFlags: false, cancellationToken);
+                        if (startedWithNoIndexedFiles)
+                            writer.InsertReferencesForNewFiles(references, refreshMutualRecursionFlags: false, cancellationToken);
+                        else
+                            writer.InsertReferences(references, refreshMutualRecursionFlags: false, cancellationToken);
                         if (references.Count > 0)
                             mutualRecursionRefreshNeeded = true;
                         currentJsonIndexFile = FormatIndexPhasePath(record.Path, "validating");
