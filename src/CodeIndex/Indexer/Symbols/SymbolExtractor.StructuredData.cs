@@ -457,7 +457,7 @@ public static partial class SymbolExtractor
 
     private static int FindJsonPropertyOffset(string content, string propertyName, ref int searchOffset)
     {
-        var encodedName = JsonSerializer.Serialize(propertyName);
+        var encodedName = EncodeJsonPropertySearchName(propertyName);
         var offset = content.IndexOf(encodedName, searchOffset, StringComparison.Ordinal);
         if (offset < 0 && searchOffset > 0)
             offset = content.IndexOf(encodedName, StringComparison.Ordinal);
@@ -469,6 +469,30 @@ public static partial class SymbolExtractor
         }
 
         return Math.Clamp(searchOffset, 0, Math.Max(0, content.Length - 1));
+    }
+
+    private static string EncodeJsonPropertySearchName(string propertyName)
+        => IsSimpleJsonPropertySearchName(propertyName)
+            ? "\"" + propertyName + "\""
+            : JsonSerializer.Serialize(propertyName);
+
+    private static bool IsSimpleJsonPropertySearchName(string propertyName)
+    {
+        for (var index = 0; index < propertyName.Length; index++)
+        {
+            var ch = propertyName[index];
+            if ((ch >= 'A' && ch <= 'Z')
+                || (ch >= 'a' && ch <= 'z')
+                || (ch >= '0' && ch <= '9')
+                || ch is '_' or '-' or '.' or ' ')
+            {
+                continue;
+            }
+
+            return false;
+        }
+
+        return true;
     }
 
     private static int[] BuildLineStarts(string[] lines)
