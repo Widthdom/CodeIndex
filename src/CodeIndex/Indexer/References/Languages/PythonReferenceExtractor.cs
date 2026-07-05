@@ -150,7 +150,7 @@ internal static class PythonReferenceExtractor
             return expression[1..^1];
         }
 
-        if (expression.IndexOf('\'') < 0 && expression.IndexOf('"') < 0)
+        if (expression.AsSpan().IndexOfAny('\'', '"') < 0)
             return expression;
 
         return Regex.Replace(
