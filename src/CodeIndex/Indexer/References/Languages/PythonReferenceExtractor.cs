@@ -868,7 +868,8 @@ internal static class PythonReferenceExtractor
     {
         if (preparedLine.IndexOf("def", StringComparison.Ordinal) < 0
             || preparedLine.IndexOf('(') < 0
-            || preparedLine.IndexOf(')') < 0)
+            || preparedLine.IndexOf(')') < 0
+            || preparedLine.IndexOf(':') < 0)
         {
             return;
         }
