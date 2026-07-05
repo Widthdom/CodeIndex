@@ -61,12 +61,15 @@ internal readonly record struct RawByteContentInspection(
         var rawSpan = rawBytes.AsSpan();
         if (rawSpan.IndexOfAny((byte)0, (byte)0x0D) < 0)
         {
+            // LF-only tracking only matters when CR is also present; without CR/NUL the
+            // validator cannot emit line-ending or null-byte issues, so avoid a second
+            // full-byte scan on the common clean UTF-8 path.
             return new RawByteContentInspection(
                 HasUtf8Bom: hasUtf8Bom,
                 HasNullByte: false,
                 NullByteOffset: -1,
                 HasCrlf: false,
-                HasLfOnly: rawSpan.IndexOf((byte)0x0A) >= 0,
+                HasLfOnly: false,
                 HasCrOnly: false);
         }
 

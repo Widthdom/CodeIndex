@@ -7,6 +7,7 @@ affected:
   - src/CodeIndex/Database/FtsBulkLoadTriggerGuard.cs
   - src/CodeIndex/Database/DbWriter.cs
   - src/CodeIndex/Indexer/Scanning/FileIndexer.cs
+  - src/CodeIndex/Indexer/Scanning/FileContentInspection.cs
   - src/CodeIndex/Indexer/Scanning/FileIndexer.DanglingEntries.cs
   - src/CodeIndex/Indexer/Scanning/FileIndexer.DirectoryLinks.cs
   - src/CodeIndex/Indexer/Scanning/FileIndexer.DirectoryTraversal.cs
@@ -68,6 +69,7 @@ affected:
 - **Scanner diagnostic sets allocate lazily** — full scans now create optional non-indexable, unknown-extension, probe-failure, pruned-directory, nested-repository, and dangling-symlink path sets only when those diagnostics are actually recorded.
 - **Fresh reference writes skip line-id lookups** — CLI and MCP fresh full scans now insert new `reference_lines` rows with `RETURNING` for newly inserted files instead of upserting and selecting the same line ids back.
 - **Clean validation avoids issue-list allocation** — CLI and MCP indexing now let content-validation helpers allocate `FileIssue` lists only when a file actually emits a validation issue, reusing an empty result for the common clean-file path.
+- **Clean raw-byte validation avoids LF rescans** — content inspection now skips the second LF-only byte search when a file contains no CR or NUL bytes, because that path cannot emit line-ending or null-byte validation issues.
 
 ## 日本語
 
@@ -117,3 +119,4 @@ affected:
 - **scanner の診断用 set を遅延確保します** — full scan は non-indexable、unknown-extension、probe-failure、pruned-directory、nested-repository、dangling-symlink の各 optional path set を、実際に診断が記録された場合だけ作るようになりました。
 - **fresh reference write で line-id lookup を省きます** — CLI と MCP の fresh full scan は、新規挿入ファイルの `reference_lines` を upsert 後に SELECT で読み返さず、`RETURNING` 付き INSERT で id を受け取るようになりました。
 - **clean な validation で issue list 確保を避けます** — CLI と MCP の index は、content validation helper が実際に検証 issue を出す場合だけ `FileIssue` list を確保し、一般的な clean file 経路では空結果を再利用するようになりました。
+- **clean な raw-byte validation で LF 再走査を避けます** — content inspection は CR / NUL を含まないファイルでは line-ending / null-byte issue が出ないため、LF-only 判定用の2回目の byte search を省くようになりました。
