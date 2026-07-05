@@ -3,6 +3,7 @@ category: fixed
 affected:
   - src/CodeIndex/Cli/IndexCommandRunner.FullScan.cs
   - src/CodeIndex/Cli/IndexCommandRunner.cs
+  - src/CodeIndex/Database/NameFold.cs
   - src/CodeIndex/Database/DbReader.cs
   - src/CodeIndex/Database/FtsBulkLoadTriggerGuard.cs
   - src/CodeIndex/Database/DbWriter.cs
@@ -19,6 +20,7 @@ affected:
   - src/CodeIndex/Indexer/Scanning/FileIndexer.ScanOrchestration.cs
   - src/CodeIndex/Mcp/McpToolHandlers.cs
   - tests/CodeIndex.Tests/DatabaseTests.cs
+  - tests/CodeIndex.Tests/NameFoldTests.cs
 ---
 
 ## English
@@ -70,6 +72,7 @@ affected:
 - **Fresh reference writes skip line-id lookups** — CLI and MCP fresh full scans now insert new `reference_lines` rows with `RETURNING` for newly inserted files instead of upserting and selecting the same line ids back.
 - **Clean validation avoids issue-list allocation** — CLI and MCP indexing now let content-validation helpers allocate `FileIssue` lists only when a file actually emits a validation issue, reusing an empty result for the common clean-file path.
 - **Clean raw-byte validation avoids LF rescans** — content inspection now skips the second LF-only byte search when a file contains no CR or NUL bytes, because that path cannot emit line-ending or null-byte validation issues.
+- **ASCII folded-name writes skip Unicode work** — `NameFold.Fold` now returns already-folded ASCII names unchanged and uses a lightweight ASCII lowercase path before falling back to NFKC/Unicode casefolding, reducing symbol/reference write overhead for common identifiers.
 
 ## 日本語
 
@@ -120,3 +123,4 @@ affected:
 - **fresh reference write で line-id lookup を省きます** — CLI と MCP の fresh full scan は、新規挿入ファイルの `reference_lines` を upsert 後に SELECT で読み返さず、`RETURNING` 付き INSERT で id を受け取るようになりました。
 - **clean な validation で issue list 確保を避けます** — CLI と MCP の index は、content validation helper が実際に検証 issue を出す場合だけ `FileIssue` list を確保し、一般的な clean file 経路では空結果を再利用するようになりました。
 - **clean な raw-byte validation で LF 再走査を避けます** — content inspection は CR / NUL を含まないファイルでは line-ending / null-byte issue が出ないため、LF-only 判定用の2回目の byte search を省くようになりました。
+- **ASCII の folded-name 書き込みで Unicode 処理を省きます** — `NameFold.Fold` は既に fold 済みの ASCII 名をそのまま返し、NFKC / Unicode casefold に入る前に軽量な ASCII lowercase 経路を使うため、一般的な identifier の symbol / reference 書き込み負荷を減らします。

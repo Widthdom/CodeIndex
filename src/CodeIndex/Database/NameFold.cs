@@ -91,6 +91,50 @@ public static class NameFold
     public static string? Fold(string? name)
     {
         if (name is null) return null;
+        var asciiTriggerIndex = FindAsciiFoldTrigger(name);
+        if (asciiTriggerIndex < 0)
+            return name;
+        if (name[asciiTriggerIndex] <= '\u007F')
+            return FoldAsciiUppercase(name, asciiTriggerIndex);
+
+        return FoldUnicode(name);
+    }
+
+    private static int FindAsciiFoldTrigger(string name)
+    {
+        var firstUppercaseIndex = -1;
+        for (var i = 0; i < name.Length; i++)
+        {
+            var value = name[i];
+            if (value > '\u007F')
+                return i;
+            if (firstUppercaseIndex < 0 && value is >= 'A' and <= 'Z')
+                firstUppercaseIndex = i;
+        }
+
+        return firstUppercaseIndex;
+    }
+
+    private static string FoldAsciiUppercase(string name, int firstUppercaseIndex)
+    {
+        return string.Create(
+            name.Length,
+            (Name: name, FirstUppercaseIndex: firstUppercaseIndex),
+            static (destination, state) =>
+            {
+                state.Name.AsSpan(0, state.FirstUppercaseIndex).CopyTo(destination);
+                for (var i = state.FirstUppercaseIndex; i < state.Name.Length; i++)
+                {
+                    var value = state.Name[i];
+                    destination[i] = value is >= 'A' and <= 'Z'
+                        ? (char)(value + ('a' - 'A'))
+                        : value;
+                }
+            });
+    }
+
+    private static string FoldUnicode(string name)
+    {
         var normalized = name.Normalize(NormalizationForm.FormKC);
         var builder = new StringBuilder(normalized.Length + 8);
         foreach (var rune in normalized.EnumerateRunes())
