@@ -7,6 +7,8 @@ namespace CodeIndex.Indexer;
 
 public static partial class ReferenceExtractor
 {
+    private static readonly HashSet<int> EmptyMatchedIndices = new();
+
     internal static List<ReferenceRecord> ExtractCore(ReferenceExtractionContext request)
     {
         request.CancellationToken.ThrowIfCancellationRequested();
@@ -1802,12 +1804,13 @@ public static partial class ReferenceExtractor
             // 専用パスで `instantiate` を発行する。issue #286 参照。
             if (language is "csharp" or "java")
             {
-                var matchedInitializerIndices = new HashSet<int>();
+                HashSet<int>? matchedInitializerIndices = null;
+                var mayContainNestedGenericInitializer = language == "csharp" && MayContainNestedGenericSyntax(preparedLine);
                 foreach (Match match in CSharpJavaInitializerRegex.Matches(preparedLine))
                 {
                     var rawName = match.Groups["name"].Value;
                     var nameIndex = match.Groups["name"].Index;
-                    matchedInitializerIndices.Add(nameIndex);
+                    (matchedInitializerIndices ??= []).Add(nameIndex);
                     if (ShouldSkipInitializerName(language, rawName))
                         continue;
                     // Do NOT skip when the type is defined in the same file — the CallRegex
@@ -1826,11 +1829,11 @@ public static partial class ReferenceExtractor
                 // initializer regex も CallRegex と同じく generic を 1 段までしか見ないため、
                 // `new Dictionary<string, List<int>> { ... }` の外側型は depth-aware fallback
                 // で補って `instantiate` を落とさないようにする。
-                if (language == "csharp")
+                if (mayContainNestedGenericInitializer)
                 {
                     foreach (var candidate in EnumerateNestedGenericInitializerCandidates(
                                  preparedLine,
-                                 matchedInitializerIndices,
+                                 matchedInitializerIndices ?? EmptyMatchedIndices,
                                  requireOpeningBrace: true))
                     {
                         if (ShouldSkipInitializerName(language, candidate.Name))
@@ -1872,7 +1875,7 @@ public static partial class ReferenceExtractor
                         {
                             var rawName = trailingMatch.Groups["name"].Value;
                             var nameIndex = trailingMatch.Groups["name"].Index;
-                            matchedInitializerIndices.Add(nameIndex);
+                            (matchedInitializerIndices ??= []).Add(nameIndex);
                             if (!ShouldSkipInitializerName(language, rawName))
                             {
                                 var initContainer = ResolveContainerForCall(nameIndex);
@@ -1882,11 +1885,11 @@ public static partial class ReferenceExtractor
 
                         }
 
-                        if (language == "csharp")
+                        if (mayContainNestedGenericInitializer)
                         {
                             foreach (var candidate in EnumerateNestedGenericInitializerCandidates(
                                          preparedLine,
-                                         matchedInitializerIndices,
+                                         matchedInitializerIndices ?? EmptyMatchedIndices,
                                          requireOpeningBrace: false))
                             {
                                 if (ShouldSkipInitializerName(language, candidate.Name))
@@ -2199,7 +2202,9 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     ResolveContainerForCall);
 
-            var matchedCallIndices = new HashSet<int>();
+            HashSet<int>? matchedCallIndices = null;
+            HashSet<int> GetMatchedCallIndices() => matchedCallIndices ??= [];
+
             if (language is "commonlisp" or "racket")
             {
                 LispReferenceExtractor.EmitReferences(
@@ -2257,7 +2262,7 @@ public static partial class ReferenceExtractor
                     if (sqlWindowFunctionCallSiteSuppressions != null
                         && sqlWindowFunctionCallSiteSuppressions.Contains((lineNumber, callIndex)))
                         continue;
-                    matchedCallIndices.Add(callIndex);
+                    GetMatchedCallIndices().Add(callIndex);
                     if (TryAddCallLikeReference(name, callIndex))
                     {
                         EmitGenericInvocationTypeArgumentReferences(
@@ -2295,7 +2300,7 @@ public static partial class ReferenceExtractor
                         context,
                         lineNumber,
                         ResolveContainerForCall,
-                        matchedCallIndices,
+                        GetMatchedCallIndices(),
                         AddCallLikeReference);
                 }
                 else if (language == "perl")
@@ -2397,20 +2402,23 @@ public static partial class ReferenceExtractor
                 // 平坦な CallRegex は `<[^>\n]+>` が最初の `>` で止まるため `>>(` 形を取りこぼす。
                 // depth-aware な fallback を足し、`Foo<Bar<int>>()` や `new Dict<K, List<V>>()` でも
                 // `call` / `instantiate` を発行する。issue #263 参照。
-                foreach (var candidate in EnumerateNestedGenericCallCandidates(preparedLine, matchedCallIndices))
+                if (MayContainNestedGenericSyntax(preparedLine))
                 {
-                    if (TryAddCallLikeReference(candidate.Name, candidate.NameIndex))
+                    foreach (var candidate in EnumerateNestedGenericCallCandidates(preparedLine, matchedCallIndices ?? EmptyMatchedIndices))
                     {
-                        EmitGenericInvocationTypeArgumentReferences(
-                            language,
-                            preparedLine,
-                            candidate.NameIndex,
-                            references,
-                            seen,
-                            fileId,
-                            context,
-                            lineNumber,
-                            ResolveContainerForCall(candidate.NameIndex));
+                        if (TryAddCallLikeReference(candidate.Name, candidate.NameIndex))
+                        {
+                            EmitGenericInvocationTypeArgumentReferences(
+                                language,
+                                preparedLine,
+                                candidate.NameIndex,
+                                references,
+                                seen,
+                                fileId,
+                                context,
+                                lineNumber,
+                                ResolveContainerForCall(candidate.NameIndex));
+                        }
                     }
                 }
             }
@@ -3094,4 +3102,10 @@ public static partial class ReferenceExtractor
         return references;
     }
 
+    private static bool MayContainNestedGenericSyntax(string preparedLine)
+    {
+        var firstGenericStart = preparedLine.IndexOf('<');
+        return firstGenericStart >= 0
+            && preparedLine.IndexOf('<', firstGenericStart + 1) >= 0;
+    }
 }
