@@ -709,37 +709,15 @@ internal static class PythonReferenceExtractor
             return;
         }
 
-        foreach (Match match in ClassMetaclassTypeRegex.Matches(preparedLine))
+        if (preparedLine.IndexOf("metaclass", StringComparison.Ordinal) >= 0)
         {
-            var name = match.Groups["name"].Value;
-            if (isIgnoredName(name))
-                continue;
-
-            var nameIndex = match.Groups["name"].Index;
-            ReferenceExtractor.AddTypeReferenceSegments(
-                references,
-                seen,
-                fileId,
-                name,
-                nameIndex,
-                context,
-                lineNumber,
-                resolveContainerForReference(nameIndex) ?? container,
-                "python");
-        }
-
-        foreach (Match match in MultipleClassBaseTypesRegex.Matches(preparedLine))
-        {
-            var typesGroup = match.Groups["types"];
-            foreach (Match typeMatch in TypeNameRegex.Matches(typesGroup.Value))
+            foreach (Match match in ClassMetaclassTypeRegex.Matches(preparedLine))
             {
-                var name = typeMatch.Groups["name"].Value;
+                var name = match.Groups["name"].Value;
                 if (isIgnoredName(name))
                     continue;
-                if (IsPythonClassHeaderKeywordArgument(typesGroup.Value, typeMatch.Groups["name"].Index))
-                    continue;
 
-                var nameIndex = typesGroup.Index + typeMatch.Groups["name"].Index;
+                var nameIndex = match.Groups["name"].Index;
                 ReferenceExtractor.AddTypeReferenceSegments(
                     references,
                     seen,
@@ -750,6 +728,34 @@ internal static class PythonReferenceExtractor
                     lineNumber,
                     resolveContainerForReference(nameIndex) ?? container,
                     "python");
+            }
+        }
+
+        if (preparedLine.IndexOf(',') >= 0)
+        {
+            foreach (Match match in MultipleClassBaseTypesRegex.Matches(preparedLine))
+            {
+                var typesGroup = match.Groups["types"];
+                foreach (Match typeMatch in TypeNameRegex.Matches(typesGroup.Value))
+                {
+                    var name = typeMatch.Groups["name"].Value;
+                    if (isIgnoredName(name))
+                        continue;
+                    if (IsPythonClassHeaderKeywordArgument(typesGroup.Value, typeMatch.Groups["name"].Index))
+                        continue;
+
+                    var nameIndex = typesGroup.Index + typeMatch.Groups["name"].Index;
+                    ReferenceExtractor.AddTypeReferenceSegments(
+                        references,
+                        seen,
+                        fileId,
+                        name,
+                        nameIndex,
+                        context,
+                        lineNumber,
+                        resolveContainerForReference(nameIndex) ?? container,
+                        "python");
+                }
             }
         }
 
@@ -1069,6 +1075,8 @@ internal static class PythonReferenceExtractor
         {
             return;
         }
+        if (preparedLine.IndexOf(',') < 0)
+            return;
 
         foreach (Match match in TypeVarConstraintTypesRegex.Matches(preparedLine))
         {
