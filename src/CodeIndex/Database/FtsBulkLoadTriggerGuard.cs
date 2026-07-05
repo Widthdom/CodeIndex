@@ -24,24 +24,18 @@ internal sealed class FtsBulkLoadTriggerGuard : IDisposable
         if (writer == null)
             return;
 
-        try
-        {
-            writer.RestoreFtsSyncTriggers();
-            if (rebuild)
-                writer.RebuildFtsFromChunks(resetIncrementalWriteCounter: false);
+        writer.RestoreFtsSyncTriggers();
+        if (rebuild)
+            writer.RebuildFtsFromChunks(resetIncrementalWriteCounter: false);
 
-            if (rebuild)
-            {
-                beforeOptimize?.Invoke();
-                writer.OptimizeFts();
-            }
-
-            writer.ClearFtsBulkLoadInProgress();
-        }
-        finally
+        if (rebuild)
         {
-            _writer = null;
+            beforeOptimize?.Invoke();
+            writer.OptimizeFts();
         }
+
+        writer.ClearFtsBulkLoadInProgress();
+        _writer = null;
     }
 
     public void Dispose()

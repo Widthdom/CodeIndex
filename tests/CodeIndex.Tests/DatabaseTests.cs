@@ -509,6 +509,38 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void FtsBulkLoadTriggerGuard_CompleteFailureKeepsDisposeRecovery()
+    {
+        var fileId = UpsertTestFile("src/failed-complete-bulk-fts.cs", checksum: "failed-complete-bulk-fts");
+        var ftsMutated = false;
+
+        using (var guard = FtsBulkLoadTriggerGuard.Start(_writer, enabled: true, () => ftsMutated))
+        {
+            Assert.NotNull(guard);
+            _writer.InsertChunks(
+            [
+                new ChunkRecord
+                {
+                    FileId = fileId,
+                    ChunkIndex = 0,
+                    StartLine = 1,
+                    EndLine = 1,
+                    Content = "failedcompletebulktoken",
+                },
+            ]);
+            ftsMutated = true;
+
+            Assert.Throws<InvalidOperationException>(() => guard!.Complete(
+                rebuild: true,
+                beforeOptimize: () => throw new InvalidOperationException("simulated optimize precheck failure")));
+        }
+
+        Assert.Equal(3L, CountFtsSyncTriggers());
+        Assert.Null(ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+        Assert.Equal(1L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'failedcompletebulktoken'"));
+    }
+
+    [Fact]
     public void RecoverInterruptedFtsBulkLoadIfNeeded_RebuildsCommittedRowsAndClearsMarker()
     {
         var fileId = UpsertTestFile("src/recovered-bulk-fts.cs", checksum: "recovered-bulk-fts");
