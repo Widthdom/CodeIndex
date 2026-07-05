@@ -563,6 +563,9 @@ public static partial class SymbolExtractor
 
     private static string UnescapeJsonPropertyName(string value)
     {
+        if (value.IndexOf('\\') < 0)
+            return value;
+
         try
         {
             return BoundedJson.Deserialize<string>(
