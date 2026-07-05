@@ -1351,6 +1351,8 @@ internal static class PythonReferenceExtractor
     {
         if (preparedLine.IndexOf("default_factory", StringComparison.Ordinal) < 0)
             return;
+        if (preparedLine.IndexOf('=') < 0)
+            return;
 
         foreach (Match match in DataclassFieldDefaultFactoryRegex.Matches(preparedLine))
         {
