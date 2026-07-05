@@ -2738,9 +2738,23 @@ public static partial class SymbolExtractor
         CSharpCallableParameterScope? csharpCallableParameterScope = null;
         CSharpCallableParameterScope GetCSharpCallableParameterScope() =>
             csharpCallableParameterScope ??= BuildCSharpCallableParameterScope(structuralLines, GetCSharpInsideTypeBody());
-        var csharpSwitchExpressionLines = lang == "csharp"
-            && LinesContain(structuralLines, "switch", StringComparison.Ordinal)
-            ? FindCSharpSwitchExpressionLines(structuralLines)
+        bool[]? csharpSwitchExpressionLines = null;
+        var csharpSwitchExpressionLinesInitialized = false;
+        bool[]? GetCSharpSwitchExpressionLines()
+        {
+            if (!csharpSwitchExpressionLinesInitialized)
+            {
+                csharpSwitchExpressionLinesInitialized = true;
+                csharpSwitchExpressionLines = LinesContain(structuralLines, "switch", StringComparison.Ordinal)
+                    ? FindCSharpSwitchExpressionLines(structuralLines)
+                    : null;
+            }
+
+            return csharpSwitchExpressionLines;
+        }
+
+        Func<bool[]?>? getCSharpSwitchExpressionLines = lang == "csharp"
+            ? GetCSharpSwitchExpressionLines
             : null;
         var cssQualifiedRuleAncestors = lang == "css"
             ? FindCssQualifiedRuleAncestors(cssScannerLines!)
@@ -3037,7 +3051,7 @@ public static partial class SymbolExtractor
                         if (lang is "java" or "kotlin" && javaLeadingAnnotationOffset > 0)
                             absoluteStartColumn = lineOffset + javaLeadingAnnotationOffset;
                         var nextSameLineOffsetAfterRejectedCSharpProperty = -1;
-                        if (ShouldSkipCSharpSwitchExpressionPropertyCandidate(lang, pattern, patternMatchLine, csharpSwitchExpressionLines, i)
+                        if (ShouldSkipCSharpSwitchExpressionPropertyCandidate(lang, pattern, patternMatchLine, getCSharpSwitchExpressionLines, i)
                             || TrySkipCSharpBracePropertyCandidate(
                                 lang,
                                 pattern,
