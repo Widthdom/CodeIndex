@@ -1350,9 +1350,13 @@ public static partial class IndexCommandRunner
             freshCountReferences += referenceCount;
         }
 
+        var canSkipFullScanTargetsBeforeContentLoad = !options.Rebuild
+            && !startedWithNoIndexedFiles
+            && !options.SymbolsOnly;
+
         bool TrySkipFullScanTargetBeforeContentLoad(int fileIndex)
         {
-            if (options.Rebuild || startedWithNoIndexedFiles || options.SymbolsOnly)
+            if (!canSkipFullScanTargetsBeforeContentLoad)
                 return false;
 
             var target = fileTargets[fileIndex];
@@ -1394,18 +1398,29 @@ public static partial class IndexCommandRunner
             return true;
         }
 
-        var extractionFileIndexes = new List<int>(fileTargets.Length);
-        for (var fileIndex = 0; fileIndex < fileTargets.Length; fileIndex++)
+        ThrowIfFullScanCancelled(processed, files.Count);
+        List<int>? extractionFileIndexes = null;
+        int extractionWorkItemCount;
+        if (canSkipFullScanTargetsBeforeContentLoad)
         {
-            ThrowIfFullScanCancelled(processed, files.Count);
-            if (!TrySkipFullScanTargetBeforeContentLoad(fileIndex))
-                extractionFileIndexes.Add(fileIndex);
+            extractionFileIndexes = new List<int>(fileTargets.Length);
+            for (var fileIndex = 0; fileIndex < fileTargets.Length; fileIndex++)
+            {
+                ThrowIfFullScanCancelled(processed, files.Count);
+                if (!TrySkipFullScanTargetBeforeContentLoad(fileIndex))
+                    extractionFileIndexes.Add(fileIndex);
+            }
+            extractionWorkItemCount = extractionFileIndexes.Count;
+        }
+        else
+        {
+            extractionWorkItemCount = fileTargets.Length;
         }
 
         ReportJsonIndexProgressIfNeeded();
 
         PostExtractionHookRunner? postExtractionHooks = null;
-        if (extractionFileIndexes.Count == 0)
+        if (extractionWorkItemCount == 0)
         {
             FullScanExtractionSchedulingForTesting?.Invoke(false, null);
         }
@@ -1456,10 +1471,12 @@ public static partial class IndexCommandRunner
                         {
                             extractionCancellationToken.ThrowIfCancellationRequested();
                             var extractionIndex = Interlocked.Increment(ref nextExtractionIndex);
-                            if (extractionIndex >= extractionFileIndexes.Count)
+                            if (extractionIndex >= extractionWorkItemCount)
                                 break;
 
-                            var fileIndex = extractionFileIndexes[extractionIndex];
+                            var fileIndex = extractionFileIndexes == null
+                                ? extractionIndex
+                                : extractionFileIndexes[extractionIndex];
                             var target = fileTargets[fileIndex];
                             var filePath = target.FilePath;
                             var relativeFilePath = target.RelativePath;
