@@ -166,14 +166,14 @@ public static partial class ReferenceExtractor
     {
         var contractsByType = new Dictionary<string, List<CSharpStaticInterfaceMemberContract>>(StringComparer.Ordinal);
         var interfaceGenericParameters = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        var interfaceGenericParameterCandidates = new List<(string Name, string Signature)>();
+        List<(string Name, string Signature)>? interfaceGenericParameterCandidates = null;
         foreach (var symbol in workspaceSymbols)
         {
             if (symbol.Kind == "interface"
                 && !string.IsNullOrWhiteSpace(symbol.Name)
                 && !string.IsNullOrWhiteSpace(symbol.Signature))
             {
-                interfaceGenericParameterCandidates.Add((symbol.Name, symbol.Signature!));
+                (interfaceGenericParameterCandidates ??= []).Add((symbol.Name, symbol.Signature!));
             }
 
             if (!IsCSharpStaticInterfaceMemberContract(symbol))
@@ -193,7 +193,7 @@ public static partial class ReferenceExtractor
                 NormalizeCSharpTypeArgumentShape(symbol.ReturnType ?? string.Empty)));
         }
 
-        if (contractsByType.Count > 0)
+        if (contractsByType.Count > 0 && interfaceGenericParameterCandidates is not null)
         {
             foreach (var candidate in interfaceGenericParameterCandidates)
                 AddCSharpInterfaceGenericParameters(interfaceGenericParameters, candidate.Name, candidate.Signature);
@@ -503,13 +503,12 @@ public static partial class ReferenceExtractor
         string headerText,
         IReadOnlyDictionary<string, List<string>> interfaceGenericParameters)
     {
-        var interfaces = new List<CSharpImplementedInterface>();
         if (string.IsNullOrWhiteSpace(headerText))
-            return interfaces;
+            return [];
 
         var colonIndex = FindSignatureColonIndex(headerText);
         if (colonIndex < 0)
-            return interfaces;
+            return [];
 
         var baseList = headerText.Substring(colonIndex + 1);
         var whereMatch = CSharpWhereClauseRegex.Match(baseList);
@@ -517,6 +516,7 @@ public static partial class ReferenceExtractor
             baseList = baseList.Substring(0, whereMatch.Index);
         baseList = TrimTrailingTypeListTerminator(baseList);
 
+        var interfaces = new List<CSharpImplementedInterface>();
         foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(baseList))
         {
             var rawSegment = baseList.Substring(segmentStart, segmentLength).Trim();
