@@ -1417,7 +1417,8 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
-        if (preparedLine.IndexOf("fields", StringComparison.Ordinal) < 0)
+        if (preparedLine.IndexOf("fields", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf("attr", StringComparison.Ordinal) < 0)
             return;
 
         foreach (Match match in AttrsFieldsTargetRegex.Matches(preparedLine))
@@ -1449,7 +1450,8 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
-        if (preparedLine.IndexOf("TypeAdapter", StringComparison.Ordinal) < 0)
+        if (preparedLine.IndexOf("TypeAdapter", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf("pydantic", StringComparison.Ordinal) < 0)
             return;
 
         foreach (Match match in PydanticTypeAdapterTargetRegex.Matches(preparedLine))
@@ -1481,7 +1483,8 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
-        if (preparedLine.IndexOf("raises", StringComparison.Ordinal) < 0)
+        if (preparedLine.IndexOf("raises", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf("pytest", StringComparison.Ordinal) < 0)
             return;
 
         foreach (Match match in PytestRaisesTypeRegex.Matches(preparedLine))
@@ -1513,7 +1516,8 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
-        if (preparedLine.IndexOf("suppress", StringComparison.Ordinal) < 0)
+        if (preparedLine.IndexOf("suppress", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf("contextlib", StringComparison.Ordinal) < 0)
             return;
 
         foreach (Match match in ContextlibSuppressTypeRegex.Matches(preparedLine))
