@@ -2726,9 +2726,9 @@ public static partial class SymbolExtractor
         Func<CSharpLexState[]>? getCSharpLineStartStates = lang == "csharp"
             ? GetCSharpLineStartStates
             : null;
-        var dartInsideClassBody = lang == "dart"
-            ? BuildDartClassBodyScope(structuralLines)
-            : null;
+        DartClassBodyScope? dartInsideClassBody = null;
+        DartClassBodyScope GetDartInsideClassBody() =>
+            dartInsideClassBody ??= BuildDartClassBodyScope(structuralLines);
         JavaScriptScopePrivacyFlags[][]? privateScopeColumns = null;
         JavaScriptScopePrivacyFlags[][] GetPrivateScopeColumns() =>
             privateScopeColumns ??= BuildJavaScriptTypeScriptPrivateScopeColumns(lines, lang!);
@@ -3169,7 +3169,7 @@ public static partial class SymbolExtractor
 
                         if (lang == "dart"
                             && ReferenceEquals(pattern.Regex, DartBareConstConstructorRegex)
-                            && !dartInsideClassBody!.IsInsideClassBodyAt(i))
+                            && !GetDartInsideClassBody().IsInsideClassBodyAt(i))
                         {
                             // Bare `const` constructors need class-body context; otherwise
                             // `const Widget(key: k)` expressions become phantom symbols.

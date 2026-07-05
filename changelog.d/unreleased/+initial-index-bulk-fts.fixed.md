@@ -97,6 +97,7 @@ affected:
 - **JavaScript/TypeScript symbol extraction defers private-scope scans** — JS/TS private-scope column maps are now built only after class, object-literal, export, or assignment helper guards prove they are needed, avoiding a full lexical scope pass for simpler files.
 - **JavaScript/TypeScript symbol extraction defers sanitized-line arrays** — JS/TS module-reference helpers now build sanitized line arrays only after a raw line contains an import/require/worker-style token, while keeping the sanitized check before emitting symbols.
 - **CSS symbol extraction defers qualified-rule scans** — CSS qualified-rule ancestor maps are now built only when a class selector candidate needs the nested-selector guard, avoiding a whole-file selector-context pass for simpler stylesheets.
+- **Dart symbol extraction defers class-body scans** — Dart class-body maps are now built only when a bare `const` constructor candidate must be checked, avoiding a whole-file scope pass for files without that pattern.
 
 ## 日本語
 
@@ -165,3 +166,4 @@ affected:
 - **JavaScript/TypeScript symbol extraction の private-scope scan を遅延します** — JS/TS の private-scope column map は class、object literal、export、assignment helper の軽い guard で必要性が確定した後だけ作るようになり、単純なファイルで全体 lexical scope pass を避けます。
 - **JavaScript/TypeScript symbol extraction の sanitized-line 配列を遅延します** — JS/TS の module-reference helper は raw 行に import / require / worker 系 token が出た後だけ sanitized line 配列を作り、symbol を出す前の sanitized check は維持します。
 - **CSS symbol extraction の qualified-rule scan を遅延します** — CSS の qualified-rule ancestor map は class selector 候補で nested-selector guard が必要になった時だけ作るようになり、単純な stylesheet で全体 selector-context pass を避けます。
+- **Dart symbol extraction の class-body scan を遅延します** — Dart の class-body map は bare `const` constructor 候補を確認する必要がある時だけ作るようになり、その pattern が出ないファイルで全体 scope pass を避けます。
