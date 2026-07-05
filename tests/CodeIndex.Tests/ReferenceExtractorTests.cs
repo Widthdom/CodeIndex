@@ -359,6 +359,27 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_XmlNonXamlHighFanoutSymbols_SkipsReferenceLookupDiagnostics()
+    {
+        var symbols = Enumerable
+            .Range(0, ReferenceExtractor.MaxReferenceLookupSymbols + 5)
+            .Select(index => new SymbolRecord
+            {
+                Kind = "property",
+                Name = $"Generated{index}",
+                Line = index + 1,
+                StartLine = index + 1,
+                EndLine = index + 1,
+            })
+            .ToList();
+
+        var result = ReferenceExtractor.ExtractDetailed(1, "xml", "<root><child /></root>\n", symbols);
+
+        Assert.Empty(result.References);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
     public void Extract_SwiftHighFanoutProperties_ReportsPropertyLookupBudgetDiagnostics_Issue3783()
     {
         var symbols = Enumerable

@@ -50,6 +50,9 @@ public static partial class ReferenceExtractor
         content = preparedInput.Content;
         var lines = preparedInput.Lines;
         var xamlReferenceEnabled = language == "xml" && XamlReferenceExtractor.IsXaml(lines);
+        if (language == "xml" && !xamlReferenceEnabled)
+            return [];
+
         var structuralLines = preparedInput.StructuralLines;
         var csharpLinesInsideMultilineStringContent = preparedInput.CSharpLinesInsideMultilineStringContent;
         var csharpLinesInsideBlockComment = preparedInput.CSharpLinesInsideBlockComment;
