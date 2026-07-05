@@ -137,7 +137,9 @@ public static partial class ReferenceExtractor
             : default;
         var pythonDefinitionContainersByLineAndKind = pythonSymbolLookups.DefinitionContainersByLineAndKind;
         var pythonHeaderSymbolsByLine = pythonSymbolLookups.HeaderSymbolsByLine;
-        var swiftPropertyDefinitionsByLine = BuildSwiftPropertyDefinitionsByLine(language, symbols, request.ReportDiagnostic);
+        var swiftPropertyDefinitionsByLine = language == "swift"
+            ? BuildSwiftPropertyDefinitionsByLine(language, symbols, request.ReportDiagnostic)
+            : null;
 
         // Synthetic function-kind container for C# primary-ctor declarations with a base
         // primary-ctor call such as `record Child(int x) : Parent(x)` or C# 12 `class Child(int x) : Parent(x)`.
@@ -157,14 +159,20 @@ public static partial class ReferenceExtractor
         var kotlinConstructorTypeNames = kotlinNameSets.ConstructorTypeNames;
         var kotlinInfixFunctionNames = kotlinNameSets.InfixFunctionNames;
         KotlinReferenceExtractor.AddDeclaredInfixFunctionNames(language, lines, kotlinInfixFunctionNames);
-        var callableDefinitionNames = BuildCallableDefinitionNames(language, symbols);
+        var callableDefinitionNames = language == "csharp"
+            ? BuildCallableDefinitionNames(language, symbols)
+            : null;
         var stylusVariableDefinitionNames = language == "stylus"
             ? CssReferenceExtractor.BuildStylusVariableDefinitionNames(lines)
             : null;
-        var dockerfileNameSets = DockerfileReferenceExtractor.BuildNameSets(language, symbols);
+        var dockerfileNameSets = language == "dockerfile"
+            ? DockerfileReferenceExtractor.BuildNameSets(language, symbols)
+            : default;
         var dockerfileStageNames = dockerfileNameSets.StageNames;
         var dockerfileVariableNames = dockerfileNameSets.VariableNames;
-        var shellNameSets = ShellReferenceExtractor.BuildNameSets(language, symbols);
+        var shellNameSets = language == "shell"
+            ? ShellReferenceExtractor.BuildNameSets(language, symbols)
+            : default;
         var shellCallableNames = shellNameSets.CallableNames;
         var shellGlobalAliasNames = shellNameSets.GlobalAliasNames;
         IReadOnlyList<(int StartLine, int EndLine)> csharpNamespaceScopes = language == "csharp"
