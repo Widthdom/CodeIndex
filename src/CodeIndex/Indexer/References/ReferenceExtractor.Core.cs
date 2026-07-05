@@ -146,10 +146,17 @@ public static partial class ReferenceExtractor
         // 宣言ヘッダー全体を合成コンテナで上書きする。`{` / `;` 以降の本体行は通常の container に戻す。
         List<(int StartLine, int StartColumn, int EndLine, int EndColumn, SymbolRecord Container)>? recordPrimaryCtorRanges = null;
         var recordPrimaryCtorRangesResolved = false;
-        var csharpTypeNameSets = BuildCSharpTypeNameSets(language, symbols);
+        var csharpTypeNameSets = language == "csharp"
+            ? BuildCSharpTypeNameSets(language, symbols)
+            : (KnownTypeNames: EmptyCSharpStringSet, NonEnumTypeNames: EmptyCSharpStringSet);
         var csharpKnownTypeNames = csharpTypeNameSets.KnownTypeNames;
         var csharpNonEnumTypeNames = csharpTypeNameSets.NonEnumTypeNames;
-        var csharpQualifiedPatternLookups = BuildCSharpQualifiedPatternLookups(language, symbols, csharpNonEnumTypeNames);
+        var csharpQualifiedPatternLookups = language == "csharp"
+            ? BuildCSharpQualifiedPatternLookups(language, symbols, csharpNonEnumTypeNames)
+            : (
+                EnumMemberLookup: EmptyCSharpQualifiedEnumMemberLookup,
+                ConstantPatternMemberLookup: EmptyCSharpQualifiedPatternLookup,
+                TypePatternLookup: EmptyCSharpQualifiedPatternLookup);
         var csharpQualifiedEnumMemberLookup = csharpQualifiedPatternLookups.EnumMemberLookup;
         var csharpQualifiedConstantPatternMemberLookup = csharpQualifiedPatternLookups.ConstantPatternMemberLookup;
         var csharpQualifiedTypePatternLookup = csharpQualifiedPatternLookups.TypePatternLookup;
@@ -181,7 +188,12 @@ public static partial class ReferenceExtractor
         IReadOnlyList<(int StartLine, int EndLine)> csharpNamespaceScopes = language == "csharp"
             ? BuildCSharpNamespaceScopes(symbols)
             : Array.Empty<(int StartLine, int EndLine)>();
-        var csharpUsingImports = BuildCSharpUsingImports(language, symbols, csharpKnownTypeNames, csharpNamespaceScopes, lines, structuralLines);
+        var csharpUsingImports = language == "csharp"
+            ? BuildCSharpUsingImports(language, symbols, csharpKnownTypeNames, csharpNamespaceScopes, lines, structuralLines)
+            : (
+                Aliases: Array.Empty<CSharpUsingAliasRecord>(),
+                Namespaces: Array.Empty<CSharpUsingNamespaceRecord>(),
+                Statics: Array.Empty<CSharpUsingStaticRecord>());
         var csharpUsingAliases = csharpUsingImports.Aliases;
         var csharpUsingNamespaces = csharpUsingImports.Namespaces;
         var csharpUsingStatics = csharpUsingImports.Statics;
