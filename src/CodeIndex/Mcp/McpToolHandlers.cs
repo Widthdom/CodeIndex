@@ -5616,6 +5616,9 @@ public partial class McpServer
         writer.ClearReadyFlags();
         writer.ClearHotspotFamilyReady();
         writer.ClearMetadataTargetReady();
+        var useFullRunBatchMarker = rebuild || startedWithNoIndexedFiles;
+        if (useFullRunBatchMarker)
+            writer.MarkBatchInProgress();
 
         var hadCSharpStaticInterfaceContractsBeforePurge = !startedWithNoIndexedFiles
             && writer.LoadCSharpStaticInterfaceContractSymbols().Count > 0;
@@ -5844,8 +5847,11 @@ public partial class McpServer
                     continue;
                 }
 
-                writer.MarkBatchInProgress();
-                fileBatchMarked = true;
+                if (!useFullRunBatchMarker)
+                {
+                    writer.MarkBatchInProgress();
+                    fileBatchMarked = true;
+                }
                 MarkSymbolKindFilterMetaIncompleteOnce();
                 if (record.Lang == "csharp")
                     csharpMetadataTargetsNeedRefresh = true;
@@ -5867,7 +5873,8 @@ public partial class McpServer
                         generatedSuppressionIssue);
                     InsertIssuesForIndexedFile(fileId, issues);
                     WriteProjectRootOnce();
-                    writer.ClearBatchInProgress();
+                    if (!useFullRunBatchMarker)
+                        writer.ClearBatchInProgress();
                     txn.Commit();
                     CountFreshInsertedRows(chunkCount: chunks.Count);
                     ftsMutated = true;
@@ -5954,7 +5961,8 @@ public partial class McpServer
                     InsertIssuesForIndexedFile(fileId, issues);
                 }
                 WriteProjectRootOnce();
-                writer.ClearBatchInProgress();
+                if (!useFullRunBatchMarker)
+                    writer.ClearBatchInProgress();
                 txn.Commit();
                 if (!string.IsNullOrWhiteSpace(record.Lang))
                     indexedSymbolExtractorLanguages.Add(record.Lang);
@@ -6021,7 +6029,7 @@ public partial class McpServer
             }
             catch (OperationCanceledException) when (requestToken.IsCancellationRequested)
             {
-                if (fileBatchMarked)
+                if (fileBatchMarked || useFullRunBatchMarker)
                     writer.ClearBatchInProgress();
                 throw;
             }
@@ -6072,7 +6080,8 @@ public partial class McpServer
         if (!scanHadErrors && errors == 0)
         {
             await EmitProgressNotificationAsync(progressToken, processed, files.Count, "Finalizing index metadata.").ConfigureAwait(false);
-            writer.MarkBatchInProgress();
+            if (!useFullRunBatchMarker)
+                writer.MarkBatchInProgress();
             using var readinessTxn = writer.BeginTransaction(requestToken, "mcp index readiness");
             writer.MarkGraphReady();
             writer.MarkIssuesReady();
@@ -6231,6 +6240,10 @@ public partial class McpServer
             IndexCommandRunner.StampLastIndexRunDiagnostics(writer, indexRunDiagnostics);
             writer.ClearBatchInProgress();
             readinessTxn.Commit();
+        }
+        else if (useFullRunBatchMarker)
+        {
+            writer.ClearBatchInProgress();
         }
         if (!scanResult.HadErrors && errors == 0)
         {
