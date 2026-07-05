@@ -32,7 +32,9 @@ public static partial class SymbolExtractor
         // を失うため不可能。マスク済みテキストを文字単位の state machine で走査し、タグ
         // ごとに属性を列挙していく。
         var rawText = string.Join('\n', lines);
-        var maskedText = MaskHtmlRawTextRegions(rawText);
+        var maskedText = MayNeedHtmlRawTextMask(rawText)
+            ? MaskHtmlRawTextRegions(rawText)
+            : rawText;
 
         // Build per-line absolute offsets only once a symbol needs O(log n)
         // offset-to-line lookup. Plain markup with no emitted symbols can skip it.
@@ -2849,6 +2851,14 @@ public static partial class SymbolExtractor
         }
         return null;
     }
+
+    private static bool MayNeedHtmlRawTextMask(string text)
+        => text.IndexOf("<!", StringComparison.Ordinal) >= 0
+           || text.IndexOf("<?", StringComparison.Ordinal) >= 0
+           || text.IndexOf("<script", StringComparison.OrdinalIgnoreCase) >= 0
+           || text.IndexOf("<style", StringComparison.OrdinalIgnoreCase) >= 0
+           || text.IndexOf("<textarea", StringComparison.OrdinalIgnoreCase) >= 0
+           || text.IndexOf("<title", StringComparison.OrdinalIgnoreCase) >= 0;
 
     private static int FindHtmlTagOpenerEnd(string text, int start)
     {
