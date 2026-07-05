@@ -1155,18 +1155,6 @@ public static partial class ReferenceExtractor
                 ? namesOnLine
                 : null;
             Dictionary<string, int>? definitionNameIndices = null;
-            if (definitionNames != null && language != "sql")
-            {
-                foreach (var definitionName in definitionNames)
-                {
-                    var definitionIndex = preparedLine.IndexOf(definitionName, StringComparison.Ordinal);
-                    if (definitionIndex >= 0)
-                    {
-                        definitionNameIndices ??= new Dictionary<string, int>(definitionNamesComparer);
-                        definitionNameIndices[definitionName] = definitionIndex;
-                    }
-                }
-            }
             List<SqlReferenceExtractor.DefinitionLeafSpan>? sqlDefinitionLeafSpans = null;
             if (language == "sql")
                 sqlDefinitionLeafSpansByLine?.TryGetValue(lineNumber, out sqlDefinitionLeafSpans);
@@ -1385,11 +1373,36 @@ public static partial class ReferenceExtractor
                 }
 
                 if (language != "sql")
-                    return definitionNameIndices != null
-                        && definitionNameIndices.TryGetValue(resolvedName, out var definitionIndex)
+                    return TryGetDefinitionNameIndex(resolvedName, out var definitionIndex)
                         && callIndex == definitionIndex;
 
                 return SqlReferenceExtractor.ShouldSuppressDefinitionCall(sqlDefinitionLeafSpans, resolvedName, callIndex);
+            }
+
+            bool TryGetDefinitionNameIndex(string resolvedName, out int definitionIndex)
+            {
+                definitionIndex = -1;
+                if (definitionNames == null)
+                    return false;
+                if (definitionNameIndices != null && definitionNameIndices.TryGetValue(resolvedName, out definitionIndex))
+                    return true;
+                if (!definitionNames.Contains(resolvedName))
+                    return false;
+
+                foreach (var definitionName in definitionNames)
+                {
+                    if (!definitionNamesComparer.Equals(definitionName, resolvedName))
+                        continue;
+
+                    definitionIndex = preparedLine.IndexOf(definitionName, StringComparison.Ordinal);
+                    if (definitionIndex < 0)
+                        return false;
+
+                    (definitionNameIndices ??= new Dictionary<string, int>(definitionNamesComparer))[definitionName] = definitionIndex;
+                    return true;
+                }
+
+                return false;
             }
 
             // Event subscription/unsubscription (C#) / イベント購読・解除 (C#)

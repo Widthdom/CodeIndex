@@ -85,6 +85,7 @@ affected:
 - **Reference extraction reuses normalized language keys** — built-in reference extraction now reuses the language key computed during extractor lookup and only computes plugin language fallback keys after built-in lookup fails.
 - **Index symbol extraction reuses loaded pattern configs** — CLI/MCP indexing now skips per-file configured-pattern discovery after `FileIndexer` has loaded project configs, and isolated symbol workers reuse the first per-root discovery across subsequent files.
 - **Reference extraction builds Stylus-only definition sets on demand** — built-in reference extraction now skips the all-definition symbol lookup for non-Stylus files, avoiding an extra symbol-list pass during large initial indexes.
+- **Reference extraction resolves definition positions lazily** — built-in reference extraction now computes same-line definition name positions only when a call candidate must be checked against them, avoiding eager `IndexOf` scans on definition-heavy files.
 
 ## 日本語
 
@@ -141,3 +142,4 @@ affected:
 - **reference extraction で正規化済み言語 key を再利用します** — built-in reference extraction は extractor lookup 時に計算した言語 key を再利用し、plugin fallback 用の key は built-in lookup が失敗した後だけ計算するようになりました。
 - **index の symbol extraction で読み込み済み pattern config を再利用します** — CLI / MCP の indexing は `FileIndexer` が project config を読み込んだ後のファイル単位 configured-pattern 探索を省き、分離 symbol worker も同一 root の初回探索を後続ファイルで再利用します。
 - **reference extraction の Stylus 専用 definition set を必要時だけ作ります** — built-in reference extraction は non-Stylus ファイルで all-definition symbol lookup を省き、大規模初回 index 中の余分な symbol list 走査を避けます。
+- **reference extraction の定義位置解決を遅延します** — built-in reference extraction は call 候補を同一行定義と照合する必要がある場合だけ定義名の行内位置を計算し、定義が多いファイルでの eager な `IndexOf` 走査を避けます。
