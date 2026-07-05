@@ -1597,6 +1597,51 @@ public class DbWriter
     }
 
     /// <summary>
+    /// Insert a new file record and return its ID.
+    /// Use only when the caller knows the path cannot already exist in the
+    /// current database, such as a full scan that started from an empty index.
+    /// 新規ファイルレコードをINSERTしてIDを返す。
+    /// 空インデックスから開始したfull scanなど、呼び出し元が現在のDBに
+    /// 同じpathが存在し得ないと保証できる場合だけ使う。
+    /// </summary>
+    public long InsertNewFile(FileRecord file)
+    {
+        var cmd = RentCommand(
+            @"
+            INSERT INTO files (path, lang, size, lines, checksum, modified, generated, indexed_at)
+            VALUES (@path, @lang, @size, @lines, @checksum, @modified, @generated, CURRENT_TIMESTAMP)
+            RETURNING id",
+            static c =>
+            {
+                c.Parameters.Add("@path", SqliteType.Text);
+                c.Parameters.Add("@lang", SqliteType.Text);
+                c.Parameters.Add("@size", SqliteType.Integer);
+                c.Parameters.Add("@lines", SqliteType.Integer);
+                c.Parameters.Add("@checksum", SqliteType.Text);
+                c.Parameters.Add("@modified", SqliteType.Text);
+                c.Parameters.Add("@generated", SqliteType.Integer);
+            });
+        try
+        {
+            cmd.Parameters["@path"].Value = file.Path;
+            cmd.Parameters["@lang"].Value = (object?)file.Lang ?? DBNull.Value;
+            cmd.Parameters["@size"].Value = file.Size;
+            cmd.Parameters["@lines"].Value = file.Lines;
+            cmd.Parameters["@checksum"].Value = (object?)file.Checksum ?? DBNull.Value;
+            cmd.Parameters["@modified"].Value = file.Modified;
+            cmd.Parameters["@generated"].Value = file.Generated ? 1 : 0;
+            using var reader = cmd.ExecuteReader();
+            if (!reader.Read())
+                throw new InvalidOperationException("SQLite RETURNING id produced no row for file insert.");
+            return reader.GetInt64(0);
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
+    }
+
+    /// <summary>
     /// Delete old chunks and symbols for a file before re-indexing.
     /// 再インデックス前にファイルの古いチャンクとシンボルを削除する。
     /// </summary>

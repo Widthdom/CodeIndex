@@ -5847,7 +5847,9 @@ public partial class McpServer
                 using var txn = writer.BeginTransaction(requestToken, "mcp index file");
                 if (recordRequiresTypeScriptAugmentationRefresh)
                     RequireTypeScriptAugmentationRefresh();
-                var fileId = writer.UpsertFile(record, cleanExistingData: !startedWithNoIndexedFiles);
+                var fileId = startedWithNoIndexedFiles
+                    ? writer.InsertNewFile(record)
+                    : writer.UpsertFile(record);
                 var chunks = ChunkSplitter.SplitNormalized(fileId, content, loaded.HasOversizeLine, record.Lines);
                 if (generatedSuppressionIssue != null)
                 {
@@ -5966,7 +5968,9 @@ public partial class McpServer
                     using var txn = writer.BeginTransaction(requestToken, "mcp index skipped binary");
                     if (skippedRecordRequiresTypeScriptAugmentationRefresh)
                         RequireTypeScriptAugmentationRefresh();
-                    var fileId = writer.UpsertFile(skippedRecord, cleanExistingData: !startedWithNoIndexedFiles);
+                    var fileId = startedWithNoIndexedFiles
+                        ? writer.InsertNewFile(skippedRecord)
+                        : writer.UpsertFile(skippedRecord);
                     writer.InsertChunks([], requestToken);
                     writer.InsertSymbols([], requestToken);
                     writer.InsertReferences([], requestToken);

@@ -1770,6 +1770,46 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void InsertNewFile_InsertsAndReturnsId()
+    {
+        var file = new FileRecord
+        {
+            Path = "src/new.py",
+            Lang = "python",
+            Size = 100,
+            Lines = 10,
+            Checksum = "abc123",
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+        };
+
+        var id = _writer.InsertNewFile(file);
+
+        Assert.True(id > 0);
+        var (fileCount, _, _, _) = _writer.GetCounts();
+        Assert.Equal(1, fileCount);
+    }
+
+    [Fact]
+    public void InsertNewFile_DuplicatePathThrows()
+    {
+        var file = new FileRecord
+        {
+            Path = "src/duplicate.py",
+            Lang = "python",
+            Size = 100,
+            Lines = 10,
+            Checksum = "abc123",
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+        };
+
+        _writer.InsertNewFile(file);
+
+        Assert.Throws<SqliteException>(() => _writer.InsertNewFile(file));
+        var (fileCount, _, _, _) = _writer.GetCounts();
+        Assert.Equal(1, fileCount);
+    }
+
+    [Fact]
     public void UpsertFile_ReplacesOnConflict()
     {
         // Same path should replace (not duplicate)

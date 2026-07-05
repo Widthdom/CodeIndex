@@ -1820,7 +1820,9 @@ public static partial class IndexCommandRunner
                                 csharpMetadataTargetsNeedRefresh = true;
                             }
                         }
-                        var fileId = writer.UpsertFile(record, cleanExistingData: !startedWithNoIndexedFiles);
+                        var fileId = startedWithNoIndexedFiles
+                            ? writer.InsertNewFile(record)
+                            : writer.UpsertFile(record);
                         ftsMutated = true;
                         currentJsonIndexFile = FormatIndexPhasePath(record.Path, "chunking");
                         var chunks = item.Chunks == null
