@@ -2861,7 +2861,7 @@ public class DbWriter
     /// </summary>
     public void SuspendFtsSyncTriggersForBulkLoad()
     {
-        SetMeta(FtsBulkLoadInProgressMetaKey, "true");
+        SetMeta(FtsBulkLoadInProgressMetaKey, CreateFtsBulkLoadMarker());
         Execute(DbContext.DropFtsChunksSyncTriggersSql);
         _markWriteWork?.Invoke();
     }
@@ -2892,13 +2892,55 @@ public class DbWriter
 
     public bool RecoverInterruptedFtsBulkLoadIfNeeded()
     {
-        if (!string.Equals(GetMetaString(FtsBulkLoadInProgressMetaKey), "true", StringComparison.OrdinalIgnoreCase))
+        var marker = GetMetaString(FtsBulkLoadInProgressMetaKey);
+        if (!IsFtsBulkLoadMarkerSet(marker) || IsFtsBulkLoadOwnerActive(marker!))
             return false;
 
         RestoreFtsSyncTriggers();
         RebuildFtsFromChunks();
         ClearFtsBulkLoadInProgress();
         return true;
+    }
+
+    private static string CreateFtsBulkLoadMarker()
+        => "pid:" + Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    private static bool IsFtsBulkLoadMarkerSet(string? marker)
+        => string.Equals(marker, "true", StringComparison.OrdinalIgnoreCase)
+           || TryGetFtsBulkLoadOwnerPid(marker, out _);
+
+    private static bool IsFtsBulkLoadOwnerActive(string marker)
+    {
+        if (!TryGetFtsBulkLoadOwnerPid(marker, out var pid))
+            return false;
+
+        if (pid == Environment.ProcessId)
+            return true;
+
+        try
+        {
+            using var process = Process.GetProcessById(pid);
+            return !process.HasExited;
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryGetFtsBulkLoadOwnerPid(string? marker, out int pid)
+    {
+        const string prefix = "pid:";
+        pid = 0;
+        if (marker == null || !marker.StartsWith(prefix, StringComparison.Ordinal))
+            return false;
+
+        return int.TryParse(
+            marker.AsSpan(prefix.Length),
+            System.Globalization.NumberStyles.None,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out pid)
+            && pid > 0;
     }
 
     public int GetFtsIncrementalWritesSinceOptimize()

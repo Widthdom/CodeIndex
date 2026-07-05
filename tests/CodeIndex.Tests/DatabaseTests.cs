@@ -514,7 +514,7 @@ public class DatabaseTests : IDisposable
         var fileId = UpsertTestFile("src/recovered-bulk-fts.cs", checksum: "recovered-bulk-fts");
 
         _writer.SuspendFtsSyncTriggersForBulkLoad();
-        Assert.Equal("true", ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+        Assert.NotNull(ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
         Assert.Equal(0L, CountFtsSyncTriggers());
 
         _writer.InsertChunks(
@@ -531,12 +531,46 @@ public class DatabaseTests : IDisposable
 
         Assert.Equal(0L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'recoveredbulktoken'"));
 
+        _writer.SetMeta(DbWriter.FtsBulkLoadInProgressMetaKey, "true");
         Assert.True(_writer.RecoverInterruptedFtsBulkLoadIfNeeded());
 
         Assert.Equal(3L, CountFtsSyncTriggers());
         Assert.Null(ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
         Assert.Equal(1L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'recoveredbulktoken'"));
         Assert.False(_writer.RecoverInterruptedFtsBulkLoadIfNeeded());
+    }
+
+    [Fact]
+    public void RecoverInterruptedFtsBulkLoadIfNeeded_SkipsActiveOwner()
+    {
+        var fileId = UpsertTestFile("src/active-bulk-fts.cs", checksum: "active-bulk-fts");
+
+        _writer.SuspendFtsSyncTriggersForBulkLoad();
+        var marker = ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey);
+        Assert.NotNull(marker);
+        Assert.Equal(0L, CountFtsSyncTriggers());
+
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 1,
+                Content = "activebulktoken",
+            },
+        ]);
+
+        Assert.False(_writer.RecoverInterruptedFtsBulkLoadIfNeeded());
+
+        Assert.Equal(marker, ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+        Assert.Equal(0L, CountFtsSyncTriggers());
+        Assert.Equal(0L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'activebulktoken'"));
+
+        _writer.RestoreFtsSyncTriggers();
+        _writer.RebuildFtsFromChunks();
+        _writer.ClearFtsBulkLoadInProgress();
     }
 
     [Fact]
@@ -559,6 +593,7 @@ public class DatabaseTests : IDisposable
 
         Assert.Equal(0L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'readerrecoveredbulktoken'"));
 
+        _writer.SetMeta(DbWriter.FtsBulkLoadInProgressMetaKey, "true");
         using var reader = new DbReader(_db.Connection);
         var results = reader.Search("readerrecoveredbulktoken");
 
