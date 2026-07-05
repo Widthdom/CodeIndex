@@ -1275,15 +1275,14 @@ internal static class PythonReferenceExtractor
         {
             var currentPreparedLine = preparedLines[currentLineIndex];
             var currentOriginalLine = originalLines[currentLineIndex];
-            var currentContext = currentOriginalLine.Trim();
             var currentLineNumber = currentLineIndex + 1;
 
             EmitDataclassFieldDefaultFactoryReferences(
                 currentPreparedLine,
+                currentOriginalLine,
                 references,
                 seen,
                 fileId,
-                currentContext,
                 currentLineNumber,
                 container,
                 isIgnoredName);
@@ -1341,10 +1340,10 @@ internal static class PythonReferenceExtractor
 
     private static void EmitDataclassFieldDefaultFactoryReferences(
         string preparedLine,
+        string originalLine,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
-        string context,
         int lineNumber,
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
@@ -1354,6 +1353,7 @@ internal static class PythonReferenceExtractor
         if (preparedLine.IndexOf('=') < 0)
             return;
 
+        string? context = null;
         foreach (Match match in DataclassFieldDefaultFactoryRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -1367,7 +1367,7 @@ internal static class PythonReferenceExtractor
                 name,
                 match.Groups["name"].Index,
                 "call",
-                context,
+                context ??= originalLine.Trim(),
                 lineNumber,
                 container,
                 "python");
