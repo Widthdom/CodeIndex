@@ -2838,7 +2838,7 @@ public static partial class SymbolExtractor
             var match = true;
             for (var j = 0; j < name.Length; j++)
             {
-                if (char.ToLowerInvariant(text[nameStart + j]) != name[j])
+                if (!EqualsHtmlAsciiIgnoreCase(text[nameStart + j], name[j]))
                 {
                     match = false;
                     break;
@@ -3019,7 +3019,7 @@ public static partial class SymbolExtractor
                 var match = true;
                 for (var j = 0; j < tagName.Length; j++)
                 {
-                    if (char.ToLowerInvariant(text[i + 2 + j]) != tagName[j])
+                    if (!EqualsHtmlAsciiIgnoreCase(text[i + 2 + j], tagName[j]))
                     {
                         match = false;
                         break;
@@ -3038,6 +3038,14 @@ public static partial class SymbolExtractor
             i++;
         }
         return -1;
+    }
+
+    private static bool EqualsHtmlAsciiIgnoreCase(char actual, char expectedLower)
+    {
+        if (actual >= 'A' && actual <= 'Z')
+            actual = (char)(actual + ('a' - 'A'));
+
+        return actual == expectedLower;
     }
 
     private static void BlankPreservingNewlines(char[] chars, int start, int end)
