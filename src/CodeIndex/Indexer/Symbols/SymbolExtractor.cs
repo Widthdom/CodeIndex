@@ -2745,7 +2745,7 @@ public static partial class SymbolExtractor
         var fsharpTypeBodyState = FSharpTypeBodyState.None;
         var symbols = new SymbolExtractionList();
         var extractionState = symbols.ExtractionState;
-        var pendingRecordPrimaryComponents = new List<PendingRecordPrimaryComponents>();
+        List<PendingRecordPrimaryComponents>? pendingRecordPrimaryComponents = null;
         var cssSeenSymbols = lang == "css"
             ? new HashSet<string>(StringComparer.Ordinal)
             : null;
@@ -4138,7 +4138,7 @@ public static partial class SymbolExtractor
                             absoluteStartColumn,
                             kind,
                             name,
-                            pendingRecordPrimaryComponents,
+                            ref pendingRecordPrimaryComponents,
                             symbols);
 
                         // C# plain-field (kind `property`, BodyStyle.None) matches need their own
@@ -7281,7 +7281,7 @@ public static partial class SymbolExtractor
         int declarationStartColumn,
         string kind,
         string recordName,
-        List<PendingRecordPrimaryComponents> pendingRecordPrimaryComponents,
+        ref List<PendingRecordPrimaryComponents>? pendingRecordPrimaryComponents,
         List<SymbolRecord> symbols)
     {
         if (lang == "kotlin")
@@ -7315,7 +7315,7 @@ public static partial class SymbolExtractor
 
         if (components.Count > 0)
         {
-            pendingRecordPrimaryComponents.Add(new PendingRecordPrimaryComponents(
+            (pendingRecordPrimaryComponents ??= []).Add(new PendingRecordPrimaryComponents(
                 fileId,
                 kind,
                 recordName,
@@ -7326,9 +7326,9 @@ public static partial class SymbolExtractor
 
     private static void MaterializeRecordPrimaryComponentSymbols(
         List<SymbolRecord> symbols,
-        List<PendingRecordPrimaryComponents> pendingRecordPrimaryComponents)
+        List<PendingRecordPrimaryComponents>? pendingRecordPrimaryComponents)
     {
-        if (pendingRecordPrimaryComponents.Count == 0)
+        if (pendingRecordPrimaryComponents is not { Count: > 0 })
             return;
 
         foreach (var pending in pendingRecordPrimaryComponents)
