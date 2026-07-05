@@ -475,8 +475,8 @@ internal static class RReferenceExtractor
 
         var line = StripRNamespaceDirectiveComment(originalLine);
 
-        var mayContainSetGeneric = line.IndexOf("setGeneric", StringComparison.Ordinal) >= 0;
-        var mayContainSetClass = line.IndexOf("setClass", StringComparison.Ordinal) >= 0;
+        var mayContainSetGeneric = MayContainS4GenericConstructor(line);
+        var mayContainSetClass = MayContainS4ClassConstructor(line);
         var mayContainSetMethod = line.IndexOf("setMethod", StringComparison.Ordinal) >= 0;
         if (mayContainSetGeneric)
         {
@@ -580,6 +580,19 @@ internal static class RReferenceExtractor
                 lineNumber,
                 container);
         }
+    }
+
+    private static bool MayContainS4GenericConstructor(string line)
+    {
+        return line.IndexOf("setGeneric", StringComparison.Ordinal) >= 0
+            || line.IndexOf("setGroupGeneric", StringComparison.Ordinal) >= 0;
+    }
+
+    private static bool MayContainS4ClassConstructor(string line)
+    {
+        return line.IndexOf("setClass", StringComparison.Ordinal) >= 0
+            || line.IndexOf("setRefClass", StringComparison.Ordinal) >= 0
+            || line.IndexOf("setOldClass", StringComparison.Ordinal) >= 0;
     }
 
     public static void EmitRoxygenMethodReferences(

@@ -69,7 +69,7 @@ public static partial class ReferenceExtractor
         int lineNumber,
         InnermostContainerResolver containerResolver)
     {
-        if (line.IndexOf(" is ", StringComparison.Ordinal) < 0)
+        if (!MayContainSolidityInheritanceMarker(line))
             return;
 
         var match = SolidityInheritanceRegex.Match(line);
@@ -94,6 +94,27 @@ public static partial class ReferenceExtractor
                 lineNumber,
                 containerResolver);
         }
+    }
+
+    private static bool MayContainSolidityInheritanceMarker(string line)
+    {
+        var index = line.IndexOf("is", StringComparison.Ordinal);
+        while (index >= 0)
+        {
+            var before = index - 1;
+            var after = index + "is".Length;
+            if (before >= 0
+                && after < line.Length
+                && char.IsWhiteSpace(line[before])
+                && char.IsWhiteSpace(line[after]))
+            {
+                return true;
+            }
+
+            index = line.IndexOf("is", index + "is".Length, StringComparison.Ordinal);
+        }
+
+        return false;
     }
 
     private static void AddSolidityLibraryReferences(
