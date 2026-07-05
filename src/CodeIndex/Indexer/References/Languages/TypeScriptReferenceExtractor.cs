@@ -62,10 +62,7 @@ internal static class TypeScriptReferenceExtractor
         IReadOnlyList<string> originalLines,
         IReadOnlyList<string> preparedLines)
     {
-        if (!MayContainNamespaceAliasCandidate(originalLines))
-            return Array.Empty<NamespaceAliasBinding>();
-
-        var bindings = new List<NamespaceAliasBinding>();
+        List<NamespaceAliasBinding>? bindings = null;
         int[]? braceDepths = null;
         IReadOnlyDictionary<string, List<int>>? localDeclarationLinesByName = null;
         Dictionary<string, IReadOnlyList<LineRange>>? parameterShadowRangesByAlias = null;
@@ -76,7 +73,7 @@ internal static class TypeScriptReferenceExtractor
             if (match.Success)
             {
                 AddNamespaceAliasBinding(
-                    bindings,
+                    bindings ??= [],
                     preparedLines,
                     match.Groups["alias"].Value,
                     match.Groups["module"].Value,
@@ -94,7 +91,7 @@ internal static class TypeScriptReferenceExtractor
                 var bindingLine = index + 1;
                 var sharedBraceDepths = braceDepths ??= BuildBraceDepthsBeforeLine(preparedLines);
                 AddNamespaceAliasBinding(
-                    bindings,
+                    bindings ??= [],
                     preparedLines,
                     match.Groups["alias"].Value,
                     match.Groups["module"].Value,
@@ -111,7 +108,7 @@ internal static class TypeScriptReferenceExtractor
                 continue;
 
             AddNamedImportExportAliasBindings(
-                bindings,
+                bindings ??= [],
                 preparedLines,
                 match.Groups["body"].Value,
                 match.Groups["module"].Value,
@@ -121,24 +118,7 @@ internal static class TypeScriptReferenceExtractor
                 ref parameterShadowRangesByAlias);
         }
 
-        return bindings;
-    }
-
-    private static bool MayContainNamespaceAliasCandidate(IReadOnlyList<string> originalLines)
-    {
-        foreach (var line in originalLines)
-        {
-            if (line.Contains('*', StringComparison.Ordinal))
-                return true;
-
-            if (line.Contains("import", StringComparison.Ordinal)
-                && (line.Contains("from", StringComparison.Ordinal) || line.Contains('(')))
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return bindings is null ? Array.Empty<NamespaceAliasBinding>() : bindings;
     }
 
     private static void AddNamespaceAliasBinding(
