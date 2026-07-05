@@ -641,15 +641,33 @@ internal static class PythonReferenceExtractor
 
     private static bool StartsWithPythonKeywordStatement(string preparedLine, string keyword)
     {
-        var index = 0;
-        while (index < preparedLine.Length && char.IsWhiteSpace(preparedLine[index]))
-            index++;
+        var index = SkipPythonWhitespace(preparedLine, 0);
+        return StartsWithPythonKeywordAt(preparedLine, index, keyword);
+    }
 
+    private static bool StartsWithPythonDefStatement(string preparedLine)
+    {
+        var index = SkipPythonWhitespace(preparedLine, 0);
+        if (StartsWithPythonKeywordAt(preparedLine, index, "async"))
+            index = SkipPythonWhitespace(preparedLine, index + "async".Length);
+
+        return StartsWithPythonKeywordAt(preparedLine, index, "def");
+    }
+
+    private static bool StartsWithPythonKeywordAt(string preparedLine, int index, string keyword)
+    {
         if (!preparedLine.AsSpan(index).StartsWith(keyword, StringComparison.Ordinal))
             return false;
 
         var after = index + keyword.Length;
         return after >= preparedLine.Length || !IsPythonIdentifierContinue(preparedLine[after]);
+    }
+
+    private static int SkipPythonWhitespace(string preparedLine, int index)
+    {
+        while (index < preparedLine.Length && char.IsWhiteSpace(preparedLine[index]))
+            index++;
+        return index;
     }
 
     private static bool IsPythonIdentifierContinue(char ch) =>
@@ -830,7 +848,7 @@ internal static class PythonReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForReference,
         Func<string, bool> isIgnoredName)
     {
-        if (preparedLine.IndexOf("def", StringComparison.Ordinal) < 0
+        if (!StartsWithPythonDefStatement(preparedLine)
             || preparedLine.IndexOf("->", StringComparison.Ordinal) < 0)
         {
             return;
@@ -882,7 +900,7 @@ internal static class PythonReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForReference,
         Func<string, bool> isIgnoredName)
     {
-        if (preparedLine.IndexOf("def", StringComparison.Ordinal) < 0
+        if (!StartsWithPythonDefStatement(preparedLine)
             || preparedLine.IndexOf('(') < 0
             || preparedLine.IndexOf(')') < 0
             || preparedLine.IndexOf(':') < 0)
