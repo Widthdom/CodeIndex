@@ -1089,9 +1089,11 @@ public static partial class ReferenceExtractor
 
         lang = NormalizeLanguage(lang);
         var language = lang!;
-        var builtInDiagnostics = new List<ReferenceExtractionDiagnostic>();
-        return new ReferenceExtractionResult(
-            extractor.Extract(new ReferenceExtractionContext(
+        List<ReferenceExtractionDiagnostic>? builtInDiagnostics = null;
+        void ReportDiagnostic(ReferenceExtractionDiagnostic diagnostic)
+            => (builtInDiagnostics ??= []).Add(diagnostic);
+
+        var builtInReferences = extractor.Extract(new ReferenceExtractionContext(
             fileId,
             language,
             content,
@@ -1101,11 +1103,13 @@ public static partial class ReferenceExtractor
             requestedLanguage,
             cancellationToken,
             maxReferenceCount,
-            builtInDiagnostics.Add,
+            ReportDiagnostic,
             contentIsNormalized,
             hasOversizeLine,
-            conflictMarkerLine)),
-            builtInDiagnostics);
+            conflictMarkerLine));
+        return new ReferenceExtractionResult(
+            builtInReferences,
+            builtInDiagnostics ?? (IReadOnlyList<ReferenceExtractionDiagnostic>)Array.Empty<ReferenceExtractionDiagnostic>());
     }
 
     private static List<ReferenceRecord> CopyPluginReferencesWithinLimit(
