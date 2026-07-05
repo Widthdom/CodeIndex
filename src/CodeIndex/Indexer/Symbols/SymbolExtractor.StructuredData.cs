@@ -194,7 +194,7 @@ public static partial class SymbolExtractor
         var truncated = false;
         for (var i = 0; i < lines.Length; i++)
         {
-            if (lines[i].IndexOf(':') < 0 || lines[i].IndexOf('"') < 0)
+            if (!MayStartJsonPropertyLine(lines[i]) || lines[i].IndexOf(':') < 0)
                 continue;
 
             var match = JsonFallbackPropertyRegex.Match(lines[i]);
@@ -493,6 +493,19 @@ public static partial class SymbolExtractor
         if (index < 0)
             index = Math.Max(0, ~index - 1);
         return index + 1;
+    }
+
+    private static bool MayStartJsonPropertyLine(string line)
+    {
+        for (var index = 0; index < line.Length; index++)
+        {
+            if (char.IsWhiteSpace(line[index]))
+                continue;
+
+            return line[index] == '"';
+        }
+
+        return false;
     }
 
     private static int CountLeadingSpaces(string line)
