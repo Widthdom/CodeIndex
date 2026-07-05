@@ -13,7 +13,8 @@ public static partial class SymbolExtractor
         string lang,
         string[] lines,
         List<SymbolRecord> symbols,
-        Func<JavaScriptScopePrivacyFlags[][]> getPrivateScopeColumns)
+        Func<JavaScriptScopePrivacyFlags[][]> getPrivateScopeColumns,
+        Func<string[]> getSanitizedLines)
     {
         var existingClassTargets = GetJavaScriptTypeScriptExistingClassScanTargets(lang, lines, symbols);
         ExtractJavaScriptTypeScriptBareMethodsInTargets(fileId, lang, lines, symbols, existingClassTargets);
@@ -23,8 +24,8 @@ public static partial class SymbolExtractor
 
         var objectLiteralTargets = CollectJavaScriptTypeScriptObjectLiteralScanTargets(lang, lines, getPrivateScopeColumns);
         ExtractJavaScriptTypeScriptBareMethodsInTargets(fileId, lang, lines, symbols, objectLiteralTargets);
-        ExtractJavaScriptTypeScriptExportSurfaceSymbols(fileId, lang, lines, symbols, getPrivateScopeColumns, objectLiteralTargets);
-        ExtractJavaScriptTypeScriptQualifiedAssignments(fileId, lang, lines, symbols, getPrivateScopeColumns);
+        ExtractJavaScriptTypeScriptExportSurfaceSymbols(fileId, lang, lines, symbols, getPrivateScopeColumns, getSanitizedLines, objectLiteralTargets);
+        ExtractJavaScriptTypeScriptQualifiedAssignments(fileId, lang, lines, symbols, getPrivateScopeColumns, getSanitizedLines);
     }
 
     // Scans for object literal declarations (`const obj = { ... }`, `module.exports = { ... }`
@@ -150,13 +151,14 @@ public static partial class SymbolExtractor
         string[] lines,
         List<SymbolRecord> symbols,
         Func<JavaScriptScopePrivacyFlags[][]> getPrivateScopeColumns,
+        Func<string[]> getSanitizedLines,
         List<JavaScriptClassScanTarget> objectLiteralTargets)
     {
         if (!LinesContain(lines, "export", StringComparison.Ordinal))
             return;
 
         var privateScopeColumns = getPrivateScopeColumns();
-        var sanitizedLines = BuildJavaScriptTypeScriptSanitizedLines(lines);
+        var sanitizedLines = getSanitizedLines();
         ExtractJavaScriptTypeScriptReExportSymbols(fileId, lang, lines, sanitizedLines, symbols);
         ExtractJavaScriptTypeScriptLocalNamedExportSymbols(fileId, lines, sanitizedLines, symbols);
         ExtractJavaScriptTypeScriptExportedVariableSymbols(fileId, lines, sanitizedLines, symbols, privateScopeColumns);
@@ -1876,13 +1878,14 @@ public static partial class SymbolExtractor
         string lang,
         string[] lines,
         List<SymbolRecord> symbols,
-        Func<JavaScriptScopePrivacyFlags[][]> getPrivateScopeColumns)
+        Func<JavaScriptScopePrivacyFlags[][]> getPrivateScopeColumns,
+        Func<string[]> getSanitizedLines)
     {
         if (!LinesContain(lines, "=", StringComparison.Ordinal))
             return;
 
         var privateScopeColumns = getPrivateScopeColumns();
-        var sanitizedLines = BuildJavaScriptTypeScriptSanitizedLines(lines);
+        var sanitizedLines = getSanitizedLines();
         List<JavaScriptClassScanTarget>? syntheticClassTargets = null;
         HashSet<SymbolLineIdentity>? symbolLineIdentities = null;
         HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)>? targetIdentities = null;
