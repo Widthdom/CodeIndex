@@ -121,20 +121,26 @@ public static partial class SymbolExtractor
             }
 
             traversalNodes++;
-            var name = string.IsNullOrEmpty(parentPath)
-                ? property.Name
-                : parentPath + "." + property.Name;
-            var line = propertyLines == null
-                ? 1
-                : TryDequeueJsonPropertyLine(propertyLines, property.Name, out var mappedLine)
-                    ? mappedLine
-                    : FindLineNumberForOffset(lineStarts ??= BuildLineStarts(lines), FindJsonPropertyOffset(content, property.Name, ref searchOffset));
-
-            if (name.Length > StructuredDataMaxPathLength)
+            var propertyName = property.Name;
+            var nameLength = string.IsNullOrEmpty(parentPath)
+                ? propertyName.Length
+                : parentPath.Length + 1 + propertyName.Length;
+            if (nameLength > StructuredDataMaxPathLength)
             {
+                if (propertyLines != null)
+                    _ = TryDequeueJsonPropertyLine(propertyLines, propertyName, out _);
                 DrainJsonPropertyLines(property.Value, propertyLines);
                 continue;
             }
+
+            var name = string.IsNullOrEmpty(parentPath)
+                ? propertyName
+                : parentPath + "." + propertyName;
+            var line = propertyLines == null
+                ? 1
+                : TryDequeueJsonPropertyLine(propertyLines, propertyName, out var mappedLine)
+                    ? mappedLine
+                    : FindLineNumberForOffset(lineStarts ??= BuildLineStarts(lines), FindJsonPropertyOffset(content, propertyName, ref searchOffset));
 
             var kind = property.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array
                 ? "namespace"
