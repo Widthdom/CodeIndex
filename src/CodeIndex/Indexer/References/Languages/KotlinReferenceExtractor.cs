@@ -369,7 +369,7 @@ internal static class KotlinReferenceExtractor
 
     public static void EmitCtorDelegationReferences(
         string preparedLine,
-        IReadOnlyList<SymbolRecord> enclosingTypeCandidates,
+        Func<IReadOnlyList<SymbolRecord>> getEnclosingTypeCandidates,
         IReadOnlyList<SymbolRecord> symbols,
         string[] structuralLines,
         List<ReferenceRecord> references,
@@ -383,7 +383,7 @@ internal static class KotlinReferenceExtractor
         if (matches.Count == 0)
             return;
 
-        var enclosingType = ReferenceExtractor.FindInnermostClassLike(enclosingTypeCandidates, lineNumber);
+        var enclosingType = ReferenceExtractor.FindInnermostClassLike(getEnclosingTypeCandidates(), lineNumber);
         if (enclosingType == null)
             return;
 

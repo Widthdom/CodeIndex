@@ -126,9 +126,8 @@ public static partial class ReferenceExtractor
         // コンストラクタ連鎖の呼び先解決で使う外側の型候補（class/struct/record/enum。namespace は含めない）。
         // 内側優先で昇順にソート。Java の enum は `this(...)` 連鎖を持てるため `enum` も含める。
         // C# の enum はコンストラクタ自体を持てず `CSharpCtorChainRegex` が一致しないので副作用は無い。
-        var enclosingTypeCandidates = language is "csharp" or "java" or "kotlin"
-            ? BuildEnclosingTypeCandidates(symbols, request.ReportDiagnostic)
-            : [];
+        IReadOnlyList<SymbolRecord>? enclosingTypeCandidates = null;
+        var enclosingTypeCandidatesResolved = false;
         var rustEnumCandidates = language == "rust"
             ? BuildRustEnumCandidates(symbols)
             : null;
@@ -245,6 +244,19 @@ public static partial class ReferenceExtractor
             }
 
             return csharpXmlDocAttachmentScopeCandidates;
+        }
+
+        IReadOnlyList<SymbolRecord> GetEnclosingTypeCandidates()
+        {
+            if (!enclosingTypeCandidatesResolved)
+            {
+                enclosingTypeCandidates = language is "csharp" or "java" or "kotlin"
+                    ? BuildEnclosingTypeCandidates(symbols, request.ReportDiagnostic)
+                    : [];
+                enclosingTypeCandidatesResolved = true;
+            }
+
+            return enclosingTypeCandidates!;
         }
 
         List<(int StartLine, int StartColumn, int EndLine, int EndColumn, SymbolRecord Container)> GetRecordPrimaryCtorRanges()
@@ -1247,7 +1259,7 @@ public static partial class ReferenceExtractor
                 javaSameLineCtor = JavaReferenceExtractor.TryBuildSameLineCtorSpan(
                     preparedLine,
                     lineNumber,
-                    enclosingTypeCandidates);
+                    GetEnclosingTypeCandidates);
             }
 
             // Per-call-site record primary-ctor override: only calls whose column sits inside the
@@ -1493,19 +1505,19 @@ public static partial class ReferenceExtractor
             if (language is "csharp")
             {
                 CSharpReferenceExtractor.EmitCtorChainReferences(
-                    preparedLine, enclosingTypeCandidates, containerCandidates,
+                    preparedLine, GetEnclosingTypeCandidates, containerCandidates,
                     structuralLines, references, seen, fileId, context, lineNumber, container);
             }
             else if (language is "java")
             {
                 JavaReferenceExtractor.EmitCtorChainReferences(
-                    preparedLine, enclosingTypeCandidates, symbols, structuralLines,
+                    preparedLine, GetEnclosingTypeCandidates, symbols, structuralLines,
                     references, seen, fileId, context, lineNumber, container);
             }
             else if (language is "kotlin")
             {
                 KotlinReferenceExtractor.EmitCtorDelegationReferences(
-                    preparedLine, enclosingTypeCandidates, symbols, structuralLines,
+                    preparedLine, GetEnclosingTypeCandidates, symbols, structuralLines,
                     references, seen, fileId, context, lineNumber, container);
             }
 

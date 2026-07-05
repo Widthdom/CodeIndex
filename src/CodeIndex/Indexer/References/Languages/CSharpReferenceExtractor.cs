@@ -99,7 +99,7 @@ internal static class CSharpReferenceExtractor
 
     public static void EmitCtorChainReferences(
         string preparedLine,
-        IReadOnlyList<SymbolRecord> enclosingTypeCandidates,
+        Func<IReadOnlyList<SymbolRecord>> getEnclosingTypeCandidates,
         IReadOnlyList<SymbolRecord> containerCandidates,
         string[] structuralLines,
         List<ReferenceRecord> references,
@@ -113,7 +113,7 @@ internal static class CSharpReferenceExtractor
         if (chainMatches.Count == 0)
             return;
 
-        var enclosingType = ReferenceExtractor.FindInnermostClassLike(enclosingTypeCandidates, lineNumber);
+        var enclosingType = ReferenceExtractor.FindInnermostClassLike(getEnclosingTypeCandidates(), lineNumber);
         if (enclosingType == null)
             return;
 
