@@ -85,7 +85,9 @@ public static partial class ReferenceExtractor
         var csharpAttrTopLevelRanges = csharpAttrTables.Item2;
         var definitionNamesComparer = GetDefinitionNamesComparer(language);
         var definitionNamesByLine = BuildDefinitionNamesByLine(language, symbols, request.ReportDiagnostic);
-        var allDefinitionNames = BuildAllDefinitionNames(language, symbols, request.ReportDiagnostic);
+        var allDefinitionNames = language == "stylus"
+            ? BuildAllDefinitionNames(language, symbols, request.ReportDiagnostic)
+            : null;
         var fileDefinitionNames = isRazorFile
             ? BuildFileDefinitionNames(symbols)
             : null;
