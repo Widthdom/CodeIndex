@@ -593,7 +593,7 @@ public class DatabaseTests : IDisposable
 
         Assert.Equal(0L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'readerrecoveredbulktoken'"));
 
-        _writer.SetMeta(DbWriter.FtsBulkLoadInProgressMetaKey, "true");
+        _writer.SetMeta(DbWriter.FtsBulkLoadInProgressMetaKey, "pid:2147483647");
         using var reader = new DbReader(_db.Connection);
         var results = reader.Search("readerrecoveredbulktoken");
 

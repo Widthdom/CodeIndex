@@ -519,13 +519,8 @@ public partial class DbReader : IDisposable
         if (isReadOnly)
             return;
 
-        if (!string.Equals(
-                TryGetMetaString(conn, DbWriter.FtsBulkLoadInProgressMetaKey),
-                "true",
-                StringComparison.OrdinalIgnoreCase))
-        {
+        if (TryGetMetaString(conn, DbWriter.FtsBulkLoadInProgressMetaKey) == null)
             return;
-        }
 
         var writer = new DbWriter(conn);
         writer.RecoverInterruptedFtsBulkLoadIfNeeded();
