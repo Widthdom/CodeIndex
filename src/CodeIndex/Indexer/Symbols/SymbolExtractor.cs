@@ -6065,8 +6065,8 @@ public static partial class SymbolExtractor
 
     private sealed class SymbolExtractionState
     {
-        private readonly SymbolAddState _symbolAddState = new();
-        private readonly SymbolLineIdentityState _symbolLineIdentityState = new();
+        private SymbolAddState? _symbolAddState;
+        private SymbolLineIdentityState? _symbolLineIdentityState;
 
         public static SymbolExtractionState FromSymbols(List<SymbolRecord> symbols)
         {
@@ -6077,19 +6077,25 @@ public static partial class SymbolExtractor
         }
 
         public int GetExactDuplicateCount(SymbolRecord symbol) =>
-            _symbolAddState.GetExactDuplicateCount(symbol);
+            _symbolAddState?.GetExactDuplicateCount(symbol) ?? 0;
 
         public int? GetSameLineSignatureOccurrenceIndex(SymbolRecord symbol) =>
-            _symbolAddState.GetSameLineSignatureOccurrenceIndex(symbol);
+            _symbolAddState?.GetSameLineSignatureOccurrenceIndex(symbol)
+            ?? (TryGetSameLineSignatureKey(symbol, out _) ? 0 : null);
 
-        public bool HasSymbolLineIdentity(List<SymbolRecord> symbols, SymbolLineIdentity identity) =>
-            _symbolLineIdentityState.Contains(symbols, identity);
+        public bool HasSymbolLineIdentity(List<SymbolRecord> symbols, SymbolLineIdentity identity)
+        {
+            if (symbols.Count == 0)
+                return false;
+
+            return (_symbolLineIdentityState ??= new()).Contains(symbols, identity);
+        }
 
         public void Record(SymbolRecord symbol) =>
-            _symbolAddState.Record(symbol);
+            (_symbolAddState ??= new()).Record(symbol);
 
         public void Remove(SymbolRecord symbol) =>
-            _symbolAddState.Remove(symbol);
+            _symbolAddState?.Remove(symbol);
     }
 
     private sealed class SymbolExtractionList : List<SymbolRecord>
@@ -6099,11 +6105,14 @@ public static partial class SymbolExtractor
 
     private sealed class SymbolAddState
     {
-        private readonly Dictionary<SymbolRecordIdentity, int> _exactCounts = new();
-        private readonly Dictionary<SameLineSignatureKey, int> _sameLineSignatureCounts = new();
+        private Dictionary<SymbolRecordIdentity, int>? _exactCounts;
+        private Dictionary<SameLineSignatureKey, int>? _sameLineSignatureCounts;
 
         public int GetExactDuplicateCount(SymbolRecord symbol)
         {
+            if (_exactCounts is null)
+                return 0;
+
             var key = new SymbolRecordIdentity(symbol);
             return _exactCounts.TryGetValue(key, out var count) ? count : 0;
         }
@@ -6113,19 +6122,24 @@ public static partial class SymbolExtractor
             if (!TryGetSameLineSignatureKey(symbol, out var key))
                 return null;
 
+            if (_sameLineSignatureCounts is null)
+                return 0;
+
             return _sameLineSignatureCounts.TryGetValue(key, out var count) ? count : 0;
         }
 
         public void Record(SymbolRecord symbol)
         {
             var exactKey = new SymbolRecordIdentity(symbol);
-            _exactCounts[exactKey] = _exactCounts.TryGetValue(exactKey, out var exactCount)
+            var exactCounts = _exactCounts ??= new();
+            exactCounts[exactKey] = exactCounts.TryGetValue(exactKey, out var exactCount)
                 ? exactCount + 1
                 : 1;
 
             if (TryGetSameLineSignatureKey(symbol, out var sameLineKey))
             {
-                _sameLineSignatureCounts[sameLineKey] = _sameLineSignatureCounts.TryGetValue(sameLineKey, out var sameLineCount)
+                var sameLineSignatureCounts = _sameLineSignatureCounts ??= new();
+                sameLineSignatureCounts[sameLineKey] = sameLineSignatureCounts.TryGetValue(sameLineKey, out var sameLineCount)
                     ? sameLineCount + 1
                     : 1;
             }
@@ -6133,16 +6147,22 @@ public static partial class SymbolExtractor
 
         public void Remove(SymbolRecord symbol)
         {
-            var exactKey = new SymbolRecordIdentity(symbol);
-            if (_exactCounts.TryGetValue(exactKey, out var exactCount))
+            if (_exactCounts is not null)
             {
-                if (exactCount <= 1)
-                    _exactCounts.Remove(exactKey);
-                else
-                    _exactCounts[exactKey] = exactCount - 1;
+                var exactKey = new SymbolRecordIdentity(symbol);
+                if (_exactCounts.TryGetValue(exactKey, out var exactCount))
+                {
+                    if (exactCount <= 1)
+                        _exactCounts.Remove(exactKey);
+                    else
+                        _exactCounts[exactKey] = exactCount - 1;
+                }
             }
 
             if (!TryGetSameLineSignatureKey(symbol, out var sameLineKey))
+                return;
+
+            if (_sameLineSignatureCounts is null)
                 return;
 
             if (!_sameLineSignatureCounts.TryGetValue(sameLineKey, out var sameLineCount))
