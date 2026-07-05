@@ -7469,7 +7469,7 @@ public static partial class SymbolExtractor
         out List<RecordPrimaryComponent> components,
         out int declarationEndLine)
     {
-        components = [];
+        components = null!;
         declarationEndLine = declarationLineIndex + 1;
 
         if (lang is not "csharp" and not "java" and not "kotlin")
@@ -7507,6 +7507,7 @@ public static partial class SymbolExtractor
         declarationEndLine = declarationLineIndex + 1 + declaration[..declarationLineSpanEnd].Count(ch => ch == '\n');
 
         var rawParameterList = StripRecordComponentComments(declaration[(parameterOpenIndex + 1)..parameterCloseIndex]);
+        components = [];
         foreach (var rawComponent in SplitTopLevelRecordPrimaryComponents(rawParameterList, declarationLineIndex + 1))
         {
             if (TryParseRecordPrimaryComponent(lang, rawComponent, out var component))
