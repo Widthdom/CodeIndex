@@ -713,7 +713,7 @@ public static partial class SymbolExtractor
         out int endLineIndex,
         out string signature)
     {
-        moduleSpecifiers = [];
+        moduleSpecifiers = null!;
         endLineIndex = -1;
         signature = string.Empty;
 
@@ -744,6 +744,7 @@ public static partial class SymbolExtractor
         var parenDepth = 0;
         var bracketDepth = 0;
         var braceDepth = 0;
+        List<(string ModuleName, int LineIndex, int StartColumn)>? collectedModuleSpecifiers = null;
         for (var currentLineIndex = openParenLineIndex; currentLineIndex <= endLineIndex; currentLineIndex++)
         {
             var sanitizedLine = sanitizedLines[currentLineIndex];
@@ -766,7 +767,7 @@ public static partial class SymbolExtractor
                                 out var moduleStartColumn,
                                 out var moduleEndColumn))
                         {
-                            moduleSpecifiers.Add((moduleName, currentLineIndex, moduleStartColumn));
+                            (collectedModuleSpecifiers ??= []).Add((moduleName, currentLineIndex, moduleStartColumn));
                             column = moduleEndColumn + 1;
                             continue;
                         }
@@ -809,8 +810,12 @@ public static partial class SymbolExtractor
             }
         }
 
+        if (collectedModuleSpecifiers is null)
+            return false;
+
+        moduleSpecifiers = collectedModuleSpecifiers;
         signature = BuildJavaScriptTypeScriptDynamicImportSignature(rawLines, startLineIndex, endLineIndex, closeParenColumn);
-        return moduleSpecifiers.Count > 0;
+        return true;
     }
 
     private static void ExtractJavaScriptTypeScriptServiceWorkerRegisterModuleSymbols(
@@ -2762,7 +2767,7 @@ public static partial class SymbolExtractor
         out int endColumn,
         out List<JavaScriptTypeScriptExportedVariableName> variableNames)
     {
-        variableNames = [];
+        variableNames = null!;
         endLineIndex = startLineIndex;
         endColumn = Math.Max(0, startColumn);
 
@@ -2772,6 +2777,7 @@ public static partial class SymbolExtractor
         var expectingName = true;
         var sawTopLevelSemicolon = false;
         var scanLimit = Math.Min(sanitizedLines.Length, startLineIndex + 32);
+        List<JavaScriptTypeScriptExportedVariableName>? collectedVariableNames = null;
 
         for (var lineIndex = startLineIndex; lineIndex < scanLimit; lineIndex++)
         {
@@ -2802,7 +2808,7 @@ public static partial class SymbolExtractor
                         while (column < line.Length && IsJavaScriptTypeScriptIdentifierPart(line[column]))
                             column++;
 
-                        variableNames.Add(new JavaScriptTypeScriptExportedVariableName(line[nameStart..column], lineIndex, nameStart));
+                        (collectedVariableNames ??= []).Add(new JavaScriptTypeScriptExportedVariableName(line[nameStart..column], lineIndex, nameStart));
                         expectingName = false;
                         continue;
                     }
@@ -2858,7 +2864,7 @@ public static partial class SymbolExtractor
             if (parenDepth == 0
                 && bracketDepth == 0
                 && braceDepth == 0
-                && variableNames.Count > 0
+                && collectedVariableNames is { Count: > 0 }
                 && !expectingName
                 && CanStopJavaScriptTypeScriptExportedVariableDeclarationAtLineEnd(line, out var lastContentColumn))
             {
@@ -2871,7 +2877,11 @@ public static partial class SymbolExtractor
             endColumn = Math.Max(0, line.Length - 1);
         }
 
-        return variableNames.Count > 0;
+        if (collectedVariableNames is null)
+            return false;
+
+        variableNames = collectedVariableNames;
+        return true;
     }
 
     private static bool CanStopJavaScriptTypeScriptExportedVariableDeclarationAtLineEnd(

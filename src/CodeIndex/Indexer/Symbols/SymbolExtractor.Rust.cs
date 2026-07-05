@@ -168,7 +168,7 @@ public static partial class SymbolExtractor
     private static bool TryReadRustUseStatement(string[] lines, int startIndex, out string statement, out List<int> lineStarts, out int endIndex)
     {
         statement = string.Empty;
-        lineStarts = [];
+        lineStarts = null!;
         endIndex = startIndex;
 
         var firstLine = lines[startIndex];
@@ -177,6 +177,7 @@ public static partial class SymbolExtractor
 
         var builder = new StringBuilder(firstLine.Length + 32);
         var braceDepth = 0;
+        lineStarts = [];
         lineStarts.Add(0);
 
         for (var i = startIndex; i < lines.Length; i++)
@@ -218,7 +219,7 @@ public static partial class SymbolExtractor
     private static bool TryReadRustImplStatement(string[] lines, int startIndex, out string statement, out List<int> lineStarts, out int endIndex)
     {
         statement = string.Empty;
-        lineStarts = [];
+        lineStarts = null!;
         endIndex = startIndex;
 
         var firstLine = lines[startIndex];
@@ -230,6 +231,7 @@ public static partial class SymbolExtractor
         }
 
         var builder = new StringBuilder(firstLine.Length + 32);
+        lineStarts = [];
         lineStarts.Add(0);
 
         for (var i = startIndex; i < lines.Length; i++)
