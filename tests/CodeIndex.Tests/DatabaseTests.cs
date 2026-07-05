@@ -540,6 +540,35 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void DbReader_RecoversInterruptedFtsBulkLoadBeforeServingSearch()
+    {
+        var fileId = UpsertTestFile("src/reader-recovered-bulk-fts.cs", checksum: "reader-recovered-bulk-fts");
+
+        _writer.SuspendFtsSyncTriggersForBulkLoad();
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 1,
+                Content = "readerrecoveredbulktoken",
+            },
+        ]);
+
+        Assert.Equal(0L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'readerrecoveredbulktoken'"));
+
+        using var reader = new DbReader(_db.Connection);
+        var results = reader.Search("readerrecoveredbulktoken");
+
+        Assert.Contains(results, result => result.Path == "src/reader-recovered-bulk-fts.cs");
+        Assert.Equal(3L, CountFtsSyncTriggers());
+        Assert.Null(ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+        Assert.Equal(1L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'readerrecoveredbulktoken'"));
+    }
+
+    [Fact]
     public void InsertReferences_ReportsProgressCheckpoints_Issue3738()
     {
         var fileId = UpsertTestFile("src/progress-reference.cs", checksum: "progress-reference");
