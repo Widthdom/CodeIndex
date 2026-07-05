@@ -375,7 +375,7 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
-        if (preparedLine.IndexOf("raise", StringComparison.Ordinal) < 0)
+        if (!StartsWithPythonKeywordStatement(preparedLine, "raise"))
             return;
 
         foreach (Match match in BareRaiseTypeRegex.Matches(preparedLine))
@@ -407,7 +407,7 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
-        if (preparedLine.IndexOf("except", StringComparison.Ordinal) < 0)
+        if (!StartsWithPythonKeywordStatement(preparedLine, "except"))
             return;
 
         if (preparedLine.IndexOf('(') >= 0)
@@ -638,6 +638,22 @@ internal static class PythonReferenceExtractor
 
         return false;
     }
+
+    private static bool StartsWithPythonKeywordStatement(string preparedLine, string keyword)
+    {
+        var index = 0;
+        while (index < preparedLine.Length && char.IsWhiteSpace(preparedLine[index]))
+            index++;
+
+        if (!preparedLine.AsSpan(index).StartsWith(keyword, StringComparison.Ordinal))
+            return false;
+
+        var after = index + keyword.Length;
+        return after >= preparedLine.Length || !IsPythonIdentifierContinue(preparedLine[after]);
+    }
+
+    private static bool IsPythonIdentifierContinue(char ch) =>
+        char.IsLetterOrDigit(ch) || ch == '_';
 
     public static void EmitAssertTypeReferences(
         string preparedLine,
