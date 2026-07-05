@@ -358,8 +358,17 @@ public static partial class SymbolExtractor
                attrName.Length > 5;
     }
 
-    private static string NormalizeHtmlAttributeName(string attrName) =>
-        attrName.ToLowerInvariant();
+    private static string NormalizeHtmlAttributeName(string attrName)
+    {
+        for (var index = 0; index < attrName.Length; index++)
+        {
+            var ch = attrName[index];
+            if (ch >= 'A' && ch <= 'Z')
+                return attrName.ToLowerInvariant();
+        }
+
+        return attrName;
+    }
 
     private static bool IsHtmlAttributeName(string attrName, string expected) =>
         attrName.Equals(expected, StringComparison.OrdinalIgnoreCase);
