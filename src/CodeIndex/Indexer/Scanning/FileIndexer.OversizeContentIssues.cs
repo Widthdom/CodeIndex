@@ -6,7 +6,7 @@ namespace CodeIndex.Indexer;
 
 public partial class FileIndexer
 {
-    private static void AddOversizeContentIssues(List<FileIssue> issues, string relativePath, string content, bool? hasOversizeLine)
+    private static void AddOversizeContentIssues(ref List<FileIssue>? issues, string relativePath, string content, bool? hasOversizeLine)
     {
         // line_too_long — surface the chunk/symbol/reference skip path that
         // triggers when a single physical line exceeds ChunkSplitter.MaxLineLength
@@ -25,7 +25,7 @@ public partial class FileIndexer
             var longLine = FindOversizeLine(content, ChunkSplitter.MaxLineLength);
             if (longLine > 0)
             {
-                issues.Add(new FileIssue
+                AddIssue(ref issues, new FileIssue
                 {
                     Path = relativePath,
                     Kind = "line_too_long",
@@ -38,7 +38,7 @@ public partial class FileIndexer
         var longFtsTokenLine = FindOversizeFtsTokenLine(content, CodeIndex.Database.DbReader.FtsUnicode61MaxTokenLength);
         if (longFtsTokenLine > 0)
         {
-            issues.Add(new FileIssue
+            AddIssue(ref issues, new FileIssue
             {
                 Path = relativePath,
                 Kind = "fts_token_too_long",

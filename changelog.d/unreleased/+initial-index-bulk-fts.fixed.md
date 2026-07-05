@@ -10,7 +10,11 @@ affected:
   - src/CodeIndex/Indexer/Scanning/FileIndexer.DanglingEntries.cs
   - src/CodeIndex/Indexer/Scanning/FileIndexer.DirectoryLinks.cs
   - src/CodeIndex/Indexer/Scanning/FileIndexer.DirectoryTraversal.cs
+  - src/CodeIndex/Indexer/Scanning/FileIndexer.ContentValidation.cs
+  - src/CodeIndex/Indexer/Scanning/FileIndexer.DockerfileDiagnostics.cs
+  - src/CodeIndex/Indexer/Scanning/FileIndexer.EncodingIssues.cs
   - src/CodeIndex/Indexer/Scanning/FileIndexer.FileAcceptance.cs
+  - src/CodeIndex/Indexer/Scanning/FileIndexer.OversizeContentIssues.cs
   - src/CodeIndex/Indexer/Scanning/FileIndexer.ScanOrchestration.cs
   - src/CodeIndex/Mcp/McpToolHandlers.cs
   - tests/CodeIndex.Tests/DatabaseTests.cs
@@ -63,6 +67,7 @@ affected:
 - **CLI fresh purge skips retained-set allocation** — CLI full scans that start from an empty database now avoid allocating the retained path set that only existing-database stale purge paths consume.
 - **Scanner diagnostic sets allocate lazily** — full scans now create optional non-indexable, unknown-extension, probe-failure, pruned-directory, nested-repository, and dangling-symlink path sets only when those diagnostics are actually recorded.
 - **Fresh reference writes skip line-id lookups** — CLI and MCP fresh full scans now insert new `reference_lines` rows with `RETURNING` for newly inserted files instead of upserting and selecting the same line ids back.
+- **Clean validation avoids issue-list allocation** — CLI and MCP indexing now let content-validation helpers allocate `FileIssue` lists only when a file actually emits a validation issue, reusing an empty result for the common clean-file path.
 
 ## 日本語
 
@@ -111,3 +116,4 @@ affected:
 - **CLI fresh purge の retained set 確保を省きます** — 空DBから始まる CLI full scan は、既存DBの stale purge 経路だけが使う retained path set を確保しないようになりました。
 - **scanner の診断用 set を遅延確保します** — full scan は non-indexable、unknown-extension、probe-failure、pruned-directory、nested-repository、dangling-symlink の各 optional path set を、実際に診断が記録された場合だけ作るようになりました。
 - **fresh reference write で line-id lookup を省きます** — CLI と MCP の fresh full scan は、新規挿入ファイルの `reference_lines` を upsert 後に SELECT で読み返さず、`RETURNING` 付き INSERT で id を受け取るようになりました。
+- **clean な validation で issue list 確保を避けます** — CLI と MCP の index は、content validation helper が実際に検証 issue を出す場合だけ `FileIssue` list を確保し、一般的な clean file 経路では空結果を再利用するようになりました。

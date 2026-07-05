@@ -11,9 +11,9 @@ public partial class FileIndexer
     private static readonly UnicodeEncoding StrictReplacementOriginUtf16BeBomEncoding = new(bigEndian: true, byteOrderMark: true, throwOnInvalidBytes: true);
     private static readonly UnicodeEncoding StrictReplacementOriginUtf16BeNoBomEncoding = new(bigEndian: true, byteOrderMark: false, throwOnInvalidBytes: true);
 
-    private static void AddUtf16BomIssue(List<FileIssue> issues, string relativePath, bool utf16BigEndian)
+    private static void AddUtf16BomIssue(ref List<FileIssue>? issues, string relativePath, bool utf16BigEndian)
     {
-        issues.Add(new FileIssue
+        AddIssue(ref issues, new FileIssue
         {
             Path = relativePath,
             Kind = "utf16_bom",
@@ -26,9 +26,9 @@ public partial class FileIndexer
         });
     }
 
-    private static void AddUtf16HeuristicIssue(List<FileIssue> issues, string relativePath, bool utf16BigEndian)
+    private static void AddUtf16HeuristicIssue(ref List<FileIssue>? issues, string relativePath, bool utf16BigEndian)
     {
-        issues.Add(new FileIssue
+        AddIssue(ref issues, new FileIssue
         {
             Path = relativePath,
             Kind = "utf16_heuristic",
@@ -40,7 +40,7 @@ public partial class FileIndexer
     }
 
     private static void AddReplacementCharacterIssues(
-        List<FileIssue> issues,
+        ref List<FileIssue>? issues,
         string relativePath,
         byte[] rawBytes,
         string content,
@@ -73,7 +73,7 @@ public partial class FileIndexer
         if (nonUtf8Likely)
         {
             var ratioPercent = 100.0 * fffdCount / content.Length;
-            issues.Add(new FileIssue
+            AddIssue(ref issues, new FileIssue
             {
                 Path = relativePath,
                 Kind = "non_utf8_likely",
@@ -104,7 +104,7 @@ public partial class FileIndexer
                 continue;
 
             var isSourceLiteral = replacementCharOrigin == FileIssue.OriginSourceLiteral;
-            issues.Add(new FileIssue
+            AddIssue(ref issues, new FileIssue
             {
                 Path = relativePath,
                 Kind = "replacement_char",
@@ -126,14 +126,14 @@ public partial class FileIndexer
     }
 
     private static void AddRawByteContentIssues(
-        List<FileIssue> issues,
+        ref List<FileIssue>? issues,
         string relativePath,
         RawByteContentInspection rawByteInspection)
     {
         // BOM marker / BOMマーカー
         if (rawByteInspection.HasUtf8Bom && !ShouldSuppressUtf8BomIssue(relativePath))
         {
-            issues.Add(new FileIssue
+            AddIssue(ref issues, new FileIssue
             {
                 Path = relativePath,
                 Kind = "bom",
@@ -147,7 +147,7 @@ public partial class FileIndexer
         // NULL bytes (likely binary content) / NULLバイト（バイナリ混入の可能性）
         if (rawByteInspection.HasNullByte)
         {
-            issues.Add(new FileIssue
+            AddIssue(ref issues, new FileIssue
             {
                 Path = relativePath,
                 Kind = "null_byte",
@@ -156,7 +156,7 @@ public partial class FileIndexer
             });
         }
 
-        AddLineEndingIssues(issues, relativePath, rawByteInspection);
+        AddLineEndingIssues(ref issues, relativePath, rawByteInspection);
     }
 
     private static bool ShouldSuppressUtf8BomIssue(string relativePath)
@@ -164,7 +164,7 @@ public partial class FileIndexer
             .Equals(".sln".AsSpan(), StringComparison.OrdinalIgnoreCase);
 
     private static void AddLineEndingIssues(
-        List<FileIssue> issues,
+        ref List<FileIssue>? issues,
         string relativePath,
         RawByteContentInspection inspection)
     {
@@ -173,7 +173,7 @@ public partial class FileIndexer
             + (inspection.HasCrOnly ? 1 : 0);
         if (distinctEndingTypes >= 3)
         {
-            issues.Add(new FileIssue
+            AddIssue(ref issues, new FileIssue
             {
                 Path = relativePath,
                 Kind = "mixed_line_endings_three_way",
@@ -190,7 +190,7 @@ public partial class FileIndexer
                 description = "CRLF and CR";
             else
                 description = "LF and CR";
-            issues.Add(new FileIssue
+            AddIssue(ref issues, new FileIssue
             {
                 Path = relativePath,
                 Kind = "mixed_line_endings",
@@ -200,7 +200,7 @@ public partial class FileIndexer
         }
         else if (inspection.HasCrOnly)
         {
-            issues.Add(new FileIssue
+            AddIssue(ref issues, new FileIssue
             {
                 Path = relativePath,
                 Kind = "cr_only_line_endings",
