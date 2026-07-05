@@ -17,7 +17,7 @@ public static partial class ReferenceExtractor
         CancellationToken cancellationToken,
         out List<ReferenceRecord> references)
     {
-        references = [];
+        references = null!;
         if (language is not ("solution" or "dependency_manifest" or "dependency_lock"))
             return false;
 
@@ -28,7 +28,10 @@ public static partial class ReferenceExtractor
             conflictMarkerLine,
             out var normalizedContent,
             out var lines))
+        {
+            references = [];
             return true;
+        }
         cancellationToken.ThrowIfCancellationRequested();
 
         references = language == "solution"
