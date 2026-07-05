@@ -150,6 +150,9 @@ internal static class PythonReferenceExtractor
             return expression[1..^1];
         }
 
+        if (expression.IndexOf('\'') < 0 && expression.IndexOf('"') < 0)
+            return expression;
+
         return Regex.Replace(
             expression,
             @"(?<quote>['""])(?<name>(?:[_\p{L}]\w*\.)*[_\p{L}]\w*)\k<quote>",
