@@ -68,6 +68,7 @@ affected:
 - TypeScript and Swift type-alias reference budget guards now use smaller large-use fixtures while still checking the first and last generated alias references.
 - TypeScript symbol-extraction budget guards now use smaller large fixtures while still checking the first and last generated export/class targets.
 - JavaScript object-literal symbol budget guards now use smaller large fixtures while still checking the first and last generated object targets and exported properties.
+- Go grouped-declaration symbol budget guards now use smaller large fixtures while still checking the first and last generated type/import/var targets.
 
 ## 日本語
 
@@ -92,3 +93,4 @@ affected:
 - TypeScript / Swift の type-alias reference budget guard は、先頭と末尾の generated alias reference を確認しつつ、大規模 fixture の use 数を減らしました。
 - TypeScript の symbol-extraction budget guard は、先頭と末尾の generated export / class target を確認しつつ、大規模 fixture の件数を減らしました。
 - JavaScript の object-literal symbol budget guard は、先頭と末尾の generated object target / exported property を確認しつつ、大規模 fixture の件数を減らしました。
+- Go grouped-declaration symbol budget guard は、先頭と末尾の generated type / import / var target を確認しつつ、大規模 fixture の件数を減らしました。

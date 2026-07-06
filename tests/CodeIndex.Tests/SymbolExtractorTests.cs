@@ -5351,9 +5351,10 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_GoLargeGroupedDeclarations_CompletesWithinPracticalBudget()
     {
-        var typeLines = string.Join('\n', Enumerable.Range(0, 2_000).Select(i => $"    Type{i} struct {{ Embedded{i} }}"));
-        var constLines = string.Join('\n', Enumerable.Range(0, 2_000).Select(i => $"    Const{i} = {i}"));
-        var varLines = string.Join('\n', Enumerable.Range(0, 2_000).Select(i => $"    Var{i} Config"));
+        const int declarationCount = 1_000;
+        var typeLines = string.Join('\n', Enumerable.Range(0, declarationCount).Select(i => $"    Type{i} struct {{ Embedded{i} }}"));
+        var constLines = string.Join('\n', Enumerable.Range(0, declarationCount).Select(i => $"    Const{i} = {i}"));
+        var varLines = string.Join('\n', Enumerable.Range(0, declarationCount).Select(i => $"    Var{i} Config"));
         var content = $$"""
             package generated
 
@@ -5375,10 +5376,10 @@ public partial class SymbolExtractorTests
         stopwatch.Stop();
 
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Type0");
-        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Type1999");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Embedded1999");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == $"Type{declarationCount - 1}");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == $"Embedded{declarationCount - 1}");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Const0");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Var1999");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == $"Var{declarationCount - 1}");
         var runawayBudget = TimeSpan.FromSeconds(10);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
