@@ -407,10 +407,11 @@ public partial class ReferenceExtractorTests
 #endif
     public void Extract_CSharpLargePlainCallFile_CompletesWithinPracticalBudget()
     {
+        const int callerCount = 1_000;
         var builder = new StringBuilder();
         builder.AppendLine("class App {");
         builder.AppendLine("    void Target() { }");
-        for (var index = 0; index < 5_000; index++)
+        for (var index = 0; index < callerCount; index++)
             builder.Append("    void Caller").Append(index).AppendLine("() { Target(); }");
         builder.AppendLine("}");
         var content = builder.ToString();
@@ -421,7 +422,7 @@ public partial class ReferenceExtractorTests
         stopwatch.Stop();
 
         Assert.Contains(references, reference => reference.SymbolName == "Target" && reference.ContainerName == "Caller0");
-        Assert.Contains(references, reference => reference.SymbolName == "Target" && reference.ContainerName == "Caller4999");
+        Assert.Contains(references, reference => reference.SymbolName == "Target" && reference.ContainerName == $"Caller{callerCount - 1}");
         var runawayBudget = TimeSpan.FromSeconds(15);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,

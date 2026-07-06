@@ -33,6 +33,8 @@ affected:
   - tests/CodeIndex.Tests/QueryCommandRunnerTests.cs
   - tests/CodeIndex.Tests/DbDebugTests.cs
   - tests/CodeIndex.Tests/ReferenceExtractorRustSwiftTests.cs
+  - tests/CodeIndex.Tests/ReferenceExtractorCSharpTests.cs
+  - tests/CodeIndex.Tests/ReferenceExtractorTests.cs
   - tests/CodeIndex.Tests/ReferenceExtractorTypeScriptTests.cs
   - tests/CodeIndex.Tests/PostExtractionHookTests.cs
   - tests/CodeIndex.Tests/ProgramCliTests.cs
@@ -72,6 +74,7 @@ affected:
 - Java and Kotlin component symbol budget guards now use smaller large fixtures while still checking first, last, and trailing constructor/record components.
 - Shell alias and Dockerfile stage-chain symbol budget guards now use smaller large fixtures while preserving first/last generated symbol coverage.
 - Rust import and C++ same-line class-body symbol budget guards now use smaller large fixtures while preserving first/last generated symbol coverage.
+- C# reference budget guards now use smaller large fixtures while preserving generated caller coverage and the large-method helper-call contract.
 
 ## 日本語
 
@@ -100,3 +103,4 @@ affected:
 - Java / Kotlin の component symbol budget guard は、先頭、末尾、trailing constructor / record component を確認しつつ、大規模 fixture の件数を減らしました。
 - Shell alias と Dockerfile stage-chain の symbol budget guard は、先頭と末尾の generated symbol coverage を保ちつつ、大規模 fixture の件数を減らしました。
 - Rust import と C++ same-line class-body の symbol budget guard は、先頭と末尾の generated symbol coverage を保ちつつ、大規模 fixture の件数を減らしました。
+- C# reference budget guard は、generated caller coverage と large-method helper-call 契約を保ちつつ、大規模 fixture の件数を減らしました。
