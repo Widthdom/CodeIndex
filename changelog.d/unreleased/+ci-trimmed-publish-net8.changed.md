@@ -57,7 +57,7 @@ affected:
 - The file hotspot structural-rank fixture now uses threshold-sized reference counts instead of oversized synthetic call sets.
 - The DB debug query-plan cap test now uses the minimum UNION fixture needed to cross the truncation boundary.
 - The primary Build and Test lane now builds only the matrix test target instead of building the test project's unused `net9.0` target during the Release solution build.
-- Non-primary Build and Test lanes now restore only the matrix target framework, and `.NET 9` SDK setup is skipped outside the primary and `net9.0` compatibility lanes.
+- Non-primary Build and Test lanes now restore only the matrix target framework while every lane still installs pinned `9.0.301` so `global.json` SDK resolution succeeds before restore/build filtering runs.
 - Installer snippet tests now run only on the production `net8.0` test target because `install.sh` is target-framework independent, avoiding duplicate bash subprocess coverage in the `net9.0` compatibility lane.
 - Heavy post-extraction hook worker integration tests now run only on the `net8.0` production target, and their timeout/cancellation sentinel delays are shorter while still exceeding the callback budgets they guard.
 - `RunBuiltCli` / `RunCliInSubprocess` subprocess tests, including timeout-guarded FIFO probes, now run only on the `net8.0` production target when the subprocess resolves to the production CLI, while direct in-process command-runner tests remain cross-target.
@@ -86,7 +86,7 @@ affected:
 - file hotspot structural-rank fixture は、過大な synthetic call set ではなく threshold に必要な reference count だけを使うようにしました。
 - DB debug の query-plan cap test は、truncation boundary を超えるために必要な最小限の UNION fixture を使うようにしました。
 - Build and Test の primary lane は Release solution build で test project の未使用 `net9.0` target まで build せず、matrix の test target だけを build するようにしました。
-- Build and Test の non-primary lane は matrix の target framework だけを restore し、`.NET 9` SDK setup は primary lane と `net9.0` compatibility lane 以外では skip するようにしました。
+- Build and Test の non-primary lane は matrix の target framework だけを restore しつつ、`global.json` の SDK 解決が restore / build 絞り込みより前に成功するよう、全 lane で pinned `9.0.301` を install するようにしました。
 - installer snippet test は、`install.sh` が target framework 非依存であることに合わせて production target の `net8.0` でのみ実行し、`net9.0` compatibility lane で bash subprocess coverage を重複実行しないようにしました。
 - 重い post-extraction hook worker integration test は `net8.0` production target でのみ実行し、timeout / cancellation の sentinel delay も guard 対象の callback budget を超える範囲で短縮しました。
 - `RunBuiltCli` / `RunCliInSubprocess` を使う subprocess test は、timeout guard 付きの FIFO probe も含め、subprocess が production CLI に解決される場合に `net8.0` production target でのみ実行し、direct in-process の command-runner test は cross-target のままにしました。
