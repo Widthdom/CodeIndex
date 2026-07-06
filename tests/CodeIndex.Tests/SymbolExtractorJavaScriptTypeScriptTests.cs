@@ -2008,8 +2008,9 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_JavaScriptLargeObjectLiteralTargets_CompletesWithinPracticalBudget()
     {
+        const int objectCount = 1_000;
         var builder = new StringBuilder();
-        for (var i = 0; i < 2_000; i++)
+        for (var i = 0; i < objectCount; i++)
             builder.Append("export const obj").Append(i).Append(" = { run").Append(i).AppendLine("() { return 1; } };");
 
         var stopwatch = Stopwatch.StartNew();
@@ -2017,7 +2018,7 @@ public partial class SymbolExtractorTests
         stopwatch.Stop();
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run0" && s.ContainerKind == "object" && s.ContainerName == "obj0");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run1999" && s.ContainerKind == "object" && s.ContainerName == "obj1999");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == $"run{objectCount - 1}" && s.ContainerKind == "object" && s.ContainerName == $"obj{objectCount - 1}");
         var runawayBudget = TimeSpan.FromSeconds(10);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,

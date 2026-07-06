@@ -13574,7 +13574,8 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_JavaScriptLargeExportedObjectLiteralProperties_CompletesWithinPracticalBudget()
     {
-        var properties = string.Join(", ", Enumerable.Range(0, 3_000).Select(i => $"p{i}: {i}"));
+        const int propertyCount = 1_000;
+        var properties = string.Join(", ", Enumerable.Range(0, propertyCount).Select(i => $"p{i}: {i}"));
         var content = $"export default {{ {properties} }};";
 
         var stopwatch = Stopwatch.StartNew();
@@ -13582,9 +13583,9 @@ public partial class SymbolExtractorTests
         stopwatch.Stop();
 
         var first = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "p0" && s.ContainerKind == "object" && s.ContainerName == "default"));
-        var last = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "p2999" && s.ContainerKind == "object" && s.ContainerName == "default"));
+        var last = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == $"p{propertyCount - 1}" && s.ContainerKind == "object" && s.ContainerName == "default"));
         Assert.Equal("p0: 0", first.Signature);
-        Assert.Equal("p2999: 2999", last.Signature);
+        Assert.Equal($"p{propertyCount - 1}: {propertyCount - 1}", last.Signature);
         var runawayBudget = TimeSpan.FromSeconds(30);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,

@@ -39,6 +39,7 @@ affected:
   - tests/CodeIndex.Tests/QueryCommandRunnerImpactTests.cs
   - tests/CodeIndex.Tests/ReleaseWorkflowDockerContractTests.cs
   - tests/CodeIndex.Tests/SymbolExtractorConfiguredPatternTests.cs
+  - tests/CodeIndex.Tests/SymbolExtractorJavaScriptTypeScriptTests.cs
   - tests/CodeIndex.Tests/SymbolExtractorTests.cs
   - tests/CodeIndex.Tests/SymbolExtractorTypeScriptTests.cs
   - TESTING_GUIDE.md
@@ -66,6 +67,7 @@ affected:
 - Git external-process integration tests, including direct git process runner diagnostics, now run only on the `net8.0` test target while pure `.git` metadata parsing and trusted-candidate enumeration remain cross-target.
 - TypeScript and Swift type-alias reference budget guards now use smaller large-use fixtures while still checking the first and last generated alias references.
 - TypeScript symbol-extraction budget guards now use smaller large fixtures while still checking the first and last generated export/class targets.
+- JavaScript object-literal symbol budget guards now use smaller large fixtures while still checking the first and last generated object targets and exported properties.
 
 ## 日本語
 
@@ -89,3 +91,4 @@ affected:
 - direct git process runner diagnostics を含む Git の external-process integration test は `net8.0` test target だけで実行し、純粋な `.git` metadata parsing と trusted-candidate enumeration は cross-target のまま維持するようにしました。
 - TypeScript / Swift の type-alias reference budget guard は、先頭と末尾の generated alias reference を確認しつつ、大規模 fixture の use 数を減らしました。
 - TypeScript の symbol-extraction budget guard は、先頭と末尾の generated export / class target を確認しつつ、大規模 fixture の件数を減らしました。
+- JavaScript の object-literal symbol budget guard は、先頭と末尾の generated object target / exported property を確認しつつ、大規模 fixture の件数を減らしました。
