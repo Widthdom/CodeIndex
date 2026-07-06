@@ -11,6 +11,7 @@ affected:
   - tests/CodeIndex.Tests/ExternalProcessTestTarget.cs
   - tests/CodeIndex.Tests/ExternalProcessTheoryAttribute.cs
   - tests/CodeIndex.Tests/GitHelperTests.cs
+  - tests/CodeIndex.Tests/GitProcessRunnerTests.cs
   - tests/CodeIndex.Tests/IndexCommandRunnerTests.cs
   - tests/CodeIndex.Tests/IndexCommandRunnerFullScanTests.cs
   - tests/CodeIndex.Tests/IndexCommandRunnerDryRunTests.cs
@@ -58,7 +59,7 @@ affected:
 - Docker entrypoint shell contract tests now run only on the production `net8.0` test target because the script behavior is target-framework independent.
 - Configured-pattern regex timeout suppression tests now re-run only enough extractions to prove the timed-out pattern was disabled.
 - Impact zero-result JSON stability tests now keep both zero-result shapes but use fewer repeated temp project iterations.
-- Git external-process integration tests now run only on the `net8.0` test target while pure `.git` metadata parsing and trusted-candidate enumeration remain cross-target.
+- Git external-process integration tests, including direct git process runner diagnostics, now run only on the `net8.0` test target while pure `.git` metadata parsing and trusted-candidate enumeration remain cross-target.
 
 ## 日本語
 
@@ -79,4 +80,4 @@ affected:
 - Docker entrypoint shell contract test は script 挙動が target framework 非依存であるため、production `net8.0` test target でのみ実行するようにしました。
 - configured-pattern regex timeout suppression test は、timeout 済み pattern が無効化されたことを確認するのに必要な回数だけ再抽出するようにしました。
 - impact zero-result JSON stability test は、2種類の zero-result shape を維持しつつ temp project 反復回数を減らしました。
-- Git の external-process integration test は `net8.0` test target だけで実行し、純粋な `.git` metadata parsing と trusted-candidate enumeration は cross-target のまま維持するようにしました。
+- direct git process runner diagnostics を含む Git の external-process integration test は `net8.0` test target だけで実行し、純粋な `.git` metadata parsing と trusted-candidate enumeration は cross-target のまま維持するようにしました。
