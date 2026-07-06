@@ -28,6 +28,7 @@ affected:
   - tests/CodeIndex.Tests/DbDebugTests.cs
   - tests/CodeIndex.Tests/PostExtractionHookTests.cs
   - tests/CodeIndex.Tests/ProgramCliTests.cs
+  - tests/CodeIndex.Tests/QueryCommandRunnerImpactTests.cs
   - tests/CodeIndex.Tests/ReleaseWorkflowDockerContractTests.cs
   - tests/CodeIndex.Tests/SymbolExtractorConfiguredPatternTests.cs
   - TESTING_GUIDE.md
@@ -51,6 +52,7 @@ affected:
 - Generic symbol-ranking noise tests now preserve the same relative noisy-reference ordering with far fewer synthetic reference inserts.
 - Docker entrypoint shell contract tests now run only on the production `net8.0` test target because the script behavior is target-framework independent.
 - Configured-pattern regex timeout suppression tests now re-run only enough extractions to prove the timed-out pattern was disabled.
+- Impact zero-result JSON stability tests now keep both zero-result shapes but use fewer repeated temp project iterations.
 
 ## 日本語
 
@@ -70,3 +72,4 @@ affected:
 - generic symbol-ranking noise test は、noisy reference の相対的な順序を保ったまま synthetic reference insert 数を大きく減らしました。
 - Docker entrypoint shell contract test は script 挙動が target framework 非依存であるため、production `net8.0` test target でのみ実行するようにしました。
 - configured-pattern regex timeout suppression test は、timeout 済み pattern が無効化されたことを確認するのに必要な回数だけ再抽出するようにしました。
+- impact zero-result JSON stability test は、2種類の zero-result shape を維持しつつ temp project 反復回数を減らしました。

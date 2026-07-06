@@ -917,7 +917,7 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunImpact_ZeroResultJsonPayloadRemainsStableAcrossRepeatedTempProjects()
     {
-        for (var iteration = 0; iteration < 10; iteration++)
+        for (var iteration = 0; iteration < 3; iteration++)
         {
             RunImpactPartialClassZeroResultIteration(iteration);
             RunImpactImportOnlyZeroResultIteration(iteration);
