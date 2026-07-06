@@ -3052,7 +3052,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpQueryRangeVariableNamedLikeEnum_OrderByCommaDoesNotLeakReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_query_orderby_comma_collision");
@@ -3163,7 +3163,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpQueryRangeVariableOrderByAnonymousTypeCommaDoesNotLeakReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_query_orderby_anonymous_type_collision");
@@ -3218,7 +3218,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpQueryRangeVariableNestedQueryBeforeOrderByCommaDoesNotLeakReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_nested_query_orderby_collision");
@@ -3274,7 +3274,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpQueryKeywordNamedLocalFunctionInSelectExpressionPreservesLaterEnumReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_query_keyword_local_function");
@@ -3334,7 +3334,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpParenthesizedTerminalSelectInArgumentPreservesLaterEnumReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_terminal_select");
@@ -3393,7 +3393,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpGroupByQueryInArgumentPreservesLaterEnumReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_group_by_argument");
@@ -3511,7 +3511,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpQueryKeywordNamedLocalFunctionInParenthesizedOrderByExpressionDoesNotLeakReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_orderby_keyword_local_function");
@@ -3567,7 +3567,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpQueryKeywordNamedLocalFunctionAfterGreaterThanInOrderByTernaryDoesNotLeakReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_orderby_greater_than_local_function");
@@ -3623,7 +3623,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpQueryKeywordNamedLocalFunctionAfterLessThanInOrderByTernaryDoesNotLeakReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_orderby_less_than_local_function");
@@ -3679,7 +3679,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpQueryKeywordNamedLocalFunctionAfterBangInOrderByTernaryDoesNotLeakReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_orderby_bang_local_function");
@@ -3792,7 +3792,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpCommentSeparatedAwaitBeforeQueryKeywordNamedLocalFunctionInOrderByDoesNotLeakReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_orderby_await_local_function_comment_gap");
@@ -3849,7 +3849,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpPostfixNullForgivingBeforeParenthesizedTerminalSelectPreservesLaterEnumReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_terminal_select_after_null_forgiving");
@@ -3912,7 +3912,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpThrowBeforeQueryKeywordNamedLocalFunctionInOrderByDoesNotLeakReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_orderby_throw_select_local_function");
@@ -3968,7 +3968,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpThrowBeforeGroupNamedLocalFunctionInOrderByDoesNotLeakReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_orderby_throw_group_local_function");
@@ -4024,7 +4024,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpMultilineParenthesizedSelectAfterGreaterThanDoesNotLeakReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_orderby_multiline_select_after_greater_than");
@@ -4160,7 +4160,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_SqlModifierPrefixedObjectsResolveRealNames()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_modifier_prefixed_objects");
@@ -4270,7 +4270,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_SqlTruncateTargetsHandleOnlyAndMultipleTargets()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_truncate_targets");
@@ -4352,7 +4352,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_SqlDeleteUsingCapturesSourceReferences()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_delete_using");
@@ -4430,7 +4430,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_SqlUsingSourceMatcherSkipsDdlUsingClauses()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_using_source_matcher");
@@ -4504,7 +4504,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_SqlMergeUsingWithTargetHintStillResolvesSource()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_merge_using_target_hint");
@@ -4542,7 +4542,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_SqlMergeTempTargetWithoutIntoResolvesTargetAndSource()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_merge_temp_without_into");
@@ -4655,7 +4655,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_SqlLineEndCommentsKeepMultilineUsingSources()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_line_end_comment_using");
@@ -4715,7 +4715,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_SqlLineEndCommentsKeepUnfinishedPrefixes()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_line_end_comment_unfinished_prefixes");
@@ -4777,7 +4777,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_SqlLineEndCommentsKeepUnfinishedTargetPrefixes()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_line_end_comment_target_prefixes");
@@ -4855,7 +4855,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_SqlTruncateTempTargetsEstablishLaterReads()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_truncate_temp_target");
@@ -4898,7 +4898,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_SqlBareDollarIdentifiersStayWhole()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_bare_dollar_identifier");
@@ -4980,7 +4980,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_SqlSemicolonlessSetAndDeclareKeepTempReads()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_semicolonless_set_declare_temp");
@@ -5029,7 +5029,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_SqlSemicolonlessIfAndWhileKeepTempReads()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_semicolonless_if_while_temp");
@@ -5107,7 +5107,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_SqlDoubleQuotedDynamicSqlDoesNotEstablishTempTable()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_dynamic_temp_establishment");
@@ -5181,7 +5181,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_SqlSameLineDollarQuotedBodiesDoNotHideLaterReference()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_same_line_dollar_quoted_bodies");
@@ -5255,7 +5255,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_SqlMultilineSingleQuotedStringsStayOpaque()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_multiline_single_quoted_strings");
@@ -5300,7 +5300,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_SqlNonCodeRegionsDoNotLeakPhantomReference()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_non_code_regions");
@@ -5354,7 +5354,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpMultilineThrowBeforeGroupDoesNotLeakReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_orderby_multiline_throw_group_local_function");
@@ -5469,7 +5469,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpPostfixIncrementBeforeParenthesizedTerminalSelectPreservesLaterEnumReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_terminal_select_after_postfix_increment");
@@ -5526,7 +5526,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpNullableArrayRankSuffixBeforeParenthesizedTerminalSelectPreservesLaterEnumReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_terminal_select_after_nullable_array_rank_suffix");
@@ -5583,7 +5583,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpNullableTupleSuffixBeforeParenthesizedTerminalSelectPreservesLaterEnumReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_terminal_select_after_nullable_tuple_suffix");
@@ -5640,7 +5640,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpCastedLocalSelectCallInOrderByDoesNotLeakReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_orderby_casted_select_local_function");
@@ -5696,7 +5696,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpSimpleIdentifierCastedLocalSelectCallInOrderByPreservesLaterEnumReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_orderby_simple_casted_select_local_function");
@@ -5762,7 +5762,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpMultilineSimpleIdentifierCastedLocalSelectCallInOrderByPreservesLaterEnumReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_orderby_multiline_simple_casted_select_local_function");
@@ -5885,7 +5885,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpParenthesizedCoalesceOrderByBeforeParenthesizedTerminalSelectPreservesLaterEnumReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_orderby_coalesce_before_parenthesized_select");
@@ -5941,7 +5941,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpParenthesizedQualifiedMemberAccessBeforeParenthesizedTerminalSelectPreservesOnlyRealEnumReferences()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_qualified_member_access_before_parenthesized_select");
@@ -5997,7 +5997,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpLowercaseAliasCastedLocalSelectCallInOrderByPreservesLaterEnumReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_orderby_lowercase_alias_casted_select_local_function");
@@ -6059,7 +6059,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpParenthesizedKeywordNamedParameterBeforeParenthesizedTerminalSelectPreservesLaterEnumReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_keyword_named_parameter_before_parenthesized_select");
@@ -6172,7 +6172,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpParenthesizedUppercaseConstantBeforeParenthesizedTerminalSelectPreservesLaterEnumReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_uppercase_constant_before_parenthesized_select");
@@ -6229,7 +6229,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpParenthesizedTerminalSelectAfterGenericClosePreservesLaterEnumReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_terminal_select_after_generic_close");
@@ -6283,7 +6283,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpNestedQueryBeforeParenthesizedOrderByCommaPreservesOnlyTrailingEnumReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_nested_query_parenthesized_orderby_collision");
@@ -6346,7 +6346,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpTerminalSelectIdentifierNamedDescendingPreservesLaterEnumReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_terminal_select_descending_identifier");
@@ -8880,7 +8880,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpCommentSeparatedMultiLineCaseUsingStaticConstantPattern_StaysSuppressed()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_comment_separated_multiline_case_constant_pattern_exact_suppressed");
@@ -8959,7 +8959,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpBlankLineSeparatedMultiLineCaseUsingStaticConstantPattern_StaysSuppressed()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_blank_line_multiline_case_constant_pattern_exact_suppressed");
@@ -9038,7 +9038,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_CSharpLongMultiLineCaseUsingStaticConstantPattern_NonExactKeepsRows_ExactSuppressesAll()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_long_multiline_case_constant_pattern_suppressed");
@@ -9174,7 +9174,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpQualifiedConstantPatternSameFileEnumMemberSitesStaySuppressed()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_qualified_constant_pattern_same_file_enum_member_sites_suppressed");
@@ -9809,7 +9809,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpSwitchExpressionLaterArmAfterWhenGuardStaysVisible()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_switch_expression_later_arm_after_when");
@@ -9854,7 +9854,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Theory]
+    [ProductionRuntimeTheory]
     [InlineData("Point { X: < 0 } => 1,")]
     [InlineData("Point { X: > 0 } => 1,")]
     public void RunReferences_ExactJson_CSharpSwitchExpressionLaterArmAfterRelationalPatternStaysVisible(string previousArm)
@@ -9949,7 +9949,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpCrossFileSameNamespaceTypePatternStaysVisible()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_cross_file_same_namespace_type_pattern_visible");
@@ -10050,7 +10050,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpUsingNamespaceImportPatternStaysVisible()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_using_namespace_import_pattern_visible");
@@ -10147,7 +10147,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpSameFileFileTypePatternStaysVisible()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_same_file_file_type_pattern_visible");
@@ -10396,7 +10396,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpUsingStaticConstantPatternsStaySuppressedWhenContextClamped()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_using_static_constant_pattern_clamped");
@@ -10547,7 +10547,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunReferences_ExactJson_CSharpUsingStaticNestedSameNameTypePatternStaysVisible()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_using_static_nested_same_name_type_pattern_visible");

@@ -17,6 +17,8 @@ affected:
   - tests/CodeIndex.Tests/ProductionRuntimeFactAttribute.cs
   - tests/CodeIndex.Tests/ProductionRuntimeFactAttributeTests.cs
   - tests/CodeIndex.Tests/ProductionRuntimeTestTarget.cs
+  - tests/CodeIndex.Tests/ProductionRuntimeTheoryAttribute.cs
+  - tests/CodeIndex.Tests/QueryCommandRunnerReferencesTests.cs
   - tests/CodeIndex.Tests/QueryCommandRunnerTests.cs
   - tests/CodeIndex.Tests/DbDebugTests.cs
   - tests/CodeIndex.Tests/PostExtractionHookTests.cs
@@ -36,6 +38,7 @@ affected:
 - Non-primary Build and Test lanes now restore only the matrix target framework, and `.NET 9` SDK setup is skipped outside the primary and `net9.0` compatibility lanes.
 - Installer snippet tests now run only on the production `net8.0` test target because `install.sh` is target-framework independent, avoiding duplicate bash subprocess coverage in the `net9.0` compatibility lane.
 - Heavy post-extraction hook worker integration tests now run only on the `net8.0` production target, and their timeout/cancellation sentinel delays are shorter while still exceeding the callback budgets they guard.
+- `RunBuiltCli` reference-query subprocess tests now run only on the `net8.0` production target when the subprocess resolves to the production CLI, while direct in-process reference-query tests remain cross-target.
 
 ## 日本語
 
@@ -50,3 +53,4 @@ affected:
 - Build and Test の non-primary lane は matrix の target framework だけを restore し、`.NET 9` SDK setup は primary lane と `net9.0` compatibility lane 以外では skip するようにしました。
 - installer snippet test は、`install.sh` が target framework 非依存であることに合わせて production target の `net8.0` でのみ実行し、`net9.0` compatibility lane で bash subprocess coverage を重複実行しないようにしました。
 - 重い post-extraction hook worker integration test は `net8.0` production target でのみ実行し、timeout / cancellation の sentinel delay も guard 対象の callback budget を超える範囲で短縮しました。
+- `RunBuiltCli` を使う reference-query subprocess test は、subprocess が production CLI に解決される場合に `net8.0` production target でのみ実行し、direct in-process の reference-query test は cross-target のままにしました。
