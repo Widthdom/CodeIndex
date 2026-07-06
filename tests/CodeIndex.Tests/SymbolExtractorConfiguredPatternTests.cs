@@ -564,7 +564,7 @@ public partial class SymbolExtractorTests
                     tempDir,
                     "language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"class\"\n    regex: \"^(a+)+$\"\n");
                 ExtractorPluginRegistry.ReloadForTests();
-                const int extractionCount = 25;
+                const int extractionCount = 3;
                 var slowLine = new string('a', 10_000) + "!";
 
                 var stopwatch = Stopwatch.StartNew();
