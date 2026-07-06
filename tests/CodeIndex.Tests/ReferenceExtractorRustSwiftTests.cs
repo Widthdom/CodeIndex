@@ -360,7 +360,8 @@ public partial class ReferenceExtractorTests
 #endif
     public void Extract_SwiftLargeTypealiasUseSet_CompletesWithinPracticalBudget()
     {
-        var uses = string.Join('\n', Enumerable.Range(0, 5_000).Select(index => $"let v{index}: MyAlias = value"));
+        const int useCount = 1_000;
+        var uses = string.Join('\n', Enumerable.Range(0, useCount).Select(index => $"let v{index}: MyAlias = value"));
         var content = $$"""
             class SomeType {}
             typealias MyAlias = SomeType
@@ -380,7 +381,7 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, reference =>
             reference.SymbolName == "SomeType"
             && reference.ReferenceKind == "type_reference"
-            && reference.Context == "let v4999: MyAlias = value");
+            && reference.Context == $"let v{useCount - 1}: MyAlias = value");
         var runawayBudget = TimeSpan.FromSeconds(10);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,

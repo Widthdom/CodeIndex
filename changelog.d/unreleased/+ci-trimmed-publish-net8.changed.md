@@ -32,6 +32,8 @@ affected:
   - tests/CodeIndex.Tests/QueryCommandRunnerReferencesTests.cs
   - tests/CodeIndex.Tests/QueryCommandRunnerTests.cs
   - tests/CodeIndex.Tests/DbDebugTests.cs
+  - tests/CodeIndex.Tests/ReferenceExtractorRustSwiftTests.cs
+  - tests/CodeIndex.Tests/ReferenceExtractorTypeScriptTests.cs
   - tests/CodeIndex.Tests/PostExtractionHookTests.cs
   - tests/CodeIndex.Tests/ProgramCliTests.cs
   - tests/CodeIndex.Tests/QueryCommandRunnerImpactTests.cs
@@ -60,6 +62,7 @@ affected:
 - Configured-pattern regex timeout suppression tests now re-run only enough extractions to prove the timed-out pattern was disabled.
 - Impact zero-result JSON stability tests now keep both zero-result shapes but use fewer repeated temp project iterations.
 - Git external-process integration tests, including direct git process runner diagnostics, now run only on the `net8.0` test target while pure `.git` metadata parsing and trusted-candidate enumeration remain cross-target.
+- TypeScript and Swift type-alias reference budget guards now use smaller large-use fixtures while still checking the first and last generated alias references.
 
 ## 日本語
 
@@ -81,3 +84,4 @@ affected:
 - configured-pattern regex timeout suppression test は、timeout 済み pattern が無効化されたことを確認するのに必要な回数だけ再抽出するようにしました。
 - impact zero-result JSON stability test は、2種類の zero-result shape を維持しつつ temp project 反復回数を減らしました。
 - direct git process runner diagnostics を含む Git の external-process integration test は `net8.0` test target だけで実行し、純粋な `.git` metadata parsing と trusted-candidate enumeration は cross-target のまま維持するようにしました。
+- TypeScript / Swift の type-alias reference budget guard は、先頭と末尾の generated alias reference を確認しつつ、大規模 fixture の use 数を減らしました。
