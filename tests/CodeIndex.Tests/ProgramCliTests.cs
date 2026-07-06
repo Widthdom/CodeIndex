@@ -16,7 +16,7 @@ namespace CodeIndex.Tests;
 /// </summary>
 public class ProgramCliTests
 {
-    [Theory]
+    [ProductionRuntimeTheory]
     [InlineData("mcp", "--db", "Error: --db requires a value.")]
     [InlineData("mcp", "--db", "--json", "Error: --db requires a value.")]
     [InlineData("mcp", "--since", "nope", "Error: could not parse --since value 'nope' as a date/time.")]
@@ -35,7 +35,7 @@ public class ProgramCliTests
         Assert.DoesNotContain("MCP server running", stderr);
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Mcp_UnsupportedOptionReturnUsageError()
     {
         var (exitCode, _, stderr) = RunCliInSubprocess(["mcp", "--json"]);
@@ -46,7 +46,7 @@ public class ProgramCliTests
         Assert.DoesNotContain("Warning: unknown option", stderr);
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Mcp_HttpOversizedLimitEnvironmentReturnsUsageError()
     {
         var oversized = (HttpMcpTransport.MaxConfiguredRequestBodyBytes + 1).ToString(CultureInfo.InvariantCulture);
@@ -64,7 +64,7 @@ public class ProgramCliTests
         Assert.DoesNotContain("HTTP transport listening", stderr);
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Mcp_DbAcceptsLeadingDoubleDashPathValueViaInlineLiteral()
     {
         var (exitCode, _, stderr) = RunCliInSubprocess(["mcp", "--db=--tmp.db"]);
@@ -73,7 +73,7 @@ public class ProgramCliTests
         Assert.DoesNotContain("requires a value", stderr);
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Mcp_DbAcceptsRecognizedOptionTokenViaInlineValue()
     {
         var (exitCode, _, stderr) = RunCliInSubprocess(["mcp", "--db=--json"]);
@@ -82,7 +82,7 @@ public class ProgramCliTests
         Assert.DoesNotContain("requires a value", stderr);
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Mcp_DbRejectsSeparatedUnknownDoubleDashValue()
     {
         var (exitCode, _, stderr) = RunCliInSubprocess(["mcp", "--db", "--mystery"]);
@@ -93,7 +93,7 @@ public class ProgramCliTests
         Assert.Contains("Usage: cdidx mcp [--db <path>]", stderr);
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Mcp_DbRejectsEmptyInlineValue()
     {
         var (exitCode, _, stderr) = RunCliInSubprocess(["mcp", "--db="]);
@@ -103,7 +103,7 @@ public class ProgramCliTests
         Assert.Contains("Usage: cdidx mcp [--db <path>]", stderr);
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Symbols_NameHelpLikeValueReturnsUsageError()
     {
         var (exitCode, stdout, stderr) = RunCliInSubprocess(["symbols", "--name", "-h"]);
@@ -114,7 +114,7 @@ public class ProgramCliTests
         Assert.DoesNotContain("██████╗", stderr);
     }
 
-    [Theory]
+    [ProductionRuntimeTheory]
     [InlineData("--quiet")]
     [InlineData("-q")]
     [InlineData("--silent")]
@@ -138,7 +138,7 @@ public class ProgramCliTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void QueryQuietEnvironment_SuppressesVerboseStderr()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_program_quiet_env");
@@ -161,7 +161,7 @@ public class ProgramCliTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void QueryQuietFlag_PreservesErrorLines()
     {
         var missingDbPath = Path.Combine(Path.GetTempPath(), $"cdidx_missing_{Guid.NewGuid():N}.db");
@@ -174,7 +174,7 @@ public class ProgramCliTests
         Assert.DoesNotContain("Hint:", stderr);
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Run_UnhandledExceptionReturnsUnhandledExitCode()
     {
         lock (TestConsoleLock.Gate)
@@ -201,7 +201,7 @@ public class ProgramCliTests
         }
     }
 
-    [Theory]
+    [ProductionRuntimeTheory]
     [InlineData(5)]
     [InlineData(6)]
     [InlineData(8)]
@@ -230,7 +230,7 @@ public class ProgramCliTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Run_UnhandledPermanentSqliteExceptionReturnsDatabaseExitCode()
     {
         lock (TestConsoleLock.Gate)
@@ -256,7 +256,7 @@ public class ProgramCliTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Completions_HelpLikeValueReturnsCompletionsError()
     {
         var (exitCode, stdout, stderr) = RunCliInSubprocess(["--completions", "-h"]);
@@ -268,7 +268,7 @@ public class ProgramCliTests
         Assert.Contains("Usage: cdidx --completions <shell>", stderr);
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Completions_MissingShellReturnsUsageError()
     {
         var (exitCode, stdout, stderr) = RunCliInSubprocess(["--completions"]);
@@ -281,7 +281,7 @@ public class ProgramCliTests
         Assert.DoesNotContain("Unknown command: --completions", stderr);
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Completions_JsonFlagReturnsStructuredUnsupportedError()
     {
         var (exitCode, stdout, stderr) = RunCliInSubprocess(["--completions", "--json"]);
@@ -294,7 +294,7 @@ public class ProgramCliTests
         Assert.Contains("powershell", document.RootElement.GetProperty("hint").GetString());
     }
 
-    [Theory]
+    [ProductionRuntimeTheory]
     [InlineData("index", "cdidx index <projectPath>")]
     [InlineData("search", "cdidx search <query>")]
     [InlineData("references", "cdidx references <query>")]
@@ -343,7 +343,7 @@ public class ProgramCliTests
         Assert.DoesNotContain("██████╗", stdout);
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void ExportCtags_WritesTagsFileFromIndexedSymbols()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_export_ctags");
@@ -368,7 +368,7 @@ public class ProgramCliTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void ExportImportArchive_RestoresCodeIndexDatabase()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_export_archive");
@@ -396,7 +396,7 @@ public class ProgramCliTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void ExportArchive_ManifestIncludesReadinessAndSummaryMetadata_Issue3549()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_export_manifest_metadata");
@@ -459,7 +459,7 @@ public class ProgramCliTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void ImportArchive_RejectsManifestFileCountMismatch_Issue3549()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_import_manifest_count_mismatch");
@@ -489,7 +489,7 @@ public class ProgramCliTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void ImportArchive_AcceptsOlderManifestWithoutSummaryMetadata_Issue3549()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_import_old_manifest");
@@ -537,7 +537,7 @@ public class ProgramCliTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void ImportArchive_DryRunJsonValidatesWithoutReplacingDestination_Issue3550()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_import_dry_run");
@@ -590,7 +590,7 @@ public class ProgramCliTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void ImportArchive_RejectsDatabaseHashMismatch()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_import_hash_mismatch");
@@ -620,7 +620,7 @@ public class ProgramCliTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void ImportArchive_RejectsManifestUserVersionMismatch()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_import_user_version_mismatch");
@@ -646,7 +646,7 @@ public class ProgramCliTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void ExportArchive_RejectsSourceDatabaseAsOutput()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_export_same_db");
@@ -667,7 +667,7 @@ public class ProgramCliTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void ImportArchive_RemovesStaleDestinationSidecars()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_import_sidecars");
@@ -697,7 +697,7 @@ public class ProgramCliTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Doctor_PrintsRedactedEnvironmentSummary()
     {
         var (exitCode, stdout, stderr) = RunCliInSubprocess(
@@ -732,7 +732,7 @@ public class ProgramCliTests
         Assert.DoesNotContain("private-key-value", stdout);
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void TopLevelHelp_DefaultIsBriefAndExtendedHelpKeepsFullReference()
     {
         var (briefExit, briefStdout, briefStderr) = RunCliInSubprocess(["--help"]);
@@ -751,7 +751,7 @@ public class ProgramCliTests
         Assert.Contains("--limit <n>, --top <n>", fullStdout);
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void HelpFlags_PrintsFlagReferenceOnly()
     {
         var (exitCode, stdout, stderr) = RunCliInSubprocess(["--help-flags"]);
@@ -764,7 +764,7 @@ public class ProgramCliTests
         Assert.DoesNotContain("Commands:", stdout);
     }
 
-    [Theory]
+    [ProductionRuntimeTheory]
     [InlineData("completions")]
     [InlineData("completions", "bash", "extra")]
     public void CompletionsCommand_ErrorsUseCommandUsage(params string[] args)
@@ -777,7 +777,7 @@ public class ProgramCliTests
         Assert.DoesNotContain("Usage: cdidx --completions <shell>", stderr);
     }
 
-    [Theory]
+    [ProductionRuntimeTheory]
     [InlineData(CommandExitCodes.UsageError, "license does not support --json or --json=<format>.", "license", "--json")]
     [InlineData(CommandExitCodes.UsageError, "license does not support --json or --json=<format>.", "license", "--json=array")]
     [InlineData(CommandExitCodes.UsageError, "--json is not supported for completions.", "completions", "--json")]
@@ -794,7 +794,7 @@ public class ProgramCliTests
         Assert.Equal(expectedMessage, document.RootElement.GetProperty("message").GetString());
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Mcp_JsonFlagReturnsExplicitUnsupportedError()
     {
         var (exitCode, stdout, stderr) = RunCliInSubprocess(["mcp", "--json"]);
@@ -806,7 +806,7 @@ public class ProgramCliTests
         Assert.Contains("Note: --json is not supported", stderr);
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Completions_ExtraArgsReturnUsageError()
     {
         var (exitCode, stdout, stderr) = RunCliInSubprocess(["--completions", "bash", "extra"]);
@@ -818,7 +818,7 @@ public class ProgramCliTests
         Assert.Contains("Usage: cdidx --completions <shell>", stderr);
     }
 
-    [Theory]
+    [ProductionRuntimeTheory]
     [InlineData("license")]
     [InlineData("--license")]
     public void License_PrintsLicenseSummary(string arg)
@@ -835,7 +835,7 @@ public class ProgramCliTests
         Assert.Contains("INTEGRATION_POLICY.md", stdout);
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Suggestions_ListFiltersAndPrintsStoredSuggestions()
     {
         using var fixture = SuggestionFixture.Create();
@@ -852,7 +852,7 @@ public class ProgramCliTests
         Assert.DoesNotContain("Improve macro handling", stdout);
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Suggestions_ListJsonSupportsLimitAndOffset()
     {
         using var fixture = SuggestionFixture.Create();
@@ -873,7 +873,7 @@ public class ProgramCliTests
         Assert.Equal("Middle suggestion", doc.RootElement.GetProperty("title").GetString());
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Suggestions_ListDefaultVerbAcceptsTopLevelJsonFlags_Issue4171()
     {
         using var fixture = SuggestionFixture.Create();
@@ -894,7 +894,7 @@ public class ProgramCliTests
         Assert.Equal("Middle suggestion", doc.RootElement.GetProperty("title").GetString());
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Suggestions_ListJsonEmptyReturnsArray_Issue3896()
     {
         using var fixture = SuggestionFixture.Create();
@@ -910,7 +910,7 @@ public class ProgramCliTests
         Assert.Equal(0, doc.RootElement.GetArrayLength());
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Suggestions_ListDefaultVerbJsonEmptyReturnsArray_Issue4171()
     {
         using var fixture = SuggestionFixture.Create();
@@ -926,7 +926,7 @@ public class ProgramCliTests
         Assert.Equal(0, doc.RootElement.GetArrayLength());
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Suggestions_ListUsesSharedDataDirResolutionWhenDbIsOmitted()
     {
         using var fixture = SuggestionFixture.Create();
@@ -945,7 +945,7 @@ public class ProgramCliTests
         Assert.Equal(record.Hash, doc.RootElement.GetProperty("id").GetString());
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Suggestions_ShowJsonResolvesShortId()
     {
         using var fixture = SuggestionFixture.Create();
@@ -964,7 +964,7 @@ public class ProgramCliTests
         Assert.False(doc.RootElement.TryGetProperty("last_submit_error", out _));
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Suggestions_ShowJsonMissingIdReturnsStructuredError_Issue3896()
     {
         using var fixture = SuggestionFixture.Create();
@@ -978,7 +978,7 @@ public class ProgramCliTests
         Assert.Equal("Suggestion not found: missing", doc.RootElement.GetProperty("message").GetString());
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Suggestions_ShowRejectsPaginationFlags()
     {
         using var fixture = SuggestionFixture.Create();
@@ -993,7 +993,7 @@ public class ProgramCliTests
         Assert.Contains("--limit and --offset can only be used", stderr);
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Suggestions_ListJsonIncludesSubmitDiagnostics()
     {
         using var fixture = SuggestionFixture.Create();
@@ -1017,7 +1017,7 @@ public class ProgramCliTests
         Assert.Equal("API 422: validation failed", doc.RootElement.GetProperty("last_submit_error").GetString());
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Suggestions_ExportJsonSupportsLimitAndOffset()
     {
         using var fixture = SuggestionFixture.Create();
@@ -1038,7 +1038,7 @@ public class ProgramCliTests
         Assert.Equal(oldest.Hash, suggestions[1].GetProperty("id").GetString());
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Suggestions_ListRejectsInvalidLimit()
     {
         using var fixture = SuggestionFixture.Create();
@@ -1053,7 +1053,7 @@ public class ProgramCliTests
         Assert.Contains("--limit must be a non-negative integer", stderr);
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Suggestions_ExportMarkdownIncludesFilteredSuggestions()
     {
         using var fixture = SuggestionFixture.Create();
@@ -1080,7 +1080,7 @@ public class ProgramCliTests
         Assert.DoesNotContain("Add parser support", stdout);
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Suggestions_ExportJsonCapsDetailedBodyFields()
     {
         using var fixture = SuggestionFixture.Create();
@@ -1108,7 +1108,7 @@ public class ProgramCliTests
         AssertCappedSuggestionText(suggestion.GetProperty("tool_invocation_context").GetString());
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Suggestions_ExportMarkdownCapsDetailedBodyFields()
     {
         using var fixture = SuggestionFixture.Create();
@@ -1129,7 +1129,7 @@ public class ProgramCliTests
         Assert.Contains("[truncated]", stdout);
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Suggestions_ExportIssueDraftsIncludesEvidenceAndDuplicatePreflight()
     {
         using var fixture = SuggestionFixture.Create();
@@ -1182,7 +1182,7 @@ public class ProgramCliTests
         Assert.Equal("title_exact", preflight.GetProperty("matches")[0].GetProperty("reason").GetString());
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Suggestions_ExportIssueDraftsDuplicateThresholdFiltersMatches_Issue3827()
     {
         using var fixture = SuggestionFixture.Create();
@@ -1236,7 +1236,7 @@ public class ProgramCliTests
         Assert.Equal(0.45, customMatch.GetProperty("score").GetDouble());
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Suggestions_DuplicateTuningRequiresIssueDraftExport_Issue3827()
     {
         using var fixture = SuggestionFixture.Create();
@@ -1251,7 +1251,7 @@ public class ProgramCliTests
         Assert.Contains("suggestions export --format issue-drafts", stderr);
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Suggestions_ExportIssueDraftsGitHubOpenIssuesRequiresRepository_Issue3449()
     {
         using var fixture = SuggestionFixture.Create();
@@ -1272,7 +1272,7 @@ public class ProgramCliTests
         Assert.DoesNotContain("could not read --open-issues file 'github'", stderr);
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Suggestions_ExportIssueDraftsRedactsSensitiveSampledTitle()
     {
         using var fixture = SuggestionFixture.Create();
@@ -1297,7 +1297,7 @@ public class ProgramCliTests
         Assert.Contains("REDACTED:credential", title!);
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Suggestions_ExportIssueDraftsCapsRenderedBody()
     {
         using var fixture = SuggestionFixture.Create();
@@ -1326,7 +1326,7 @@ public class ProgramCliTests
         Assert.Contains("[truncated]", body);
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Suggestions_ExportIssueDraftsRejectsOversizedOpenIssuesPreflight()
     {
         using var fixture = SuggestionFixture.Create();
@@ -1348,7 +1348,7 @@ public class ProgramCliTests
         Assert.Contains("exceeds maximum supported size", stderr);
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Suggestions_ExportIssueDraftsRejectsTooDeepOpenIssuesPreflight()
     {
         using var fixture = SuggestionFixture.Create();

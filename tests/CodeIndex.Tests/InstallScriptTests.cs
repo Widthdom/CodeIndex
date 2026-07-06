@@ -22,7 +22,7 @@ public sealed class InstallScriptTests : IDisposable
         TestProjectHelper.DeleteDirectory(_tempRoot);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void Uninstall_RemovesInstalledPayloadAndLeavesProjectData()
     {
         if (OperatingSystem.IsWindows())
@@ -51,7 +51,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(installDir, "LICENSES")));
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void UninstallPurgeCache_RemovesOnlyValidatedCacheDirectory_Issue3499()
     {
         if (OperatingSystem.IsWindows())
@@ -86,7 +86,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.True(File.Exists(Path.Combine(siblingCache, "keep.txt")));
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void Uninstall_ReportsFileRemovalFailureWithoutSuccessMessage_Issue3500()
     {
         if (OperatingSystem.IsWindows())
@@ -118,7 +118,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.True(Directory.Exists(Path.Combine(installDir, "cdidx")));
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void Uninstall_ReportsDirectoryRemovalFailureWithoutSuccessMessage_Issue3500()
     {
         if (OperatingSystem.IsWindows())
@@ -157,7 +157,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.True(Directory.Exists(licensesDir));
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void UninstallPurgeCache_RejectsUnsafeCacheRootBeforeRemovingInstall_Issue3499()
     {
         if (OperatingSystem.IsWindows())
@@ -187,7 +187,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.True(File.Exists(binaryPath));
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void PathProfileUpdate_BacksUpAndAtomicallyReplacesProfile_Issue3501()
     {
         if (OperatingSystem.IsWindows())
@@ -222,7 +222,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Empty(Directory.GetFiles(home, ".zshrc.cdidx-tmp.*"));
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void PathProfileUpdate_PreservesSymlinkedProfile_Issue3501()
     {
         if (OperatingSystem.IsWindows())
@@ -262,7 +262,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Empty(Directory.GetFiles(home, ".zshrc.cdidx-backup.*"));
     }
 
-    [Theory]
+    [ProductionCliTheory]
     [InlineData("/")]
     [InlineData("/usr/local")]
     [InlineData("/tmp")]
@@ -295,7 +295,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("CDIDX_ALLOW_RISKY_INSTALL_DIR=1", stderr);
     }
 
-    [Theory]
+    [ProductionCliTheory]
     [InlineData("")]
     [InlineData("bin")]
     [InlineData("../bin")]
@@ -323,7 +323,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("Refusing", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void Main_DefaultHomeLocalBin_RemainsAllowed_Issue3511()
     {
         if (OperatingSystem.IsWindows())
@@ -355,7 +355,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("/.local/bin", stdout);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void Main_RiskyInstallDir_ExplicitOverrideAllows_Issue3511()
     {
         if (OperatingSystem.IsWindows())
@@ -385,7 +385,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("DOWNLOAD:/usr/local/bin", stdout);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void Uninstall_RiskyHomeInstallDir_RejectsBeforeRemoval_Issue3511()
     {
         if (OperatingSystem.IsWindows())
@@ -415,7 +415,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.True(File.Exists(binaryPath));
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void RemovePromotedFiles_RemovesExpectedAssets_Issue3503()
     {
         if (OperatingSystem.IsWindows())
@@ -441,7 +441,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(installDir, "LICENSES")));
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void RemovePromotedFiles_RejectsUnsafeAssetBeforeDeletingAny_Issue3503()
     {
         if (OperatingSystem.IsWindows())
@@ -465,7 +465,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.True(File.Exists(versionPath));
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void DownloadAndInstall_SecuresStageDirectoryAfterMktemp()
     {
         var script = File.ReadAllText(Path.Combine(GetRepositoryRoot(), "install.sh"));
@@ -478,7 +478,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.True(cleanupIndex > chmodIndex);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void InstallScript_IsGeneratedFromFocusedModules()
     {
         var root = GetRepositoryRoot();
@@ -489,7 +489,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Equal(NormalizeNewlines(generated), NormalizeNewlines(script));
     }
 
-    [Theory]
+    [ProductionCliTheory]
     [InlineData("20-installer.sh", "download_and_install()")]
     [InlineData("40-uninstall.sh", "uninstall_cdidx()")]
     [InlineData("50-self-test.sh", "run_local_mirror_self_test()")]
@@ -502,7 +502,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains(entrypoint, moduleText);
     }
 
-    [Theory]
+    [ProductionCliTheory]
     [InlineData("linux", "x64", "linux-x64", "libe_sqlite3.so")]
     [InlineData("osx", "arm64", "osx-arm64", "libe_sqlite3.dylib")]
     public void Main_WithoutExplicitVersion_SkipsDownloadWhenLatestAlreadyInstalled(string osName, string archName, string rid, string nativeAssetName)
@@ -569,7 +569,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("DOWNLOAD_SHOULD_NOT_RUN", stdout);
     }
 
-    [Theory]
+    [ProductionCliTheory]
     [InlineData("linux", "x64", "linux-x64", "libe_sqlite3.so")]
     [InlineData("osx", "arm64", "osx-arm64", "libe_sqlite3.dylib")]
     public void Main_WithoutExplicitVersion_UpgradesHealthyOlderInstallToLatest(string osName, string archName, string rid, string nativeAssetName)
@@ -629,7 +629,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("DOWNLOAD_RAN", stdout);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void Main_WithoutExplicitVersion_DoesNotShortCircuitBrokenZeroVersionInstall()
     {
         if (OperatingSystem.IsWindows())
@@ -686,7 +686,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("Skipping latest-release lookup", stdout);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void Main_ExplicitSameVersionBrokenInstall_ReinstallsInsteadOfSkipping()
     {
         if (OperatingSystem.IsWindows())
@@ -725,7 +725,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("CURL_SHOULD_NOT_RUN", stdout);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void Main_ExplicitSameVersionHealthyInstall_ReinstallsInsteadOfSkipping()
     {
         if (OperatingSystem.IsWindows())
@@ -765,7 +765,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("CURL_SHOULD_NOT_RUN", stdout);
     }
 
-    [Theory]
+    [ProductionCliTheory]
     [InlineData("linux", "x64", "linux-x64")]
     [InlineData("osx", "arm64", "osx-arm64")]
     public void Main_WithoutExplicitVersion_LatestMatchingBrokenInstall_ReinstallsInsteadOfSkipping(string osName, string archName, string rid)
@@ -826,7 +826,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("Skipping latest-release lookup", stdout);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ResolveVersion_RateLimitedLatestLookup_PrintsSpecificError()
     {
         if (OperatingSystem.IsWindows())
@@ -866,7 +866,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("Check your network connection", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ResolveVersion_LatestLookupResponseTooLarge_FailsBeforeShellParsing()
     {
         if (OperatingSystem.IsWindows())
@@ -909,7 +909,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("Version: v9.9.9", stdout);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ResolveVersion_ForbiddenLatestLookup_PrintsProxyAndVersionPinHints()
     {
         if (OperatingSystem.IsWindows())
@@ -953,7 +953,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("CONNECT tunnel failed, response 403", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ResolveVersion_ForbiddenConfiguredLatestLookup_PrintsConfiguredApiHints()
     {
         if (OperatingSystem.IsWindows())
@@ -1001,7 +1001,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("CONNECT tunnel failed, response 403", stderr);
     }
 
-    [Theory]
+    [ProductionCliTheory]
     [InlineData("curl: (56) CONNECT tunnel failed, response 403")]
     [InlineData("curl: (56) Received HTTP code 403 from proxy after CONNECT")]
     public void ResolveVersion_TunnelForbiddenLatestLookup_PrintsProxyDenyGuidance(string curlStderr)
@@ -1030,7 +1030,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("Network error reaching GitHub API while fetching", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ResolveVersion_TunnelForbiddenLatestLookup_CapsCurlStderrBeforePrinting()
     {
         if (OperatingSystem.IsWindows())
@@ -1055,7 +1055,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("TAIL_SHOULD_NOT_APPEAR", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void DownloadAndInstall_ForbiddenGitHubAssetDownload_PrintsGitHubAndAllowListHints()
     {
         if (OperatingSystem.IsWindows())
@@ -1111,7 +1111,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("allow-list at least one artifact host path", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void VerifyReleaseAttestation_GhAvailable_VerifiesArtifactWithRepository()
     {
         if (OperatingSystem.IsWindows())
@@ -1141,7 +1141,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Equal($"attestation verify {artifactPath} -R Widthdom/CodeIndex{Environment.NewLine}", File.ReadAllText(logPath));
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void VerifyReleaseAttestation_RequiredAndGhFails_Aborts()
     {
         if (OperatingSystem.IsWindows())
@@ -1171,7 +1171,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("GitHub provenance attestation verification failed for sha256sums.txt", stderr);
     }
 
-    [Theory]
+    [ProductionCliTheory]
     [InlineData("curl: (56) CONNECT tunnel failed, response 403")]
     [InlineData("curl: (56) Received HTTP code 403 from proxy after CONNECT")]
     public void DownloadAndInstall_TunnelForbiddenAssetDownload_PrintsProxyDenyGuidance(string curlStderr)
@@ -1210,7 +1210,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("Network error reaching GitHub release host while fetching", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void DownloadAndInstall_ForbiddenConfiguredAssetDownload_PrintsConfiguredMirrorHints()
     {
         if (OperatingSystem.IsWindows())
@@ -1267,7 +1267,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("allow-list at least one artifact host path", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void Main_RateLimitedLatestLookup_StopsBeforeSuccessPath()
     {
         if (OperatingSystem.IsWindows())
@@ -1316,7 +1316,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("GitHub API rate limit exceeded while fetching", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void Main_NetworkFailureDuringLatestLookup_StopsBeforeSuccessPath()
     {
         if (OperatingSystem.IsWindows())
@@ -1350,7 +1350,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("curl exit 7", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void DownloadAndInstall_MissingAsset_DoesNotCreateFilesInEmptyInstallDir()
     {
         if (OperatingSystem.IsWindows())
@@ -1441,7 +1441,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("Required runtime asset missing from release tarball: libe_sqlite3.so", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void DownloadAndInstall_OptionalLicenseAssetsAreInstalledWhenPresent()
     {
         if (OperatingSystem.IsWindows())
@@ -1544,7 +1544,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Equal(string.Empty, stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void DownloadAndInstall_ReinstallReplacesExistingOptionalDirectories()
     {
         if (OperatingSystem.IsWindows())
@@ -1621,7 +1621,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(installDir, "LICENSES", "LICENSES")));
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void DownloadAndInstall_LegacyArchiveWithoutManifestStillInstalls()
     {
         if (OperatingSystem.IsWindows())
@@ -1684,7 +1684,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Equal("""{"version":"1.24.5","integrity_ok":true}""" + Environment.NewLine, File.ReadAllText(Path.Combine(installDir, "version.json")));
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void DownloadAndInstall_NewArchiveWithoutManifestFails()
     {
         if (OperatingSystem.IsWindows())
@@ -1746,7 +1746,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.False(File.Exists(Path.Combine(installDir, "cdidx")));
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ValidateArchiveMembers_RejectsTraversalBeforeExtraction()
     {
         if (OperatingSystem.IsWindows())
@@ -1794,7 +1794,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.False(File.Exists(outsidePath));
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void DownloadAndInstall_ArchiveWithUnmanifestedFileFails()
     {
         if (OperatingSystem.IsWindows())
@@ -1865,7 +1865,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.False(File.Exists(Path.Combine(installDir, "LICENSES", "extra.txt")));
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void DownloadAndInstall_StageDirMktempFailure_AbortsBeforeInstallWritesUnderStrictMode()
     {
         if (OperatingSystem.IsWindows())
@@ -1964,7 +1964,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.True(!File.Exists(cpLogPath) || string.IsNullOrWhiteSpace(File.ReadAllText(cpLogPath)));
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void DownloadAndInstall_BackupDirMktempFailure_PreservesExistingHealthyInstallUnderStrictMode()
     {
         if (OperatingSystem.IsWindows())
@@ -2063,7 +2063,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Empty(Directory.GetFileSystemEntries(installDir, ".cdidx-*"));
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void DownloadAndInstall_MissingAsset_DoesNotOverwriteExistingHealthyInstall()
     {
         if (OperatingSystem.IsWindows())
@@ -2167,7 +2167,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("Required runtime asset missing from release tarball: libe_sqlite3.so", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void DownloadAndInstall_MoveFailure_RollsBackExistingHealthyInstall()
     {
         if (OperatingSystem.IsWindows())
@@ -2299,7 +2299,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("Restoring previous install", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void DownloadAndInstall_BackupMoveFailure_PreservesExistingHealthyInstall()
     {
         if (OperatingSystem.IsWindows())
@@ -2435,7 +2435,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("Install aborted before replacing the current install", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void DownloadAndInstall_RollbackFailure_PreservesRecoveryArtifacts()
     {
         if (OperatingSystem.IsWindows())
@@ -2578,7 +2578,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("Stage:", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void DownloadAndInstall_RestrictsStageAndBackupDirectories()
     {
         if (OperatingSystem.IsWindows())
@@ -2676,7 +2676,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("Failed to restrict", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void DownloadReleaseFile_Http404_PrintsHttpSpecificError()
     {
         if (OperatingSystem.IsWindows())
@@ -2718,7 +2718,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("Check your network connection", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void DownloadAndInstall_MissingChecksumEntry_PrintsActionableError()
     {
         if (OperatingSystem.IsWindows())
@@ -2789,7 +2789,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("Checksum for CodeIndex-linux-x64.tar.gz not found in sha256sums.txt.", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void CheckExisting_DifferentVersion_UsesNeutralSwitchingWording()
     {
         if (OperatingSystem.IsWindows())
@@ -2820,7 +2820,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("Upgrading cdidx from 1.10.0 to 0.99.0", stdout);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void VerifyChecksumSignature_StrictVerifyWithoutGpg_FailsClosed()
     {
         if (OperatingSystem.IsWindows())
@@ -2854,7 +2854,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("GPG signature verification is required", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void VerificationPolicy_StrictEnablesAttestationAndStrictGpg()
     {
         if (OperatingSystem.IsWindows())
@@ -2874,7 +2874,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("policy=strict attestation=1 strict=1", stdout);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void VerificationPolicy_InvalidValue_FailsDuringSource()
     {
         if (OperatingSystem.IsWindows())
@@ -2895,7 +2895,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("CDIDX_VERIFY_POLICY must be 'compat' or 'strict'", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void VerifyChecksumSignature_StrictPolicyWithoutFingerprint_FailsClosed()
     {
         if (OperatingSystem.IsWindows())
@@ -2928,7 +2928,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("no expected release signer fingerprint is configured", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void VerifyChecksumSignature_FingerprintMismatch_Fails()
     {
         if (OperatingSystem.IsWindows())
@@ -2960,7 +2960,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("GPG signature fingerprint mismatch", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void VerifyChecksumSignature_MatchingFingerprint_Succeeds()
     {
         if (OperatingSystem.IsWindows())
@@ -2992,7 +2992,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Equal(string.Empty, stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void AcquireInstallLock_WhenFlockIsAvailable_TakesNonBlockingFileLock()
     {
         if (OperatingSystem.IsWindows())
@@ -3020,7 +3020,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.True(File.Exists(Path.Combine(installDir, ".cdidx-install.lock")));
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void AcquireInstallLock_WhenFlockIsUnavailable_RefusesExistingLockDirectory()
     {
         if (OperatingSystem.IsWindows())
@@ -3053,7 +3053,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.True(Directory.Exists(Path.Combine(installDir, ".cdidx-install.lockdir")));
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void DetectPlatform_MacosX64_PrintsActionableUnsupportedRidGuidance()
     {
         if (OperatingSystem.IsWindows())
@@ -3081,7 +3081,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("Rosetta 2 with osx-arm64", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void DetectPlatform_UnsupportedArchitecture_PrintsPublishedRidPolicyAndSourceBuildGuidance()
     {
         if (OperatingSystem.IsWindows())
@@ -3111,7 +3111,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("docs/platform-support.md", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ValidatePublishedReleaseRid_UnsupportedResolvedRid_FailsBeforeDownloadWithActionableGuidance()
     {
         if (OperatingSystem.IsWindows())
@@ -3133,7 +3133,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("docs/platform-support.md", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ResolveVersion_UsesJqWhenAvailable()
     {
         if (OperatingSystem.IsWindows())
@@ -3181,7 +3181,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("Version: v9.9.9", stdout);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ResolveVersion_UsesConfiguredApiBaseUrl()
     {
         if (OperatingSystem.IsWindows())
@@ -3229,7 +3229,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("https://mirror.example/api/repos/Widthdom/CodeIndex/releases/latest", stdout);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ResolveVersion_ConfiguredApiBase403_PrintsConfiguredEndpointGuidance()
     {
         if (OperatingSystem.IsWindows())
@@ -3273,7 +3273,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("GitHub API returned HTTP 403", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void DownloadAndInstall_ConfiguredReleaseBaseNetworkFailure_PrintsConfiguredHostGuidance()
     {
         if (OperatingSystem.IsWindows())
@@ -3307,7 +3307,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("Network error reaching GitHub", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void SelfTestLocalMirror_WithoutExplicitInstallDir_UsesIsolatedTempInstallDir()
     {
         if (OperatingSystem.IsWindows())
@@ -3353,7 +3353,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("ERROR:", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void SelfTestLocalMirror_WithExplicitInstallDir_UsesRequestedInstallDir()
     {
         if (OperatingSystem.IsWindows())
@@ -3391,7 +3391,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("ERROR:", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void SelfTestLocalMirror_EmptyInstallDirEnv_StillUsesIsolatedTempInstallDir()
     {
         if (OperatingSystem.IsWindows())
@@ -3440,7 +3440,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("ERROR:", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void SelfTestLocalMirror_AddsLoopbackNoProxyAndUsesCurlNoProxy()
     {
         if (OperatingSystem.IsWindows())
@@ -3493,7 +3493,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("ERROR:", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void SelfTestLocalMirror_CustomPort_UsesConfiguredPort()
     {
         if (OperatingSystem.IsWindows())
@@ -3531,7 +3531,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("ERROR:", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void SelfTestLocalMirror_LocalMirrorStartFailure_PrintsSelfTestSpecificError()
     {
         if (OperatingSystem.IsWindows())
@@ -3565,7 +3565,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("CDIDX_LOCAL_MIRROR_PORT", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void SelfTestLocalMirror_AddressAlreadyInUse_PrintsPortSpecificGuidance()
     {
         if (OperatingSystem.IsWindows())
@@ -3597,7 +3597,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("free port", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void SelfTestLocalMirror_BindPermissionFailure_PrintsPermissionSpecificGuidance()
     {
         if (OperatingSystem.IsWindows())
@@ -3631,7 +3631,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("free port", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void SelfTestLocalMirror_CdidxInstallDirPointsAtHomeLocalBin_AbortsToProtectRealInstall()
     {
         if (OperatingSystem.IsWindows())
@@ -3672,7 +3672,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("REAL_EXISTING_BINARY", realCdidx);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void SelfTestLocalMirror_CdidxInstallDirContainingExistingCdidx_AbortsToProtectRealInstall()
     {
         if (OperatingSystem.IsWindows())
@@ -3709,7 +3709,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("REAL_EXISTING_BINARY", realCdidx);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void SelfTestLocalMirror_EnvSelfTestAllowOverwrite_IsNotHonoredAsSilentBypass()
     {
         // Regression: a pre-exported SELF_TEST_ALLOW_OVERWRITE=1 in the caller's
@@ -3761,7 +3761,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("REAL_EXISTING_BINARY", realCdidx);
     }
 
-    [Theory]
+    [ProductionCliTheory]
     [InlineData("/usr/local/bin/")]
     [InlineData("/usr/bin/")]
     [InlineData("/opt/homebrew/bin/")]
@@ -3788,7 +3788,7 @@ public sealed class InstallScriptTests : IDisposable
         _ = stderr;
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void SelfTestLocalMirror_HomeLocalBinWithTrailingSlash_IsStillRiskyAndAborts()
     {
         // A CDIDX_INSTALL_DIR of "$HOME/.local/bin/" (with trailing slash, no
@@ -3827,7 +3827,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("--self-test-allow-overwrite", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void SelfTestLocalMirror_AllowOverwriteCliFlag_ProceedsDespiteRiskyInstallDir()
     {
         if (OperatingSystem.IsWindows())
@@ -3888,7 +3888,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("Local mirror self-test aborted", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void SelfTestLocalMirror_CdidxInstallDirPointsAtFreshCustomDir_ProceedsWithoutGuard()
     {
         if (OperatingSystem.IsWindows())
@@ -3925,7 +3925,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("Local mirror self-test aborted", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void DownloadAndInstall_UsesConfiguredReleaseBaseUrl()
     {
         if (OperatingSystem.IsWindows())
@@ -4004,7 +4004,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("https://mirror.example/releases/Widthdom/CodeIndex/releases/download/v1.2.3/sha256sums.txt", stdout);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ProbeTempRoot_UnwritableTmpdir_PrintsSpecificError()
     {
         if (OperatingSystem.IsWindows())
@@ -4027,7 +4027,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("TMPDIR not usable", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void VerifyCdidxBinary_VersionMismatch_FailsBeforeSuccess()
     {
         if (OperatingSystem.IsWindows())
@@ -4053,7 +4053,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("expected 1.2.3, got 9.9.9", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void CheckPath_WhenOlderCdidxPrecedesInstallDir_WarnsAboutShadowing()
     {
         if (OperatingSystem.IsWindows())
@@ -4087,7 +4087,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("shadowing the new install", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void CheckPath_UpdatePathOptIn_AppendsProfileExportAndUpdatesCurrentPath()
     {
         if (OperatingSystem.IsWindows())
@@ -4123,7 +4123,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains($"{installDir} is not in your PATH", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReinstallReal_WithoutVersionArgument_FailsWithUsageError()
     {
         if (OperatingSystem.IsWindows())
@@ -4139,7 +4139,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("--reinstall-real requires a version argument", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReinstallReal_PrefixesBareVersionWithV()
     {
         if (OperatingSystem.IsWindows())
@@ -4182,7 +4182,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("MAIN_VERSION_ARG:v1.2.3", stdout);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReinstallReal_IgnoresCdidxInstallDirAndUsesIsolatedTempDir()
     {
         if (OperatingSystem.IsWindows())
@@ -4246,7 +4246,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain($"MAIN_INSTALL_DIR:{realInstallDir}", stdout);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReinstallReal_ExercisesVersionIndexAndSearch()
     {
         if (OperatingSystem.IsWindows())
@@ -4316,7 +4316,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("Real reinstall validation passed", stdout);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReinstallReal_BinaryMissingAfterInstall_FailsLoudly()
     {
         if (OperatingSystem.IsWindows())
@@ -4340,7 +4340,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("installed binary not found", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReinstallReal_SearchFails_AbortsWithError()
     {
         if (OperatingSystem.IsWindows())
@@ -4376,7 +4376,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("search returned a non-zero exit code", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReinstallReal_VersionMismatch_AbortsWithError()
     {
         if (OperatingSystem.IsWindows())
@@ -4407,7 +4407,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("9.9.9", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReinstallReal_VersionWithoutLeftBoundary_AbortsWithError()
     {
         if (OperatingSystem.IsWindows())
@@ -4437,7 +4437,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("expected exactly one version token v1.2.3", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReinstallReal_VersionWithTrailingDigit_AbortsWithError()
     {
         if (OperatingSystem.IsWindows())
@@ -4467,7 +4467,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("expected exactly one version token v1.2.3", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReinstallReal_SearchOutputWithoutStructuredMatch_AbortsWithError()
     {
         if (OperatingSystem.IsWindows())
@@ -4508,7 +4508,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("did not return a structured match", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReinstallReal_VersionMixedOutput_AbortsWithError()
     {
         if (OperatingSystem.IsWindows())
@@ -4549,7 +4549,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("expected exactly one version token", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReinstallReal_SearchPathPrefix_AbortsWithError()
     {
         if (OperatingSystem.IsWindows())
@@ -4596,7 +4596,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("did not return a structured match", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReinstallReal_VersionDiagnosticOnlyRequestedToken_AbortsWithError()
     {
         if (OperatingSystem.IsWindows())
@@ -4640,7 +4640,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("first non-empty line of cdidx --version must be exactly", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReinstallReal_SearchHeaderPlusDiagnosticGreet_AbortsWithError()
     {
         if (OperatingSystem.IsWindows())
@@ -4689,7 +4689,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("did not return a structured match", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReinstallReal_VersionFirstLineTrailingDiagnostic_AbortsWithError()
     {
         if (OperatingSystem.IsWindows())
@@ -4737,7 +4737,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("first non-empty line of cdidx --version must be exactly", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReinstallReal_VersionFirstLineWithBuildMetadata_AcceptsAndContinues()
     {
         if (OperatingSystem.IsWindows())
@@ -4785,7 +4785,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("first non-empty line of cdidx --version must be exactly", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReinstallReal_VersionFirstLineWithUpdateHint_AcceptsAndContinues()
     {
         if (OperatingSystem.IsWindows())
@@ -4830,7 +4830,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("first non-empty line of cdidx --version must be exactly", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReinstallReal_SearchHeaderInlineDiagnostic_AbortsWithError()
     {
         if (OperatingSystem.IsWindows())
@@ -4880,7 +4880,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("did not return a structured match", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReinstallReal_SearchIndentedDiagnosticWithoutDef_AbortsWithError()
     {
         if (OperatingSystem.IsWindows())
@@ -4928,7 +4928,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("did not return a structured match", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReinstallReal_VersionMultiLineExactFirstLinePlusDiagnostic_AbortsWithError()
     {
         if (OperatingSystem.IsWindows())
@@ -4976,7 +4976,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("must emit exactly one non-empty line", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReinstallReal_SearchHeaderLineContainsDefGreetDiagnostic_AbortsWithError()
     {
         if (OperatingSystem.IsWindows())
@@ -5024,7 +5024,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("did not return a structured match", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReinstallReal_SearchIndentedLineContainsDefGreetDiagnostic_AbortsWithError()
     {
         if (OperatingSystem.IsWindows())
@@ -5072,7 +5072,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("did not return a structured match", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReinstallReal_SearchHeaderLineContainsVerbatimSignatureDiagnostic_AbortsWithError()
     {
         if (OperatingSystem.IsWindows())
@@ -5122,7 +5122,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("did not return a structured match", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReinstallReal_SearchIndentedLineContainsVerbatimSignatureDiagnostic_AbortsWithError()
     {
         if (OperatingSystem.IsWindows())
@@ -5171,7 +5171,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("did not return a structured match", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReinstallReal_SearchRangeBlockNonFirstIndentMatchesSignature_AbortsWithError()
     {
         if (OperatingSystem.IsWindows())
@@ -5222,7 +5222,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("did not return a structured match", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReinstallReal_SearchGrepFormExactFullLine_Succeeds()
     {
         if (OperatingSystem.IsWindows())
@@ -5270,7 +5270,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("Real reinstall validation passed", stdout);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReinstallReal_SearchLaterRangeHeaderRearmsFirstIndent_Succeeds()
     {
         if (OperatingSystem.IsWindows())
@@ -5324,7 +5324,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("Real reinstall validation passed", stdout);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReinstallReal_DoesNotRequestJsonFromSearch()
     {
         if (OperatingSystem.IsWindows())
@@ -5377,7 +5377,7 @@ public sealed class InstallScriptTests : IDisposable
 
     // --- Doctor diagnostic mode (#436) / --doctor ネットワーク診断 (#436) ---
 
-    [Fact]
+    [ProductionCliFact]
     public void Doctor_AllProbesReturn200_ExitsZeroAndReportsReachable()
     {
         if (OperatingSystem.IsWindows())
@@ -5426,7 +5426,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("Doctor detected", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void Doctor_ConnectTunnel403_PrintsUpstreamProxyGuidanceAndExitsOne()
     {
         if (OperatingSystem.IsWindows())
@@ -5462,7 +5462,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("Checksums probe: FAILED", stdout);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void Doctor_ConnectTunnel403_CapsCurlStderrBeforePrinting()
     {
         if (OperatingSystem.IsWindows())
@@ -5490,7 +5490,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("TAIL_SHOULD_NOT_APPEAR", stderr);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void Doctor_PrintsConfiguredProxyEnvVars()
     {
         if (OperatingSystem.IsWindows())
@@ -5518,7 +5518,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("ALL_PROXY=(unset)", stdout);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void Doctor_RedactsProxyUrlCredentialsBeforePrinting()
     {
         if (OperatingSystem.IsWindows())
@@ -5566,7 +5566,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("NO_PROXY=127.0.0.1,localhost", stdout);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void Doctor_CredentialLessProxyUrlsAreNotRewritten()
     {
         if (OperatingSystem.IsWindows())
@@ -5600,7 +5600,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("NO_PROXY=127.0.0.1,localhost,*.internal", stdout);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void Doctor_ExplicitVersionArgument_ProbesReleaseAssetForThatVersion()
     {
         if (OperatingSystem.IsWindows())
@@ -5621,7 +5621,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("/releases/download/v9.8.7/sha256sums.txt", stdout);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void Doctor_BareVersionArgument_GetsVPrefixBeforeProbing()
     {
         if (OperatingSystem.IsWindows())
@@ -5641,7 +5641,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("/releases/download/v1.2.3/CodeIndex-linux-x64.tar.gz", stdout);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void Doctor_NoExplicitVersion_ReadsVersionJson()
     {
         if (OperatingSystem.IsWindows())
@@ -5666,7 +5666,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("/releases/download/v4.5.6/CodeIndex-linux-x64.tar.gz", stdout);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void Doctor_NoExplicitVersionAndNoVersionJson_SkipsReleaseProbes()
     {
         if (OperatingSystem.IsWindows())
@@ -5696,7 +5696,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("/releases/download/v0.0.0/", stdout);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void Doctor_ApiReturnsHttp404_ExitsOneAndFlagsApiProbe()
     {
         if (OperatingSystem.IsWindows())
@@ -5740,7 +5740,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("Checksums probe: reachable", stdout);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void Doctor_UnknownFlagAfterDoctor_IsTreatedAsVersion()
     {
         if (OperatingSystem.IsWindows())
@@ -5769,7 +5769,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("Probing version: vnotaversion (explicit argument)", stdout);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void Doctor_DispatcherWiresDoctorCliFlag()
     {
         if (OperatingSystem.IsWindows())
@@ -5826,7 +5826,7 @@ public sealed class InstallScriptTests : IDisposable
         }
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void VerificationPolicy_DispatcherRejectsInvalidCliValue()
     {
         if (OperatingSystem.IsWindows())

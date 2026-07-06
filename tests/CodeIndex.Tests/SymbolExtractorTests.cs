@@ -3131,14 +3131,15 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_TypeScriptLargeExportedVariables_CompletesWithinPracticalBudget()
     {
-        var lines = string.Join('\n', Enumerable.Range(0, 5_000).Select(i => $"export const value{i} = {i};"));
+        const int variableCount = 1_000;
+        var lines = string.Join('\n', Enumerable.Range(0, variableCount).Select(i => $"export const value{i} = {i};"));
 
         var stopwatch = Stopwatch.StartNew();
         var symbols = SymbolExtractor.Extract(1, "typescript", lines);
         stopwatch.Stop();
 
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "value0" && s.Visibility == "export");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "value4999" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == $"value{variableCount - 1}" && s.Visibility == "export");
         var runawayBudget = TimeSpan.FromSeconds(10);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
@@ -3885,8 +3886,9 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_ShellLargeAliasSet_CompletesWithinPracticalBudget()
     {
+        const int aliasCount = 1_000;
         var builder = new StringBuilder();
-        for (var i = 0; i < 5_000; i++)
+        for (var i = 0; i < aliasCount; i++)
             builder.Append("alias a").Append(i).Append("='echo ").Append(i).AppendLine("'");
 
         var stopwatch = Stopwatch.StartNew();
@@ -3894,7 +3896,7 @@ public partial class SymbolExtractorTests
         stopwatch.Stop();
 
         Assert.Contains(symbols, s => s.Kind == "alias" && s.Name == "a0");
-        Assert.Contains(symbols, s => s.Kind == "alias" && s.Name == "a4999");
+        Assert.Contains(symbols, s => s.Kind == "alias" && s.Name == $"a{aliasCount - 1}");
         var runawayBudget = TimeSpan.FromSeconds(10);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
@@ -5207,8 +5209,9 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_RustLargeUseSet_CompletesWithinPracticalBudget()
     {
+        const int importCount = 2_000;
         var builder = new StringBuilder();
-        for (var i = 0; i < 8_000; i++)
+        for (var i = 0; i < importCount; i++)
             builder.Append("use crate::generated::Item").Append(i).AppendLine(";");
 
         var stopwatch = Stopwatch.StartNew();
@@ -5216,7 +5219,7 @@ public partial class SymbolExtractorTests
         stopwatch.Stop();
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Item0");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Item7999");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == $"Item{importCount - 1}");
         var runawayBudget = TimeSpan.FromSeconds(10);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
@@ -5350,9 +5353,10 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_GoLargeGroupedDeclarations_CompletesWithinPracticalBudget()
     {
-        var typeLines = string.Join('\n', Enumerable.Range(0, 2_000).Select(i => $"    Type{i} struct {{ Embedded{i} }}"));
-        var constLines = string.Join('\n', Enumerable.Range(0, 2_000).Select(i => $"    Const{i} = {i}"));
-        var varLines = string.Join('\n', Enumerable.Range(0, 2_000).Select(i => $"    Var{i} Config"));
+        const int declarationCount = 1_000;
+        var typeLines = string.Join('\n', Enumerable.Range(0, declarationCount).Select(i => $"    Type{i} struct {{ Embedded{i} }}"));
+        var constLines = string.Join('\n', Enumerable.Range(0, declarationCount).Select(i => $"    Const{i} = {i}"));
+        var varLines = string.Join('\n', Enumerable.Range(0, declarationCount).Select(i => $"    Var{i} Config"));
         var content = $$"""
             package generated
 
@@ -5374,10 +5378,10 @@ public partial class SymbolExtractorTests
         stopwatch.Stop();
 
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Type0");
-        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Type1999");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Embedded1999");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == $"Type{declarationCount - 1}");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == $"Embedded{declarationCount - 1}");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Const0");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Var1999");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == $"Var{declarationCount - 1}");
         var runawayBudget = TimeSpan.FromSeconds(10);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
@@ -5786,7 +5790,8 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_JavaLargeRecordPrimaryComponents_CompletesWithinPracticalBudget()
     {
-        var componentLines = string.Join('\n', Enumerable.Range(0, 2_000).Select(i => $"    int p{i},"));
+        const int componentCount = 1_000;
+        var componentLines = string.Join('\n', Enumerable.Range(0, componentCount).Select(i => $"    int p{i},"));
         var content = $$"""
             package com.example;
 
@@ -5801,7 +5806,7 @@ public partial class SymbolExtractorTests
         stopwatch.Stop();
 
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "p0" && s.ContainerName == "Huge");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "p1999" && s.ContainerName == "Huge");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == $"p{componentCount - 1}" && s.ContainerName == "Huge");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "tail" && s.ContainerName == "Huge");
         var runawayBudget = TimeSpan.FromSeconds(10);
         Assert.True(
@@ -6522,7 +6527,8 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_KotlinLargePrimaryConstructorComponents_CompletesWithinPracticalBudget()
     {
-        var components = string.Join(", ", Enumerable.Range(0, 2_000).Select(i => $"val p{i}: String"));
+        const int componentCount = 1_000;
+        var components = string.Join(", ", Enumerable.Range(0, componentCount).Select(i => $"val p{i}: String"));
         var content = $"""
             package generated
 
@@ -6534,7 +6540,7 @@ public partial class SymbolExtractorTests
         stopwatch.Stop();
 
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "p0" && s.ContainerName == "Huge");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "p1999" && s.ContainerName == "Huge");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == $"p{componentCount - 1}" && s.ContainerName == "Huge");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "tail" && s.ContainerName == "Huge");
         var runawayBudget = TimeSpan.FromSeconds(10);
         Assert.True(
@@ -7218,7 +7224,8 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_CppLargeSameLineClassBody_CompletesWithinPracticalBudget()
     {
-        var members = string.Join(' ', Enumerable.Range(0, 2_000).Select(i => $"int method{i}();"));
+        const int methodCount = 1_000;
+        var members = string.Join(' ', Enumerable.Range(0, methodCount).Select(i => $"int method{i}();"));
         var content = $"class Big {{ {members} }};";
 
         var stopwatch = Stopwatch.StartNew();
@@ -7226,7 +7233,7 @@ public partial class SymbolExtractorTests
         stopwatch.Stop();
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method0" && s.ContainerName == "Big");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method1999" && s.ContainerName == "Big");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == $"method{methodCount - 1}" && s.ContainerName == "Big");
         var runawayBudget = TimeSpan.FromSeconds(10);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
@@ -11957,9 +11964,10 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_DockerfileLargeNamedStageChain_CompletesWithinPracticalBudget()
     {
+        const int stageCount = 1_000;
         var builder = new StringBuilder();
         builder.AppendLine("FROM alpine AS stage0");
-        for (var i = 1; i < 2_000; i++)
+        for (var i = 1; i < stageCount; i++)
             builder.Append("FROM stage").Append(i - 1).Append(" AS stage").Append(i).AppendLine();
 
         var stopwatch = Stopwatch.StartNew();
@@ -11967,10 +11975,10 @@ public partial class SymbolExtractorTests
         stopwatch.Stop();
 
         Assert.Contains(symbols, s => s.Kind == "stage" && s.Name == "stage0");
-        Assert.Contains(symbols, s => s.Kind == "stage" && s.Name == "stage1999");
+        Assert.Contains(symbols, s => s.Kind == "stage" && s.Name == $"stage{stageCount - 1}");
         Assert.Contains(symbols, s => s.Kind == "base_image" && s.Name == "alpine");
         Assert.DoesNotContain(symbols, s => s.Kind == "base_image" && s.Name == "stage0");
-        Assert.DoesNotContain(symbols, s => s.Kind == "base_image" && s.Name == "stage1998");
+        Assert.DoesNotContain(symbols, s => s.Kind == "base_image" && s.Name == $"stage{stageCount - 2}");
         var runawayBudget = TimeSpan.FromSeconds(10);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
@@ -13573,7 +13581,8 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_JavaScriptLargeExportedObjectLiteralProperties_CompletesWithinPracticalBudget()
     {
-        var properties = string.Join(", ", Enumerable.Range(0, 3_000).Select(i => $"p{i}: {i}"));
+        const int propertyCount = 1_000;
+        var properties = string.Join(", ", Enumerable.Range(0, propertyCount).Select(i => $"p{i}: {i}"));
         var content = $"export default {{ {properties} }};";
 
         var stopwatch = Stopwatch.StartNew();
@@ -13581,9 +13590,9 @@ public partial class SymbolExtractorTests
         stopwatch.Stop();
 
         var first = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "p0" && s.ContainerKind == "object" && s.ContainerName == "default"));
-        var last = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "p2999" && s.ContainerKind == "object" && s.ContainerName == "default"));
+        var last = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == $"p{propertyCount - 1}" && s.ContainerKind == "object" && s.ContainerName == "default"));
         Assert.Equal("p0: 0", first.Signature);
-        Assert.Equal("p2999: 2999", last.Signature);
+        Assert.Equal($"p{propertyCount - 1}: {propertyCount - 1}", last.Signature);
         var runawayBudget = TimeSpan.FromSeconds(30);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,

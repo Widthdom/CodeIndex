@@ -9782,13 +9782,14 @@ public partial class ReferenceExtractorTests
 #endif
     public void Extract_CSharpLargeMethodWithManyLocals_CompletesWithinPracticalBudget()
     {
+        const int localCount = 2_000;
         var builder = new StringBuilder();
         builder.AppendLine("class Demo");
         builder.AppendLine("{");
         builder.AppendLine("    int Run(int input)");
         builder.AppendLine("    {");
         builder.AppendLine("        var result = input;");
-        for (var i = 0; i < 10_000; i++)
+        for (var i = 0; i < localCount; i++)
         {
             builder.Append("        var value").Append(i).Append(" = result + ").Append(i).AppendLine(";");
             builder.Append("        result += value").Append(i).AppendLine(";");

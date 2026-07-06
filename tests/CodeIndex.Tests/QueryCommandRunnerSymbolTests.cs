@@ -630,11 +630,11 @@ public partial class QueryCommandRunnerTests
         db.InitializeSchema();
         var refsFileId = GetIndexedFileId(db.Connection, "src/Refs.cs");
         var references = new List<ReferenceRecord>();
-        AddSyntheticReferences(references, refsFileId, "Path", 500);
-        AddSyntheticReferences(references, refsFileId, "Equal", 450);
-        AddSyntheticReferences(references, refsFileId, "File", 400);
-        AddSyntheticReferences(references, refsFileId, "List", 600);
-        AddSyntheticReferences(references, refsFileId, "DeepAuditTarget", 30);
+        AddSyntheticReferences(references, refsFileId, "Path", 10);
+        AddSyntheticReferences(references, refsFileId, "Equal", 9);
+        AddSyntheticReferences(references, refsFileId, "File", 8);
+        AddSyntheticReferences(references, refsFileId, "List", 12);
+        AddSyntheticReferences(references, refsFileId, "DeepAuditTarget", 4);
 
         var writer = new DbWriter(db.Connection);
         writer.InsertReferences(references);

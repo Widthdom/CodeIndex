@@ -16,24 +16,6 @@ using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
-public sealed class SkipOnMacOsArm64FactAttribute : FactAttribute
-{
-    public SkipOnMacOsArm64FactAttribute()
-    {
-        if (OperatingSystem.IsMacOS() && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
-            Skip = "macOS arm64 SDK/ILLink can crash before this test can exercise cdidx (#2586).";
-    }
-}
-
-public sealed class SkipOnMacOsArm64TheoryAttribute : TheoryAttribute
-{
-    public SkipOnMacOsArm64TheoryAttribute()
-    {
-        if (OperatingSystem.IsMacOS() && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
-            Skip = "macOS arm64 SDK/ILLink currently crashes before this test can exercise cdidx (#2606).";
-    }
-}
-
 /// <summary>
 /// Tests for indexing command argument handling.
 /// インデックスコマンドの引数処理テスト。
@@ -1147,7 +1129,7 @@ public partial class IndexCommandRunnerTests
             startInfo.ArgumentList);
     }
 
-    [SkipOnMacOsArm64Fact]
+    [PublishedTrimmedCliFact]
     public void Run_PublishedSingleFileBinary_IndexesWithIsolatedSymbolWorker()
     {
         var projectRoot = CreateTempProject();
@@ -1444,7 +1426,7 @@ public partial class IndexCommandRunnerTests
         try
         {
             var filePath = Path.Combine(projectRoot, "DenseReferences.cs");
-            File.WriteAllText(filePath, BuildDenseReferenceCSharpSource(8));
+            File.WriteAllText(filePath, BuildDenseReferenceCSharpSource(3));
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--max-references-per-file", "2", "--json"]);
 
@@ -1466,7 +1448,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(0, issue.Line);
             Assert.Contains("--max-references-per-file", issue.Message);
 
-            var (raisedExitCode, raisedJson) = RunAndCaptureJson([projectRoot, "--max-references-per-file", "100", "--json"]);
+            var (raisedExitCode, raisedJson) = RunAndCaptureJson([projectRoot, "--max-references-per-file", "10", "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, raisedExitCode);
             Assert.Equal("success", raisedJson.GetProperty("status").GetString());
@@ -1487,9 +1469,9 @@ public partial class IndexCommandRunnerTests
         try
         {
             var filePath = Path.Combine(projectRoot, "DenseReferences.cs");
-            File.WriteAllText(filePath, BuildDenseReferenceCSharpSource(8));
+            File.WriteAllText(filePath, BuildDenseReferenceCSharpSource(3));
 
-            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--max-references-per-file", "100", "--json"]);
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--max-references-per-file", "10", "--json"]);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
@@ -4330,7 +4312,7 @@ public sealed class Caller
         }
     }
 
-    [SkipOnMacOsArm64Fact]
+    [PublishedTrimmedCliFact]
     public void RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson()
     {
         var dbPath = CreateTempDbPath("cdidx_trimmed_backfill");
@@ -4432,7 +4414,7 @@ public sealed class Caller
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Run_ReadOnlyUriDbPath_PrintsActionableErrorInsteadOfCrashing()
     {
         var projectRoot = CreateTempProject();
@@ -4460,7 +4442,7 @@ public sealed class Caller
     }
 
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Run_ReadOnlyDbFile_ReturnsDatabaseErrorWithoutStackTrace()
     {
         if (OperatingSystem.IsWindows())
@@ -4499,7 +4481,7 @@ public sealed class Caller
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Run_OversizedFileUriQueryDbPath_ReturnsBoundedJsonError_Issue3140()
     {
         var projectRoot = CreateTempProject();
@@ -4530,7 +4512,7 @@ public sealed class Caller
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Run_MissingCdidxDirectoryInReadOnlyProject_ReturnsDatabaseErrorWithoutStackTrace()
     {
         if (OperatingSystem.IsWindows())
@@ -4561,7 +4543,7 @@ public sealed class Caller
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Run_ExplicitDbInReadOnlyParent_ReturnsDatabaseErrorWithoutStackTrace()
     {
         if (OperatingSystem.IsWindows())

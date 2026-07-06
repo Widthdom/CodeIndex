@@ -111,7 +111,7 @@ public partial class IndexCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Run_DryRun_IgnoresUnixFifoWithoutHanging()
     {
         if (OperatingSystem.IsWindows())
@@ -521,7 +521,7 @@ public partial class IndexCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Run_DryRun_WithFiles_IgnoresUnixFifoKnownFilename()
     {
         if (OperatingSystem.IsWindows())

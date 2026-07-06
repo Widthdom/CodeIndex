@@ -1662,7 +1662,7 @@ public partial class QueryCommandRunnerTests
 
 
 
-    [SkipOnMacOsArm64Fact]
+    [PublishedTrimmedCliFact]
     public void RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_trimmed_publish");
@@ -3829,7 +3829,7 @@ public partial class QueryCommandRunnerTests
 
 
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunSymbolsOutlineAndInspect_CSharpInterfaceAndStructContainerMetadataRoundTrips()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_container_metadata_roundtrip_issue474");
@@ -5320,7 +5320,7 @@ public partial class QueryCommandRunnerTests
 
 
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunGraphCounts_ExactJson_CssScssVariableAliasAppliesToCallersAndCallees()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_css_scss_variable_alias_counts");

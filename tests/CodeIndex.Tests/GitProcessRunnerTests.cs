@@ -18,7 +18,7 @@ public sealed class GitProcessRunnerTests : IDisposable
         TestProjectHelper.DeleteDirectory(tempDir);
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void RunCapturingResult_PreservesExitDiagnosticContract_Issue4179()
     {
         if (OperatingSystem.IsWindows())

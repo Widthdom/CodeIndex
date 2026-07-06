@@ -1301,7 +1301,7 @@ public partial class IndexCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Run_UpdateMode_WithOversizedFile_PrintsSkipWarningWithoutRecoveryWarning()
     {
         var projectRoot = CreateTempProject();
@@ -2721,7 +2721,7 @@ public partial class IndexCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Run_UpdateMode_DegradedWarningUsesResolvedProjectDbPathWhenCwdDiffers()
     {
         var projectRoot = CreateTempProject();
@@ -2762,7 +2762,7 @@ public partial class IndexCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Run_UpdateMode_DegradedWarningUsesExplicitDbPath()
     {
         var projectRoot = CreateTempProject();
@@ -3105,7 +3105,7 @@ public partial class IndexCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Run_Update_WhenHotspotFamilyMetadataCannotBeRestamped_ReportsDegradedReadiness()
     {
         var projectRoot = CreateTempProject();

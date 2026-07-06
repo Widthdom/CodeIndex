@@ -77,7 +77,7 @@ public static partial class SymbolExtractor
         $@"^(?:(?:{CSharpVisibilityPattern}|abstract|async|extern|new|override|sealed|static|unsafe|virtual)\s+)*partial\s+",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpTestMethodAttributeRegex = new(
-        @"(?:^|,)\s*(?:(?:\w+\.)*)?(?:Fact|Theory|Test|TestCase|TestCaseSource|TestMethod|DataTestMethod)(?:Attribute)?\b",
+        @"(?:^|,)\s*(?:(?:\w+\.)*)?(?:(?:\w*Fact|\w*Theory)|Test|TestCase|TestCaseSource|TestMethod|DataTestMethod)(?:Attribute)?\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     // `delegate` is a non-type keyword only when it is NOT followed by `*` — `delegate*<...>` is a valid return type.
     // `delegate` は `*` を伴わないときだけ非型キーワード扱い。`delegate*<...>` は戻り値型として有効。

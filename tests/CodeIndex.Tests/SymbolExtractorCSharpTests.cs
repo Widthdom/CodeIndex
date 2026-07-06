@@ -235,6 +235,13 @@ public partial class SymbolExtractorTests
                 [NUnit.Framework.TestCase(1)]
                 public void AcceptsQualifiedNUnitAttributes(int value) { }
 
+                [ProductionCliFact]
+                public void UsesCustomFactAttribute() { }
+
+                [ProductionCliTheory]
+                [InlineData(1)]
+                public void UsesCustomTheoryAttribute(int value) { }
+
                 [Obsolete]
                 public void HelperMethod() { }
             }
@@ -247,6 +254,8 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "test.method" && s.Name == "MultipliesValues");
         Assert.Contains(symbols, s => s.Kind == "test.method" && s.Name == "DividesValues");
         Assert.Contains(symbols, s => s.Kind == "test.method" && s.Name == "AcceptsQualifiedNUnitAttributes");
+        Assert.Contains(symbols, s => s.Kind == "test.method" && s.Name == "UsesCustomFactAttribute");
+        Assert.Contains(symbols, s => s.Kind == "test.method" && s.Name == "UsesCustomTheoryAttribute");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "HelperMethod");
     }
 

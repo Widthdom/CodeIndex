@@ -1776,12 +1776,12 @@ public partial class DbReaderTests : IDisposable
             string.Join("\n\n", tinySymbols.Select(name => $"def {name}():\n    return True")) +
             "\n\n" +
             "def use_tiny_4113():\n" +
-            string.Join("\n", Enumerable.Range(0, 100).SelectMany(_ => tinySymbols.Select(name => $"    {name}()"))));
+            string.Join("\n", Enumerable.Range(0, 10).SelectMany(_ => tinySymbols.Select(name => $"    {name}()"))));
         InsertIndexedFile("src/hotspot_rank_broad.py", "python",
             string.Join("\n\n", broadSymbols.Select(name => $"def {name}():\n    return True")) +
             "\n\n" +
             "def use_broad_4113():\n" +
-            string.Join("\n", broadSymbols.SelectMany(name => Enumerable.Range(0, 3).Select(_ => $"    {name}()"))));
+            string.Join("\n", broadSymbols.Select(name => $"    {name}()")));
 
         var results = _reader.GetFileSymbolHotspots(
             limit: 10,

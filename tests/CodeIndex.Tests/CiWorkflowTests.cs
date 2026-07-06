@@ -26,13 +26,36 @@ public class CiWorkflowTests
         Assert.Contains(
             "\"primary_lane=$primaryLaneText\" | Out-File -FilePath $env:GITHUB_OUTPUT",
             workflow);
+        Assert.True(
+            normalizedWorkflow.IndexOf("- name: Select CI lane\n        id: lane", StringComparison.Ordinal)
+            < normalizedWorkflow.IndexOf("- name: Set up .NET SDKs", StringComparison.Ordinal));
+        Assert.Contains(
+            "- name: Set up .NET SDKs\n        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0\n        with:\n          dotnet-version: |\n            8.0.413\n            9.0.301",
+            normalizedWorkflow);
+        Assert.Contains(
+            "- name: Restore dependencies\n        if: steps.lane.outputs.primary_lane == 'true'\n        run: dotnet restore CodeIndex.sln --locked-mode",
+            normalizedWorkflow);
+        Assert.Contains(
+            "- name: Restore test dependencies\n        if: steps.lane.outputs.primary_lane != 'true'\n        run: dotnet restore tests/CodeIndex.Tests/CodeIndex.Tests.csproj -p:RestoreTargetFrameworks=${{ matrix.test-framework }} --locked-mode",
+            normalizedWorkflow);
+        Assert.True(
+            normalizedWorkflow.IndexOf("- name: Select CI lane\n        id: lane", StringComparison.Ordinal)
+            < normalizedWorkflow.IndexOf("- name: Restore dependencies", StringComparison.Ordinal));
         Assert.DoesNotContain("collect_coverage", workflow);
         Assert.Contains("key: ${{ runner.os }}-dotnet-nuget-${{ hashFiles('**/packages.lock.json', 'global.json') }}", workflow, StringComparison.Ordinal);
         Assert.DoesNotContain("restore-keys:", workflow, StringComparison.Ordinal);
         Assert.DoesNotContain("'**/*.csproj'", workflow, StringComparison.Ordinal);
         Assert.Contains(
+            "exclude:\n          - os: windows-2022\n            test-framework: net9.0\n          - os: macos-14\n            test-framework: net9.0",
+            normalizedWorkflow);
+        Assert.Contains(
             "- name: Audit NuGet package vulnerabilities\n        if: steps.lane.outputs.primary_lane == 'true'",
             normalizedWorkflow);
+        Assert.Contains(
+            "- name: Verify Release test build\n        if: steps.lane.outputs.primary_lane == 'true'\n        run: dotnet build tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework ${{ matrix.test-framework }} --no-restore -p:UseSharedCompilation=false",
+            normalizedWorkflow);
+        Assert.DoesNotContain("- name: Verify Release solution build", normalizedWorkflow);
+        Assert.DoesNotContain("dotnet build CodeIndex.sln --configuration Release --no-restore", normalizedWorkflow);
         Assert.Contains(
             "- name: Verify developer task wrapper\n        if: steps.lane.outputs.primary_lane == 'true'\n        run: make lint",
             normalizedWorkflow);

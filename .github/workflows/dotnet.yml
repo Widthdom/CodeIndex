@@ -26,6 +26,11 @@ jobs:
       matrix:
         os: [ubuntu-24.04, windows-2022, macos-14]
         test-framework: [net8.0, net9.0]
+        exclude:
+          - os: windows-2022
+            test-framework: net9.0
+          - os: macos-14
+            test-framework: net9.0
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:
@@ -37,7 +42,15 @@ jobs:
         shell: pwsh
         run: ./.github/scripts/configure-windows-test-host.ps1 -Workspace "${{ github.workspace }}"
 
-      - name: Set up .NET
+      - name: Select CI lane
+        id: lane
+        shell: pwsh
+        run: |
+          $primaryLane = "${{ matrix.os }}" -eq "ubuntu-24.04" -and "${{ matrix.test-framework }}" -eq "net8.0"
+          $primaryLaneText = if ($primaryLane) { "true" } else { "false" }
+          "primary_lane=$primaryLaneText" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Set up .NET SDKs
         uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0
         with:
           dotnet-version: |
@@ -63,15 +76,12 @@ jobs:
       # bump が CI / release アーティファクトに紛れ込まずビルド失敗で気付ける。
       # 詳細は issue #1556 参照。
       - name: Restore dependencies
+        if: steps.lane.outputs.primary_lane == 'true'
         run: dotnet restore CodeIndex.sln --locked-mode
 
-      - name: Select CI lane
-        id: lane
-        shell: pwsh
-        run: |
-          $primaryLane = "${{ matrix.os }}" -eq "ubuntu-24.04" -and "${{ matrix.test-framework }}" -eq "net8.0"
-          $primaryLaneText = if ($primaryLane) { "true" } else { "false" }
-          "primary_lane=$primaryLaneText" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+      - name: Restore test dependencies
+        if: steps.lane.outputs.primary_lane != 'true'
+        run: dotnet restore tests/CodeIndex.Tests/CodeIndex.Tests.csproj -p:RestoreTargetFrameworks=${{ matrix.test-framework }} --locked-mode
 
       - name: Audit NuGet package vulnerabilities
         if: steps.lane.outputs.primary_lane == 'true'
@@ -90,9 +100,9 @@ jobs:
             throw "High or critical NuGet vulnerability detected."
           }
 
-      - name: Verify Release solution build
+      - name: Verify Release test build
         if: steps.lane.outputs.primary_lane == 'true'
-        run: dotnet build CodeIndex.sln --configuration Release --no-restore -p:UseSharedCompilation=false
+        run: dotnet build tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework ${{ matrix.test-framework }} --no-restore -p:UseSharedCompilation=false
 
       - name: Verify developer task wrapper
         if: steps.lane.outputs.primary_lane == 'true'

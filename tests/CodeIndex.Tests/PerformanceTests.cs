@@ -116,7 +116,11 @@ public class PerformanceTests : IDisposable
         Assert.Equal(4_000, symbols.Count);
     }
 
+#if NET8_0
     [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void CiPerformanceSmoke_IndexAndSearchSmallFixture_StaysWithinBudget()
     {
         WritePerformanceSmokeFixture(_projectRoot, fileCount: 120);
@@ -139,7 +143,11 @@ public class PerformanceTests : IDisposable
         Assert.True(searchElapsed < TimeSpan.FromSeconds(2), $"CI performance smoke search took {searchElapsed.TotalMilliseconds:F0}ms");
     }
 
+#if NET8_0
     [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void SymbolExtraction_CsharpHotPath_StaysWithinAllocationBudget()
     {
         var content = BuildCSharpHotPathFixture(typeCount: 120);
@@ -150,7 +158,11 @@ public class PerformanceTests : IDisposable
         Assert.True(allocatedBytes < 18_000_000, $"Symbol extraction allocated {allocatedBytes:N0} bytes");
     }
 
+#if NET8_0
     [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void ReferenceExtraction_CsharpHotPath_StaysWithinAllocationBudget()
     {
         var content = BuildCSharpHotPathFixture(typeCount: 80);

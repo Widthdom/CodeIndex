@@ -219,7 +219,7 @@ public class GitHelperTests : IDisposable
         Assert.Equal(Path.GetFullPath(worktreeGitDir), Path.GetFullPath(result!));
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void ResolveGitCommonDir_BareRepository_ReturnsRepositoryDirectory()
     {
         var sourceRepo = CreateGitRepo();
@@ -234,10 +234,13 @@ public class GitHelperTests : IDisposable
         Assert.Equal(Path.GetFullPath(bareRepo), Path.GetFullPath(GitHelper.TryGetRepositoryRoot(bareRepo)!));
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void TryGetRepositoryType_ClassifiesNormalWorktreeBareAndNone()
     {
         var normalRepo = CreateGitRepo();
+        File.WriteAllText(Path.Combine(normalRepo, "tracked.txt"), "v1\n");
+        RunGit(normalRepo, "add", "tracked.txt");
+        RunGit(normalRepo, "commit", "-m", "initial");
         var linkedWorktree = Path.Combine(_tempDir, "linked-worktree");
         RunGit(normalRepo, "worktree", "add", linkedWorktree);
         var bareRepo = Path.Combine(_tempDir, "shape.git");
@@ -251,7 +254,7 @@ public class GitHelperTests : IDisposable
         Assert.Equal(GitRepositoryType.None, GitHelper.TryGetRepositoryType(nonRepo));
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void GetChangedFilesFromCommit_ReturnsFilesForRegularCommit()
     {
         var repoDir = CreateGitRepo();
@@ -272,7 +275,7 @@ public class GitHelperTests : IDisposable
         Assert.Equal(["added.txt", "tracked.txt"], changedFiles.OrderBy(x => x).ToArray());
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void GetChangedFilesFromCommit_IncludesFilesForRootCommit()
     {
         var repoDir = CreateGitRepo();
@@ -288,7 +291,7 @@ public class GitHelperTests : IDisposable
         Assert.Equal(["first.txt"], changedFiles);
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void GetChangedFilesFromCommit_RejectsRevisionRanges()
     {
         var repoDir = CreateGitRepo();
@@ -306,7 +309,7 @@ public class GitHelperTests : IDisposable
         Assert.Contains("ranges and tag refs are not accepted", ex.Message);
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void GetChangedFilesFromCommit_RejectsTagRefs()
     {
         var repoDir = CreateGitRepo();
@@ -322,7 +325,7 @@ public class GitHelperTests : IDisposable
         Assert.Contains("Tag refs are not accepted", ex.Message);
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void GetChangedFilesFromCommit_ReturnsFilesForMergeCommit()
     {
         var repoDir = CreateGitRepo();
@@ -350,7 +353,7 @@ public class GitHelperTests : IDisposable
         Assert.Equal(["feature.txt", "main.txt"], changedFiles.OrderBy(x => x).ToArray());
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void GetChangedFilesFromCommit_DeduplicatesFilesForOctopusMergeCommit()
     {
         var repoDir = CreateGitRepo();
@@ -387,7 +390,7 @@ public class GitHelperTests : IDisposable
         Assert.Equal(changedFiles.Count, changedFiles.Distinct(StringComparer.Ordinal).Count());
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void GetChangedFilesFromCommit_IncludesOldAndNewPathsForRenameCommit()
     {
         var repoDir = CreateGitRepo();
@@ -409,7 +412,7 @@ public class GitHelperTests : IDisposable
         Assert.Contains("new.txt", changedFiles);
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public async Task GetChangedFilesFromCommit_DrainsLargeStderrWithoutDeadlock()
     {
         if (OperatingSystem.IsWindows())
@@ -436,7 +439,7 @@ public class GitHelperTests : IDisposable
         }
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void GetChangedFilesFromCommit_UsesTrustedGitExecutableInsteadOfPath_Issue3433()
     {
         if (OperatingSystem.IsWindows())
@@ -468,7 +471,7 @@ public class GitHelperTests : IDisposable
         }
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void GetChangedFilesFromCommit_FailsWhenCapturedOutputExceedsLimit()
     {
         if (OperatingSystem.IsWindows())
@@ -495,7 +498,7 @@ public class GitHelperTests : IDisposable
         }
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void GetChangedFilesFromCommit_FailsWhenNewlineFreeStdoutExceedsLimit_Issue3019()
     {
         if (OperatingSystem.IsWindows())
@@ -522,7 +525,7 @@ public class GitHelperTests : IDisposable
         }
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void RunGitCapturingResult_FailsWhenCapturedStderrExceedsLimit_Issue3704()
     {
         if (OperatingSystem.IsWindows())
@@ -559,7 +562,7 @@ public class GitHelperTests : IDisposable
         }
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void GetChangedFilesFromCommit_FailsWhenGitCommandTimesOut()
     {
         if (OperatingSystem.IsWindows())
@@ -593,7 +596,7 @@ public class GitHelperTests : IDisposable
         }
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void RunGitCapturingResult_NonZeroExitReportsStructuredBoundedDiagnostic_Issue3434()
     {
         if (OperatingSystem.IsWindows())
@@ -630,7 +633,7 @@ public class GitHelperTests : IDisposable
         }
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void RunGitCapturingResult_TimeoutReportsStructuredFailure_Issue3434()
     {
         if (OperatingSystem.IsWindows())
@@ -670,7 +673,7 @@ public class GitHelperTests : IDisposable
         }
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void RunGitCapturingResult_CallerCancellationStopsProcessWait_Issue3969()
     {
         if (OperatingSystem.IsWindows())
@@ -711,7 +714,7 @@ public class GitHelperTests : IDisposable
         }
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void RunGitCapturingResult_StartFailureReportsStructuredRedactedDiagnostic_Issue3434()
     {
         if (OperatingSystem.IsWindows())
@@ -745,7 +748,7 @@ public class GitHelperTests : IDisposable
         }
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void RunGitCapturingResult_ScrubsInheritedEnvironmentByAllowlist_Issue3910()
     {
         if (OperatingSystem.IsWindows())
@@ -789,7 +792,7 @@ public class GitHelperTests : IDisposable
         }
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void GetChangedFilesFromCommit_CancelDuringGitCommand_ThrowsOperationCanceled()
     {
         if (OperatingSystem.IsWindows())
@@ -824,7 +827,7 @@ public class GitHelperTests : IDisposable
         }
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void ResolveIgnoreCase_CancelDuringGitCommand_ThrowsOperationCanceled()
     {
         if (OperatingSystem.IsWindows())
@@ -859,7 +862,7 @@ public class GitHelperTests : IDisposable
         }
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void RunGitCapturingResult_CancelDuringOutputCapture_ThrowsOperationCanceled_Issue3761()
     {
         if (OperatingSystem.IsWindows())
@@ -909,7 +912,7 @@ public class GitHelperTests : IDisposable
         Assert.Contains("/Applications/Xcode.app/Contents/Developer/usr/bin/git", candidates);
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void TryGetHeadCommitResult_OnMacOS_DoesNotUseDeveloperDirShimGit_Issue3433()
     {
         if (!OperatingSystem.IsMacOS())
@@ -937,7 +940,7 @@ exit 7
         Assert.False(File.Exists(markerPath), "GitHelper must not execute git selected through DEVELOPER_DIR.");
     }
 
-    [Theory]
+    [ExternalProcessTheory]
     [InlineData("feature")]
     [InlineData("v1.0.0")]
     [InlineData("main..feature")]
@@ -950,7 +953,7 @@ exit 7
         Assert.Contains("Invalid commit ID", ex.Message);
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void TryGetHeadCommit_ReturnsHeadCommitForRepo()
     {
         var repoDir = CreateGitRepo();
@@ -965,7 +968,7 @@ exit 7
         Assert.Equal(expected, actual);
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void TryGetHeadCommitResult_ReturnsResolvedForBranchHead()
     {
         var repoDir = CreateGitRepo();
@@ -982,7 +985,7 @@ exit 7
         Assert.Null(actual.Reason);
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void TryGetHeadCommitResult_ReturnsResolvedForRepositorySubdirectory()
     {
         var repoDir = CreateGitRepo();
@@ -1001,7 +1004,7 @@ exit 7
         Assert.Null(actual.Reason);
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void TryGetHeadCommitResult_ReturnsDetachedHeadWithSha()
     {
         var repoDir = CreateGitRepo();
@@ -1019,7 +1022,7 @@ exit 7
         Assert.Null(actual.Reason);
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void TryGetHeadCommitResult_ReturnsNotARepo()
     {
         var nonRepo = Path.Combine(_tempDir, "not-a-repo");
@@ -1032,7 +1035,7 @@ exit 7
         Assert.Null(actual.Reason);
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void TryGetHeadCommitResult_RootDiscoveryTimeoutReportsStructuredFailure_Issue3434()
     {
         if (OperatingSystem.IsWindows())
@@ -1065,7 +1068,7 @@ exit 7
         }
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void TryResolveCommit_CanceledTokenStopsGitProcess_Issue3723()
     {
         if (OperatingSystem.IsWindows())
@@ -1097,7 +1100,7 @@ exit 7
             $"git cancellation should stop before the fake git sleep completes; elapsed={stopwatch.Elapsed}");
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void TryGetHeadCommitResult_ReturnsNoneForUnbornHead()
     {
         var repoDir = CreateGitRepo();
@@ -1109,7 +1112,7 @@ exit 7
         Assert.Null(actual.Reason);
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void TryGetHeadCommitResult_ReturnsErrorForCorruptGitDirectory()
     {
         var repoDir = Path.Combine(_tempDir, "corrupt-repo");
@@ -1122,7 +1125,7 @@ exit 7
         Assert.False(string.IsNullOrWhiteSpace(actual.Reason));
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void TryGetHeadCommitResult_ReturnsResolvedForBareRepository()
     {
         var sourceRepo = CreateGitRepo();
@@ -1140,7 +1143,7 @@ exit 7
         Assert.Null(actual.Reason);
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void TryGetHeadBranch_ReturnsBranchShortName()
     {
         var repoDir = CreateGitRepo();
@@ -1156,7 +1159,7 @@ exit 7
         Assert.Equal("feature", GitHelper.TryGetHeadBranch(repoDir));
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void TryGetHeadBranch_ReturnsNullOnDetachedHead()
     {
         var repoDir = CreateGitRepo();
@@ -1172,7 +1175,7 @@ exit 7
         Assert.Null(GitHelper.TryGetHeadBranch(repoDir));
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void TryCountCommitsAhead_ReturnsZeroWhenIndexedShaEqualsCurrent()
     {
         var repoDir = CreateGitRepo();
@@ -1184,7 +1187,7 @@ exit 7
         Assert.Equal(0, GitHelper.TryCountCommitsAhead(repoDir, sha));
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void TryCountCommitsAhead_CountsCommitsBetweenIndexedAndCurrentHead()
     {
         var repoDir = CreateGitRepo();
@@ -1203,7 +1206,7 @@ exit 7
         Assert.Equal(2, GitHelper.TryCountCommitsAhead(repoDir, indexedSha));
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void TryCountCommitsAhead_ReturnsNullWhenIndexedShaIsNotAncestor()
     {
         var repoDir = CreateGitRepo();
@@ -1232,7 +1235,7 @@ exit 7
         Assert.Null(GitHelper.TryCountCommitsAhead(repoDir, divergentSha));
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void TryCountCommitsAhead_RejectsArgumentInjectionAttempts()
     {
         var repoDir = CreateGitRepo();
@@ -1248,7 +1251,7 @@ exit 7
         Assert.Null(GitHelper.TryCountCommitsAhead(repoDir, string.Empty));
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void TryIsWorktreeDirty_DetectsModifiedFiles()
     {
         var repoDir = CreateGitRepo();
@@ -1264,7 +1267,7 @@ exit 7
         Assert.True(GitHelper.TryIsWorktreeDirty(repoDir));
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void TryGetWorktreeStatus_DetectsUnresolvedMergeFiles()
     {
         var repoDir = CreateGitRepo();
@@ -1289,7 +1292,7 @@ exit 7
         Assert.Contains("tracked.txt", status.UnresolvedMergeFiles);
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void ResolveIgnoreCase_UsesGitConfigWhenRepositorySetsTrue()
     {
         var repoDir = CreateGitRepo();
@@ -1298,7 +1301,7 @@ exit 7
         Assert.True(GitHelper.ResolveIgnoreCase(repoDir));
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void ResolveIgnoreCase_UsesGitConfigWhenRepositorySetsFalse()
     {
         var repoDir = CreateGitRepo();
@@ -1307,7 +1310,7 @@ exit 7
         Assert.False(GitHelper.ResolveIgnoreCase(repoDir));
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void ResolveIgnoreCase_UsesGitConfigWhenProjectPathIsSubdirectoryAndRepositorySetsTrue()
     {
         var repoDir = CreateGitRepo();
@@ -1318,7 +1321,7 @@ exit 7
         Assert.True(GitHelper.ResolveIgnoreCase(subDir));
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void ResolveIgnoreCase_UsesGitConfigWhenProjectPathIsSubdirectoryAndRepositorySetsFalse()
     {
         var repoDir = CreateGitRepo();
@@ -1329,7 +1332,7 @@ exit 7
         Assert.False(GitHelper.ResolveIgnoreCase(subDir));
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void ResolveIgnoreCase_NonRepoIgnoresGlobalGitConfigAndFallsBackToFileSystemProbe()
     {
         var nonRepoDir = Path.Combine(_tempDir, $"non_repo_{Guid.NewGuid():N}");
@@ -1352,7 +1355,7 @@ exit 7
         Assert.Equal(expected, resolved);
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void ResolveIgnoreCase_NonRepoProbeAvoidsRootProbeArtifacts_Issue3174()
     {
         var nonRepoDir = Path.Combine(_tempDir, $"non_repo_probe_{Guid.NewGuid():N}");
@@ -1374,7 +1377,7 @@ exit 7
         Assert.False(Directory.Exists(Path.Combine(nonRepoDir, CaseSensitivityProbeDirectory.DataDirectoryName)));
     }
 
-    [Fact]
+    [ExternalProcessFact]
     public void ResolveIgnoreCase_ProbeFailureThrowsStructuredFilesystemError_Issue3439()
     {
         var nonRepoDir = Path.Combine(_tempDir, $"non_repo_probe_failure_{Guid.NewGuid():N}");
