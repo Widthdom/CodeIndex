@@ -2,6 +2,7 @@
 category: changed
 affected:
   - .github/workflows/dotnet.yml
+  - tests/CodeIndex.Tests/DbReaderTests.cs
   - tests/CodeIndex.Tests/CiWorkflowTests.cs
   - tests/CodeIndex.Tests/PublishedTrimmedCliFactAttribute.cs
   - tests/CodeIndex.Tests/PublishedTrimmedCliFactAttributeTests.cs
@@ -19,6 +20,7 @@ affected:
 - The MCP invalid UTF-8 stdio ordering test now uses transport signals instead of a fixed 200 ms serializer sleep.
 - Build and Test now keeps OS coverage on the production `net8.0` target and runs the `net9.0` compatibility suite on Ubuntu only.
 - Performance smoke and allocation budget guards now run only on the `net8.0` test target.
+- The file hotspot structural-rank fixture now uses threshold-sized reference counts instead of oversized synthetic call sets.
 
 ## 日本語
 
@@ -27,3 +29,4 @@ affected:
 - MCP の invalid UTF-8 stdio ordering test は、固定 200 ms の serializer sleep ではなく transport signal を使うようにしました。
 - Build and Test は OS coverage を production target の `net8.0` で維持し、`net9.0` compatibility suite は Ubuntu のみに絞りました。
 - performance smoke と allocation budget guard は `net8.0` test target でのみ実行するようにしました。
+- file hotspot structural-rank fixture は、過大な synthetic call set ではなく threshold に必要な reference count だけを使うようにしました。
