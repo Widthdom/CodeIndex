@@ -40,6 +40,9 @@ public class CiWorkflowTests
         Assert.DoesNotContain("restore-keys:", workflow, StringComparison.Ordinal);
         Assert.DoesNotContain("'**/*.csproj'", workflow, StringComparison.Ordinal);
         Assert.Contains(
+            "exclude:\n          - os: windows-2022\n            test-framework: net9.0\n          - os: macos-14\n            test-framework: net9.0",
+            normalizedWorkflow);
+        Assert.Contains(
             "- name: Audit NuGet package vulnerabilities\n        if: steps.lane.outputs.primary_lane == 'true'",
             normalizedWorkflow);
         Assert.Contains(

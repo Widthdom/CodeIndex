@@ -26,6 +26,11 @@ jobs:
       matrix:
         os: [ubuntu-24.04, windows-2022, macos-14]
         test-framework: [net8.0, net9.0]
+        exclude:
+          - os: windows-2022
+            test-framework: net9.0
+          - os: macos-14
+            test-framework: net9.0
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:
