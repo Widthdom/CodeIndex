@@ -26,11 +26,20 @@ public class CiWorkflowTests
         Assert.Contains(
             "\"primary_lane=$primaryLaneText\" | Out-File -FilePath $env:GITHUB_OUTPUT",
             workflow);
+        Assert.True(
+            normalizedWorkflow.IndexOf("- name: Select CI lane\n        id: lane", StringComparison.Ordinal)
+            < normalizedWorkflow.IndexOf("- name: Set up .NET 8", StringComparison.Ordinal));
+        Assert.Contains(
+            "- name: Set up .NET 8\n        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0\n        with:\n          dotnet-version: 8.0.413",
+            normalizedWorkflow);
+        Assert.Contains(
+            "- name: Set up .NET 9\n        if: steps.lane.outputs.primary_lane == 'true' || matrix.test-framework == 'net9.0'\n        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0\n        with:\n          dotnet-version: 9.0.301",
+            normalizedWorkflow);
         Assert.Contains(
             "- name: Restore dependencies\n        if: steps.lane.outputs.primary_lane == 'true'\n        run: dotnet restore CodeIndex.sln --locked-mode",
             normalizedWorkflow);
         Assert.Contains(
-            "- name: Restore test dependencies\n        if: steps.lane.outputs.primary_lane != 'true'\n        run: dotnet restore tests/CodeIndex.Tests/CodeIndex.Tests.csproj --locked-mode",
+            "- name: Restore test dependencies\n        if: steps.lane.outputs.primary_lane != 'true'\n        run: dotnet restore tests/CodeIndex.Tests/CodeIndex.Tests.csproj -p:RestoreTargetFrameworks=${{ matrix.test-framework }} --locked-mode",
             normalizedWorkflow);
         Assert.True(
             normalizedWorkflow.IndexOf("- name: Select CI lane\n        id: lane", StringComparison.Ordinal)

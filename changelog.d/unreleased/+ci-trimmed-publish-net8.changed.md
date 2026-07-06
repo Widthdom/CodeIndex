@@ -24,6 +24,7 @@ affected:
 - The file hotspot structural-rank fixture now uses threshold-sized reference counts instead of oversized synthetic call sets.
 - The DB debug query-plan cap test now uses the minimum UNION fixture needed to cross the truncation boundary.
 - The primary Build and Test lane now builds only the matrix test target instead of building the test project's unused `net9.0` target during the Release solution build.
+- Non-primary Build and Test lanes now restore only the matrix target framework, and `.NET 9` SDK setup is skipped outside the primary and `net9.0` compatibility lanes.
 
 ## 日本語
 
@@ -35,3 +36,4 @@ affected:
 - file hotspot structural-rank fixture は、過大な synthetic call set ではなく threshold に必要な reference count だけを使うようにしました。
 - DB debug の query-plan cap test は、truncation boundary を超えるために必要な最小限の UNION fixture を使うようにしました。
 - Build and Test の primary lane は Release solution build で test project の未使用 `net9.0` target まで build せず、matrix の test target だけを build するようにしました。
+- Build and Test の non-primary lane は matrix の target framework だけを restore し、`.NET 9` SDK setup は primary lane と `net9.0` compatibility lane 以外では skip するようにしました。
