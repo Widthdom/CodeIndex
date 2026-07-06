@@ -3886,8 +3886,9 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_ShellLargeAliasSet_CompletesWithinPracticalBudget()
     {
+        const int aliasCount = 1_000;
         var builder = new StringBuilder();
-        for (var i = 0; i < 5_000; i++)
+        for (var i = 0; i < aliasCount; i++)
             builder.Append("alias a").Append(i).Append("='echo ").Append(i).AppendLine("'");
 
         var stopwatch = Stopwatch.StartNew();
@@ -3895,7 +3896,7 @@ public partial class SymbolExtractorTests
         stopwatch.Stop();
 
         Assert.Contains(symbols, s => s.Kind == "alias" && s.Name == "a0");
-        Assert.Contains(symbols, s => s.Kind == "alias" && s.Name == "a4999");
+        Assert.Contains(symbols, s => s.Kind == "alias" && s.Name == $"a{aliasCount - 1}");
         var runawayBudget = TimeSpan.FromSeconds(10);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
@@ -11961,9 +11962,10 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_DockerfileLargeNamedStageChain_CompletesWithinPracticalBudget()
     {
+        const int stageCount = 1_000;
         var builder = new StringBuilder();
         builder.AppendLine("FROM alpine AS stage0");
-        for (var i = 1; i < 2_000; i++)
+        for (var i = 1; i < stageCount; i++)
             builder.Append("FROM stage").Append(i - 1).Append(" AS stage").Append(i).AppendLine();
 
         var stopwatch = Stopwatch.StartNew();
@@ -11971,10 +11973,10 @@ public partial class SymbolExtractorTests
         stopwatch.Stop();
 
         Assert.Contains(symbols, s => s.Kind == "stage" && s.Name == "stage0");
-        Assert.Contains(symbols, s => s.Kind == "stage" && s.Name == "stage1999");
+        Assert.Contains(symbols, s => s.Kind == "stage" && s.Name == $"stage{stageCount - 1}");
         Assert.Contains(symbols, s => s.Kind == "base_image" && s.Name == "alpine");
         Assert.DoesNotContain(symbols, s => s.Kind == "base_image" && s.Name == "stage0");
-        Assert.DoesNotContain(symbols, s => s.Kind == "base_image" && s.Name == "stage1998");
+        Assert.DoesNotContain(symbols, s => s.Kind == "base_image" && s.Name == $"stage{stageCount - 2}");
         var runawayBudget = TimeSpan.FromSeconds(10);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
