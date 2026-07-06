@@ -1426,7 +1426,7 @@ public partial class IndexCommandRunnerTests
         try
         {
             var filePath = Path.Combine(projectRoot, "DenseReferences.cs");
-            File.WriteAllText(filePath, BuildDenseReferenceCSharpSource(8));
+            File.WriteAllText(filePath, BuildDenseReferenceCSharpSource(3));
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--max-references-per-file", "2", "--json"]);
 
@@ -1448,7 +1448,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(0, issue.Line);
             Assert.Contains("--max-references-per-file", issue.Message);
 
-            var (raisedExitCode, raisedJson) = RunAndCaptureJson([projectRoot, "--max-references-per-file", "100", "--json"]);
+            var (raisedExitCode, raisedJson) = RunAndCaptureJson([projectRoot, "--max-references-per-file", "10", "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, raisedExitCode);
             Assert.Equal("success", raisedJson.GetProperty("status").GetString());
@@ -1469,9 +1469,9 @@ public partial class IndexCommandRunnerTests
         try
         {
             var filePath = Path.Combine(projectRoot, "DenseReferences.cs");
-            File.WriteAllText(filePath, BuildDenseReferenceCSharpSource(8));
+            File.WriteAllText(filePath, BuildDenseReferenceCSharpSource(3));
 
-            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--max-references-per-file", "100", "--json"]);
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--max-references-per-file", "10", "--json"]);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");

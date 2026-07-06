@@ -45,6 +45,7 @@ affected:
 - Installer snippet tests now run only on the production `net8.0` test target because `install.sh` is target-framework independent, avoiding duplicate bash subprocess coverage in the `net9.0` compatibility lane.
 - Heavy post-extraction hook worker integration tests now run only on the `net8.0` production target, and their timeout/cancellation sentinel delays are shorter while still exceeding the callback budgets they guard.
 - `RunBuiltCli` / `RunCliInSubprocess` subprocess tests, including timeout-guarded FIFO probes, now run only on the `net8.0` production target when the subprocess resolves to the production CLI, while direct in-process command-runner tests remain cross-target.
+- Reference-count limit tests now use the minimum dense C# call fixture needed to cross the configured threshold.
 
 ## 日本語
 
@@ -60,3 +61,4 @@ affected:
 - installer snippet test は、`install.sh` が target framework 非依存であることに合わせて production target の `net8.0` でのみ実行し、`net9.0` compatibility lane で bash subprocess coverage を重複実行しないようにしました。
 - 重い post-extraction hook worker integration test は `net8.0` production target でのみ実行し、timeout / cancellation の sentinel delay も guard 対象の callback budget を超える範囲で短縮しました。
 - `RunBuiltCli` / `RunCliInSubprocess` を使う subprocess test は、timeout guard 付きの FIFO probe も含め、subprocess が production CLI に解決される場合に `net8.0` production target でのみ実行し、direct in-process の command-runner test は cross-target のままにしました。
+- reference-count limit test は、設定した閾値を超えるために必要な最小限の dense C# call fixture を使うようにしました。
