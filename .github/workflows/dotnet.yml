@@ -100,9 +100,9 @@ jobs:
             throw "High or critical NuGet vulnerability detected."
           }
 
-      - name: Verify Release solution build
+      - name: Verify Release test build
         if: steps.lane.outputs.primary_lane == 'true'
-        run: dotnet build CodeIndex.sln --configuration Release --no-restore -p:UseSharedCompilation=false
+        run: dotnet build tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework ${{ matrix.test-framework }} --no-restore -p:UseSharedCompilation=false
 
       - name: Verify developer task wrapper
         if: steps.lane.outputs.primary_lane == 'true'
