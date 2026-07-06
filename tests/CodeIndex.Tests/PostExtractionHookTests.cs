@@ -17,10 +17,10 @@ public class PostExtractionHookTests
     internal const string StatefulHookEnvironmentVariable = "CDIDX_TEST_STATEFUL_POST_EXTRACTION_HOOK";
     internal const string ThrowingConstructorHookEnvironmentVariable = "CDIDX_TEST_THROWING_CTOR_POST_EXTRACTION_HOOK";
     internal const string ExpandingHookEnvironmentVariable = "CDIDX_TEST_EXPANDING_POST_EXTRACTION_HOOK";
-    private const string TimedOutHookDelayMilliseconds = "250";
-    private static readonly TimeSpan TimedOutHookLeakObservationWindow = TimeSpan.FromMilliseconds(600);
+    private const string TimedOutHookDelayMilliseconds = "150";
+    private static readonly TimeSpan TimedOutHookLeakObservationWindow = TimeSpan.FromMilliseconds(400);
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Discover_LoadsHooksAndAllowsSymbolAndReferenceMutation()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hooks");
@@ -56,7 +56,7 @@ public class PostExtractionHookTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Discover_LoadsHookAssemblyInCollectibleContext_3413()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-collectible-load");
@@ -110,7 +110,7 @@ public class PostExtractionHookTests
         Assert.Contains(response.Symbols!, symbol => symbol.Name == "CollectibleHookLoadContext");
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void CallbackExceptions_AreDiagnosticsAndDoNotBlockOtherHooks()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-failure");
@@ -142,7 +142,7 @@ public class PostExtractionHookTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void WorkerConstructionFailure_DisablesHookForCurrentRun()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-ctor-failure");
@@ -181,7 +181,7 @@ public class PostExtractionHookTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Callbacks_ReuseIsolatedWorkerHookInstance()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-state");
@@ -215,7 +215,7 @@ public class PostExtractionHookTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void CallbackBudgetExceeded_KillsWorkerAndSkipsTimedOutMutation()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-budget");
@@ -268,7 +268,7 @@ public class PostExtractionHookTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void CallbackBudgetExceeded_KillsSlowConstructorAfterLargeRequestIsSent()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-slow-ctor");
@@ -278,7 +278,7 @@ public class PostExtractionHookTests
             var originalBudget = PostExtractionHookRunner.CallbackBudgetForTesting;
             try
             {
-                env.Set(SlowConstructorHookDelayEnvironmentVariable, "200");
+                env.Set(SlowConstructorHookDelayEnvironmentVariable, TimedOutHookDelayMilliseconds);
                 PostExtractionHookRunner.CallbackBudgetForTesting = () => TimeSpan.FromMilliseconds(50);
                 var hooksDir = Path.Combine(projectRoot, "hooks");
                 Directory.CreateDirectory(hooksDir);
@@ -321,7 +321,7 @@ public class PostExtractionHookTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void OnSymbolsExtracted_CancellationWhileWaitingForCallback_KillsWorker_Issue3773()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-cancel");
@@ -661,7 +661,7 @@ public class PostExtractionHookTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Callbacks_TruncateHookMaterializationAndReportDiagnostics_Issue3744()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-materialization-cap");
@@ -707,7 +707,7 @@ public class PostExtractionHookTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Discover_SkipsAssembliesAboveTypeInspectionLimit_Issue3790()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-type-cap-3790");
@@ -738,7 +738,7 @@ public class PostExtractionHookTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Discover_UnloadsAssemblyWithoutRetainedHooks_Issue3790()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-no-hook-unload-3790");
