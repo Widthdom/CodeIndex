@@ -2515,20 +2515,24 @@ public sealed class Caller
     [Fact]
     public async Task RunAsync_InvalidUtf8DecodeFailure_WaitsForPriorStdioResponse()
     {
+        using var invalidUtf8ReadStarted = new ManualResetEventSlim(false);
         var transport = new InvalidUtf8ReadTransport(
             "stdio",
+            invalidUtf8ReadStarted.Set,
             """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""");
         using var firstResponseStarted = new ManualResetEventSlim(false);
         using var server = new McpServer(_dbPath, "test", false, response =>
         {
             firstResponseStarted.Set();
-            Thread.Sleep(200);
+            if (!invalidUtf8ReadStarted.Wait(TestDeterminism.DefaultTimeout))
+                throw new TimeoutException("Timed out waiting for the invalid UTF-8 read to reach the parse-error path.");
             return response.ToJsonString();
         });
 
         await server.RunAsync(transport, CancellationToken.None);
 
         Assert.True(firstResponseStarted.IsSet);
+        Assert.True(invalidUtf8ReadStarted.IsSet);
         Assert.Equal(2, transport.WrittenFrames.Count);
         using var first = JsonDocument.Parse(transport.WrittenFrames[0]!);
         using var second = JsonDocument.Parse(transport.WrittenFrames[1]!);
@@ -2989,10 +2993,17 @@ public sealed class Caller
     private sealed class InvalidUtf8ReadTransport : IMcpTransport
     {
         private readonly Queue<string> _frames;
+        private readonly Action? _beforeInvalidUtf8;
 
         public InvalidUtf8ReadTransport(string name, params string[] frames)
+            : this(name, beforeInvalidUtf8: null, frames)
+        {
+        }
+
+        public InvalidUtf8ReadTransport(string name, Action? beforeInvalidUtf8, params string[] frames)
         {
             Name = name;
+            _beforeInvalidUtf8 = beforeInvalidUtf8;
             _frames = new Queue<string>(frames);
         }
 
@@ -3006,6 +3017,7 @@ public sealed class Caller
         {
             if (_frames.Count > 0)
                 return Task.FromResult<string?>(_frames.Dequeue());
+            _beforeInvalidUtf8?.Invoke();
             throw new DecoderFallbackException("Unable to translate bytes [ED][A0][80] at index 0 from specified code page to Unicode.");
         }
 
