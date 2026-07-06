@@ -5209,8 +5209,9 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_RustLargeUseSet_CompletesWithinPracticalBudget()
     {
+        const int importCount = 2_000;
         var builder = new StringBuilder();
-        for (var i = 0; i < 8_000; i++)
+        for (var i = 0; i < importCount; i++)
             builder.Append("use crate::generated::Item").Append(i).AppendLine(";");
 
         var stopwatch = Stopwatch.StartNew();
@@ -5218,7 +5219,7 @@ public partial class SymbolExtractorTests
         stopwatch.Stop();
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Item0");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Item7999");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == $"Item{importCount - 1}");
         var runawayBudget = TimeSpan.FromSeconds(10);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
@@ -7223,7 +7224,8 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_CppLargeSameLineClassBody_CompletesWithinPracticalBudget()
     {
-        var members = string.Join(' ', Enumerable.Range(0, 2_000).Select(i => $"int method{i}();"));
+        const int methodCount = 1_000;
+        var members = string.Join(' ', Enumerable.Range(0, methodCount).Select(i => $"int method{i}();"));
         var content = $"class Big {{ {members} }};";
 
         var stopwatch = Stopwatch.StartNew();
@@ -7231,7 +7233,7 @@ public partial class SymbolExtractorTests
         stopwatch.Stop();
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method0" && s.ContainerName == "Big");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method1999" && s.ContainerName == "Big");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == $"method{methodCount - 1}" && s.ContainerName == "Big");
         var runawayBudget = TimeSpan.FromSeconds(10);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,

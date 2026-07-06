@@ -71,6 +71,7 @@ affected:
 - Go grouped-declaration symbol budget guards now use smaller large fixtures while still checking the first and last generated type/import/var targets.
 - Java and Kotlin component symbol budget guards now use smaller large fixtures while still checking first, last, and trailing constructor/record components.
 - Shell alias and Dockerfile stage-chain symbol budget guards now use smaller large fixtures while preserving first/last generated symbol coverage.
+- Rust import and C++ same-line class-body symbol budget guards now use smaller large fixtures while preserving first/last generated symbol coverage.
 
 ## 日本語
 
@@ -98,3 +99,4 @@ affected:
 - Go grouped-declaration symbol budget guard は、先頭と末尾の generated type / import / var target を確認しつつ、大規模 fixture の件数を減らしました。
 - Java / Kotlin の component symbol budget guard は、先頭、末尾、trailing constructor / record component を確認しつつ、大規模 fixture の件数を減らしました。
 - Shell alias と Dockerfile stage-chain の symbol budget guard は、先頭と末尾の generated symbol coverage を保ちつつ、大規模 fixture の件数を減らしました。
+- Rust import と C++ same-line class-body の symbol budget guard は、先頭と末尾の generated symbol coverage を保ちつつ、大規模 fixture の件数を減らしました。
