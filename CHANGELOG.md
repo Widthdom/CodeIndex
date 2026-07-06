@@ -11,6 +11,107 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.36.3] - 2026-07-06
+
+#### Changed
+
+- Published trimmed CLI smoke tests now run only on the `net8.0` test target, avoiding duplicate expensive `dotnet publish` work in `net9.0` Build and Test matrix lanes while retaining focused cross-target in-process coverage.
+- Non-primary Build and Test matrix lanes now restore only the test project and its references instead of restoring the full solution before building the test project.
+- The MCP invalid UTF-8 stdio ordering test now uses transport signals instead of a fixed 200 ms serializer sleep.
+- Build and Test now keeps OS coverage on the production `net8.0` target and runs the `net9.0` compatibility suite on Ubuntu only.
+- Performance smoke and allocation budget guards now run only on the `net8.0` test target.
+- The file hotspot structural-rank fixture now uses threshold-sized reference counts instead of oversized synthetic call sets.
+- The DB debug query-plan cap test now uses the minimum UNION fixture needed to cross the truncation boundary.
+- The primary Build and Test lane now builds only the matrix test target instead of building the test project's unused `net9.0` target during the Release solution build.
+- Non-primary Build and Test lanes now restore only the matrix target framework while every lane still installs pinned `9.0.301` so `global.json` SDK resolution succeeds before restore/build filtering runs.
+- Installer snippet tests now run only on the production `net8.0` test target because `install.sh` is target-framework independent, avoiding duplicate bash subprocess coverage in the `net9.0` compatibility lane.
+- Heavy post-extraction hook worker integration tests now run only on the `net8.0` production target, and their timeout/cancellation sentinel delays are shorter while still exceeding the callback budgets they guard.
+- `RunBuiltCli` / `RunCliInSubprocess` subprocess tests, including timeout-guarded FIFO probes, now run only on the `net8.0` production target when the subprocess resolves to the production CLI, while direct in-process command-runner tests remain cross-target.
+- Reference-count limit tests now use the minimum dense C# call fixture needed to cross the configured threshold.
+- Generic symbol-ranking noise tests now preserve the same relative noisy-reference ordering with far fewer synthetic reference inserts.
+- Docker entrypoint shell contract tests now run only on the production `net8.0` test target because the script behavior is target-framework independent.
+- Configured-pattern regex timeout suppression tests now re-run only enough extractions to prove the timed-out pattern was disabled.
+- Impact zero-result JSON stability tests now keep both zero-result shapes but use fewer repeated temp project iterations.
+- Git external-process integration tests, including direct git process runner diagnostics, now run only on the `net8.0` test target while pure `.git` metadata parsing and trusted-candidate enumeration remain cross-target.
+- TypeScript and Swift type-alias reference budget guards now use smaller large-use fixtures while still checking the first and last generated alias references.
+- TypeScript symbol-extraction budget guards now use smaller large fixtures while still checking the first and last generated export/class targets.
+- JavaScript object-literal symbol budget guards now use smaller large fixtures while still checking the first and last generated object targets and exported properties.
+- Go grouped-declaration symbol budget guards now use smaller large fixtures while still checking the first and last generated type/import/var targets.
+- Java and Kotlin component symbol budget guards now use smaller large fixtures while still checking first, last, and trailing constructor/record components.
+- Shell alias and Dockerfile stage-chain symbol budget guards now use smaller large fixtures while preserving first/last generated symbol coverage.
+- Rust import and C++ same-line class-body symbol budget guards now use smaller large fixtures while preserving first/last generated symbol coverage.
+- C# reference budget guards now use smaller large fixtures while preserving generated caller coverage and the large-method helper-call contract.
+
+#### Fixed
+
+- C# symbol extraction now classifies custom xUnit wrapper attributes ending in `Fact` or `Theory` as `test.method`, keeping self-indexing budget fixtures aligned with repository test attributes.
+- **Initial indexing bulk-loads the text search index** — fresh and rebuild indexing now suspend per-row FTS trigger maintenance, rebuild the FTS table once from `chunks`, and then optimize it, reducing first-index write amplification on large repositories.
+- **MCP indexing defers mutual-recursion finalization** — MCP `index` now inserts per-file references without recalculating the whole mutual-recursion graph each time, then refreshes the graph once after all changed files are committed.
+- **Fresh indexing skips empty issue cleanup writes** — CLI fresh indexes and MCP rebuild/empty indexes now avoid per-file `file_issues` cleanup DELETEs for newly-created file rows that cannot have existing validation issues.
+- **MCP empty indexes skip stale file-data cleanup probes** — MCP `index` now matches the CLI fresh-index path by avoiding per-file stale chunk/symbol cleanup lookups when the database started empty or was just rebuilt.
+- **MCP empty indexes skip stale purge queries** — MCP `index` now skips stale-file purge, unsupported-reference purge, and pre-purge C# contract reads when the database started empty or was just rebuilt.
+- **CLI fresh indexes skip stale purge queries** — CLI full scans that start from an empty database now skip retained-set construction, stale-file purge, and unsupported-reference purge while still preserving scan checkpoint cleanup semantics.
+- **Fresh non-TypeScript indexes skip augmentation rebuilds** — CLI and MCP fresh indexes now stamp the current TypeScript augmentation contract without running the augmentation DELETE/SELECT rebuild when the scan found no TypeScript files.
+- **Fresh full scans avoid duplicate fold-readiness verification** — CLI and MCP fresh/rebuild-style full scans now rely on the guarded `MarkFoldReady` re-verification instead of running an identical folded-column table scan immediately before it.
+- **Fresh full scans reuse scan language metadata** — CLI and MCP successful fresh indexes now use the scan target language set for C#/SQL finalizer readiness instead of probing the newly-written `files` table.
+- **MCP fresh indexes skip impossible file-reuse lookups** — MCP fresh/rebuild indexes now match the CLI path by disabling existing-symbol/stat/content reuse probes when the database started empty.
+- **Fresh index summaries avoid table-wide count probes** — CLI and MCP successful fresh indexes now derive summary totals from committed insert counts, including TypeScript augmentation references, instead of running four final `COUNT(*)` scans.
+- **Successful full indexes reuse captured Git branch metadata** — CLI and MCP successful full-index finalization now reuse one captured HEAD branch value across both index-head stamps instead of invoking git twice.
+- **Fresh-index empty checks use a single existence probe** — CLI and MCP now decide whether a database started empty with `SELECT 1 FROM files LIMIT 1` instead of calling the four-table summary count helper.
+- **Index-start metadata cleanup batches related keys** — CLI and MCP index startup now clear failed-run and hotspot-family metadata with one multi-key upsert per group instead of issuing one metadata write per key.
+- **Fresh fold readiness stamps reuse indexed symbol languages** — CLI and MCP fresh/rebuild full scans now stamp symbol-extractor contract versions from the languages committed during the run, including files that emit no symbols, instead of querying distinct indexed languages from the database.
+- **Successful index metadata stamps batch related writes** — CLI and MCP successful index finalization now persist unknown-extension and last-index-run metadata with grouped upserts instead of one metadata statement per field.
+- **Successful index HEAD stamps batch related writes** — CLI and MCP now persist indexed HEAD commit/branch and HEAD freshness metadata with grouped upserts during successful finalization.
+- **Fold readiness metadata stamps batch version writes** — successful fold readiness finalization now persists fold-key and symbol-extractor contract metadata with grouped upserts instead of per-key metadata writes.
+- **Index diagnostic metadata batches related writes** — successful diagnostic cleanup and failed/partial run metadata persistence now use grouped upserts instead of writing each diagnostic field separately.
+- **FTS bulk-load finalization avoids duplicate counter resets** — normal bulk-load completion now lets FTS optimize reset incremental-write metadata once, while recovery and abandon rebuilds still reset it when no optimize follows.
+- **FTS bulk-load trigger changes execute as grouped SQL** — suspending and restoring FTS sync triggers now issue one grouped trigger statement set instead of three separate database commands.
+- **Readers recover interrupted FTS bulk-loads before search** — read initialization now detects an abandoned FTS bulk-load marker, restores sync triggers, and rebuilds `fts_chunks` from committed `chunks` rows before serving search results.
+- **Failed FTS bulk-load completion stays recoverable** — if final trigger restore, FTS rebuild, optimize, or marker cleanup fails, the guard remains attached so disposal can still run the abandoned-load recovery path.
+- **Hotspot-family readiness stamps batch related metadata** — successful hotspot-family finalization now writes per-language version, marker fingerprint, and superseded global-key clears with one grouped upsert.
+- **Writer-version and symbol-filter stamps share one write** — CLI full scans, CLI updates, and MCP indexes now persist the writer version and symbol-kind filter signature with one grouped upsert when the writer version is available.
+- **Reader contract readiness stamps batch related metadata** — CLI full scans and MCP indexes now persist C# symbol-name, SQL graph, and symbols-only graph contract metadata with grouped upserts during successful finalization.
+- **Index startup batches fixed metadata reads** — CLI index startup now reads fixed prior-run metadata keys with one multi-key query instead of issuing one metadata lookup per field.
+- **Index startup batches hotspot metadata snapshots** — CLI and MCP index startup now read per-language hotspot-family version and marker fingerprints with multi-key queries instead of one lookup per language and field.
+- **Fresh bytes-read accounting pre-sizes file-size caches** — CLI and MCP indexing now allocate the known-readable-size cache with the discovered file count, avoiding dictionary growth churn on large first scans.
+- **Fresh scans skip empty unknown-extension classification** — successful full scans now stamp known empty unknown-extension metadata without running sample construction or classification when no unknown-extension files were found.
+- **MCP full scans pre-size C# prepass targets** — MCP indexing now sizes its C# static-interface prepass target list from scan language metadata, matching the CLI path and avoiding list growth churn on C#-heavy first indexes.
+- **Fresh C# prepass skips unused stat-reuse caches** — CLI and MCP fresh/rebuild scans now avoid allocating the C# prepass stat-reuse cache until a reusable existing C# file can actually populate it.
+- **Full scans reuse scanner language counts** — the scanner now returns per-language counts with the file list, letting CLI and MCP full-index finalization reuse scan metadata instead of recounting target languages.
+- **Full scans cache scan-error state** — CLI and MCP full-index finalization now evaluate the scan error flag once and reuse it across purge, readiness, and summary decisions.
+- **Full scans avoid scan-error LINQ staging** — CLI and MCP full-index setup now split scan errors directly into their output lists, avoiding intermediate `Where`/`Select`/`ToList` allocations on large scans.
+- **Scanner reuses empty result lists** — scan result materialization now returns shared empty arrays for empty optional path sets instead of allocating empty lists for every full scan.
+- **Root scans skip empty ancestor-ignore copies** — scan result materialization now reuses an empty ancestor-ignore list when the index root has no parent ignore-chain entries, while preserving defensive copies for non-empty chains.
+- **CLI full scans build C# prepass targets during target setup** — CLI full indexing now fills C# static-interface prepass targets while creating per-file scan targets, matching the MCP path and avoiding a second pass over every file.
+- **Fresh file writes use insert-only SQL** — CLI and MCP full scans that start from an empty database now insert new `files` rows with a conflict-free statement instead of paying UPSERT conflict handling for paths that cannot exist yet.
+- **Fresh CLI extraction skips index staging lists** — CLI fresh, rebuild, and symbols-only full scans now schedule extraction directly from the target array instead of allocating a full file-index list that can never filter anything in those modes.
+- **Fresh full scans defer reuse-language tracking** — CLI and MCP fresh/rebuild scans now allocate hotspot and fold reuse language sets only after an existing file is actually reused, and pre-size committed-language tracking from scan metadata.
+- **MCP fresh indexes use one batch marker** — MCP fresh/rebuild scans now keep the in-progress batch marker for the scan instead of rewriting it around every committed file, matching the CLI full-scan crash signal while cutting per-file metadata writes.
+- **CLI fresh purge skips retained-set allocation** — CLI full scans that start from an empty database now avoid allocating the retained path set that only existing-database stale purge paths consume.
+- **Scanner diagnostic sets allocate lazily** — full scans now create optional non-indexable, unknown-extension, probe-failure, pruned-directory, nested-repository, and dangling-symlink path sets only when those diagnostics are actually recorded.
+- **Fresh reference writes skip line-id lookups** — CLI and MCP fresh full scans now insert new `reference_lines` rows with `RETURNING` for newly inserted files instead of upserting and selecting the same line ids back.
+- **Clean validation avoids issue-list allocation** — CLI and MCP indexing now let content-validation helpers allocate `FileIssue` lists only when a file actually emits a validation issue, reusing an empty result for the common clean-file path.
+- **Clean raw-byte validation avoids LF rescans** — content inspection now skips the second LF-only byte search when a file contains no CR or NUL bytes, because that path cannot emit line-ending or null-byte validation issues.
+- **ASCII folded-name writes skip Unicode work** — `NameFold.Fold` now returns already-folded ASCII names unchanged and uses a lightweight ASCII lowercase path before falling back to NFKC/Unicode casefolding, reducing symbol/reference write overhead for common identifiers.
+- **Reference extraction diagnostics allocate lazily** — built-in reference extraction now creates its diagnostic list only when an extractor reports a diagnostic, avoiding one empty list allocation per clean file.
+- **Symbol extraction skips unused empty result lists** — symbol extraction preparation now allocates empty result lists only for early-return paths, not for the common path that continues into language-specific extraction.
+- **Reference extraction reuses normalized language keys** — built-in reference extraction now reuses the language key computed during extractor lookup and only computes plugin language fallback keys after built-in lookup fails.
+- **Index symbol extraction reuses loaded pattern configs** — CLI/MCP indexing now skips per-file configured-pattern discovery after `FileIndexer` has loaded project configs, and isolated symbol workers reuse the first per-root discovery across subsequent files.
+- **Reference extraction builds Stylus-only definition sets on demand** — built-in reference extraction now skips the all-definition symbol lookup for non-Stylus files, avoiding an extra symbol-list pass during large initial indexes.
+- **Reference extraction resolves definition positions lazily** — built-in reference extraction now computes same-line definition name positions only when a call candidate must be checked against them, avoiding eager `IndexOf` scans on definition-heavy files.
+- **Reference extraction allocates call-match sets lazily** — built-in reference extraction now creates per-line call/initializer match sets only when regex matches need duplicate suppression, and skips nested-generic fallback scans on lines without nested generic syntax.
+- **Non-XAML XML reference extraction returns early** — XML files that are not detected as XAML now skip reference lookup preparation entirely instead of building symbol/container lookup state and then ignoring every line.
+- **Symbol extraction defers record component staging** — line-based symbol extraction now allocates the record-primary-component staging list only after a C#/Kotlin declaration actually yields staged components.
+- **Symbol extraction skips trivial container assignment work** — container assignment now returns before sorting or allocating a stack for empty, single-symbol, or container-free symbol lists.
+- **Symbol extraction caches allocate lazily** — line-based symbol extraction now creates duplicate-tracking dictionaries and symbol-line identity caches only after symbols or identity checks actually need them.
+- **C# symbol extraction defers line-start lexing** — C# line-start lex states are now built only when root-code or same-line container checks actually require them, avoiding a full-file lexical pass for files that never reach those paths.
+- **C# symbol extraction defers scope scans** — C# type-body and callable-parameter scope maps are now built only when field-like candidate checks need them, avoiding extra full-file scans for files without those patterns.
+- **C# symbol extraction defers switch-expression scans** — C# switch-expression line maps are now built only when an arrow-bodied property candidate must be checked, avoiding another whole-file scan for C# files that never reach that false-positive guard.
+- **JavaScript/TypeScript symbol extraction defers private-scope scans** — JS/TS private-scope column maps are now built only after class, object-literal, export, or assignment helper guards prove they are needed, avoiding a full lexical scope pass for simpler files.
+- **JavaScript/TypeScript symbol extraction defers sanitized-line arrays** — JS/TS module-reference helpers now build sanitized line arrays only after a raw line contains an import/require/worker-style token, while keeping the sanitized check before emitting symbols.
+- **CSS symbol extraction defers qualified-rule scans** — CSS qualified-rule ancestor maps are now built only when a class selector candidate needs the nested-selector guard, avoiding a whole-file selector-context pass for simpler stylesheets.
+- **Dart symbol extraction defers class-body scans** — Dart class-body maps are now built only when a bare `const` constructor candidate must be checked, avoiding a whole-file scope pass for files without that pattern.
+
 ### [1.36.2] - 2026-07-04
 
 #### Fixed
@@ -5462,6 +5563,107 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.36.3] - 2026-07-06
+
+#### 変更
+
+- published trimmed CLI smoke test は `net8.0` test target でのみ実行するようになり、focused な cross-target in-process coverage は維持しつつ、Build and Test の `net9.0` matrix lane で高コストな `dotnet publish` を重複実行しないようにしました。
+- Build and Test の non-primary matrix lane は、test project を build する前に solution 全体ではなく test project とその参照だけを restore するようにしました。
+- MCP の invalid UTF-8 stdio ordering test は、固定 200 ms の serializer sleep ではなく transport signal を使うようにしました。
+- Build and Test は OS coverage を production target の `net8.0` で維持し、`net9.0` compatibility suite は Ubuntu のみに絞りました。
+- performance smoke と allocation budget guard は `net8.0` test target でのみ実行するようにしました。
+- file hotspot structural-rank fixture は、過大な synthetic call set ではなく threshold に必要な reference count だけを使うようにしました。
+- DB debug の query-plan cap test は、truncation boundary を超えるために必要な最小限の UNION fixture を使うようにしました。
+- Build and Test の primary lane は Release solution build で test project の未使用 `net9.0` target まで build せず、matrix の test target だけを build するようにしました。
+- Build and Test の non-primary lane は matrix の target framework だけを restore しつつ、`global.json` の SDK 解決が restore / build 絞り込みより前に成功するよう、全 lane で pinned `9.0.301` を install するようにしました。
+- installer snippet test は、`install.sh` が target framework 非依存であることに合わせて production target の `net8.0` でのみ実行し、`net9.0` compatibility lane で bash subprocess coverage を重複実行しないようにしました。
+- 重い post-extraction hook worker integration test は `net8.0` production target でのみ実行し、timeout / cancellation の sentinel delay も guard 対象の callback budget を超える範囲で短縮しました。
+- `RunBuiltCli` / `RunCliInSubprocess` を使う subprocess test は、timeout guard 付きの FIFO probe も含め、subprocess が production CLI に解決される場合に `net8.0` production target でのみ実行し、direct in-process の command-runner test は cross-target のままにしました。
+- reference-count limit test は、設定した閾値を超えるために必要な最小限の dense C# call fixture を使うようにしました。
+- generic symbol-ranking noise test は、noisy reference の相対的な順序を保ったまま synthetic reference insert 数を大きく減らしました。
+- Docker entrypoint shell contract test は script 挙動が target framework 非依存であるため、production `net8.0` test target でのみ実行するようにしました。
+- configured-pattern regex timeout suppression test は、timeout 済み pattern が無効化されたことを確認するのに必要な回数だけ再抽出するようにしました。
+- impact zero-result JSON stability test は、2種類の zero-result shape を維持しつつ temp project 反復回数を減らしました。
+- direct git process runner diagnostics を含む Git の external-process integration test は `net8.0` test target だけで実行し、純粋な `.git` metadata parsing と trusted-candidate enumeration は cross-target のまま維持するようにしました。
+- TypeScript / Swift の type-alias reference budget guard は、先頭と末尾の generated alias reference を確認しつつ、大規模 fixture の use 数を減らしました。
+- TypeScript の symbol-extraction budget guard は、先頭と末尾の generated export / class target を確認しつつ、大規模 fixture の件数を減らしました。
+- JavaScript の object-literal symbol budget guard は、先頭と末尾の generated object target / exported property を確認しつつ、大規模 fixture の件数を減らしました。
+- Go grouped-declaration symbol budget guard は、先頭と末尾の generated type / import / var target を確認しつつ、大規模 fixture の件数を減らしました。
+- Java / Kotlin の component symbol budget guard は、先頭、末尾、trailing constructor / record component を確認しつつ、大規模 fixture の件数を減らしました。
+- Shell alias と Dockerfile stage-chain の symbol budget guard は、先頭と末尾の generated symbol coverage を保ちつつ、大規模 fixture の件数を減らしました。
+- Rust import と C++ same-line class-body の symbol budget guard は、先頭と末尾の generated symbol coverage を保ちつつ、大規模 fixture の件数を減らしました。
+- C# reference budget guard は、generated caller coverage と large-method helper-call 契約を保ちつつ、大規模 fixture の件数を減らしました。
+
+#### 修正
+
+- C# symbol extraction は `Fact` / `Theory` で終わる xUnit wrapper 属性も `test.method` として分類するようになり、self-indexing の budget fixture がリポジトリ内のテスト属性と一致するようになりました。
+- **初回インデックス作成で全文検索インデックスを一括投入するようになりました** — fresh / rebuild のインデックス作成では行ごとの FTS トリガー更新を一時停止し、`chunks` から FTS テーブルを一度だけ再構築してから最適化するため、大規模リポジトリ初回投入時の書き込み増幅を抑えます。
+- **MCP index の相互再帰最終化を後段へ延期しました** — MCP `index` はファイルごとの参照挿入時に相互再帰グラフ全体を毎回再計算せず、変更ファイルのコミット後に一度だけ更新するようになりました。
+- **fresh index の空 issue cleanup 書き込みを省きます** — CLI の fresh index と MCP の rebuild / 空DB index では、既存の検証 issue が存在し得ない新規ファイル行に対するファイル単位の `file_issues` DELETE を避けるようになりました。
+- **MCP の空DB index で古いファイルデータ cleanup probe を省きます** — MCP `index` は、DB が空の状態または rebuild 直後に始まった場合、CLI fresh-index 経路と同じくファイル単位の古い chunk / symbol cleanup lookup を避けるようになりました。
+- **MCP の空DB index で stale purge query を省きます** — MCP `index` は、DB が空の状態または rebuild 直後に始まった場合、stale file purge、unsupported reference purge、purge 前の C# contract 読み出しをスキップするようになりました。
+- **CLI fresh index で stale purge query を省きます** — 空DBから始まる CLI full scan は、scan checkpoint の保存/削除 semantics を保ったまま、retained set 構築、stale file purge、unsupported reference purge をスキップするようになりました。
+- **TypeScript を含まない fresh index で augmentation rebuild を省きます** — CLI と MCP の fresh index は、scan で TypeScript ファイルが見つからなかった場合、augmentation の DELETE/SELECT rebuild を実行せず current contract だけを stamp するようになりました。
+- **fresh full scan の fold-readiness 重複検証を省きます** — CLI と MCP の fresh / rebuild 相当の full scan は、直後に guarded な `MarkFoldReady` 再検証を行うため、その前の同種の folded-column 全表 scan を省くようになりました。
+- **fresh full scan で scan 済みの言語 metadata を再利用します** — CLI と MCP の成功した fresh index は、C# / SQL finalizer readiness の判定に新しく書いた `files` table への probe ではなく scan target の言語集合を使うようになりました。
+- **MCP fresh index で成立しない file reuse lookup を省きます** — MCP の fresh / rebuild index は、DB が空で始まった場合に既存 symbol / stat / content reuse probe を無効化し、CLI 経路と同じ挙動になりました。
+- **fresh index summary でテーブル全体の count probe を避けます** — CLI と MCP の成功した fresh index は、TypeScript augmentation references を含む commit 済み挿入件数から summary totals を作り、最後の4本の `COUNT(*)` scan を省くようになりました。
+- **成功した full index で取得済み Git branch metadata を再利用します** — CLI と MCP の成功時 finalization は、2種類の index-head stamp で同じ HEAD branch 値を再利用し、git 呼び出しを重複させないようになりました。
+- **fresh index の空DB判定を単一の存在確認にします** — CLI と MCP は DB が空で始まったかを4テーブル summary count helper ではなく `SELECT 1 FROM files LIMIT 1` で判定するようになりました。
+- **index start の metadata cleanup で関連キーをまとめます** — CLI と MCP の index startup は、failed-run metadata と hotspot-family metadata のクリアをキーごとの個別 metadata write ではなく、グループごとに1回の multi-key upsert で行うようになりました。
+- **fresh fold readiness stamp で index 済み symbol 言語を再利用します** — CLI と MCP の fresh / rebuild full scan は、symbol-extractor contract version を DB から distinct indexed language として読み直さず、symbol を出さないファイルも含めてその run で commit した言語集合から stamp するようになりました。
+- **成功時 index metadata stamp の関連 write をまとめます** — CLI と MCP の成功時 finalization は、unknown-extension metadata と last-index-run metadata をフィールドごとの個別 metadata statement ではなく grouped upsert で保存するようになりました。
+- **成功時 index HEAD stamp の関連 write をまとめます** — CLI と MCP は成功時 finalization で indexed HEAD commit / branch と HEAD freshness metadata を grouped upsert で保存するようになりました。
+- **fold readiness metadata stamp の version write をまとめます** — 成功時の fold readiness finalization は、fold-key と symbol-extractor contract metadata をキーごとの個別 metadata write ではなく grouped upsert で保存するようになりました。
+- **index diagnostic metadata の関連 write をまとめます** — 成功時の diagnostic cleanup と失敗 / partial run metadata 保存は、diagnostic field ごとの個別 write ではなく grouped upsert を使うようになりました。
+- **FTS bulk-load finalization の counter reset 重複を省きます** — 通常の bulk-load 完了では FTS optimize が incremental-write metadata を一度だけ reset し、recovery / abandon rebuild では optimize が続かない場合も従来通り reset するようになりました。
+- **FTS bulk-load trigger 変更を grouped SQL で実行します** — FTS sync trigger の一時停止と復元は、3回の個別 database command ではなく1つの grouped trigger statement set で実行するようになりました。
+- **read 初期化で中断された FTS bulk-load を復旧します** — 放棄された FTS bulk-load marker を検出した場合、検索結果を返す前に sync trigger を復元し、commit 済み `chunks` から `fts_chunks` を再構築するようになりました。
+- **FTS bulk-load 完了処理が失敗しても復旧可能に保ちます** — 最終段の trigger 復元、FTS rebuild、optimize、marker cleanup が失敗した場合も guard を保持し、Dispose 時の abandoned-load recovery を走らせられるようになりました。
+- **hotspot-family readiness stamp の関連 metadata をまとめます** — 成功時 hotspot-family finalization は、言語別 version、marker fingerprint、廃止済み global key clear を1回の grouped upsert で保存するようになりました。
+- **writer-version と symbol-filter stamp を1回の write にします** — CLI full scan、CLI update、MCP index は writer version がある場合、writer version と symbol-kind filter signature を1回の grouped upsert で保存するようになりました。
+- **reader contract readiness stamp の関連 metadata をまとめます** — CLI full scan と MCP index は成功時 finalization で C# symbol-name、SQL graph、symbols-only graph contract metadata を grouped upsert で保存するようになりました。
+- **index startup の固定 metadata read をまとめます** — CLI index startup は prior-run metadata の固定キーをフィールドごとの個別 lookup ではなく、1回の multi-key query で読み出すようになりました。
+- **index startup の hotspot metadata snapshot をまとめます** — CLI と MCP の index startup は言語別 hotspot-family version と marker fingerprint を、言語/フィールドごとの個別 lookup ではなく multi-key query で読み出すようになりました。
+- **fresh bytes-read accounting の file-size cache を事前確保します** — CLI と MCP の index は known-readable-size cache を発見済み file count で確保し、大規模初回 scan での dictionary growth churn を避けるようになりました。
+- **fresh scan で空の unknown-extension classification を省きます** — 成功した full scan は未知拡張子ファイルが見つからなかった場合、sample 構築や分類を実行せず既知の空 metadata を stamp するようになりました。
+- **MCP full scan の C# prepass targets を事前確保します** — MCP index は scan 済みの言語 metadata から C# static-interface prepass target list の容量を決め、CLI 経路と同様に C# が多い初回 index での list growth churn を避けるようになりました。
+- **fresh C# prepass で未使用の stat-reuse cache を作りません** — CLI と MCP の fresh / rebuild scan は、再利用可能な既存 C# ファイルで実際に埋められるまで C# prepass stat-reuse cache の確保を避けるようになりました。
+- **full scan で scanner の言語カウントを再利用します** — scanner が file list と一緒に言語別件数を返すようになり、CLI と MCP の full-index finalization は target 言語を数え直さず scan metadata を再利用します。
+- **full scan で scan-error state をキャッシュします** — CLI と MCP の full-index finalization は scan error flag を一度だけ評価し、purge、readiness、summary の判定で再利用するようになりました。
+- **full scan で scan-error の LINQ 中間リストを避けます** — CLI と MCP の full-index setup は scan errors を出力用リストへ直接振り分け、大規模 scan での中間 `Where` / `Select` / `ToList` 確保を避けるようになりました。
+- **scanner が空の result list を再利用します** — scan result materialization は空の optional path set に対して scan ごとに空 list を確保せず、共有空配列を返すようになりました。
+- **root scan で空の ancestor-ignore copy を省きます** — scan result materialization は index root に親 ignore-chain entry が無い場合に空の ancestor-ignore list を再利用し、非空 chain では従来通り defensive copy を維持します。
+- **CLI full scan で C# prepass targets を target setup 中に作ります** — CLI full index はファイルごとの scan target 作成時に C# static-interface prepass targets も埋めるようになり、MCP 経路と同様に全ファイル2回目の走査を避けます。
+- **fresh file write で insert-only SQL を使います** — 空DBから始まる CLI / MCP full scan は、まだ存在し得ない path に対して UPSERT の conflict 処理を使わず、新規 `files` 行専用の INSERT で書き込むようになりました。
+- **fresh CLI extraction で index staging list を省きます** — CLI の fresh / rebuild / symbols-only full scan は、その mode では何も除外できない全ファイル分の index list を確保せず、target 配列から直接 extraction を schedule するようになりました。
+- **fresh full scan の reuse language tracking を遅延確保します** — CLI と MCP の fresh / rebuild scan は、既存ファイルを実際に再利用するまで hotspot / fold 用の言語 set を確保せず、commit 済み言語 tracking も scan metadata から事前サイズ指定するようになりました。
+- **MCP fresh index の batch marker を1回にします** — MCP の fresh / rebuild scan は、file commit ごとに in-progress batch marker を書き直さず scan 中に維持するようになり、CLI full-scan と同じ crash signal を保ちながらファイル単位の metadata write を減らします。
+- **CLI fresh purge の retained set 確保を省きます** — 空DBから始まる CLI full scan は、既存DBの stale purge 経路だけが使う retained path set を確保しないようになりました。
+- **scanner の診断用 set を遅延確保します** — full scan は non-indexable、unknown-extension、probe-failure、pruned-directory、nested-repository、dangling-symlink の各 optional path set を、実際に診断が記録された場合だけ作るようになりました。
+- **fresh reference write で line-id lookup を省きます** — CLI と MCP の fresh full scan は、新規挿入ファイルの `reference_lines` を upsert 後に SELECT で読み返さず、`RETURNING` 付き INSERT で id を受け取るようになりました。
+- **clean な validation で issue list 確保を避けます** — CLI と MCP の index は、content validation helper が実際に検証 issue を出す場合だけ `FileIssue` list を確保し、一般的な clean file 経路では空結果を再利用するようになりました。
+- **clean な raw-byte validation で LF 再走査を避けます** — content inspection は CR / NUL を含まないファイルでは line-ending / null-byte issue が出ないため、LF-only 判定用の2回目の byte search を省くようになりました。
+- **ASCII の folded-name 書き込みで Unicode 処理を省きます** — `NameFold.Fold` は既に fold 済みの ASCII 名をそのまま返し、NFKC / Unicode casefold に入る前に軽量な ASCII lowercase 経路を使うため、一般的な identifier の symbol / reference 書き込み負荷を減らします。
+- **reference extraction の diagnostic を遅延確保します** — built-in reference extraction は extractor が diagnostic を報告した場合だけ diagnostic list を作り、clean file ごとの空 list 確保を避けるようになりました。
+- **symbol extraction で未使用の空 result list を省きます** — symbol extraction preparation は、言語別抽出へ進む通常経路ではなく early return 経路で必要になった場合だけ空 result list を確保するようになりました。
+- **reference extraction で正規化済み言語 key を再利用します** — built-in reference extraction は extractor lookup 時に計算した言語 key を再利用し、plugin fallback 用の key は built-in lookup が失敗した後だけ計算するようになりました。
+- **index の symbol extraction で読み込み済み pattern config を再利用します** — CLI / MCP の indexing は `FileIndexer` が project config を読み込んだ後のファイル単位 configured-pattern 探索を省き、分離 symbol worker も同一 root の初回探索を後続ファイルで再利用します。
+- **reference extraction の Stylus 専用 definition set を必要時だけ作ります** — built-in reference extraction は non-Stylus ファイルで all-definition symbol lookup を省き、大規模初回 index 中の余分な symbol list 走査を避けます。
+- **reference extraction の定義位置解決を遅延します** — built-in reference extraction は call 候補を同一行定義と照合する必要がある場合だけ定義名の行内位置を計算し、定義が多いファイルでの eager な `IndexOf` 走査を避けます。
+- **reference extraction の call-match set を遅延確保します** — built-in reference extraction は重複抑止が必要な regex match が出た場合だけ行単位の call / initializer match set を作り、nested generic 構文のない行では fallback scan も省きます。
+- **non-XAML XML の reference extraction を早期 return します** — XAML と判定されない XML ファイルでは symbol / container lookup state を作って全行を無視するのではなく、参照 lookup 準備自体を省きます。
+- **symbol extraction の record component staging を遅延します** — line-based symbol extraction は C# / Kotlin 宣言が staging 対象の record primary component を実際に出した後だけ、一時 staging list を確保します。
+- **symbol extraction の自明な container assignment 作業を省きます** — container assignment は空、単一 symbol、または container 候補を持たない symbol list では sort や stack 確保へ進まずに戻ります。
+- **symbol extraction cache を遅延確保します** — line-based symbol extraction は重複追跡用 dictionary と symbol-line identity cache を、symbol や identity check が実際に必要になってから作るようになりました。
+- **C# symbol extraction の line-start lexing を遅延します** — C# の line-start lex state は root-code 判定や same-line container 判定で実際に必要になった時だけ作るようになり、その経路へ到達しないファイルで全ファイル lexical pass を避けます。
+- **C# symbol extraction の scope scan を遅延します** — C# の type-body と callable-parameter scope map は field-like candidate 判定で必要になった時だけ作るようになり、それらの pattern が出ないファイルで追加の全ファイル scan を避けます。
+- **C# symbol extraction の switch-expression scan を遅延します** — C# の switch-expression line map は arrow-bodied property 候補を確認する必要がある場合だけ作るようになり、その false-positive guard へ到達しない C# ファイルで追加の全ファイル scan を避けます。
+- **JavaScript/TypeScript symbol extraction の private-scope scan を遅延します** — JS/TS の private-scope column map は class、object literal、export、assignment helper の軽い guard で必要性が確定した後だけ作るようになり、単純なファイルで全体 lexical scope pass を避けます。
+- **JavaScript/TypeScript symbol extraction の sanitized-line 配列を遅延します** — JS/TS の module-reference helper は raw 行に import / require / worker 系 token が出た後だけ sanitized line 配列を作り、symbol を出す前の sanitized check は維持します。
+- **CSS symbol extraction の qualified-rule scan を遅延します** — CSS の qualified-rule ancestor map は class selector 候補で nested-selector guard が必要になった時だけ作るようになり、単純な stylesheet で全体 selector-context pass を避けます。
+- **Dart symbol extraction の class-body scan を遅延します** — Dart の class-body map は bare `const` constructor 候補を確認する必要がある時だけ作るようになり、その pattern が出ないファイルで全体 scope pass を避けます。
+
 ### [1.36.2] - 2026-07-04
 
 #### 修正
@@ -10895,7 +11097,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.36.2...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.36.3...HEAD
+[1.36.3]: https://github.com/Widthdom/CodeIndex/compare/v1.36.2...v1.36.3
 [1.36.2]: https://github.com/Widthdom/CodeIndex/compare/v1.36.1...v1.36.2
 [1.36.1]: https://github.com/Widthdom/CodeIndex/compare/v1.36.0...v1.36.1
 [1.36.0]: https://github.com/Widthdom/CodeIndex/compare/v1.35.0...v1.36.0
