@@ -803,7 +803,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunStatus_Json_RelativeReadOnlyUriFoldRemediationUsesWorkingDirectoryDbPath()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_fold_only_relative_uri_json");
@@ -852,7 +852,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunStatus_HumanOutput_RelativeReadOnlyUriUsesWorkingDirectoryDbPath()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_fold_only_relative_uri_human");

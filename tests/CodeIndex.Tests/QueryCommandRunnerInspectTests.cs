@@ -4708,7 +4708,7 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void RunInspect_ExactJson_CSharpNestedQueryBeforeParenthesizedOrderByCommaPreservesOnlyTrailingEnumReferenceBundle()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_nested_query_parenthesized_orderby_collision");
