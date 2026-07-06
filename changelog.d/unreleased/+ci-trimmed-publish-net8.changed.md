@@ -10,6 +10,7 @@ affected:
   - tests/CodeIndex.Tests/McpServerTests.cs
   - tests/CodeIndex.Tests/PerformanceTests.cs
   - tests/CodeIndex.Tests/QueryCommandRunnerTests.cs
+  - tests/CodeIndex.Tests/DbDebugTests.cs
   - TESTING_GUIDE.md
 ---
 
@@ -21,6 +22,7 @@ affected:
 - Build and Test now keeps OS coverage on the production `net8.0` target and runs the `net9.0` compatibility suite on Ubuntu only.
 - Performance smoke and allocation budget guards now run only on the `net8.0` test target.
 - The file hotspot structural-rank fixture now uses threshold-sized reference counts instead of oversized synthetic call sets.
+- The DB debug query-plan cap test now uses the minimum UNION fixture needed to cross the truncation boundary.
 
 ## 日本語
 
@@ -30,3 +32,4 @@ affected:
 - Build and Test は OS coverage を production target の `net8.0` で維持し、`net9.0` compatibility suite は Ubuntu のみに絞りました。
 - performance smoke と allocation budget guard は `net8.0` test target でのみ実行するようにしました。
 - file hotspot structural-rank fixture は、過大な synthetic call set ではなく threshold に必要な reference count だけを使うようにしました。
+- DB debug の query-plan cap test は、truncation boundary を超えるために必要な最小限の UNION fixture を使うようにしました。

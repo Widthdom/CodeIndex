@@ -212,7 +212,7 @@ Add or update tests whenever you change:
 - workspace freshness or trust metadata
 
 Prefer extending the closest existing `*Tests.cs` file. Create a new test file only when the area does not fit an existing one cleanly.
-For boundary tests, use the smallest fixture that still crosses the boundary. If the behavior only needs one page, chunk, cache, or offset overflow, do not scale synthetic data far past that point unless the larger size is part of the contract.
+For boundary tests, use the smallest fixture that still crosses the boundary. If the behavior only needs one page, chunk, cache, query-plan row, or offset overflow, do not scale synthetic data far past that point unless the larger size is part of the contract.
 
 ### CLI and console tests
 
@@ -517,6 +517,7 @@ GitHub workflow、`global.json`、ドキュメントなど、checked-in され�
 
 - テストごとに分離された一時 DB を優先する。
 - 実DB挙動を検証する場合はスキーマ初期化を明示する。
+- query plan、page、row count などの境界をまたぐ DB fixture は、その境界を最小限に超えるサイズに留める。実際の大規模 DB が契約そのものではない限り、余裕値で膨らませない。
 - 読み取り互換性に触れる変更なら、通常経路に加えて必要な fallback / migration 経路も検証する。
 
 ## クロスプラットフォームのルール

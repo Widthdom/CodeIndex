@@ -80,7 +80,7 @@ public class DbDebugTests
             using var conn = new SqliteConnection("Data Source=:memory:");
             conn.Open();
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = BuildUnionAllQuery(120);
+            cmd.CommandText = BuildUnionAllQuery(DbDebug.MaxQueryPlanRows + 1);
 
             DbDebug.BeginProfile();
             using (var reader = cmd.ExecuteTrackedReader())
