@@ -769,7 +769,7 @@ public partial class IndexCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Run_FullScan_WithOversizedFile_PrintsSkipWarningWithoutRecoveryWarning()
     {
         var projectRoot = CreateTempProject();
@@ -1941,7 +1941,7 @@ public partial class IndexCommandRunnerTests
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Run_FullScan_DegradedWarningSummarizesRemainingFoldGap()
     {
         var projectRoot = CreateTempProject();

@@ -4414,7 +4414,7 @@ public sealed class Caller
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Run_ReadOnlyUriDbPath_PrintsActionableErrorInsteadOfCrashing()
     {
         var projectRoot = CreateTempProject();
@@ -4442,7 +4442,7 @@ public sealed class Caller
     }
 
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Run_ReadOnlyDbFile_ReturnsDatabaseErrorWithoutStackTrace()
     {
         if (OperatingSystem.IsWindows())
@@ -4481,7 +4481,7 @@ public sealed class Caller
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Run_OversizedFileUriQueryDbPath_ReturnsBoundedJsonError_Issue3140()
     {
         var projectRoot = CreateTempProject();
@@ -4512,7 +4512,7 @@ public sealed class Caller
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Run_MissingCdidxDirectoryInReadOnlyProject_ReturnsDatabaseErrorWithoutStackTrace()
     {
         if (OperatingSystem.IsWindows())
@@ -4543,7 +4543,7 @@ public sealed class Caller
         }
     }
 
-    [Fact]
+    [ProductionRuntimeFact]
     public void Run_ExplicitDbInReadOnlyParent_ReturnsDatabaseErrorWithoutStackTrace()
     {
         if (OperatingSystem.IsWindows())
