@@ -78,22 +78,67 @@ public partial class FileIndexer
 
     private static readonly IReadOnlySet<string> EmptyCheckpointedDirectorySet = new HashSet<string>(StringComparer.Ordinal);
 
-    private sealed record DirectoryScanState(
-        List<string> Results,
-        Dictionary<string, string> FileLanguages,
-        Dictionary<string, int> LanguageCounts,
-        List<ScanError> Errors,
-        HashSet<string> NonIndexablePaths,
-        HashSet<string> UnknownExtensionFiles,
-        HashSet<string> ProbeFailedFilePaths,
-        HashSet<string> ListedDirectories,
-        HashSet<string> FullyScannedDirectories,
-        IReadOnlySet<string> CheckpointedDirectories,
-        HashSet<string> AttributePrunedDirectories,
-        HashSet<string> NestedRepositories,
-        HashSet<string> DanglingSymlinks,
-        HashSet<FileIdentity> VisitedFileIdentities,
-        HashSet<string> VisitedDirectories);
+    private sealed class DirectoryScanState
+    {
+        public DirectoryScanState(
+            List<string> results,
+            Dictionary<string, string> fileLanguages,
+            Dictionary<string, int> languageCounts,
+            List<ScanError> errors,
+            HashSet<string> listedDirectories,
+            HashSet<string> fullyScannedDirectories,
+            IReadOnlySet<string> checkpointedDirectories,
+            HashSet<FileIdentity> visitedFileIdentities,
+            HashSet<string> visitedDirectories)
+        {
+            Results = results;
+            FileLanguages = fileLanguages;
+            LanguageCounts = languageCounts;
+            Errors = errors;
+            ListedDirectories = listedDirectories;
+            FullyScannedDirectories = fullyScannedDirectories;
+            CheckpointedDirectories = checkpointedDirectories;
+            VisitedFileIdentities = visitedFileIdentities;
+            VisitedDirectories = visitedDirectories;
+        }
+
+        public List<string> Results { get; }
+        public Dictionary<string, string> FileLanguages { get; }
+        public Dictionary<string, int> LanguageCounts { get; }
+        public List<ScanError> Errors { get; }
+        public HashSet<string>? NonIndexablePaths { get; private set; }
+        public HashSet<string>? UnknownExtensionFiles { get; private set; }
+        public HashSet<string>? ProbeFailedFilePaths { get; private set; }
+        public HashSet<string> ListedDirectories { get; }
+        public HashSet<string> FullyScannedDirectories { get; }
+        public IReadOnlySet<string> CheckpointedDirectories { get; }
+        public HashSet<string>? AttributePrunedDirectories { get; private set; }
+        public HashSet<string>? NestedRepositories { get; private set; }
+        public HashSet<string>? DanglingSymlinks { get; private set; }
+        public HashSet<FileIdentity> VisitedFileIdentities { get; }
+        public HashSet<string> VisitedDirectories { get; }
+
+        public void RecordNonIndexablePath(string path)
+            => (NonIndexablePaths ??= CreatePathSet()).Add(path);
+
+        public void RecordUnknownExtensionFile(string path)
+            => (UnknownExtensionFiles ??= CreatePathSet()).Add(path);
+
+        public void RecordProbeFailedFilePath(string path)
+            => (ProbeFailedFilePaths ??= CreatePathSet()).Add(path);
+
+        public void RecordAttributePrunedDirectory(string path)
+            => (AttributePrunedDirectories ??= CreatePathSet()).Add(path);
+
+        public void RecordNestedRepository(string path)
+            => (NestedRepositories ??= CreatePathSet()).Add(path);
+
+        public void RecordDanglingSymlink(string path)
+            => (DanglingSymlinks ??= CreatePathSet()).Add(path);
+
+        private static HashSet<string> CreatePathSet()
+            => new(StringComparer.Ordinal);
+    }
 
     private sealed record LanguageMapOverrideLookupCache(
         string StartDirectory,

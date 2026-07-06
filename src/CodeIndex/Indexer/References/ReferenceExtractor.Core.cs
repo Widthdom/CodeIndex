@@ -7,6 +7,8 @@ namespace CodeIndex.Indexer;
 
 public static partial class ReferenceExtractor
 {
+    private static readonly HashSet<int> EmptyMatchedIndices = new();
+
     internal static List<ReferenceRecord> ExtractCore(ReferenceExtractionContext request)
     {
         request.CancellationToken.ThrowIfCancellationRequested();
@@ -48,6 +50,9 @@ public static partial class ReferenceExtractor
         content = preparedInput.Content;
         var lines = preparedInput.Lines;
         var xamlReferenceEnabled = language == "xml" && XamlReferenceExtractor.IsXaml(lines);
+        if (language == "xml" && !xamlReferenceEnabled)
+            return [];
+
         var structuralLines = preparedInput.StructuralLines;
         var csharpLinesInsideMultilineStringContent = preparedInput.CSharpLinesInsideMultilineStringContent;
         var csharpLinesInsideBlockComment = preparedInput.CSharpLinesInsideBlockComment;
@@ -85,7 +90,9 @@ public static partial class ReferenceExtractor
         var csharpAttrTopLevelRanges = csharpAttrTables.Item2;
         var definitionNamesComparer = GetDefinitionNamesComparer(language);
         var definitionNamesByLine = BuildDefinitionNamesByLine(language, symbols, request.ReportDiagnostic);
-        var allDefinitionNames = BuildAllDefinitionNames(language, symbols, request.ReportDiagnostic);
+        var allDefinitionNames = language == "stylus"
+            ? BuildAllDefinitionNames(language, symbols, request.ReportDiagnostic)
+            : null;
         var fileDefinitionNames = isRazorFile
             ? BuildFileDefinitionNames(symbols)
             : null;
@@ -105,13 +112,13 @@ public static partial class ReferenceExtractor
         // プロパティ自身に帰属させる (issue #233 参照)。
         var containerCandidates = BuildReferenceContainerCandidates(symbols, request.ReportDiagnostic);
         var containerResolver = new InnermostContainerResolver(containerCandidates);
-        var csharpSameLineContainerCandidatesByLine = BuildCSharpSameLineContainerCandidatesByLine(language, containerCandidates);
+        Dictionary<int, List<SymbolRecord>>? csharpSameLineContainerCandidatesByLine = null;
+        var csharpSameLineContainerCandidatesResolved = false;
         if (language == "solidity")
             return ExtractSolidityReferences(fileId, lines, preparedLines, containerResolver);
 
-        var csharpXmlDocAttachmentScopeCandidates = csharpLinesInsideMultilineStringContent != null
-            ? BuildCSharpXmlDocAttachmentScopeCandidates(language, symbols, request.ReportDiagnostic)
-            : null;
+        IReadOnlyList<SymbolRecord>? csharpXmlDocAttachmentScopeCandidates = null;
+        var csharpXmlDocAttachmentScopeCandidatesResolved = false;
         // Enclosing-type candidates for constructor-chain rewrites (class/struct/record; namespace excluded).
         // Ordered innermost-first via ascending body range. Java enums can declare constructors and
         // chain via `this(...)` so `enum` is included; C# enums cannot declare constructors, and
@@ -119,18 +126,17 @@ public static partial class ReferenceExtractor
         // コンストラクタ連鎖の呼び先解決で使う外側の型候補（class/struct/record/enum。namespace は含めない）。
         // 内側優先で昇順にソート。Java の enum は `this(...)` 連鎖を持てるため `enum` も含める。
         // C# の enum はコンストラクタ自体を持てず `CSharpCtorChainRegex` が一致しないので副作用は無い。
-        var enclosingTypeCandidates = language is "csharp" or "java" or "kotlin"
-            ? BuildEnclosingTypeCandidates(symbols, request.ReportDiagnostic)
-            : [];
-        var rustEnumCandidates = language == "rust"
-            ? BuildRustEnumCandidates(symbols)
+        IReadOnlyList<SymbolRecord>? enclosingTypeCandidates = null;
+        var enclosingTypeCandidatesResolved = false;
+        IReadOnlyList<SymbolRecord>? rustEnumCandidates = null;
+        var rustEnumCandidatesResolved = false;
+        (
+            IReadOnlyDictionary<(int Line, string Kind), SymbolRecord>? DefinitionContainersByLineAndKind,
+            IReadOnlyDictionary<int, SymbolRecord>? HeaderSymbolsByLine) pythonSymbolLookups = default;
+        var pythonSymbolLookupsResolved = false;
+        var swiftPropertyDefinitionsByLine = language == "swift"
+            ? BuildSwiftPropertyDefinitionsByLine(language, symbols, request.ReportDiagnostic)
             : null;
-        var pythonSymbolLookups = language == "python"
-            ? BuildPythonSymbolLookups(symbols)
-            : default;
-        var pythonDefinitionContainersByLineAndKind = pythonSymbolLookups.DefinitionContainersByLineAndKind;
-        var pythonHeaderSymbolsByLine = pythonSymbolLookups.HeaderSymbolsByLine;
-        var swiftPropertyDefinitionsByLine = BuildSwiftPropertyDefinitionsByLine(language, symbols, request.ReportDiagnostic);
 
         // Synthetic function-kind container for C# primary-ctor declarations with a base
         // primary-ctor call such as `record Child(int x) : Parent(x)` or C# 12 `class Child(int x) : Parent(x)`.
@@ -138,46 +144,65 @@ public static partial class ReferenceExtractor
         // later line are covered. Later lines inside the body keep their real innermost containers.
         // C# のプライマリコンストラクタ宣言（record / class / struct）で base primary-ctor を呼んでいる場合、
         // 宣言ヘッダー全体を合成コンテナで上書きする。`{` / `;` 以降の本体行は通常の container に戻す。
-        var recordPrimaryCtorRanges = BuildCSharpPrimaryCtorContainers(language, symbols, structuralLines);
-        var csharpTypeNameSets = BuildCSharpTypeNameSets(language, symbols);
+        List<(int StartLine, int StartColumn, int EndLine, int EndColumn, SymbolRecord Container)>? recordPrimaryCtorRanges = null;
+        var recordPrimaryCtorRangesResolved = false;
+        var csharpTypeNameSets = language == "csharp"
+            ? BuildCSharpTypeNameSets(language, symbols)
+            : (KnownTypeNames: EmptyCSharpStringSet, NonEnumTypeNames: EmptyCSharpStringSet);
         var csharpKnownTypeNames = csharpTypeNameSets.KnownTypeNames;
         var csharpNonEnumTypeNames = csharpTypeNameSets.NonEnumTypeNames;
-        var csharpQualifiedPatternLookups = BuildCSharpQualifiedPatternLookups(language, symbols, csharpNonEnumTypeNames);
+        var csharpQualifiedPatternLookups = language == "csharp"
+            ? BuildCSharpQualifiedPatternLookups(language, symbols, csharpNonEnumTypeNames)
+            : (
+                EnumMemberLookup: EmptyCSharpQualifiedEnumMemberLookup,
+                ConstantPatternMemberLookup: EmptyCSharpQualifiedPatternLookup,
+                TypePatternLookup: EmptyCSharpQualifiedPatternLookup);
         var csharpQualifiedEnumMemberLookup = csharpQualifiedPatternLookups.EnumMemberLookup;
         var csharpQualifiedConstantPatternMemberLookup = csharpQualifiedPatternLookups.ConstantPatternMemberLookup;
         var csharpQualifiedTypePatternLookup = csharpQualifiedPatternLookups.TypePatternLookup;
-        var kotlinNameSets = KotlinReferenceExtractor.BuildNameSets(language, symbols);
-        var kotlinConstructorTypeNames = kotlinNameSets.ConstructorTypeNames;
-        var kotlinInfixFunctionNames = kotlinNameSets.InfixFunctionNames;
-        KotlinReferenceExtractor.AddDeclaredInfixFunctionNames(language, lines, kotlinInfixFunctionNames);
-        var callableDefinitionNames = BuildCallableDefinitionNames(language, symbols);
+        HashSet<string>? kotlinConstructorTypeNames = null;
+        HashSet<string>? kotlinInfixFunctionNames = null;
+        if (language == "kotlin")
+        {
+            var kotlinNameSets = KotlinReferenceExtractor.BuildNameSets(language, symbols);
+            kotlinConstructorTypeNames = kotlinNameSets.ConstructorTypeNames;
+            kotlinInfixFunctionNames = kotlinNameSets.InfixFunctionNames;
+            KotlinReferenceExtractor.AddDeclaredInfixFunctionNames(lines, kotlinInfixFunctionNames);
+        }
+        var callableDefinitionNames = language == "csharp"
+            ? BuildCallableDefinitionNames(language, symbols)
+            : null;
         var stylusVariableDefinitionNames = language == "stylus"
             ? CssReferenceExtractor.BuildStylusVariableDefinitionNames(lines)
             : null;
-        var dockerfileNameSets = DockerfileReferenceExtractor.BuildNameSets(language, symbols);
+        var dockerfileNameSets = language == "dockerfile"
+            ? DockerfileReferenceExtractor.BuildNameSets(language, symbols)
+            : default;
         var dockerfileStageNames = dockerfileNameSets.StageNames;
         var dockerfileVariableNames = dockerfileNameSets.VariableNames;
-        var shellNameSets = ShellReferenceExtractor.BuildNameSets(language, symbols);
+        var shellNameSets = language == "shell"
+            ? ShellReferenceExtractor.BuildNameSets(language, symbols)
+            : default;
         var shellCallableNames = shellNameSets.CallableNames;
         var shellGlobalAliasNames = shellNameSets.GlobalAliasNames;
         IReadOnlyList<(int StartLine, int EndLine)> csharpNamespaceScopes = language == "csharp"
             ? BuildCSharpNamespaceScopes(symbols)
             : Array.Empty<(int StartLine, int EndLine)>();
-        var csharpUsingImports = BuildCSharpUsingImports(language, symbols, csharpKnownTypeNames, csharpNamespaceScopes, lines, structuralLines);
+        var csharpUsingImports = language == "csharp"
+            ? BuildCSharpUsingImports(language, symbols, csharpKnownTypeNames, csharpNamespaceScopes, lines, structuralLines)
+            : (
+                Aliases: Array.Empty<CSharpUsingAliasRecord>(),
+                Namespaces: Array.Empty<CSharpUsingNamespaceRecord>(),
+                Statics: Array.Empty<CSharpUsingStaticRecord>());
         var csharpUsingAliases = csharpUsingImports.Aliases;
         var csharpUsingNamespaces = csharpUsingImports.Namespaces;
         var csharpUsingStatics = csharpUsingImports.Statics;
-        var csharpValueReceiverLookups = BuildCSharpValueReceiverNameLookups(
-            language,
-            symbols,
-            structuralLines,
-            csharpKnownTypeNames,
-            csharpUsingAliases);
-        var csharpValueReceiverNames = csharpValueReceiverLookups.ByContainingType;
-        var csharpFunctionValueReceiverNames = csharpValueReceiverLookups.ByFunctionStartLine;
-        var powershellSplatAssignments = language == "powershell"
-            ? PowerShellReferenceExtractor.BuildSplatAssignments(preparedLines)
-            : null;
+        (
+            IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames> ByContainingType,
+            IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> ByFunctionStartLine)? csharpValueReceiverLookups = null;
+        var csharpValueReceiverLookupsResolved = false;
+        IReadOnlyDictionary<string, List<PowerShellReferenceExtractor.SplatAssignment>>? powershellSplatAssignments = null;
+        var powershellSplatAssignmentsResolved = false;
         // Workspace-wide same-name type rescue needs cross-file visibility, so the
         // extractor leaves ambiguous unqualified using-static pattern heads for the
         // read path to disambiguate.
@@ -210,6 +235,123 @@ public static partial class ReferenceExtractor
 
             return false;
         }
+
+        Dictionary<int, List<SymbolRecord>>? GetCSharpSameLineContainerCandidatesByLine()
+        {
+            if (!csharpSameLineContainerCandidatesResolved)
+            {
+                csharpSameLineContainerCandidatesByLine = BuildCSharpSameLineContainerCandidatesByLine(language, containerCandidates);
+                csharpSameLineContainerCandidatesResolved = true;
+            }
+
+            return csharpSameLineContainerCandidatesByLine;
+        }
+
+        IReadOnlyList<SymbolRecord>? GetCSharpXmlDocAttachmentScopeCandidates()
+        {
+            if (!csharpXmlDocAttachmentScopeCandidatesResolved)
+            {
+                csharpXmlDocAttachmentScopeCandidates = csharpLinesInsideMultilineStringContent != null
+                    ? BuildCSharpXmlDocAttachmentScopeCandidates(language, symbols, request.ReportDiagnostic)
+                    : null;
+                csharpXmlDocAttachmentScopeCandidatesResolved = true;
+            }
+
+            return csharpXmlDocAttachmentScopeCandidates;
+        }
+
+        IReadOnlyList<SymbolRecord> GetEnclosingTypeCandidates()
+        {
+            if (!enclosingTypeCandidatesResolved)
+            {
+                enclosingTypeCandidates = language is "csharp" or "java" or "kotlin"
+                    ? BuildEnclosingTypeCandidates(symbols, request.ReportDiagnostic)
+                    : [];
+                enclosingTypeCandidatesResolved = true;
+            }
+
+            return enclosingTypeCandidates!;
+        }
+
+        IReadOnlyList<SymbolRecord>? GetRustEnumCandidates()
+        {
+            if (!rustEnumCandidatesResolved)
+            {
+                rustEnumCandidates = language == "rust"
+                    ? BuildRustEnumCandidates(symbols)
+                    : null;
+                rustEnumCandidatesResolved = true;
+            }
+
+            return rustEnumCandidates;
+        }
+
+        (
+            IReadOnlyDictionary<(int Line, string Kind), SymbolRecord>? DefinitionContainersByLineAndKind,
+            IReadOnlyDictionary<int, SymbolRecord>? HeaderSymbolsByLine) GetPythonSymbolLookups()
+        {
+            if (!pythonSymbolLookupsResolved)
+            {
+                pythonSymbolLookups = language == "python"
+                    ? BuildPythonSymbolLookups(symbols)
+                    : default;
+                pythonSymbolLookupsResolved = true;
+            }
+
+            return pythonSymbolLookups;
+        }
+
+        IReadOnlyDictionary<(int Line, string Kind), SymbolRecord>? GetPythonDefinitionContainersByLineAndKind() =>
+            GetPythonSymbolLookups().DefinitionContainersByLineAndKind;
+
+        IReadOnlyDictionary<int, SymbolRecord>? GetPythonHeaderSymbolsByLine() =>
+            GetPythonSymbolLookups().HeaderSymbolsByLine;
+
+        IReadOnlyDictionary<string, List<PowerShellReferenceExtractor.SplatAssignment>> GetPowerShellSplatAssignments()
+        {
+            if (!powershellSplatAssignmentsResolved)
+            {
+                powershellSplatAssignments = PowerShellReferenceExtractor.BuildSplatAssignments(preparedLines);
+                powershellSplatAssignmentsResolved = true;
+            }
+
+            return powershellSplatAssignments!;
+        }
+
+        List<(int StartLine, int StartColumn, int EndLine, int EndColumn, SymbolRecord Container)> GetRecordPrimaryCtorRanges()
+        {
+            if (!recordPrimaryCtorRangesResolved)
+            {
+                recordPrimaryCtorRanges = BuildCSharpPrimaryCtorContainers(language, symbols, structuralLines);
+                recordPrimaryCtorRangesResolved = true;
+            }
+
+            return recordPrimaryCtorRanges!;
+        }
+
+        (
+            IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames> ByContainingType,
+            IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> ByFunctionStartLine) GetCSharpValueReceiverLookups()
+        {
+            if (!csharpValueReceiverLookupsResolved)
+            {
+                csharpValueReceiverLookups = BuildCSharpValueReceiverNameLookups(
+                    language,
+                    symbols,
+                    structuralLines,
+                    csharpKnownTypeNames,
+                    csharpUsingAliases);
+                csharpValueReceiverLookupsResolved = true;
+            }
+
+            return csharpValueReceiverLookups!.Value;
+        }
+
+        IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames> GetCSharpValueReceiverNames() =>
+            GetCSharpValueReceiverLookups().ByContainingType;
+
+        IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> GetCSharpFunctionValueReceiverNames() =>
+            GetCSharpValueReceiverLookups().ByFunctionStartLine;
 
         string ResolveCSharpUsingAliasReferenceName(string referenceName, int lineNumber)
         {
@@ -989,7 +1131,7 @@ public static partial class ReferenceExtractor
                         && (docContainer.StartLine == lineNumber
                             || CanAttachCSharpXmlDocCommentToNextDeclaration(
                                 innermostContainer,
-                                csharpXmlDocAttachmentScopeCandidates,
+                                GetCSharpXmlDocAttachmentScopeCandidates(),
                                 csharpAttrRanges,
                                 preparedLines,
                                 lineNumber,
@@ -1153,18 +1295,6 @@ public static partial class ReferenceExtractor
                 ? namesOnLine
                 : null;
             Dictionary<string, int>? definitionNameIndices = null;
-            if (definitionNames != null && language != "sql")
-            {
-                foreach (var definitionName in definitionNames)
-                {
-                    var definitionIndex = preparedLine.IndexOf(definitionName, StringComparison.Ordinal);
-                    if (definitionIndex >= 0)
-                    {
-                        definitionNameIndices ??= new Dictionary<string, int>(definitionNamesComparer);
-                        definitionNameIndices[definitionName] = definitionIndex;
-                    }
-                }
-            }
             List<SqlReferenceExtractor.DefinitionLeafSpan>? sqlDefinitionLeafSpans = null;
             if (language == "sql")
                 sqlDefinitionLeafSpansByLine?.TryGetValue(lineNumber, out sqlDefinitionLeafSpans);
@@ -1188,7 +1318,7 @@ public static partial class ReferenceExtractor
                 javaSameLineCtor = JavaReferenceExtractor.TryBuildSameLineCtorSpan(
                     preparedLine,
                     lineNumber,
-                    enclosingTypeCandidates);
+                    GetEnclosingTypeCandidates);
             }
 
             // Per-call-site record primary-ctor override: only calls whose column sits inside the
@@ -1200,15 +1330,18 @@ public static partial class ReferenceExtractor
             // ヘッダ範囲（end line の end column より前）に入っているかを判定して差し替える。
             SymbolRecord? ResolveContainerForCall(int column)
             {
-                foreach (var (rangeStart, rangeStartColumn, rangeEnd, rangeEndColumn, syntheticRecordCtor) in recordPrimaryCtorRanges)
+                if (language == "csharp")
                 {
-                    if (lineNumber < rangeStart || lineNumber > rangeEnd)
-                        continue;
-                    if (lineNumber == rangeStart && column < rangeStartColumn)
-                        continue;
-                    if (lineNumber == rangeEnd && column >= rangeEndColumn)
-                        continue;
-                    return syntheticRecordCtor;
+                    foreach (var (rangeStart, rangeStartColumn, rangeEnd, rangeEndColumn, syntheticRecordCtor) in GetRecordPrimaryCtorRanges())
+                    {
+                        if (lineNumber < rangeStart || lineNumber > rangeEnd)
+                            continue;
+                        if (lineNumber == rangeStart && column < rangeStartColumn)
+                            continue;
+                        if (lineNumber == rangeEnd && column >= rangeEndColumn)
+                            continue;
+                        return syntheticRecordCtor;
+                    }
                 }
 
                 // Java same-line ctor body override: calls whose column sits strictly inside the
@@ -1244,7 +1377,7 @@ public static partial class ReferenceExtractor
                     }
 
                     var sameLineContainer = FindInnermostSameLineCSharpContainer(
-                        csharpSameLineContainerCandidatesByLine,
+                        GetCSharpSameLineContainerCandidatesByLine(),
                         structuralLines[i],
                         lineNumber,
                         column);
@@ -1266,6 +1399,7 @@ public static partial class ReferenceExtractor
 
             SymbolRecord? ResolvePythonDefinitionContainer(int line, string kind)
             {
+                var pythonDefinitionContainersByLineAndKind = GetPythonDefinitionContainersByLineAndKind();
                 if (pythonDefinitionContainersByLineAndKind == null)
                     return null;
                 return pythonDefinitionContainersByLineAndKind.TryGetValue((line, kind), out var symbol)
@@ -1383,11 +1517,36 @@ public static partial class ReferenceExtractor
                 }
 
                 if (language != "sql")
-                    return definitionNameIndices != null
-                        && definitionNameIndices.TryGetValue(resolvedName, out var definitionIndex)
+                    return TryGetDefinitionNameIndex(resolvedName, out var definitionIndex)
                         && callIndex == definitionIndex;
 
                 return SqlReferenceExtractor.ShouldSuppressDefinitionCall(sqlDefinitionLeafSpans, resolvedName, callIndex);
+            }
+
+            bool TryGetDefinitionNameIndex(string resolvedName, out int definitionIndex)
+            {
+                definitionIndex = -1;
+                if (definitionNames == null)
+                    return false;
+                if (definitionNameIndices != null && definitionNameIndices.TryGetValue(resolvedName, out definitionIndex))
+                    return true;
+                if (!definitionNames.Contains(resolvedName))
+                    return false;
+
+                foreach (var definitionName in definitionNames)
+                {
+                    if (!definitionNamesComparer.Equals(definitionName, resolvedName))
+                        continue;
+
+                    definitionIndex = preparedLine.IndexOf(definitionName, StringComparison.Ordinal);
+                    if (definitionIndex < 0)
+                        return false;
+
+                    (definitionNameIndices ??= new Dictionary<string, int>(definitionNamesComparer))[definitionName] = definitionIndex;
+                    return true;
+                }
+
+                return false;
             }
 
             // Event subscription/unsubscription (C#) / イベント購読・解除 (C#)
@@ -1406,19 +1565,19 @@ public static partial class ReferenceExtractor
             if (language is "csharp")
             {
                 CSharpReferenceExtractor.EmitCtorChainReferences(
-                    preparedLine, enclosingTypeCandidates, containerCandidates,
+                    preparedLine, GetEnclosingTypeCandidates, containerCandidates,
                     structuralLines, references, seen, fileId, context, lineNumber, container);
             }
             else if (language is "java")
             {
                 JavaReferenceExtractor.EmitCtorChainReferences(
-                    preparedLine, enclosingTypeCandidates, symbols, structuralLines,
+                    preparedLine, GetEnclosingTypeCandidates, symbols, structuralLines,
                     references, seen, fileId, context, lineNumber, container);
             }
             else if (language is "kotlin")
             {
                 KotlinReferenceExtractor.EmitCtorDelegationReferences(
-                    preparedLine, enclosingTypeCandidates, symbols, structuralLines,
+                    preparedLine, GetEnclosingTypeCandidates, symbols, structuralLines,
                     references, seen, fileId, context, lineNumber, container);
             }
 
@@ -1461,7 +1620,7 @@ public static partial class ReferenceExtractor
                     container);
                 KotlinReferenceExtractor.EmitBacktickConstructorReferences(
                     preparedLine,
-                    kotlinConstructorTypeNames,
+                    kotlinConstructorTypeNames!,
                     references,
                     seen,
                     fileId,
@@ -1622,8 +1781,9 @@ public static partial class ReferenceExtractor
             }
             else if (language == "rust")
             {
-                var rustEnumContainer = rustEnumCandidates != null
-                    ? FindInnermostContainer(rustEnumCandidates, lineNumber)
+                var rustEnumCandidatesForLine = GetRustEnumCandidates();
+                var rustEnumContainer = rustEnumCandidatesForLine != null
+                    ? FindInnermostContainer(rustEnumCandidatesForLine, lineNumber)
                     : null;
                 var rustTypePositionLine = RustReferenceExtractor.MaskAttributeBodies(preparedLine);
                 RustReferenceExtractor.EmitTypePositionReferences(
@@ -1787,12 +1947,13 @@ public static partial class ReferenceExtractor
             // 専用パスで `instantiate` を発行する。issue #286 参照。
             if (language is "csharp" or "java")
             {
-                var matchedInitializerIndices = new HashSet<int>();
+                HashSet<int>? matchedInitializerIndices = null;
+                var mayContainNestedGenericInitializer = language == "csharp" && MayContainNestedGenericSyntax(preparedLine);
                 foreach (Match match in CSharpJavaInitializerRegex.Matches(preparedLine))
                 {
                     var rawName = match.Groups["name"].Value;
                     var nameIndex = match.Groups["name"].Index;
-                    matchedInitializerIndices.Add(nameIndex);
+                    (matchedInitializerIndices ??= []).Add(nameIndex);
                     if (ShouldSkipInitializerName(language, rawName))
                         continue;
                     // Do NOT skip when the type is defined in the same file — the CallRegex
@@ -1811,11 +1972,11 @@ public static partial class ReferenceExtractor
                 // initializer regex も CallRegex と同じく generic を 1 段までしか見ないため、
                 // `new Dictionary<string, List<int>> { ... }` の外側型は depth-aware fallback
                 // で補って `instantiate` を落とさないようにする。
-                if (language == "csharp")
+                if (mayContainNestedGenericInitializer)
                 {
                     foreach (var candidate in EnumerateNestedGenericInitializerCandidates(
                                  preparedLine,
-                                 matchedInitializerIndices,
+                                 matchedInitializerIndices ?? EmptyMatchedIndices,
                                  requireOpeningBrace: true))
                     {
                         if (ShouldSkipInitializerName(language, candidate.Name))
@@ -1857,7 +2018,7 @@ public static partial class ReferenceExtractor
                         {
                             var rawName = trailingMatch.Groups["name"].Value;
                             var nameIndex = trailingMatch.Groups["name"].Index;
-                            matchedInitializerIndices.Add(nameIndex);
+                            (matchedInitializerIndices ??= []).Add(nameIndex);
                             if (!ShouldSkipInitializerName(language, rawName))
                             {
                                 var initContainer = ResolveContainerForCall(nameIndex);
@@ -1867,11 +2028,11 @@ public static partial class ReferenceExtractor
 
                         }
 
-                        if (language == "csharp")
+                        if (mayContainNestedGenericInitializer)
                         {
                             foreach (var candidate in EnumerateNestedGenericInitializerCandidates(
                                          preparedLine,
-                                         matchedInitializerIndices,
+                                         matchedInitializerIndices ?? EmptyMatchedIndices,
                                          requireOpeningBrace: false))
                             {
                                 if (ShouldSkipInitializerName(language, candidate.Name))
@@ -2146,7 +2307,7 @@ public static partial class ReferenceExtractor
                     return true;
                 }
 
-                if (language == "kotlin" && KotlinReferenceExtractor.IsConstructorCallName(normalizedName, kotlinConstructorTypeNames))
+                if (language == "kotlin" && KotlinReferenceExtractor.IsConstructorCallName(normalizedName, kotlinConstructorTypeNames!))
                 {
                     AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer);
                     return true;
@@ -2184,7 +2345,9 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     ResolveContainerForCall);
 
-            var matchedCallIndices = new HashSet<int>();
+            HashSet<int>? matchedCallIndices = null;
+            HashSet<int> GetMatchedCallIndices() => matchedCallIndices ??= [];
+
             if (language is "commonlisp" or "racket")
             {
                 LispReferenceExtractor.EmitReferences(
@@ -2203,7 +2366,7 @@ public static partial class ReferenceExtractor
                 PowerShellReferenceExtractor.EmitCallReferences(preparedLine, AddCallLikeReference);
                 PowerShellReferenceExtractor.EmitSplatParameterReferences(
                     preparedLine,
-                    powershellSplatAssignments!,
+                    GetPowerShellSplatAssignments,
                     lineNumber,
                     AddPowerShellParameterReference);
             }
@@ -2242,7 +2405,7 @@ public static partial class ReferenceExtractor
                     if (sqlWindowFunctionCallSiteSuppressions != null
                         && sqlWindowFunctionCallSiteSuppressions.Contains((lineNumber, callIndex)))
                         continue;
-                    matchedCallIndices.Add(callIndex);
+                    GetMatchedCallIndices().Add(callIndex);
                     if (TryAddCallLikeReference(name, callIndex))
                     {
                         EmitGenericInvocationTypeArgumentReferences(
@@ -2280,7 +2443,7 @@ public static partial class ReferenceExtractor
                         context,
                         lineNumber,
                         ResolveContainerForCall,
-                        matchedCallIndices,
+                        GetMatchedCallIndices(),
                         AddCallLikeReference);
                 }
                 else if (language == "perl")
@@ -2307,7 +2470,7 @@ public static partial class ReferenceExtractor
                     KotlinReferenceExtractor.EmitInfixCallReferences(
                         preparedLine,
                         originalLine,
-                        kotlinInfixFunctionNames,
+                        kotlinInfixFunctionNames!,
                         AddCallLikeReference);
                     KotlinReferenceExtractor.EmitTrailingLambdaReferences(preparedLine, AddCallLikeReference);
                 }
@@ -2382,20 +2545,23 @@ public static partial class ReferenceExtractor
                 // 平坦な CallRegex は `<[^>\n]+>` が最初の `>` で止まるため `>>(` 形を取りこぼす。
                 // depth-aware な fallback を足し、`Foo<Bar<int>>()` や `new Dict<K, List<V>>()` でも
                 // `call` / `instantiate` を発行する。issue #263 参照。
-                foreach (var candidate in EnumerateNestedGenericCallCandidates(preparedLine, matchedCallIndices))
+                if (MayContainNestedGenericSyntax(preparedLine))
                 {
-                    if (TryAddCallLikeReference(candidate.Name, candidate.NameIndex))
+                    foreach (var candidate in EnumerateNestedGenericCallCandidates(preparedLine, matchedCallIndices ?? EmptyMatchedIndices))
                     {
-                        EmitGenericInvocationTypeArgumentReferences(
-                            language,
-                            preparedLine,
-                            candidate.NameIndex,
-                            references,
-                            seen,
-                            fileId,
-                            context,
-                            lineNumber,
-                            ResolveContainerForCall(candidate.NameIndex));
+                        if (TryAddCallLikeReference(candidate.Name, candidate.NameIndex))
+                        {
+                            EmitGenericInvocationTypeArgumentReferences(
+                                language,
+                                preparedLine,
+                                candidate.NameIndex,
+                                references,
+                                seen,
+                                fileId,
+                                context,
+                                lineNumber,
+                                ResolveContainerForCall(candidate.NameIndex));
+                        }
                     }
                 }
             }
@@ -2483,8 +2649,8 @@ public static partial class ReferenceExtractor
                     csharpQualifiedEnumMemberLookup,
                     csharpAttrRangesOnLine,
                     csharpUsingAliases,
-                    csharpValueReceiverNames,
-                    csharpFunctionValueReceiverNames,
+                    GetCSharpValueReceiverNames,
+                    GetCSharpFunctionValueReceiverNames,
                     references,
                     seen,
                     fileId,
@@ -2645,7 +2811,7 @@ public static partial class ReferenceExtractor
                 var pythonPreparedLine = preparedLine;
                 var pythonHeaderMap = default(PythonLogicalHeaderReferenceLine?);
                 SymbolRecord? pythonHeaderSymbol = null;
-                pythonHeaderSymbolsByLine?.TryGetValue(lineNumber, out pythonHeaderSymbol);
+                GetPythonHeaderSymbolsByLine()?.TryGetValue(lineNumber, out pythonHeaderSymbol);
                 if (pythonHeaderSymbol?.Signature != null
                     && TryBuildPythonLogicalHeaderReferenceLine(lines, i, pythonHeaderSymbol.StartColumn ?? 0, out var builtPythonHeaderMap))
                 {
@@ -3079,4 +3245,10 @@ public static partial class ReferenceExtractor
         return references;
     }
 
+    private static bool MayContainNestedGenericSyntax(string preparedLine)
+    {
+        var firstGenericStart = preparedLine.IndexOf('<');
+        return firstGenericStart >= 0
+            && preparedLine.IndexOf('<', firstGenericStart + 1) >= 0;
+    }
 }

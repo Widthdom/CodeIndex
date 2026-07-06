@@ -99,7 +99,7 @@ internal static class CSharpReferenceExtractor
 
     public static void EmitCtorChainReferences(
         string preparedLine,
-        IReadOnlyList<SymbolRecord> enclosingTypeCandidates,
+        Func<IReadOnlyList<SymbolRecord>> getEnclosingTypeCandidates,
         IReadOnlyList<SymbolRecord> containerCandidates,
         string[] structuralLines,
         List<ReferenceRecord> references,
@@ -113,7 +113,7 @@ internal static class CSharpReferenceExtractor
         if (chainMatches.Count == 0)
             return;
 
-        var enclosingType = ReferenceExtractor.FindInnermostClassLike(enclosingTypeCandidates, lineNumber);
+        var enclosingType = ReferenceExtractor.FindInnermostClassLike(getEnclosingTypeCandidates(), lineNumber);
         if (enclosingType == null)
             return;
 
@@ -611,8 +611,8 @@ internal static class CSharpReferenceExtractor
         IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> enumMemberLookup,
         IReadOnlyList<(int start, int end)>? csharpAttrRangesOnLine,
         IReadOnlyList<CSharpUsingAliasRecord> usingAliases,
-        IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames> valueReceiverNamesByContainingType,
-        IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> valueReceiverNamesByFunctionStartLine,
+        Func<IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames>> getValueReceiverNamesByContainingType,
+        Func<IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>>> getValueReceiverNamesByFunctionStartLine,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -624,8 +624,8 @@ internal static class CSharpReferenceExtractor
             enumMemberLookup,
             csharpAttrRangesOnLine,
             usingAliases,
-            valueReceiverNamesByContainingType,
-            valueReceiverNamesByFunctionStartLine,
+            getValueReceiverNamesByContainingType,
+            getValueReceiverNamesByFunctionStartLine,
             references,
             seen,
             fileId,

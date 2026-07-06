@@ -156,7 +156,7 @@ public static partial class SymbolExtractor
         out string signature)
     {
         body = string.Empty;
-        lineSegments = [];
+        lineSegments = null!;
         endLineIndex = startLineIndex;
         signature = lines[startLineIndex].Trim();
 
@@ -170,6 +170,7 @@ public static partial class SymbolExtractor
             return false;
 
         var builder = new System.Text.StringBuilder();
+        List<PerlBodyLineSegment>? collectedLineSegments = null;
         var inQuotedKey = false;
         var quotedKeyDelimiter = '\0';
         for (var lineIndex = startLineIndex; lineIndex < lines.Length; lineIndex++)
@@ -180,13 +181,14 @@ public static partial class SymbolExtractor
             var segmentEnd = closeBraceIndex >= 0 ? closeBraceIndex : line.Length;
             if (segmentEnd > segmentStart)
             {
-                lineSegments.Add(new PerlBodyLineSegment(builder.Length, lineIndex, segmentStart));
+                (collectedLineSegments ??= []).Add(new PerlBodyLineSegment(builder.Length, lineIndex, segmentStart));
                 builder.Append(line, segmentStart, segmentEnd - segmentStart);
             }
 
             if (closeBraceIndex >= 0)
             {
                 body = builder.ToString();
+                lineSegments = collectedLineSegments ?? [];
                 endLineIndex = lineIndex;
                 return true;
             }

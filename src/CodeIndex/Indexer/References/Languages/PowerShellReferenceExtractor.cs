@@ -114,13 +114,17 @@ internal static class PowerShellReferenceExtractor
 
     public static void EmitSplatParameterReferences(
         string preparedLine,
-        IReadOnlyDictionary<string, List<SplatAssignment>> splatAssignments,
+        Func<IReadOnlyDictionary<string, List<SplatAssignment>>> getSplatAssignments,
         int lineNumber,
         Action<string, int> addParameterReference)
     {
-        if (splatAssignments.Count == 0 || preparedLine.IndexOf('@') < 0)
+        if (preparedLine.IndexOf('@') < 0)
             return;
         if (!CallRegex.IsMatch(preparedLine))
+            return;
+
+        var splatAssignments = getSplatAssignments();
+        if (splatAssignments.Count == 0)
             return;
 
         foreach (Match splat in SplatTokenRegex.Matches(preparedLine))

@@ -48,7 +48,7 @@ internal static class JavaReferenceExtractor
 
     public static void EmitCtorChainReferences(
         string preparedLine,
-        IReadOnlyList<SymbolRecord> enclosingTypeCandidates,
+        Func<IReadOnlyList<SymbolRecord>> getEnclosingTypeCandidates,
         IReadOnlyList<SymbolRecord> symbols,
         string[] structuralLines,
         List<ReferenceRecord> references,
@@ -62,7 +62,7 @@ internal static class JavaReferenceExtractor
         if (!match.Success)
             return;
 
-        var enclosingType = ReferenceExtractor.FindInnermostClassLike(enclosingTypeCandidates, lineNumber);
+        var enclosingType = ReferenceExtractor.FindInnermostClassLike(getEnclosingTypeCandidates(), lineNumber);
         if (enclosingType == null)
             return;
 
@@ -132,12 +132,12 @@ internal static class JavaReferenceExtractor
         TryBuildSameLineCtorSpan(
             string preparedLine,
             int lineNumber,
-            IReadOnlyList<SymbolRecord> enclosingTypeCandidates)
+            Func<IReadOnlyList<SymbolRecord>> getEnclosingTypeCandidates)
     {
         var span = TryExtractSameLineCtorSpan(preparedLine);
         if (span is null)
             return null;
-        var enclosingType = ReferenceExtractor.FindInnermostClassLike(enclosingTypeCandidates, lineNumber);
+        var enclosingType = ReferenceExtractor.FindInnermostClassLike(getEnclosingTypeCandidates(), lineNumber);
         if (enclosingType == null)
             return null;
         if (!string.Equals(span.Value.Name, enclosingType.Name, StringComparison.Ordinal))

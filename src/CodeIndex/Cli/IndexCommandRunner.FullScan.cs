@@ -247,8 +247,8 @@ public static partial class IndexCommandRunner
         {
             using var regexTimeouts = BoundedRegex.CaptureTimeouts(lang, "symbol_extraction");
             var symbols = contentIsNormalized && hasOversizeLine is { } knownHasOversizeLine
-                ? SymbolExtractor.ExtractNormalized(fileId, lang, content, knownHasOversizeLine, filePath, projectRoot, cancellationToken, conflictMarkerLine)
-                : SymbolExtractor.Extract(fileId, lang, content, filePath, projectRoot, cancellationToken);
+                ? SymbolExtractor.ExtractNormalized(fileId, lang, content, knownHasOversizeLine, filePath, projectRoot, cancellationToken, conflictMarkerLine, patternConfigsAlreadyLoaded: true)
+                : SymbolExtractor.ExtractWithPatternConfigsLoaded(fileId, lang, content, filePath, projectRoot, cancellationToken);
             return new SymbolExtractionResult(symbols, BuildRegexTimeoutIssue(issuePath, regexTimeouts));
         }
 
@@ -940,13 +940,13 @@ public static partial class IndexCommandRunner
         var purged = 0;
         var startedWithNoIndexedFiles = !writer.HasAnyIndexedFiles();
         var retainedPaths = startedWithNoIndexedFiles
-            ? new HashSet<string>(StringComparer.Ordinal)
+            ? null
             : new HashSet<string>(fileTargets.Length, StringComparer.Ordinal);
         IReadOnlyList<string> indexedJavaScriptTypeScriptConfigPathsBeforePurge = [];
         if (!startedWithNoIndexedFiles)
         {
             foreach (var target in fileTargets)
-                retainedPaths.Add(target.IndexPath);
+                retainedPaths!.Add(target.IndexPath);
             indexedJavaScriptTypeScriptConfigPathsBeforePurge = writer.GetIndexedJavaScriptTypeScriptConfigPaths();
         }
         if (scanHadErrors)
@@ -960,7 +960,7 @@ public static partial class IndexCommandRunner
                 options.Quiet);
             if (!startedWithNoIndexedFiles)
             {
-                retainedPaths.UnionWith(scanResult.ProbeFailedFilePaths.Select(FileIndexer.NormalizeIndexPath));
+                retainedPaths!.UnionWith(scanResult.ProbeFailedFilePaths.Select(FileIndexer.NormalizeIndexPath));
 
                 foreach (var relPath in scanResult.NonIndexablePaths)
                 {
@@ -976,7 +976,7 @@ public static partial class IndexCommandRunner
                     .Select(FileIndexer.NormalizeIndexPath)
                     .ToHashSet(StringComparer.Ordinal);
                 attributePrunedDirectories.UnionWith(scanResult.NestedRepositories.Select(FileIndexer.NormalizeIndexPath));
-                purged += writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retainedPaths, authoritativeDirectories, attributePrunedDirectories);
+                purged += writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retainedPaths!, authoritativeDirectories, attributePrunedDirectories);
             }
         }
         else
@@ -990,11 +990,11 @@ public static partial class IndexCommandRunner
                     .Select(FileIndexer.NormalizeIndexPath)
                     .ToHashSet(StringComparer.Ordinal);
                 attributePrunedDirectories.UnionWith(scanResult.NestedRepositories.Select(FileIndexer.NormalizeIndexPath));
-                purged = writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retainedPaths, authoritativeDirectories, attributePrunedDirectories);
+                purged = writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retainedPaths!, authoritativeDirectories, attributePrunedDirectories);
             }
             else if (!startedWithNoIndexedFiles)
             {
-                purged = writer.PurgeFilesOutsideRetainedSet(retainedPaths);
+                purged = writer.PurgeFilesOutsideRetainedSet(retainedPaths!);
             }
             DeleteScanCheckpoint(scanCheckpointPath, warningList, options.Json, options.Quiet);
         }
@@ -1044,9 +1044,9 @@ public static partial class IndexCommandRunner
         var interactiveIndexSpinner = !options.Json && !options.Quiet && ConsoleUi.ShouldUseInteractiveConsole();
         var redirectedIndexingMessagePrinted = false;
         var indexProgressVisible = false;
-        var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
-        var skippedSymbolExtractorLanguages = new HashSet<string>(StringComparer.Ordinal);
-        var indexedSymbolExtractorLanguages = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string>? reusedHotspotFamilyLanguages = null;
+        HashSet<string>? skippedSymbolExtractorLanguages = null;
+        var indexedSymbolExtractorLanguages = new HashSet<string>(languageCounts.Count, StringComparer.Ordinal);
         var lastJsonProgressAt = Stopwatch.GetTimestamp();
         string? currentJsonIndexFile = null;
         var activeJsonExtractionPhases = new ConcurrentDictionary<int, string>();
@@ -1219,7 +1219,7 @@ public static partial class IndexCommandRunner
         {
             foreach (var indexedConfigPath in indexedJavaScriptTypeScriptConfigPathsBeforePurge)
             {
-                if (!retainedPaths.Contains(indexedConfigPath))
+                if (!retainedPaths!.Contains(indexedConfigPath))
                     return true;
             }
 
@@ -1350,9 +1350,13 @@ public static partial class IndexCommandRunner
             freshCountReferences += referenceCount;
         }
 
+        var canSkipFullScanTargetsBeforeContentLoad = !options.Rebuild
+            && !startedWithNoIndexedFiles
+            && !options.SymbolsOnly;
+
         bool TrySkipFullScanTargetBeforeContentLoad(int fileIndex)
         {
-            if (options.Rebuild || startedWithNoIndexedFiles || options.SymbolsOnly)
+            if (!canSkipFullScanTargetsBeforeContentLoad)
                 return false;
 
             var target = fileTargets[fileIndex];
@@ -1386,26 +1390,43 @@ public static partial class IndexCommandRunner
             processed++;
             RememberReadableFileSize(target.FilePath, existingFile.Value.Size);
             if (!string.IsNullOrWhiteSpace(language))
+            {
+                skippedSymbolExtractorLanguages ??= new HashSet<string>(StringComparer.Ordinal);
                 skippedSymbolExtractorLanguages.Add(language);
+            }
             if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(language) && language != null)
+            {
+                reusedHotspotFamilyLanguages ??= new HashSet<string>(StringComparer.Ordinal);
                 reusedHotspotFamilyLanguages.Add(language);
+            }
             if (options.Verbose && !options.Json && !options.Quiet)
                 Console.WriteLine($"  [SKIP] {target.IndexPath} (unchanged)");
             return true;
         }
 
-        var extractionFileIndexes = new List<int>(fileTargets.Length);
-        for (var fileIndex = 0; fileIndex < fileTargets.Length; fileIndex++)
+        ThrowIfFullScanCancelled(processed, files.Count);
+        List<int>? extractionFileIndexes = null;
+        int extractionWorkItemCount;
+        if (canSkipFullScanTargetsBeforeContentLoad)
         {
-            ThrowIfFullScanCancelled(processed, files.Count);
-            if (!TrySkipFullScanTargetBeforeContentLoad(fileIndex))
-                extractionFileIndexes.Add(fileIndex);
+            extractionFileIndexes = new List<int>(fileTargets.Length);
+            for (var fileIndex = 0; fileIndex < fileTargets.Length; fileIndex++)
+            {
+                ThrowIfFullScanCancelled(processed, files.Count);
+                if (!TrySkipFullScanTargetBeforeContentLoad(fileIndex))
+                    extractionFileIndexes.Add(fileIndex);
+            }
+            extractionWorkItemCount = extractionFileIndexes.Count;
+        }
+        else
+        {
+            extractionWorkItemCount = fileTargets.Length;
         }
 
         ReportJsonIndexProgressIfNeeded();
 
         PostExtractionHookRunner? postExtractionHooks = null;
-        if (extractionFileIndexes.Count == 0)
+        if (extractionWorkItemCount == 0)
         {
             FullScanExtractionSchedulingForTesting?.Invoke(false, null);
         }
@@ -1456,10 +1477,12 @@ public static partial class IndexCommandRunner
                         {
                             extractionCancellationToken.ThrowIfCancellationRequested();
                             var extractionIndex = Interlocked.Increment(ref nextExtractionIndex);
-                            if (extractionIndex >= extractionFileIndexes.Count)
+                            if (extractionIndex >= extractionWorkItemCount)
                                 break;
 
-                            var fileIndex = extractionFileIndexes[extractionIndex];
+                            var fileIndex = extractionFileIndexes == null
+                                ? extractionIndex
+                                : extractionFileIndexes[extractionIndex];
                             var target = fileTargets[fileIndex];
                             var filePath = target.FilePath;
                             var relativeFilePath = target.RelativePath;
@@ -1784,9 +1807,15 @@ public static partial class IndexCommandRunner
                             skipped++;
                             processed++;
                             if (!string.IsNullOrWhiteSpace(record.Lang))
+                            {
+                                skippedSymbolExtractorLanguages ??= new HashSet<string>(StringComparer.Ordinal);
                                 skippedSymbolExtractorLanguages.Add(record.Lang);
+                            }
                             if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(record.Lang) && record.Lang != null)
+                            {
+                                reusedHotspotFamilyLanguages ??= new HashSet<string>(StringComparer.Ordinal);
                                 reusedHotspotFamilyLanguages.Add(record.Lang);
+                            }
                             if (options.Verbose && !options.Json && !options.Quiet)
                             {
                                 PauseIndexSpinnerForConsoleWrite();
@@ -1820,7 +1849,9 @@ public static partial class IndexCommandRunner
                                 csharpMetadataTargetsNeedRefresh = true;
                             }
                         }
-                        var fileId = writer.UpsertFile(record, cleanExistingData: !startedWithNoIndexedFiles);
+                        var fileId = startedWithNoIndexedFiles
+                            ? writer.InsertNewFile(record)
+                            : writer.UpsertFile(record);
                         ftsMutated = true;
                         currentJsonIndexFile = FormatIndexPhasePath(record.Path, "chunking");
                         var chunks = item.Chunks == null
@@ -1991,7 +2022,10 @@ public static partial class IndexCommandRunner
                                 item = item with { Issues = AppendIssue(baseIssues, issue) };
                             }
                         }
-                        writer.InsertReferences(references, refreshMutualRecursionFlags: false, cancellationToken);
+                        if (startedWithNoIndexedFiles)
+                            writer.InsertReferencesForNewFiles(references, refreshMutualRecursionFlags: false, cancellationToken);
+                        else
+                            writer.InsertReferences(references, refreshMutualRecursionFlags: false, cancellationToken);
                         if (references.Count > 0)
                             mutualRecursionRefreshNeeded = true;
                         currentJsonIndexFile = FormatIndexPhasePath(record.Path, "validating");
@@ -2168,7 +2202,10 @@ public static partial class IndexCommandRunner
             // guarantee 100% backfill on a legacy DB).
             // fold は実検証が通ったときだけ stamp。legacy DB で skip された行は NULL のため、
             // 黙って stamp すると reader が fold 経路で legacy 行を見逃す。codex #86 レビュー。
-            var backfillReady = skipped == 0 || writer.AllFoldedColumnsBackfilled(skippedSymbolExtractorLanguages);
+            IReadOnlyCollection<string> skippedSymbolExtractorLanguageSet = skippedSymbolExtractorLanguages is null
+                ? Array.Empty<string>()
+                : skippedSymbolExtractorLanguages;
+            var backfillReady = skipped == 0 || writer.AllFoldedColumnsBackfilled(skippedSymbolExtractorLanguageSet);
             var foldedKeysCurrent = skipped == 0 || writer.AllFoldedColumnValuesMatchCurrentFold();
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var currentFoldFingerprint = NameFold.Fingerprint();
@@ -2176,7 +2213,7 @@ public static partial class IndexCommandRunner
             var foldFingerprintMatchesCurrent = priorFoldFingerprint == currentFoldFingerprint;
             var canRestampExistingFoldTrust = foldVersionMatchesCurrent
                 && foldFingerprintMatchesCurrent
-                && writer.SymbolExtractorVersionsMatchCurrent(skippedSymbolExtractorLanguages);
+                && writer.SymbolExtractorVersionsMatchCurrent(skippedSymbolExtractorLanguageSet);
             // A normal `index .` run still skips unchanged files. If the prior fold metadata
             // is stale, those skipped rows keep the old physical folded keys, so stamping the
             // NEW metadata for the whole DB would silently misadvertise trust. Only stamp when

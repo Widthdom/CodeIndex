@@ -493,12 +493,12 @@ public static partial class SymbolExtractor
         string? lang,
         SymbolPattern pattern,
         string matchLine,
-        bool[]? cssQualifiedRuleAncestors,
+        Func<bool[]?>? getCssQualifiedRuleAncestors,
         int lineIndex) =>
         lang == "css"
-        && cssQualifiedRuleAncestors != null
-        && cssQualifiedRuleAncestors[lineIndex]
         && pattern.Kind == "class"
-        && !matchLine.TrimStart().StartsWith('@');
+        && !matchLine.TrimStart().StartsWith('@')
+        && getCssQualifiedRuleAncestors?.Invoke() is { } cssQualifiedRuleAncestors
+        && cssQualifiedRuleAncestors[lineIndex];
 
 }

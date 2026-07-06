@@ -93,11 +93,8 @@ internal static class KotlinReferenceExtractor
     public static bool IsConstructorCallName(string name, IReadOnlySet<string> constructorTypeNames)
         => constructorTypeNames.Contains(name);
 
-    public static void AddDeclaredInfixFunctionNames(string language, IEnumerable<string> lines, HashSet<string> names)
+    public static void AddDeclaredInfixFunctionNames(IEnumerable<string> lines, HashSet<string> names)
     {
-        if (language != "kotlin")
-            return;
-
         foreach (var line in lines)
         {
             var match = InfixFunctionNameRegex.Match(line);
@@ -369,7 +366,7 @@ internal static class KotlinReferenceExtractor
 
     public static void EmitCtorDelegationReferences(
         string preparedLine,
-        IReadOnlyList<SymbolRecord> enclosingTypeCandidates,
+        Func<IReadOnlyList<SymbolRecord>> getEnclosingTypeCandidates,
         IReadOnlyList<SymbolRecord> symbols,
         string[] structuralLines,
         List<ReferenceRecord> references,
@@ -383,7 +380,7 @@ internal static class KotlinReferenceExtractor
         if (matches.Count == 0)
             return;
 
-        var enclosingType = ReferenceExtractor.FindInnermostClassLike(enclosingTypeCandidates, lineNumber);
+        var enclosingType = ReferenceExtractor.FindInnermostClassLike(getEnclosingTypeCandidates(), lineNumber);
         if (enclosingType == null)
             return;
 

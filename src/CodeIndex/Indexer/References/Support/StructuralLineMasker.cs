@@ -74,9 +74,16 @@ internal static class StructuralLineMasker
     }
 
     internal static string[] MaskLines(string? lang, string[] originalLines)
-        => MaskLines(lang, originalLines, out _);
+        => MaskLines(lang, originalLines, collectJsTaggedTemplateHits: false, out _);
 
     internal static string[] MaskLines(string? lang, string[] originalLines, out List<JsTaggedTemplateHit>? jsTaggedTemplateHits)
+        => MaskLines(lang, originalLines, collectJsTaggedTemplateHits: true, out jsTaggedTemplateHits);
+
+    private static string[] MaskLines(
+        string? lang,
+        string[] originalLines,
+        bool collectJsTaggedTemplateHits,
+        out List<JsTaggedTemplateHit>? jsTaggedTemplateHits)
     {
         jsTaggedTemplateHits = null;
         if (!RequiresStructuralMasking(lang))
@@ -99,8 +106,7 @@ internal static class StructuralLineMasker
                 break;
             case "javascript":
             case "typescript":
-                jsTaggedTemplateHits = new List<JsTaggedTemplateHit>();
-                MaskJsTsTemplateLiteralContents(maskedLines, jsTaggedTemplateHits, lang);
+                MaskJsTsTemplateLiteralContents(maskedLines, collectJsTaggedTemplateHits, ref jsTaggedTemplateHits, lang);
                 break;
             case "kotlin":
                 MaskKotlinTripleStringContents(maskedLines);
@@ -1572,7 +1578,11 @@ internal static class StructuralLineMasker
     // ホール内の本物のコードは参照抽出に見せるためマスクしない。
     // regex literal は外側と hole 内の両方でスキップし、regex 中の backtick が template を
     // 誤って開始したり `}` が hole を早く閉じたりするのを避ける。
-    private static void MaskJsTsTemplateLiteralContents(string[] lines, List<JsTaggedTemplateHit>? taggedTemplateHits = null, string? lang = null)
+    private static void MaskJsTsTemplateLiteralContents(
+        string[] lines,
+        bool collectTaggedTemplateHits,
+        ref List<JsTaggedTemplateHit>? taggedTemplateHits,
+        string? lang = null)
     {
         // `<...>` before a backtick is a TypeScript-only generic type-argument form. In plain
         // JavaScript the same character sequence is always a comparison chain (`foo<bar>\`x\``
@@ -1737,8 +1747,8 @@ internal static class StructuralLineMasker
                             // restore paren/state context for the token that follows.
                             // hole 側の lex state を退避し、閉じ backtick 後に paren
                             // などの context を元に戻せるようにする。
-                            if (taggedTemplateHits != null)
-                                TryRecordJsTaggedTemplateHit(lines, masked, i, pos, taggedTemplateHits, allowGenericTag);
+                            if (collectTaggedTemplateHits)
+                                TryRecordJsTaggedTemplateHit(lines, masked, i, pos, ref taggedTemplateHits, allowGenericTag);
                             pos++;
                             frames.Push(new JsTemplateLiteralFrame { SavedLexState = lexState });
                             lexState = default;
@@ -1877,8 +1887,8 @@ internal static class StructuralLineMasker
                     // the paren stack / statement-head hints that preceded the template.
                     // テンプレート直前の lex state を退避し、閉じ backtick で paren
                     // stack や statement-head hint を復元できるようにする。
-                    if (taggedTemplateHits != null)
-                        TryRecordJsTaggedTemplateHit(lines, masked, i, pos, taggedTemplateHits, allowGenericTag);
+                    if (collectTaggedTemplateHits)
+                        TryRecordJsTaggedTemplateHit(lines, masked, i, pos, ref taggedTemplateHits, allowGenericTag);
                     masked[pos] = ' ';
                     pos++;
                     frames.Push(new JsTemplateLiteralFrame { SavedLexState = lexState });
@@ -1920,7 +1930,7 @@ internal static class StructuralLineMasker
         // なので、ループヘッダ形だけを静かにする必要がある。マスク後バッファに対して
         // 検査するため template 本体が誤トークンを混入させることがなく、
         // `for (\n  const ch of \`abc\`\n)` のような複数行ヘッダも行境界を越えて処理する。
-        if (taggedTemplateHits != null && taggedTemplateHits.Count > 0)
+        if (collectTaggedTemplateHits && taggedTemplateHits != null && taggedTemplateHits.Count > 0)
             FilterJsForOfHeaderHits(lines, taggedTemplateHits);
     }
 
@@ -2346,7 +2356,7 @@ internal static class StructuralLineMasker
     // `return` / `throw` / `await` / `typeof` のようなプレーンテンプレートの前に
     // 立ちうるキーワードは呼び出し側の `IsIgnoredCallName` で除外する。
     private static void TryRecordJsTaggedTemplateHit(
-        string[] lines, char[] masked, int lineIndex, int backtickPos, List<JsTaggedTemplateHit> hits, bool allowGenericTag)
+        string[] lines, char[] masked, int lineIndex, int backtickPos, ref List<JsTaggedTemplateHit>? hits, bool allowGenericTag)
     {
         // Skip inter-token whitespace backward, crossing line boundaries when the tag
         // identifier lives on a prior line (multi-line forms like `tag\n\`hello\``).
@@ -2467,7 +2477,7 @@ internal static class StructuralLineMasker
             break;
         }
 
-        hits.Add(new JsTaggedTemplateHit(curLine + 1, start + 1, name, isMemberAccess));
+        (hits ??= []).Add(new JsTaggedTemplateHit(curLine + 1, start + 1, name, isMemberAccess));
     }
 
     // Decide whether `/` at the current scan position starts a regex literal rather

@@ -13,8 +13,8 @@ public static partial class SymbolExtractor
 
     private static string[] MaskShellHeredocLines(string[] lines)
     {
-        var maskedLines = (string[])lines.Clone();
-        var pendingTerminators = new Queue<ShellHeredocTerminator>();
+        string[]? maskedLines = null;
+        Queue<ShellHeredocTerminator>? pendingTerminators = null;
         ShellHeredocTerminator? activeTerminator = null;
 
         for (var i = 0; i < lines.Length; i++)
@@ -22,10 +22,10 @@ public static partial class SymbolExtractor
             var line = lines[i];
             if (activeTerminator is { } terminator)
             {
-                maskedLines[i] = string.Empty;
+                (maskedLines ??= (string[])lines.Clone())[i] = string.Empty;
                 if (ShellHeredocTerminatorMatches(line, terminator))
                 {
-                    activeTerminator = pendingTerminators.Count > 0
+                    activeTerminator = pendingTerminators is { Count: > 0 }
                         ? pendingTerminators.Dequeue()
                         : null;
                 }
@@ -34,13 +34,13 @@ public static partial class SymbolExtractor
             }
 
             foreach (var heredocTerminator in EnumerateShellHeredocTerminators(line))
-                pendingTerminators.Enqueue(heredocTerminator);
+                (pendingTerminators ??= new Queue<ShellHeredocTerminator>()).Enqueue(heredocTerminator);
 
-            if (pendingTerminators.Count > 0)
+            if (pendingTerminators is { Count: > 0 })
                 activeTerminator = pendingTerminators.Dequeue();
         }
 
-        return maskedLines;
+        return maskedLines ?? lines;
     }
 
     private static bool ShellHeredocTerminatorMatches(string line, ShellHeredocTerminator terminator)

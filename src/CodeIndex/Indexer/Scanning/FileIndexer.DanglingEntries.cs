@@ -30,22 +30,22 @@ public partial class FileIndexer
                 continue;
 
             var relativeEntry = ToRelativePath(entry);
-            scanState.DanglingSymlinks.Add(relativeEntry);
+            scanState.RecordDanglingSymlink(relativeEntry);
             scanState.Errors.Add(new ScanError(relativeEntry, "Skipped dangling symlink because its target could not be resolved.", ScanIssueSeverity.Warning));
             scanState.ListedDirectories.Add(relativeEntry);
             scanState.FullyScannedDirectories.Add(relativeEntry);
-            scanState.AttributePrunedDirectories.Add(relativeEntry);
+            scanState.RecordAttributePrunedDirectory(relativeEntry);
         }
     }
 
     private void RecordDanglingFileSystemEntry(string entry, DirectoryScanState scanState)
     {
         var relativeEntry = ToRelativePath(entry);
-        scanState.DanglingSymlinks.Add(relativeEntry);
+        scanState.RecordDanglingSymlink(relativeEntry);
         scanState.Errors.Add(new ScanError(relativeEntry, "Skipped dangling symlink because its target could not be resolved.", ScanIssueSeverity.Warning));
         scanState.ListedDirectories.Add(relativeEntry);
         scanState.FullyScannedDirectories.Add(relativeEntry);
-        scanState.AttributePrunedDirectories.Add(relativeEntry);
+        scanState.RecordAttributePrunedDirectory(relativeEntry);
     }
 
     private static bool ReparsePointTargetExists(string path)

@@ -844,7 +844,7 @@ public static partial class IndexCommandRunner
 
     private static void RestampHotspotFamilyTrustForFullScan(
         DbWriter writer,
-        IReadOnlySet<string> reusedLanguages,
+        IReadOnlySet<string>? reusedLanguages,
         IReadOnlyDictionary<string, string?> priorVersions,
         IReadOnlyDictionary<string, string?> priorFingerprints,
         IReadOnlyDictionary<string, FileIndexer.ProjectMarkerFingerprintResult> currentFingerprints)
@@ -863,7 +863,7 @@ public static partial class IndexCommandRunner
 
             priorVersions.TryGetValue(lang, out var priorVersion);
             priorFingerprints.TryGetValue(lang, out var priorFingerprint);
-            if (!reusedLanguages.Contains(lang) || (priorVersion == currentVersion && priorFingerprint == currentFingerprint.Fingerprint))
+            if (reusedLanguages?.Contains(lang) != true || (priorVersion == currentVersion && priorFingerprint == currentFingerprint.Fingerprint))
                 writer.MarkHotspotFamilyReady(lang, currentFingerprint.Fingerprint);
         }
     }

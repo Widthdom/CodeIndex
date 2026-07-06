@@ -442,6 +442,62 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void SymbolExtractionWorker_ReusesPatternConfigDiscoveryPerProjectRoot()
+    {
+        var projectRoot = CreateTempProject();
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                WriteSymbolWorkerPatternConfig(
+                    projectRoot,
+                    "toydsl.yaml",
+                    "language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"class\"\n    regex: \"^entity (?<name>\\\\w+)\"\n");
+                using var worker = new SymbolExtractionWorkerClient();
+
+                var first = worker.Invoke(
+                    0,
+                    "toydsl",
+                    "entity First",
+                    Path.Combine(projectRoot, "first.toy"),
+                    projectRoot,
+                    contentIsNormalized: true,
+                    hasOversizeLine: false,
+                    conflictMarkerLine: null,
+                    TimeSpan.FromSeconds(5));
+
+                Assert.True(first.Success, first.WorkerError);
+                var firstSymbol = Assert.Single(first.Symbols!);
+                Assert.Equal("First", firstSymbol.Name);
+
+                WriteSymbolWorkerPatternConfig(
+                    projectRoot,
+                    "laterdsl.yaml",
+                    "language: \"laterdsl\"\nextensions:\n  - extension: \".later\"\npatterns:\n  - kind: \"class\"\n    regex: \"^later (?<name>\\\\w+)\"\n");
+
+                var second = worker.Invoke(
+                    0,
+                    "laterdsl",
+                    "later Second",
+                    Path.Combine(projectRoot, "second.later"),
+                    projectRoot,
+                    contentIsNormalized: true,
+                    hasOversizeLine: false,
+                    conflictMarkerLine: null,
+                    TimeSpan.FromSeconds(5));
+
+                Assert.True(second.Success, second.WorkerError);
+                Assert.Empty(second.Symbols!);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
     public void SymbolExtractionWorker_InvalidRequestJsonDoesNotEchoParserMessage_Issue3425()
     {
         const string secret = "SECRET_SYMBOL_WORKER_3425";
@@ -6604,8 +6660,11 @@ public sealed class Caller
     }
 
     private static void WriteSymbolWorkerPatternConfig(string projectRoot, string content)
+        => WriteSymbolWorkerPatternConfig(projectRoot, "toydsl.yaml", content);
+
+    private static void WriteSymbolWorkerPatternConfig(string projectRoot, string fileName, string content)
     {
-        var path = Path.Combine(projectRoot, ".cdidx", "patterns", "toydsl.yaml");
+        var path = Path.Combine(projectRoot, ".cdidx", "patterns", fileName);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, content);
     }

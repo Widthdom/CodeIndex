@@ -8,18 +8,24 @@ namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
-    private static void ExtractJavaScriptTypeScriptBareMethods(long fileId, string lang, string[] lines, List<SymbolRecord> symbols, JavaScriptScopePrivacyFlags[][] privateScopeColumns)
+    private static void ExtractJavaScriptTypeScriptBareMethods(
+        long fileId,
+        string lang,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        Func<JavaScriptScopePrivacyFlags[][]> getPrivateScopeColumns,
+        Func<string[]> getSanitizedLines)
     {
         var existingClassTargets = GetJavaScriptTypeScriptExistingClassScanTargets(lang, lines, symbols);
         ExtractJavaScriptTypeScriptBareMethodsInTargets(fileId, lang, lines, symbols, existingClassTargets);
 
-        var syntheticClassTargets = CollectJavaScriptTypeScriptSyntheticClassScanTargets(fileId, lang, lines, symbols, privateScopeColumns);
+        var syntheticClassTargets = CollectJavaScriptTypeScriptSyntheticClassScanTargets(fileId, lang, lines, symbols, getPrivateScopeColumns);
         ExtractJavaScriptTypeScriptBareMethodsInTargets(fileId, lang, lines, symbols, syntheticClassTargets);
 
-        var objectLiteralTargets = CollectJavaScriptTypeScriptObjectLiteralScanTargets(lang, lines, privateScopeColumns);
+        var objectLiteralTargets = CollectJavaScriptTypeScriptObjectLiteralScanTargets(lang, lines, getPrivateScopeColumns);
         ExtractJavaScriptTypeScriptBareMethodsInTargets(fileId, lang, lines, symbols, objectLiteralTargets);
-        ExtractJavaScriptTypeScriptExportSurfaceSymbols(fileId, lang, lines, symbols, privateScopeColumns, objectLiteralTargets);
-        ExtractJavaScriptTypeScriptQualifiedAssignments(fileId, lang, lines, symbols, privateScopeColumns);
+        ExtractJavaScriptTypeScriptExportSurfaceSymbols(fileId, lang, lines, symbols, getPrivateScopeColumns, getSanitizedLines, objectLiteralTargets);
+        ExtractJavaScriptTypeScriptQualifiedAssignments(fileId, lang, lines, symbols, getPrivateScopeColumns, getSanitizedLines);
     }
 
     // Scans for object literal declarations (`const obj = { ... }`, `module.exports = { ... }`
@@ -36,11 +42,12 @@ public static partial class SymbolExtractor
     private static List<JavaScriptClassScanTarget> CollectJavaScriptTypeScriptObjectLiteralScanTargets(
         string lang,
         string[] lines,
-        JavaScriptScopePrivacyFlags[][] privateScopeColumns)
+        Func<JavaScriptScopePrivacyFlags[][]> getPrivateScopeColumns)
     {
         if (!LinesContain(lines, "{", StringComparison.Ordinal))
             return [];
 
+        var privateScopeColumns = getPrivateScopeColumns();
         List<JavaScriptClassScanTarget>? targets = null;
         HashSet<(int StartIndex, int ScanStartIndex, int ScanEndExclusive, string ContainerName)>? targetIdentities = null;
         var lexState = new JavaScriptLexState();
@@ -143,13 +150,15 @@ public static partial class SymbolExtractor
         string lang,
         string[] lines,
         List<SymbolRecord> symbols,
-        JavaScriptScopePrivacyFlags[][] privateScopeColumns,
+        Func<JavaScriptScopePrivacyFlags[][]> getPrivateScopeColumns,
+        Func<string[]> getSanitizedLines,
         List<JavaScriptClassScanTarget> objectLiteralTargets)
     {
         if (!LinesContain(lines, "export", StringComparison.Ordinal))
             return;
 
-        var sanitizedLines = BuildJavaScriptTypeScriptSanitizedLines(lines);
+        var privateScopeColumns = getPrivateScopeColumns();
+        var sanitizedLines = getSanitizedLines();
         ExtractJavaScriptTypeScriptReExportSymbols(fileId, lang, lines, sanitizedLines, symbols);
         ExtractJavaScriptTypeScriptLocalNamedExportSymbols(fileId, lines, sanitizedLines, symbols);
         ExtractJavaScriptTypeScriptExportedVariableSymbols(fileId, lines, sanitizedLines, symbols, privateScopeColumns);
@@ -706,7 +715,7 @@ public static partial class SymbolExtractor
         out int endLineIndex,
         out string signature)
     {
-        moduleSpecifiers = [];
+        moduleSpecifiers = null!;
         endLineIndex = -1;
         signature = string.Empty;
 
@@ -737,6 +746,7 @@ public static partial class SymbolExtractor
         var parenDepth = 0;
         var bracketDepth = 0;
         var braceDepth = 0;
+        List<(string ModuleName, int LineIndex, int StartColumn)>? collectedModuleSpecifiers = null;
         for (var currentLineIndex = openParenLineIndex; currentLineIndex <= endLineIndex; currentLineIndex++)
         {
             var sanitizedLine = sanitizedLines[currentLineIndex];
@@ -759,7 +769,7 @@ public static partial class SymbolExtractor
                                 out var moduleStartColumn,
                                 out var moduleEndColumn))
                         {
-                            moduleSpecifiers.Add((moduleName, currentLineIndex, moduleStartColumn));
+                            (collectedModuleSpecifiers ??= []).Add((moduleName, currentLineIndex, moduleStartColumn));
                             column = moduleEndColumn + 1;
                             continue;
                         }
@@ -802,8 +812,12 @@ public static partial class SymbolExtractor
             }
         }
 
+        if (collectedModuleSpecifiers is null)
+            return false;
+
+        moduleSpecifiers = collectedModuleSpecifiers;
         signature = BuildJavaScriptTypeScriptDynamicImportSignature(rawLines, startLineIndex, endLineIndex, closeParenColumn);
-        return moduleSpecifiers.Count > 0;
+        return true;
     }
 
     private static void ExtractJavaScriptTypeScriptServiceWorkerRegisterModuleSymbols(
@@ -1864,12 +1878,14 @@ public static partial class SymbolExtractor
         string lang,
         string[] lines,
         List<SymbolRecord> symbols,
-        JavaScriptScopePrivacyFlags[][] privateScopeColumns)
+        Func<JavaScriptScopePrivacyFlags[][]> getPrivateScopeColumns,
+        Func<string[]> getSanitizedLines)
     {
         if (!LinesContain(lines, "=", StringComparison.Ordinal))
             return;
 
-        var sanitizedLines = BuildJavaScriptTypeScriptSanitizedLines(lines);
+        var privateScopeColumns = getPrivateScopeColumns();
+        var sanitizedLines = getSanitizedLines();
         List<JavaScriptClassScanTarget>? syntheticClassTargets = null;
         HashSet<SymbolLineIdentity>? symbolLineIdentities = null;
         HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)>? targetIdentities = null;
@@ -2754,7 +2770,7 @@ public static partial class SymbolExtractor
         out int endColumn,
         out List<JavaScriptTypeScriptExportedVariableName> variableNames)
     {
-        variableNames = [];
+        variableNames = null!;
         endLineIndex = startLineIndex;
         endColumn = Math.Max(0, startColumn);
 
@@ -2764,6 +2780,7 @@ public static partial class SymbolExtractor
         var expectingName = true;
         var sawTopLevelSemicolon = false;
         var scanLimit = Math.Min(sanitizedLines.Length, startLineIndex + 32);
+        List<JavaScriptTypeScriptExportedVariableName>? collectedVariableNames = null;
 
         for (var lineIndex = startLineIndex; lineIndex < scanLimit; lineIndex++)
         {
@@ -2794,7 +2811,7 @@ public static partial class SymbolExtractor
                         while (column < line.Length && IsJavaScriptTypeScriptIdentifierPart(line[column]))
                             column++;
 
-                        variableNames.Add(new JavaScriptTypeScriptExportedVariableName(line[nameStart..column], lineIndex, nameStart));
+                        (collectedVariableNames ??= []).Add(new JavaScriptTypeScriptExportedVariableName(line[nameStart..column], lineIndex, nameStart));
                         expectingName = false;
                         continue;
                     }
@@ -2850,7 +2867,7 @@ public static partial class SymbolExtractor
             if (parenDepth == 0
                 && bracketDepth == 0
                 && braceDepth == 0
-                && variableNames.Count > 0
+                && collectedVariableNames is { Count: > 0 }
                 && !expectingName
                 && CanStopJavaScriptTypeScriptExportedVariableDeclarationAtLineEnd(line, out var lastContentColumn))
             {
@@ -2863,7 +2880,11 @@ public static partial class SymbolExtractor
             endColumn = Math.Max(0, line.Length - 1);
         }
 
-        return variableNames.Count > 0;
+        if (collectedVariableNames is null)
+            return false;
+
+        variableNames = collectedVariableNames;
+        return true;
     }
 
     private static bool CanStopJavaScriptTypeScriptExportedVariableDeclarationAtLineEnd(
@@ -6592,11 +6613,17 @@ public static partial class SymbolExtractor
         return targets;
     }
 
-    private static List<JavaScriptClassScanTarget> CollectJavaScriptTypeScriptSyntheticClassScanTargets(long fileId, string lang, string[] lines, List<SymbolRecord> symbols, JavaScriptScopePrivacyFlags[][] privateScopeColumns)
+    private static List<JavaScriptClassScanTarget> CollectJavaScriptTypeScriptSyntheticClassScanTargets(
+        long fileId,
+        string lang,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        Func<JavaScriptScopePrivacyFlags[][]> getPrivateScopeColumns)
     {
         if (!LinesContain(lines, "class", StringComparison.Ordinal))
             return [];
 
+        var privateScopeColumns = getPrivateScopeColumns();
         List<JavaScriptClassScanTarget>? targets = null;
         HashSet<SymbolLineIdentity>? symbolLineIdentities = null;
         HashSet<(int StartIndex, int StartColumn, int ScanStartIndex, int ScanEndExclusive, int FirstLineScanOffset, string ContainerKind, string ContainerName)>? targetIdentities = null;
@@ -8690,8 +8717,26 @@ public static partial class SymbolExtractor
 
     private static JavaScriptLexedLine LexJavaScriptLine(string line, JavaScriptLexState state)
     {
-        var sanitized = new char[line.Length];
+        char[]? sanitized = null;
         var i = 0;
+
+        char[] GetSanitizedBuffer()
+        {
+            return sanitized ??= line.ToCharArray();
+        }
+
+        void SetSanitized(int index, char value)
+        {
+            if (sanitized is null)
+            {
+                if (line[index] == value)
+                    return;
+
+                sanitized = line.ToCharArray();
+            }
+
+            sanitized[index] = value;
+        }
 
         while (i < line.Length)
         {
@@ -8700,10 +8745,10 @@ public static partial class SymbolExtractor
 
             if (state.Mode == JavaScriptLexMode.BlockComment)
             {
-                sanitized[i] = ' ';
+                SetSanitized(i, ' ');
                 if (ch == '*' && next == '/')
                 {
-                    sanitized[i + 1] = ' ';
+                    SetSanitized(i + 1, ' ');
                     state = state with { Mode = JavaScriptLexMode.Code };
                     i++;
                 }
@@ -8714,7 +8759,8 @@ public static partial class SymbolExtractor
 
             if (state.Mode == JavaScriptLexMode.SingleQuote)
             {
-                sanitized[i] = ch is '\'' or '\\' ? ch : ' ';
+                if (ch is not '\'' and not '\\')
+                    SetSanitized(i, ' ');
 
                 if (state.EscapeNext)
                 {
@@ -8739,7 +8785,8 @@ public static partial class SymbolExtractor
 
             if (state.Mode == JavaScriptLexMode.DoubleQuote)
             {
-                sanitized[i] = ch is '"' or '\\' ? ch : ' ';
+                if (ch is not '"' and not '\\')
+                    SetSanitized(i, ' ');
 
                 if (state.EscapeNext)
                 {
@@ -8764,7 +8811,8 @@ public static partial class SymbolExtractor
 
             if (state.Mode == JavaScriptLexMode.TemplateString)
             {
-                sanitized[i] = ch is '`' or '\\' ? ch : ' ';
+                if (ch is not '`' and not '\\')
+                    SetSanitized(i, ' ');
 
                 if (state.EscapeNext)
                 {
@@ -8791,7 +8839,7 @@ public static partial class SymbolExtractor
             {
                 while (i < line.Length)
                 {
-                    sanitized[i] = ' ';
+                    SetSanitized(i, ' ');
                     i++;
                 }
 
@@ -8800,8 +8848,8 @@ public static partial class SymbolExtractor
 
             if (ch == '/' && next == '*')
             {
-                sanitized[i] = ' ';
-                sanitized[i + 1] = ' ';
+                SetSanitized(i, ' ');
+                SetSanitized(i + 1, ' ');
                 state = state with { Mode = JavaScriptLexMode.BlockComment };
                 i++;
                 i++;
@@ -8810,7 +8858,6 @@ public static partial class SymbolExtractor
 
             if (char.IsWhiteSpace(ch))
             {
-                sanitized[i] = ch;
                 i++;
                 continue;
             }
@@ -8828,7 +8875,6 @@ public static partial class SymbolExtractor
 
             if (ch == '\'')
             {
-                sanitized[i] = ch;
                 state = state with { Mode = JavaScriptLexMode.SingleQuote, EscapeNext = false };
                 i++;
                 continue;
@@ -8836,7 +8882,6 @@ public static partial class SymbolExtractor
 
             if (ch == '"')
             {
-                sanitized[i] = ch;
                 state = state with { Mode = JavaScriptLexMode.DoubleQuote, EscapeNext = false };
                 i++;
                 continue;
@@ -8844,7 +8889,6 @@ public static partial class SymbolExtractor
 
             if (ch == '`')
             {
-                sanitized[i] = ch;
                 state = state with { Mode = JavaScriptLexMode.TemplateString, EscapeNext = false };
                 i++;
                 continue;
@@ -8852,8 +8896,8 @@ public static partial class SymbolExtractor
 
             if (ch == '/' && CanStartJavaScriptRegexLiteral(state))
             {
-                sanitized[i] = ' ';
-                i = SkipJavaScriptRegexLiteral(line, sanitized, i);
+                SetSanitized(i, ' ');
+                i = SkipJavaScriptRegexLiteral(line, GetSanitizedBuffer(), i);
                 state = state with
                 {
                     PreviousTokenKind = JavaScriptPrevTokenKind.Other,
@@ -8867,10 +8911,7 @@ public static partial class SymbolExtractor
             {
                 var tokenStart = i;
                 while (i < line.Length && (char.IsLetterOrDigit(line[i]) || line[i] == '_' || line[i] == '$'))
-                {
-                    sanitized[i] = line[i];
                     i++;
-                }
 
                 state = state with
                 {
@@ -8883,13 +8924,9 @@ public static partial class SymbolExtractor
 
             if (char.IsDigit(ch))
             {
-                sanitized[i] = ch;
                 i++;
                 while (i < line.Length && (char.IsLetterOrDigit(line[i]) || line[i] == '_' || line[i] == '.'))
-                {
-                    sanitized[i] = line[i];
                     i++;
-                }
 
                 state = state with
                 {
@@ -8900,7 +8937,6 @@ public static partial class SymbolExtractor
                 continue;
             }
 
-            sanitized[i] = ch;
             if (!char.IsWhiteSpace(ch))
             {
                 var controlFlowParenDepth = state.ControlFlowParenDepth;
@@ -8944,7 +8980,7 @@ public static partial class SymbolExtractor
             i++;
         }
 
-        return new JavaScriptLexedLine(new string(sanitized), state);
+        return new JavaScriptLexedLine(sanitized is null ? line : new string(sanitized), state);
     }
 
     // Sanitize a contiguous block of C# source lines for cross-line structural

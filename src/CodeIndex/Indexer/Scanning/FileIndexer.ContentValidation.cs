@@ -9,9 +9,9 @@ public partial class FileIndexer
     /// ファイル内容のエンコーディング問題を検証する。
     /// </summary>
     public static List<FileIssue> ValidateContent(string relativePath, byte[] rawBytes, string content, string? language = null)
-        => ValidateContent(relativePath, rawBytes, content, language, FileContentInspection.Inspect(rawBytes));
+        => MaterializePublicIssueList(ValidateContent(relativePath, rawBytes, content, language, FileContentInspection.Inspect(rawBytes)));
 
-    internal static List<FileIssue> ValidateContent(
+    internal static IReadOnlyList<FileIssue> ValidateContent(
         string relativePath,
         byte[] rawBytes,
         string content,
@@ -20,11 +20,11 @@ public partial class FileIndexer
         bool? hasOversizeLine = null,
         int? conflictMarkerLine = null)
     {
-        var issues = new List<FileIssue>();
+        List<FileIssue>? issues = null;
 
         if (inspection.IsGitLfsPointer)
         {
-            issues.Add(new FileIssue
+            AddIssue(ref issues, new FileIssue
             {
                 Path = relativePath,
                 Kind = "lfs_pointer_skipped",
@@ -51,15 +51,15 @@ public partial class FileIndexer
         if (isUtf16)
         {
             if (hasUtf16Bom)
-                AddUtf16BomIssue(issues, relativePath, utf16BigEndian);
+                AddUtf16BomIssue(ref issues, relativePath, utf16BigEndian);
             else
-                AddUtf16HeuristicIssue(issues, relativePath, utf16BigEndian);
+                AddUtf16HeuristicIssue(ref issues, relativePath, utf16BigEndian);
         }
 
         var effectiveConflictMarkerLine = conflictMarkerLine ?? GetConflictMarkerLine(content);
         if (effectiveConflictMarkerLine > 0)
         {
-            issues.Add(new FileIssue
+            AddIssue(ref issues, new FileIssue
             {
                 Path = relativePath,
                 Kind = "conflict_markers",
@@ -68,7 +68,7 @@ public partial class FileIndexer
             });
         }
 
-        AddReplacementCharacterIssues(issues, relativePath, rawBytes, content, isUtf16, utf16BigEndian, hasUtf16Bom);
+        AddReplacementCharacterIssues(ref issues, relativePath, rawBytes, content, isUtf16, utf16BigEndian, hasUtf16Bom);
 
         // Raw-byte heuristics: skip for UTF-16-decoded files because every UTF-16 LE ASCII
         // codepoint looks like a NUL byte and CRLF appears as 0D 00 0A 00, so `bom` /
@@ -77,26 +77,32 @@ public partial class FileIndexer
         // `null_byte` / `mixed_line_endings` / `cr_only_line_endings` がすべて誤検出する
         // ためスキップする。
         if (!isUtf16)
-            AddRawByteContentIssues(issues, relativePath, inspection.RawByteContent);
+            AddRawByteContentIssues(ref issues, relativePath, inspection.RawByteContent);
 
-        AddOversizeContentIssues(issues, relativePath, content, hasOversizeLine);
+        AddOversizeContentIssues(ref issues, relativePath, content, hasOversizeLine);
         var effectiveLanguage = language ?? TryDetectLanguage(relativePath, content).Language;
         if (effectiveLanguage is "xml" or "msbuild")
-            AddXmlStructureIssues(issues, relativePath, content);
+            AddXmlStructureIssues(ref issues, relativePath, content);
         if (effectiveLanguage == "dockerfile")
         {
-            AddDockerfileJsonFormIssues(issues, relativePath, content);
+            AddDockerfileJsonFormIssues(ref issues, relativePath, content);
         }
 
-        return issues;
+        return issues ?? (IReadOnlyList<FileIssue>)Array.Empty<FileIssue>();
     }
 
-    private static void AddXmlStructureIssues(List<FileIssue> issues, string relativePath, string content)
+    private static List<FileIssue> MaterializePublicIssueList(IReadOnlyList<FileIssue> issues)
+        => issues as List<FileIssue> ?? new List<FileIssue>(issues);
+
+    private static void AddIssue(ref List<FileIssue>? issues, FileIssue issue)
+        => (issues ??= []).Add(issue);
+
+    private static void AddXmlStructureIssues(ref List<FileIssue>? issues, string relativePath, string content)
     {
         if (!SymbolExtractor.TryGetXmlStructureIssue(content, out var issue))
             return;
 
-        issues.Add(new FileIssue
+        AddIssue(ref issues, new FileIssue
         {
             Path = relativePath,
             Kind = issue.Kind,

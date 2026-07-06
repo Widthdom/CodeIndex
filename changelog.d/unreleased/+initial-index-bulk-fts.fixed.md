@@ -2,10 +2,32 @@
 category: fixed
 affected:
   - src/CodeIndex/Cli/IndexCommandRunner.FullScan.cs
+  - src/CodeIndex/Cli/IndexCommandRunner.cs
+  - src/CodeIndex/Database/NameFold.cs
   - src/CodeIndex/Database/DbReader.cs
   - src/CodeIndex/Database/FtsBulkLoadTriggerGuard.cs
   - src/CodeIndex/Database/DbWriter.cs
+  - src/CodeIndex/Indexer/Scanning/FileIndexer.cs
+  - src/CodeIndex/Indexer/Scanning/FileContentInspection.cs
+  - src/CodeIndex/Indexer/Scanning/FileIndexer.DanglingEntries.cs
+  - src/CodeIndex/Indexer/Scanning/FileIndexer.DirectoryLinks.cs
+  - src/CodeIndex/Indexer/Scanning/FileIndexer.DirectoryTraversal.cs
+  - src/CodeIndex/Indexer/Scanning/FileIndexer.ContentValidation.cs
+  - src/CodeIndex/Indexer/Scanning/FileIndexer.DockerfileDiagnostics.cs
+  - src/CodeIndex/Indexer/Scanning/FileIndexer.EncodingIssues.cs
+  - src/CodeIndex/Indexer/Scanning/FileIndexer.FileAcceptance.cs
+  - src/CodeIndex/Indexer/Scanning/FileIndexer.OversizeContentIssues.cs
+  - src/CodeIndex/Indexer/Scanning/FileIndexer.ScanOrchestration.cs
+  - src/CodeIndex/Indexer/References/ReferenceExtractor.cs
+  - src/CodeIndex/Indexer/References/ReferenceExtractor.Core.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs
+  - src/CodeIndex/Indexer/Symbols/SymbolExtractionWorker.cs
   - src/CodeIndex/Mcp/McpToolHandlers.cs
+  - tests/CodeIndex.Tests/DatabaseTests.cs
+  - tests/CodeIndex.Tests/IndexCommandRunnerTests.cs
+  - tests/CodeIndex.Tests/NameFoldTests.cs
+  - tests/CodeIndex.Tests/ReferenceExtractorTests.cs
+  - tests/CodeIndex.Tests/SymbolExtractorConfiguredPatternTests.cs
 ---
 
 ## English
@@ -48,6 +70,34 @@ affected:
 - **Scanner reuses empty result lists** — scan result materialization now returns shared empty arrays for empty optional path sets instead of allocating empty lists for every full scan.
 - **Root scans skip empty ancestor-ignore copies** — scan result materialization now reuses an empty ancestor-ignore list when the index root has no parent ignore-chain entries, while preserving defensive copies for non-empty chains.
 - **CLI full scans build C# prepass targets during target setup** — CLI full indexing now fills C# static-interface prepass targets while creating per-file scan targets, matching the MCP path and avoiding a second pass over every file.
+- **Fresh file writes use insert-only SQL** — CLI and MCP full scans that start from an empty database now insert new `files` rows with a conflict-free statement instead of paying UPSERT conflict handling for paths that cannot exist yet.
+- **Fresh CLI extraction skips index staging lists** — CLI fresh, rebuild, and symbols-only full scans now schedule extraction directly from the target array instead of allocating a full file-index list that can never filter anything in those modes.
+- **Fresh full scans defer reuse-language tracking** — CLI and MCP fresh/rebuild scans now allocate hotspot and fold reuse language sets only after an existing file is actually reused, and pre-size committed-language tracking from scan metadata.
+- **MCP fresh indexes use one batch marker** — MCP fresh/rebuild scans now keep the in-progress batch marker for the scan instead of rewriting it around every committed file, matching the CLI full-scan crash signal while cutting per-file metadata writes.
+- **CLI fresh purge skips retained-set allocation** — CLI full scans that start from an empty database now avoid allocating the retained path set that only existing-database stale purge paths consume.
+- **Scanner diagnostic sets allocate lazily** — full scans now create optional non-indexable, unknown-extension, probe-failure, pruned-directory, nested-repository, and dangling-symlink path sets only when those diagnostics are actually recorded.
+- **Fresh reference writes skip line-id lookups** — CLI and MCP fresh full scans now insert new `reference_lines` rows with `RETURNING` for newly inserted files instead of upserting and selecting the same line ids back.
+- **Clean validation avoids issue-list allocation** — CLI and MCP indexing now let content-validation helpers allocate `FileIssue` lists only when a file actually emits a validation issue, reusing an empty result for the common clean-file path.
+- **Clean raw-byte validation avoids LF rescans** — content inspection now skips the second LF-only byte search when a file contains no CR or NUL bytes, because that path cannot emit line-ending or null-byte validation issues.
+- **ASCII folded-name writes skip Unicode work** — `NameFold.Fold` now returns already-folded ASCII names unchanged and uses a lightweight ASCII lowercase path before falling back to NFKC/Unicode casefolding, reducing symbol/reference write overhead for common identifiers.
+- **Reference extraction diagnostics allocate lazily** — built-in reference extraction now creates its diagnostic list only when an extractor reports a diagnostic, avoiding one empty list allocation per clean file.
+- **Symbol extraction skips unused empty result lists** — symbol extraction preparation now allocates empty result lists only for early-return paths, not for the common path that continues into language-specific extraction.
+- **Reference extraction reuses normalized language keys** — built-in reference extraction now reuses the language key computed during extractor lookup and only computes plugin language fallback keys after built-in lookup fails.
+- **Index symbol extraction reuses loaded pattern configs** — CLI/MCP indexing now skips per-file configured-pattern discovery after `FileIndexer` has loaded project configs, and isolated symbol workers reuse the first per-root discovery across subsequent files.
+- **Reference extraction builds Stylus-only definition sets on demand** — built-in reference extraction now skips the all-definition symbol lookup for non-Stylus files, avoiding an extra symbol-list pass during large initial indexes.
+- **Reference extraction resolves definition positions lazily** — built-in reference extraction now computes same-line definition name positions only when a call candidate must be checked against them, avoiding eager `IndexOf` scans on definition-heavy files.
+- **Reference extraction allocates call-match sets lazily** — built-in reference extraction now creates per-line call/initializer match sets only when regex matches need duplicate suppression, and skips nested-generic fallback scans on lines without nested generic syntax.
+- **Non-XAML XML reference extraction returns early** — XML files that are not detected as XAML now skip reference lookup preparation entirely instead of building symbol/container lookup state and then ignoring every line.
+- **Symbol extraction defers record component staging** — line-based symbol extraction now allocates the record-primary-component staging list only after a C#/Kotlin declaration actually yields staged components.
+- **Symbol extraction skips trivial container assignment work** — container assignment now returns before sorting or allocating a stack for empty, single-symbol, or container-free symbol lists.
+- **Symbol extraction caches allocate lazily** — line-based symbol extraction now creates duplicate-tracking dictionaries and symbol-line identity caches only after symbols or identity checks actually need them.
+- **C# symbol extraction defers line-start lexing** — C# line-start lex states are now built only when root-code or same-line container checks actually require them, avoiding a full-file lexical pass for files that never reach those paths.
+- **C# symbol extraction defers scope scans** — C# type-body and callable-parameter scope maps are now built only when field-like candidate checks need them, avoiding extra full-file scans for files without those patterns.
+- **C# symbol extraction defers switch-expression scans** — C# switch-expression line maps are now built only when an arrow-bodied property candidate must be checked, avoiding another whole-file scan for C# files that never reach that false-positive guard.
+- **JavaScript/TypeScript symbol extraction defers private-scope scans** — JS/TS private-scope column maps are now built only after class, object-literal, export, or assignment helper guards prove they are needed, avoiding a full lexical scope pass for simpler files.
+- **JavaScript/TypeScript symbol extraction defers sanitized-line arrays** — JS/TS module-reference helpers now build sanitized line arrays only after a raw line contains an import/require/worker-style token, while keeping the sanitized check before emitting symbols.
+- **CSS symbol extraction defers qualified-rule scans** — CSS qualified-rule ancestor maps are now built only when a class selector candidate needs the nested-selector guard, avoiding a whole-file selector-context pass for simpler stylesheets.
+- **Dart symbol extraction defers class-body scans** — Dart class-body maps are now built only when a bare `const` constructor candidate must be checked, avoiding a whole-file scope pass for files without that pattern.
 
 ## 日本語
 
@@ -89,3 +139,31 @@ affected:
 - **scanner が空の result list を再利用します** — scan result materialization は空の optional path set に対して scan ごとに空 list を確保せず、共有空配列を返すようになりました。
 - **root scan で空の ancestor-ignore copy を省きます** — scan result materialization は index root に親 ignore-chain entry が無い場合に空の ancestor-ignore list を再利用し、非空 chain では従来通り defensive copy を維持します。
 - **CLI full scan で C# prepass targets を target setup 中に作ります** — CLI full index はファイルごとの scan target 作成時に C# static-interface prepass targets も埋めるようになり、MCP 経路と同様に全ファイル2回目の走査を避けます。
+- **fresh file write で insert-only SQL を使います** — 空DBから始まる CLI / MCP full scan は、まだ存在し得ない path に対して UPSERT の conflict 処理を使わず、新規 `files` 行専用の INSERT で書き込むようになりました。
+- **fresh CLI extraction で index staging list を省きます** — CLI の fresh / rebuild / symbols-only full scan は、その mode では何も除外できない全ファイル分の index list を確保せず、target 配列から直接 extraction を schedule するようになりました。
+- **fresh full scan の reuse language tracking を遅延確保します** — CLI と MCP の fresh / rebuild scan は、既存ファイルを実際に再利用するまで hotspot / fold 用の言語 set を確保せず、commit 済み言語 tracking も scan metadata から事前サイズ指定するようになりました。
+- **MCP fresh index の batch marker を1回にします** — MCP の fresh / rebuild scan は、file commit ごとに in-progress batch marker を書き直さず scan 中に維持するようになり、CLI full-scan と同じ crash signal を保ちながらファイル単位の metadata write を減らします。
+- **CLI fresh purge の retained set 確保を省きます** — 空DBから始まる CLI full scan は、既存DBの stale purge 経路だけが使う retained path set を確保しないようになりました。
+- **scanner の診断用 set を遅延確保します** — full scan は non-indexable、unknown-extension、probe-failure、pruned-directory、nested-repository、dangling-symlink の各 optional path set を、実際に診断が記録された場合だけ作るようになりました。
+- **fresh reference write で line-id lookup を省きます** — CLI と MCP の fresh full scan は、新規挿入ファイルの `reference_lines` を upsert 後に SELECT で読み返さず、`RETURNING` 付き INSERT で id を受け取るようになりました。
+- **clean な validation で issue list 確保を避けます** — CLI と MCP の index は、content validation helper が実際に検証 issue を出す場合だけ `FileIssue` list を確保し、一般的な clean file 経路では空結果を再利用するようになりました。
+- **clean な raw-byte validation で LF 再走査を避けます** — content inspection は CR / NUL を含まないファイルでは line-ending / null-byte issue が出ないため、LF-only 判定用の2回目の byte search を省くようになりました。
+- **ASCII の folded-name 書き込みで Unicode 処理を省きます** — `NameFold.Fold` は既に fold 済みの ASCII 名をそのまま返し、NFKC / Unicode casefold に入る前に軽量な ASCII lowercase 経路を使うため、一般的な identifier の symbol / reference 書き込み負荷を減らします。
+- **reference extraction の diagnostic を遅延確保します** — built-in reference extraction は extractor が diagnostic を報告した場合だけ diagnostic list を作り、clean file ごとの空 list 確保を避けるようになりました。
+- **symbol extraction で未使用の空 result list を省きます** — symbol extraction preparation は、言語別抽出へ進む通常経路ではなく early return 経路で必要になった場合だけ空 result list を確保するようになりました。
+- **reference extraction で正規化済み言語 key を再利用します** — built-in reference extraction は extractor lookup 時に計算した言語 key を再利用し、plugin fallback 用の key は built-in lookup が失敗した後だけ計算するようになりました。
+- **index の symbol extraction で読み込み済み pattern config を再利用します** — CLI / MCP の indexing は `FileIndexer` が project config を読み込んだ後のファイル単位 configured-pattern 探索を省き、分離 symbol worker も同一 root の初回探索を後続ファイルで再利用します。
+- **reference extraction の Stylus 専用 definition set を必要時だけ作ります** — built-in reference extraction は non-Stylus ファイルで all-definition symbol lookup を省き、大規模初回 index 中の余分な symbol list 走査を避けます。
+- **reference extraction の定義位置解決を遅延します** — built-in reference extraction は call 候補を同一行定義と照合する必要がある場合だけ定義名の行内位置を計算し、定義が多いファイルでの eager な `IndexOf` 走査を避けます。
+- **reference extraction の call-match set を遅延確保します** — built-in reference extraction は重複抑止が必要な regex match が出た場合だけ行単位の call / initializer match set を作り、nested generic 構文のない行では fallback scan も省きます。
+- **non-XAML XML の reference extraction を早期 return します** — XAML と判定されない XML ファイルでは symbol / container lookup state を作って全行を無視するのではなく、参照 lookup 準備自体を省きます。
+- **symbol extraction の record component staging を遅延します** — line-based symbol extraction は C# / Kotlin 宣言が staging 対象の record primary component を実際に出した後だけ、一時 staging list を確保します。
+- **symbol extraction の自明な container assignment 作業を省きます** — container assignment は空、単一 symbol、または container 候補を持たない symbol list では sort や stack 確保へ進まずに戻ります。
+- **symbol extraction cache を遅延確保します** — line-based symbol extraction は重複追跡用 dictionary と symbol-line identity cache を、symbol や identity check が実際に必要になってから作るようになりました。
+- **C# symbol extraction の line-start lexing を遅延します** — C# の line-start lex state は root-code 判定や same-line container 判定で実際に必要になった時だけ作るようになり、その経路へ到達しないファイルで全ファイル lexical pass を避けます。
+- **C# symbol extraction の scope scan を遅延します** — C# の type-body と callable-parameter scope map は field-like candidate 判定で必要になった時だけ作るようになり、それらの pattern が出ないファイルで追加の全ファイル scan を避けます。
+- **C# symbol extraction の switch-expression scan を遅延します** — C# の switch-expression line map は arrow-bodied property 候補を確認する必要がある場合だけ作るようになり、その false-positive guard へ到達しない C# ファイルで追加の全ファイル scan を避けます。
+- **JavaScript/TypeScript symbol extraction の private-scope scan を遅延します** — JS/TS の private-scope column map は class、object literal、export、assignment helper の軽い guard で必要性が確定した後だけ作るようになり、単純なファイルで全体 lexical scope pass を避けます。
+- **JavaScript/TypeScript symbol extraction の sanitized-line 配列を遅延します** — JS/TS の module-reference helper は raw 行に import / require / worker 系 token が出た後だけ sanitized line 配列を作り、symbol を出す前の sanitized check は維持します。
+- **CSS symbol extraction の qualified-rule scan を遅延します** — CSS の qualified-rule ancestor map は class selector 候補で nested-selector guard が必要になった時だけ作るようになり、単純な stylesheet で全体 selector-context pass を避けます。
+- **Dart symbol extraction の class-body scan を遅延します** — Dart の class-body map は bare `const` constructor 候補を確認する必要がある時だけ作るようになり、その pattern が出ないファイルで全体 scope pass を避けます。

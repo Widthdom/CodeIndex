@@ -9,7 +9,7 @@ public partial class FileIndexer
     private const int DockerfileJsonFormIssueLimit = 32;
     private static readonly string[] DockerfileJsonFormInstructions = ["VOLUME", "SHELL", "COPY", "ADD"];
 
-    private static void AddDockerfileJsonFormIssues(List<FileIssue> issues, string relativePath, string content)
+    private static void AddDockerfileJsonFormIssues(ref List<FileIssue>? issues, string relativePath, string content)
     {
         var emitted = 0;
         var diagnosticsTruncated = false;
@@ -24,7 +24,7 @@ public partial class FileIndexer
             var line = content[lineStart..lineEnd];
             if (TryGetDockerfileJsonFormPayload(line, out var instruction, out var payload))
             {
-                if (!TryAddDockerfileJsonFormIssue(issues, relativePath, instruction, payload, lineNumber, ref emitted))
+                if (!TryAddDockerfileJsonFormIssue(ref issues, relativePath, instruction, payload, lineNumber, ref emitted))
                 {
                     diagnosticsTruncated = true;
                     break;
@@ -40,7 +40,7 @@ public partial class FileIndexer
 
         if (diagnosticsTruncated)
         {
-            issues.Add(new FileIssue
+            AddIssue(ref issues, new FileIssue
             {
                 Path = relativePath,
                 Kind = "dockerfile_json_form_issue_limit_reached",
@@ -52,7 +52,7 @@ public partial class FileIndexer
     }
 
     private static bool TryAddDockerfileJsonFormIssue(
-        List<FileIssue> issues,
+        ref List<FileIssue>? issues,
         string relativePath,
         string instruction,
         string payload,
@@ -73,7 +73,7 @@ public partial class FileIndexer
                     continue;
 
                 if (!TryAddDockerfileJsonFormIssue(
-                    issues,
+                    ref issues,
                     relativePath,
                     "dockerfile_json_form_truncated",
                     lineNumber,
@@ -89,7 +89,7 @@ public partial class FileIndexer
         catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
             return TryAddDockerfileJsonFormIssue(
-                issues,
+                ref issues,
                 relativePath,
                 "dockerfile_json_form_invalid",
                 lineNumber,
@@ -101,7 +101,7 @@ public partial class FileIndexer
     }
 
     private static bool TryAddDockerfileJsonFormIssue(
-        List<FileIssue> issues,
+        ref List<FileIssue>? issues,
         string relativePath,
         string kind,
         int lineNumber,
@@ -111,7 +111,7 @@ public partial class FileIndexer
         if (emitted >= DockerfileJsonFormIssueLimit)
             return false;
 
-        issues.Add(new FileIssue
+        AddIssue(ref issues, new FileIssue
         {
             Path = relativePath,
             Kind = kind,

@@ -2117,7 +2117,7 @@ internal static partial class LanguageReferenceExtractionSupport
             return;
 
         var list = line[start..end];
-        var pendingSingleExpressions = new List<(string Expression, int AbsoluteStart)>();
+        List<(string Expression, int AbsoluteStart)>? pendingSingleExpressions = null;
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(list))
         {
             var rawSegment = list.Substring(segmentStart, segmentLength);
@@ -2132,15 +2132,18 @@ internal static partial class LanguageReferenceExtractionSupport
                 continue;
             if (typeStartInFragment == 0)
             {
-                pendingSingleExpressions.Add((fragment, absoluteFragmentStart));
+                (pendingSingleExpressions ??= []).Add((fragment, absoluteFragmentStart));
                 continue;
             }
 
-            pendingSingleExpressions.Clear();
+            pendingSingleExpressions?.Clear();
             var expression = fragment[typeStartInFragment..];
             var absoluteStart = absoluteFragmentStart + typeStartInFragment;
             EmitGoTypeExpression(expression, absoluteStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         }
+
+        if (pendingSingleExpressions is null)
+            return;
 
         foreach (var (expression, absoluteStart) in pendingSingleExpressions)
             EmitGoTypeExpression(expression, absoluteStart, references, seen, fileId, context, lineNumber, resolveContainerForColumn);

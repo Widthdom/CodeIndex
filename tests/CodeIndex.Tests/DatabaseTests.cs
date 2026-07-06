@@ -1770,6 +1770,46 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void InsertNewFile_InsertsAndReturnsId()
+    {
+        var file = new FileRecord
+        {
+            Path = "src/new.py",
+            Lang = "python",
+            Size = 100,
+            Lines = 10,
+            Checksum = "abc123",
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+        };
+
+        var id = _writer.InsertNewFile(file);
+
+        Assert.True(id > 0);
+        var (fileCount, _, _, _) = _writer.GetCounts();
+        Assert.Equal(1, fileCount);
+    }
+
+    [Fact]
+    public void InsertNewFile_DuplicatePathThrows()
+    {
+        var file = new FileRecord
+        {
+            Path = "src/duplicate.py",
+            Lang = "python",
+            Size = 100,
+            Lines = 10,
+            Checksum = "abc123",
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+        };
+
+        _writer.InsertNewFile(file);
+
+        Assert.Throws<SqliteException>(() => _writer.InsertNewFile(file));
+        var (fileCount, _, _, _) = _writer.GetCounts();
+        Assert.Equal(1, fileCount);
+    }
+
+    [Fact]
     public void UpsertFile_ReplacesOnConflict()
     {
         // Same path should replace (not duplicate)
@@ -2781,6 +2821,40 @@ public class DatabaseTests : IDisposable
             .ToList();
 
         _writer.InsertReferences(references);
+
+        var (_, _, _, referenceCount) = _writer.GetCounts();
+        Assert.Equal(120, referenceCount);
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM reference_lines";
+        Assert.Equal(10L, (long)cmd.ExecuteScalar()!);
+    }
+
+    [Fact]
+    public void InsertReferencesForNewFiles_InsertsReturningReferenceLines()
+    {
+        var fileId = _writer.InsertNewFile(new FileRecord
+        {
+            Path = "src/new_refs.py",
+            Lang = "python",
+            Size = 1000,
+            Lines = 1000,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var references = Enumerable.Range(0, 120)
+            .Select(i => new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = $"callee_{i}",
+                ReferenceKind = "call",
+                Line = i % 10 + 1,
+                Column = 4,
+                Context = $"line_{i % 10}()",
+                ContainerKind = "function",
+                ContainerName = "caller",
+            })
+            .ToList();
+
+        _writer.InsertReferencesForNewFiles(references, refreshMutualRecursionFlags: false, CancellationToken.None);
 
         var (_, _, _, referenceCount) = _writer.GetCounts();
         Assert.Equal(120, referenceCount);

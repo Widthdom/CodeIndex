@@ -13,6 +13,20 @@ public class NameFoldTests
     }
 
     [Fact]
+    public void Fold_ReusesAlreadyFoldedAsciiNames()
+    {
+        var name = "already_folded.name_123";
+
+        Assert.Same(name, NameFold.Fold(name));
+    }
+
+    [Fact]
+    public void Fold_FoldsAsciiUppercaseWithoutUnicodeNormalization()
+    {
+        Assert.Equal("my.symbol_123", NameFold.Fold("My.Symbol_123"));
+    }
+
+    [Fact]
     public void Fold_RemainsLocaleInvariantForTurkishDottedI()
     {
         Assert.Equal("i\u0307", NameFold.Fold("İ"));

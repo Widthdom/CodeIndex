@@ -883,8 +883,11 @@ public static partial class ReferenceExtractor
     /// 対応言語の登録済み参照抽出器を返す。
     /// </summary>
     public static bool TryGetExtractor(string? lang, out IReferenceExtractor extractor)
+        => TryGetExtractor(lang, out extractor, out _);
+
+    private static bool TryGetExtractor(string? lang, out IReferenceExtractor extractor, out string? normalized)
     {
-        var normalized = NormalizeLanguage(lang);
+        normalized = NormalizeLanguage(lang);
         if (normalized != null && Extractors.TryGetValue(normalized, out extractor!))
             return true;
 
@@ -1056,9 +1059,9 @@ public static partial class ReferenceExtractor
     {
         cancellationToken.ThrowIfCancellationRequested();
         var requestedLanguage = lang;
-        var pluginLanguage = NormalizePluginLanguage(lang);
-        if (!TryGetExtractor(lang, out var extractor))
+        if (!TryGetExtractor(lang, out var extractor, out var normalizedLanguage))
         {
+            var pluginLanguage = NormalizePluginLanguage(lang);
             if (pluginLanguage == null || !ExtractorPluginRegistry.TryGetReferenceExtractor(pluginLanguage, out var pluginExtractor))
                 return new ReferenceExtractionResult([], []);
 
@@ -1087,11 +1090,12 @@ public static partial class ReferenceExtractor
             return new ReferenceExtractionResult(references, diagnostics);
         }
 
-        lang = NormalizeLanguage(lang);
-        var language = lang!;
-        var builtInDiagnostics = new List<ReferenceExtractionDiagnostic>();
-        return new ReferenceExtractionResult(
-            extractor.Extract(new ReferenceExtractionContext(
+        var language = normalizedLanguage!;
+        List<ReferenceExtractionDiagnostic>? builtInDiagnostics = null;
+        void ReportDiagnostic(ReferenceExtractionDiagnostic diagnostic)
+            => (builtInDiagnostics ??= []).Add(diagnostic);
+
+        var builtInReferences = extractor.Extract(new ReferenceExtractionContext(
             fileId,
             language,
             content,
@@ -1101,11 +1105,13 @@ public static partial class ReferenceExtractor
             requestedLanguage,
             cancellationToken,
             maxReferenceCount,
-            builtInDiagnostics.Add,
+            ReportDiagnostic,
             contentIsNormalized,
             hasOversizeLine,
-            conflictMarkerLine)),
-            builtInDiagnostics);
+            conflictMarkerLine));
+        return new ReferenceExtractionResult(
+            builtInReferences,
+            builtInDiagnostics ?? (IReadOnlyList<ReferenceExtractionDiagnostic>)Array.Empty<ReferenceExtractionDiagnostic>());
     }
 
     private static List<ReferenceRecord> CopyPluginReferencesWithinLimit(

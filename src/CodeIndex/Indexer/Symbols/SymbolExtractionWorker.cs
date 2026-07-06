@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using CodeIndex.Cli;
 using CodeIndex.Diagnostics;
+using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
@@ -387,6 +388,8 @@ internal static class SymbolExtractionWorker
     private const string TestDelayMillisecondsOption = "--test-delay-ms";
     private const string TestConsoleStdoutOption = "--test-console-stdout";
     private const int CapturedConsoleMaxChars = 32 * 1024;
+    private static readonly object PatternConfigProjectRootsGate = new();
+    private static readonly List<string> LoadedPatternConfigProjectRoots = [];
     internal static readonly JsonSerializerOptions JsonOptions =
         WorkerProtocolJsonValidator.CreateSerializerOptions(SymbolExtractionWorkerJsonContext.Default.Options);
     internal static int? DelayMillisecondsForTesting { get; set; }
@@ -507,6 +510,7 @@ internal static class SymbolExtractionWorker
             return 2;
         }
 
+        ResetPatternConfigProjectRootsForWorker();
         maxProtocolLineCharacters = workerOptions.MaxProtocolLineCharacters;
         maxProtocolLineUtf8Bytes = workerOptions.MaxProtocolLineUtf8Bytes;
 
@@ -597,6 +601,7 @@ internal static class SymbolExtractionWorker
             WriteConsoleOutputForTestingIfRequested(options);
             DelayForTestingIfRequested(options, cancellationToken);
             using var regexTimeouts = BoundedRegex.CaptureTimeouts(request.Lang, "symbol_extraction");
+            var patternConfigsAlreadyLoaded = EnsurePatternConfigsLoadedForWorker(request.ProjectRoot);
             var symbols = request.ContentIsNormalized && request.HasOversizeLine is { } hasOversizeLine
                 ? SymbolExtractor.ExtractNormalized(
                     request.FileId,
@@ -606,14 +611,23 @@ internal static class SymbolExtractionWorker
                     request.FilePath,
                     request.ProjectRoot,
                     cancellationToken,
-                    request.ConflictMarkerLine)
-                : SymbolExtractor.Extract(
-                    request.FileId,
-                    request.Lang,
-                    request.Content,
-                    request.FilePath,
-                    request.ProjectRoot,
-                    cancellationToken);
+                    request.ConflictMarkerLine,
+                    patternConfigsAlreadyLoaded: patternConfigsAlreadyLoaded)
+                : patternConfigsAlreadyLoaded
+                    ? SymbolExtractor.ExtractWithPatternConfigsLoaded(
+                        request.FileId,
+                        request.Lang,
+                        request.Content,
+                        request.FilePath,
+                        request.ProjectRoot,
+                        cancellationToken)
+                    : SymbolExtractor.Extract(
+                        request.FileId,
+                        request.Lang,
+                        request.Content,
+                        request.FilePath,
+                        request.ProjectRoot,
+                        cancellationToken);
             return new WorkerResponse(
                 symbols,
                 null,
@@ -650,6 +664,32 @@ internal static class SymbolExtractionWorker
 
         if (cancellationToken.WaitHandle.WaitOne(milliseconds))
             cancellationToken.ThrowIfCancellationRequested();
+    }
+
+    private static bool EnsurePatternConfigsLoadedForWorker(string? projectRoot)
+    {
+        if (string.IsNullOrWhiteSpace(projectRoot))
+            return false;
+
+        var fullRoot = Path.GetFullPath(projectRoot);
+        lock (PatternConfigProjectRootsGate)
+        {
+            foreach (var loadedRoot in LoadedPatternConfigProjectRoots)
+            {
+                if (PathCasing.PathsEqual(loadedRoot, fullRoot))
+                    return true;
+            }
+
+            ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(fullRoot);
+            LoadedPatternConfigProjectRoots.Add(fullRoot);
+            return true;
+        }
+    }
+
+    private static void ResetPatternConfigProjectRootsForWorker()
+    {
+        lock (PatternConfigProjectRootsGate)
+            LoadedPatternConfigProjectRoots.Clear();
     }
 
     private static void AddTestingArguments(ProcessStartInfo startInfo)

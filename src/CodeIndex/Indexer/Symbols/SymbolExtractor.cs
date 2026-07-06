@@ -2429,19 +2429,23 @@ public static partial class SymbolExtractor
         int? conflictMarkerLine,
         string? filePath,
         string? projectRoot,
+        bool patternConfigsAlreadyLoaded,
         CancellationToken cancellationToken,
         out string? lang,
         out string preparedContent,
-        out List<SymbolRecord> symbols)
+        out List<SymbolRecord>? symbols)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lang = NormalizeLanguage(originalLang);
         var pluginLanguage = NormalizePluginLanguage(originalLang);
         preparedContent = content;
-        symbols = [];
+        symbols = null;
 
         if (lang == null && pluginLanguage == null)
+        {
+            symbols = [];
             return true;
+        }
 
         // Null / empty fast path — keep the direct-call null-safe contract that
         // FileIndexer.StripLineLeadingInvisibles' IsNullOrEmpty check used to provide
@@ -2450,7 +2454,10 @@ public static partial class SymbolExtractor
         // 入れたことで helper 側の IsNullOrEmpty による null 許容が効かなくなる
         // ため、direct call の null セーフ契約をここで復元する。Closes #183.
         if (string.IsNullOrEmpty(content))
+        {
+            symbols = [];
             return true;
+        }
 
         // Oversize-line skip: bail out for files that pack a multi-MB payload
         // into a single physical line (minified bundles, base64 blobs). The
@@ -2463,10 +2470,16 @@ public static partial class SymbolExtractor
         // インデクサが止まることを防ぎ、スキップは `line_too_long` FileIssue
         // として表面化させる。Closes #1542.
         if (hasOversizeLine ?? ChunkSplitter.HasOversizeLine(content))
+        {
+            symbols = [];
             return true;
+        }
 
         if ((conflictMarkerLine ?? FileIndexer.GetConflictMarkerLine(content)) > 0)
+        {
+            symbols = [];
             return true;
+        }
 
         if (!contentIsNormalized)
         {
@@ -2474,7 +2487,8 @@ public static partial class SymbolExtractor
         }
         preparedContent = content;
         cancellationToken.ThrowIfCancellationRequested();
-        ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
+        if (!patternConfigsAlreadyLoaded)
+            ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
 
         if (pluginLanguage != null
             && !PatternCache.ContainsKey(pluginLanguage)
@@ -2518,7 +2532,27 @@ public static partial class SymbolExtractor
             conflictMarkerLine: null,
             filePath,
             projectRoot,
-            cancellationToken);
+            patternConfigsAlreadyLoaded: false,
+            cancellationToken: cancellationToken);
+
+    internal static List<SymbolRecord> ExtractWithPatternConfigsLoaded(
+        long fileId,
+        string? lang,
+        string content,
+        string? filePath = null,
+        string? projectRoot = null,
+        CancellationToken cancellationToken = default)
+        => ExtractCore(
+            fileId,
+            lang,
+            content,
+            contentIsNormalized: false,
+            hasOversizeLine: null,
+            conflictMarkerLine: null,
+            filePath,
+            projectRoot,
+            patternConfigsAlreadyLoaded: true,
+            cancellationToken: cancellationToken);
 
     internal static List<SymbolRecord> ExtractNormalized(
         long fileId,
@@ -2528,7 +2562,8 @@ public static partial class SymbolExtractor
         string? filePath = null,
         string? projectRoot = null,
         CancellationToken cancellationToken = default,
-        int? conflictMarkerLine = null)
+        int? conflictMarkerLine = null,
+        bool patternConfigsAlreadyLoaded = false)
         => ExtractCore(
             fileId,
             lang,
@@ -2538,6 +2573,7 @@ public static partial class SymbolExtractor
             conflictMarkerLine,
             filePath,
             projectRoot,
+            patternConfigsAlreadyLoaded,
             cancellationToken);
 
     private static List<SymbolRecord> ExtractCore(
@@ -2549,6 +2585,7 @@ public static partial class SymbolExtractor
         int? conflictMarkerLine,
         string? filePath = null,
         string? projectRoot = null,
+        bool patternConfigsAlreadyLoaded = false,
         CancellationToken cancellationToken = default)
     {
         var originalLang = lang;
@@ -2561,12 +2598,13 @@ public static partial class SymbolExtractor
             conflictMarkerLine,
             filePath,
             projectRoot,
+            patternConfigsAlreadyLoaded,
             cancellationToken,
             out lang,
             out content,
             out var preparedSymbols))
         {
-            return preparedSymbols;
+            return preparedSymbols!;
         }
 
         if (lang == "xml")
@@ -2666,9 +2704,9 @@ public static partial class SymbolExtractor
             return ExtractAssemblySymbols(fileId, lines);
 
         var structuralLines = StructuralLineMasker.MaskLines(lang, lines);
-        var javaScriptTypeScriptSanitizedLines = lang is "javascript" or "typescript"
-            ? BuildJavaScriptTypeScriptSanitizedLines(lines)
-            : null;
+        string[]? javaScriptTypeScriptSanitizedLines = null;
+        string[] GetJavaScriptTypeScriptSanitizedLines() =>
+            javaScriptTypeScriptSanitizedLines ??= BuildJavaScriptTypeScriptSanitizedLines(lines);
         var cssScannerLines = lang == "css"
             ? MaskCssScannerLines(lines)
             : null;
@@ -2682,32 +2720,55 @@ public static partial class SymbolExtractor
         var csharpMatchLines = lang == "csharp"
             ? BuildCSharpMatchLines(lines, out csharpMatchColumnToRaw)
             : null;
-        var csharpLineStartStates = lang == "csharp"
-            ? BuildCSharpLineStartStates(lines)
+        CSharpLexState[]? csharpLineStartStates = null;
+        CSharpLexState[] GetCSharpLineStartStates() =>
+            csharpLineStartStates ??= BuildCSharpLineStartStates(lines);
+        Func<CSharpLexState[]>? getCSharpLineStartStates = lang == "csharp"
+            ? GetCSharpLineStartStates
             : null;
-        var dartInsideClassBody = lang == "dart"
-            ? BuildDartClassBodyScope(structuralLines)
+        DartClassBodyScope? dartInsideClassBody = null;
+        DartClassBodyScope GetDartInsideClassBody() =>
+            dartInsideClassBody ??= BuildDartClassBodyScope(structuralLines);
+        JavaScriptScopePrivacyFlags[][]? privateScopeColumns = null;
+        JavaScriptScopePrivacyFlags[][] GetPrivateScopeColumns() =>
+            privateScopeColumns ??= BuildJavaScriptTypeScriptPrivateScopeColumns(lines, lang!);
+        Func<JavaScriptScopePrivacyFlags[][]>? getPrivateScopeColumns = lang is "javascript" or "typescript"
+            ? GetPrivateScopeColumns
             : null;
-        var privateScopeColumns = lang is "javascript" or "typescript"
-            ? BuildJavaScriptTypeScriptPrivateScopeColumns(lines, lang)
+        CSharpTypeBodyScope? csharpInsideTypeBody = null;
+        CSharpTypeBodyScope GetCSharpInsideTypeBody() =>
+            csharpInsideTypeBody ??= BuildCSharpTypeBodyScope(structuralLines);
+        CSharpCallableParameterScope? csharpCallableParameterScope = null;
+        CSharpCallableParameterScope GetCSharpCallableParameterScope() =>
+            csharpCallableParameterScope ??= BuildCSharpCallableParameterScope(structuralLines, GetCSharpInsideTypeBody());
+        bool[]? csharpSwitchExpressionLines = null;
+        var csharpSwitchExpressionLinesInitialized = false;
+        bool[]? GetCSharpSwitchExpressionLines()
+        {
+            if (!csharpSwitchExpressionLinesInitialized)
+            {
+                csharpSwitchExpressionLinesInitialized = true;
+                csharpSwitchExpressionLines = LinesContain(structuralLines, "switch", StringComparison.Ordinal)
+                    ? FindCSharpSwitchExpressionLines(structuralLines)
+                    : null;
+            }
+
+            return csharpSwitchExpressionLines;
+        }
+
+        Func<bool[]?>? getCSharpSwitchExpressionLines = lang == "csharp"
+            ? GetCSharpSwitchExpressionLines
             : null;
-        var csharpInsideTypeBody = lang == "csharp"
-            ? BuildCSharpTypeBodyScope(structuralLines)
-            : null;
-        var csharpCallableParameterScope = lang == "csharp"
-            ? BuildCSharpCallableParameterScope(structuralLines, csharpInsideTypeBody!)
-            : null;
-        var csharpSwitchExpressionLines = lang == "csharp"
-            && LinesContain(structuralLines, "switch", StringComparison.Ordinal)
-            ? FindCSharpSwitchExpressionLines(structuralLines)
-            : null;
-        var cssQualifiedRuleAncestors = lang == "css"
-            ? FindCssQualifiedRuleAncestors(cssScannerLines!)
+        bool[]? cssQualifiedRuleAncestors = null;
+        bool[] GetCssQualifiedRuleAncestors() =>
+            cssQualifiedRuleAncestors ??= FindCssQualifiedRuleAncestors(cssScannerLines!);
+        Func<bool[]?>? getCssQualifiedRuleAncestors = lang == "css"
+            ? GetCssQualifiedRuleAncestors
             : null;
         var fsharpTypeBodyState = FSharpTypeBodyState.None;
         var symbols = new SymbolExtractionList();
         var extractionState = symbols.ExtractionState;
-        var pendingRecordPrimaryComponents = new List<PendingRecordPrimaryComponents>();
+        List<PendingRecordPrimaryComponents>? pendingRecordPrimaryComponents = null;
         var cssSeenSymbols = lang == "css"
             ? new HashSet<string>(StringComparer.Ordinal)
             : null;
@@ -2797,31 +2858,41 @@ public static partial class SymbolExtractor
 
             if (lang is "javascript" or "typescript")
             {
-                var jsTsSanitizedLines = javaScriptTypeScriptSanitizedLines!;
-                var sanitizedLine = jsTsSanitizedLines[i];
-                if (sanitizedLine.IndexOf("import", StringComparison.Ordinal) >= 0)
+                if (line.IndexOf("import", StringComparison.Ordinal) >= 0
+                    || line.IndexOf("require", StringComparison.Ordinal) >= 0
+                    || line.IndexOf("URL", StringComparison.Ordinal) >= 0
+                    || line.IndexOf("importScripts", StringComparison.Ordinal) >= 0
+                    || line.IndexOf("serviceWorker", StringComparison.Ordinal) >= 0
+                    || line.IndexOf("register", StringComparison.Ordinal) >= 0
+                    || line.IndexOf("addModule", StringComparison.Ordinal) >= 0
+                    || line.IndexOf("Worker", StringComparison.Ordinal) >= 0)
                 {
-                    ExtractJavaScriptTypeScriptDynamicImportSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
-                    ExtractJavaScriptTypeScriptStaticImportModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
-                    ExtractJavaScriptTypeScriptImportMetaResolveModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
-                }
+                    var jsTsSanitizedLines = GetJavaScriptTypeScriptSanitizedLines();
+                    var sanitizedLine = jsTsSanitizedLines[i];
+                    if (sanitizedLine.IndexOf("import", StringComparison.Ordinal) >= 0)
+                    {
+                        ExtractJavaScriptTypeScriptDynamicImportSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
+                        ExtractJavaScriptTypeScriptStaticImportModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
+                        ExtractJavaScriptTypeScriptImportMetaResolveModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
+                    }
 
-                if (sanitizedLine.IndexOf("require", StringComparison.Ordinal) >= 0)
-                    ExtractJavaScriptTypeScriptRequireModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
-                if (sanitizedLine.IndexOf("URL", StringComparison.Ordinal) >= 0)
-                    ExtractJavaScriptTypeScriptNewUrlModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
-                if (sanitizedLine.IndexOf("importScripts", StringComparison.Ordinal) >= 0)
-                    ExtractJavaScriptTypeScriptImportScriptsModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
-                if (sanitizedLine.IndexOf("serviceWorker", StringComparison.Ordinal) >= 0
-                    || sanitizedLine.IndexOf("register", StringComparison.Ordinal) >= 0)
-                {
-                    ExtractJavaScriptTypeScriptServiceWorkerRegisterModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
-                }
+                    if (sanitizedLine.IndexOf("require", StringComparison.Ordinal) >= 0)
+                        ExtractJavaScriptTypeScriptRequireModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
+                    if (sanitizedLine.IndexOf("URL", StringComparison.Ordinal) >= 0)
+                        ExtractJavaScriptTypeScriptNewUrlModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
+                    if (sanitizedLine.IndexOf("importScripts", StringComparison.Ordinal) >= 0)
+                        ExtractJavaScriptTypeScriptImportScriptsModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
+                    if (sanitizedLine.IndexOf("serviceWorker", StringComparison.Ordinal) >= 0
+                        || sanitizedLine.IndexOf("register", StringComparison.Ordinal) >= 0)
+                    {
+                        ExtractJavaScriptTypeScriptServiceWorkerRegisterModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
+                    }
 
-                if (sanitizedLine.IndexOf("addModule", StringComparison.Ordinal) >= 0)
-                    ExtractJavaScriptTypeScriptWorkletAddModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
-                if (sanitizedLine.IndexOf("Worker", StringComparison.Ordinal) >= 0)
-                    ExtractJavaScriptTypeScriptWorkerConstructorModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
+                    if (sanitizedLine.IndexOf("addModule", StringComparison.Ordinal) >= 0)
+                        ExtractJavaScriptTypeScriptWorkletAddModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
+                    if (sanitizedLine.IndexOf("Worker", StringComparison.Ordinal) >= 0)
+                        ExtractJavaScriptTypeScriptWorkerConstructorModuleSymbols(fileId, lang, filePath, projectRoot, lines, jsTsSanitizedLines, i, symbols);
+                }
             }
 
             if (lang is "javascript" or "typescript"
@@ -2996,7 +3067,7 @@ public static partial class SymbolExtractor
                         if (lang is "java" or "kotlin" && javaLeadingAnnotationOffset > 0)
                             absoluteStartColumn = lineOffset + javaLeadingAnnotationOffset;
                         var nextSameLineOffsetAfterRejectedCSharpProperty = -1;
-                        if (ShouldSkipCSharpSwitchExpressionPropertyCandidate(lang, pattern, patternMatchLine, csharpSwitchExpressionLines, i)
+                        if (ShouldSkipCSharpSwitchExpressionPropertyCandidate(lang, pattern, patternMatchLine, getCSharpSwitchExpressionLines, i)
                             || TrySkipCSharpBracePropertyCandidate(
                                 lang,
                                 pattern,
@@ -3038,7 +3109,7 @@ public static partial class SymbolExtractor
                         // ラムダの内部にあるローカル変数宣言が同じ形でマッチしてしまい、
                         // `symbols` / `definition` / `outline` / `inspect` / `unused` に
                         // 擬似シンボルが混入する。Closes #298 の codex レビュー blocker 対応。
-                        if (ShouldSkipCssNestedSelectorCandidate(lang, pattern, patternMatchLine, cssQualifiedRuleAncestors, i))
+                        if (ShouldSkipCssNestedSelectorCandidate(lang, pattern, patternMatchLine, getCssQualifiedRuleAncestors, i))
                             break;
 
                         // JS/TS HOC binding gate: the `styled.` / `styled(` / `styled\`` regex
@@ -3098,7 +3169,7 @@ public static partial class SymbolExtractor
 
                         if (lang == "dart"
                             && ReferenceEquals(pattern.Regex, DartBareConstConstructorRegex)
-                            && !dartInsideClassBody!.IsInsideClassBodyAt(i))
+                            && !GetDartInsideClassBody().IsInsideClassBodyAt(i))
                         {
                             // Bare `const` constructors need class-body context; otherwise
                             // `const Widget(key: k)` expressions become phantom symbols.
@@ -3119,9 +3190,11 @@ public static partial class SymbolExtractor
                         // 本物の宣言は root code から始まり、入れ子の補間コードからは始まらない。
                         // raw 行上の開始列でゲートし、補間ログ文字列内の呼び出し断片が
                         // exact definition / inspect に混入しないようにする。Closes #790.
-                        if (lang == "csharp"
-                            && csharpLineStartStates != null
-                            && !IsCSharpRootCodePosition(line, csharpLineStartStates[i], csharpGateRawStartColumn))
+                        var csharpLineStartStatesForGate = lang == "csharp"
+                            ? getCSharpLineStartStates?.Invoke()
+                            : null;
+                        if (csharpLineStartStatesForGate != null
+                            && !IsCSharpRootCodePosition(line, csharpLineStartStatesForGate[i], csharpGateRawStartColumn))
                         {
                             lineOffset = FindNextSameLineBraceStatementStart(
                                 matchLine,
@@ -3140,8 +3213,7 @@ public static partial class SymbolExtractor
                         if (lang == "csharp"
                             && pattern.BodyStyle == BodyStyle.None
                           && (pattern.Kind == "property" || IsCSharpFieldLikeFunctionPattern(pattern))
-                          && csharpCallableParameterScope != null
-                          && csharpCallableParameterScope.IsInsideParameterListAt(i, csharpGateRawStartColumn))
+                          && GetCSharpCallableParameterScope().IsInsideParameterListAt(i, csharpGateRawStartColumn))
                         {
                             lineOffset = FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang);
                             continue;
@@ -3149,8 +3221,7 @@ public static partial class SymbolExtractor
                         if (lang == "csharp"
                             && pattern.BodyStyle == BodyStyle.None
                           && (pattern.Kind == "property" || IsCSharpFieldLikeFunctionPattern(pattern))
-                          && csharpInsideTypeBody != null
-                          && !csharpInsideTypeBody.IsInsideTypeBodyAt(i, csharpGateRawStartColumn))
+                          && !GetCSharpInsideTypeBody().IsInsideTypeBodyAt(i, csharpGateRawStartColumn))
                         {
                             // Move the cursor past this same-line candidate so a later
                             // column on the same line (e.g. a real field that lives after
@@ -3222,9 +3293,12 @@ public static partial class SymbolExtractor
                             lineOffset = FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang);
                             continue;
                         }
-                        if (privateScopeColumns != null
+                        var jsTsPrivateScopeColumnsForClassGate = lang is "javascript" or "typescript" && pattern.Kind == "class"
+                            ? getPrivateScopeColumns?.Invoke()
+                            : null;
+                        if (jsTsPrivateScopeColumnsForClassGate != null
                             && pattern.Kind == "class"
-                            && IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, i, absoluteStartColumn, matchLine, includeBlockScope: true))
+                            && IsJavaScriptTypeScriptMatchInPrivateScope(jsTsPrivateScopeColumnsForClassGate, i, absoluteStartColumn, matchLine, includeBlockScope: true))
                         {
                             if (lang is "javascript" or "typescript")
                             {
@@ -3240,10 +3314,10 @@ public static partial class SymbolExtractor
                             break;
                         }
 
-                        if (privateScopeColumns != null
+                        if (jsTsPrivateScopeColumnsForClassGate != null
                             && pattern.Kind == "class"
                             && TryGetGroup(match, pattern.VisibilityGroup) != "export"
-                            && IsJavaScriptTypeScriptMatchInNamespaceScope(privateScopeColumns, i, absoluteStartColumn, matchLine))
+                            && IsJavaScriptTypeScriptMatchInNamespaceScope(jsTsPrivateScopeColumnsForClassGate, i, absoluteStartColumn, matchLine))
                         {
                             if (lang is "javascript" or "typescript")
                             {
@@ -3288,7 +3362,7 @@ public static partial class SymbolExtractor
                                             ? FindCSharpPatternBraceRange(
                                                 lines,
                                                 csharpMatchLines,
-                                                csharpLineStartStates,
+                                                getCSharpLineStartStates,
                                                 i,
                                                 absoluteStartColumn,
                                                 csharpGateRawStartColumn)
@@ -4100,7 +4174,7 @@ public static partial class SymbolExtractor
                             absoluteStartColumn,
                             kind,
                             name,
-                            pendingRecordPrimaryComponents,
+                            ref pendingRecordPrimaryComponents,
                             symbols);
 
                         // C# plain-field (kind `property`, BodyStyle.None) matches need their own
@@ -4452,9 +4526,9 @@ public static partial class SymbolExtractor
         }
 
         if (lang == "javascript")
-            ExtractJavaScriptBareMethods(fileId, lines, symbols, privateScopeColumns!);
+            ExtractJavaScriptBareMethods(fileId, lines, symbols, getPrivateScopeColumns!, GetJavaScriptTypeScriptSanitizedLines);
         else if (lang == "typescript")
-            ExtractTypeScriptBareMethods(fileId, lines, symbols, privateScopeColumns!);
+            ExtractTypeScriptBareMethods(fileId, lines, symbols, getPrivateScopeColumns!, GetJavaScriptTypeScriptSanitizedLines);
         else if (lang == "csharp")
             ExtractCSharpEnumMembers(fileId, lines, structuralLines, csharpMatchLines!, symbols);
         else if (lang == "java")
@@ -4526,7 +4600,7 @@ public static partial class SymbolExtractor
             ExtractSectionHeadingSymbols(fileId, lang, lines, symbols);
         if (IsRazorLanguage(originalLang) || IsRazorFilePath(filePath))
             ExtractRazorDirectiveSymbols(fileId, lines, symbols);
-        AssignContainers(symbols, lines, csharpLineStartStates);
+        AssignContainers(symbols, lines, getCSharpLineStartStates);
         if (lang == "csharp")
             NormalizeCSharpImplicitPartialConstructorReturnTypes(symbols);
         if (lang == "go")
@@ -6027,8 +6101,8 @@ public static partial class SymbolExtractor
 
     private sealed class SymbolExtractionState
     {
-        private readonly SymbolAddState _symbolAddState = new();
-        private readonly SymbolLineIdentityState _symbolLineIdentityState = new();
+        private SymbolAddState? _symbolAddState;
+        private SymbolLineIdentityState? _symbolLineIdentityState;
 
         public static SymbolExtractionState FromSymbols(List<SymbolRecord> symbols)
         {
@@ -6039,19 +6113,25 @@ public static partial class SymbolExtractor
         }
 
         public int GetExactDuplicateCount(SymbolRecord symbol) =>
-            _symbolAddState.GetExactDuplicateCount(symbol);
+            _symbolAddState?.GetExactDuplicateCount(symbol) ?? 0;
 
         public int? GetSameLineSignatureOccurrenceIndex(SymbolRecord symbol) =>
-            _symbolAddState.GetSameLineSignatureOccurrenceIndex(symbol);
+            _symbolAddState?.GetSameLineSignatureOccurrenceIndex(symbol)
+            ?? (TryGetSameLineSignatureKey(symbol, out _) ? 0 : null);
 
-        public bool HasSymbolLineIdentity(List<SymbolRecord> symbols, SymbolLineIdentity identity) =>
-            _symbolLineIdentityState.Contains(symbols, identity);
+        public bool HasSymbolLineIdentity(List<SymbolRecord> symbols, SymbolLineIdentity identity)
+        {
+            if (symbols.Count == 0)
+                return false;
+
+            return (_symbolLineIdentityState ??= new()).Contains(symbols, identity);
+        }
 
         public void Record(SymbolRecord symbol) =>
-            _symbolAddState.Record(symbol);
+            (_symbolAddState ??= new()).Record(symbol);
 
         public void Remove(SymbolRecord symbol) =>
-            _symbolAddState.Remove(symbol);
+            _symbolAddState?.Remove(symbol);
     }
 
     private sealed class SymbolExtractionList : List<SymbolRecord>
@@ -6061,11 +6141,14 @@ public static partial class SymbolExtractor
 
     private sealed class SymbolAddState
     {
-        private readonly Dictionary<SymbolRecordIdentity, int> _exactCounts = new();
-        private readonly Dictionary<SameLineSignatureKey, int> _sameLineSignatureCounts = new();
+        private Dictionary<SymbolRecordIdentity, int>? _exactCounts;
+        private Dictionary<SameLineSignatureKey, int>? _sameLineSignatureCounts;
 
         public int GetExactDuplicateCount(SymbolRecord symbol)
         {
+            if (_exactCounts is null)
+                return 0;
+
             var key = new SymbolRecordIdentity(symbol);
             return _exactCounts.TryGetValue(key, out var count) ? count : 0;
         }
@@ -6075,19 +6158,24 @@ public static partial class SymbolExtractor
             if (!TryGetSameLineSignatureKey(symbol, out var key))
                 return null;
 
+            if (_sameLineSignatureCounts is null)
+                return 0;
+
             return _sameLineSignatureCounts.TryGetValue(key, out var count) ? count : 0;
         }
 
         public void Record(SymbolRecord symbol)
         {
             var exactKey = new SymbolRecordIdentity(symbol);
-            _exactCounts[exactKey] = _exactCounts.TryGetValue(exactKey, out var exactCount)
+            var exactCounts = _exactCounts ??= new();
+            exactCounts[exactKey] = exactCounts.TryGetValue(exactKey, out var exactCount)
                 ? exactCount + 1
                 : 1;
 
             if (TryGetSameLineSignatureKey(symbol, out var sameLineKey))
             {
-                _sameLineSignatureCounts[sameLineKey] = _sameLineSignatureCounts.TryGetValue(sameLineKey, out var sameLineCount)
+                var sameLineSignatureCounts = _sameLineSignatureCounts ??= new();
+                sameLineSignatureCounts[sameLineKey] = sameLineSignatureCounts.TryGetValue(sameLineKey, out var sameLineCount)
                     ? sameLineCount + 1
                     : 1;
             }
@@ -6095,16 +6183,22 @@ public static partial class SymbolExtractor
 
         public void Remove(SymbolRecord symbol)
         {
-            var exactKey = new SymbolRecordIdentity(symbol);
-            if (_exactCounts.TryGetValue(exactKey, out var exactCount))
+            if (_exactCounts is not null)
             {
-                if (exactCount <= 1)
-                    _exactCounts.Remove(exactKey);
-                else
-                    _exactCounts[exactKey] = exactCount - 1;
+                var exactKey = new SymbolRecordIdentity(symbol);
+                if (_exactCounts.TryGetValue(exactKey, out var exactCount))
+                {
+                    if (exactCount <= 1)
+                        _exactCounts.Remove(exactKey);
+                    else
+                        _exactCounts[exactKey] = exactCount - 1;
+                }
             }
 
             if (!TryGetSameLineSignatureKey(symbol, out var sameLineKey))
+                return;
+
+            if (_sameLineSignatureCounts is null)
                 return;
 
             if (!_sameLineSignatureCounts.TryGetValue(sameLineKey, out var sameLineCount))
@@ -7243,7 +7337,7 @@ public static partial class SymbolExtractor
         int declarationStartColumn,
         string kind,
         string recordName,
-        List<PendingRecordPrimaryComponents> pendingRecordPrimaryComponents,
+        ref List<PendingRecordPrimaryComponents>? pendingRecordPrimaryComponents,
         List<SymbolRecord> symbols)
     {
         if (lang == "kotlin")
@@ -7277,7 +7371,7 @@ public static partial class SymbolExtractor
 
         if (components.Count > 0)
         {
-            pendingRecordPrimaryComponents.Add(new PendingRecordPrimaryComponents(
+            (pendingRecordPrimaryComponents ??= []).Add(new PendingRecordPrimaryComponents(
                 fileId,
                 kind,
                 recordName,
@@ -7288,9 +7382,9 @@ public static partial class SymbolExtractor
 
     private static void MaterializeRecordPrimaryComponentSymbols(
         List<SymbolRecord> symbols,
-        List<PendingRecordPrimaryComponents> pendingRecordPrimaryComponents)
+        List<PendingRecordPrimaryComponents>? pendingRecordPrimaryComponents)
     {
-        if (pendingRecordPrimaryComponents.Count == 0)
+        if (pendingRecordPrimaryComponents is not { Count: > 0 })
             return;
 
         foreach (var pending in pendingRecordPrimaryComponents)
@@ -7375,7 +7469,7 @@ public static partial class SymbolExtractor
         out List<RecordPrimaryComponent> components,
         out int declarationEndLine)
     {
-        components = [];
+        components = null!;
         declarationEndLine = declarationLineIndex + 1;
 
         if (lang is not "csharp" and not "java" and not "kotlin")
@@ -7413,6 +7507,7 @@ public static partial class SymbolExtractor
         declarationEndLine = declarationLineIndex + 1 + declaration[..declarationLineSpanEnd].Count(ch => ch == '\n');
 
         var rawParameterList = StripRecordComponentComments(declaration[(parameterOpenIndex + 1)..parameterCloseIndex]);
+        components = [];
         foreach (var rawComponent in SplitTopLevelRecordPrimaryComponents(rawParameterList, declarationLineIndex + 1))
         {
             if (TryParseRecordPrimaryComponent(lang, rawComponent, out var component))
@@ -8868,8 +8963,24 @@ public static partial class SymbolExtractor
     private static void AssignContainers(
         List<SymbolRecord> symbols,
         string[]? rawLines = null,
-        CSharpLexState[]? csharpLineStartStates = null)
+        Func<CSharpLexState[]>? getCSharpLineStartStates = null)
     {
+        if (symbols.Count == 0)
+            return;
+
+        if (symbols.Count == 1)
+        {
+            AssignTopLevelFamilyKey(symbols[0]);
+            return;
+        }
+
+        if (!ContainsContainerCandidates(symbols))
+        {
+            foreach (var symbol in symbols)
+                AssignTopLevelFamilyKey(symbol);
+            return;
+        }
+
         var ordered = BuildContainerAssignmentOrder(symbols);
 
         var stack = new Stack<SymbolRecord>();
@@ -8879,7 +8990,7 @@ public static partial class SymbolExtractor
             while (stack.Count > 0 && !IsFileScopedNamespace(stack.Peek()) && symbol.StartLine > stack.Peek().EndLine)
                 stack.Pop();
 
-            var containerPath = GetEffectiveContainerPath(stack, symbol, rawLines, csharpLineStartStates);
+            var containerPath = GetEffectiveContainerPath(stack, symbol, rawLines, getCSharpLineStartStates);
 
             if (containerPath.Count > 0)
             {
@@ -8940,6 +9051,20 @@ public static partial class SymbolExtractor
         }
     }
 
+    private static void AssignTopLevelFamilyKey(SymbolRecord symbol)
+        => symbol.FamilyKey ??= BuildSelfFamilyKey(symbol, Array.Empty<SymbolRecord>());
+
+    private static bool ContainsContainerCandidates(IReadOnlyList<SymbolRecord> symbols)
+    {
+        foreach (var symbol in symbols)
+        {
+            if (CanContainSymbols(symbol))
+                return true;
+        }
+
+        return false;
+    }
+
     private readonly record struct ContainerAssignmentSortEntry(SymbolRecord Symbol, int OriginalIndex);
 
     private static List<ContainerAssignmentSortEntry> BuildContainerAssignmentOrder(IReadOnlyList<SymbolRecord> symbols)
@@ -8989,7 +9114,7 @@ public static partial class SymbolExtractor
         Stack<SymbolRecord> containers,
         SymbolRecord symbol,
         string[]? rawLines = null,
-        CSharpLexState[]? csharpLineStartStates = null)
+        Func<CSharpLexState[]>? getCSharpLineStartStates = null)
     {
         if (containers.Count == 0)
             return [];
@@ -8997,7 +9122,7 @@ public static partial class SymbolExtractor
         if (containers.Count == 1)
         {
             var container = containers.Peek();
-            return ContainsSymbol(container, symbol, rawLines, csharpLineStartStates)
+            return ContainsSymbol(container, symbol, rawLines, getCSharpLineStartStates)
                 ? [container]
                 : [];
         }
@@ -9007,7 +9132,7 @@ public static partial class SymbolExtractor
         for (var i = orderedContainers.Length - 1; i >= 0; i--)
         {
             var container = orderedContainers[i];
-            if (ContainsSymbol(container, symbol, rawLines, csharpLineStartStates))
+            if (ContainsSymbol(container, symbol, rawLines, getCSharpLineStartStates))
                 containingContainers.Add(container);
         }
 
@@ -9134,7 +9259,7 @@ public static partial class SymbolExtractor
         SymbolRecord container,
         SymbolRecord candidate,
         string[]? rawLines = null,
-        CSharpLexState[]? csharpLineStartStates = null)
+        Func<CSharpLexState[]>? getCSharpLineStartStates = null)
     {
         if (IsFileScopedNamespace(container))
             return candidate.StartLine > container.StartLine;
@@ -9144,7 +9269,7 @@ public static partial class SymbolExtractor
 
         if (candidate.StartLine == container.StartLine)
         {
-            if (TryContainsCSharpSameLineSymbolByRawLine(container, candidate, rawLines, csharpLineStartStates, out var containsSameLineSymbol))
+            if (TryContainsCSharpSameLineSymbolByRawLine(container, candidate, rawLines, getCSharpLineStartStates, out var containsSameLineSymbol))
                 return containsSameLineSymbol;
 
             return CanContainSameLineSymbol(container, candidate)
@@ -9160,14 +9285,14 @@ public static partial class SymbolExtractor
             return true;
         }
 
-        return IsInsideCSharpClosingBraceLineContainer(container, candidate, rawLines, csharpLineStartStates);
+        return IsInsideCSharpClosingBraceLineContainer(container, candidate, rawLines, getCSharpLineStartStates);
     }
 
     private static bool TryContainsCSharpSameLineSymbolByRawLine(
         SymbolRecord container,
         SymbolRecord candidate,
         string[]? rawLines,
-        CSharpLexState[]? csharpLineStartStates,
+        Func<CSharpLexState[]>? getCSharpLineStartStates,
         out bool contains)
     {
         contains = false;
@@ -9177,14 +9302,16 @@ public static partial class SymbolExtractor
             || container.StartLine != candidate.StartLine
             || container.StartLine <= 0
             || container.StartLine > rawLines.Length
-            || csharpLineStartStates == null
-            || container.StartLine > csharpLineStartStates.Length
             || !CanContainSameLineSymbol(container, candidate))
         {
             return false;
         }
 
         var lineIndex = container.StartLine - 1;
+        var csharpLineStartStates = getCSharpLineStartStates?.Invoke();
+        if (csharpLineStartStates == null || container.StartLine > csharpLineStartStates.Length)
+            return false;
+
         var rawLine = rawLines[lineIndex];
         var lineStartState = csharpLineStartStates[lineIndex];
         var containerStartColumn = FindSignatureOccurrenceStartColumn(
@@ -9231,7 +9358,7 @@ public static partial class SymbolExtractor
         SymbolRecord container,
         SymbolRecord candidate,
         string[]? rawLines,
-        CSharpLexState[]? csharpLineStartStates)
+        Func<CSharpLexState[]>? getCSharpLineStartStates)
     {
         if (rawLines == null
             || container.BodyStartLine == null
@@ -9256,7 +9383,8 @@ public static partial class SymbolExtractor
             rawLines[lineIndex],
             candidate.Signature,
             candidate.SameLineSignatureOccurrenceIndex ?? 0,
-            csharpLineStartStates != null && lineIndex < csharpLineStartStates.Length
+            getCSharpLineStartStates?.Invoke() is { } csharpLineStartStates
+            && lineIndex < csharpLineStartStates.Length
                 ? csharpLineStartStates[lineIndex]
                 : new CSharpLexState());
         return candidateColumn >= 0 && candidateColumn < closingBraceColumn;

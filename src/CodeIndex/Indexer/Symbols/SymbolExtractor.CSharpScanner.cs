@@ -3490,13 +3490,13 @@ public static partial class SymbolExtractor
         string? lang,
         SymbolPattern pattern,
         string matchLine,
-        bool[]? csharpSwitchExpressionLines,
+        Func<bool[]?>? getCSharpSwitchExpressionLines,
         int lineIndex) =>
         lang == "csharp"
         && pattern.Kind == "property"
-        && csharpSwitchExpressionLines != null
-        && csharpSwitchExpressionLines[lineIndex]
-        && matchLine.Contains("=>", StringComparison.Ordinal);
+        && matchLine.Contains("=>", StringComparison.Ordinal)
+        && getCSharpSwitchExpressionLines?.Invoke() is { } csharpSwitchExpressionLines
+        && csharpSwitchExpressionLines[lineIndex];
 
     private static string[] BuildCSharpMatchLines(string[] structuralLines)
         => BuildCSharpMatchLines(structuralLines, out _);

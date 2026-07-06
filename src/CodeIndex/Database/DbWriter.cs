@@ -1597,6 +1597,51 @@ public class DbWriter
     }
 
     /// <summary>
+    /// Insert a new file record and return its ID.
+    /// Use only when the caller knows the path cannot already exist in the
+    /// current database, such as a full scan that started from an empty index.
+    /// 新規ファイルレコードをINSERTしてIDを返す。
+    /// 空インデックスから開始したfull scanなど、呼び出し元が現在のDBに
+    /// 同じpathが存在し得ないと保証できる場合だけ使う。
+    /// </summary>
+    public long InsertNewFile(FileRecord file)
+    {
+        var cmd = RentCommand(
+            @"
+            INSERT INTO files (path, lang, size, lines, checksum, modified, generated, indexed_at)
+            VALUES (@path, @lang, @size, @lines, @checksum, @modified, @generated, CURRENT_TIMESTAMP)
+            RETURNING id",
+            static c =>
+            {
+                c.Parameters.Add("@path", SqliteType.Text);
+                c.Parameters.Add("@lang", SqliteType.Text);
+                c.Parameters.Add("@size", SqliteType.Integer);
+                c.Parameters.Add("@lines", SqliteType.Integer);
+                c.Parameters.Add("@checksum", SqliteType.Text);
+                c.Parameters.Add("@modified", SqliteType.Text);
+                c.Parameters.Add("@generated", SqliteType.Integer);
+            });
+        try
+        {
+            cmd.Parameters["@path"].Value = file.Path;
+            cmd.Parameters["@lang"].Value = (object?)file.Lang ?? DBNull.Value;
+            cmd.Parameters["@size"].Value = file.Size;
+            cmd.Parameters["@lines"].Value = file.Lines;
+            cmd.Parameters["@checksum"].Value = (object?)file.Checksum ?? DBNull.Value;
+            cmd.Parameters["@modified"].Value = file.Modified;
+            cmd.Parameters["@generated"].Value = file.Generated ? 1 : 0;
+            using var reader = cmd.ExecuteReader();
+            if (!reader.Read())
+                throw new InvalidOperationException("SQLite RETURNING id produced no row for file insert.");
+            return reader.GetInt64(0);
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
+    }
+
+    /// <summary>
     /// Delete old chunks and symbols for a file before re-indexing.
     /// 再インデックス前にファイルの古いチャンクとシンボルを削除する。
     /// </summary>
@@ -1989,10 +2034,23 @@ public class DbWriter
         => InsertReferences(references, refreshMutualRecursionFlags: true, cancellationToken);
 
     public void InsertReferences(IReadOnlyList<ReferenceRecord> references, bool refreshMutualRecursionFlags, CancellationToken cancellationToken)
+        => InsertReferencesCore(references, refreshMutualRecursionFlags, cancellationToken, referenceLinesAreNew: false);
+
+    public void InsertReferencesForNewFiles(IReadOnlyList<ReferenceRecord> references, bool refreshMutualRecursionFlags, CancellationToken cancellationToken)
+        => InsertReferencesCore(references, refreshMutualRecursionFlags, cancellationToken, referenceLinesAreNew: true);
+
+    private void InsertReferencesCore(
+        IReadOnlyList<ReferenceRecord> references,
+        bool refreshMutualRecursionFlags,
+        CancellationToken cancellationToken,
+        bool referenceLinesAreNew)
     {
         if (references.Count == 0) return;
 
         int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 13);
+        var newReferenceLineIds = referenceLinesAreNew
+            ? new Dictionary<(long FileId, int Line, string Context), long>()
+            : null;
         for (int i = 0; i < references.Count; i += rowsPerStatement)
         {
             CheckBatchCancellationAndReportProgress("insert_references", i, references.Count, cancellationToken);
@@ -2002,7 +2060,9 @@ public class DbWriter
             // symbol_references share one rollback boundary; without it a mid-chunk failure
             // under an outer transaction would orphan committed reference_lines (#1518).
             using var transaction = BeginTransaction(cancellationToken, "insert references");
-            var referenceLineIds = UpsertReferenceLines(references, i, end, cancellationToken);
+            var referenceLineIds = referenceLinesAreNew
+                ? InsertNewReferenceLines(references, i, end, newReferenceLineIds!, cancellationToken)
+                : UpsertReferenceLines(references, i, end, cancellationToken);
 
             using var cmd = _conn.CreateCommand();
             var sql = CreateBatchSqlBuilder(end - i, estimatedCharsPerRow: 256);
@@ -2153,6 +2213,71 @@ public class DbWriter
                 var context = reader.GetString(3);
                 var key = (fileId, line, context);
                 lineIds[key] = id;
+            }
+        }
+
+        return lineIds;
+    }
+
+    private Dictionary<(long FileId, int Line, string Context), long> InsertNewReferenceLines(
+        IReadOnlyList<ReferenceRecord> references,
+        int start,
+        int end,
+        Dictionary<(long FileId, int Line, string Context), long> knownLineIds,
+        CancellationToken cancellationToken)
+    {
+        var batchCount = end - start;
+        var referenceLineKeys = new HashSet<(long FileId, int Line, string Context)>(batchCount);
+        for (int i = start; i < end; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var reference = references[i];
+            referenceLineKeys.Add((reference.FileId, reference.Line, reference.Context));
+        }
+
+        var lineIds = new Dictionary<(long FileId, int Line, string Context), long>(referenceLineKeys.Count);
+        var rows = new List<(long FileId, int Line, string Context)>(referenceLineKeys.Count);
+        foreach (var key in referenceLineKeys)
+        {
+            if (knownLineIds.TryGetValue(key, out var knownId))
+                lineIds[key] = knownId;
+            else
+                rows.Add(key);
+        }
+
+        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 3);
+        for (int i = 0; i < rows.Count; i += rowsPerStatement)
+        {
+            CheckBatchCancellationAndReportProgress("insert_reference_lines", i, rows.Count, cancellationToken);
+            int batchEnd = Math.Min(i + rowsPerStatement, rows.Count);
+            using var cmd = _conn.CreateCommand();
+            var sql = CreateBatchSqlBuilder(batchEnd - i, estimatedCharsPerRow: 64);
+            sql.Append("INSERT INTO reference_lines (file_id, line, context) VALUES ");
+            for (int j = i; j < batchEnd; j++)
+            {
+                if (j > i)
+                    sql.Append(", ");
+
+                var suffix = j - i;
+                var (fileId, line, context) = rows[j];
+                sql.Append($"(@fid{suffix}, @line{suffix}, @context{suffix})");
+                cmd.Parameters.Add($"@fid{suffix}", SqliteType.Integer).Value = fileId;
+                cmd.Parameters.Add($"@line{suffix}", SqliteType.Integer).Value = line;
+                cmd.Parameters.Add($"@context{suffix}", SqliteType.Text).Value = context;
+            }
+
+            sql.Append(" RETURNING id, file_id, line, context");
+            cmd.CommandText = sql.ToString();
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var id = reader.GetInt64(0);
+                var fileId = reader.GetInt64(1);
+                var line = reader.GetInt32(2);
+                var context = reader.GetString(3);
+                var key = (fileId, line, context);
+                lineIds[key] = id;
+                knownLineIds[key] = id;
             }
         }
 

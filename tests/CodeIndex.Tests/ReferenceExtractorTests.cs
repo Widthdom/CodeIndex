@@ -332,8 +332,51 @@ public partial class ReferenceExtractorTests
         var result = ReferenceExtractor.ExtractDetailed(1, "python", "def use():\n    pass\n", symbols);
 
         Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Kind == "reference_definition_lookup_symbol_budget_exceeded");
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Kind == "reference_all_definition_lookup_symbol_budget_exceeded");
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Kind == "reference_all_definition_lookup_symbol_budget_exceeded");
         Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Kind == "reference_container_candidate_budget_exceeded");
+    }
+
+    [Fact]
+    public void Extract_StylusHighFanoutSymbols_ReportsAllDefinitionLookupBudgetDiagnostics_Issue3783()
+    {
+        var symbols = Enumerable
+            .Range(0, ReferenceExtractor.MaxReferenceLookupSymbols + 5)
+            .Select(index => new SymbolRecord
+            {
+                Kind = "function",
+                Name = $"Generated{index}",
+                Line = index + 1,
+                StartLine = index + 1,
+                EndLine = index + 1,
+                BodyStartLine = index + 1,
+                BodyEndLine = index + 1,
+            })
+            .ToList();
+
+        var result = ReferenceExtractor.ExtractDetailed(1, "stylus", "body\n  color red\n", symbols);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Kind == "reference_all_definition_lookup_symbol_budget_exceeded");
+    }
+
+    [Fact]
+    public void Extract_XmlNonXamlHighFanoutSymbols_SkipsReferenceLookupDiagnostics()
+    {
+        var symbols = Enumerable
+            .Range(0, ReferenceExtractor.MaxReferenceLookupSymbols + 5)
+            .Select(index => new SymbolRecord
+            {
+                Kind = "property",
+                Name = $"Generated{index}",
+                Line = index + 1,
+                StartLine = index + 1,
+                EndLine = index + 1,
+            })
+            .ToList();
+
+        var result = ReferenceExtractor.ExtractDetailed(1, "xml", "<root><child /></root>\n", symbols);
+
+        Assert.Empty(result.References);
+        Assert.Empty(result.Diagnostics);
     }
 
     [Fact]

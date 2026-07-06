@@ -500,6 +500,59 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void ExtractNormalized_ConfiguredPatternYaml_SkipsDiscoveryWhenCallerPreloadedPatterns()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var tempDir = TestProjectHelper.CreateTempProject("cdidx_patterns_preloaded");
+            try
+            {
+                WritePatternConfig(
+                    tempDir,
+                    "toydsl.yaml",
+                    "language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"class\"\n    regex: \"^entity (?<name>\\\\w+)\"\n");
+                ExtractorPluginRegistry.ReloadForTests();
+                ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(tempDir);
+                Assert.Equal(1, ExtractorPluginRegistry.GetStatusSnapshot().PatternConfigCount);
+
+                WritePatternConfig(
+                    tempDir,
+                    "laterdsl.yaml",
+                    "language: \"laterdsl\"\nextensions:\n  - extension: \".later\"\npatterns:\n  - kind: \"class\"\n    regex: \"^later (?<name>\\\\w+)\"\n");
+
+                var skipped = SymbolExtractor.ExtractNormalized(
+                    2,
+                    "laterdsl",
+                    "later Widget",
+                    hasOversizeLine: false,
+                    filePath: "demo.later",
+                    projectRoot: tempDir,
+                    patternConfigsAlreadyLoaded: true);
+
+                Assert.Empty(skipped);
+                Assert.Equal(1, ExtractorPluginRegistry.GetStatusSnapshot().PatternConfigCount);
+
+                var symbols = SymbolExtractor.ExtractNormalized(
+                    2,
+                    "laterdsl",
+                    "later Widget",
+                    hasOversizeLine: false,
+                    filePath: "demo.later",
+                    projectRoot: tempDir);
+
+                var symbol = Assert.Single(symbols);
+                Assert.Equal("Widget", symbol.Name);
+                Assert.Equal(2, ExtractorPluginRegistry.GetStatusSnapshot().PatternConfigCount);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(tempDir);
+            }
+        }
+    }
+
+    [Fact]
     public void Extract_ConfiguredPatternYaml_DisablesPatternAfterRegexTimeout()
     {
         lock (TestConsoleLock.Gate)
