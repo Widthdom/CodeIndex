@@ -1662,7 +1662,7 @@ public partial class QueryCommandRunnerTests
 
 
 
-    [SkipOnMacOsArm64Fact]
+    [PublishedTrimmedCliFact]
     public void RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_trimmed_publish");

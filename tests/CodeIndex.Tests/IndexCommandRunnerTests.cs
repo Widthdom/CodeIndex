@@ -16,24 +16,6 @@ using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
-public sealed class SkipOnMacOsArm64FactAttribute : FactAttribute
-{
-    public SkipOnMacOsArm64FactAttribute()
-    {
-        if (OperatingSystem.IsMacOS() && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
-            Skip = "macOS arm64 SDK/ILLink can crash before this test can exercise cdidx (#2586).";
-    }
-}
-
-public sealed class SkipOnMacOsArm64TheoryAttribute : TheoryAttribute
-{
-    public SkipOnMacOsArm64TheoryAttribute()
-    {
-        if (OperatingSystem.IsMacOS() && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
-            Skip = "macOS arm64 SDK/ILLink currently crashes before this test can exercise cdidx (#2606).";
-    }
-}
-
 /// <summary>
 /// Tests for indexing command argument handling.
 /// インデックスコマンドの引数処理テスト。
@@ -1147,7 +1129,7 @@ public partial class IndexCommandRunnerTests
             startInfo.ArgumentList);
     }
 
-    [SkipOnMacOsArm64Fact]
+    [PublishedTrimmedCliFact]
     public void Run_PublishedSingleFileBinary_IndexesWithIsolatedSymbolWorker()
     {
         var projectRoot = CreateTempProject();
@@ -4330,7 +4312,7 @@ public sealed class Caller
         }
     }
 
-    [SkipOnMacOsArm64Fact]
+    [PublishedTrimmedCliFact]
     public void RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson()
     {
         var dbPath = CreateTempDbPath("cdidx_trimmed_backfill");
