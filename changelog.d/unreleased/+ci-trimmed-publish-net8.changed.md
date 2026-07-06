@@ -69,6 +69,7 @@ affected:
 - TypeScript symbol-extraction budget guards now use smaller large fixtures while still checking the first and last generated export/class targets.
 - JavaScript object-literal symbol budget guards now use smaller large fixtures while still checking the first and last generated object targets and exported properties.
 - Go grouped-declaration symbol budget guards now use smaller large fixtures while still checking the first and last generated type/import/var targets.
+- Java and Kotlin component symbol budget guards now use smaller large fixtures while still checking first, last, and trailing constructor/record components.
 
 ## 日本語
 
@@ -94,3 +95,4 @@ affected:
 - TypeScript の symbol-extraction budget guard は、先頭と末尾の generated export / class target を確認しつつ、大規模 fixture の件数を減らしました。
 - JavaScript の object-literal symbol budget guard は、先頭と末尾の generated object target / exported property を確認しつつ、大規模 fixture の件数を減らしました。
 - Go grouped-declaration symbol budget guard は、先頭と末尾の generated type / import / var target を確認しつつ、大規模 fixture の件数を減らしました。
+- Java / Kotlin の component symbol budget guard は、先頭、末尾、trailing constructor / record component を確認しつつ、大規模 fixture の件数を減らしました。

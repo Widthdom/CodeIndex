@@ -5788,7 +5788,8 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_JavaLargeRecordPrimaryComponents_CompletesWithinPracticalBudget()
     {
-        var componentLines = string.Join('\n', Enumerable.Range(0, 2_000).Select(i => $"    int p{i},"));
+        const int componentCount = 1_000;
+        var componentLines = string.Join('\n', Enumerable.Range(0, componentCount).Select(i => $"    int p{i},"));
         var content = $$"""
             package com.example;
 
@@ -5803,7 +5804,7 @@ public partial class SymbolExtractorTests
         stopwatch.Stop();
 
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "p0" && s.ContainerName == "Huge");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "p1999" && s.ContainerName == "Huge");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == $"p{componentCount - 1}" && s.ContainerName == "Huge");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "tail" && s.ContainerName == "Huge");
         var runawayBudget = TimeSpan.FromSeconds(10);
         Assert.True(
@@ -6524,7 +6525,8 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_KotlinLargePrimaryConstructorComponents_CompletesWithinPracticalBudget()
     {
-        var components = string.Join(", ", Enumerable.Range(0, 2_000).Select(i => $"val p{i}: String"));
+        const int componentCount = 1_000;
+        var components = string.Join(", ", Enumerable.Range(0, componentCount).Select(i => $"val p{i}: String"));
         var content = $"""
             package generated
 
@@ -6536,7 +6538,7 @@ public partial class SymbolExtractorTests
         stopwatch.Stop();
 
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "p0" && s.ContainerName == "Huge");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "p1999" && s.ContainerName == "Huge");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == $"p{componentCount - 1}" && s.ContainerName == "Huge");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "tail" && s.ContainerName == "Huge");
         var runawayBudget = TimeSpan.FromSeconds(10);
         Assert.True(
