@@ -26,6 +26,15 @@ public class CiWorkflowTests
         Assert.Contains(
             "\"primary_lane=$primaryLaneText\" | Out-File -FilePath $env:GITHUB_OUTPUT",
             workflow);
+        Assert.Contains(
+            "- name: Restore dependencies\n        if: steps.lane.outputs.primary_lane == 'true'\n        run: dotnet restore CodeIndex.sln --locked-mode",
+            normalizedWorkflow);
+        Assert.Contains(
+            "- name: Restore test dependencies\n        if: steps.lane.outputs.primary_lane != 'true'\n        run: dotnet restore tests/CodeIndex.Tests/CodeIndex.Tests.csproj --locked-mode",
+            normalizedWorkflow);
+        Assert.True(
+            normalizedWorkflow.IndexOf("- name: Select CI lane\n        id: lane", StringComparison.Ordinal)
+            < normalizedWorkflow.IndexOf("- name: Restore dependencies", StringComparison.Ordinal));
         Assert.DoesNotContain("collect_coverage", workflow);
         Assert.Contains("key: ${{ runner.os }}-dotnet-nuget-${{ hashFiles('**/packages.lock.json', 'global.json') }}", workflow, StringComparison.Ordinal);
         Assert.DoesNotContain("restore-keys:", workflow, StringComparison.Ordinal);
