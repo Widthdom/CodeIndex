@@ -40,7 +40,7 @@ public partial class ReleaseWorkflowTests
         Assert.DoesNotContain(" apk add --no-cache shadow", dockerfile);
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReleaseWorkflow_DockerEntrypointDropsRootToRequestedUidGid()
     {
         if (OperatingSystem.IsWindows())
@@ -90,7 +90,7 @@ public partial class ReleaseWorkflowTests
         }
     }
 
-    [Fact]
+    [ProductionCliFact]
     public void ReleaseWorkflow_DockerEntrypointCanKeepRootWhenExplicitlyRequested()
     {
         if (OperatingSystem.IsWindows())

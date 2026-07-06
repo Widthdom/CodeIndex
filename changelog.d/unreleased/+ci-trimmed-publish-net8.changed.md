@@ -28,6 +28,7 @@ affected:
   - tests/CodeIndex.Tests/DbDebugTests.cs
   - tests/CodeIndex.Tests/PostExtractionHookTests.cs
   - tests/CodeIndex.Tests/ProgramCliTests.cs
+  - tests/CodeIndex.Tests/ReleaseWorkflowDockerContractTests.cs
   - TESTING_GUIDE.md
 ---
 
@@ -47,6 +48,7 @@ affected:
 - `RunBuiltCli` / `RunCliInSubprocess` subprocess tests, including timeout-guarded FIFO probes, now run only on the `net8.0` production target when the subprocess resolves to the production CLI, while direct in-process command-runner tests remain cross-target.
 - Reference-count limit tests now use the minimum dense C# call fixture needed to cross the configured threshold.
 - Generic symbol-ranking noise tests now preserve the same relative noisy-reference ordering with far fewer synthetic reference inserts.
+- Docker entrypoint shell contract tests now run only on the production `net8.0` test target because the script behavior is target-framework independent.
 
 ## 日本語
 
@@ -64,3 +66,4 @@ affected:
 - `RunBuiltCli` / `RunCliInSubprocess` を使う subprocess test は、timeout guard 付きの FIFO probe も含め、subprocess が production CLI に解決される場合に `net8.0` production target でのみ実行し、direct in-process の command-runner test は cross-target のままにしました。
 - reference-count limit test は、設定した閾値を超えるために必要な最小限の dense C# call fixture を使うようにしました。
 - generic symbol-ranking noise test は、noisy reference の相対的な順序を保ったまま synthetic reference insert 数を大きく減らしました。
+- Docker entrypoint shell contract test は script 挙動が target framework 非依存であるため、production `net8.0` test target でのみ実行するようにしました。
