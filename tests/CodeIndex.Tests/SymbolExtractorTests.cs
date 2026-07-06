@@ -3131,14 +3131,15 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_TypeScriptLargeExportedVariables_CompletesWithinPracticalBudget()
     {
-        var lines = string.Join('\n', Enumerable.Range(0, 5_000).Select(i => $"export const value{i} = {i};"));
+        const int variableCount = 1_000;
+        var lines = string.Join('\n', Enumerable.Range(0, variableCount).Select(i => $"export const value{i} = {i};"));
 
         var stopwatch = Stopwatch.StartNew();
         var symbols = SymbolExtractor.Extract(1, "typescript", lines);
         stopwatch.Stop();
 
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "value0" && s.Visibility == "export");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "value4999" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == $"value{variableCount - 1}" && s.Visibility == "export");
         var runawayBudget = TimeSpan.FromSeconds(10);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,

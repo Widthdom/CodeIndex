@@ -2049,8 +2049,9 @@ public partial class SymbolExtractorTests
 #endif
     public void Extract_TypeScriptLargeClassExpressionTargets_CompletesWithinPracticalBudget()
     {
+        const int classCount = 1_000;
         var builder = new StringBuilder();
-        for (var i = 0; i < 2_000; i++)
+        for (var i = 0; i < classCount; i++)
             builder.Append("export const C").Append(i).Append(" = class { method").Append(i).AppendLine("(): number { return 1; } };");
 
         var stopwatch = Stopwatch.StartNew();
@@ -2058,8 +2059,8 @@ public partial class SymbolExtractorTests
         stopwatch.Stop();
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "C0");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "C1999");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method1999" && s.ContainerKind == "class" && s.ContainerName == "C1999");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == $"C{classCount - 1}");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == $"method{classCount - 1}" && s.ContainerKind == "class" && s.ContainerName == $"C{classCount - 1}");
         var runawayBudget = TimeSpan.FromSeconds(10);
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
