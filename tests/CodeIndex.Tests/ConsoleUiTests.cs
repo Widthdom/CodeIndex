@@ -182,6 +182,7 @@ public class ConsoleUiTests
             Assert.Contains(flag, auditOutput);
         }
 
+        Assert.Contains("cdidx recipes [list]", recipesOutput);
         Assert.Contains("[--names|--summary-only]", recipesOutput);
         Assert.Contains("--max-json-bytes", recipesOutput);
     }
