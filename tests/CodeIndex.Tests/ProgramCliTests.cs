@@ -994,6 +994,69 @@ public class ProgramCliTests
     }
 
     [ProductionRuntimeFact]
+    public void Suggestions_AddJsonCreatesLocalDraftAndDeduplicates_Issue4310()
+    {
+        using var fixture = SuggestionFixture.Create();
+        string[] addArgs =
+        [
+            "suggestions", "add",
+            "--db", fixture.DbPath,
+            "--json",
+            "--description", "Record local dogfood finding before opening GitHub issues",
+            "--category", "output_format",
+            "--language", "csharp",
+            "--agent", "codex",
+            "--context", "Observed while triaging local audit output.",
+            "--title", "Local dogfood finding store",
+            "--evidence-path", "src/CodeIndex/Cli/SuggestionsCommandRunner.cs",
+        ];
+
+        var (firstExitCode, firstStdout, firstStderr) = RunCliInSubprocess(addArgs);
+        var (secondExitCode, secondStdout, secondStderr) = RunCliInSubprocess(addArgs);
+        var (listExitCode, listStdout, listStderr) = RunCliInSubprocess([
+            "suggestions", "list", "--db", fixture.DbPath, "--json", "--status", "draft"
+        ]);
+
+        Assert.Equal(0, firstExitCode);
+        Assert.Equal(0, secondExitCode);
+        Assert.Equal(0, listExitCode);
+        Assert.Equal(string.Empty, firstStderr);
+        Assert.Equal(string.Empty, secondStderr);
+        Assert.Equal(string.Empty, listStderr);
+        using var firstDoc = JsonDocument.Parse(firstStdout);
+        using var secondDoc = JsonDocument.Parse(secondStdout);
+        using var listDoc = JsonDocument.Parse(listStdout);
+        var first = firstDoc.RootElement;
+        var second = secondDoc.RootElement;
+        var suggestion = first.GetProperty("suggestion");
+        Assert.True(first.GetProperty("created").GetBoolean());
+        Assert.False(first.GetProperty("duplicate").GetBoolean());
+        Assert.False(second.GetProperty("created").GetBoolean());
+        Assert.True(second.GetProperty("duplicate").GetBoolean());
+        Assert.Equal(suggestion.GetProperty("id").GetString(), second.GetProperty("suggestion").GetProperty("id").GetString());
+        Assert.Equal("draft", suggestion.GetProperty("status").GetString());
+        Assert.Equal("output_format", suggestion.GetProperty("category").GetString());
+        Assert.Equal("csharp", suggestion.GetProperty("language").GetString());
+        Assert.Equal("codex", suggestion.GetProperty("agent").GetString());
+        Assert.Equal("Observed while triaging local audit output.", suggestion.GetProperty("context").GetString());
+        Assert.Equal("Local dogfood finding store", suggestion.GetProperty("sampled_title").GetString());
+        Assert.Equal("src/CodeIndex/Cli/SuggestionsCommandRunner.cs", suggestion.GetProperty("evidence_paths")[0].GetString());
+        Assert.Equal(suggestion.GetProperty("id").GetString(), listDoc.RootElement.GetProperty("id").GetString());
+    }
+
+    [ProductionRuntimeFact]
+    public void Suggestions_AddHelpIncludesLocalDraftFlags_Issue4310()
+    {
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(["suggestions", "add", "--help"]);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("cdidx suggestions [list|show|export|add]", stdout);
+        Assert.Contains("--description <text>", stdout);
+        Assert.Contains("--evidence-path <path>", stdout);
+    }
+
+    [ProductionRuntimeFact]
     public void Suggestions_ListJsonIncludesSubmitDiagnostics()
     {
         using var fixture = SuggestionFixture.Create();

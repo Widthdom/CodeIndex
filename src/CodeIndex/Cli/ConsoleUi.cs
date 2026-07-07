@@ -125,7 +125,7 @@ public static class ConsoleUi
         ("deps", "cdidx deps [--db <path>] [--json] [--format <dot|graphml|json-graph|edgelist>] [--summary-only] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--reverse] [--cycles]"),
         ("unused", "cdidx unused [--db <path>] [--json] [--compact] [--summary-only] [--verbose] [--limit <n>|--top <n>] [--cursor <unused:offset>] [--audit-scope <source|all>] [--kind <kind>] [--bucket <bucket>] [--min-confidence <medium|low>|--confidence <medium|low>] [--actionable] [--all] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--by-bucket]"),
         ("hotspots", "cdidx hotspots [--db <path>] [--json] [--summary-only] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]"),
-        ("suggestions", "cdidx suggestions [list|show|export] [id] [--db <path>] [--json] [--status <all|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--limit <n>] [--offset <n>] [--format <json|markdown|issue-drafts>] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>] [--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>]"),
+        ("suggestions", "cdidx suggestions [list|show|export|add] [id|description] [--db <path>] [--json] [--description <text>] [--context <text>] [--title <text>] [--evidence-path <path>] [--status <all|draft|submitted_pending_triage|open_in_upstream|resolved_in_upstream|wont_fix|duplicate|superseded|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--limit <n>] [--offset <n>] [--format <json|markdown|issue-drafts>] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>] [--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>]"),
         ("export", "cdidx export <archive> [--db <path>] [--json]"),
         ("export", "cdidx export ctags [--output <path>] [--db <path>] [--json] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests]"),
         ("import", "cdidx import <archive> [--db <path>] [--prune-paths] [--dry-run|--check] [--json]"),
@@ -1026,7 +1026,7 @@ public static class ConsoleUi
         Console.WriteLine("  deps                       Show file-level dependency edges from the reference graph");
         Console.WriteLine("  unused                     Find symbols defined but never referenced (dead code)");
         Console.WriteLine("  hotspots                   Find high-impact symbols; duplicate-name families may fall back conservatively");
-        Console.WriteLine("  suggestions                List, inspect, and export local suggestion history");
+        Console.WriteLine("  suggestions                Add, list, inspect, and export local suggestion history");
         Console.WriteLine("  export                     Export ctags or a portable CodeIndex archive");
         Console.WriteLine("  import                     Import a portable CodeIndex archive");
         Console.WriteLine("  languages                  List supported languages and their capabilities");
