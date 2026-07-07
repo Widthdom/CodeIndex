@@ -1072,7 +1072,8 @@ normalized repository-relative artifact URIs.
 Search audit recipes expand one named recipe into multiple curated search
 queries. `--list-recipes` reports the available names, descriptions,
 recommended labels, query text, exact-match mode, false-positive guidance,
-guard filters, risk evidence, and query-specific audit taxonomy metadata.
+guard filters, risk evidence, classifier metadata, and query-specific audit
+taxonomy metadata.
 Add `--query <filter>` to narrow discovery by recipe/query names, query text,
 labels, severity, path metadata, or descriptions.
 Built-in recipe queries may also include `risk_evidence`, a short set of
@@ -1080,6 +1081,12 @@ positive and negative evidence facets that explain why a hit is risky or likely
 bounded/safe. Recipe run JSON repeats those facets on each matching result so
 issue-draft export and downstream triage tools can keep the reviewer guidance
 next to the evidence path. For example,
+`classifiers` describe the triage dimensions that downstream tools should use,
+such as `source_origin`, `guard_evidence`, `secret_origin`,
+`parser_guard_evidence`, `process_launch_boundary`, `cancellation_intent`,
+`task_result_intent`, `active_skip_governance`, `broad_catch_boundary`, and
+`diagnostic_redaction`; each classifier lists categories, evidence fields, and
+guidance so noisy audit terms can be separated before filing.
 `risky-code/broad-exception-catch` includes broad-catch boundary categories and
 expected diagnostic behaviors so users can distinguish intentional top-level,
 cleanup, probe, diagnostic-sanitization, and worker boundaries from catches that
@@ -3845,14 +3852,20 @@ issue 化前に exact-substring、origin、result-kind、file-kind、production/
 facet で切り分けたい場合に使います。
 `--list-recipes` は利用可能な名前、
 説明、推奨 label、query text、exact-match mode、false-positive guidance、guard filter、
-risk evidence、query 固有の audit taxonomy metadata を表示します。
+risk evidence、classifier metadata、query 固有の audit taxonomy metadata を表示します。
 `--query <filter>` を追加すると、recipe/query 名、query text、label、severity、path metadata、
 説明で discovery を絞り込めます。
 組み込み recipe query は `risk_evidence` も出力できます。これは hit が risky なのか、
 すでに bounded / safe と見なせる可能性が高いのかを説明する positive / negative evidence
 facet の短い一覧です。recipe run の JSON は各 matching result にも同じ facet を付けるため、
 issue-draft export や下流の triage tool が evidence path の近くに reviewer guidance を
-保持できます。たとえば `risky-code/broad-exception-catch` は
+保持できます。`classifiers` は下流 tool が使うべき triage の軸を表し、
+`source_origin`、`guard_evidence`、`secret_origin`、`parser_guard_evidence`、
+`process_launch_boundary`、`cancellation_intent`、`task_result_intent`、
+`active_skip_governance`、`broad_catch_boundary`、`diagnostic_redaction` などの
+classifier が category、evidence field、guidance を持つため、ノイズの多い audit term を
+起票前に切り分けられます。
+たとえば `risky-code/broad-exception-catch` は
 broad catch の境界カテゴリと期待される diagnostic behavior を含めるため、意図的な
 top-level、cleanup、probe、diagnostic-sanitization、worker 境界と、narrowing または
 rethrow が必要な catch を区別できます。

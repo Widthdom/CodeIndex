@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -489,9 +488,7 @@ internal sealed class IssueDuplicatePreflight
                 () =>
                 {
                     var request = new HttpRequestMessage(HttpMethod.Get, url);
-                    GitHubHttpClientFactory.ApplyDefaultHeaders(request.Headers);
-                    if (!string.IsNullOrWhiteSpace(token))
-                        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                    GitHubHttpClientFactory.ApplyAuthenticatedGitHubApiHeaders(request, token);
                     return request;
                 },
                 HttpCompletionOption.ResponseHeadersRead,
@@ -540,9 +537,7 @@ internal sealed class IssueDuplicatePreflight
                 () =>
                 {
                     var request = new HttpRequestMessage(HttpMethod.Get, url);
-                    GitHubHttpClientFactory.ApplyDefaultHeaders(request.Headers);
-                    if (!string.IsNullOrWhiteSpace(token))
-                        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                    GitHubHttpClientFactory.ApplyAuthenticatedGitHubApiHeaders(request, token);
                     return request;
                 },
                 HttpCompletionOption.ResponseHeadersRead,

@@ -1574,6 +1574,14 @@ public partial class QueryCommandRunnerTests
             .GetProperty("queries")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "file-read-all-text");
+        var cancellationGapQuery = recipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "cancellation-gap");
+        var processStartInfoQuery = recipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "process-start-info");
         var pathCaseQuery = recipe
             .GetProperty("queries")
             .EnumerateArray()
@@ -1598,6 +1606,10 @@ public partial class QueryCommandRunnerTests
             .GetProperty("queries")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "bearer-token");
+        var jsonDocumentParseQuery = jsonRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "json-document-parse");
         var dogfoodRegexQuery = dogfoodRecipe
             .GetProperty("queries")
             .EnumerateArray()
@@ -1606,6 +1618,14 @@ public partial class QueryCommandRunnerTests
             .GetProperty("queries")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "raw-sql-command-text");
+        var dogfoodExceptionMessageQuery = dogfoodRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "exception-message-classifier");
+        var suppressedCleanupQuery = dogfoodRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "suppressed-cleanup-diagnostics");
         var sqlitePolicyCommandTextQuery = sqlitePolicyRecipe
             .GetProperty("queries")
             .EnumerateArray()
@@ -1702,10 +1722,19 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("redaction", query.GetProperty("description").GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.Contains("False positives", query.GetProperty("false_positive_guidance").GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.Contains(query.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("DiagnosticRedactor", StringComparison.Ordinal));
+        Assert.Contains(query.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "diagnostic_redaction");
+        var diagnosticClassifier = query
+            .GetProperty("classifiers")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "diagnostic_redaction");
+        Assert.Contains(diagnosticClassifier.GetProperty("categories").EnumerateArray(), item => item.GetProperty("name").GetString() == "raw_exception_echo");
         Assert.Contains(fileReadAllTextQuery.GetProperty("exclude_origins").EnumerateArray(), origin => origin.GetString() == "help_text");
+        Assert.Contains(cancellationGapQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "cancellation_intent");
+        Assert.Contains(processStartInfoQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "process_launch_boundary");
         Assert.Equal("catch", emptyCatchQuery.GetProperty("query").GetString());
         Assert.False(emptyCatchQuery.GetProperty("exact_substring").GetBoolean());
         Assert.Contains(emptyCatchQuery.GetProperty("match_origins").EnumerateArray(), origin => origin.GetString() == "code");
+        Assert.Contains(emptyCatchQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "broad_catch_boundary");
         Assert.Contains(emptyCatchQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("broad or empty catch", StringComparison.Ordinal));
         Assert.Contains(emptyCatchQuery.GetProperty("guard_filters").EnumerateArray(), filter =>
             filter.GetProperty("option").GetString() == "--require-before" &&
@@ -1739,6 +1768,13 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(broadCatchTaxonomy.GetProperty("diagnostic_behaviors").EnumerateArray(), item => item.GetProperty("name").GetString() == "stable_sanitized_diagnostic");
         Assert.Contains(broadCatchTaxonomy.GetProperty("diagnostic_behaviors").EnumerateArray(), item => item.GetProperty("name").GetString() == "narrow_or_rethrow_required");
         Assert.Contains("Classify each broad catch by boundary first", broadCatchTaxonomy.GetProperty("triage_guidance").GetString(), StringComparison.Ordinal);
+        Assert.Contains(broadCatchQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "broad_catch_boundary");
+        Assert.Contains(broadCatchQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "diagnostic_redaction");
+        var broadCatchClassifier = broadCatchQuery
+            .GetProperty("classifiers")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "broad_catch_boundary");
+        Assert.Contains(broadCatchClassifier.GetProperty("categories").EnumerateArray(), item => item.GetProperty("name").GetString() == "unexpected_bug");
         var pathCaseTaxonomy = pathCaseQuery.GetProperty("string_comparison_taxonomy");
         Assert.Contains(pathCaseTaxonomy.GetProperty("domain_categories").EnumerateArray(), item => item.GetProperty("name").GetString() == "path_filesystem");
         Assert.Contains(pathCaseTaxonomy.GetProperty("domain_categories").EnumerateArray(), item => item.GetProperty("name").GetString() == "protocol_tokens");
@@ -1758,9 +1794,16 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(authTokenRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "github-token");
         Assert.Contains(authTokenRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "api-token");
         Assert.Contains(authTokenRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "token-secret");
+        Assert.Contains(authBearerQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "secret_origin");
+        Assert.Contains(authBearerQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "source_origin");
         Assert.Contains(authBearerQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("bearer tokens", StringComparison.Ordinal));
+        Assert.Contains(jsonDocumentParseQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "parser_guard_evidence");
+        Assert.Contains(jsonDocumentParseQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "guard_evidence");
         Assert.Contains(dogfoodRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "exception-message-classifier");
         Assert.Contains(dogfoodRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "plugin-activator");
+        Assert.Contains(dogfoodExceptionMessageQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "diagnostic_redaction");
+        Assert.Contains(suppressedCleanupQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "broad_catch_boundary");
+        Assert.Contains(suppressedCleanupQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "diagnostic_redaction");
         Assert.Equal(" Regex.", dogfoodRegexQuery.GetProperty("query").GetString());
         Assert.Contains(dogfoodRegexQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("raw System.Text.RegularExpressions.Regex static APIs", StringComparison.Ordinal));
         Assert.Contains(dogfoodRegexQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("BoundedRegex aliases and instance names ending in Regex are filtered out", StringComparison.Ordinal));
@@ -1843,11 +1886,20 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(".Result", phraseResultQuery.GetProperty("query").GetString());
         Assert.Contains(phraseResultQuery.GetProperty("match_origins").EnumerateArray(), origin => origin.GetString() == "code");
         Assert.Contains(phraseResultQuery.GetProperty("result_kinds").EnumerateArray(), kind => kind.GetString() == "identifier");
+        Assert.Contains(phraseResultQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "task_result_intent");
+        var taskResultClassifier = phraseResultQuery
+            .GetProperty("classifiers")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "task_result_intent");
+        Assert.Contains(taskResultClassifier.GetProperty("categories").EnumerateArray(), item => item.GetProperty("name").GetString() == "task_blocking");
+        Assert.Contains(taskResultClassifier.GetProperty("categories").EnumerateArray(), item => item.GetProperty("name").GetString() == "dto_result_property");
         Assert.Contains("DTO", phraseResultQuery.GetProperty("false_positive_guidance").GetString(), StringComparison.Ordinal);
         Assert.Equal("Skip =", phraseSkipQuery.GetProperty("query").GetString());
         Assert.Contains(phraseSkipQuery.GetProperty("path_patterns").EnumerateArray(), path => path.GetString() == "tests/**");
+        Assert.Contains(phraseSkipQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "active_skip_governance");
         Assert.Equal("TODO", phraseTodoQuery.GetProperty("query").GetString());
         Assert.Contains(phraseTodoQuery.GetProperty("match_origins").EnumerateArray(), origin => origin.GetString() == "comment");
+        Assert.Contains(phraseTodoQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "source_origin");
 
         static void AssertRegexBoundedGuardFilters(JsonElement query)
         {
@@ -1867,6 +1919,49 @@ public partial class QueryCommandRunnerTests
                 filter.GetProperty("direction").GetString() == "after" &&
                 filter.GetProperty("query").GetString() == "MatchTimeout(" &&
                 filter.GetProperty("scope").GetString() == "same_line");
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RecipeRunJsonIncludesClassifierMetadata_Issue4312()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_classifiers_4312");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                public sealed class App
+                {
+                    public string Result { get; init; } = "";
+                    public void Run()
+                    {
+                        _ = Result;
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "phrase-risk-patterns/task-result-property-review", "--db", dbPath, "--json", "--limit", "5"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var query = Assert.Single(document.RootElement.GetProperty("queries").EnumerateArray());
+            var classifiers = query.GetProperty("classifiers").EnumerateArray().ToArray();
+
+            Assert.Contains(classifiers, classifier => classifier.GetProperty("name").GetString() == "task_result_intent");
+            Assert.Contains(classifiers, classifier => classifier.GetProperty("name").GetString() == "source_origin");
+            var taskClassifier = classifiers.Single(classifier => classifier.GetProperty("name").GetString() == "task_result_intent");
+            Assert.Contains(taskClassifier.GetProperty("evidence_fields").EnumerateArray(), field => field.GetString() == "enclosing_symbol_name");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 
@@ -5012,6 +5107,7 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("worker_process_boundary", listStdout, StringComparison.Ordinal);
             Assert.Contains("broad catch diagnostics: stable_sanitized_diagnostic", listStdout, StringComparison.Ordinal);
             Assert.Contains("narrow_or_rethrow_required", listStdout, StringComparison.Ordinal);
+            Assert.Contains("classifiers: broad_catch_boundary, diagnostic_redaction", listStdout, StringComparison.Ordinal);
 
             var (jsonExitCode, jsonStdout, jsonStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["--recipe", "risky-code/broad-exception-catch", "--db", dbPath, "--json", "--limit", "5"],
@@ -5027,6 +5123,8 @@ public partial class QueryCommandRunnerTests
             Assert.Contains(taxonomy.GetProperty("boundary_categories").EnumerateArray(), item => item.GetProperty("name").GetString() == "worker_process_boundary");
             Assert.Contains(taxonomy.GetProperty("diagnostic_behaviors").EnumerateArray(), item => item.GetProperty("name").GetString() == "documented_fallback");
             Assert.Contains("stable sanitized diagnostics", taxonomy.GetProperty("triage_guidance").GetString(), StringComparison.Ordinal);
+            Assert.Contains(jsonQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "broad_catch_boundary");
+            Assert.Contains(jsonQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "diagnostic_redaction");
 
             var (compactExitCode, compactStdout, compactStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["--recipe", "risky-code/broad-exception-catch", "--db", dbPath, "--format", "compact", "--limit", "5"],
@@ -5039,6 +5137,9 @@ public partial class QueryCommandRunnerTests
             Assert.Contains(
                 compactQuery.GetProperty("broad_catch_taxonomy").GetProperty("diagnostic_behaviors").EnumerateArray(),
                 item => item.GetProperty("name").GetString() == "narrow_or_rethrow_required");
+            Assert.Contains(
+                compactQuery.GetProperty("classifiers").EnumerateArray(),
+                item => item.GetProperty("name").GetString() == "diagnostic_redaction");
 
             var (draftExitCode, draftStdout, draftStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["--recipe", "risky-code/broad-exception-catch", "--db", dbPath, "--format", "issue-drafts", "--limit", "5"],
