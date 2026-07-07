@@ -40,6 +40,8 @@ public static partial class QueryCommandRunner
             CommandErrorWriter.WriteStderr(exactError);
             return CommandExitCodes.UsageError;
         }
+        if (!exact && HasOption(cmdArgs, "--name"))
+            exact = true;
         var exactBareVerbatimOnly = exact && string.Equals(options.Lang, "csharp", StringComparison.OrdinalIgnoreCase) && (
             (options.Query is not null && IsBareVerbatimQueryToken(options.Query) && options.ExtraNames.Count == 0) ||
             (options.Query is null && options.ExtraNames.Count > 0 && options.ExtraNames.All(IsBareVerbatimQueryToken)));

@@ -121,6 +121,101 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_NameOptionDefaultsToExactName_Issue4315()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_name_exact_issue4315");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/McpServer.Core.cs",
+                "csharp",
+                """
+                namespace Demo;
+
+                public partial class McpServer
+                {
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "tests/McpServerTests.cs",
+                "csharp",
+                """
+                namespace Demo.Tests;
+
+                public class McpServerTests
+                {
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--name", "McpServer", "--db", dbPath, "--json=array", "--kind", "class", "--lang", "csharp"],
+                _jsonOptions));
+
+            Assert.True(exitCode == CommandExitCodes.Success, $"stdout: {stdout}\nstderr: {stderr}");
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var rows = document.RootElement.EnumerateArray().ToList();
+
+            Assert.Single(rows);
+            Assert.Equal("McpServer", rows[0].GetProperty("name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunGoto_PartialClassReturnsRepresentativeLocation_Issue4315()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_goto_partial_issue4315");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.McpServer.cs",
+                "csharp",
+                """
+                namespace Demo;
+
+                public partial class McpServer
+                {
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/B.McpServer.cs",
+                "csharp",
+                """
+                namespace Demo;
+
+                public partial class McpServer
+                {
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunGoto(
+                ["McpServer", "--db", dbPath, "--kind", "class", "--lang", "csharp"],
+                _jsonOptions));
+
+            Assert.True(exitCode == CommandExitCodes.Success, $"stdout: {stdout}\nstderr: {stderr}");
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var location = document.RootElement;
+
+            Assert.Contains("src/A.McpServer.cs", location.GetProperty("uri").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_CountJsonMaxJsonBytesRejectsBareVerbatimZero_Issue4165()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
@@ -1471,6 +1566,47 @@ public partial class QueryCommandRunnerTests
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void RunUnused_SummaryOnlyJsonUsesCompactCountEnvelope_Issue4344()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--summary-only", "--lang", "csharp"],
+                _jsonOptions));
+
+            Assert.True(exitCode == CommandExitCodes.Success, $"stdout: {stdout}\nstderr: {stderr}");
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var omittedSections = json.GetProperty("omitted_sections").EnumerateArray().Select(value => value.GetString()).ToArray();
+
+            Assert.Equal(2, json.GetProperty("count").GetInt32());
+            Assert.True(json.GetProperty("summary_only").GetBoolean());
+            Assert.True(json.GetProperty("compact").GetBoolean());
+            Assert.Contains("bucket_taxonomy", omittedSections);
+            Assert.False(json.TryGetProperty("bucket_taxonomy", out _));
+            Assert.False(json.TryGetProperty("symbols", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_SummaryOnlyWithoutJsonReturnsUsageError_Issue4344()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+            ["--summary-only"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("unused --summary-only is only supported with JSON output", stderr);
     }
 
     [Fact]

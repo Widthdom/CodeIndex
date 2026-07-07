@@ -1,5 +1,6 @@
 using System.Text.Json;
 using CodeIndex.Database;
+using CodeIndex.Models;
 
 namespace CodeIndex.Cli;
 
@@ -228,6 +229,12 @@ public static partial class QueryCommandRunner
 
             if (results.Count > 1)
             {
+                if (TrySelectLogicalPartialDefinition(results, out var representative))
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(ToLspLocation(representative), CliJsonSerializerContextFactory.Create(jsonOptions).LspLocation));
+                    return CommandExitCodes.Success;
+                }
+
                 CommandErrorWriter.WriteStderr($"Error: goto found {results.Count} matching definitions for '{options.Query}'.");
                 CommandErrorWriter.WriteStderr("Hint: narrow the query with --kind, --lang, --path, or pass --all to return all LSP locations.");
                 return CommandExitCodes.UsageError;
@@ -237,4 +244,40 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.Success;
         });
     }
+
+    private static bool TrySelectLogicalPartialDefinition(IReadOnlyList<SymbolResult> results, out SymbolResult representative)
+    {
+        representative = results[0];
+        if (results.Count <= 1)
+            return false;
+
+        var first = results[0];
+        if (!IsLogicalPartialDefinitionKind(first.Kind) || string.IsNullOrWhiteSpace(first.ContainerName))
+            return false;
+
+        foreach (var result in results)
+        {
+            if (!IsLogicalPartialDefinitionKind(result.Kind))
+                return false;
+            if (!string.Equals(result.Lang, first.Lang, StringComparison.OrdinalIgnoreCase))
+                return false;
+            if (!string.Equals(result.Kind, first.Kind, StringComparison.OrdinalIgnoreCase))
+                return false;
+            if (!string.Equals(result.Name, first.Name, StringComparison.Ordinal))
+                return false;
+            if (!string.Equals(result.ContainerKind, first.ContainerKind, StringComparison.Ordinal))
+                return false;
+            if (!string.Equals(result.ContainerName, first.ContainerName, StringComparison.Ordinal))
+                return false;
+        }
+
+        representative = results
+            .OrderBy(result => result.Path, StringComparer.Ordinal)
+            .ThenBy(result => result.StartLine)
+            .First();
+        return true;
+    }
+
+    private static bool IsLogicalPartialDefinitionKind(string kind)
+        => kind is "class" or "struct" or "interface" or "record";
 }

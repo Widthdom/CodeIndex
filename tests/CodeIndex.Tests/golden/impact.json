@@ -28,6 +28,9 @@
   "has_multiple_definitions": false,
   "has_class_like_definitions": true,
   "has_multiple_definition_files": false,
+  "definition_output_count": 1,
+  "definition_result_scope": "definition_sites",
+  "definitions_collapsed": false,
   "definitions": [
     {
       "api_version": "1",
