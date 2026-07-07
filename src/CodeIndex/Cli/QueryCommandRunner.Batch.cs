@@ -65,7 +65,7 @@ public static partial class QueryCommandRunner
         {
             using var db = new DbContext(dbPath);
             if (!db.TryValidateIsCodeIndexDb(out var validationReason))
-                return WriteInvalidCodeIndexDbError(dbPath, validationReason);
+                return WriteInvalidCodeIndexDbError(dbPath, validationReason, json: false, jsonOptions);
 
             db.TryMigrateForRead();
             s_batchReader = new DbReader(db);

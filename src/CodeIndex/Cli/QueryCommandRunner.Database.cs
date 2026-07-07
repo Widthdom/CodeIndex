@@ -64,6 +64,7 @@ public static partial class QueryCommandRunner
         if (profiling)
             Database.DbDebug.BeginProfile(options.SlowQueryMs);
         DbContext? db = null;
+        var databaseReadyForQueries = s_batchReader != null;
         try
         {
             DbReader reader;
@@ -75,9 +76,10 @@ public static partial class QueryCommandRunner
             {
                 db = new DbContext(dbPath, cancellationToken);
                 if (!db.TryValidateIsCodeIndexDb(out var validationReason))
-                    return WriteInvalidCodeIndexDbError(dbPath, validationReason);
+                    return WriteInvalidCodeIndexDbError(dbPath, validationReason, options.Json, jsonOptions);
                 db.TryMigrateForRead();
                 reader = new DbReader(db);
+                databaseReadyForQueries = true;
             }
 
             reader.IncludeGenerated = options.IncludeGenerated;
@@ -167,9 +169,10 @@ public static partial class QueryCommandRunner
                 }
             }
 
-            WriteDatabaseOpenFailure(ex, dbPath);
+            var jsonDatabaseOpenFailure = options.Json && !databaseReadyForQueries;
+            var databaseExitCode = WriteDatabaseOpenFailureJsonAware(ex, dbPath, jsonDatabaseOpenFailure, jsonOptions);
             Database.DbDebug.DumpToStderr(ex);
-            return CommandExitCodes.DatabaseError;
+            return databaseExitCode;
         }
         finally
         {
@@ -180,11 +183,18 @@ public static partial class QueryCommandRunner
         }
     }
 
-    private static int WriteInvalidCodeIndexDbError(string dbPath, string? validationReason)
+    private static int WriteInvalidCodeIndexDbError(
+        string dbPath,
+        string? validationReason,
+        bool json,
+        JsonSerializerOptions jsonOptions)
     {
-        CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: {FormatDbDiagnosticValue(dbPath)} does not appear to be a valid CodeIndex database ({validationReason}).");
-        CommandErrorWriter.WriteStderr("Hint: rebuild with `cdidx index <projectPath> --db <path>` to create a fresh database.");
-        return CommandExitCodes.DatabaseError;
+        return WriteDatabaseCommandError(
+            json,
+            jsonOptions,
+            $"{FormatDbDiagnosticValue(dbPath)} does not appear to be a valid CodeIndex database ({validationReason}).",
+            "rebuild with `cdidx index <projectPath> --db <path>` to create a fresh database.",
+            "database");
     }
 
     private static string? GetDataDirectoryPath(string? dbPath)
@@ -199,23 +209,36 @@ public static partial class QueryCommandRunner
     }
 
     private static void WriteDatabaseOpenFailure(Exception ex, string dbPath)
+        => _ = WriteDatabaseOpenFailureJsonAware(ex, dbPath, json: false, JsonSerializerOptions.Default);
+
+    private static int WriteDatabaseOpenFailureJsonAware(
+        Exception ex,
+        string dbPath,
+        bool json,
+        JsonSerializerOptions jsonOptions)
     {
         GlobalToolLog.Error($"database_open_failed db={FormatLogValue(dbPath)} exception={FormatLogValue(ex.ToString())}");
 
         var unauthorized = FindException<UnauthorizedAccessException>(ex);
         if (unauthorized != null)
         {
-            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database access denied: {CommandErrorWriter.FormatSanitizedExceptionMessage(unauthorized)}");
-            CommandErrorWriter.WriteStderr(MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent()));
-            return;
+            return WriteDatabaseCommandError(
+                json,
+                jsonOptions,
+                $"database access denied: {CommandErrorWriter.FormatSanitizedExceptionMessage(unauthorized)}",
+                MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent()),
+                DiagnosticRedactor.ClassifyException(unauthorized));
         }
 
         var io = FindException<IOException>(ex);
         if (io != null)
         {
-            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database I/O error: {CommandErrorWriter.FormatSanitizedExceptionMessage(io)}");
-            CommandErrorWriter.WriteStderr(MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent()));
-            return;
+            return WriteDatabaseCommandError(
+                json,
+                jsonOptions,
+                $"database I/O error: {CommandErrorWriter.FormatSanitizedExceptionMessage(io)}",
+                MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent()),
+                DiagnosticRedactor.ClassifyException(io));
         }
 
         var sqlite = FindException<SqliteException>(ex);
@@ -223,27 +246,63 @@ public static partial class QueryCommandRunner
         {
             if (sqlite.SqliteErrorCode == 14)
             {
-                CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database access/open denied: {CommandErrorWriter.FormatSanitizedExceptionMessage(sqlite)}");
-                CommandErrorWriter.WriteStderr(MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent()));
-                return;
+                return WriteDatabaseCommandError(
+                    json,
+                    jsonOptions,
+                    $"database access/open denied: {CommandErrorWriter.FormatSanitizedExceptionMessage(sqlite)}",
+                    MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent()),
+                    DiagnosticRedactor.ClassifyException(sqlite));
             }
 
             if (sqlite.SqliteErrorCode == 11)
             {
-                CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: SQLite reported database corruption: {CommandErrorWriter.FormatSanitizedExceptionMessage(sqlite)}");
-                CommandErrorWriter.WriteStderr("Hint: rebuild the index with `cdidx index <projectPath> --rebuild`, or delete the broken `.cdidx/codeindex.db*` files and run `cdidx index <projectPath>` again.");
-                return;
+                return WriteDatabaseCommandError(
+                    json,
+                    jsonOptions,
+                    $"SQLite reported database corruption: {CommandErrorWriter.FormatSanitizedExceptionMessage(sqlite)}",
+                    "rebuild the index with `cdidx index <projectPath> --rebuild`, or delete the broken `.cdidx/codeindex.db*` files and run `cdidx index <projectPath>` again.",
+                    DiagnosticRedactor.ClassifyException(sqlite));
             }
 
-            CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: SQLite database error ({sqlite.SqliteErrorCode}): {CommandErrorWriter.FormatSanitizedExceptionMessage(sqlite)}");
-            CommandErrorWriter.WriteStderr(MacProfileDetector.IsPermissionStyleSqliteError(sqlite)
-                ? MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent())
-                : "Hint: check `--db`, verify the index was written by a compatible cdidx version, or rebuild it with `cdidx index <projectPath> --rebuild`.");
-            return;
+            return WriteDatabaseCommandError(
+                json,
+                jsonOptions,
+                $"SQLite database error ({sqlite.SqliteErrorCode}): {CommandErrorWriter.FormatSanitizedExceptionMessage(sqlite)}",
+                MacProfileDetector.IsPermissionStyleSqliteError(sqlite)
+                    ? MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent())
+                    : "check `--db`, verify the index was written by a compatible cdidx version, or rebuild it with `cdidx index <projectPath> --rebuild`.",
+                DiagnosticRedactor.ClassifyException(sqlite));
         }
 
-        CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.DbError}]: database error: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}");
-        CommandErrorWriter.WriteStderr("Hint: check `--db`, or rebuild the index with `cdidx index <projectPath>` if the DB may be stale or corrupted.");
+        return WriteDatabaseCommandError(
+            json,
+            jsonOptions,
+            $"database error: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}",
+            "check `--db`, or rebuild the index with `cdidx index <projectPath>` if the DB may be stale or corrupted.",
+            DiagnosticRedactor.ClassifyException(ex));
+    }
+
+    private static int WriteDatabaseCommandError(
+        bool json,
+        JsonSerializerOptions jsonOptions,
+        string message,
+        string hint,
+        string? category)
+        => CommandErrorWriter.WriteJsonOrHuman(
+            json,
+            jsonOptions,
+            message,
+            CommandExitCodes.DatabaseError,
+            TrimHintPrefix(hint),
+            errorCode: CommandErrorCodes.DbError,
+            category: category);
+
+    private static string TrimHintPrefix(string hint)
+    {
+        const string prefix = "Hint:";
+        return hint.StartsWith(prefix, StringComparison.Ordinal)
+            ? hint[prefix.Length..].TrimStart()
+            : hint;
     }
 
     private static T? FindException<T>(Exception ex)

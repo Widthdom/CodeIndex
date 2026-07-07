@@ -804,6 +804,49 @@ public partial class QueryCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void RunVacuum_JsonExplainsWalCheckpointTiming_Issue4338()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_vacuum_wal_timing");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using (var db = new DbContext(dbPath))
+            {
+                using var command = db.Connection.CreateCommand();
+                command.CommandText = @"
+                    CREATE TABLE vacuum_payload (id INTEGER PRIMARY KEY, payload BLOB);
+                    WITH RECURSIVE n(value) AS (
+                        SELECT 1
+                        UNION ALL
+                        SELECT value + 1 FROM n WHERE value < 128
+                    )
+                    INSERT INTO vacuum_payload (payload)
+                    SELECT randomblob(4096) FROM n;
+                    DELETE FROM vacuum_payload;";
+                command.ExecuteNonQuery();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            Assert.Equal("ok", root.GetProperty("status").GetString());
+            Assert.False(root.GetProperty("dry_run").GetBoolean());
+            var timingNote = root.GetProperty("wal_checkpoint_timing_note").GetString();
+            Assert.Contains("wal_size_bytes_after", timingNote, StringComparison.Ordinal);
+            Assert.Contains("checkpoint", timingNote, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
 
 
 
@@ -2040,6 +2083,35 @@ public partial class QueryCommandRunnerTests
             Assert.Contains($"Error [{CommandErrorCodes.DbError}]: SQLite database error", stderr);
             Assert.Contains("Hint: check `--db`, verify the index was written by a compatible cdidx version", stderr);
             Assert.DoesNotContain("database error:", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_CorruptDbJsonReturnsStructuredError_Issue4338()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue4338_corrupt_status");
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, "corrupt.db");
+            File.WriteAllText(dbPath, "this is not a sqlite database");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            Assert.Equal("error", root.GetProperty("status").GetString());
+            Assert.Equal(CommandErrorCodes.DbError, root.GetProperty("error_code").GetString());
+            Assert.Equal("sqlite_error", root.GetProperty("category").GetString());
+            Assert.Contains("SQLite", root.GetProperty("message").GetString(), StringComparison.Ordinal);
+            Assert.Contains("rebuild", root.GetProperty("hint").GetString(), StringComparison.Ordinal);
         }
         finally
         {
