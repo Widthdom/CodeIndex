@@ -15,6 +15,7 @@ public static partial class QueryCommandRunner
         "--exact",
         "--exact-name",
         "--exact-substring",
+        "--token-boundary",
         "--prefix",
         "--reverse",
         "--help",

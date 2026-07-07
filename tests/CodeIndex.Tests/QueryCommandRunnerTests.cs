@@ -1972,6 +1972,11 @@ public partial class QueryCommandRunnerTests
         var search = QueryCommandRunner.ParseArgs(["needle", "--exact-substring"], jsonDefault: false);
         Assert.True(search.ExactSubstring);
         Assert.False(search.ExactName);
+        Assert.False(search.TokenBoundary);
+
+        var tokenBoundarySearch = QueryCommandRunner.ParseArgs(["needle", "--token-boundary"], jsonDefault: false);
+        Assert.True(tokenBoundarySearch.TokenBoundary);
+        Assert.False(tokenBoundarySearch.ExactSubstring);
 
         var symbols = QueryCommandRunner.ParseArgs(["Run", "--exact-name"], jsonDefault: false);
         Assert.True(symbols.ExactName);

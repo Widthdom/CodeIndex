@@ -319,6 +319,7 @@ internal static class CliFlagSchema
             new() { Name = "--regex", Description = "Use regular expression matching", Commands = Set("find") },
             new() { Name = "--exact-name", Description = "Exact symbol-name equality", Commands = Set(ExactNameCommands), AlsoAcceptedBy = Set("search") },
             new() { Name = "--exact-substring", Description = "Search-only exact substring match", Commands = Set("search"), AlsoAcceptedBy = Set(ExactSubstringAccepted) },
+            new() { Name = "--token-boundary", Description = "Search-only exact substring match with identifier/token boundaries", Commands = Set("search") },
             new() { Name = "--prefix", Description = "Trailing-asterisk prefix shorthand", Commands = Set("search") },
             new() { Name = "--require-before", ValuePlaceholder = "<query>", Description = "Search: require a nearby guard query before each primary match", Commands = Set("search") },
             new() { Name = "--require-after", ValuePlaceholder = "<query>", Description = "Search: require a nearby guard query after each primary match", Commands = Set("search") },

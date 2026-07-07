@@ -171,7 +171,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("punctuation_heavy_query", hint.GetProperty("reason").GetString());
             Assert.Equal(
-                "This looks like a literal code phrase; rerun with `--exact-substring`, for example: `cdidx search --exact-substring --query \"...\"`, for punctuation-sensitive matching.",
+                "This looks like a literal code phrase; rerun with `--exact-substring`, for example: `cdidx search --exact-substring --query \"...\"`, for punctuation-sensitive matching. Use `--token-boundary` when longer identifiers such as `HttpClientHandler` should not match `HttpClient`.",
                 hint.GetProperty("suggested_action").GetString());
             Assert.Equal("--exact-substring", hint.GetProperty("flag").GetString());
             Assert.Equal("exactSubstring", hint.GetProperty("mcp_argument").GetString());
