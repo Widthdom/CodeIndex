@@ -135,7 +135,7 @@ internal static class CliFlagSchema
     private static readonly string[] ByteFormatCommands = ["files", "map"];
     private static readonly string[] EntrypointConfidenceCommands = ["map"];
     private static readonly string[] MapSectionCommands = ["map"];
-    private static readonly string[] SummaryOnlyCommands = ["map", "search", "recipes", "audit", "symbols", "files", "deps", "hotspots"];
+    private static readonly string[] SummaryOnlyCommands = ["map", "search", "recipes", "audit", "symbols", "files", "deps", "unused", "hotspots"];
     private static readonly string[] DependencyCycleCommands = ["deps"];
     private static readonly string[] LanguagesFilterCommands = ["languages"];
 

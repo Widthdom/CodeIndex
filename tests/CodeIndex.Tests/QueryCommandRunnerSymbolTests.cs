@@ -1569,6 +1569,47 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunUnused_SummaryOnlyJsonUsesCompactCountEnvelope_Issue4344()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--summary-only", "--lang", "csharp"],
+                _jsonOptions));
+
+            Assert.True(exitCode == CommandExitCodes.Success, $"stdout: {stdout}\nstderr: {stderr}");
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var omittedSections = json.GetProperty("omitted_sections").EnumerateArray().Select(value => value.GetString()).ToArray();
+
+            Assert.Equal(2, json.GetProperty("count").GetInt32());
+            Assert.True(json.GetProperty("summary_only").GetBoolean());
+            Assert.True(json.GetProperty("compact").GetBoolean());
+            Assert.Contains("bucket_taxonomy", omittedSections);
+            Assert.False(json.TryGetProperty("bucket_taxonomy", out _));
+            Assert.False(json.TryGetProperty("symbols", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_SummaryOnlyWithoutJsonReturnsUsageError_Issue4344()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+            ["--summary-only"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("unused --summary-only is only supported with JSON output", stderr);
+    }
+
+    [Fact]
     public void RunUnused_DefaultTextCountReportsSuppressionHint_Issue4120()
     {
         var (projectRoot, dbPath) = CreateUnusedFixtureDb();

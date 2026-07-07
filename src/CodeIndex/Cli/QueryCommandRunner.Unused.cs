@@ -49,12 +49,20 @@ public static partial class QueryCommandRunner
                 "`outline:<offset>` cursors are for `cdidx outline <path>`.");
             return CommandExitCodes.UsageError;
         }
-        if (options.UnusedCursorOffset.HasValue && options.CountOnly)
+        if (options.UnusedCursorOffset.HasValue && (options.CountOnly || options.SummaryOnly))
         {
             WriteUsageError(
-                "--cursor cannot be used with `unused --count`.",
+                "--cursor cannot be used with unused count or summary-only output.",
                 GetUsageLineOrThrow("unused"),
-                "Remove `--count` to page unused results.");
+                "Remove --count/--summary-only to page unused results.");
+            return CommandExitCodes.UsageError;
+        }
+        if (options.SummaryOnly && !options.Json)
+        {
+            WriteUsageError(
+                "unused --summary-only is only supported with JSON output.",
+                GetUsageLineOrThrow("unused"),
+                "Use `cdidx unused --json --summary-only` for compact unused totals.");
             return CommandExitCodes.UsageError;
         }
         var unusedScope = BuildUnusedAuditScopeFilters(options);
@@ -102,7 +110,7 @@ public static partial class QueryCommandRunner
                     resultFilter: resultFilter);
             }
 
-            if (options.CountOnly)
+            if (options.CountOnly || options.SummaryOnly)
             {
                 var countSummary = CountUnusedSymbolsDetailedForCurrentQuery();
                 UnusedDefaultCountSuppressionResult? countSuppression = null;
@@ -128,12 +136,23 @@ public static partial class QueryCommandRunner
                         ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(ToUnusedCountDictionary(countSummary.BucketCounts), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
                         ["returned_contract_domain_counts"] = JsonSerializer.SerializeToNode(ToUnusedCountDictionary(countSummary.ContractDomainCounts), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
                         ["summary"] = BuildUnusedCountSummaryJson(countSummary, jsonOptions, countSuppression),
-                        ["bucket_taxonomy"] = BuildUnusedBucketTaxonomyJson(),
                         ["graph_supported"] = graphSupported,
                         ["graph_support_reason"] = graphSupportReason,
                         ["graph_table_available"] = reader._hasReferencesTable,
                         ["degraded"] = !reader._hasReferencesTable
                     };
+                    var omittedSections = new JsonArray();
+                    if (options.Compact || options.SummaryOnly)
+                    {
+                        payload["compact"] = true;
+                        omittedSections.Add(JsonValue.Create("bucket_taxonomy"));
+                    }
+                    else
+                    {
+                        payload["bucket_taxonomy"] = BuildUnusedBucketTaxonomyJson();
+                    }
+                    if (options.SummaryOnly)
+                        payload["summary_only"] = true;
                     if (countSuppression is { Applied: true })
                         payload["default_suppression"] = BuildUnusedDefaultCountSuppressionJson(countSuppression, jsonOptions);
                     AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
@@ -143,11 +162,8 @@ public static partial class QueryCommandRunner
                     if (options.All)
                         queryContext["all"] = true;
                     payload["query_context"] = queryContext;
-                    if (options.Compact)
-                    {
-                        payload["compact"] = true;
-                        payload["omitted_sections"] = new JsonArray();
-                    }
+                    if (options.Compact || options.SummaryOnly)
+                        payload["omitted_sections"] = omittedSections;
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
