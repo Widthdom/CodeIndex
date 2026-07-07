@@ -7596,7 +7596,68 @@ jobs:
             Assert.Equal(3, json.GetProperty("end_line").GetInt32());
             Assert.Contains("public class Sample", json.GetProperty("content").GetString());
             Assert.False(json.TryGetProperty("semantic_tokens", out _));
+            Assert.False(json.TryGetProperty("semantic_tokens_hint", out _));
             Assert.True(json.TryGetProperty("content_line_spans", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunExcerpt_JsonSemanticTokensIncludesCompactHint_Issue4311()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_semantic_hint_4311");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Sample.cs",
+                "csharp",
+                "namespace Demo;\npublic class Sample { }\npublic class Other { }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                ["src/Sample.cs", "--db", dbPath, "--line", "2", "--context", "1", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("semantic_tokens").GetArrayLength() > 0);
+            Assert.Contains("--no-semantic-tokens", json.GetProperty("semantic_tokens_hint").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunExcerpt_JsonMaxBytesRejectsOversizedPayload_Issue4311()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_json_max_bytes_4311");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Sample.cs",
+                "csharp",
+                "namespace Demo;\npublic class Sample { }\npublic class Other { }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                ["src/Sample.cs", "--db", dbPath, "--line", "2", "--context", "1", "--json", "--max-json-bytes", "64"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("excerpt JSON output", stderr);
+            Assert.Contains("--max-json-bytes 64", stderr);
+            Assert.Contains("--no-semantic-tokens", stderr);
         }
         finally
         {

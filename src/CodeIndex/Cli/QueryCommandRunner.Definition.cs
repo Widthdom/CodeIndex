@@ -73,16 +73,38 @@ public static partial class QueryCommandRunner
                 WriteExactSymbolWarningIfNeeded(exact, options.Json, exactSignalForCount, reader, options);
                 if (counts.Count == 0)
                 {
-                    Console.WriteLine(options.Json
-                        ? BuildCountJsonPayload(reader, jsonOptions, count: 0, files: 0, query: options.Query, exactZeroHint: exactZeroHintForCount, exactSignal: exact ? exactSignalForCount : null, queryOptions: options).ToJsonString(jsonOptions)
-                        : "0");
+                    if (options.Json)
+                    {
+                        var zeroPayload = BuildCountJsonPayload(reader, jsonOptions, count: 0, files: 0, query: options.Query, exactZeroHint: exactZeroHintForCount, exactSignal: exact ? exactSignalForCount : null, queryOptions: options);
+                        var writeExitCode = WriteJsonPayloadWithOptionalByteLimit(
+                            zeroPayload,
+                            options,
+                            jsonOptions,
+                            "definition",
+                            "definition count",
+                            "Narrow the query or increase --max-json-bytes.");
+                        if (writeExitCode != CommandExitCodes.Success)
+                            return writeExitCode;
+                    }
+                    else
+                    {
+                        Console.WriteLine("0");
+                    }
                     return CommandExitCodes.Success;
                 }
 
                 if (options.Json)
                 {
                     var payload = BuildCountJsonPayload(reader, jsonOptions, counts.Count, counts.FileCount, query: options.Query, exactSignal: exact ? exactSignalForCount : null, queryOptions: options);
-                    Console.WriteLine(payload.ToJsonString(jsonOptions));
+                    var writeExitCode = WriteJsonPayloadWithOptionalByteLimit(
+                        payload,
+                        options,
+                        jsonOptions,
+                        "definition",
+                        "definition count",
+                        "Narrow the query or increase --max-json-bytes.");
+                    if (writeExitCode != CommandExitCodes.Success)
+                        return writeExitCode;
                 }
                 else
                 {
@@ -140,7 +162,9 @@ public static partial class QueryCommandRunner
                 }
                 foreach (var r in results)
                 {
-                    WriteDefinitionJsonResult(r, options, exact ? exactSignal : null, jsonOptions);
+                    var writeExitCode = WriteDefinitionJsonResult(r, options, exact ? exactSignal : null, jsonOptions);
+                    if (writeExitCode != CommandExitCodes.Success)
+                        return writeExitCode;
                 }
             }
             else
