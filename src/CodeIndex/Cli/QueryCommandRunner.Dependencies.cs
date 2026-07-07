@@ -9,6 +9,8 @@ namespace CodeIndex.Cli;
 
 public static partial class QueryCommandRunner
 {
+    private const int BroadDependencySummaryCandidateFileLimit = 250;
+
     public static int RunImpact(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var previewOptionError = ValidatePreviewOptions("impact", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
@@ -525,6 +527,21 @@ public static partial class QueryCommandRunner
             cancellationToken.ThrowIfCancellationRequested();
             if (TryWriteInvalidWorkspaceDependencyDatabaseError(options, out var workspaceDbExitCode))
                 return workspaceDbExitCode;
+            if (options.SummaryOnly
+                && !options.DependencyCycles
+                && depsFormat == OutputFormatEdgeList
+                && IsBroadDependencySummaryQuery(options))
+            {
+                var candidateFiles = reader.CountListFiles(null, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests).Count;
+                if (candidateFiles > BroadDependencySummaryCandidateFileLimit)
+                {
+                    WriteUsageError(
+                        $"deps --summary-only is too broad for this index ({candidateFiles} candidate files).",
+                        GetUsageLineOrThrow("deps"),
+                        "Add --path, --lang, or --exclude-tests so the summary can be computed without materializing a workspace-wide graph.");
+                    return CommandExitCodes.UsageError;
+                }
+            }
 
             var reverse = cmdArgs.Any(a => a == "--reverse");
             List<FileDependencyResult> results;
@@ -789,6 +806,13 @@ public static partial class QueryCommandRunner
         parseArgs = rewritten.ToArray();
         return true;
     }
+
+    private static bool IsBroadDependencySummaryQuery(QueryCommandOptions options)
+        => options.PathPatterns.Count == 0
+           && options.ExcludePaths.Count == 0
+           && !options.ExcludeTests
+           && options.Lang == null
+           && options.WorkspaceDbPaths.Count == 0;
 
     private static bool TryNormalizeDepsFormat(string rawFormat, out string format, out string? error)
     {
