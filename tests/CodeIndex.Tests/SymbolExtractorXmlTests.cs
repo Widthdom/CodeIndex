@@ -85,6 +85,15 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void CreateExtractionXmlReaderSettings_RejectsDtdParsing_Issue4345()
+    {
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            SymbolExtractor.CreateExtractionXmlReaderSettings(DtdProcessing.Parse));
+
+        Assert.Equal("dtdProcessing", exception.ParamName);
+    }
+
+    [Fact]
     public void Extract_AppManifest_IgnoresDtdWithSharedReaderPolicy_Issue3981()
     {
         const string content = """
@@ -102,6 +111,27 @@ public partial class SymbolExtractorTests
             symbol.Kind == "assembly"
             && symbol.Name == "CodeIndex.App"
             && symbol.Line == 5);
+    }
+
+    [Fact]
+    public void Extract_AppManifest_DoesNotResolveExternalEntityWithSharedReaderPolicy_Issue4345()
+    {
+        const string content = """
+            <!DOCTYPE assembly [
+              <!ENTITY xxe SYSTEM "file:///should/not/be/read">
+            ]>
+            <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+              <assemblyIdentity version="1.0.0.0" name="CodeIndex.App" processorArchitecture="*" type="win32" />
+              <description>&xxe;</description>
+            </assembly>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "app_manifest", content);
+
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "assembly"
+            && symbol.Name == "CodeIndex.App");
+        Assert.DoesNotContain(symbols, symbol => symbol.Signature?.Contains("should/not/be/read", StringComparison.Ordinal) == true);
     }
 
     [Fact]
@@ -186,6 +216,23 @@ public partial class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "xml", content);
 
         Assert.Empty(symbols);
+    }
+
+    [Fact]
+    public void Extract_MsBuild_MalformedXmlReturnsBoundedPartialSymbols_Issue4345()
+    {
+        const string content = """
+            <Project>
+              <Target Name="Build">
+            </Project>
+            """;
+
+        var exception = Record.Exception(() => SymbolExtractor.Extract(1, "msbuild", content));
+        var symbols = SymbolExtractor.Extract(1, "msbuild", content);
+
+        Assert.Null(exception);
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "Build");
+        Assert.DoesNotContain(symbols, symbol => symbol.Signature?.Contains("</Project>", StringComparison.Ordinal) == true);
     }
 
     [Fact]

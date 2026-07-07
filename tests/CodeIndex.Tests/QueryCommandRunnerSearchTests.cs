@@ -1686,14 +1686,46 @@ public partial class QueryCommandRunnerTests
             .GetProperty("queries")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "broad-exception-catch");
+        var jsonDocumentQuery = jsonRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "json-document-parse");
+        var jsonOptionsQuery = jsonRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "json-serializer-options");
+        var jsonSerializeQuery = jsonRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "json-serializer-serialize");
+        var xmlReaderSettingsQuery = xmlRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "xml-reader-settings");
+        var xmlResolverQuery = xmlRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "xml-resolver");
         var enumerateWithoutOptionsQuery = traversalRecipe
             .GetProperty("queries")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "enumerate-without-options");
+        var boundedMemoryAccumulatorQuery = boundedReadRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "bounded-memory-accumulator");
+        var boundedFileOpenHelperQuery = boundedReadRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "bounded-file-open-helper");
         var resourceDbCommandQuery = resourceRecipe
             .GetProperty("queries")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "db-command-reader-ownership");
+        var resourceStreamReaderQuery = resourceRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "stream-reader-ownership");
         var resourceToArrayQuery = resourceRecipe
             .GetProperty("queries")
             .EnumerateArray()
@@ -1843,9 +1875,14 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(recipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "file-read-all-bytes");
         Assert.Contains(recipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "thread-sleep");
         Assert.Contains(recipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "http-client-construction");
+        Assert.Contains(jsonDocumentQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("BoundedJson.ParseDocument", StringComparison.Ordinal));
         Assert.Contains(jsonRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "json-node-parse");
         Assert.Contains(jsonRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "json-serializer-deserialize");
         Assert.Contains(jsonRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "json-async-deserialize");
+        Assert.Contains(jsonOptionsQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("MaxDepth", StringComparison.Ordinal));
+        Assert.Contains(jsonRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "json-case-insensitive-properties");
+        Assert.Contains(jsonSerializeQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("output", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(jsonRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "utf8-json-writer");
         Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "sqlite-addwithvalue");
         Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "sqlite-quoted-identifier");
         Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "sqlite-typed-parameter");
@@ -1856,7 +1893,9 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "static-regex-replace");
         Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "static-regex-split");
         Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "sync-over-async");
+        Assert.Contains(xmlReaderSettingsQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("XmlResolver = null", StringComparison.Ordinal));
         Assert.Contains(xmlRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "dtd-processing");
+        Assert.Contains(xmlResolverQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("external entity", StringComparison.Ordinal));
         Assert.Contains(traversalRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "enumerate-files");
         Assert.Equal("Directory.Enumerate", enumerateWithoutOptionsQuery.GetProperty("query").GetString());
         Assert.Contains(enumerateWithoutOptionsQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("without nearby EnumerationOptions", StringComparison.Ordinal));
@@ -1866,10 +1905,15 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(enumerateWithoutOptionsQuery.GetProperty("guard_filters").EnumerateArray(), filter =>
             filter.GetProperty("option").GetString() == "--reject-after" &&
             filter.GetProperty("query").GetString() == "EnumerationOptions");
-        Assert.Contains(boundedReadRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "bounded-memory-accumulator");
+        Assert.Equal("BoundedFile.OpenReadFor", boundedFileOpenHelperQuery.GetProperty("query").GetString());
+        Assert.Contains(boundedFileOpenHelperQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("FileShare.ReadWrite", StringComparison.Ordinal));
+        Assert.Contains(boundedMemoryAccumulatorQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("max-byte", StringComparison.Ordinal));
         Assert.Equal("source", resourceRecipe.GetProperty("default_scope").GetString());
         Assert.Contains(resourceRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "async-dispose-boundary");
         Assert.Contains(resourceRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "file-open-sharing-policy");
+        Assert.Contains(resourceStreamReaderQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("encoding", StringComparison.Ordinal));
+        Assert.Contains(resourceRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "stream-writer-ownership");
+        Assert.Contains(resourceRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "read-to-end-materialization");
         Assert.Equal("CreateCommand(", resourceDbCommandQuery.GetProperty("query").GetString());
         Assert.Equal(0, resourceDbCommandQuery.GetProperty("path_patterns").GetArrayLength());
         Assert.Equal("ToArray()", resourceToArrayQuery.GetProperty("query").GetString());
@@ -2345,7 +2389,16 @@ public partial class QueryCommandRunnerTests
             SearchAuditRecipes.DefaultAuditScope,
             ["src/**"],
             expectedSourceExcludes,
-            ["json-document-parse", "json-node-parse", "json-serializer-deserialize", "json-async-deserialize"]);
+            [
+                "json-document-parse",
+                "json-node-parse",
+                "json-serializer-deserialize",
+                "json-async-deserialize",
+                "json-serializer-options",
+                "json-case-insensitive-properties",
+                "json-serializer-serialize",
+                "utf8-json-writer"
+            ]);
         AssertRecipe(
             "dotnet-risk-patterns",
             SearchAuditRecipes.DefaultAuditScope,
@@ -2394,6 +2447,9 @@ public partial class QueryCommandRunnerTests
                 "file-stream-ownership",
                 "file-open-sharing-policy",
                 "openread-sharing-policy",
+                "stream-reader-ownership",
+                "stream-writer-ownership",
+                "read-to-end-materialization",
                 "memory-stream-materialization",
                 "query-mcp-toarray-materialization"
             ]);
@@ -4049,7 +4105,7 @@ public partial class QueryCommandRunnerTests
             var serializer = queries.Single(item => item.GetProperty("name").GetString() == "json-serializer-deserialize");
 
             Assert.Equal("json-parse-apis", root.GetProperty("recipe").GetProperty("name").GetString());
-            Assert.Equal(4, root.GetProperty("query_count").GetInt32());
+            Assert.Equal(8, root.GetProperty("query_count").GetInt32());
             Assert.Equal(1, jsonNode.GetProperty("count").GetInt32());
             Assert.Equal("JsonNode.Parse", jsonNode.GetProperty("query").GetString());
             Assert.Equal("src/json.cs", jsonNode.GetProperty("top_files")[0].GetProperty("path").GetString());
@@ -4149,6 +4205,11 @@ public partial class QueryCommandRunnerTests
                 {
                     internal static Stream OpenReadForHash(string path)
                         => BoundedFile.OpenRead(path, FileShare.Read);
+
+                    internal static void UseHashRead(string path)
+                    {
+                        using var stream = BoundedFile.OpenReadForHash(path);
+                    }
                 }
                 """);
             TestProjectHelper.InsertIndexedFile(
@@ -4183,7 +4244,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             using var document = ParseJsonOutput(stdout);
             var root = document.RootElement;
-            AssertRecipeQueryHit(root, "bounded-file-open-helper", "BoundedFile.OpenRead", "src/CodeIndex/BoundedFile.cs");
+            AssertRecipeQueryHit(root, "bounded-file-open-helper", "BoundedFile.OpenReadFor", "src/CodeIndex/BoundedFile.cs");
             AssertRecipeQueryHit(root, "bounded-memory-accumulator", "MemoryStream", "src/CodeIndex/BoundedLineReader.cs");
             AssertRecipeQueryHit(root, "bounded-full-byte-read-helper", "ReadRawBytesWithSizeLimit", "src/CodeIndex/Indexer/Scanning/FileContentLoader.cs");
         }

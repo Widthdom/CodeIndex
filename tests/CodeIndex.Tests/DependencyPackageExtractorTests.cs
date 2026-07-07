@@ -114,6 +114,27 @@ public class DependencyPackageExtractorTests
     }
 
     [Fact]
+    public void Extract_DependencyManifest_RejectsExternalEntityWithSharedReaderPolicy_Issue4345()
+    {
+        var symbols = SymbolExtractor.Extract(
+            5,
+            "dependency_manifest",
+            """
+            <!DOCTYPE Project [
+              <!ENTITY packageName SYSTEM "file:///should/not/be/read">
+            ]>
+            <Project>
+              <ItemGroup>
+                <PackageVersion Include="&packageName;" Version="1.0.0" />
+              </ItemGroup>
+            </Project>
+            """,
+            filePath: "Directory.Packages.props");
+
+        Assert.Empty(symbols);
+    }
+
+    [Fact]
     public void Extract_DependencyManifest_StopsAtSharedDocumentLimit_Issue4130()
     {
         var padding = new string('a', (int)SymbolExtractor.XmlExtractionMaxCharactersInDocument + 1);
