@@ -949,6 +949,77 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_NullableRecipeGroupByReturnTypeCountsEnclosingReturnTypes_Issue4301()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_nullable_return_type_4301");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/name-contract.cs",
+                "csharp",
+                """
+                public sealed class Contracts
+                {
+                    public string? FindName()
+                    {
+                        return null;
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/count-contract.cs",
+                "csharp",
+                """
+                public sealed class Counters
+                {
+                    public int? ParseCount()
+                    {
+                        return null;
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "--recipe",
+                    "nullable-contracts/return-null-contract",
+                    "--db",
+                    dbPath,
+                    "--lang",
+                    "csharp",
+                    "--group-by",
+                    "nullable-return-type",
+                    "--count",
+                    "--json"
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var query = Assert.Single(root.GetProperty("queries").EnumerateArray());
+            var groups = query.GetProperty("groups").EnumerateArray().ToList();
+
+            Assert.Equal("return_type", root.GetProperty("group_by").GetString());
+            Assert.Equal(2, query.GetProperty("count").GetInt32());
+            Assert.Contains(groups, group =>
+                group.GetProperty("return_type").GetString() == "string?" &&
+                group.GetProperty("count").GetInt32() == 1);
+            Assert.Contains(groups, group =>
+                group.GetProperty("return_type").GetString() == "int?" &&
+                group.GetProperty("count").GetInt32() == 1);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_GroupByRequiresCount_Issue3388()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_group_by_requires_count");

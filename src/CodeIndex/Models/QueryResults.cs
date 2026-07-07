@@ -32,6 +32,8 @@ public class SearchResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? EnclosingContainerName { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? EnclosingSymbolReturnType { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<SearchGuardEvidence>? GuardEvidence { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<SearchGuardCheck>? GuardChecks { get; set; }
