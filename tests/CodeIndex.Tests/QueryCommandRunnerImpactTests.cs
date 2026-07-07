@@ -244,6 +244,59 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunImpact_ZeroDepthJsonCollapsesPartialDefinitions_Issue4309()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_impact_partial_definitions_issue4309");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.QueryCommandRunner.cs",
+                "csharp",
+                """
+                namespace Demo;
+
+                public partial class QueryCommandRunner
+                {
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/B.QueryCommandRunner.cs",
+                "csharp",
+                """
+                namespace Demo;
+
+                public partial class QueryCommandRunner
+                {
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["QueryCommandRunner", "--db", dbPath, "--json", "--max-hops", "0"],
+                _jsonOptions));
+
+            Assert.True(exitCode == CommandExitCodes.Success, $"stdout: {stdout}\nstderr: {stderr}");
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var definition = Assert.Single(json.GetProperty("definitions").EnumerateArray());
+
+            Assert.Equal(2, json.GetProperty("definition_count").GetInt32());
+            Assert.Equal(1, json.GetProperty("definition_output_count").GetInt32());
+            Assert.True(json.GetProperty("definitions_collapsed").GetBoolean());
+            Assert.Equal("logical_partial_families", json.GetProperty("definition_result_scope").GetString());
+            Assert.Equal(2, definition.GetProperty("definition_sites").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunImpact_StrictReturnsFeatureUnavailableForResolutionFailure()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_impact_strict_resolution_failure");
