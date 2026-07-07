@@ -1964,7 +1964,7 @@ public partial class QueryCommandRunnerTests
         };
 
         Assert.Equal(
-            ["risky-code", "string-comparison-semantics", "auth-token-audit", "dogfood-risk-patterns", "sqlite-query-policy-surfaces", "json-parse-apis", "dotnet-risk-patterns", "unsupported-operation-boundaries", "nullable-contracts", "xml-parser-security", "filesystem-traversal", "bounded-read-evidence", "resource-materialization-audit", "phrase-risk-patterns", "broad-token-audit"],
+            ["risky-code", "string-comparison-semantics", "auth-token-audit", "dogfood-risk-patterns", "sqlite-query-policy-surfaces", "json-parse-apis", "dotnet-risk-patterns", "unsupported-operation-boundaries", "nullable-contracts", "xml-parser-security", "filesystem-traversal", "bounded-read-evidence", "resource-materialization-audit", "concurrency-state-audit", "phrase-risk-patterns", "broad-token-audit"],
             recipes.Select(recipe => recipe.Name).ToArray());
 
         AssertRecipe(
@@ -2136,6 +2136,27 @@ public partial class QueryCommandRunnerTests
                 "query-mcp-toarray-materialization"
             ]);
         AssertRecipe(
+            "concurrency-state-audit",
+            SearchAuditRecipes.DefaultAuditScope,
+            ["src/**"],
+            expectedSourceExcludes,
+            [
+                "semaphore-slim-gate",
+                "lock-statement-scope",
+                "cancellation-registration-callback",
+                "concurrent-dictionary-cache",
+                "lazy-cache-ownership",
+                "async-local-context",
+                "task-run-background-work",
+                "task-completion-source-signal",
+                "manual-reset-event-slim",
+                "interlocked-state",
+                "volatile-state",
+                "channel-boundary",
+                "blocking-collection-boundary",
+                "threading-timer-lifetime"
+            ]);
+        AssertRecipe(
             "phrase-risk-patterns",
             SearchAuditRecipes.AllAuditScope,
             [],
@@ -2177,6 +2198,41 @@ public partial class QueryCommandRunnerTests
                 Assert.False(string.IsNullOrWhiteSpace(query.FalsePositiveGuidance));
             });
         }
+    }
+
+    [Fact]
+    public void RunSearch_ConcurrencyStateRecipeDocumentsSharedStateBoundaries_Issue4348()
+    {
+        using var env = EnvironmentVariableScope.Capture(SearchAuditRecipes.RecipePathsEnvironmentVariable);
+        env.Set(SearchAuditRecipes.RecipePathsEnvironmentVariable, null);
+
+        var recipe = Assert.Single(SearchAuditRecipes.All, item => item.Name == "concurrency-state-audit");
+        var queryNames = recipe.Queries.Select(query => query.Name).ToArray();
+
+        Assert.Equal(SearchAuditRecipes.DefaultAuditScope, recipe.DefaultScope);
+        Assert.Contains("shared-state", recipe.Description, StringComparison.Ordinal);
+        Assert.Contains("lock-statement-scope", queryNames);
+        Assert.Contains("cancellation-registration-callback", queryNames);
+        Assert.Contains("concurrent-dictionary-cache", queryNames);
+        Assert.Contains("async-local-context", queryNames);
+        Assert.Contains("task-run-background-work", queryNames);
+        Assert.Contains("interlocked-state", queryNames);
+        Assert.Contains("volatile-state", queryNames);
+        Assert.Contains("channel-boundary", queryNames);
+
+        var lockScope = Assert.Single(recipe.Queries, query => query.Name == "lock-statement-scope");
+        var cache = Assert.Single(recipe.Queries, query => query.Name == "concurrent-dictionary-cache");
+        var asyncLocal = Assert.Single(recipe.Queries, query => query.Name == "async-local-context");
+        var channel = Assert.Single(recipe.Queries, query => query.Name == "channel-boundary");
+
+        Assert.True(lockScope.ExactSubstring);
+        Assert.Contains("callbacks", lockScope.Description, StringComparison.Ordinal);
+        Assert.Contains("plugin/user code", lockScope.RiskEvidence[0], StringComparison.Ordinal);
+        Assert.Contains("ownership, eviction, and shutdown", cache.Description, StringComparison.Ordinal);
+        Assert.Contains("unbounded growth", cache.RiskEvidence[0], StringComparison.Ordinal);
+        Assert.Contains("leak across async boundaries", asyncLocal.Description, StringComparison.Ordinal);
+        Assert.Contains("drain ordering", channel.Description, StringComparison.Ordinal);
+        Assert.All(new[] { lockScope, cache, asyncLocal, channel }, query => Assert.Equal(["code"], query.MatchOrigins));
     }
 
     [Fact]

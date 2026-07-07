@@ -1809,6 +1809,209 @@ internal static class SearchAuditRecipes
                     ],
                 }
             ]),
+        SourceScopedRecipe(
+            "concurrency-state-audit",
+            "Audit shared-state, locking, cancellation-registration, background-worker, and cache-ownership boundaries.",
+            [
+                new(
+                    "semaphore-slim-gate",
+                    "SemaphoreSlim",
+                    "Find shared async/sync gates where wait cancellation, fairness, release pairing, and disposal order need review.",
+                    ["audit", "bug"],
+                    "False positives include small local throttles; prioritize command, DB writer, MCP, HTTP transport, and event-stream gates.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: SemaphoreSlim gates can leak permits or block shutdown when Wait/WaitAsync, Release, and Dispose ownership are split.",
+                        "positive: WaitAsync with caller tokens, try/finally Release, and deterministic shutdown tests make gate ownership explicit."
+                    ],
+                },
+                new(
+                    "lock-statement-scope",
+                    "lock (",
+                    "Find lock scopes that should stay small, ordered, and free of callbacks, blocking I/O, or user/plugin code.",
+                    ["audit", "bug"],
+                    "False positives include tiny private-state guards; prioritize global caches, transport/session state, and callback-adjacent locks.",
+                    ExactSubstring: true)
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: lock scopes that invoke callbacks, perform blocking I/O, or call plugin/user code can deadlock or stall unrelated work.",
+                        "positive: narrow private-state locks with no awaits, no callbacks, and documented ordering are usually intentional."
+                    ],
+                },
+                new(
+                    "cancellation-registration-callback",
+                    "Register(",
+                    "Find registration callbacks that may need deterministic disposal and isolation from lock-held shared state.",
+                    ["audit", "bug"],
+                    "False positives include DI/service registration and event registration; prioritize CancellationToken.Register callbacks and teardown hooks.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: cancellation registrations can fire on disposal paths and should not acquire contested locks or outlive the owning operation.",
+                        "positive: disposed registrations, static callbacks with captured immutable state, and lock-free callback bodies reduce teardown risk."
+                    ],
+                },
+                new(
+                    "concurrent-dictionary-cache",
+                    "ConcurrentDictionary",
+                    "Find shared concurrent caches whose ownership, eviction, and shutdown behavior should be documented.",
+                    ["audit", "bug", "performance"],
+                    "False positives include tiny immutable lookup tables; prioritize unbounded caches, prepared-command state, and session/transport maps.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: ConcurrentDictionary can hide unbounded growth, value factory races, or stale state when ownership and eviction are unclear.",
+                        "positive: bounded capacity, explicit Clear/Dispose ownership, immutable values, and documented lifecycle reduce shared-cache risk."
+                    ],
+                },
+                new(
+                    "lazy-cache-ownership",
+                    "Lazy<",
+                    "Find lazy initialization and cache ownership boundaries that may hide exception caching or shutdown-order assumptions.",
+                    ["audit", "bug"],
+                    "False positives include static immutable metadata; prioritize lazy state that owns handles, tasks, cancellation sources, or process-global values.",
+                    ExactSubstring: true)
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: Lazy<T> can cache initialization exceptions or retain process-global state beyond the intended owner lifetime.",
+                        "positive: immutable metadata, explicit LazyThreadSafetyMode, and no disposable/task payload make lazy ownership easier to justify."
+                    ],
+                },
+                new(
+                    "async-local-context",
+                    "AsyncLocal",
+                    "Find ambient context scopes that may leak across async boundaries or nested operations.",
+                    ["audit", "bug"],
+                    "False positives include test-only context probes; prioritize command/session correlation, trace, and diagnostic scopes.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: AsyncLocal state can leak into child tasks or survive nested operations unless scope restoration is deterministic.",
+                        "positive: disposable scope guards, try/finally restoration, and tests for nested async operations make ambient state safer."
+                    ],
+                },
+                new(
+                    "task-run-background-work",
+                    "Task.Run",
+                    "Find background worker boundaries where cancellation, exception observation, and drain/flush ordering need review.",
+                    ["audit", "bug"],
+                    "False positives include small CPU offloads; prioritize fire-and-forget, transport, worker, and cache-maintenance paths.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: Task.Run can detach work from cancellation and hide exceptions when no owner observes or drains the task.",
+                        "positive: BackgroundTaskObserver, captured cancellation, awaited drains, and documented fire-and-forget ownership make scheduling intentional."
+                    ],
+                },
+                new(
+                    "task-completion-source-signal",
+                    "TaskCompletionSource",
+                    "Find completion-signal ownership boundaries that may need asynchronous continuations and completion-race review.",
+                    ["audit", "bug"],
+                    "False positives include test-only coordination; prioritize production protocol, transport, worker, and shutdown signals.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: TaskCompletionSource can inline continuations under locks or race Set/Cancellation paths when ownership is unclear.",
+                        "positive: RunContinuationsAsynchronously, TrySet* calls, and single-owner completion helpers reduce signaling risk."
+                    ],
+                },
+                new(
+                    "manual-reset-event-slim",
+                    "ManualResetEventSlim",
+                    "Find blocking signal boundaries that should be limited to tests or have explicit timeout and disposal ownership.",
+                    ["audit", "bug"],
+                    "False positives include test fixtures; production hits should justify sync blocking and teardown ordering.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: ManualResetEventSlim blocks threads and can stall shutdown if waits are unbounded or disposal races with signalers.",
+                        "positive: test-only usage, bounded waits, and deterministic owner disposal make the signal boundary intentional."
+                    ],
+                },
+                new(
+                    "interlocked-state",
+                    "Interlocked",
+                    "Find lock-free state transitions that need a clear invariant and pairing with volatile reads or higher-level ownership.",
+                    ["audit", "bug"],
+                    "False positives include simple counters; prioritize state machines, shutdown flags, and shared cache mutations.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: Interlocked operations can become ad hoc memory-order assumptions when the invariant and matching reads are not documented.",
+                        "positive: single-purpose counters, documented state transitions, and paired Volatile reads/writes make lock-free state easier to review."
+                    ],
+                },
+                new(
+                    "volatile-state",
+                    "Volatile",
+                    "Find explicit memory-order reads and writes that should have documented invariants and pairing.",
+                    ["audit", "bug"],
+                    "False positives include simple stop flags; prioritize multi-field state machines and cache visibility assumptions.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: Volatile reads/writes only protect visibility for the accessed location and can hide multi-field invariant races.",
+                        "positive: single-flag ownership, documented happens-before relationships, and paired Interlocked transitions reduce memory-order risk."
+                    ],
+                },
+                new(
+                    "channel-boundary",
+                    "Channel",
+                    "Find channel and queue boundaries where cancellation, completion, backpressure, and drain ordering need review.",
+                    ["audit", "bug", "performance"],
+                    "False positives include namespace/type declarations; prioritize runtime queues, protocol streams, and background workers.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: Channel producers and consumers can deadlock or drop work when completion, cancellation, and drain ordering are split.",
+                        "positive: bounded channels, TryComplete ownership, cancellation-aware readers, and flush/drain tests make queue behavior explicit."
+                    ],
+                },
+                new(
+                    "blocking-collection-boundary",
+                    "BlockingCollection",
+                    "Find blocking collection boundaries that need timeout, cancellation, and disposal review.",
+                    ["audit", "bug"],
+                    "False positives include legacy tests; production use should justify synchronous blocking and bounded shutdown.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: BlockingCollection can hide thread blocking and shutdown hangs without bounded Take/Add cancellation and CompleteAdding ownership.",
+                        "positive: bounded capacity, cancellation-aware consuming loops, and deterministic CompleteAdding/Dispose ordering reduce blocking risk."
+                    ],
+                },
+                new(
+                    "threading-timer-lifetime",
+                    "System.Threading.Timer",
+                    "Find timer lifetimes where callback ownership, cancellation, and Dispose/DisposeAsync ordering need review.",
+                    ["audit", "bug"],
+                    "False positives include documentation strings and tests; prioritize runtime timers whose callbacks mutate shared state.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: System.Threading.Timer callbacks can overlap disposal or mutate shared state after the owner begins shutdown.",
+                        "positive: deterministic Dispose/DisposeAsync, callback serialization, and cancellation-aware owner teardown make timer lifetime intentional."
+                    ],
+                }
+            ]),
         AllScopedRecipe(
             "phrase-risk-patterns",
             "Precision-focused audit searches for noisy code phrases, broad words, and configuration text that need semantic triage facets.",
