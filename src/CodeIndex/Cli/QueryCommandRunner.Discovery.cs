@@ -261,9 +261,21 @@ public static partial class QueryCommandRunner
         if (!args.Any(arg => string.Equals(arg, "--compact", StringComparison.Ordinal)))
             return args;
 
+        var valueOptions = CliFlagSchema.GetParserFlagsPartitionedByValueBearing("symbols").WithValues;
         var expanded = new List<string>(args.Length + 1);
-        foreach (var arg in args)
+        for (var i = 0; i < args.Length; i++)
         {
+            var arg = args[i];
+            if (string.Equals(arg, "--", StringComparison.Ordinal))
+            {
+                expanded.Add(arg);
+                if (i + 1 < args.Length)
+                    expanded.Add(args[++i]);
+                continue;
+            }
+
+            var inlineValue = TrySplitInlineOptionValue(arg, out var inlineOptionName);
+            var normalizedArg = inlineOptionName ?? arg;
             if (string.Equals(arg, "--compact", StringComparison.Ordinal))
             {
                 expanded.Add("--format");
@@ -273,6 +285,9 @@ public static partial class QueryCommandRunner
             {
                 expanded.Add(arg);
             }
+
+            if (!inlineValue && valueOptions.Contains(normalizedArg) && i + 1 < args.Length)
+                expanded.Add(args[++i]);
         }
         return expanded.ToArray();
     }
