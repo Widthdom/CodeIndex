@@ -439,6 +439,30 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
+    public void BuildApiErrorDetail_RedactsCredentialFieldVariants_Issue4299()
+    {
+        const string secret = "value-that-must-not-leak";
+        var detail = GitHubIssueReporter.BuildApiErrorDetail(
+            401,
+            $$"""
+            {
+              "github_token": "{{secret}}",
+              "api-key": "{{secret}}",
+              "accessToken": "{{secret}}",
+              "AuthorizationHeader": "{{secret}}",
+              "bearer": "{{secret}}"
+            }
+            """);
+
+        Assert.Contains("\"github_token\":\"[redacted]\"", detail, StringComparison.Ordinal);
+        Assert.Contains("\"api-key\":\"[redacted]\"", detail, StringComparison.Ordinal);
+        Assert.Contains("\"accessToken\":\"[redacted]\"", detail, StringComparison.Ordinal);
+        Assert.Contains("\"AuthorizationHeader\":\"[redacted]\"", detail, StringComparison.Ordinal);
+        Assert.Contains("\"bearer\":\"[redacted]\"", detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void BuildIssueTitle_ClampsFinalTitleToGitHubLimit()
     {
         var category = new string('c', 240);
@@ -522,15 +546,100 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
+    public void GetRateLimitRetryAt_ClampsExcessiveRetryAfterDelta_Issue4329()
+    {
+        using var response = new HttpResponseMessage((HttpStatusCode)429);
+        response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromDays(30));
+        var now = new DateTime(2026, 5, 23, 10, 0, 0, DateTimeKind.Utc);
+
+        var retryAt = GitHubIssueReporter.GetRateLimitRetryAt(response, now);
+
+        Assert.Equal(now.Add(GitHubHttpClientFactory.MaxRetryAfterDelay), retryAt);
+    }
+
+    [Fact]
+    public void GetRateLimitRetryAt_ClampsPastRetryAfterDateToNow_Issue4329()
+    {
+        using var response = new HttpResponseMessage((HttpStatusCode)429);
+        var now = new DateTime(2026, 5, 23, 10, 0, 0, DateTimeKind.Utc);
+        response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(
+            new DateTimeOffset(now.AddMinutes(-5)));
+
+        var retryAt = GitHubIssueReporter.GetRateLimitRetryAt(response, now);
+
+        Assert.Equal(now, retryAt);
+    }
+
+    [Fact]
     public void GetRateLimitRetryAt_UsesResetHeaderForForbiddenExhaustedLimit()
     {
         using var response = new HttpResponseMessage(HttpStatusCode.Forbidden);
+        var now = new DateTime(2026, 5, 23, 10, 0, 0, DateTimeKind.Utc);
+        var resetAt = now.AddMinutes(20);
         response.Headers.TryAddWithoutValidation("x-ratelimit-remaining", "0");
-        response.Headers.TryAddWithoutValidation("x-ratelimit-reset", "1770000000");
+        response.Headers.TryAddWithoutValidation(
+            "x-ratelimit-reset",
+            new DateTimeOffset(resetAt, TimeSpan.Zero).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture));
 
-        var retryAt = GitHubIssueReporter.GetRateLimitRetryAt(response, new DateTime(2026, 5, 23, 10, 0, 0, DateTimeKind.Utc));
+        var retryAt = GitHubIssueReporter.GetRateLimitRetryAt(response, now);
 
-        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1770000000).UtcDateTime, retryAt);
+        Assert.Equal(resetAt, retryAt);
+    }
+
+    [Fact]
+    public void GetRateLimitRetryAt_ClampsExcessiveResetHeader_Issue4329()
+    {
+        using var response = new HttpResponseMessage(HttpStatusCode.Forbidden);
+        var now = new DateTime(2026, 5, 23, 10, 0, 0, DateTimeKind.Utc);
+        response.Headers.TryAddWithoutValidation("x-ratelimit-remaining", "0");
+        response.Headers.TryAddWithoutValidation(
+            "x-ratelimit-reset",
+            new DateTimeOffset(now.AddYears(20), TimeSpan.Zero).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture));
+
+        var retryAt = GitHubIssueReporter.GetRateLimitRetryAt(response, now);
+
+        Assert.Equal(now.Add(GitHubHttpClientFactory.MaxRetryAfterDelay), retryAt);
+    }
+
+    [Fact]
+    public void GetRateLimitRetryAt_InvalidResetHeaderFallsBackToBoundedDefault_Issue4329()
+    {
+        using var response = new HttpResponseMessage(HttpStatusCode.Forbidden);
+        var now = new DateTime(2026, 5, 23, 10, 0, 0, DateTimeKind.Utc);
+        response.Headers.TryAddWithoutValidation("x-ratelimit-remaining", "0");
+        response.Headers.TryAddWithoutValidation("x-ratelimit-reset", long.MaxValue.ToString(CultureInfo.InvariantCulture));
+
+        var retryAt = GitHubIssueReporter.GetRateLimitRetryAt(response, now);
+
+        Assert.Equal(now.AddMinutes(1), retryAt);
+    }
+
+    [Fact]
+    public void ApplyAuthenticatedGitHubApiHeaders_SetsSharedHeadersAndBearerToken_Issue4343()
+    {
+        const string token = "ghp_header_test_token_4343";
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/Widthdom/CodeIndex/issues");
+
+        GitHubHttpClientFactory.ApplyAuthenticatedGitHubApiHeaders(request, token);
+
+        Assert.Equal("Bearer", request.Headers.Authorization?.Scheme);
+        Assert.Equal(token, request.Headers.Authorization?.Parameter);
+        Assert.Contains(request.Headers.UserAgent, value => value.Product?.Name == "cdidx");
+        Assert.Contains(request.Headers.Accept, value => value.MediaType == "application/vnd.github+json");
+        Assert.True(request.Headers.Contains("X-GitHub-Api-Version"));
+    }
+
+    [Fact]
+    public void ApplyAuthenticatedGitHubApiHeaders_AllowsMissingTokenForPublicPreflight_Issue4343()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/Widthdom/CodeIndex/issues");
+
+        GitHubHttpClientFactory.ApplyAuthenticatedGitHubApiHeaders(request, token: null);
+
+        Assert.Null(request.Headers.Authorization);
+        Assert.Contains(request.Headers.UserAgent, value => value.Product?.Name == "cdidx");
+        Assert.Contains(request.Headers.Accept, value => value.MediaType == "application/vnd.github+json");
+        Assert.True(request.Headers.Contains("X-GitHub-Api-Version"));
     }
 
     // --- Idempotency-on-retry tests / 再試行時の冪等性テスト ---

@@ -814,6 +814,8 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(SearchRecipeBroadCatchDiagnosticBehaviorJsonResult))]
 [JsonSerializable(typeof(SearchRecipeStringComparisonTaxonomyJsonResult))]
 [JsonSerializable(typeof(SearchRecipeStringComparisonDomainJsonResult))]
+[JsonSerializable(typeof(SearchRecipeClassifierJsonResult))]
+[JsonSerializable(typeof(SearchRecipeClassifierCategoryJsonResult))]
 [JsonSerializable(typeof(SearchRecipeFilterSupportJsonResult))]
 [JsonSerializable(typeof(SearchRecipeLimitSemanticsJsonResult))]
 [JsonSerializable(typeof(SearchRecipeQueryFreshnessJsonResult))]

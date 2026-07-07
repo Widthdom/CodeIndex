@@ -165,6 +165,108 @@ internal static class SearchAuditRecipes
     internal static IReadOnlyList<string> DefaultSourcePathPatterns => DefaultSourcePathPatternsValue;
     internal static IReadOnlyList<string> DefaultSourceExcludePaths => DefaultSourceExcludePathsValue;
 
+    private static readonly SearchRecipeClassifierJsonResult SourceOriginClassifier = new(
+        "source_origin",
+        "Classifies whether a textual hit came from production source, tests, docs, generated metadata, recipe definitions, comments, strings, or help text.",
+        [
+            new("source_code", "Runtime source-code hit in the selected source scope.", "Prioritize when the path and origin facets point to production code."),
+            new("test_or_fixture", "Test file, test symbol, or fixture text.", "Usually lower priority unless the audit is explicitly about tests or fixture drift."),
+            new("documentation_or_recipe", "Documentation, changelog, workflow, or recipe-definition text.", "Treat as guidance or examples instead of runtime evidence."),
+            new("comment_or_string", "Comment, string literal, regex literal, or help text rather than executable code.", "Use match origin facets before filing runtime issues.")
+        ],
+        ["path", "match_origins", "match_facets.origin", "test_file", "test_symbol", "test_fixture", "result_kinds"],
+        "Use origin and test/fixture facets before filing noisy lexical hits; prefer source-scoped recipes or --origin code/comment when the raw term appears in docs or metadata.");
+    private static readonly SearchRecipeClassifierJsonResult GuardEvidenceClassifier = new(
+        "guard_evidence",
+        "Classifies whether nearby guard checks explain why a risky API call is already bounded, filtered, or intentionally rejected.",
+        [
+            new("bounded_positive_evidence", "A required guard appears near the primary match.", "Use guard_evidence and guard_checks to decide whether the hit is already bounded."),
+            new("missing_guard", "No required guard was found near the primary match.", "Prioritize review when the query describes an API that needs bounds or policy."),
+            new("reject_guard_excluded", "A reject guard intentionally removed an otherwise noisy hit.", "Use --show-excluded or a narrower child query when auditing recipe precision.")
+        ],
+        ["guard_filters", "guard_evidence", "guard_checks", "risk_evidence"],
+        "Guard evidence is query-local context, not proof of safety; verify that the guard applies to the matched operation and not an unrelated nearby call.");
+    private static readonly SearchRecipeClassifierJsonResult SecretOriginClassifier = new(
+        "secret_origin",
+        "Classifies token/auth hits by likely sensitive runtime material versus structural, SQL, protocol, docs, or placeholder text.",
+        [
+            new("runtime_secret_material", "Code that loads, stores, logs, forwards, or serializes token material.", "Prioritize redaction, scope, retention, and outbound-boundary review."),
+            new("placeholder_or_redacted_example", "Fixture, documentation, or example text that does not carry live credentials.", "Usually keep as low-priority evidence unless examples can be copied unsafely."),
+            new("structural_token_domain", "Parser, syntax, LSP, cancellation, SQL, or protocol-token domains.", "Use source/auth-token recipes to avoid confusing lexical token uses with credentials.")
+        ],
+        ["match_origins", "match_facets.origin", "path", "test_file", "risk_evidence"],
+        "Use the source-scoped auth-token recipe for credential material and the broad-token-audit recipe only when lexical token coverage is intentional.");
+    private static readonly SearchRecipeClassifierJsonResult ParserGuardClassifier = new(
+        "parser_guard_evidence",
+        "Classifies parser and deserializer hits by payload bounds, streaming/cancellation, and guard evidence.",
+        [
+            new("bounded_payload", "A byte, depth, item, or file-size bound is near the parse operation.", "Review whether the bound covers the actual input consumed by the parser."),
+            new("streaming_or_cancelable", "The parser path is streaming, async, or cancellation-aware.", "Verify item budgets and cancellation are wired to the caller."),
+            new("unbounded_materialization", "DOM or serializer materialization appears without nearby bounds.", "Prioritize size/depth limits, streaming, or bounded readers.")
+        ],
+        ["guard_filters", "guard_evidence", "guard_checks", "risk_evidence", "match_origins"],
+        "Parser guard classifiers are triage hints; keep input-size, depth, and cancellation checks close to the parse boundary when possible.");
+    private static readonly SearchRecipeClassifierJsonResult ProcessLaunchClassifier = new(
+        "process_launch_boundary",
+        "Classifies process-launch hits by shell use, ArgumentList use, working directory, environment forwarding, and shared launch wrappers.",
+        [
+            new("safe_wrapper", "Launch configuration flows through a shared policy wrapper.", "Check that the wrapper disables shell execution, bounds output, and scrubs environment variables."),
+            new("adhoc_launch", "ProcessStartInfo or Process.Start is configured inline.", "Prioritize ArgumentList, UseShellExecute=false, working-directory validation, and timeout/cancellation review."),
+            new("environment_or_cwd_boundary", "The launch mutates environment variables or working directory.", "Review inherited secrets, prompt suppression, and path trust boundaries.")
+        ],
+        ["path", "enclosing_symbol_name", "risk_evidence", "guard_evidence", "guard_checks"],
+        "Treat process-launch results as trust-boundary evidence; prefer ProcessLaunchPolicy/SubprocessEnvironmentPolicy or nearby purpose-specific wrappers.");
+    private static readonly SearchRecipeClassifierJsonResult CancellationIntentClassifier = new(
+        "cancellation_intent",
+        "Classifies cancellation-token hits by compatibility wrapper, short-lived probe, or long-running operation risk.",
+        [
+            new("compatibility_wrapper", "CancellationToken.None is used because an upstream API has no caller token.", "Document why cancellation cannot be propagated."),
+            new("short_lived_probe", "A bounded local probe intentionally omits cancellation.", "Keep timeout or size evidence near the probe."),
+            new("long_running_operation", "Indexing, I/O, process, network, or stream work ignores caller cancellation.", "Prioritize token propagation or a clear timeout path.")
+        ],
+        ["path", "enclosing_symbol_name", "risk_evidence", "match_origins"],
+        "Classify CancellationToken.None by operation lifetime before changing behavior; long-running work should normally accept caller cancellation.");
+    private static readonly SearchRecipeClassifierJsonResult TaskResultIntentClassifier = new(
+        "task_result_intent",
+        "Classifies .Result hits as sync-over-async risks or ordinary DTO/result-wrapper properties.",
+        [
+            new("task_blocking", "The receiver is Task, ValueTask, or an async operation converted to a blocking wait.", "Prioritize async flow, cancellation, and timeout review."),
+            new("dto_result_property", "The receiver is a command, parse, query, or DTO result object.", "Usually a false positive for sync-over-async audits."),
+            new("unclear_receiver", "The receiver type is not clear from the indexed snippet.", "Inspect the enclosing symbol before filing.")
+        ],
+        ["enclosing_symbol_name", "enclosing_symbol_kind", "result_kinds", "match_origins", "path"],
+        "Use the receiver domain to separate true Task/ValueTask blocking from result-wrapper properties named Result.");
+    private static readonly SearchRecipeClassifierJsonResult ActiveSkipClassifier = new(
+        "active_skip_governance",
+        "Classifies Skip assignments by active disabled tests versus examples, fixtures, or documented platform-specific skips.",
+        [
+            new("active_skip", "An active test attribute or metadata assignment disables coverage.", "Track the reason, issue link, and platform/runtime condition."),
+            new("platform_or_external_dependency_skip", "The skip is a documented platform or external-dependency guard.", "Keep the condition narrow and covered by an alternate test when practical."),
+            new("fixture_or_example", "The skip text appears in fixture code or documentation.", "Usually lower priority unless it masks an active test.")
+        ],
+        ["path", "match_origins", "test_file", "test_symbol", "test_fixture"],
+        "Review active Skip assignments as test governance metadata, not just lexical matches.");
+    private static readonly SearchRecipeClassifierJsonResult BroadCatchBoundaryClassifier = new(
+        "broad_catch_boundary",
+        "Classifies broad catch clauses by intentional boundary type before deciding whether the catch should be narrowed, rethrown, or documented.",
+        [.. BroadExceptionCatchTaxonomy.BoundaryCategories.Select(category => new SearchRecipeClassifierCategoryJsonResult(
+            category.Name,
+            category.Description,
+            category.ExpectedDiagnosticBehavior))],
+        ["path", "enclosing_symbol_name", "guard_evidence", "risk_evidence", "match_origins"],
+        BroadExceptionCatchTaxonomy.TriageGuidance);
+    private static readonly SearchRecipeClassifierJsonResult DiagnosticRedactionClassifier = new(
+        "diagnostic_redaction",
+        "Classifies exception-message and broad-catch diagnostic paths by sanitized output, bounded private suppression, debug logging, or raw echo risk.",
+        [
+            new("sanitized_user_visible", "The path emits a stable error code, bounded user message, or redacted diagnostic.", "Prefer DiagnosticRedactor, CommandErrorWriter.FormatSanitizedException, or protocol-specific bounded error payloads."),
+            new("private_or_best_effort_suppression", "The exception stays private because cleanup/probe failure should not replace the primary result.", "Keep comments or tests near the boundary explaining why suppression is intentional."),
+            new("debug_or_support_bundle", "The diagnostic is limited to debug logging, local traces, or support-bundle material.", "Verify the path is opt-in, scoped, and redacted before it leaves the local trust boundary."),
+            new("raw_exception_echo", "Raw exception text can cross CLI, JSON, MCP, LSP, support-bundle, or GitHub issue output.", "Route through the existing diagnostic/error formatting policy or add a stable sanitized wrapper.")
+        ],
+        ["path", "enclosing_symbol_name", "risk_evidence", "guard_evidence", "match_origins", "result_kinds"],
+        "Trace raw exception text to its output boundary; user-visible diagnostics should be bounded and redacted, while private cleanup/probe suppression needs explicit intent.");
+
     private static List<SearchGuardFilter> BoundedRegexEvidenceGuardFilters() =>
     [
         new(SearchGuardRole.Reject, SearchGuardDirection.Before, "RegexOptions.NonBacktracking", SearchGuardScope.Window),
@@ -179,6 +281,16 @@ internal static class SearchAuditRecipes
         new(SearchGuardRole.Reject, SearchGuardDirection.After, "MatchTimeout(", SearchGuardScope.Window),
         new(SearchGuardRole.Reject, SearchGuardDirection.After, "MatchTimeout(", SearchGuardScope.SameLine)
     ];
+
+    private static List<SearchAuditRecipeQuery> AddClassifiers(
+        List<SearchAuditRecipeQuery> queries,
+        params SearchRecipeClassifierJsonResult[] classifiers)
+        => queries
+            .Select(query => query with
+            {
+                Classifiers = [.. query.Classifiers, .. classifiers]
+            })
+            .ToList();
 
     private static SearchAuditRecipeQuery StaticRegexApiQuery(string name, string query, string apiName) =>
         new(
@@ -293,13 +405,17 @@ internal static class SearchAuditRecipes
                         "risk: raw exception messages can carry absolute paths, command lines, SQL, or secret-like values into user-visible output.",
                         "positive: DiagnosticRedactor, CommandErrorWriter.FormatSanitizedException, or a dedicated sanitizer nearby is strong safe evidence."
                     ],
+                    Classifiers = [DiagnosticRedactionClassifier],
                 },
                 new(
                     "cancellation-gap",
                     "CancellationToken.None",
                     "Find async or stream paths that may be ignoring caller cancellation.",
                     ["audit", "bug"],
-                    "False positives include intentionally fire-and-forget work and APIs that have no meaningful caller cancellation token."),
+                    "False positives include intentionally fire-and-forget work and APIs that have no meaningful caller cancellation token.")
+                {
+                    Classifiers = [CancellationIntentClassifier],
+                },
                 new(
                     "empty-catch-review",
                     "catch",
@@ -319,6 +435,7 @@ internal static class SearchAuditRecipes
                         "risk: broad or empty catch clauses can swallow recovery diagnostics or hide unexpected failures.",
                         "positive: explicit rethrow, translation to a stable error contract, or documented best-effort cleanup can make a catch intentional."
                     ],
+                    Classifiers = [BroadCatchBoundaryClassifier],
                 },
                 new(
                     "broad-exception-catch",
@@ -329,6 +446,7 @@ internal static class SearchAuditRecipes
                 {
                     MatchOrigins = ["code"],
                     BroadCatchTaxonomy = BroadExceptionCatchTaxonomy,
+                    Classifiers = [BroadCatchBoundaryClassifier, DiagnosticRedactionClassifier],
                 },
                 new(
                     "process-start-info",
@@ -342,13 +460,17 @@ internal static class SearchAuditRecipes
                         "risk: launch sites need review for UseShellExecute, WorkingDirectory, Environment mutation, and ArgumentList usage.",
                         "positive: shared safe-launch wrappers and explicit ArgumentList setup usually lower risk compared with ad hoc Process.Start calls."
                     ],
+                    Classifiers = [ProcessLaunchClassifier],
                 },
                 new(
                     "process-start-direct",
                     "Process.Start",
                     "Find direct process launches that may need a shared safe-launch wrapper or explicit argument handling.",
                     ["audit", "security"],
-                    "False positives include simple URL/document open helpers or test fixtures with trusted inputs."),
+                    "False positives include simple URL/document open helpers or test fixtures with trusted inputs.")
+                {
+                    Classifiers = [ProcessLaunchClassifier],
+                },
                 new(
                     "recursive-delete",
                     "Directory.Delete",
@@ -663,7 +785,7 @@ internal static class SearchAuditRecipes
         SourceScopedRecipe(
             "auth-token-audit",
             "Audit credential and auth-token material without the parser, protocol, LSP, and cancellation-token noise from bare token searches.",
-            [
+            AddClassifiers([
                 new(
                     "bearer-token",
                     "Bearer",
@@ -748,7 +870,7 @@ internal static class SearchAuditRecipes
                         "positive: secret providers, short-lived values, and sanitized diagnostics are safer evidence."
                     ],
                 }
-            ]),
+            ], SecretOriginClassifier, SourceOriginClassifier)),
         SourceScopedRecipe(
             "dogfood-risk-patterns",
             "Focused audit searches for recurring risk patterns found while dogfooding cdidx.",
@@ -766,6 +888,7 @@ internal static class SearchAuditRecipes
                         "positive: typed exception properties, error codes, or normalized diagnostic classifiers are safer evidence."
                     ],
                     MatchOrigins = ["code"],
+                    Classifiers = [DiagnosticRedactionClassifier],
                 },
                 DogfoodStaticRegexApiQuery(
                     "static-regex-api",
@@ -834,6 +957,7 @@ internal static class SearchAuditRecipes
                         "positive: logging, aggregation, retry policy, or explicit non-critical cleanup comments reduce filing priority."
                     ],
                     MatchOrigins = ["code"],
+                    Classifiers = [BroadCatchBoundaryClassifier, DiagnosticRedactionClassifier],
                 },
                 new(
                     "wall-clock-deadline",
@@ -1112,7 +1236,7 @@ internal static class SearchAuditRecipes
         SourceScopedRecipe(
             "json-parse-apis",
             "Audit JSON parse and deserialize API families that may need payload bounds, streaming, or serializer-option review.",
-            [
+            AddClassifiers([
                 new(
                     "json-document-parse",
                     "JsonDocument.Parse",
@@ -1225,7 +1349,7 @@ internal static class SearchAuditRecipes
                         "positive: writing directly to a caller-owned stream, LocalJsonlJsonWriterOptions, or fixed-size diagnostic payloads can explain the writer."
                     ],
                 }
-            ]),
+            ], ParserGuardClassifier, GuardEvidenceClassifier)),
         SourceScopedRecipe(
             "dotnet-risk-patterns",
             "Audit common .NET reliability and security patterns that regularly need manual review.",
@@ -1869,7 +1993,7 @@ internal static class SearchAuditRecipes
         AllScopedRecipe(
             "phrase-risk-patterns",
             "Precision-focused audit searches for noisy code phrases, broad words, and configuration text that need semantic triage facets.",
-            [
+            AddClassifiers([
                 new(
                     "async-void-code",
                     "async void",
@@ -1918,6 +2042,7 @@ internal static class SearchAuditRecipes
                         "risk: Task.Result and ValueTask.AsTask().Result can block async continuations and hide cancellation or timeout policy.",
                         "positive: DTOs and result-wrapper properties named Result should be classified separately from sync-over-async blocking."
                     ],
+                    Classifiers = [TaskResultIntentClassifier],
                 },
                 new(
                     "unsafe-keyword-code",
@@ -1951,6 +2076,7 @@ internal static class SearchAuditRecipes
                         "risk: active Skip assignments can hide disabled coverage in the test suite.",
                         "positive: documented platform-specific skips or intentionally external-dependency tests may be acceptable when tracked."
                     ],
+                    Classifiers = [ActiveSkipClassifier],
                 },
                 new(
                     "readalltext-call-site",
@@ -2029,7 +2155,7 @@ internal static class SearchAuditRecipes
                         "positive: explicit migration comments, compatibility guards, or attribute declarations with planned removal can make the hit intentional."
                     ],
                 }
-            ]),
+            ], SourceOriginClassifier)),
         AllScopedRecipe(
             "broad-token-audit",
             "Opt-in broad token search for audits that intentionally need lexical, parser, LSP, cancellation, and auth-token coverage.",
@@ -2597,6 +2723,7 @@ internal sealed record SearchAuditRecipeQuery(
     public List<string> MatchOrigins { get; init; } = [];
     public List<string> ExcludeOrigins { get; init; } = [];
     public List<string> ResultKinds { get; init; } = [];
+    public List<SearchRecipeClassifierJsonResult> Classifiers { get; init; } = [];
     public SearchRecipeStringComparisonTaxonomyJsonResult? StringComparisonTaxonomy { get; init; }
     public SearchRecipeBroadCatchTaxonomyJsonResult? BroadCatchTaxonomy { get; init; }
     public SearchRecipeNullableContractTaxonomyJsonResult? NullableContractTaxonomy { get; init; }
@@ -2669,6 +2796,7 @@ internal sealed record SearchRecipeQueryListItemJsonResult(
     [property: JsonPropertyName("match_origins")] List<string> MatchOrigins,
     [property: JsonPropertyName("exclude_origins")] List<string> ExcludeOrigins,
     [property: JsonPropertyName("result_kinds")] List<string> ResultKinds,
+    [property: JsonPropertyName("classifiers")] List<SearchRecipeClassifierJsonResult> Classifiers,
     [property: JsonPropertyName("string_comparison_taxonomy")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     SearchRecipeStringComparisonTaxonomyJsonResult? StringComparisonTaxonomy,
@@ -2688,6 +2816,18 @@ internal sealed record SearchRecipeGuardFilterJsonResult(
     [property: JsonPropertyName("scope")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? Scope);
+
+internal sealed record SearchRecipeClassifierJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("description")] string Description,
+    [property: JsonPropertyName("categories")] List<SearchRecipeClassifierCategoryJsonResult> Categories,
+    [property: JsonPropertyName("evidence_fields")] List<string> EvidenceFields,
+    [property: JsonPropertyName("triage_guidance")] string TriageGuidance);
+
+internal sealed record SearchRecipeClassifierCategoryJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("description")] string Description,
+    [property: JsonPropertyName("review_guidance")] string ReviewGuidance);
 
 internal sealed record SearchRecipeBroadCatchTaxonomyJsonResult(
     [property: JsonPropertyName("boundary_categories")] List<SearchRecipeBroadCatchBoundaryJsonResult> BoundaryCategories,
@@ -2781,6 +2921,7 @@ internal sealed record SearchRecipeQueryResultJsonResult(
     [property: JsonPropertyName("match_origins")] List<string> MatchOrigins,
     [property: JsonPropertyName("exclude_origins")] List<string> ExcludeOrigins,
     [property: JsonPropertyName("result_kinds")] List<string> ResultKinds,
+    [property: JsonPropertyName("classifiers")] List<SearchRecipeClassifierJsonResult> Classifiers,
     [property: JsonPropertyName("string_comparison_taxonomy")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     SearchRecipeStringComparisonTaxonomyJsonResult? StringComparisonTaxonomy,
@@ -2884,6 +3025,7 @@ internal sealed record SearchRecipeCompactQueryResultJsonResult(
     [property: JsonPropertyName("match_origins")] List<string> MatchOrigins,
     [property: JsonPropertyName("exclude_origins")] List<string> ExcludeOrigins,
     [property: JsonPropertyName("result_kinds")] List<string> ResultKinds,
+    [property: JsonPropertyName("classifiers")] List<SearchRecipeClassifierJsonResult> Classifiers,
     [property: JsonPropertyName("string_comparison_taxonomy")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     SearchRecipeStringComparisonTaxonomyJsonResult? StringComparisonTaxonomy,

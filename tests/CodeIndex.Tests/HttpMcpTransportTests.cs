@@ -1371,6 +1371,49 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_BearerToken_RejectsAuthorizationFailureCasesWithoutLeakingValues_Issue4299()
+    {
+        const string token = "s3cret-token";
+        const string wrongToken = "wrong-token";
+        var oversizedToken = new string('x', McpAuthenticationLimits.MaxTokenCharacters + 1);
+        var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: token, requestLogger: records.Enqueue);
+        using var client = CreateHttpClient();
+
+        var cases = new (string Name, Action<HttpRequestMessage> Configure)[]
+        {
+            ("missing", static _ => { }),
+            ("wrong scheme", request => request.Headers.TryAddWithoutValidation("Authorization", "Basic " + token)),
+            ("wrong token", request => request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", wrongToken)),
+            ("multiple values", request => request.Headers.TryAddWithoutValidation("Authorization", new[] { "Bearer " + token, "Bearer " + token })),
+            ("comma-separated values", request => request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + token + ", Bearer " + token)),
+            ("oversized token", request => request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + oversizedToken)),
+        };
+
+        foreach (var (name, configure) in cases)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
+            {
+                Content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", Encoding.UTF8, "application/json"),
+            };
+            configure(request);
+
+            using var response = await client.SendAsync(request);
+            var body = await response.Content.ReadAsStringAsync();
+
+            Assert.True(response.StatusCode == HttpStatusCode.Unauthorized, name);
+            Assert.Equal("Missing or invalid bearer token.\n", body);
+            Assert.DoesNotContain(token, body, StringComparison.Ordinal);
+            Assert.DoesNotContain(wrongToken, body, StringComparison.Ordinal);
+            Assert.DoesNotContain(oversizedToken, body, StringComparison.Ordinal);
+            Assert.Contains(response.Headers.WwwAuthenticate, h => h.Scheme.Equals("Bearer", StringComparison.OrdinalIgnoreCase));
+        }
+
+        var logged = await WaitForRequestLogRecordsAsync(records, cases.Length);
+        Assert.All(logged, record => Assert.Equal("unauthorized", record.AuthOutcome));
+    }
+
+    [Fact]
     public async Task HttpTransport_BearerToken_AcceptsMaxLengthHeader_Issue3798()
     {
         var token = new string('t', McpAuthenticationLimits.MaxTokenCharacters);
