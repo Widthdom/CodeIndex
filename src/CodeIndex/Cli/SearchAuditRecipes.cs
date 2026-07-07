@@ -3492,6 +3492,16 @@ internal sealed record SearchRecipeClassifierCategoryJsonResult(
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("review_guidance")] string ReviewGuidance);
 
+internal sealed record SearchRecipeClassifierCountJsonResult(
+    [property: JsonPropertyName("classifier")] string Classifier,
+    [property: JsonPropertyName("categories")] List<SearchRecipeClassifierCategoryCountJsonResult> Categories);
+
+internal sealed record SearchRecipeClassifierCategoryCountJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("description")] string Description,
+    [property: JsonPropertyName("review_guidance")] string ReviewGuidance);
+
 internal sealed record SearchRecipeBroadCatchTaxonomyJsonResult(
     [property: JsonPropertyName("boundary_categories")] List<SearchRecipeBroadCatchBoundaryJsonResult> BoundaryCategories,
     [property: JsonPropertyName("diagnostic_behaviors")] List<SearchRecipeBroadCatchDiagnosticBehaviorJsonResult> DiagnosticBehaviors,
@@ -3594,6 +3604,9 @@ internal sealed record SearchRecipeQueryResultJsonResult(
     [property: JsonPropertyName("nullable_contract_taxonomy")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     SearchRecipeNullableContractTaxonomyJsonResult? NullableContractTaxonomy,
+    [property: JsonPropertyName("classifier_counts")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    List<SearchRecipeClassifierCountJsonResult>? ClassifierCounts,
     [property: JsonPropertyName("count")] int Count,
     [property: JsonPropertyName("emitted_count")] int EmittedCount,
     [property: JsonPropertyName("minimum_matched_count")] int MinimumMatchedCount,
@@ -3640,6 +3653,9 @@ internal sealed record SearchRecipeCountQueryJsonResult(
     [property: JsonPropertyName("omitted_count")] int OmittedCount,
     [property: JsonPropertyName("file_count")] int FileCount,
     [property: JsonPropertyName("truncated")] bool Truncated,
+    [property: JsonPropertyName("classifier_counts")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    List<SearchRecipeClassifierCountJsonResult>? ClassifierCounts,
     [property: JsonPropertyName("top_files")] List<SearchRecipeTopFileJsonResult> TopFiles);
 
 internal sealed record SearchRecipeAggregationRunJsonResult(
@@ -3695,6 +3711,9 @@ internal sealed record SearchRecipeCompactQueryResultJsonResult(
     [property: JsonPropertyName("broad_catch_taxonomy")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     SearchRecipeBroadCatchTaxonomyJsonResult? BroadCatchTaxonomy,
+    [property: JsonPropertyName("classifier_counts")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    List<SearchRecipeClassifierCountJsonResult>? ClassifierCounts,
     [property: JsonPropertyName("count")] int Count,
     [property: JsonPropertyName("emitted_count")] int EmittedCount,
     [property: JsonPropertyName("minimum_matched_count")] int MinimumMatchedCount,

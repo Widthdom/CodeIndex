@@ -320,7 +320,8 @@ public static partial class QueryCommandRunner
             CommandErrorWriter.Write(
                 $"{displayArg} is not supported for {commandName}.",
                 hint,
-                GetUsageLineOrThrow(commandName));
+                GetUsageLineOrThrow(commandName),
+                CommandErrorCodes.UsageError);
             return true;
         }
 

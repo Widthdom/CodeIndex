@@ -2146,6 +2146,129 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_TaskResultRecipeClassifiesResultIntent_Issue4314()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_task_result_classifiers_4314");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/dto.cs",
+                "csharp",
+                """
+                public sealed class QueryDto
+                {
+                    public string Result { get; init; } = "";
+                }
+
+                public sealed class DtoConsumer
+                {
+                    public string Read(QueryDto dto)
+                    {
+                        return dto.Result;
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/task.cs",
+                "csharp",
+                """
+                using System.Threading.Tasks;
+
+                public sealed class TaskConsumer
+                {
+                    public int Read(Task<int> task)
+                    {
+                        return task.Result;
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/async-call.cs",
+                "csharp",
+                """
+                using System.Threading.Tasks;
+
+                public sealed class AsyncCallConsumer
+                {
+                    private Task<int> ReadAsync()
+                    {
+                        return Task.FromResult(1);
+                    }
+
+                    public int Read()
+                    {
+                        return ReadAsync().Result;
+                    }
+                }
+                """);
+
+            var (runExitCode, runStdout, runStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "phrase-risk-patterns/task-result-property-review", "--db", dbPath, "--json", "--limit", "10"],
+                _jsonOptions));
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "phrase-risk-patterns/task-result-property-review", "--db", dbPath, "--format", "count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, runExitCode);
+            Assert.Equal(string.Empty, runStderr);
+            using (var document = ParseJsonOutput(runStdout))
+            {
+                var query = Assert.Single(document.RootElement.GetProperty("queries").EnumerateArray());
+                Assert.Equal(3, query.GetProperty("count").GetInt32());
+                AssertTaskResultClassifierCounts(query);
+
+                var results = query.GetProperty("results").EnumerateArray().ToArray();
+                var dtoResult = Assert.Single(results, result => result.GetProperty("path").GetString() == "src/dto.cs");
+                var taskResult = Assert.Single(results, result => result.GetProperty("path").GetString() == "src/task.cs");
+                var asyncCallResult = Assert.Single(results, result => result.GetProperty("path").GetString() == "src/async-call.cs");
+
+                AssertTaskResultClassification(dtoResult, "dto_result_property", "receiver:dto");
+                AssertTaskResultClassification(taskResult, "task_blocking", "receiver:task");
+                AssertTaskResultClassification(asyncCallResult, "task_blocking", "receiver:ReadAsync");
+            }
+
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Equal(string.Empty, countStderr);
+            using (var document = ParseJsonOutput(countStdout))
+            {
+                var query = Assert.Single(document.RootElement.GetProperty("queries").EnumerateArray());
+                Assert.Equal(3, query.GetProperty("count").GetInt32());
+                AssertTaskResultClassifierCounts(query);
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+
+        static void AssertTaskResultClassifierCounts(JsonElement query)
+        {
+            var counts = query.GetProperty("classifier_counts").EnumerateArray().ToArray();
+            var taskIntentCounts = Assert.Single(counts, count => count.GetProperty("classifier").GetString() == "task_result_intent");
+            var categories = taskIntentCounts.GetProperty("categories").EnumerateArray().ToArray();
+
+            Assert.Contains(categories, category =>
+                category.GetProperty("name").GetString() == "dto_result_property" &&
+                category.GetProperty("count").GetInt32() == 1);
+            Assert.Contains(categories, category =>
+                category.GetProperty("name").GetString() == "task_blocking" &&
+                category.GetProperty("count").GetInt32() == 2);
+        }
+
+        static void AssertTaskResultClassification(JsonElement result, string expectedCategory, string expectedEvidence)
+        {
+            var classification = Assert.Single(result.GetProperty("audit_classifications").EnumerateArray());
+            Assert.Equal("task_result_intent", classification.GetProperty("classifier").GetString());
+            Assert.Equal(expectedCategory, classification.GetProperty("category").GetString());
+            Assert.Contains(classification.GetProperty("evidence").EnumerateArray(), evidence => evidence.GetString() == expectedEvidence);
+        }
+    }
+
+    [Fact]
     public void RunSearch_ListRecipesNamesJsonEmitsDeterministicSmallPayload_Issue4064()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
@@ -7588,7 +7711,7 @@ jobs:
             _jsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Contains("Error: --paht is not supported for search.", stderr);
+        Assert.Contains("Error [E010_USAGE_ERROR]: --paht is not supported for search.", stderr);
         Assert.Contains("Did you mean: --path?", stderr);
     }
 

@@ -1130,8 +1130,13 @@ production/test scope facets before filing findings.
 query in the recipe. With `--json`, recipe runs emit one aggregate JSON payload
 grouped by recipe query instead of the usual newline-delimited search stream.
 Recipe and named-query JSON include per-query counts, `top_files`, and
-`truncated` metadata. Recipe JSON and compact output also return `next_cursor`
-when a single selected recipe query is truncated. Recipe run summaries and
+`truncated` metadata. Recipe JSON rows may include `audit_classifications`
+when a recipe classifier can classify an individual result, and query payloads
+include `classifier_counts` when classified rows are present. For example,
+`phrase-risk-patterns/task-result-property-review` separates DTO/result-wrapper
+`.Result` properties from Task/ValueTask blocking waits. Recipe JSON and
+compact output also return `next_cursor` when a single selected recipe query is
+truncated. Recipe run summaries and
 count summaries include `query_freshness` with the number of queries that found
 positive evidence, the number that returned zero results, and `stale_query_names`
 so broad audit recipes can surface query drift without requiring the full
@@ -3911,8 +3916,12 @@ category を含めます。
 `--json` 併用時、recipe run は通常の newline-delimited search stream ではなく、recipe
 query ごとに grouped された 1 つの aggregate JSON payload を出力し、query ごとの count、
 `top_files`、`truncated` metadata を含みます。named-query JSON も count、`top_files`、
-`truncated` の per-query metadata を返します。recipe の JSON / compact output は、単一の
-recipe query が truncated された場合に `next_cursor` も返します。`--format compact` は
+`truncated` の per-query metadata を返します。recipe classifier が個別 result を分類できる場合、
+recipe JSON row は `audit_classifications` を含むことがあり、分類済み row がある query payload は
+`classifier_counts` を含みます。例えば `phrase-risk-patterns/task-result-property-review` は
+DTO / result-wrapper の `.Result` property と Task / ValueTask の blocking wait を分離します。
+recipe の JSON / compact output は、単一の recipe query が truncated された場合に `next_cursor`
+も返します。`--format compact` は
 summary、query count、query ごとの count、`truncated` flag、該当する場合の `next_cursor`
 を返します。recipe run summary と count summary は `query_freshness` も返し、肯定的な根拠が
 見つかった query 数、結果 0 件の query 数、`stale_query_names` を示します。これにより、

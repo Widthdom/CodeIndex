@@ -895,6 +895,9 @@ public sealed class CompactSearchResult
     public List<string> ResultKinds { get; set; } = [];
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? RiskEvidence { get; set; }
+    [JsonPropertyName("audit_classifications")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<SearchAuditClassificationJsonResult>? AuditClassifications { get; set; }
     public bool TestFile { get; set; }
     public bool TestSymbol { get; set; }
     public bool TestFixture { get; set; }
@@ -943,6 +946,13 @@ public sealed class CompactSearchResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? EnclosingContainerName { get; set; }
 }
+
+public sealed record SearchAuditClassificationJsonResult(
+    [property: JsonPropertyName("classifier")] string Classifier,
+    [property: JsonPropertyName("category")] string Category,
+    [property: JsonPropertyName("description")] string Description,
+    [property: JsonPropertyName("review_guidance")] string ReviewGuidance,
+    [property: JsonPropertyName("evidence")] List<string> Evidence);
 
 public sealed class SearchNextMatchHint
 {

@@ -3089,7 +3089,7 @@ public partial class QueryCommandRunnerTests
         var (exitCode, _, stderr) = CaptureConsole(() => RunCommandWithUnsupportedSince(command, "nope"));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Contains($"Error: --since is not supported for {command}.", stderr);
+        Assert.Contains($"Error [E010_USAGE_ERROR]: --since is not supported for {command}.", stderr);
         Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
         Assert.DoesNotContain("could not parse --since value", stderr);
         Assert.DoesNotContain("database not found", stderr);
@@ -3112,7 +3112,7 @@ public partial class QueryCommandRunnerTests
         var (exitCode, _, stderr) = CaptureConsole(() => RunCommandWithUnsupportedOption(command, args));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Contains($"Error: {flag} is not supported for {command}.", stderr);
+        Assert.Contains($"Error [E010_USAGE_ERROR]: {flag} is not supported for {command}.", stderr);
         Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
         if (flag is "--limit" or "--top")
             Assert.DoesNotContain("requires a positive integer", stderr);
