@@ -2266,7 +2266,7 @@ public partial class QueryCommandRunnerTests
         };
 
         Assert.Equal(
-            ["risky-code", "string-comparison-semantics", "auth-token-audit", "dogfood-risk-patterns", "sqlite-query-policy-surfaces", "json-parse-apis", "dotnet-risk-patterns", "unsupported-operation-boundaries", "nullable-contracts", "xml-parser-security", "filesystem-traversal", "bounded-read-evidence", "resource-materialization-audit", "concurrency-state-audit", "phrase-risk-patterns", "broad-token-audit"],
+            ["risky-code", "string-comparison-semantics", "auth-token-audit", "dogfood-risk-patterns", "sqlite-query-policy-surfaces", "json-parse-apis", "text-encoding-boundaries", "dotnet-risk-patterns", "unsupported-operation-boundaries", "nullable-contracts", "xml-parser-security", "filesystem-traversal", "bounded-read-evidence", "resource-materialization-audit", "concurrency-state-audit", "phrase-risk-patterns", "broad-token-audit"],
             recipes.Select(recipe => recipe.Name).ToArray());
 
         AssertRecipe(
@@ -2398,6 +2398,21 @@ public partial class QueryCommandRunnerTests
                 "json-case-insensitive-properties",
                 "json-serializer-serialize",
                 "utf8-json-writer"
+            ]);
+        AssertRecipe(
+            "text-encoding-boundaries",
+            SearchAuditRecipes.DefaultAuditScope,
+            ["src/**"],
+            expectedSourceExcludes,
+            [
+                "utf8-encoding-boundary",
+                "utf8-encoding-constructor",
+                "stream-reader-bom-policy",
+                "stream-reader-encoding-boundary",
+                "stream-writer-encoding-boundary",
+                "default-encoding-boundary",
+                "code-page-encoding-boundary",
+                "unicode-normalization-boundary"
             ]);
         AssertRecipe(
             "dotnet-risk-patterns",
@@ -4118,6 +4133,78 @@ public partial class QueryCommandRunnerTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_TextEncodingBoundaryRecipeFindsReaderWriterAndNormalization_Issue4327()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_text_encoding_4327");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/encoding.cs",
+                "csharp",
+                """
+                using System.Text;
+
+                public sealed class EncodingBoundaries
+                {
+                    public void Run(Stream input, Stream output, string text)
+                    {
+                        var strict = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+                        using var reader = new StreamReader(input, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, bufferSize: 4096, leaveOpen: true);
+                        using var writer = new StreamWriter(output, strict, bufferSize: 4096, leaveOpen: true);
+                        _ = Encoding.Default;
+                        _ = Encoding.GetEncoding("shift_jis");
+                        _ = text.Normalize(NormalizationForm.FormKC);
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "tests/EncodingTests.cs",
+                "csharp",
+                """
+                using System.Text;
+
+                public sealed class EncodingTests
+                {
+                    public void Fixture() => _ = Encoding.Default;
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "text-encoding-boundaries", "--db", dbPath, "--json", "--limit", "10"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var queries = document.RootElement.GetProperty("queries").EnumerateArray().ToList();
+
+            AssertRecipeQueryPath(queries, "utf8-encoding-boundary", "src/encoding.cs");
+            AssertRecipeQueryPath(queries, "utf8-encoding-constructor", "src/encoding.cs");
+            AssertRecipeQueryPath(queries, "stream-reader-bom-policy", "src/encoding.cs");
+            AssertRecipeQueryPath(queries, "stream-reader-encoding-boundary", "src/encoding.cs");
+            AssertRecipeQueryPath(queries, "stream-writer-encoding-boundary", "src/encoding.cs");
+            AssertRecipeQueryPath(queries, "default-encoding-boundary", "src/encoding.cs");
+            AssertRecipeQueryPath(queries, "code-page-encoding-boundary", "src/encoding.cs");
+            AssertRecipeQueryPath(queries, "unicode-normalization-boundary", "src/encoding.cs");
+            Assert.DoesNotContain(queries.SelectMany(query => query.GetProperty("results").EnumerateArray()), result => result.GetProperty("path").GetString() == "tests/EncodingTests.cs");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+
+        static void AssertRecipeQueryPath(List<JsonElement> queries, string queryName, string path)
+        {
+            var query = queries.Single(item => item.GetProperty("name").GetString() == queryName);
+            Assert.True(query.GetProperty("count").GetInt32() >= 1);
+            Assert.Contains(query.GetProperty("results").EnumerateArray(), result => result.GetProperty("path").GetString() == path);
         }
     }
 
