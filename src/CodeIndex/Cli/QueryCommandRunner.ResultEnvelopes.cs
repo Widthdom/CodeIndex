@@ -258,6 +258,10 @@ public static partial class QueryCommandRunner
             query["regex"] = true;
         if (options.Exact)
             query["exact"] = true;
+        if (options.ExactSubstring)
+            query["exact_substring"] = true;
+        if (options.TokenBoundary)
+            query["token_boundary"] = true;
         if (options.Prefix)
             query["prefix"] = true;
         if (options.NoDedup)

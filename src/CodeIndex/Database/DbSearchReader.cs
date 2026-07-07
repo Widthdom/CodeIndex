@@ -117,7 +117,7 @@ public partial class DbReader
     /// Full-text search across indexed chunks using FTS5.
     /// FTS5を使ったチャンク全文検索。
     /// </summary>
-    public List<SearchResult> Search(string query, int limit = 20, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true, SearchCursor? cursor = null, IReadOnlyList<SearchGuardFilter>? guardFilters = null, int guardWindow = DefaultSearchGuardWindow, int? guardRequestedLimit = null, IReadOnlyList<string>? requiredPathPatterns = null, SearchGuardScope guardScope = SearchGuardScope.Window)
+    public List<SearchResult> Search(string query, int limit = 20, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true, SearchCursor? cursor = null, IReadOnlyList<SearchGuardFilter>? guardFilters = null, int guardWindow = DefaultSearchGuardWindow, int? guardRequestedLimit = null, IReadOnlyList<string>? requiredPathPatterns = null, SearchGuardScope guardScope = SearchGuardScope.Window, bool tokenBoundary = false)
     {
         // Guard against empty/whitespace queries that would match everything
         // 空白のみのクエリが全件マッチするのを防止
@@ -127,17 +127,19 @@ public partial class DbReader
         lang = NormalizeQueryLanguage(lang);
         if (!rawQuery)
             ValidateLiteralSearchQueryLength(query);
+        var exactSearch = exact || tokenBoundary;
         var normalizedQuery = rawQuery ? query : NormalizeLiteralSearchQuery(query, lang);
-        var coverageTokens = exact ? new List<string>() : GetSearchCoverageTokens(normalizedQuery, rawQuery);
+        var coverageTokens = exactSearch ? new List<string>() : GetSearchCoverageTokens(normalizedQuery, rawQuery);
         var hasGuardFilters = guardFilters is { Count: > 0 };
-        var searchMatchLineContext = SearchMatchLineContext.Create(query, lang, exact);
-        var exactLiteralBoost = !exact && !rawQuery && ShouldBoostExactLiteralSearch(query);
+        var searchMatchLineContext = SearchMatchLineContext.Create(query, lang, exactSearch);
+        var exactLiteralBoost = !exactSearch && !rawQuery && ShouldBoostExactLiteralSearch(query);
         var guardedRequestedLimit = Math.Max(0, guardRequestedLimit ?? limit);
         var guardedCandidateLimit = hasGuardFilters ? GetGuardedSearchCandidateLimit(guardedRequestedLimit, cursor) : 0;
+        var tokenBoundaryCandidateLimit = tokenBoundary && !hasGuardFilters ? int.MaxValue : 0;
         using var cmd = _conn.CreateCommand();
         string sql;
 
-        if (exact)
+        if (exactSearch)
         {
             // Exact substring match using instr() — case-sensitive, no FTS5 tokenization
             // instr() による完全部分一致検索 — 大文字小文字区別、FTS5トークナイズなし
@@ -176,29 +178,29 @@ public partial class DbReader
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         AppendAdditionalPathIncludeFilters(ref sql, requiredPathPatterns, "requiredPathPattern");
         sql += $" ORDER BY {GetSearchOrderSql(coverageTokens.Count, exactLiteralBoost)}";
-        if (hasGuardFilters)
+        if (hasGuardFilters || tokenBoundary)
             sql += " LIMIT @candidateFetchLimit";
         else
             sql += " LIMIT @limit";
-        if (cursor is { } && !hasGuardFilters)
+        if (cursor is { } && !hasGuardFilters && !tokenBoundary)
             sql += " OFFSET @cursorOffset";
 
         cmd.CommandText = sql;
-        if (exact)
+        if (exactSearch)
             SqliteCommandPolicy.Add(cmd, "@exactQuery", query);
         SqliteCommandPolicy.Add(cmd, "@rankingQuery", normalizedQuery.Trim());
         SqliteCommandPolicy.Add(cmd, "@rankingQueryPrefix", $"{EscapeLikeQuery(normalizedQuery.Trim())}%");
         SqliteCommandPolicy.Add(cmd, "@visibilityRank", visibilityRank ? 1 : 0);
         AddSearchCoverageParameters(cmd, coverageTokens);
-        if (!hasGuardFilters)
+        if (!hasGuardFilters && !tokenBoundary)
             SqliteCommandPolicy.Add(cmd, "@limit", limit);
         else
-            SqliteCommandPolicy.Add(cmd, "@candidateFetchLimit", guardedCandidateLimit + 1);
+            SqliteCommandPolicy.Add(cmd, "@candidateFetchLimit", AddSearchCandidateSentinel(hasGuardFilters ? guardedCandidateLimit : tokenBoundaryCandidateLimit));
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", lang);
         if (since != null && _fileColumns.Contains("modified"))
             SqliteCommandPolicy.Add(cmd, "@since", since.Value);
-        if (cursor is { } searchCursorParameter && !hasGuardFilters)
+        if (cursor is { } searchCursorParameter && !hasGuardFilters && !tokenBoundary)
         {
             SqliteCommandPolicy.Add(cmd, "@cursorOffset", searchCursorParameter.Offset);
         }
@@ -206,7 +208,7 @@ public partial class DbReader
         AddPathIncludeFilterParameters(cmd, requiredPathPatterns, "requiredPathPattern");
 
         var raw = new List<SearchResult>();
-        var guardMatchContext = hasGuardFilters ? SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exact, lang) : null;
+        var guardMatchContext = hasGuardFilters ? SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exactSearch, lang) : null;
         var guardLineWindowCache = hasGuardFilters ? new Dictionary<SearchGuardLineWindowKey, SortedDictionary<int, string>>() : null;
         var nextOffset = hasGuardFilters ? 0 : cursor?.Offset ?? 0;
         var guardCandidateLimitReached = false;
@@ -232,7 +234,10 @@ public partial class DbReader
                 };
                 if (!hasGuardFilters)
                 {
-                    raw.Add(result);
+                    if (tokenBoundary)
+                        raw.AddRange(FilterSearchResultByTokenBoundary(result, searchMatchLineContext.ForResult(result)));
+                    else
+                        raw.Add(result);
                     continue;
                 }
 
@@ -244,7 +249,15 @@ public partial class DbReader
 
                 TrackGuardCandidate(guardCandidatePathCounts!, result.Path);
                 TrackGuardCandidate(guardCandidateLanguageCounts!, result.Lang ?? "?");
-                raw.AddRange(FilterSearchResultByGuards(result, guardMatchContext!, guardFilters!, guardWindow, guardScope, guardLineWindowCache!));
+                if (tokenBoundary)
+                {
+                    foreach (var tokenBoundaryResult in FilterSearchResultByTokenBoundary(result, searchMatchLineContext.ForResult(result)))
+                        raw.AddRange(FilterSearchResultByGuards(tokenBoundaryResult, guardMatchContext!, guardFilters!, guardWindow, guardScope, guardLineWindowCache!));
+                }
+                else
+                {
+                    raw.AddRange(FilterSearchResultByGuards(result, guardMatchContext!, guardFilters!, guardWindow, guardScope, guardLineWindowCache!));
+                }
             }
         }
         catch (SqliteException ex) when (rawQuery && IsRawFtsSqliteSyntaxError(ex))
@@ -252,7 +265,7 @@ public partial class DbReader
             throw CreateRawFtsSqliteSyntaxException(ex);
         }
 
-        var results = deduplicate ? DeduplicateOverlappingResults(raw, SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exact, lang)) : raw;
+        var results = deduplicate ? DeduplicateOverlappingResults(raw, SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exactSearch, lang)) : raw;
         if (guardCandidateLimitReached && results.Count < GetGuardedSearchRequestedPageEnd(guardedRequestedLimit, cursor))
             throw new SearchGuardCandidateLimitException(
                 guardedCandidateLimit,
@@ -261,7 +274,7 @@ public partial class DbReader
                 FormatTopGuardCandidateCounts(guardCandidatePathCounts!),
                 FormatTopGuardCandidateCounts(guardCandidateLanguageCounts!));
 
-        var pagedResults = hasGuardFilters ? PageGuardedSearchResults(results, limit, cursor) : results;
+        var pagedResults = hasGuardFilters || tokenBoundary ? PageGuardedSearchResults(results, limit, cursor) : results;
         if (guardCandidateLimitReached && pagedResults.Count > 0)
         {
             AddSearchDiagnostic(
@@ -274,6 +287,79 @@ public partial class DbReader
         AttachSearchEnclosingSymbols(pagedResults, searchMatchLineContext);
         return pagedResults;
     }
+
+    private static List<SearchResult> FilterSearchResultByTokenBoundary(SearchResult result, SearchMatchLineTerms terms)
+    {
+        if (string.IsNullOrWhiteSpace(terms.NormalizedQuery))
+            return [];
+
+        var filtered = new List<SearchResult>();
+        foreach (var (lineIndex, text) in EnumerateContentLines(result.Content))
+        {
+            var line = terms.NormalizeLine(text);
+            if (!ContainsTokenBoundaryMatch(line, terms.NormalizedQuery, terms.Comparison))
+                continue;
+
+            filtered.Add(new SearchResult
+            {
+                Path = result.Path,
+                Lang = result.Lang,
+                StartLine = result.StartLine + lineIndex,
+                EndLine = result.StartLine + lineIndex,
+                Content = text,
+                Score = result.Score,
+                Visibility = result.Visibility,
+                Diagnostics = result.Diagnostics,
+                ChunkId = result.ChunkId,
+                NextOffset = result.NextOffset,
+            });
+        }
+
+        return filtered;
+    }
+
+    private static bool ContainsTokenBoundaryMatch(string text, string query, StringComparison comparison)
+    {
+        var searchIndex = 0;
+        while (searchIndex < text.Length)
+        {
+            var matchIndex = text.IndexOf(query, searchIndex, comparison);
+            if (matchIndex < 0)
+                return false;
+            if (IsTokenBoundaryMatch(text, matchIndex, query.Length))
+                return true;
+
+            searchIndex = matchIndex + 1;
+        }
+
+        return false;
+    }
+
+    private static bool IsTokenBoundaryMatch(string text, int start, int length)
+    {
+        if (length <= 0)
+            return false;
+
+        var end = start + length;
+        return HasCodeTokenBoundaryBefore(text, start)
+               && HasCodeTokenBoundaryAfter(text, end);
+    }
+
+    private static bool HasCodeTokenBoundaryBefore(string text, int start)
+        => start <= 0
+           || !IsCodeIdentifierChar(text[start])
+           || !IsCodeIdentifierChar(text[start - 1]);
+
+    private static bool HasCodeTokenBoundaryAfter(string text, int end)
+        => end >= text.Length
+           || !IsCodeIdentifierChar(text[end - 1])
+           || !IsCodeIdentifierChar(text[end]);
+
+    private static bool IsCodeIdentifierChar(char ch)
+        => char.IsLetterOrDigit(ch) || ch is '_' or '@' or '$';
+
+    private static int AddSearchCandidateSentinel(int candidateLimit)
+        => candidateLimit == int.MaxValue ? candidateLimit : candidateLimit + 1;
 
     private static void TrackGuardCandidate(Dictionary<string, int> counts, string key)
     {
@@ -466,7 +552,7 @@ public partial class DbReader
 
     private sealed record SearchEnclosingSymbol(string Name, string Kind, int StartLine, int EndLine, string? ContainerName, string? ReturnType);
 
-    public QueryCountResult CountSearchResults(string query, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true, IReadOnlyList<SearchGuardFilter>? guardFilters = null, int guardWindow = DefaultSearchGuardWindow, SearchGuardScope guardScope = SearchGuardScope.Window)
+    public QueryCountResult CountSearchResults(string query, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true, IReadOnlyList<SearchGuardFilter>? guardFilters = null, int guardWindow = DefaultSearchGuardWindow, SearchGuardScope guardScope = SearchGuardScope.Window, bool tokenBoundary = false)
     {
         if (string.IsNullOrWhiteSpace(query))
             return new QueryCountResult(0, 0);
@@ -474,9 +560,9 @@ public partial class DbReader
         if (!rawQuery)
             ValidateLiteralSearchQueryLength(query);
 
-        if (guardFilters is { Count: > 0 })
+        if (guardFilters is { Count: > 0 } || tokenBoundary)
         {
-            var guardedResults = Search(query, int.MaxValue, lang, rawQuery, pathPatterns, excludePathPatterns, excludeTests, deduplicate, since, exact, prefix, visibilityRank, guardFilters: guardFilters, guardWindow: guardWindow, guardScope: guardScope);
+            var guardedResults = Search(query, int.MaxValue, lang, rawQuery, pathPatterns, excludePathPatterns, excludeTests, deduplicate, since, exact || tokenBoundary, prefix, visibilityRank, guardFilters: guardFilters, guardWindow: guardWindow, guardScope: guardScope, tokenBoundary: tokenBoundary);
             return new QueryCountResult(guardedResults.Count, guardedResults.Select(result => result.Path).Distinct(StringComparer.Ordinal).Count());
         }
 
@@ -574,14 +660,14 @@ public partial class DbReader
         return new QueryCountResult(count, keptFiles.Count);
     }
 
-    public List<SearchFileCountResult> CountSearchResultsByFile(string query, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true, IReadOnlyList<SearchGuardFilter>? guardFilters = null, int guardWindow = DefaultSearchGuardWindow, SearchGuardScope guardScope = SearchGuardScope.Window)
+    public List<SearchFileCountResult> CountSearchResultsByFile(string query, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true, IReadOnlyList<SearchGuardFilter>? guardFilters = null, int guardWindow = DefaultSearchGuardWindow, SearchGuardScope guardScope = SearchGuardScope.Window, bool tokenBoundary = false)
     {
         if (string.IsNullOrWhiteSpace(query))
             return [];
 
-        if (guardFilters is { Count: > 0 })
+        if (guardFilters is { Count: > 0 } || tokenBoundary)
         {
-            var guardedResults = Search(query, int.MaxValue, lang, rawQuery, pathPatterns, excludePathPatterns, excludeTests, deduplicate, since, exact, prefix, visibilityRank, guardFilters: guardFilters, guardWindow: guardWindow, guardScope: guardScope);
+            var guardedResults = Search(query, int.MaxValue, lang, rawQuery, pathPatterns, excludePathPatterns, excludeTests, deduplicate, since, exact || tokenBoundary, prefix, visibilityRank, guardFilters: guardFilters, guardWindow: guardWindow, guardScope: guardScope, tokenBoundary: tokenBoundary);
             return guardedResults
                 .GroupBy(result => result.Path, StringComparer.Ordinal)
                 .Select(group => new SearchFileCountResult(group.Key, group.Count()))

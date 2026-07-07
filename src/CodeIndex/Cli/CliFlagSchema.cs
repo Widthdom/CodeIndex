@@ -135,7 +135,7 @@ internal static class CliFlagSchema
     private static readonly string[] ByteFormatCommands = ["files", "map"];
     private static readonly string[] EntrypointConfidenceCommands = ["map"];
     private static readonly string[] MapSectionCommands = ["map"];
-    private static readonly string[] SummaryOnlyCommands = ["map", "search", "recipes", "audit", "symbols", "files", "deps", "hotspots"];
+    private static readonly string[] SummaryOnlyCommands = ["map", "search", "recipes", "audit", "symbols", "files", "deps", "unused", "hotspots"];
     private static readonly string[] DependencyCycleCommands = ["deps"];
     private static readonly string[] LanguagesFilterCommands = ["languages"];
 
@@ -148,7 +148,7 @@ internal static class CliFlagSchema
 
     private static readonly string[] ExactNameCommands =
     [
-        "definition", "goto", "references", "callers", "callees", "symbols", "inspect",
+        "definition", "goto", "references", "callers", "callees", "symbols", "impact", "inspect",
     ];
 
     // `--exact-substring` is only meaningful on `search`; other name commands accept it
@@ -157,7 +157,7 @@ internal static class CliFlagSchema
     // パーサで受理するだけ。補完では `search` 以外には出さない。
     private static readonly string[] ExactSubstringAccepted =
     [
-        "definition", "goto", "references", "callers", "callees", "symbols", "inspect",
+        "definition", "goto", "references", "callers", "callees", "symbols", "impact", "inspect",
     ];
 
     private static readonly string[] BodyCommands = ["definition", "references", "callers", "callees", "impact", "inspect"];
@@ -319,6 +319,7 @@ internal static class CliFlagSchema
             new() { Name = "--regex", Description = "Use regular expression matching", Commands = Set("find") },
             new() { Name = "--exact-name", Description = "Exact symbol-name equality", Commands = Set(ExactNameCommands), AlsoAcceptedBy = Set("search") },
             new() { Name = "--exact-substring", Description = "Search-only exact substring match", Commands = Set("search"), AlsoAcceptedBy = Set(ExactSubstringAccepted) },
+            new() { Name = "--token-boundary", Description = "Search-only exact substring match with identifier/token boundaries", Commands = Set("search") },
             new() { Name = "--prefix", Description = "Trailing-asterisk prefix shorthand", Commands = Set("search") },
             new() { Name = "--require-before", ValuePlaceholder = "<query>", Description = "Search: require a nearby guard query before each primary match", Commands = Set("search") },
             new() { Name = "--require-after", ValuePlaceholder = "<query>", Description = "Search: require a nearby guard query after each primary match", Commands = Set("search") },

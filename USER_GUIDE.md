@@ -395,15 +395,16 @@ mode is NFKC + Unicode CaseFold equality over extracted names.
 
 | Command family | Legacy flag | Preferred flag | Matching semantics |
 |---|---|---|---|
-| `search` | `--exact` | `--exact-substring` | Case-sensitive exact substring match; bypasses FTS5 tokenization. |
+| `search` | `--exact` | `--exact-substring`; use `--token-boundary` for bounded code phrases | Case-sensitive exact substring match; bypasses FTS5 tokenization. `--token-boundary` also requires identifier/token boundaries around the full query. |
 | `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | `--exact` | `--exact-name` | Exact extracted-name equality using NFKC + Unicode CaseFold; avoids substring expansion such as `Run` matching `RunAsync`. |
 | `find` | `--exact` | `--exact` | Literal in-file matching already has substring semantics, so there is no newer alias. |
 
 The legacy `--exact` aliases are stable for the current major release and are
 not scheduled for removal before the next major release. If removal is planned,
 the release notes will announce the timeline before the alias stops working.
-MCP mirrors the same split: use `exactSubstring` on `search`, `exactName` on
-name-based tools, and keep `exact` only for backward-compatible clients.
+MCP mirrors the same split: use `exactSubstring` or `tokenBoundary` on
+`search`, `exactName` on name-based tools, and keep `exact` only for
+backward-compatible clients.
 In `search --json` and MCP `search` responses, exact substring highlights add
 `literal_terms` / `literal_term_occurrences` (camelCase in MCP) so clients can
 render only the requested literal phrase while keeping the broader diagnostic
@@ -411,7 +412,9 @@ render only the requested literal phrase while keeping the broader diagnostic
 When a normal `search` query looks like a punctuation-heavy code phrase,
 text output suggests `--exact-substring`, JSON results include
 `exact_substring_hint`, and MCP `search` includes a `recovery_hint` with
-`exactSubstring: true` arguments.
+`exactSubstring: true` arguments. Use `--token-boundary` / `tokenBoundary`
+when the phrase should not match inside longer identifiers such as
+`HttpClientHandler`.
 
 For single-value CLI flags, repeated occurrences keep the long-standing
 rightmost-wins behavior. `cdidx` prints a warning that names the winning value:
@@ -996,6 +999,7 @@ cdidx search "auth*"                                    # trailing * on one toke
 cdidx search "計算" --prefix                            # widen every token to a prefix phrase (CJK runs are one unicode61 token; opt in to reach `計算する`)
 cdidx search "content:auth*" --fts                      # raw FTS5 syntax; `content:` is the only valid column qualifier, and NEAR distance is capped at 100
 cdidx search "Run();" --exact-substring                 # case-sensitive exact substring, no FTS5
+cdidx search "new HttpClient" --token-boundary          # exact code phrase, but not inside longer identifiers such as HttpClientHandler
 cdidx search "Foo.Bar" --lang csharp --exact-substring  # Java/Kotlin/C# exact search/find canonicalizes escaped source identifiers
 cdidx search "ExecuteReader" --source-only --json=array # apply production-source defaults outside recipe mode
 cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --guard-window 8  # API calls missing a nearby preceding guard
@@ -1530,7 +1534,7 @@ Default `cdidx search` is literal-safe unless you explicitly opt into raw FTS5:
 | Raw FTS5 mode | With `--fts`, the query is passed to FTS5 as raw syntax. Supported operators include `content:term` column filters, `NEAR(foo bar, 5)`, `foo OR bar`, `foo NOT bar`, parenthesized groups, prefix tokens such as `foo*`, and quoted phrases such as `"foo bar"`. |
 | No `--fts` | Operator-like characters are treated as literal query content except for cdidx's documented literal-safe prefix shorthand. |
 
-For punctuation-heavy code phrases such as `catch { }`, normal search may emit a rerun hint. Use `--exact-substring` when braces, operators, punctuation, and case need byte-for-byte matching.
+For punctuation-heavy code phrases such as `catch { }`, normal search may emit a rerun hint. Use `--exact-substring` when braces, operators, punctuation, and case need byte-for-byte matching. Use `--token-boundary` when the full phrase should match exactly but must stop at identifier/token boundaries, such as finding `new HttpClient` without `new HttpClientHandler`.
 
 For whitespace-containing literal queries passed as one argument, such as `cdidx search "not supported"`, normal search still uses FTS token matching but ranks chunks containing the exact phrase ahead of token-only matches. Multi-token code-like phrases such as `throw new Exception` can emit an `--exact-substring` hint when tokenized search is likely to be misleading.
 
@@ -1542,6 +1546,7 @@ Search case behavior depends on the selected mode:
 | CJK text | Mostly case-neutral, but matching still follows FTS5 token boundaries. |
 | Locale-specific Unicode cases | This is not a full collation. Turkish dotted/dotless I and German sharp-S versus `SS` should be checked with exact mode when identity matters. |
 | `--exact-substring` | Uses SQLite `instr()` and is case-sensitive byte-for-byte over the stored text. |
+| `--token-boundary` | Uses exact substring matching, then keeps only matches with non-identifier boundaries around the full query. Identifier characters are letters, digits, `_`, `@`, and `$`. |
 | Symbol-name exactness | Separate from content search: `--exact-name` uses cdidx's documented NFKC + Unicode CaseFold path when the DB reports `fold_ready`. |
 
 ### Result deduplication
@@ -1616,9 +1621,10 @@ same source location.
 | `--snippet-focus <leftmost\|quality\|proximity>` | `search` | Choose how long search-result lines pick the visible focus when clamped. `quality` (default) prefers full-query matches and strong tokens; `proximity` favors dense multi-token clusters; `leftmost` keeps legacy earliest-match behavior. |
 | `--max-line-width <n>` | `search`, `references`, `callers`, `callees`, `find`, `excerpt`, `impact`, `inspect` | Clamp very long single-line snippet/reference/excerpt payloads around the relevant match (`0` disables clamping; default: 512, max: 4096) |
 | `--fts` | `search` | Use raw FTS5 query syntax; malformed input is reported as a usage error with a hint. `fts_chunks` exposes only the `content` column, so `content:` is the only valid column qualifier. |
-| `--exact` | `search`, `find`, `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | Backward-compatible shorthand. Prefer `--exact-substring` for `search`, keep `--exact` for `find`, and prefer `--exact-name` for symbol / graph commands plus `inspect`. Pass at most one of `--exact`, `--exact-substring`, `--exact-name`; combining two or more is rejected with `Error: pass only one of --exact, --exact-substring, --exact-name.`. CLI JSON and MCP `structuredContent` expose `exact_index_available` / `degraded_reason`; MCP also keeps the legacy camelCase aliases `exactIndexAvailable` / `degradedReason` for backward compatibility. |
+| `--exact` | `search`, `find`, `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | Backward-compatible shorthand. Prefer `--exact-substring` for `search`, keep `--exact` for `find`, and prefer `--exact-name` for symbol / graph commands plus `inspect`. Pass at most one of `--exact`, `--exact-substring`, `--token-boundary`, `--exact-name`; combining two or more is rejected with `Error: pass only one of --exact, --exact-substring, --token-boundary, --exact-name.`. CLI JSON and MCP `structuredContent` expose `exact_index_available` / `degraded_reason`; MCP also keeps the legacy camelCase aliases `exactIndexAvailable` / `degradedReason` for backward compatibility. |
 | `--exact-substring` | `search` | Preferred explicit name for search exactness: case-sensitive exact substring (FTS5 bypassed). |
-| `--prefix` | `search` | Opt into FTS5 prefix-phrase expansion for every token in the query. Without this flag the literal-safe path quotes each token as a strict FTS5 phrase, so a bare `search 計算` only matches the token `計算` and not `計算する` (unicode61 keeps adjacent CJK codepoints as one token). Appending `*` to a single token (`search 計算*`) opts in for that token only; `--prefix` opts in for the whole query. Cannot be combined with `--exact` / `--exact-substring` (those bypass FTS5 entirely). |
+| `--token-boundary` | `search` | Exact code-phrase search that also requires identifier/token boundaries around the whole query. Use it when `new HttpClient` should not match `new HttpClientHandler`. Cannot be combined with `--fts` or other exact-mode flags. |
+| `--prefix` | `search` | Opt into FTS5 prefix-phrase expansion for every token in the query. Without this flag the literal-safe path quotes each token as a strict FTS5 phrase, so a bare `search 計算` only matches the token `計算` and not `計算する` (unicode61 keeps adjacent CJK codepoints as one token). Appending `*` to a single token (`search 計算*`) opts in for that token only; `--prefix` opts in for the whole query. Cannot be combined with `--exact` / `--exact-substring` / `--token-boundary` (those bypass FTS5 entirely). |
 | `--exact-name` | `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | Preferred explicit name for symbol-name exactness: NFKC + Unicode CaseFold exact equality (`Ä` / `ä`, `Ｒｕｎ` / `Run`, ligatures, sharp-S, and Greek final sigma collapse). Unicode CaseFold remains locale-invariant, so Turkish dotted `İ` is still distinct from plain `i`. For C#, pass the canonical extracted name (`operator +`, `operator checked +`, `explicit operator Money`, `implicit operator decimal`, `Item`) rather than source keywords like `this` / `explicit`. Falls back to ASCII `COLLATE NOCASE` while the DB still contains stale fold metadata; prefer `cdidx backfill-fold`, or use a plain `cdidx index .` if it rewrites or purges every stale row, otherwise `--rebuild`. `status --json` exposes `fold_ready` and `csharp_symbol_name_ready` so AI clients can tell which path is active. When a read-only legacy DB is missing the fallback exact-match indexes, human-readable output warns and CLI JSON / MCP `structuredContent` expose degraded-state metadata. |
 | `--kind <kind>` | `definition`, `references`, `callers`, `callees`, `symbols`, `inspect`, `outline`, `hotspots`, `unused`, `validate` | Filter by kind (case-insensitive; `--kind FUNCTION` is treated as `--kind function`). `outline` also accepts comma-separated symbol kinds, such as `--kind function,class`. `definition` / `symbols` / `inspect` / `outline` / `hotspots` / `unused` use symbol kinds (`function`, `lambda`, `async_function`, `generator`, `async_generator`, `test.method`, `class`, `struct`, `interface`, `protocol`, `enum`, `property`, `event`, `delegate`, `namespace`, `import`); `references` accepts all indexed reference kinds (`call`, `instantiate`, `subscribe`, `attribute`, `annotation`, `type_reference`); `callers` / `callees` accept only the call-graph kinds (`call`, `instantiate`, `subscribe`) and reject non-call-graph kinds (`--kind attribute` / `--kind annotation` / `--kind type_reference`) with a usage error — metadata rows are attributed to the enclosing body-range symbol rather than the annotated target, and `type_reference` rows are compile-time type-position edges (declaration types, generic constraints, `is`/`as`/`instanceof`, XML-doc `cref`) rather than runtime calls, so `callers` / `callees` cannot answer either correctly; use `references --kind attribute` / `references --kind annotation` / `references --kind type_reference` instead. `inspect` filters the definition candidates and primary file context while keeping graph evidence keyed to the queried symbol name. `references` defaults to every indexed reference kind so metadata usages remain visible, while `callers` / `callees` / `hotspots` / `impact` default to the call-graph kinds only (`call`, `instantiate`, `subscribe`) and exclude metadata edges (`attribute`, `annotation`, `type_reference`). Identical constructor `call` + `instantiate` rows at one physical site still collapse; `validate` uses issue kinds such as `bom` |
 | `--rank-by <weighted\|count\|kind>` | `callers`, `callees` | Choose the caller/callee ranking model. `weighted` is the default and scores `instantiate=3.0`, `call=1.0`, `subscribe=0.1`; `count` sorts by raw `reference_count`; `kind` groups by reference kind first, then count. |
@@ -2285,7 +2291,7 @@ If the checkout changed because of `git reset`, `git rebase`, `git commit --amen
 - Use `languages` as the source of truth for canonical `--lang` values and current symbol / graph support. Avoid relying on memorized per-language extraction details in prompts or agent instructions; support changes over time and the CLI reports `graph_supported`, `graph_support_reason`, and related trust metadata where it matters.
 - When you have a likely symbol name, run `symbols` first to resolve candidates. Add `--exact-name` once the intended symbol is known. Use `outline` for a single file's structure and `inspect` when you want bundled definition, reference, caller, and callee context in one request.
 - Use `definition --body` for bounded implementation text, then `references --body`, `callers --body`, `callees --body`, or `impact --body` when graph results need inline excerpts. Check `body_content_truncated` before assuming the returned body is complete. Prefer `--exact` after a candidate has been resolved so names such as `Run` do not expand to `RunAsync` or `RunImpact`. Treat graph fallback and degraded metadata as guidance about confidence, not as decoration.
-- Use `search` for raw text, comments, strings, option names, generated code, or languages where the current `languages` output says structured graph support is unavailable. Use `--include-generated` when generated code is the target. Use `--exact-substring` for punctuation-heavy literals and `--fts` only when you intentionally want raw FTS5 syntax such as `NEAR` or `OR`.
+- Use `search` for raw text, comments, strings, option names, generated code, or languages where the current `languages` output says structured graph support is unavailable. Use `--include-generated` when generated code is the target. Use `--exact-substring` for punctuation-heavy literals, `--token-boundary` for exact code phrases that must not match longer identifiers, and `--fts` only when you intentionally want raw FTS5 syntax such as `NEAR` or `OR`.
 - Scope broad searches early with `--path <text>`, repeatable `--exclude-path <text>`, and `--exclude-tests` unless tests are the target. Generated files are hidden from query results by default; pass `--include-generated` when needed. For noisy minified or transpiled files, reduce payload size with `--snippet-lines <n>` and `--max-line-width <n>`.
 - Use `files` to discover candidate paths, `find` to re-locate exact text within known files, and `excerpt` to fetch only the needed lines instead of opening entire files.
 - Use `deps --reverse` for file-level impact, `impact` for callable symbol ripple checks, `unused` for potentially dead definitions, and `hotspots` for central symbols. These commands are only as strong as the current graph support and freshness metadata, so keep `languages` and `status --check --json` in the loop.
@@ -3162,21 +3168,23 @@ name に対する NFKC + Unicode CaseFold の等価比較です。
 
 | コマンド系統 | 従来フラグ | 推奨フラグ | 一致 semantics |
 |---|---|---|---|
-| `search` | `--exact` | `--exact-substring` | FTS5 tokenization を経由しない、大小文字区別の exact substring match。 |
+| `search` | `--exact` | `--exact-substring`; bounded な code phrase には `--token-boundary` | FTS5 tokenization を経由しない、大小文字区別の exact substring match。`--token-boundary` は query 全体の前後に identifier/token 境界も要求します。 |
 | `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | `--exact` | `--exact-name` | NFKC + Unicode CaseFold による抽出済み name の完全一致。`Run` が `RunAsync` に広がるような部分一致を避ける。 |
 | `find` | `--exact` | `--exact` | 既に literal in-file substring semantics のため、新しい alias はありません。 |
 
 従来の `--exact` alias は現行 major release では安定扱いで、次の major release より前に
 削除する予定はありません。削除する場合は、alias が使えなくなる前に release notes で
-timeline を告知します。MCP も同じ分割を反映します。`search` では `exactSubstring`、
-name-based tools では `exactName` を使い、`exact` は後方互換 client 向けに残します。
+timeline を告知します。MCP も同じ分割を反映します。`search` では `exactSubstring` または
+`tokenBoundary`、name-based tools では `exactName` を使い、`exact` は後方互換 client 向けに残します。
 `search --json` と MCP `search` の exact substring highlight には
 `literal_terms` / `literal_term_occurrences`（MCP では camelCase）も追加されるため、
 広めの診断用 `terms` / `term_occurrences` を残したまま、要求した literal phrase だけを
 render できます。
 通常の `search` query が記号の多い code phrase に見える場合、text output は
 `--exact-substring` を提案し、JSON 結果は `exact_substring_hint`、MCP `search` は
-`exactSubstring: true` arguments 付きの `recovery_hint` を返します。
+`exactSubstring: true` arguments 付きの `recovery_hint` を返します。phrase が
+`HttpClientHandler` のような長い identifier 内に一致してほしくない場合は
+`--token-boundary` / `tokenBoundary` を使います。
 
 単一値の CLI フラグを複数回指定した場合は、従来どおり右端の指定が採用されます。
 `cdidx` は採用される値を含む警告を出し、最後の CLI 指定がそれ以前の CLI 指定や
@@ -3780,6 +3788,7 @@ cdidx search "auth*"                                    # 末尾の * はその�
 cdidx search "計算" --prefix                            # クエリ全体を prefix phrase 化（CJK は unicode61 が連続コードポイントを 1 トークン扱いするため、`計算する` に届かせるには opt-in）
 cdidx search "content:auth*" --fts                      # 生のFTS5構文。列修飾子は `content:` だけが有効で、NEAR distance は 100 まで
 cdidx search "Run();" --exact-substring                 # 大文字小文字区別の完全部分一致、FTS5 なし
+cdidx search "new HttpClient" --token-boundary          # exact な code phrase。ただし HttpClientHandler のような長い identifier 内には一致しない
 cdidx search "Foo.Bar" --lang csharp --exact-substring  # Java/Kotlin/C# の exact 検索 / find は escaped source identifier を正規化する
 cdidx search "ExecuteReader" --source-only --json=array # recipe なしで本番 source 向け既定 scope を適用
 cdidx search "File.ReadAllText" --exact-substring --reject-before "Length" --guard-window 8  # 直前の guard がない API 呼び出し
@@ -4296,7 +4305,7 @@ cdidx report --output report.tgz --json
 | raw FTS5 mode | `--fts` 付きでは query を raw FTS5 構文としてそのまま渡します。利用できる演算子には `content:term` の列 filter、`NEAR(foo bar, 5)`、`foo OR bar`、`foo NOT bar`、括弧 grouping、`foo*` のような prefix token、`"foo bar"` のような quoted phrase があります。 |
 | `--fts` なし | cdidx が明示している literal-safe prefix shorthand を除き、operator に見える文字も literal な query 内容として扱います。 |
 
-`catch { }` のように記号の多いコード片では、通常検索が再実行ヒントを出す場合があります。brace、operator、punctuation、大文字小文字まで byte-for-byte に一致させたい場合は `--exact-substring` を使います。
+`catch { }` のように記号の多いコード片では、通常検索が再実行ヒントを出す場合があります。brace、operator、punctuation、大文字小文字まで byte-for-byte に一致させたい場合は `--exact-substring` を使います。`new HttpClient` を `new HttpClientHandler` に一致させたくない場合のように、query 全体の前後で identifier/token 境界も必要なら `--token-boundary` を使います。
 
 `cdidx search "not supported"` のように空白を含む literal query を 1 引数で渡した場合、通常検索は引き続き FTS token matching を使いますが、exact phrase を含む chunk を token-only match より前に並べます。`throw new Exception` のような複数 token のコードらしい phrase では、tokenized search が誤解を招きそうな場合に `--exact-substring` hint を出すことがあります。
 
@@ -4308,6 +4317,7 @@ cdidx report --output report.tgz --json
 | CJK text | 多くの場合大小文字の概念がありませんが、一致範囲は FTS5 token 境界に従います。 |
 | locale 固有の Unicode case | 完全な collation ではありません。トルコ語の dotted/dotless I やドイツ語 sharp-S と `SS` の同一性が重要な場合は exact mode で確認してください。 |
 | `--exact-substring` | SQLite `instr()` を使い、保存された本文に対して byte-for-byte に大文字小文字を区別します。 |
+| `--token-boundary` | exact substring matching の後、query 全体の前後が identifier/token 境界である一致だけを残します。identifier 文字は英数字、`_`、`@`、`$` です。 |
 | symbol-name exactness | content search とは別経路です。`--exact-name` は DB が `fold_ready` のとき cdidx の NFKC + Unicode CaseFold 経路を使います。 |
 
 ### 結果の重複排除
@@ -5039,7 +5049,7 @@ system では、同じ `cdidx index . --quiet` を step として追加してく
 - `--lang` に渡す正式名と現在の symbol / graph 対応状況は `languages` を正とする。プロンプトやエージェント向け手順に言語別抽出仕様を細かく固定しない。対応範囲は更新されるため、必要な場所では CLI が返す `graph_supported`、`graph_support_reason`、関連する trust metadata を読む。
 - 候補シンボル名がある場合は、まず `symbols` で候補を固める。対象が決まったら `--exact-name` を付ける。1ファイルの構造だけ見たいときは `outline`、定義・参照・caller・callee のまとまった文脈が欲しいときは `inspect` を使う。
 - 実装本文が必要なら bounded な `definition --body` を使い、graph 結果にもインライン抜粋が必要なら `references --body`、`callers --body`、`callees --body`、`impact --body` を使う。返却 body が完全かどうかを判断する前に `body_content_truncated` を確認する。候補が解決済みなら `--exact` を付け、`Run` が `RunAsync` や `RunImpact` に広がらないようにする。graph fallback や degraded metadata は信頼度の情報として扱う。
-- 生テキスト、コメント、文字列、オプション名、生成コード、または現在の `languages` 出力で構造化 graph 対応がない言語には `search` を使う。記号を多く含む literal には `--exact-substring`、`NEAR` や `OR` などの FTS5 構文を意図して使う場合だけ `--fts` を使う。
+- 生テキスト、コメント、文字列、オプション名、生成コード、または現在の `languages` 出力で構造化 graph 対応がない言語には `search` を使う。記号を多く含む literal には `--exact-substring`、長い identifier 内への一致を避けたい exact code phrase には `--token-boundary`、`NEAR` や `OR` などの FTS5 構文を意図して使う場合だけ `--fts` を使う。
 - 広い検索は早い段階で `--path <path-or-glob>`、繰り返し指定できる `--exclude-path <path-or-glob>`、テストが目的でない場合の `--exclude-tests` で絞る。ワイルドカードなしの値は `./foo` や `/foo` を `foo` に正規化したリポジトリ相対パスとして扱い、そのファイル/ディレクトリの完全一致またはそのディレクトリ配下だけに一致する。任意の部分文字列一致ではない。生成・minified・transpiled などノイズの大きいファイルでは `--snippet-lines <n>` と `--max-line-width <n>` で payload を小さくする。
 - 候補パスの把握には `files`、既知ファイル内の再探索には `find`、必要行だけ読むときは `excerpt` を使い、ファイル全体を開かない。
 - ファイル単位の影響確認には `deps --reverse`、callable symbol の波及確認には `impact`、潜在的な未使用定義には `unused`、中心的なシンボルの把握には `hotspots` を使う。これらは現在の graph 対応とインデックス鮮度に依存するため、`languages` と `status --check --json` を併用する。

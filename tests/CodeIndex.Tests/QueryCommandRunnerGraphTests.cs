@@ -91,7 +91,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunDeps_JsonGraphSummaryOnly_OmitsNodesAndEdges_Issue4112()
+    public void RunDeps_JsonGraphSummaryOnly_FailsBeforeGraphMaterialization_Issue4353()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_json_graph_summary_only");
         try
@@ -102,16 +102,50 @@ public partial class QueryCommandRunnerTests
                 ["--db", dbPath, "--format", "json-graph", "--summary-only", "--limit", "80", "--lang", "sql"],
                 _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("summary-only is not supported with --format json-graph", stderr);
+            Assert.DoesNotContain("Progress: deps", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.True(json.GetProperty("summary_only").GetBoolean());
-            Assert.True(json.GetProperty("count").GetInt32() >= 1);
-            Assert.False(json.TryGetProperty("nodes", out _));
-            Assert.False(json.TryGetProperty("edges", out _));
-            Assert.Contains("Progress: deps", stderr);
-            Assert.Contains("phase=write_output", stderr);
+    [Fact]
+    public void RunDeps_BroadJsonSummaryOnly_FailsBeforeWorkspaceGraphScan_Issue4322()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_broad_summary_issue4322");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                for (var i = 0; i <= 250; i++)
+                {
+                    writer.UpsertFile(new FileRecord
+                    {
+                        Path = $"src/File{i:D3}.cs",
+                        Lang = "csharp",
+                        Size = 1,
+                        Lines = 1,
+                        Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                        Checksum = Guid.NewGuid().ToString("N"),
+                    });
+                }
+                writer.MarkGraphReady();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", dbPath, "--json", "--summary-only", "--limit", "5"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("too broad for this index", stderr);
+            Assert.DoesNotContain("phase=read_edges", stderr);
         }
         finally
         {

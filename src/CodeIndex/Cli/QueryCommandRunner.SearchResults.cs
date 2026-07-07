@@ -14,7 +14,7 @@ public static partial class QueryCommandRunner
     {
         if (options.GroupBy == "file" && !HasSearchOriginFilters(options))
         {
-            var fileGroups = reader.CountSearchResultsByFile(options.Query!, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, options.GuardFilters, options.GuardWindow, options.GuardScope);
+            var fileGroups = reader.CountSearchResultsByFile(options.Query!, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, options.GuardFilters, options.GuardWindow, options.GuardScope, options.TokenBoundary);
             var totalCount = fileGroups.Sum(group => group.Count);
             var fileCountGroups = fileGroups
                 .Select(group => new SearchGroupedCountItemJsonResult(
@@ -61,7 +61,7 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.Success;
         }
 
-        var results = reader.Search(options.Query!, int.MaxValue, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, guardFilters: options.GuardFilters, guardWindow: options.GuardWindow, guardScope: options.GuardScope);
+        var results = reader.Search(options.Query!, int.MaxValue, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, guardFilters: options.GuardFilters, guardWindow: options.GuardWindow, guardScope: options.GuardScope, tokenBoundary: options.TokenBoundary);
         var displayRows = BuildSearchDisplayRows(results, options, exact);
         var groupBy = NormalizeSearchAggregationKey(options.GroupBy!);
         var groups = BuildSearchGroupedCounts(groupBy, displayRows);
@@ -301,7 +301,7 @@ public static partial class QueryCommandRunner
 
     private static int RunSearchAggregation(DbReader reader, QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool exact, SearchQueryHint? exactSubstringHint)
     {
-        var results = reader.Search(options.Query!, int.MaxValue, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, guardFilters: options.GuardFilters, guardWindow: options.GuardWindow, guardScope: options.GuardScope);
+        var results = reader.Search(options.Query!, int.MaxValue, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, guardFilters: options.GuardFilters, guardWindow: options.GuardWindow, guardScope: options.GuardScope, tokenBoundary: options.TokenBoundary);
         var rows = BuildSearchDisplayRows(results, options, exact);
         var groupBy = NormalizeSearchAggregationKey(options.CountBy ?? options.UniqueBy!);
         var groups = BuildSearchGroupedCounts(groupBy, rows);
@@ -936,7 +936,7 @@ public static partial class QueryCommandRunner
     }
 
     private static List<SearchResult> ReadSearchResults(DbReader reader, QueryCommandOptions options, bool exact, int limit, SearchCursor? cursor = null, int? guardRequestedLimit = null)
-        => reader.Search(options.Query!, limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, cursor, options.GuardFilters, options.GuardWindow, guardRequestedLimit, guardScope: options.GuardScope);
+        => reader.Search(options.Query!, limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, cursor, options.GuardFilters, options.GuardWindow, guardRequestedLimit, guardScope: options.GuardScope, tokenBoundary: options.TokenBoundary);
 
     private static QueryCountResult CountFilteredSearchResults(DbReader reader, QueryCommandOptions options, bool exact)
     {

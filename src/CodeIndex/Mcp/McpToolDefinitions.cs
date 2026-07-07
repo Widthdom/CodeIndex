@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Database;
@@ -14,13 +15,13 @@ public partial class McpServer
     /// Return the list of available tools.
     /// 利用可能なツール一覧を返す。
     /// </summary>
-    private JsonNode HandleToolsList(JsonNode? id)
+    private JsonNode HandleToolsList(JsonNode? id, JsonNode? listParams)
     {
         var tools = new JsonArray
         {
             CreateToolDefinition(
                 "search",
-                "Use this when starting broad code discovery, checking error text, or running named search audit recipes. Prefer it before shell grep; common next step is `excerpt`, `definition`, or `references` on the best hit. Returns snippets plus `result_stable_at`, `next_cursor`, and `next_step_suggestion` or `recovery_hint`. Use `prefix`/trailing `*` to widen token matching, `rawQuery` for FTS5 syntax, and `exactSubstring` for case-sensitive identity. Details and examples: USER_GUIDE.md#search. / 広いコード調査、エラー文言確認、search audit recipe 実行の起点に使う。shell grep より優先し、次は最有力ヒットに `excerpt` / `definition` / `references` を使う。`prefix` / 末尾 `*` / `rawQuery` / `exactSubstring` の詳細と例は USER_GUIDE.md#search を参照。",
+                "Use this when starting broad code discovery, checking error text, or running named search audit recipes. Prefer it before shell grep; common next step is `excerpt`, `definition`, or `references` on the best hit. Returns snippets plus `result_stable_at`, `next_cursor`, and `next_step_suggestion` or `recovery_hint`. Use `prefix`/trailing `*` to widen token matching, `rawQuery` for FTS5 syntax, `exactSubstring` for case-sensitive identity, and `tokenBoundary` when a code phrase must not match inside longer identifiers. Details and examples: USER_GUIDE.md#search. / 広いコード調査、エラー文言確認、search audit recipe 実行の起点に使う。shell grep より優先し、次は最有力ヒットに `excerpt` / `definition` / `references` を使う。`prefix` / 末尾 `*` / `rawQuery` / `exactSubstring` / `tokenBoundary` の詳細と例は USER_GUIDE.md#search を参照。",
                 new JsonObject
                 {
                     ["type"] = "object",
@@ -44,8 +45,9 @@ public partial class McpServer
                         ["since"] = new JsonObject { ["type"] = "string", ["description"] = "Filter to files modified since this ISO 8601 timestamp" },
                         ["noDedup"] = new JsonObject { ["type"] = "boolean", ["description"] = "Disable overlapping-chunk deduplication and return every raw chunk hit; useful for debugging chunk boundaries or measuring raw match density.", ["default"] = false },
                         ["exactSubstring"] = new JsonObject { ["type"] = "boolean", ["description"] = "Preferred explicit name for search's exact mode: case-sensitive exact substring match (bypasses FTS5).", ["default"] = false },
+                        ["tokenBoundary"] = new JsonObject { ["type"] = "boolean", ["description"] = "Case-sensitive exact code-phrase match that also requires identifier/token boundaries around the full query, so `new HttpClient` does not match `new HttpClientHandler`.", ["default"] = false },
                         ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "Backward-compatible alias for `exactSubstring`.", ["default"] = false },
-                        ["prefix"] = new JsonObject { ["type"] = "boolean", ["description"] = "Opt into FTS5 prefix expansion for every token in `query`. Cannot be combined with `exact`/`exactSubstring`.", ["default"] = false },
+                        ["prefix"] = new JsonObject { ["type"] = "boolean", ["description"] = "Opt into FTS5 prefix expansion for every token in `query`. Cannot be combined with `exact`/`exactSubstring`/`tokenBoundary`.", ["default"] = false },
                         ["requireBefore"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Keep search matches only when this guard query appears within `guardWindow` lines before the primary match. Accepts a string or string array." },
                         ["requireAfter"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Keep search matches only when this guard query appears within `guardWindow` lines after the primary match. Accepts a string or string array." },
                         ["rejectBefore"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Drop search matches when this guard query appears within `guardWindow` lines before the primary match. Accepts a string or string array." },
@@ -610,15 +612,77 @@ public partial class McpServer
             filtered.Add(tool!.DeepClone());
         }
 
+        if (listParams is not null && listParams is not JsonObject)
+            return CreateToolsListParamsError(id);
+
+        var paramsObject = listParams as JsonObject;
+        var pageSize = DefaultToolsListPageSize;
+        if (paramsObject?["limit"] is JsonNode limitNode
+            && (limitNode is not JsonValue limitValue
+                || !limitValue.TryGetValue<int>(out pageSize)
+                || pageSize < 1
+                || pageSize > MaxToolsListPageSize))
+        {
+            return CreateToolsListLimitError(id);
+        }
+
+        var offset = 0;
+        if (paramsObject?["cursor"] is JsonNode cursorNode
+            && (cursorNode is not JsonValue cursorValue
+                || !cursorValue.TryGetValue<string>(out var cursor)
+                || !int.TryParse(cursor, NumberStyles.None, CultureInfo.InvariantCulture, out offset)
+                || offset < 0
+                || offset > MaxMcpPaginationOffset))
+        {
+            return CreateToolsListCursorError(id);
+        }
+
+        var page = new JsonArray();
+        for (var i = offset; i < filtered.Count && page.Count < pageSize; i++)
+            page.Add(filtered[i]!.DeepClone());
+
         var result = new JsonObject
         {
-            ["tools"] = filtered,
-            ["_meta"] = BuildToolsListCatalogMeta(filtered),
+            ["tools"] = page,
+            ["_meta"] = BuildToolsListCatalogMeta(filtered, page.Count, offset, pageSize),
         };
+        var nextOffset = offset + pageSize;
+        if (nextOffset <= MaxMcpPaginationOffset && nextOffset < filtered.Count)
+            result["nextCursor"] = nextOffset.ToString(CultureInfo.InvariantCulture);
         return CreateSuccessResponse(id, result);
     }
 
-    private static JsonObject BuildToolsListCatalogMeta(JsonArray tools)
+    private static JsonObject CreateToolsListCursorError(JsonNode? id)
+        => CreateErrorResponse(hasId: true, id: id, code: -32602,
+            message: $"tools/list cursor must be a non-negative pagination offset no greater than {MaxMcpPaginationOffset}.",
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: "Use the `nextCursor` value returned by the previous tools/list response, or omit params.cursor to start from the first page.",
+            retrySafe: false,
+            extraData: new JsonObject
+            {
+                ["max_pagination_offset"] = MaxMcpPaginationOffset,
+            });
+
+    private static JsonObject CreateToolsListParamsError(JsonNode? id)
+        => CreateErrorResponse(hasId: true, id: id, code: -32602,
+            message: "tools/list params must be an object when present.",
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: "Omit params for the default tools/list response, or pass an object such as {\"limit\": 3}.",
+            retrySafe: false);
+
+    private static JsonObject CreateToolsListLimitError(JsonNode? id)
+        => CreateErrorResponse(hasId: true, id: id, code: -32602,
+            message: $"tools/list limit must be between 1 and {MaxToolsListPageSize}.",
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: "Use params.limit only when you need a smaller discovery page, or omit it for the default tools/list page.",
+            retrySafe: false,
+            extraData: new JsonObject
+            {
+                ["default_tools_list_page_size"] = DefaultToolsListPageSize,
+                ["max_tools_list_page_size"] = MaxToolsListPageSize,
+            });
+
+    private static JsonObject BuildToolsListCatalogMeta(JsonArray tools, int returnedToolCount, int offset, int pageSize)
     {
         var enabledToolNames = GetAdvertisedToolNames(tools);
         return new JsonObject
@@ -662,6 +726,20 @@ public partial class McpServer
                 ["input_schemas_are_authoritative"] = true,
                 ["annotations_describe_read_only_or_mutating_behavior"] = true,
                 ["respect_tool_filtering"] = true,
+                ["pagination_supported"] = true,
+                ["cursor_param"] = "params.cursor",
+                ["limit_param"] = "params.limit",
+                ["next_cursor_field"] = "result.nextCursor",
+            },
+            ["response_controls"] = new JsonObject
+            {
+                ["tools_total"] = tools.Count,
+                ["tools_returned"] = returnedToolCount,
+                ["tools_offset"] = offset,
+                ["tools_page_size"] = pageSize,
+                ["default_tools_list_page_size"] = DefaultToolsListPageSize,
+                ["max_tools_list_page_size"] = MaxToolsListPageSize,
+                ["max_pagination_offset"] = MaxMcpPaginationOffset,
             },
         };
     }
@@ -918,7 +996,7 @@ public partial class McpServer
         switch (name)
         {
             case "query":
-                AppendConstraintDescription(obj, "Use identifiers, symbol names, error messages, config keys, or short code/text fragments; add exactName/exactSubstring when identity matters.");
+                AppendConstraintDescription(obj, "Use identifiers, symbol names, error messages, config keys, or short code/text fragments; add exactName/exactSubstring/tokenBoundary when identity matters.");
                 break;
             case "exactName":
                 AppendConstraintDescription(obj, "Use this when the symbol name must match exactly, e.g. `Run` should not also match `RunAsync`.");
@@ -941,6 +1019,9 @@ public partial class McpServer
         {
             case ("search", "exactSubstring"):
                 AppendConstraintDescription(obj, "Use this for case-sensitive exact text identity when tokenization, punctuation, emoji, or prefix matching would be misleading.");
+                break;
+            case ("search", "tokenBoundary"):
+                AppendConstraintDescription(obj, "Use this for exact code phrases that should stop at identifier/token boundaries, such as matching `new HttpClient` without `new HttpClientHandler`.");
                 break;
             case ("search", "exact"):
                 AppendConstraintDescription(obj, "Alias of `exactSubstring`; use `exactSubstring` in new calls for search text identity.");

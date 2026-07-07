@@ -179,11 +179,19 @@ public static partial class QueryCommandRunner
                 "Use --cursor with recipe JSON or compact output, then export issue drafts after choosing the desired query page.");
             return CommandExitCodes.UsageError;
         }
-        if (exact && options.Prefix)
+        var exactSearch = exact || options.TokenBoundary;
+        if (options.TokenBoundary && options.RawFts)
         {
             WriteValidationError(
-                "--prefix cannot be combined with --exact / --exact-substring (exact uses instr(), not FTS5 prefix phrases).",
-                "Drop --prefix to keep the exact substring path, or drop --exact to opt into FTS5 prefix matching.");
+                "--token-boundary cannot be combined with --fts.",
+                "Drop --fts to use exact token-boundary matching, or drop --token-boundary to keep raw FTS5 syntax.");
+            return CommandExitCodes.UsageError;
+        }
+        if (exactSearch && options.Prefix)
+        {
+            WriteValidationError(
+                "--prefix cannot be combined with --exact / --exact-substring / --token-boundary (exact uses instr(), not FTS5 prefix phrases).",
+                "Drop --prefix to keep the exact substring path, or drop the exact-mode flag to opt into FTS5 prefix matching.");
             return CommandExitCodes.UsageError;
         }
         if (options.GroupBy != null && (options.ListRecipes || options.NamedSearchQueries.Count > 0))
@@ -290,10 +298,18 @@ public static partial class QueryCommandRunner
                 return CommandExitCodes.UsageError;
             }
 
-            return RunSearchNamedBatch(options, jsonOptions, exact);
+            return RunSearchNamedBatch(options, jsonOptions, exactSearch);
         }
         if (options.RecipeName != null)
         {
+            if (options.TokenBoundary)
+            {
+                WriteUsageError(
+                    "--token-boundary is only supported for ad hoc search and --named-query batches, not recipe execution.",
+                    GetUsageLineOrThrow("search"),
+                    "Run an individual query without --recipe if token-boundary filtering is required.");
+                return CommandExitCodes.UsageError;
+            }
             if (options.Query != null || options.ExtraNames.Count > 0)
             {
                 WriteUsageError(
@@ -538,9 +554,9 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
         if (options.OutputFormat == OutputFormatIssueDrafts)
-            return RunSearchIssueDrafts(options, jsonOptions, exact, cancellationToken);
+            return RunSearchIssueDrafts(options, jsonOptions, exactSearch, cancellationToken);
 
-        var exactSubstringHint = SearchQueryAdvisor.BuildExactSubstringHint(options.Query, options.RawFts, exact, options.Prefix);
+        var exactSubstringHint = SearchQueryAdvisor.BuildExactSubstringHint(options.Query, options.RawFts, exactSearch, options.Prefix);
         var ndjsonOptions = options.JsonOutputFormat == JsonOutputFormatNdjson ? GetCompactJsonOptions(jsonOptions) : jsonOptions;
         int? jsonDoneCount = null;
         var jsonDoneInterrupted = false;
@@ -550,18 +566,18 @@ public static partial class QueryCommandRunner
             jsonDoneReader = reader;
             if (options.GroupBy != null)
             {
-                return RunGroupedSearchCount(reader, options, jsonOptions, exact, exactSubstringHint);
+                return RunGroupedSearchCount(reader, options, jsonOptions, exactSearch, exactSubstringHint);
             }
             if (options.CountBy != null || options.UniqueBy != null)
             {
-                return RunSearchAggregation(reader, options, jsonOptions, exact, exactSubstringHint);
+                return RunSearchAggregation(reader, options, jsonOptions, exactSearch, exactSubstringHint);
             }
 
             if (options.CountOnly)
             {
                 var counts = HasSearchOriginFilters(options)
-                    ? CountFilteredSearchResults(reader, options, exact)
-                    : reader.CountSearchResults(options.Query, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, options.GuardFilters, options.GuardWindow);
+                    ? CountFilteredSearchResults(reader, options, exactSearch)
+                    : reader.CountSearchResults(options.Query, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exactSearch, options.Prefix, !options.NoVisibilityRank, options.GuardFilters, options.GuardWindow, tokenBoundary: options.TokenBoundary);
                 var queryDiagnostics = DbReader.AnalyzeFtsQuery(options.Query, options.RawFts, options.Prefix, options.Lang);
                 if (counts.Count == 0)
                 {
@@ -614,7 +630,7 @@ public static partial class QueryCommandRunner
             }
 
             var ftsQueryDiagnostics = DbReader.AnalyzeFtsQuery(options.Query, options.RawFts, options.Prefix, options.Lang);
-            var displayRows = ReadSearchDisplayRows(reader, options, exact);
+            var displayRows = ReadSearchDisplayRows(reader, options, exactSearch);
             var selection = ApplySearchOutputSelection(displayRows, options);
             displayRows = selection.Rows;
             if (displayRows.Count == 0)
@@ -709,22 +725,22 @@ public static partial class QueryCommandRunner
                 }
                 if (TryWriteFormattedLocations(
                     options,
-                    displayRows.SelectMany(row => ToSearchFormattedLocations(row, options.Query, exact)),
+                    displayRows.SelectMany(row => ToSearchFormattedLocations(row, options.Query, exactSearch)),
                     jsonOptions))
                     return CommandExitCodes.Success;
                 if (options.OutputFormat == OutputFormatLsp)
                 {
-                    WriteLspLocations(displayRows.SelectMany(row => ToSearchLspLocations(row, exact)), jsonOptions);
+                    WriteLspLocations(displayRows.SelectMany(row => ToSearchLspLocations(row, exactSearch)), jsonOptions);
                     return CommandExitCodes.Success;
                 }
                 if (options.OutputFormat == OutputFormatQf)
                 {
-                    WriteQuickfix(displayRows.SelectMany(row => ToSearchQuickfixItems(row, options.Query, exact)));
+                    WriteQuickfix(displayRows.SelectMany(row => ToSearchQuickfixItems(row, options.Query, exactSearch)));
                     return CommandExitCodes.Success;
                 }
                 if (options.OutputFormat == OutputFormatSarif)
                 {
-                    WriteSarif(displayRows.SelectMany(row => ToSearchSarifItems(row, options.Query, exact)), jsonOptions);
+                    WriteSarif(displayRows.SelectMany(row => ToSearchSarifItems(row, options.Query, exactSearch)), jsonOptions);
                     return CommandExitCodes.Success;
                 }
                 if (options.JsonOutputFormat == JsonOutputFormatArray)

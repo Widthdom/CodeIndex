@@ -163,7 +163,7 @@ internal static class ConsoleCompletionRenderer
 
     private static bool IsEnumeratedBranchScopedFlag(string flagName) =>
         flagName is "--max-line-width" or "--snippet-lines" or "--snippet-focus" or "--fts" or "--no-dedup" or "--no-visibility-rank"
-            or "--prefix" or "--exact-substring" or "--integrity-check" or "--check" or "--stale-after"
+            or "--prefix" or "--exact-substring" or "--token-boundary" or "--integrity-check" or "--check" or "--stale-after"
             or "--start" or "--end" or "--focus-line" or "--focus-column" or "--focus-length"
             or "--before" or "--after" or "--group-by-name";
 

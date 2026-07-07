@@ -121,6 +121,101 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_NameOptionDefaultsToExactName_Issue4315()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_name_exact_issue4315");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/McpServer.Core.cs",
+                "csharp",
+                """
+                namespace Demo;
+
+                public partial class McpServer
+                {
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "tests/McpServerTests.cs",
+                "csharp",
+                """
+                namespace Demo.Tests;
+
+                public class McpServerTests
+                {
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--name", "McpServer", "--db", dbPath, "--json=array", "--kind", "class", "--lang", "csharp"],
+                _jsonOptions));
+
+            Assert.True(exitCode == CommandExitCodes.Success, $"stdout: {stdout}\nstderr: {stderr}");
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var rows = document.RootElement.EnumerateArray().ToList();
+
+            Assert.Single(rows);
+            Assert.Equal("McpServer", rows[0].GetProperty("name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunGoto_PartialClassReturnsRepresentativeLocation_Issue4315()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_goto_partial_issue4315");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.McpServer.cs",
+                "csharp",
+                """
+                namespace Demo;
+
+                public partial class McpServer
+                {
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/B.McpServer.cs",
+                "csharp",
+                """
+                namespace Demo;
+
+                public partial class McpServer
+                {
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunGoto(
+                ["McpServer", "--db", dbPath, "--kind", "class", "--lang", "csharp"],
+                _jsonOptions));
+
+            Assert.True(exitCode == CommandExitCodes.Success, $"stdout: {stdout}\nstderr: {stderr}");
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var location = document.RootElement;
+
+            Assert.Contains("src/A.McpServer.cs", location.GetProperty("uri").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_CountJsonMaxJsonBytesRejectsBareVerbatimZero_Issue4165()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
@@ -1540,6 +1635,47 @@ public partial class QueryCommandRunnerTests
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void RunUnused_SummaryOnlyJsonUsesCompactCountEnvelope_Issue4344()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--summary-only", "--lang", "csharp"],
+                _jsonOptions));
+
+            Assert.True(exitCode == CommandExitCodes.Success, $"stdout: {stdout}\nstderr: {stderr}");
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var omittedSections = json.GetProperty("omitted_sections").EnumerateArray().Select(value => value.GetString()).ToArray();
+
+            Assert.Equal(2, json.GetProperty("count").GetInt32());
+            Assert.True(json.GetProperty("summary_only").GetBoolean());
+            Assert.True(json.GetProperty("compact").GetBoolean());
+            Assert.Contains("bucket_taxonomy", omittedSections);
+            Assert.False(json.TryGetProperty("bucket_taxonomy", out _));
+            Assert.False(json.TryGetProperty("symbols", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_SummaryOnlyWithoutJsonReturnsUsageError_Issue4344()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+            ["--summary-only"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("unused --summary-only is only supported with JSON output", stderr);
     }
 
     [Fact]
@@ -4709,7 +4845,7 @@ public partial class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("pass only one of --exact, --exact-substring, --exact-name", stderr);
+            Assert.Contains("pass only one of --exact, --exact-substring, --token-boundary, --exact-name", stderr);
         }
         finally
         {
@@ -4729,7 +4865,7 @@ public partial class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("pass only one of --exact, --exact-substring, --exact-name", stderr);
+            Assert.Contains("pass only one of --exact, --exact-substring, --token-boundary, --exact-name", stderr);
         }
         finally
         {
@@ -5570,6 +5706,40 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("src/One.cs", hotspot.GetProperty("path").GetString());
             Assert.Equal(3, hotspot.GetProperty("reference_count").GetInt32());
             Assert.Equal(2, hotspot.GetProperty("symbol_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunHotspots_GroupByFileJsonIncludesDecompositionPlanWhenDocumentExists_Issue4306()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_plan_4306");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.WriteTextFile(projectRoot, "docs/large-file-decomposition-plan.md", "# Large File Decomposition Plan\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/One.cs", "csharp",
+                """
+                public class One
+                {
+                    private void A() { A(); A(); }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--kind", "function", "--group-by=file", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var plan = document.RootElement.GetProperty("decomposition_plan");
+            Assert.Equal("docs/large-file-decomposition-plan.md", plan.GetProperty("path").GetString());
+            Assert.Contains("partial-class surfaces", plan.GetProperty("description").GetString(), StringComparison.Ordinal);
         }
         finally
         {

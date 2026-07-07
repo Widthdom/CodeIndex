@@ -4,9 +4,9 @@ internal static class SearchQueryAdvisor
 {
     internal const string ExactSubstringHintReason = "punctuation_heavy_query";
     internal const string CliExactSubstringSuggestedAction =
-        "This looks like a literal code phrase; rerun with `--exact-substring`, for example: `cdidx search --exact-substring --query \"...\"`, for punctuation-sensitive matching.";
+        "This looks like a literal code phrase; rerun with `--exact-substring`, for example: `cdidx search --exact-substring --query \"...\"`, for punctuation-sensitive matching. Use `--token-boundary` when longer identifiers such as `HttpClientHandler` should not match `HttpClient`.";
     internal const string McpExactSubstringSuggestedAction =
-        "This looks like a literal code phrase; rerun the search with exactSubstring=true for punctuation-sensitive matching.";
+        "This looks like a literal code phrase; rerun the search with exactSubstring=true for punctuation-sensitive matching. Use token-boundary search when longer identifiers should not match shorter code phrases.";
 
     internal static SearchQueryHint? BuildExactSubstringHint(string? query, bool rawQuery, bool exact, bool prefix)
         => ShouldSuggestExactSubstring(query, rawQuery, exact, prefix)

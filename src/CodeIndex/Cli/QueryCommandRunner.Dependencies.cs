@@ -9,6 +9,8 @@ namespace CodeIndex.Cli;
 
 public static partial class QueryCommandRunner
 {
+    private const int BroadDependencySummaryCandidateFileLimit = 250;
+
     public static int RunImpact(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var previewOptionError = ValidatePreviewOptions("impact", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
@@ -24,6 +26,11 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteSnippetLinesZeroUnsupportedError(options, "impact"))
             return CommandExitCodes.UsageError;
+        if (!TryResolveNameExactMode(options, "impact", out _, out var exactError))
+        {
+            CommandErrorWriter.WriteStderr(exactError);
+            return CommandExitCodes.UsageError;
+        }
         if (TryWriteBlankQueryError(options, "impact"))
             return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))
@@ -102,11 +109,6 @@ public static partial class QueryCommandRunner
                                 zeroPayload["impact_mode"] = analysis.ImpactMode;
                                 zeroPayload["heuristic"] = analysis.Heuristic;
                                 zeroPayload["file_impacts"] = new JsonArray();
-                                zeroPayload["definition_count"] = analysis.DefinitionCount;
-                                zeroPayload["definition_file_count"] = analysis.DefinitionFileCount;
-                                zeroPayload["has_multiple_definitions"] = analysis.HasMultipleDefinitions;
-                                zeroPayload["has_class_like_definitions"] = analysis.HasClassLikeDefinitions;
-                                zeroPayload["has_multiple_definition_files"] = analysis.HasMultipleDefinitionFiles;
                                 AddImpactDefinitionsJsonFields(zeroPayload, analysis, options, jsonOptions);
                                 if (analysis.ZeroResultReason != null)
                                     zeroPayload["zero_result_reason"] = analysis.ZeroResultReason;
@@ -215,11 +217,6 @@ public static partial class QueryCommandRunner
                             zeroPayload["impact_mode"] = analysis.ImpactMode;
                             zeroPayload["heuristic"] = analysis.Heuristic;
                             zeroPayload["file_impacts"] = new JsonArray();
-                            zeroPayload["definition_count"] = analysis.DefinitionCount;
-                            zeroPayload["definition_file_count"] = analysis.DefinitionFileCount;
-                            zeroPayload["has_multiple_definitions"] = analysis.HasMultipleDefinitions;
-                            zeroPayload["has_class_like_definitions"] = analysis.HasClassLikeDefinitions;
-                            zeroPayload["has_multiple_definition_files"] = analysis.HasMultipleDefinitionFiles;
                             AddImpactDefinitionsJsonFields(zeroPayload, analysis, options, jsonOptions);
                             if (analysis.ZeroResultReason != null)
                                 zeroPayload["zero_result_reason"] = analysis.ZeroResultReason;
@@ -305,11 +302,6 @@ public static partial class QueryCommandRunner
                     ["heuristic"] = analysis.Heuristic,
                     ["callers"] = JsonSerializer.SerializeToNode(analysis.Callers, CliJsonSerializerContextFactory.Create(jsonOptions).ListImpactResult),
                     ["file_impacts"] = JsonSerializer.SerializeToNode(analysis.FileImpacts, CliJsonSerializerContextFactory.Create(jsonOptions).ListFileDependencyResult),
-                    ["definition_count"] = analysis.DefinitionCount,
-                    ["definition_file_count"] = analysis.DefinitionFileCount,
-                    ["has_multiple_definitions"] = analysis.HasMultipleDefinitions,
-                    ["has_class_like_definitions"] = analysis.HasClassLikeDefinitions,
-                    ["has_multiple_definition_files"] = analysis.HasMultipleDefinitionFiles,
                 };
                 AddImpactDefinitionsJsonFields(payload, analysis, options, jsonOptions);
                 AddImpactTerminationJsonFields(payload, analysis, jsonOptions);
@@ -388,17 +380,115 @@ public static partial class QueryCommandRunner
 
     private static void AddImpactDefinitionsJsonFields(JsonObject payload, ImpactAnalysisResult analysis, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
     {
+        var definitions = BuildImpactDefinitionJsonResults(analysis.Definitions);
         var definitionLimit = Math.Max(1, options.Limit);
-        var visibleDefinitions = analysis.Definitions.Take(definitionLimit).ToList();
+        var visibleDefinitions = definitions.Take(definitionLimit).ToList();
+        payload["definition_count"] = analysis.DefinitionCount;
+        payload["definition_file_count"] = analysis.DefinitionFileCount;
+        payload["has_multiple_definitions"] = analysis.HasMultipleDefinitions;
+        payload["has_class_like_definitions"] = analysis.HasClassLikeDefinitions;
+        payload["has_multiple_definition_files"] = analysis.HasMultipleDefinitionFiles;
+        payload["definition_output_count"] = visibleDefinitions.Count;
+        payload["definition_result_scope"] = definitions.Count == analysis.Definitions.Count
+            ? "definition_sites"
+            : "logical_partial_families";
+        payload["definitions_collapsed"] = definitions.Count != analysis.Definitions.Count;
         payload["definition_limit"] = definitionLimit;
         payload["definitions"] = JsonSerializer.SerializeToNode(visibleDefinitions, CliJsonSerializerContextFactory.Create(jsonOptions).ListSymbolResult);
-        if (visibleDefinitions.Count >= analysis.Definitions.Count)
+        if (visibleDefinitions.Count >= definitions.Count)
             return;
 
         payload["definitions_truncated"] = true;
-        payload["definitions_omitted"] = analysis.Definitions.Count - visibleDefinitions.Count;
+        payload["definitions_omitted"] = definitions.Count - visibleDefinitions.Count;
         payload["definitions_hint"] = "Raise --limit or narrow with --lang, --kind, --path, or --exclude-path to inspect additional matching definitions.";
     }
+
+    private static List<SymbolResult> BuildImpactDefinitionJsonResults(IReadOnlyList<SymbolResult> definitions)
+    {
+        if (definitions.Count <= 1)
+            return definitions.ToList();
+
+        var groups = definitions
+            .Select(definition => (definition, key: TryBuildLogicalPartialDefinitionKey(definition, out var key) ? key : null))
+            .Where(item => item.key != null)
+            .GroupBy(item => item.key!, StringComparer.Ordinal)
+            .Where(group => group.Count() > 1)
+            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
+        if (groups.Count == 0)
+            return definitions.ToList();
+
+        var emittedKeys = new HashSet<string>(StringComparer.Ordinal);
+        var results = new List<SymbolResult>(definitions.Count);
+        foreach (var definition in definitions)
+        {
+            if (!TryBuildLogicalPartialDefinitionKey(definition, out var key) || !groups.TryGetValue(key, out var group))
+            {
+                results.Add(definition);
+                continue;
+            }
+            if (!emittedKeys.Add(key))
+                continue;
+
+            var representative = group
+                .Select(item => item.definition)
+                .OrderBy(result => result.Path, StringComparer.Ordinal)
+                .ThenBy(result => result.StartLine)
+                .First();
+            results.Add(CloneSymbolResult(representative, definitionSites: group.Count));
+        }
+
+        return results;
+    }
+
+    private static bool TryBuildLogicalPartialDefinitionKey(SymbolResult definition, out string key)
+    {
+        if (!IsLogicalPartialDefinitionKind(definition.Kind) || string.IsNullOrWhiteSpace(definition.ContainerName))
+        {
+            key = string.Empty;
+            return false;
+        }
+
+        key = string.Join(
+            "\u001f",
+            definition.Lang?.ToLowerInvariant() ?? string.Empty,
+            definition.Kind.ToLowerInvariant(),
+            definition.Name,
+            definition.ContainerKind ?? string.Empty,
+            definition.ContainerName);
+        return true;
+    }
+
+    private static SymbolResult CloneSymbolResult(SymbolResult source, int? definitionSites = null)
+        => new()
+        {
+            Path = source.Path,
+            Lang = source.Lang,
+            Kind = source.Kind,
+            SubKind = source.SubKind,
+            Name = source.Name,
+            Line = source.Line,
+            StartLine = source.StartLine,
+            EndLine = source.EndLine,
+            BodyStartLine = source.BodyStartLine,
+            BodyEndLine = source.BodyEndLine,
+            Signature = source.Signature,
+            SignatureTruncated = source.SignatureTruncated,
+            SignatureOriginalLength = source.SignatureOriginalLength,
+            ContainerKind = source.ContainerKind,
+            ContainerName = source.ContainerName,
+            Visibility = source.Visibility,
+            ReturnType = source.ReturnType,
+            SortMode = source.SortMode,
+            ReferenceCount = source.ReferenceCount,
+            HotspotScore = source.HotspotScore,
+            RankingReferenceScore = source.RankingReferenceScore,
+            RankingHotspotScore = source.RankingHotspotScore,
+            GenericNamePenalty = source.GenericNamePenalty,
+            StructuralRankPenalty = source.StructuralRankPenalty,
+            DefinitionSites = definitionSites ?? source.DefinitionSites,
+            SizeLines = source.SizeLines,
+            ComplexityScore = source.ComplexityScore,
+        };
 
     private static int StrictImpactExitCode(QueryCommandOptions options, ImpactAnalysisResult analysis, int defaultExitCode)
     {
@@ -461,7 +551,15 @@ public static partial class QueryCommandRunner
             WriteUsageError(
                 "--summary-only is only supported with deps JSON output.",
                 GetUsageLineOrThrow("deps"),
-                "Use `cdidx deps --json --summary-only` or `cdidx deps --format json-graph --summary-only`.");
+                "Use `cdidx deps --json --summary-only`.");
+            return CommandExitCodes.UsageError;
+        }
+        if (options.SummaryOnly && depsFormat == OutputFormatJsonGraph)
+        {
+            WriteUsageError(
+                "deps --summary-only is not supported with --format json-graph because summary mode does not emit graph-shaped nodes or edges.",
+                GetUsageLineOrThrow("deps"),
+                "Use `cdidx deps --json --summary-only --path <glob>` for a compact summary, or remove --summary-only for json-graph output.");
             return CommandExitCodes.UsageError;
         }
 
@@ -470,6 +568,21 @@ public static partial class QueryCommandRunner
             cancellationToken.ThrowIfCancellationRequested();
             if (TryWriteInvalidWorkspaceDependencyDatabaseError(options, out var workspaceDbExitCode))
                 return workspaceDbExitCode;
+            if (options.SummaryOnly
+                && !options.DependencyCycles
+                && depsFormat == OutputFormatEdgeList
+                && IsBroadDependencySummaryQuery(options))
+            {
+                var candidateFiles = reader.CountListFiles(null, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests).Count;
+                if (candidateFiles > BroadDependencySummaryCandidateFileLimit)
+                {
+                    WriteUsageError(
+                        $"deps --summary-only is too broad for this index ({candidateFiles} candidate files).",
+                        GetUsageLineOrThrow("deps"),
+                        "Add --path, --lang, or --exclude-tests so the summary can be computed without materializing a workspace-wide graph.");
+                    return CommandExitCodes.UsageError;
+                }
+            }
 
             var reverse = cmdArgs.Any(a => a == "--reverse");
             List<FileDependencyResult> results;
@@ -734,6 +847,13 @@ public static partial class QueryCommandRunner
         parseArgs = rewritten.ToArray();
         return true;
     }
+
+    private static bool IsBroadDependencySummaryQuery(QueryCommandOptions options)
+        => options.PathPatterns.Count == 0
+           && options.ExcludePaths.Count == 0
+           && !options.ExcludeTests
+           && options.Lang == null
+           && options.WorkspaceDbPaths.Count == 0;
 
     private static bool TryNormalizeDepsFormat(string rawFormat, out string format, out string? error)
     {
