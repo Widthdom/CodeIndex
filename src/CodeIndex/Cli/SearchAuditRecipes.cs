@@ -308,6 +308,131 @@ internal static class SearchAuditRecipes
             })
             .ToList();
 
+    private static SearchAuditRecipeQuery RegexTimeoutPolicyReferenceQuery() =>
+        new(
+            "regex-timeout-policy-reference",
+            "RegexTimeoutPolicy",
+            "Find shared regex timeout policy references that separate timeout-positive paths from raw regex calls.",
+            ["audit", "performance"],
+            "This is positive evidence; pair it with the matching Regex construction or static API hit to verify the timeout applies to the searched pattern.",
+            ExactSubstring: true)
+        {
+            Severity = "info",
+            RiskEvidence =
+            [
+                "positive: RegexTimeoutPolicy references are timeout-positive evidence for a documented repository regex timeout boundary.",
+                "risk: timeout policy constants must still be wired into the actual Regex overload, wrapper, or registry factory that evaluates the pattern."
+            ],
+            MatchOrigins = ["code"],
+        };
+
+    private static SearchAuditRecipeQuery RegexTimeoutTimespanEvidenceQuery() =>
+        new(
+            "regex-timeout-timespan-evidence",
+            "TimeSpan.From",
+            "Find explicit TimeSpan timeout values that can explain why nearby regex construction is bounded.",
+            ["audit", "performance"],
+            "False positives include non-regex timeouts; require nearby Regex construction, static Regex API usage, or a registry factory before treating this as regex evidence.",
+            ExactSubstring: true)
+        {
+            Severity = "info",
+            RiskEvidence =
+            [
+                "positive: TimeSpan.From* near a Regex construction or static Regex call is timeout-positive evidence.",
+                "risk: unrelated retry, process, or database timeouts do not prove regex evaluation is bounded."
+            ],
+            MatchOrigins = ["code"],
+        };
+
+    private static SearchAuditRecipeQuery RegexRegistryFactoryQuery() =>
+        new(
+            "regex-registry-factory",
+            "RegexRegistry.Create",
+            "Find centralized regex factory use so registry-backed patterns are classified apart from ad hoc raw construction.",
+            ["audit", "performance"],
+            "False positives include factory declarations; callers should still confirm the chosen registry method matches the input trust boundary.",
+            ExactSubstring: true)
+        {
+            Severity = "info",
+            RiskEvidence =
+            [
+                "positive: RegexRegistry.Create* is the centralized regex factory path with named timeout and option policy.",
+                "risk: each caller still needs trust-boundary review for user input, config/env input, repository-controlled patterns, test fixtures, or generated diagnostics."
+            ],
+            MatchOrigins = ["code"],
+        };
+
+    private static SearchAuditRecipeQuery GeneratedRegexAttributeQuery() =>
+        new(
+            "generated-regex-attribute",
+            "GeneratedRegex",
+            "Find source-generated regex patterns so generated code can be reviewed separately from runtime construction.",
+            ["audit", "performance"],
+            "False positives include classifier strings and documentation; generated regex attributes still need timeout, culture, case, and trust-boundary review.",
+            ExactSubstring: true)
+        {
+            Severity = "info",
+            RiskEvidence =
+            [
+                "positive: GeneratedRegex can move stable hot-path patterns out of runtime construction.",
+                "risk: generated patterns still need explicit timeout and culture/case choices that match path, symbol, environment, protocol, or human-text domains."
+            ],
+            MatchOrigins = ["code", "regex_literal"],
+        };
+
+    private static SearchAuditRecipeQuery RegexCultureInvariantOptionQuery() =>
+        new(
+            "regex-culture-invariant-option",
+            "RegexOptions.CultureInvariant",
+            "Find regex culture options so path, symbol, environment, protocol, and human-text matching choices can be classified.",
+            ["audit", "bug", "portability"],
+            "False positives include non-regex option documentation; verify the pattern domain before changing culture or case behavior.",
+            ExactSubstring: true)
+        {
+            Severity = "info",
+            RiskEvidence =
+            [
+                "positive: RegexOptions.CultureInvariant is usually expected for machine-token, syntax, protocol, and repository-controlled pattern matching.",
+                "risk: human-facing text matching may need culture-aware behavior, while path matching still needs filesystem case-sensitivity evidence."
+            ],
+            MatchOrigins = ["code"],
+        };
+
+    private static SearchAuditRecipeQuery RegexNonBacktrackingOptionQuery() =>
+        new(
+            "regex-nonbacktracking-option",
+            "RegexOptions.NonBacktracking",
+            "Find regex non-backtracking evidence that can explain why nearby construction is bounded against backtracking blowups.",
+            ["audit", "performance"],
+            "False positives include recipe guard documentation; verify the option is applied to the regex that evaluates untrusted or variable input.",
+            ExactSubstring: true)
+        {
+            Severity = "info",
+            RiskEvidence =
+            [
+                "positive: RegexOptions.NonBacktracking is evidence that a pattern has a non-backtracking execution policy.",
+                "risk: non-backtracking does not replace timeout review for every trust boundary, input size, or unsupported pattern feature."
+            ],
+            MatchOrigins = ["code"],
+        };
+
+    private static SearchAuditRecipeQuery RegexInfiniteTimeoutJustificationQuery() =>
+        new(
+            "regex-infinite-timeout-justification",
+            "Regex.InfiniteMatchTimeout",
+            "Find explicit no-timeout regex policy that needs nearby bounded-input or documented no-timeout justification.",
+            ["audit", "performance"],
+            "This is not safe evidence by itself; accept it only with documented trusted small input, generated diagnostics, or another bounded execution argument.",
+            ExactSubstring: true)
+        {
+            RiskEvidence =
+            [
+                "risk: Regex.InfiniteMatchTimeout disables timeout enforcement and needs a documented no-timeout justification.",
+                "positive: fixed repository-controlled patterns over tiny trusted inputs may justify no-timeout behavior when the reason is documented."
+            ],
+            MatchOrigins = ["code"],
+        };
+
     private static SearchAuditRecipeQuery StaticRegexApiQuery(string name, string query, string apiName) =>
         new(
             name,
@@ -324,7 +449,8 @@ internal static class SearchAuditRecipes
             RiskEvidence =
             [
                 $"risk: static System.Text.RegularExpressions.Regex.{apiName} can run without the shared timeout policy.",
-                "positive: BoundedRegex aliases, explicit timeout overloads, or tightly bounded trusted inputs can make a hit intentional."
+                "risk: classify each pattern by trust boundary: user input, config/env input, repository-controlled patterns, test fixtures, or generated diagnostics.",
+                "positive: BoundedRegex aliases, explicit timeout overloads, GeneratedRegex attributes, registry factories, or tightly bounded trusted inputs can make a hit intentional."
             ],
             GuardFilters = BoundedRegexEvidenceGuardFilters(),
             MatchOrigins = ["code"],
@@ -346,6 +472,7 @@ internal static class SearchAuditRecipes
             RiskEvidence =
             [
                 "risk: raw System.Text.RegularExpressions.Regex static APIs can run without explicit timeout or shared bounded-regex policy.",
+                "risk: classify each pattern by trust boundary: user input, config/env input, repository-controlled patterns, test fixtures, or generated diagnostics.",
                 "positive: BoundedRegex aliases and instance names ending in Regex are filtered out; remaining hits should be classified as timeout-backed, generated/precompiled, trusted small input, or non-matching helpers such as Escape."
             ],
             GuardFilters = BoundedRegexEvidenceGuardFilters(),
@@ -534,6 +661,7 @@ internal static class SearchAuditRecipes
                     RiskEvidence =
                     [
                         "risk: raw System.Text.RegularExpressions.Regex construction should show an explicit timeout, non-backtracking mode, or bounded input.",
+                        "risk: classify each pattern by trust boundary: user input, config/env input, repository-controlled patterns, test fixtures, or generated diagnostics.",
                         "positive: bounded-wrapper aliases are reported by bounded-regex-alias instead of this raw construction query.",
                         "positive: shared regex factories in RegexRegistry.cs are the centralized raw-construction exception."
                     ],
@@ -569,6 +697,13 @@ internal static class SearchAuditRecipes
                     ],
                     GuardFilters = BoundedRegexEvidenceGuardFilters(),
                 },
+                RegexTimeoutPolicyReferenceQuery(),
+                RegexTimeoutTimespanEvidenceQuery(),
+                RegexRegistryFactoryQuery(),
+                GeneratedRegexAttributeQuery(),
+                RegexCultureInvariantOptionQuery(),
+                RegexNonBacktrackingOptionQuery(),
+                RegexInfiniteTimeoutJustificationQuery(),
                 StaticRegexApiQuery(
                     "static-regex-is-match",
                     " Regex.IsMatch(",
@@ -1592,6 +1727,7 @@ internal static class SearchAuditRecipes
                     RiskEvidence =
                     [
                         "risk: raw System.Text.RegularExpressions.Regex construction should show an explicit timeout, non-backtracking mode, or bounded input.",
+                        "risk: classify each pattern by trust boundary: user input, config/env input, repository-controlled patterns, test fixtures, or generated diagnostics.",
                         "positive: bounded-wrapper aliases are reported by bounded-regex-alias instead of this raw construction query.",
                         "positive: shared regex factories in RegexRegistry.cs are the centralized raw-construction exception."
                     ],
@@ -1627,6 +1763,13 @@ internal static class SearchAuditRecipes
                     ],
                     GuardFilters = BoundedRegexEvidenceGuardFilters(),
                 },
+                RegexTimeoutPolicyReferenceQuery(),
+                RegexTimeoutTimespanEvidenceQuery(),
+                RegexRegistryFactoryQuery(),
+                GeneratedRegexAttributeQuery(),
+                RegexCultureInvariantOptionQuery(),
+                RegexNonBacktrackingOptionQuery(),
+                RegexInfiniteTimeoutJustificationQuery(),
                 StaticRegexApiQuery(
                     "static-regex-is-match",
                     " Regex.IsMatch(",

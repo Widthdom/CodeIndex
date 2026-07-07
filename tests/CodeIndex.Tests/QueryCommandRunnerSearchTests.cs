@@ -1759,6 +1759,22 @@ public partial class QueryCommandRunnerTests
             .GetProperty("queries")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "bounded-regex-alias");
+        var regexTimeoutPolicyQuery = recipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "regex-timeout-policy-reference");
+        var generatedRegexQuery = recipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "generated-regex-attribute");
+        var regexCultureQuery = recipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "regex-culture-invariant-option");
+        var dotnetRegexRegistryQuery = dotnetRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "regex-registry-factory");
         var broadCatchQuery = recipe
             .GetProperty("queries")
             .EnumerateArray()
@@ -1874,6 +1890,7 @@ public partial class QueryCommandRunnerTests
         AssertRegexBoundedGuardFilters(regexQuery);
         Assert.Equal(" Regex.IsMatch(", staticRegexIsMatchQuery.GetProperty("query").GetString());
         Assert.Contains(staticRegexIsMatchQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("shared timeout policy", StringComparison.Ordinal));
+        Assert.Contains(staticRegexIsMatchQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("trust boundary", StringComparison.Ordinal));
         AssertRegexBoundedGuardFilters(staticRegexIsMatchQuery);
         Assert.Contains(recipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "static-regex-is-match-negated");
         Assert.Contains(recipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "static-regex-is-match-parenthesized");
@@ -1887,6 +1904,16 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(staticRegexSplitQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("shared timeout policy", StringComparison.Ordinal));
         Assert.Equal("info", boundedRegexAliasQuery.GetProperty("severity").GetString());
         Assert.Contains(boundedRegexAliasQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("aliases CodeIndex.Indexer.BoundedRegex", StringComparison.Ordinal));
+        Assert.Equal("RegexTimeoutPolicy", regexTimeoutPolicyQuery.GetProperty("query").GetString());
+        Assert.Equal("info", regexTimeoutPolicyQuery.GetProperty("severity").GetString());
+        Assert.Contains(regexTimeoutPolicyQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("timeout-positive", StringComparison.Ordinal));
+        Assert.Equal("GeneratedRegex", generatedRegexQuery.GetProperty("query").GetString());
+        Assert.Contains(generatedRegexQuery.GetProperty("match_origins").EnumerateArray(), origin => origin.GetString() == "code");
+        Assert.Contains(generatedRegexQuery.GetProperty("match_origins").EnumerateArray(), origin => origin.GetString() == "regex_literal");
+        Assert.Equal("RegexOptions.CultureInvariant", regexCultureQuery.GetProperty("query").GetString());
+        Assert.Contains(regexCultureQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("human-facing text", StringComparison.Ordinal));
+        Assert.Equal("RegexRegistry.Create", dotnetRegexRegistryQuery.GetProperty("query").GetString());
+        Assert.Contains(dotnetRegexRegistryQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("centralized regex factory", StringComparison.Ordinal));
         var broadCatchTaxonomy = broadCatchQuery.GetProperty("broad_catch_taxonomy");
         Assert.Contains(broadCatchTaxonomy.GetProperty("boundary_categories").EnumerateArray(), item => item.GetProperty("name").GetString() == "top_level_normalization");
         Assert.Contains(broadCatchTaxonomy.GetProperty("boundary_categories").EnumerateArray(), item => item.GetProperty("name").GetString() == "unexpected_bug");
@@ -1969,6 +1996,9 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "sqlite-quoted-identifier");
         Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "sqlite-typed-parameter");
         Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "fully-qualified-regex-construction");
+        Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "regex-timeout-timespan-evidence");
+        Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "regex-nonbacktracking-option");
+        Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "regex-infinite-timeout-justification");
         Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "static-regex-is-match");
         Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "static-regex-match");
         Assert.Contains(dotnetRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "static-regex-matches");
@@ -2375,6 +2405,13 @@ public partial class QueryCommandRunnerTests
                 "regex-construction",
                 "bounded-regex-alias",
                 "fully-qualified-regex-construction",
+                "regex-timeout-policy-reference",
+                "regex-timeout-timespan-evidence",
+                "regex-registry-factory",
+                "generated-regex-attribute",
+                "regex-culture-invariant-option",
+                "regex-nonbacktracking-option",
+                "regex-infinite-timeout-justification",
                 "static-regex-is-match",
                 "static-regex-is-match-negated",
                 "static-regex-is-match-parenthesized",
@@ -2501,7 +2538,47 @@ public partial class QueryCommandRunnerTests
             SearchAuditRecipes.DefaultAuditScope,
             ["src/**"],
             expectedSourceExcludes,
-            ["sqlite-addwithvalue", "sqlite-quoted-identifier", "sqlite-typed-parameter", "regex-construction", "bounded-regex-alias", "fully-qualified-regex-construction", "static-regex-is-match", "static-regex-is-match-negated", "static-regex-is-match-parenthesized", "static-regex-match", "static-regex-match-negated", "static-regex-match-parenthesized", "static-regex-matches", "static-regex-matches-negated", "static-regex-matches-parenthesized", "static-regex-replace", "static-regex-replace-negated", "static-regex-replace-parenthesized", "static-regex-split", "static-regex-split-negated", "static-regex-split-parenthesized", "cancellation-token-none", "cancellation-token-source", "cancellation-registration", "task-run-scheduling", "task-delay-backoff", "wait-for-exit-boundary", "semaphore-slim-boundary", "task-completion-source", "http-listener-lifetime", "sync-wait-call", "sync-over-async"]);
+            [
+                "sqlite-addwithvalue",
+                "sqlite-quoted-identifier",
+                "sqlite-typed-parameter",
+                "regex-construction",
+                "bounded-regex-alias",
+                "fully-qualified-regex-construction",
+                "regex-timeout-policy-reference",
+                "regex-timeout-timespan-evidence",
+                "regex-registry-factory",
+                "generated-regex-attribute",
+                "regex-culture-invariant-option",
+                "regex-nonbacktracking-option",
+                "regex-infinite-timeout-justification",
+                "static-regex-is-match",
+                "static-regex-is-match-negated",
+                "static-regex-is-match-parenthesized",
+                "static-regex-match",
+                "static-regex-match-negated",
+                "static-regex-match-parenthesized",
+                "static-regex-matches",
+                "static-regex-matches-negated",
+                "static-regex-matches-parenthesized",
+                "static-regex-replace",
+                "static-regex-replace-negated",
+                "static-regex-replace-parenthesized",
+                "static-regex-split",
+                "static-regex-split-negated",
+                "static-regex-split-parenthesized",
+                "cancellation-token-none",
+                "cancellation-token-source",
+                "cancellation-registration",
+                "task-run-scheduling",
+                "task-delay-backoff",
+                "wait-for-exit-boundary",
+                "semaphore-slim-boundary",
+                "task-completion-source",
+                "http-listener-lifetime",
+                "sync-wait-call",
+                "sync-over-async"
+            ]);
         AssertRecipe(
             "unsupported-operation-boundaries",
             SearchAuditRecipes.DefaultAuditScope,
@@ -3230,6 +3307,147 @@ public partial class QueryCommandRunnerTests
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void RunSearch_RegexRecipeClassifiesTimeoutAndGeneratedEvidence_Issue4326()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_regex_evidence_4326");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/raw.cs",
+                "csharp",
+                """
+                using System.Text.RegularExpressions;
+
+                public sealed class RawRegexUse
+                {
+                    public object Build() => new Regex("token");
+                    public bool Contains(string input) => Regex.IsMatch(input, "token");
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/timeout.cs",
+                "csharp",
+                """
+                using System;
+                using System.Text.RegularExpressions;
+
+                public sealed class TimeoutRegexUse
+                {
+                    public object Build() => new Regex("token", RegexOptions.CultureInvariant, matchTimeout: TimeSpan.FromMilliseconds(50));
+                    public bool Contains(string input) => Regex.IsMatch(input, "token", RegexOptions.CultureInvariant, matchTimeout: TimeSpan.FromMilliseconds(50));
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/nonbacktracking.cs",
+                "csharp",
+                """
+                using System.Text.RegularExpressions;
+
+                public sealed class NonBacktrackingRegexUse
+                {
+                    public object Build() => new Regex("token", RegexOptions.NonBacktracking);
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/generated.cs",
+                "csharp",
+                """
+                using System.Text.RegularExpressions;
+
+                public static partial class GeneratedRegexUse
+                {
+                    [GeneratedRegex("token", RegexOptions.CultureInvariant, matchTimeoutMilliseconds: 50)]
+                    private static partial Regex TokenRegex();
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/registry.cs",
+                "csharp",
+                """
+                using CodeIndex.Diagnostics;
+                using CodeIndex.Indexer;
+
+                public sealed class RegistryRegexUse
+                {
+                    public object Build() => RegexRegistry.CreateFindRegex("token", exact: false, RegexTimeoutPolicy.RedactionRegexTimeout);
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/infinite.cs",
+                "csharp",
+                """
+                using System.Text.RegularExpressions;
+
+                public sealed class InfiniteTimeoutRegexUse
+                {
+                    // Fixed repository-controlled pattern over a tiny trusted diagnostic token.
+                    public object Build() => new Regex("token", RegexOptions.CultureInvariant, Regex.InfiniteMatchTimeout);
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "--recipe", "dotnet-risk-patterns",
+                    "--include-query", "regex-construction,static-regex-is-match,regex-timeout-policy-reference,regex-timeout-timespan-evidence,regex-registry-factory,generated-regex-attribute,regex-culture-invariant-option,regex-nonbacktracking-option,regex-infinite-timeout-justification",
+                    "--db", dbPath,
+                    "--json",
+                    "--limit", "10",
+                    "--lang", "csharp"
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var queries = document.RootElement
+                .GetProperty("queries")
+                .EnumerateArray()
+                .ToDictionary(query => query.GetProperty("name").GetString()!, query => query);
+
+            var constructionPaths = PathsFor(queries["regex-construction"]);
+            Assert.Contains("src/raw.cs", constructionPaths);
+            Assert.DoesNotContain("src/timeout.cs", constructionPaths);
+            Assert.DoesNotContain("src/nonbacktracking.cs", constructionPaths);
+            Assert.DoesNotContain("src/generated.cs", constructionPaths);
+            Assert.DoesNotContain("src/registry.cs", constructionPaths);
+            Assert.DoesNotContain("src/infinite.cs", constructionPaths);
+
+            var staticRawPaths = PathsFor(queries["static-regex-is-match"]);
+            Assert.Contains("src/raw.cs", staticRawPaths);
+            Assert.DoesNotContain("src/timeout.cs", staticRawPaths);
+
+            Assert.Contains("src/registry.cs", PathsFor(queries["regex-timeout-policy-reference"]));
+            Assert.Contains("src/timeout.cs", PathsFor(queries["regex-timeout-timespan-evidence"]));
+            Assert.Contains("src/registry.cs", PathsFor(queries["regex-registry-factory"]));
+            Assert.Contains("src/generated.cs", PathsFor(queries["generated-regex-attribute"]));
+            Assert.Contains("src/timeout.cs", PathsFor(queries["regex-culture-invariant-option"]));
+            Assert.Contains("src/generated.cs", PathsFor(queries["regex-culture-invariant-option"]));
+            Assert.Contains("src/nonbacktracking.cs", PathsFor(queries["regex-nonbacktracking-option"]));
+            Assert.Contains("src/infinite.cs", PathsFor(queries["regex-infinite-timeout-justification"]));
+            Assert.Contains(
+                queries["regex-construction"].GetProperty("risk_evidence").EnumerateArray(),
+                evidence => evidence.GetString()!.Contains("trust boundary", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+
+        static List<string?> PathsFor(JsonElement query) => query
+            .GetProperty("results")
+            .EnumerateArray()
+            .Select(result => result.GetProperty("path").GetString())
+            .ToList();
     }
 
     [Fact]
