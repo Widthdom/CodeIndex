@@ -13,6 +13,7 @@ internal static class SensitiveNameClassifier
         "passwd",
         "secret",
         "token",
+        "bearer",
         "apikey",
         "accesskey",
         "privatekey",

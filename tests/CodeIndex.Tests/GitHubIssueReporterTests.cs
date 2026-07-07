@@ -439,6 +439,30 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
+    public void BuildApiErrorDetail_RedactsCredentialFieldVariants_Issue4299()
+    {
+        const string secret = "value-that-must-not-leak";
+        var detail = GitHubIssueReporter.BuildApiErrorDetail(
+            401,
+            $$"""
+            {
+              "github_token": "{{secret}}",
+              "api-key": "{{secret}}",
+              "accessToken": "{{secret}}",
+              "AuthorizationHeader": "{{secret}}",
+              "bearer": "{{secret}}"
+            }
+            """);
+
+        Assert.Contains("\"github_token\":\"[redacted]\"", detail, StringComparison.Ordinal);
+        Assert.Contains("\"api-key\":\"[redacted]\"", detail, StringComparison.Ordinal);
+        Assert.Contains("\"accessToken\":\"[redacted]\"", detail, StringComparison.Ordinal);
+        Assert.Contains("\"AuthorizationHeader\":\"[redacted]\"", detail, StringComparison.Ordinal);
+        Assert.Contains("\"bearer\":\"[redacted]\"", detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void BuildIssueTitle_ClampsFinalTitleToGitHubLimit()
     {
         var category = new string('c', 240);
