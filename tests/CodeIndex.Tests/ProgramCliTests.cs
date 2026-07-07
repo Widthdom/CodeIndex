@@ -737,6 +737,7 @@ public class ProgramCliTests
     {
         var (briefExit, briefStdout, briefStderr) = RunCliInSubprocess(["--help"]);
         var (fullExit, fullStdout, fullStderr) = RunCliInSubprocess(["--help-all"]);
+        var (aliasExit, aliasStdout, aliasStderr) = RunCliInSubprocess(["help-all"]);
 
         Assert.Equal(0, briefExit);
         Assert.Equal(string.Empty, briefStderr);
@@ -749,6 +750,10 @@ public class ProgramCliTests
         Assert.Contains("Index and update options:", fullStdout);
         Assert.Contains("cdidx index <projectPath> --commits <commit-ref>", fullStdout);
         Assert.Contains("--limit <n>, --top <n>", fullStdout);
+
+        Assert.Equal(0, aliasExit);
+        Assert.Equal(string.Empty, aliasStderr);
+        Assert.Contains("Index and update options:", aliasStdout);
     }
 
     [ProductionRuntimeFact]

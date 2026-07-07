@@ -106,6 +106,43 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("--since 2024-01-01", stderr);
     }
 
+    [Fact]
+    public void RunFiles_SummaryOnlyJsonDoesNotReportLimitAsTruncation_Issue4317()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_files_summary_only_issue4317");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App { }\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "# App\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["--db", dbPath, "--json", "--summary-only", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+
+            Assert.Equal(2, root.GetProperty("count").GetInt32());
+            Assert.Equal(0, root.GetProperty("emitted_count").GetInt32());
+            Assert.Equal(2, root.GetProperty("omitted_count").GetInt32());
+            Assert.Equal(2, root.GetProperty("summary_only_omitted_count").GetInt32());
+            Assert.True(root.GetProperty("summary_only").GetBoolean());
+            Assert.False(root.GetProperty("truncated").GetBoolean());
+            Assert.False(root.TryGetProperty("row_limit_reached", out _));
+            Assert.False(root.TryGetProperty("limit_omitted_count", out _));
+            Assert.False(root.TryGetProperty("files", out _));
+            Assert.Equal("summary_only", Assert.Single(root.GetProperty("omitted_by").EnumerateArray().ToList()).GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     private void AssertIndexedFilePath(string dbPath, string path, string language)
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
@@ -1325,7 +1362,26 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("head_freshness", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
         Assert.Contains("indexed_head_sha", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
         Assert.Contains("indexed_head_commit", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("index_matches_workspace", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
         Assert.Contains("path_case_sensitive", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
+    }
+
+    [Fact]
+    public void RunStatus_ExplainJson_PrintsIndexMatchesWorkspaceDescription_Issue4317()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--explain", "index_matches_workspace", "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
+        Assert.Equal("index_matches_workspace", json.GetProperty("field").GetString());
+        Assert.Equal("Workspace freshness check", json.GetProperty("label").GetString());
+        Assert.Contains("status --check", json.GetProperty("ready").GetString());
+        Assert.Contains("missing, changed, deleted, or stale", json.GetProperty("ready").GetString());
+        Assert.Contains("cdidx index <projectPath>", json.GetProperty("remediation").GetString());
     }
 
     [Fact]

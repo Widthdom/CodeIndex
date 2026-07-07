@@ -1758,9 +1758,26 @@ public static partial class QueryCommandRunner
             var section = rawSection.ToLowerInvariant();
             switch (section)
             {
+                case "list":
+                    sections.Add("list");
+                    break;
+                case "summary":
+                    sections.Add("summary");
+                    break;
                 case "tree":
+                case "module":
                 case "modules":
                     sections.Add("tree");
+                    break;
+                case "entrypoint":
+                case "entrypoints":
+                case "hotspot":
+                    sections.Add("hotspots");
+                    break;
+                case "largest":
+                case "largest-files":
+                case "largest_files":
+                    sections.Add("metrics");
                     break;
                 case "languages":
                 case "hotspots":
@@ -1768,13 +1785,13 @@ public static partial class QueryCommandRunner
                     sections.Add(section);
                     break;
                 default:
-                    addParseError($"Error: --sections contains unsupported section '{ConsoleUi.FormatBoundedValue(rawSection)}'. Use one or more of tree, languages, hotspots, metrics.");
+                    addParseError($"Error: --sections contains unsupported section '{ConsoleUi.FormatBoundedValue(rawSection)}'. Use one or more of summary, tree, languages, hotspots, metrics, or list.");
                     break;
             }
         }
 
         if (sections.Count == 0)
-            addParseError("Error: --sections cannot be empty. Use one or more of tree, languages, hotspots, metrics.");
+            addParseError("Error: --sections cannot be empty. Use one or more of summary, tree, languages, hotspots, metrics, or list.");
         return sections.Distinct(StringComparer.Ordinal).ToList();
     }
 

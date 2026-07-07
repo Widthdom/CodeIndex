@@ -499,8 +499,13 @@ public class DbCommandRunnerTests
             Assert.Equal("files", json.GetProperty("name_filter").GetString());
             Assert.Equal(1, json.GetProperty("object_type_counts").GetProperty("table").GetInt32());
             Assert.Equal(1, json.GetProperty("object_type_omitted_counts").GetProperty("table").GetInt32());
+            Assert.Equal(0, json.GetProperty("emitted_count").GetInt32());
+            Assert.Equal(1, json.GetProperty("omitted_count").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary_only_omitted_count").GetInt32());
             Assert.Equal(0, json.GetProperty("entries").GetArrayLength());
             Assert.False(json.GetProperty("truncated").GetBoolean());
+            Assert.False(json.TryGetProperty("row_limit_reached", out _));
+            Assert.Equal("summary_only", Assert.Single(json.GetProperty("omitted_by").EnumerateArray().ToList()).GetString());
         }
         finally
         {

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using CodeIndex.Database;
 using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
@@ -230,7 +231,7 @@ public static class DbCommandRunner
             {
                 var severity = schema.Truncated ? "warn" : "ok";
                 var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
-                Console.WriteLine(JsonSerializer.Serialize(
+                var payload = JsonSerializer.SerializeToNode(
                     new DbSchemaJsonResult(
                         fullPath,
                         schema.UserVersion,
@@ -248,7 +249,9 @@ public static class DbCommandRunner
                         options.SchemaType,
                         options.SchemaName,
                         options.SchemaIncludeInternal),
-                    jsonContext.DbSchemaJsonResult));
+                    jsonContext.DbSchemaJsonResult)!.AsObject();
+                AddDbSchemaOmissionMetadata(payload, schema, options);
+                CommandOutputWriter.WriteJsonNode(payload, jsonOptions);
             }
             else
             {
@@ -298,6 +301,31 @@ public static class DbCommandRunner
                 "Retry `cdidx db schema`. If this persists, rebuild with `cdidx index <projectPath> --rebuild`.",
                 CommandErrorCodes.DbError);
         }
+    }
+
+    private static void AddDbSchemaOmissionMetadata(JsonObject payload, DbSchemaReadResult schema, DbCommandOptions options)
+    {
+        var emittedCount = schema.Entries.Count;
+        var omittedCount = schema.ObjectTypeOmittedCounts.Values.Sum();
+        payload["emitted_count"] = emittedCount;
+        payload["omitted_count"] = omittedCount;
+
+        var omittedBy = new JsonArray();
+        if (options.SchemaSummaryOnly && omittedCount > 0)
+        {
+            payload["summary_only_omitted_count"] = omittedCount;
+            omittedBy.Add("summary_only");
+        }
+        if (!options.SchemaSummaryOnly && schema.EntriesTruncated)
+        {
+            payload["row_limit_reached"] = true;
+            payload["limit_omitted_count"] = omittedCount;
+            omittedBy.Add("limit");
+        }
+        if (schema.SqlTruncated)
+            omittedBy.Add("max_sql_chars");
+        if (omittedBy.Count > 0)
+            payload["omitted_by"] = omittedBy;
     }
 
     private static int RunPrune(DbCommandOptions options, JsonSerializerOptions jsonOptions, string dbPath, bool isUri, CancellationToken cancellationToken)

@@ -25,9 +25,12 @@ internal static class ConsoleCompletionRenderer
         string.Join(" ", FileIndexer.GetLanguageExtensions().Values
             .Append("bat")
             .Append("cmd")
-            .Concat(QueryCommandRunner.GetCompletionLanguageAliases())
+            .Concat(QueryCommandRunner.GetCompletionLanguageAliases().Where(IsShellCompletionSafeLanguageValue))
             .Distinct()
             .OrderBy(l => l));
+
+    private static bool IsShellCompletionSafeLanguageValue(string value)
+        => !value.Any(char.IsWhiteSpace);
 
     private static string GetCompletionKinds() =>
         string.Join(" ", new[]
