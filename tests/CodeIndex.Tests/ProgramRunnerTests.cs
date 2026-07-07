@@ -461,6 +461,19 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void TryConsumeQueryTraceFlag_PreservesSeparatedQueryValueThatLooksLikeTrace_Issue4342()
+    {
+        string[] args = ["--query", "--trace", "--format", "count", "--json"];
+
+        var ok = ProgramRunner.TryConsumeQueryTraceFlag("search", ref args, out var mode, out var error);
+
+        Assert.True(ok);
+        Assert.Empty(error);
+        Assert.Equal("none", mode);
+        Assert.Equal(["--query", "--trace", "--format", "count", "--json"], args);
+    }
+
+    [Fact]
     public void Run_QueryTraceStderr_EmitsStructuredSanitizedLine()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("query-trace");

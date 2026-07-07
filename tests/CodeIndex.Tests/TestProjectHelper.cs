@@ -98,7 +98,7 @@ internal static class TestProjectHelper
         return dbPath;
     }
 
-    internal static void InsertIndexedFile(string dbPath, string path, string lang, string content, DateTime? modified = null)
+    internal static void InsertIndexedFile(string dbPath, string path, string lang, string content, DateTime? modified = null, bool isGenerated = false)
     {
         var normalized = content.Replace("\r\n", "\n");
         var lines = normalized.Split('\n');
@@ -117,6 +117,7 @@ internal static class TestProjectHelper
                 Lines = lineCount,
                 Modified = modified ?? new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
                 Checksum = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized))).ToLowerInvariant(),
+                Generated = isGenerated,
             });
 
             writer.InsertChunks([

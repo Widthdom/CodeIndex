@@ -34,7 +34,7 @@ internal static partial class ProgramRunner
         {
             subArgs = InsertQueryLiteralSentinelForNonLogGlobalOption(commandName, subArgs);
 
-            if (!TryConsumeQueryTraceFlag(ref subArgs, out var traceMode, out var traceError))
+            if (!TryConsumeQueryTraceFlag(commandName, ref subArgs, out var traceMode, out var traceError))
             {
                 CommandErrorWriter.Write(StripErrorPrefix(traceError), "use one of `none`, `stderr`, or `file`.");
                 GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.InvalidArgument} command={commandName} trace_flag_invalid=true");

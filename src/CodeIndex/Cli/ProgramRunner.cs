@@ -926,6 +926,17 @@ internal static partial class ProgramRunner
     private static bool ShouldPreserveQueryCommandToken(string[] args, int index)
     {
         var role = GetQueryCommandTokenRole(args, index);
+        return ShouldPreserveQueryCommandToken(args, index, role);
+    }
+
+    private static bool ShouldPreserveQueryCommandToken(string commandName, string[] subArgs, int index)
+    {
+        var role = GetQueryCommandTokenRole(commandName, subArgs, index);
+        return ShouldPreserveQueryCommandToken(subArgs, index, role);
+    }
+
+    private static bool ShouldPreserveQueryCommandToken(string[] args, int index, QueryCommandTokenRole role)
+    {
         if (role == QueryCommandTokenRole.CommandOptionValue)
             return true;
         if (role != QueryCommandTokenRole.FirstQueryLiteral)
@@ -944,6 +955,7 @@ internal static partial class ProgramRunner
             "--color" => ConsoleUi.TryParseColorMode(value, out _),
             "--palette" => ConsoleUi.TryParseColorPalette(value, out _),
             "--metrics" => !string.IsNullOrWhiteSpace(value) && !value.StartsWith("-", StringComparison.Ordinal),
+            "--trace" => value is "none" or "stderr" or "file",
             _ => false,
         };
     }
@@ -2077,6 +2089,9 @@ internal static partial class ProgramRunner
     }
 
     internal static bool TryConsumeQueryTraceFlag(ref string[] args, out string traceMode, out string error)
+        => TryConsumeQueryTraceFlag(commandName: null, ref args, out traceMode, out error);
+
+    internal static bool TryConsumeQueryTraceFlag(string? commandName, ref string[] args, out string traceMode, out string error)
     {
         traceMode = "none";
         error = string.Empty;
@@ -2096,6 +2111,11 @@ internal static partial class ProgramRunner
             if (arg == "--")
             {
                 passthrough = true;
+                kept.Add(arg);
+                continue;
+            }
+            if (commandName is not null && ShouldPreserveQueryCommandToken(commandName, args, i))
+            {
                 kept.Add(arg);
                 continue;
             }

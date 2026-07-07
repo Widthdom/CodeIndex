@@ -193,6 +193,29 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunFiles_GeneratedAliasIncludesGeneratedFiles_Issue4342()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_files_generated_alias_4342");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Generated.g.cs", "csharp", "public class Generated { }\n", isGenerated: true);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["--db", dbPath, "--generated", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunFiles_ExcludePathFilterAcceptsLeadingDashValue()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_files_exclude_path_leading_dash");

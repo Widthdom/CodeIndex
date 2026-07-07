@@ -261,6 +261,7 @@ internal static class CliFlagSchema
             new() { Name = "--exclude-path", ValuePlaceholder = "<glob>", Description = "Exclude path", Commands = Set(ExcludeFilterCommands) },
             new() { Name = "--exclude-tests", Description = "Exclude tests", Commands = Set(ExcludeFilterCommands) },
             new() { Name = "--include-generated", Description = "Include generated files", Commands = Set(ExcludeFilterCommands) },
+            new() { Name = "--generated", Description = "Files alias for --include-generated", Commands = Set("files") },
             new() { Name = "--kind", ValuePlaceholder = "<kind>", Description = "Filter by kind", Commands = Set(KindCommands) },
             new() { Name = "--severity", ValuePlaceholder = "<info|warning|error>", Description = "Validate: filter validation issues by severity", Commands = Set(SeverityCommands) },
             new() { Name = "--visibility", ValuePlaceholder = "<visibility[,visibility]>", Description = "Filter by symbol visibility", Commands = Set(VisibilityCommands) },
