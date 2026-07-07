@@ -1475,6 +1475,22 @@ public partial class QueryCommandRunnerTests
             .GetProperty("queries")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "sqlite-policy-pragma");
+        var sqlitePolicySharedCreateCommandQuery = sqlitePolicyRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "sqlite-policy-shared-create-command");
+        var sqlitePolicyTypedParameterQuery = sqlitePolicyRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "sqlite-policy-typed-parameter");
+        var sqlitePolicyIdentifierQuotingQuery = sqlitePolicyRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "sqlite-policy-identifier-quoting");
+        var sqlitePolicyPragmaHelperQuery = sqlitePolicyRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "sqlite-policy-pragma-helper");
         var emptyCatchQuery = recipe
             .GetProperty("queries")
             .EnumerateArray()
@@ -1631,6 +1647,14 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(dogfoodSqlQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("identifier", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(sqlitePolicyCommandTextQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("SqliteCommandPolicy", StringComparison.Ordinal));
         Assert.Contains(sqlitePolicyPragmaQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("cannot bind every pragma value", StringComparison.Ordinal));
+        Assert.Equal("info", sqlitePolicySharedCreateCommandQuery.GetProperty("severity").GetString());
+        Assert.Contains(sqlitePolicySharedCreateCommandQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("centralizes command timeout", StringComparison.Ordinal));
+        Assert.Equal("info", sqlitePolicyTypedParameterQuery.GetProperty("severity").GetString());
+        Assert.Contains(sqlitePolicyTypedParameterQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("avoid AddWithValue", StringComparison.Ordinal));
+        Assert.Equal("info", sqlitePolicyIdentifierQuotingQuery.GetProperty("severity").GetString());
+        Assert.Contains(sqlitePolicyIdentifierQuotingQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("quoted SQLite identifiers", StringComparison.Ordinal));
+        Assert.Equal("info", sqlitePolicyPragmaHelperQuery.GetProperty("severity").GetString());
+        Assert.Contains(sqlitePolicyPragmaHelperQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("PRAGMA names and values", StringComparison.Ordinal));
         Assert.Contains(sqlitePolicyRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "sqlite-policy-immutable-uri");
         Assert.Contains(sqlitePolicyRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "sqlite-policy-maintenance-progress");
         Assert.Contains(recipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "file-read-all-text");
@@ -2063,6 +2087,10 @@ public partial class QueryCommandRunnerTests
                 "sqlite-policy-execute-non-query",
                 "sqlite-policy-execute-scalar",
                 "sqlite-policy-add-with-value",
+                "sqlite-policy-shared-create-command",
+                "sqlite-policy-typed-parameter",
+                "sqlite-policy-identifier-quoting",
+                "sqlite-policy-pragma-helper",
                 "sqlite-policy-pragma",
                 "sqlite-policy-create-table",
                 "sqlite-policy-alter-table",
