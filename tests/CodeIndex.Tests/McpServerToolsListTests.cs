@@ -131,6 +131,103 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsList_LimitAndCursorPageDiscoveryCatalog_Issue4304()
+    {
+        var firstRequest = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/list",
+            ["params"] = new JsonObject
+            {
+                ["limit"] = 3,
+            },
+        };
+        var firstResponse = _server.HandleMessage(firstRequest)!;
+
+        var firstResult = firstResponse["result"]!;
+        var firstTools = firstResult["tools"]!.AsArray();
+        Assert.Equal(3, firstTools.Count);
+        Assert.Equal("3", firstResult["nextCursor"]!.GetValue<string>());
+        Assert.Equal(new[] { "search", "definition", "references" }, firstTools.Select(tool => tool!["name"]!.GetValue<string>()).ToArray());
+
+        var controls = firstResult["_meta"]!["response_controls"]!;
+        Assert.Equal(24, controls["tools_total"]!.GetValue<int>());
+        Assert.Equal(3, controls["tools_returned"]!.GetValue<int>());
+        Assert.Equal(0, controls["tools_offset"]!.GetValue<int>());
+        Assert.Equal(3, controls["tools_page_size"]!.GetValue<int>());
+        Assert.Equal(McpServer.DefaultToolsListPageSize, controls["default_tools_list_page_size"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxToolsListPageSize, controls["max_tools_list_page_size"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxMcpPaginationOffset, controls["max_pagination_offset"]!.GetValue<int>());
+
+        var contract = firstResult["_meta"]!["discovery_contract"]!;
+        Assert.True(contract["pagination_supported"]!.GetValue<bool>());
+        Assert.Equal("params.cursor", contract["cursor_param"]!.GetValue<string>());
+        Assert.Equal("params.limit", contract["limit_param"]!.GetValue<string>());
+
+        var secondRequest = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 2,
+            ["method"] = "tools/list",
+            ["params"] = new JsonObject
+            {
+                ["limit"] = 3,
+                ["cursor"] = firstResult["nextCursor"]!.GetValue<string>(),
+            },
+        };
+        var secondResponse = _server.HandleMessage(secondRequest)!;
+        var secondTools = secondResponse["result"]!["tools"]!.AsArray();
+
+        Assert.Equal(3, secondTools.Count);
+        Assert.Equal(new[] { "callers", "callees", "symbols" }, secondTools.Select(tool => tool!["name"]!.GetValue<string>()).ToArray());
+        Assert.Equal("6", secondResponse["result"]!["nextCursor"]!.GetValue<string>());
+        Assert.Equal(3, secondResponse["result"]!["_meta"]!["response_controls"]!["tools_offset"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsList_InvalidPaginationParamsReturnInvalidParams_Issue4304()
+    {
+        var invalidParams = JsonNode.Parse("""{"jsonrpc":"2.0","id":0,"method":"tools/list","params":[]}""")!;
+        var paramsResponse = _server.HandleMessage(invalidParams)!;
+
+        Assert.Equal(-32602, paramsResponse["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("invalid_argument", paramsResponse["error"]!["data"]!["category"]!.GetValue<string>());
+
+        var invalidCursor = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/list",
+            ["params"] = new JsonObject
+            {
+                ["cursor"] = "not-an-offset",
+            },
+        };
+        var cursorResponse = _server.HandleMessage(invalidCursor)!;
+
+        Assert.Equal(-32602, cursorResponse["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("invalid_argument", cursorResponse["error"]!["data"]!["category"]!.GetValue<string>());
+        Assert.Equal(McpServer.MaxMcpPaginationOffset, cursorResponse["error"]!["data"]!["max_pagination_offset"]!.GetValue<int>());
+
+        var invalidLimit = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 2,
+            ["method"] = "tools/list",
+            ["params"] = new JsonObject
+            {
+                ["limit"] = McpServer.MaxToolsListPageSize + 1,
+            },
+        };
+        var limitResponse = _server.HandleMessage(invalidLimit)!;
+
+        Assert.Equal(-32602, limitResponse["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("invalid_argument", limitResponse["error"]!["data"]!["category"]!.GetValue<string>());
+        Assert.Equal(McpServer.MaxToolsListPageSize, limitResponse["error"]!["data"]!["max_tools_list_page_size"]!.GetValue<int>());
+    }
+
+    [Fact]
     public void ToolsList_EveryDescriptionIncludesLanguageSupportClause()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
