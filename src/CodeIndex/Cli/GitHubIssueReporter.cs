@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Net;
-using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -598,10 +597,7 @@ internal static class GitHubIssueReporter
     }
 
     private static void ApplyAuthenticatedGitHubApiHeaders(HttpRequestMessage requestMessage, string token)
-    {
-        GitHubHttpClientFactory.ApplyDefaultHeaders(requestMessage.Headers);
-        requestMessage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-    }
+        => GitHubHttpClientFactory.ApplyAuthenticatedGitHubApiHeaders(requestMessage, token);
 
     /// <summary>
     /// Remove fenced code blocks and inline code spans from a string before

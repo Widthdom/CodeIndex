@@ -614,6 +614,34 @@ public class GitHubIssueReporterTests : IDisposable
         Assert.Equal(now.AddMinutes(1), retryAt);
     }
 
+    [Fact]
+    public void ApplyAuthenticatedGitHubApiHeaders_SetsSharedHeadersAndBearerToken_Issue4343()
+    {
+        const string token = "ghp_header_test_token_4343";
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/Widthdom/CodeIndex/issues");
+
+        GitHubHttpClientFactory.ApplyAuthenticatedGitHubApiHeaders(request, token);
+
+        Assert.Equal("Bearer", request.Headers.Authorization?.Scheme);
+        Assert.Equal(token, request.Headers.Authorization?.Parameter);
+        Assert.Contains(request.Headers.UserAgent, value => value.Product?.Name == "cdidx");
+        Assert.Contains(request.Headers.Accept, value => value.MediaType == "application/vnd.github+json");
+        Assert.True(request.Headers.Contains("X-GitHub-Api-Version"));
+    }
+
+    [Fact]
+    public void ApplyAuthenticatedGitHubApiHeaders_AllowsMissingTokenForPublicPreflight_Issue4343()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/Widthdom/CodeIndex/issues");
+
+        GitHubHttpClientFactory.ApplyAuthenticatedGitHubApiHeaders(request, token: null);
+
+        Assert.Null(request.Headers.Authorization);
+        Assert.Contains(request.Headers.UserAgent, value => value.Product?.Name == "cdidx");
+        Assert.Contains(request.Headers.Accept, value => value.MediaType == "application/vnd.github+json");
+        Assert.True(request.Headers.Contains("X-GitHub-Api-Version"));
+    }
+
     // --- Idempotency-on-retry tests / 再試行時の冪等性テスト ---
 
     [Fact]

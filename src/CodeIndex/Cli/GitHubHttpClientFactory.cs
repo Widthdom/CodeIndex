@@ -151,6 +151,15 @@ internal static class GitHubHttpClientFactory
             headers.UserAgent.Add(new ProductInfoHeaderValue(new ProductHeaderValue("cdidx")));
     }
 
+    internal static void ApplyAuthenticatedGitHubApiHeaders(HttpRequestMessage requestMessage, string? token)
+    {
+        ArgumentNullException.ThrowIfNull(requestMessage);
+
+        ApplyDefaultHeaders(requestMessage.Headers);
+        if (!string.IsNullOrWhiteSpace(token))
+            requestMessage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+    }
+
     internal static DateTime ClampRetryAfterDelta(DateTime nowUtc, TimeSpan delta)
     {
         nowUtc = NormalizeUtc(nowUtc);
