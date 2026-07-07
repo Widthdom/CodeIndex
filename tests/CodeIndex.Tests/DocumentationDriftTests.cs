@@ -148,6 +148,7 @@ public sealed class DocumentationDriftTests
     [InlineData("DEVELOPER_GUIDE.md", "## Build & Test", "## ビルド・テスト")]
     [InlineData("TESTING_GUIDE.md", "## Test Layout", "## テスト構成")]
     [InlineData("docs/large-file-decomposition-plan.md", "## Baseline", "## ベースライン")]
+    [InlineData("docs/test-doc-maintenance-plan.md", "## Baseline", "## ベースライン")]
     public void BilingualGuides_KeepRepresentativeEnglishAndJapaneseSections_Issue4160(
         string relativePath,
         string englishHeading,

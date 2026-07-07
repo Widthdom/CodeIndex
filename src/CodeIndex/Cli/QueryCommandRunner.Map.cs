@@ -135,6 +135,7 @@ public static partial class QueryCommandRunner
                     WriteRepoMapSection("Symbol-rich files", map.SymbolRichFiles.Select(item => $"{item.Path}  [{item.SymbolCount} syms, {item.ReferenceCount} refs]"));
                     WriteRepoMapSection("Reference-rich files", map.ReferenceRichFiles.Select(item => $"{item.Path}  [{item.ReferenceCount} refs, {item.SymbolCount} syms]"));
                     WriteRepoMapSection("Entrypoints", map.Entrypoints.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.Line}  [score {item.Score}, confidence {item.Confidence:0.###}, {item.MatchType}, hint #{item.HintRank}]"));
+                    WriteLargeFileDecompositionPlanHintIfAvailable(options);
                 }
                 if (MapSectionEnabled(options, "metrics"))
                     WriteRepoMapSection("Largest files", map.LargestFiles.Select(item =>
@@ -169,6 +170,7 @@ public static partial class QueryCommandRunner
             KeepRepoMapJsonProperties(payload, RepoMapSummaryJsonProperties);
             payload["summary_only"] = true;
             payload["sections"] = new JsonArray();
+            AddLargeFileDecompositionPlanJsonField(payload, options);
             AddJsonByteLimitField(payload, options);
             return payload;
         }
@@ -182,6 +184,7 @@ public static partial class QueryCommandRunner
                 AddCompactJsonFields(payload, GetCompactSectionLimit(options), compactTruncation);
                 payload["next_commands"] = BuildRepoMapNextCommands(options);
             }
+            AddLargeFileDecompositionPlanJsonField(payload, options);
             AddJsonByteLimitField(payload, options);
             return payload;
         }
@@ -200,6 +203,7 @@ public static partial class QueryCommandRunner
             AddCompactJsonFields(payload, GetCompactSectionLimit(options), compactTruncation);
             payload["next_commands"] = BuildRepoMapNextCommands(options);
         }
+        AddLargeFileDecompositionPlanJsonField(payload, options);
         AddJsonByteLimitField(payload, options);
         return payload;
     }

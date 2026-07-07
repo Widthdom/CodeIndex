@@ -188,6 +188,7 @@ public static partial class QueryCommandRunner
                         Console.WriteLine($"{FormatHotspotScore(g.ReferenceScore),5} score {g.ReferenceCount,5} refs  {ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}{multi}");
                     }
                     CommandErrorWriter.WriteStderr($"({groupedResults.Count} unique name/kind groups, {definitionSiteTotal} definition sites)");
+                    WriteLargeFileDecompositionPlanHintIfAvailable(options);
                     WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
                 }
                 return CommandExitCodes.Success;
@@ -351,6 +352,7 @@ public static partial class QueryCommandRunner
                         Console.WriteLine($"{FormatHotspotScore(result.RankingScore),5} score {result.ReferenceCount,5} refs  {result.SymbolCount,5} symbols  {result.Path}");
                     }
                     CommandErrorWriter.WriteStderr($"({fileResults.Count} file hotspots; grouped_by={groupBy})");
+                    WriteLargeFileDecompositionPlanHintIfAvailable(options);
                     WriteHotspotFamilyWarningIfNeeded(json: false, fileHotspotSignal);
                     WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
                 }
@@ -535,6 +537,7 @@ public static partial class QueryCommandRunner
                     Console.WriteLine($"{FormatHotspotScore(r.ReferenceScore),5} score {r.ReferenceCount,5} refs  {ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}");
                 }
                 CommandErrorWriter.WriteStderr($"({results.Count} symbol hotspots; grouped_by={groupBy})");
+                WriteLargeFileDecompositionPlanHintIfAvailable(options);
                 WriteHotspotFamilyWarningIfNeeded(json: false, hotspotSignal);
                 WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
             }
@@ -543,13 +546,16 @@ public static partial class QueryCommandRunner
     }
 
     private static int WriteHotspotsJsonPayload(JsonObject payload, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
-        => WriteJsonPayloadWithOptionalByteLimit(
+    {
+        AddLargeFileDecompositionPlanJsonField(payload, options);
+        return WriteJsonPayloadWithOptionalByteLimit(
             payload,
             options,
             jsonOptions,
             "hotspots",
             "hotspots",
             "Use --summary-only, reduce --limit, or increase --max-json-bytes.");
+    }
 
     private static void AddHotspotFamilyJsonFields(JsonObject payload, HotspotFamilySignal signal)
     {

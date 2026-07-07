@@ -5509,6 +5509,40 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunHotspots_GroupByFileJsonIncludesDecompositionPlanWhenDocumentExists_Issue4306()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_plan_4306");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.WriteTextFile(projectRoot, "docs/large-file-decomposition-plan.md", "# Large File Decomposition Plan\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/One.cs", "csharp",
+                """
+                public class One
+                {
+                    private void A() { A(); A(); }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--kind", "function", "--group-by=file", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var plan = document.RootElement.GetProperty("decomposition_plan");
+            Assert.Equal("docs/large-file-decomposition-plan.md", plan.GetProperty("path").GetString());
+            Assert.Contains("partial-class surfaces", plan.GetProperty("description").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunHotspots_SqlJson_DefaultsGroupedByStatement()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_sql_group_default");

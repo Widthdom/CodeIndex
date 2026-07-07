@@ -87,6 +87,33 @@ shared search helpers, result shaping helpers, and argument parser remain in the
 same partial class for follow-up splits, while the main runner loses the 734-line
 search entry point that the issue identified as a top hotspot.
 
+## Issue #4306 Snapshot
+
+Issue #4306 refreshes the decomposition baseline from `map`, `hotspots`,
+`impact`, `outline`, and `symbols` dogfood runs on the post-#4106/#4107 tree.
+The largest production pressure points are still concentrated enough that
+follow-up work should remain staged instead of combining broad refactors:
+
+| Area | Current signal | Next boundary |
+|---|---:|---|
+| `src/CodeIndex/Indexer/Symbols/SymbolExtractor.JavaScriptTypeScriptSupport.cs` | 11,769 lines | Split lexical scanning, scope tracking, import/export parsing, and symbol emission into focused JS/TS partials. |
+| `src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs` | 9,950 lines | Continue moving shared scanner support and language-specific helpers behind smaller partials. |
+| `src/CodeIndex/Mcp/McpToolHandlers.cs` | 7,435 lines | Group query, index, status/diagnostic, and maintenance handlers by tool family. |
+| `src/CodeIndex/Database/DbSymbolReader.cs` | 6,461 lines | Separate symbol search, outline/nearby, unused analysis, and hotspot-family reads. |
+| `src/CodeIndex/Database/DbWriter.cs` | 5,197 lines | Separate schema/meta stamping, batch writes, stale-file purge, and maintenance helpers only when tests can stay attached to each boundary. |
+
+Partial-class family output is also part of the baseline. `hotspots --group-by-name`
+currently reports `SymbolExtractor` as a 49-site class family and
+`QueryCommandRunner` as a 51-site class family, so follow-up PRs should keep a
+clear organization map for those families instead of only shrinking individual
+files. Use `hotspots --group-by-name --json` to inspect the capped `paths` list
+and full `definition_site_details` for each family before choosing a move.
+
+When this plan is present at `docs/large-file-decomposition-plan.md`, `map` and
+`hotspots` include a `decomposition_plan` JSON object, and human hotspot output
+emits a short hint, so dogfood runs can point maintainers back to the staged
+plan without requiring prior knowledge of this document.
+
 ## Decomposition Sequence
 
 1. `QueryCommandRunner.cs`
@@ -95,6 +122,7 @@ search entry point that the issue identified as a top hotspot.
    - Keep CLI text, JSON, LSP, quickfix, and SARIF tests in the same PR as the moved command family.
    - Current #4061 split: `hotspots` command execution lives in `QueryCommandRunner.Hotspots.cs`; keep follow-up command-family moves similarly mechanical.
    - Current #4106 follow-up: `RunSearch` command orchestration lives in `QueryCommandRunner.Search.cs`; keep future search parsing, planning, result shaping, and rendering moves behavior-preserving and separately tested.
+   - Current #4306 baseline: treat the 51-site `QueryCommandRunner` family as an organization problem as well as a file-size problem; keep each future move discoverable through group-by-name hotspot output.
 
 2. `SymbolExtractor.cs`
    - Separate shared extraction contracts from language-specific scanners.
@@ -222,6 +250,33 @@ Issue #4106 では、同じ段階的な QueryCommandRunner 分割の続きとし
 引数パーサーは後続分割用に同じ partial class へ残しつつ、issue で主要 hotspot
 とされた 734 行の検索入口を中心の runner から切り離します。
 
+## Issue #4306 のスナップショット
+
+Issue #4306 では、#4106/#4107 後の tree で `map`、`hotspots`、`impact`、
+`outline`、`symbols` を dogfood し、分割ベースラインを更新します。最大級の
+production pressure point はまだ局所的に集中しているため、後続作業は広範な
+refactor をまとめず、段階的に進めてください。
+
+| 領域 | 現在の signal | 次の boundary |
+|---|---:|---|
+| `src/CodeIndex/Indexer/Symbols/SymbolExtractor.JavaScriptTypeScriptSupport.cs` | 11,769 lines | lexical scanning、scope tracking、import/export parsing、symbol emission を focused JS/TS partial へ分ける。 |
+| `src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs` | 9,950 lines | 共有 scanner support と言語固有 helper を小さな partial の背後へ移す作業を続ける。 |
+| `src/CodeIndex/Mcp/McpToolHandlers.cs` | 7,435 lines | query、index、status/diagnostic、maintenance handler を tool family ごとにまとめる。 |
+| `src/CodeIndex/Database/DbSymbolReader.cs` | 6,461 lines | symbol search、outline/nearby、unused analysis、hotspot-family read を分ける。 |
+| `src/CodeIndex/Database/DbWriter.cs` | 5,197 lines | schema/meta stamping、batch write、stale-file purge、maintenance helper は、test を boundary ごとに付けられる場合だけ分ける。 |
+
+partial-class family 出力もベースラインの一部です。`hotspots --group-by-name`
+は現在 `SymbolExtractor` を 49-site class family、`QueryCommandRunner` を
+51-site class family として報告します。後続 PR は単に個別ファイルを小さくするだけでなく、
+これらの family の organization map を明確に保ってください。移動対象を選ぶ前に
+`hotspots --group-by-name --json` の capped `paths` list と完全な
+`definition_site_details` を確認します。
+
+この計画が `docs/large-file-decomposition-plan.md` に存在する場合、`map` と
+`hotspots` は `decomposition_plan` JSON object を含み、human hotspot output も短い
+hint を出します。これにより、この文書を事前に知っていない dogfood run でも、
+maintainer が staged plan へ戻れるようにします。
+
 ## 分割順序
 
 1. `QueryCommandRunner.cs`
@@ -230,6 +285,7 @@ Issue #4106 では、同じ段階的な QueryCommandRunner 分割の続きとし
    - 移動した command family と同じ PR で CLI text、JSON、LSP、quickfix、SARIF test を維持する。
    - 現在の #4061 split: `hotspots` command 実行は `QueryCommandRunner.Hotspots.cs` に置く。後続の command-family move も同じく mechanical に保つ。
    - 現在の #4106 フォローアップ: `RunSearch` コマンドの実行制御は `QueryCommandRunner.Search.cs` に置く。後続の検索解析、計画、結果整形、出力描画の移動も挙動維持かつ個別 test 付きに保つ。
+   - 現在の #4306 baseline: 51-site の `QueryCommandRunner` family を file-size problem だけでなく organization problem として扱い、今後の move は group-by-name hotspot output で見つけやすい状態を保つ。
 
 2. `SymbolExtractor.cs`
    - 共有 extraction contract と言語固有 scanner を分ける。

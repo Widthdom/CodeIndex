@@ -33,6 +33,7 @@ Use the full suite by default. Use targeted filters only while iterating locally
 ## Test Layout
 
 The test project mirrors the production areas closely.
+Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding `Skip =` cases; it tracks the current split sequence, skip classifications, and large-document boundaries.
 
 - `ChunkSplitterTests.cs`, `SymbolExtractorTests.cs`, `ReferenceExtractorTests.cs`, `SearchSnippetFormatterTests.cs`, `DbPathResolverTests.cs`, `ConsoleUiTests.cs`
   Pure or mostly pure behavior tests with in-memory inputs.
@@ -307,6 +308,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 ## テスト構成
 
 テストプロジェクトは、本番コードの責務にかなり近い形で分かれています。
+巨大 suite を移動する場合や `Skip =` case を追加する場合は、現在の分割順序、skip 分類、巨大ドキュメントの境界を追跡する `docs/test-doc-maintenance-plan.md` を先に確認してください。
 
 - `ChunkSplitterTests.cs`、`SymbolExtractorTests.cs`、`ReferenceExtractorTests.cs`、`SearchSnippetFormatterTests.cs`、`DbPathResolverTests.cs`、`ConsoleUiTests.cs`
   インメモリ入力中心の、純粋またはほぼ純粋な振る舞いのテスト。

@@ -325,6 +325,37 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunMap_CompactJsonIncludesDecompositionPlanWhenDocumentExists_Issue4306()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_plan_4306");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.WriteTextFile(projectRoot, "docs/large-file-decomposition-plan.md", "# Large File Decomposition Plan\n");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.cs",
+                "csharp",
+                "namespace App; public class Program { public static void Main() { } }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--compact", "--sections", "hotspots", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var plan = document.RootElement.GetProperty("decomposition_plan");
+            Assert.Equal("docs/large-file-decomposition-plan.md", plan.GetProperty("path").GetString());
+            Assert.Contains("oversized source files", plan.GetProperty("description").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunMap_SectionsHotspotsJson_MapsSectionToReturnedProperties_Issue3938()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_hotspots_section");
