@@ -1671,6 +1671,14 @@ public partial class QueryCommandRunnerTests
             .GetProperty("queries")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "invariant-culture");
+        var comparisonPathSignalQuery = comparisonRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "path-case-sensitivity-signal");
+        var comparisonCliOptionQuery = comparisonRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "cli-option-domain");
         var authBearerQuery = authTokenRecipe
             .GetProperty("queries")
             .EnumerateArray()
@@ -1903,6 +1911,11 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("OrdinalIgnoreCase", comparisonOrdinalFamilyQuery.GetProperty("false_positive_guidance").GetString(), StringComparison.Ordinal);
         Assert.Equal("InvariantCulture", comparisonInvariantCultureQuery.GetProperty("query").GetString());
         Assert.Contains(comparisonInvariantCultureQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("machine-readable formatting", StringComparison.Ordinal));
+        Assert.Equal("path_case_sensitive", comparisonPathSignalQuery.GetProperty("query").GetString());
+        Assert.Contains(comparisonPathSignalQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("filesystem case-sensitivity signal", StringComparison.Ordinal));
+        Assert.Contains(comparisonPathSignalQuery.GetProperty("string_comparison_taxonomy").GetProperty("domain_categories").EnumerateArray(), item => item.GetProperty("name").GetString() == "persisted_db_keys");
+        Assert.Equal("CliFlag", comparisonCliOptionQuery.GetProperty("query").GetString());
+        Assert.Contains(comparisonCliOptionQuery.GetProperty("string_comparison_taxonomy").GetProperty("domain_categories").EnumerateArray(), item => item.GetProperty("name").GetString() == "docs_help_text");
         Assert.Contains(comparisonRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "lower-invariant-casing");
         Assert.Contains(comparisonRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "upper-invariant-casing");
         Assert.Equal("auth token", tokenQuery.GetProperty("query").GetString());
@@ -2397,7 +2410,22 @@ public partial class QueryCommandRunnerTests
             SearchAuditRecipes.DefaultAuditScope,
             ["src/**"],
             expectedSourceExcludes,
-            ["ordinal-ignore-case", "string-comparer-ordinal-family", "string-comparison-ordinal-family", "invariant-culture", "lower-invariant-casing", "upper-invariant-casing"]);
+            [
+                "ordinal-ignore-case",
+                "string-comparer-ordinal-family",
+                "string-comparison-ordinal-family",
+                "path-case-sensitivity-signal",
+                "uri-protocol-token-domain",
+                "cli-option-domain",
+                "symbol-name-domain",
+                "environment-name-domain",
+                "db-key-domain",
+                "current-culture-human-text",
+                "docs-help-text-domain",
+                "invariant-culture",
+                "lower-invariant-casing",
+                "upper-invariant-casing"
+            ]);
         AssertRecipe(
             "dogfood-risk-patterns",
             SearchAuditRecipes.DefaultAuditScope,
@@ -5478,6 +5506,83 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("## String-comparison taxonomy", body, StringComparison.Ordinal);
             Assert.Contains("`path_filesystem`", body, StringComparison.Ordinal);
             Assert.Contains("`human_text`", body, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_StringComparisonSemanticsRecipeClassifiesDomainSignals_Issue4303()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_string_comparison_domains_4303");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/DomainSignals.cs",
+                "csharp",
+                """
+                using System;
+                using System.Globalization;
+
+                public sealed class DomainSignals
+                {
+                    private const string PathCase = "path_case_sensitive";
+                    private const string MetaTable = "codeindex_meta";
+                    private const string HelpOrigin = "help_text";
+                    private const string SymbolLabel = "symbol name";
+
+                    public bool Run(string input)
+                    {
+                        _ = CliFlagSchema.All;
+                        _ = ActiveWorkspace.EnvironmentVariable;
+                        _ = CultureInfo.CurrentCulture.Name;
+                        return Uri.TryCreate(input, UriKind.Absolute, out _);
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "string-comparison-semantics", "--db", dbPath, "--json", "--limit", "5"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var queries = document.RootElement
+                .GetProperty("queries")
+                .EnumerateArray()
+                .ToDictionary(query => query.GetProperty("name").GetString()!, query => query);
+            var expectedQueries = new[]
+            {
+                "path-case-sensitivity-signal",
+                "uri-protocol-token-domain",
+                "cli-option-domain",
+                "symbol-name-domain",
+                "environment-name-domain",
+                "db-key-domain",
+                "current-culture-human-text",
+                "docs-help-text-domain"
+            };
+
+            foreach (var name in expectedQueries)
+            {
+                Assert.True(queries[name].GetProperty("count").GetInt32() >= 1, $"{name} should match its fixture signal.");
+            }
+
+            var domainNames = queries["path-case-sensitivity-signal"]
+                .GetProperty("string_comparison_taxonomy")
+                .GetProperty("domain_categories")
+                .EnumerateArray()
+                .Select(item => item.GetProperty("name").GetString())
+                .ToArray();
+            Assert.Contains("environment_names", domainNames);
+            Assert.Contains("symbol_names", domainNames);
+            Assert.Contains("persisted_db_keys", domainNames);
+            Assert.Contains("docs_help_text", domainNames);
         }
         finally
         {

@@ -109,19 +109,35 @@ internal static class SearchAuditRecipes
                 "CLI option names, command aliases, environment-variable names, labels, and other command/control tokens.",
                 "Case-insensitive ordinal handling can be intentional for command ergonomics; keep these hits separate from path or human-text comparisons."),
             new(
+                "environment_names",
+                "Environment variable names and process environment inventory keys that are specified as stable machine tokens.",
+                "Environment names should use stable ordinal semantics and should not inherit filesystem or human-text comparison rules."),
+            new(
+                "symbol_names",
+                "Extracted symbol names, language identifiers, canonical names, and graph lookup keys.",
+                "Symbol-name exactness uses the documented extracted-name contract; keep it separate from raw source text, paths, and display text."),
+            new(
                 "stable_identifiers",
                 "Persisted keys, cache keys, database identifiers, symbol names, and index terms that need stable process- and culture-independent lookup semantics.",
                 "Use ordinal comparers consistently with the persistence format and avoid culture-sensitive transforms unless the stored contract says otherwise."),
+            new(
+                "persisted_db_keys",
+                "SQLite metadata keys, JSON field names, and schema identifiers persisted across cdidx versions.",
+                "Persisted keys need stable ordinal semantics and migration compatibility rather than user-locale or path comparison rules."),
             new(
                 "human_text",
                 "User-facing text, localized messages, display names, search phrases, and documentation prose whose meaning can be culture-sensitive.",
                 "Prefer explicit culture-aware comparison, casing, formatting, or parsing for human text; invariant or ordinal behavior needs a machine-token justification."),
             new(
+                "docs_help_text",
+                "Documentation, help text, prompts, and explanatory strings that users read rather than machines parse.",
+                "Do not reuse protocol, path, or persisted-key comparison rules for text whose purpose is user comprehension or localization."),
+            new(
                 "machine_formatting",
                 "Round-trippable numeric, date/time, diagnostic, serialization, and protocol formatting intended for machines instead of readers.",
                 "InvariantCulture is usually expected for machine-readable formats, but it should not be reused as a blanket answer for human-facing text.")
         ],
-        "Classify each string comparison by data domain before filing. Path hits need filesystem case-sensitivity and normalization evidence; protocol, CLI, and stable-identifier hits are commonly ordinal; human-facing text needs culture-sensitive review; invariant casing should show machine-token intent or be replaced by comparer overloads.");
+        "Classify each string comparison by data domain before filing. Path hits need filesystem case-sensitivity and normalization evidence; protocol, CLI, environment, symbol-name, and persisted-key hits are commonly ordinal; human-facing docs/help text needs culture-sensitive review; invariant casing should show machine-token intent or be replaced by comparer overloads.");
 
     private static readonly SearchRecipeNullableContractTaxonomyJsonResult NullableContractTaxonomy = new(
         [
@@ -734,6 +750,135 @@ internal static class SearchAuditRecipes
                         "positive: protocol tokens, CLI switches, enum-like identifiers, and persisted keys often require ordinal-family overloads for repeatable behavior."
                     ],
                     MatchOrigins = ["code"],
+                    StringComparisonTaxonomy = StringComparisonSemanticsTaxonomy,
+                },
+                new(
+                    "path-case-sensitivity-signal",
+                    "path_case_sensitive",
+                    "Find path comparison readiness signals that should govern path/glob case-sensitivity review.",
+                    ["audit", "bug", "portability"],
+                    "False positives include documentation of the status field; use this as positive evidence when classifying path comparison hits.",
+                    ExactSubstring: true)
+                {
+                    Severity = "info",
+                    RiskEvidence =
+                    [
+                        "positive: path_case_sensitive is the indexed filesystem case-sensitivity signal; path comparisons should cite it instead of assuming host OS behavior.",
+                        "risk: path/glob comparisons that ignore this signal can collapse distinct files on case-sensitive filesystems or miss aliases on case-insensitive filesystems."
+                    ],
+                    MatchOrigins = ["code", "string_literal"],
+                    StringComparisonTaxonomy = StringComparisonSemanticsTaxonomy,
+                },
+                new(
+                    "uri-protocol-token-domain",
+                    "Uri.TryCreate",
+                    "Find URI parsing and scheme/host classification paths that usually need protocol-token ordinal semantics.",
+                    ["audit", "bug"],
+                    "False positives include file URI conversion paths where the post-parse local path still needs filesystem path semantics.",
+                    ExactSubstring: true)
+                {
+                    RiskEvidence =
+                    [
+                        "positive: URI schemes and hosts are protocol tokens; ordinal or ordinal-ignore-case checks are usually intended where the protocol specifies ASCII token behavior.",
+                        "risk: after a URI is converted to a local path, path comparison must switch back to filesystem path semantics."
+                    ],
+                    MatchOrigins = ["code"],
+                    StringComparisonTaxonomy = StringComparisonSemanticsTaxonomy,
+                },
+                new(
+                    "cli-option-domain",
+                    "CliFlag",
+                    "Find CLI flag schema and completion paths where option names are command tokens rather than human text.",
+                    ["audit", "bug"],
+                    "False positives include help text descriptions; option identity should be classified separately from descriptions shown to users.",
+                    ExactSubstring: true)
+                {
+                    RiskEvidence =
+                    [
+                        "positive: CLI flag names and aliases are command/control tokens that usually need stable ordinal semantics.",
+                        "risk: flag descriptions and help prose are human-facing text and should not inherit option-name comparison rules."
+                    ],
+                    MatchOrigins = ["code"],
+                    StringComparisonTaxonomy = StringComparisonSemanticsTaxonomy,
+                },
+                new(
+                    "symbol-name-domain",
+                    "symbol name",
+                    "Find symbol-name contract surfaces so language identifier comparisons stay separate from raw source or display text.",
+                    ["audit", "bug"],
+                    "False positives include user-facing messages that mention symbol names without performing symbol lookup.",
+                    ExactSubstring: true)
+                {
+                    RiskEvidence =
+                    [
+                        "positive: extracted symbol names and canonical name fields need the documented exact-name/folded-name contract rather than ad hoc culture rules.",
+                        "risk: user-facing messages that only display a symbol name should be classified as human text instead of lookup semantics."
+                    ],
+                    MatchOrigins = ["code", "string_literal"],
+                    StringComparisonTaxonomy = StringComparisonSemanticsTaxonomy,
+                },
+                new(
+                    "environment-name-domain",
+                    "EnvironmentVariable",
+                    "Find environment-variable name surfaces that need stable machine-token comparison semantics.",
+                    ["audit", "bug"],
+                    "False positives include user-facing environment diagnostics; classify the variable name separately from the displayed explanation.",
+                    ExactSubstring: true)
+                {
+                    RiskEvidence =
+                    [
+                        "positive: environment variable names are machine/control tokens and should stay culture-independent.",
+                        "risk: displayed environment diagnostics may be human text even when the key name is ordinal."
+                    ],
+                    MatchOrigins = ["code"],
+                    StringComparisonTaxonomy = StringComparisonSemanticsTaxonomy,
+                },
+                new(
+                    "db-key-domain",
+                    "codeindex_meta",
+                    "Find persisted database metadata key comparisons that need stable DB-key semantics.",
+                    ["audit", "bug"],
+                    "False positives include schema documentation; persisted keys need migration-compatible ordinal semantics.",
+                    ExactSubstring: true)
+                {
+                    RiskEvidence =
+                    [
+                        "positive: codeindex_meta keys are persisted DB identifiers and should be compared as stable machine keys.",
+                        "risk: migration and diff paths must not treat persisted keys as localized or path-like text."
+                    ],
+                    MatchOrigins = ["code", "string_literal"],
+                    StringComparisonTaxonomy = StringComparisonSemanticsTaxonomy,
+                },
+                new(
+                    "current-culture-human-text",
+                    "CurrentCulture",
+                    "Find explicit current-culture formatting or casing paths that are likely intended for human-facing text.",
+                    ["audit", "bug"],
+                    "False positives include diagnostics that intentionally record the active locale as machine-readable metadata.",
+                    ExactSubstring: true)
+                {
+                    RiskEvidence =
+                    [
+                        "positive: CurrentCulture is appropriate evidence for user-facing formatting and locale diagnostics.",
+                        "risk: machine formats, persisted keys, and protocol tokens should not inherit CurrentCulture behavior unless the contract says so."
+                    ],
+                    MatchOrigins = ["code"],
+                    StringComparisonTaxonomy = StringComparisonSemanticsTaxonomy,
+                },
+                new(
+                    "docs-help-text-domain",
+                    "help_text",
+                    "Find help/documentation-text classification paths so user prose stays separate from protocol, path, and key domains.",
+                    ["audit", "bug"],
+                    "False positives include enum-like origin labels; verify whether the match is classifying prose or comparing machine tokens.",
+                    ExactSubstring: true)
+                {
+                    RiskEvidence =
+                    [
+                        "positive: help_text marks explanatory text intended for users, not protocol/path/key identity.",
+                        "risk: help prose should not be normalized with protocol-token or persisted-key comparison rules unless the compared value is an actual command token."
+                    ],
+                    MatchOrigins = ["code", "string_literal"],
                     StringComparisonTaxonomy = StringComparisonSemanticsTaxonomy,
                 },
                 new(
