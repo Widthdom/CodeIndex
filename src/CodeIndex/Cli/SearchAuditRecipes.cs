@@ -1118,25 +1118,113 @@ internal static class SearchAuditRecipes
                     "JsonDocument.Parse",
                     "Find DOM parsing via JsonDocument.Parse that may need input-size limits or streaming alternatives.",
                     ["audit", "bug"],
-                    "False positives include deliberately bounded callers and parsing of already-small generated payloads."),
+                    "False positives include deliberately bounded callers and parsing of already-small generated payloads.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: JsonDocument.Parse builds a full DOM and should show byte, depth, and item-count limits before user-controlled payloads reach it.",
+                        "positive: BoundedJson.ParseDocument or a size-gated structured-data fallback is upstream guard evidence for intentional DOM parsing."
+                    ],
+                },
                 new(
                     "json-node-parse",
                     "JsonNode.Parse",
                     "Find mutable DOM parsing via JsonNode.Parse that may need input-size limits, depth limits, or streaming alternatives.",
                     ["audit", "bug"],
-                    "False positives include tests, bounded configuration files, and already-size-limited payloads."),
+                    "False positives include tests, bounded configuration files, and already-size-limited payloads.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: JsonNode.Parse materializes a mutable DOM and should be paired with payload and depth bounds for API, config, or protocol inputs.",
+                        "positive: BoundedJson.ParseNode, bounded frame readers, or fixed-size local metadata files make the materialization auditable."
+                    ],
+                },
                 new(
                     "json-serializer-deserialize",
                     "JsonSerializer.Deserialize",
                     "Find serializer materialization paths that may need payload bounds, streaming, or explicit JsonSerializerOptions review.",
                     ["audit", "bug"],
-                    "False positives include bounded local files, test fixtures, and deserialization of tiny protocol envelopes."),
+                    "False positives include bounded local files, test fixtures, and deserialization of tiny protocol envelopes.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: JsonSerializer.Deserialize can materialize an entire object graph before callers enforce semantic item limits.",
+                        "positive: BoundedJson.Deserialize, MaxDepth options, and fixed protocol frame byte caps show upstream parse bounds."
+                    ],
+                },
                 new(
                     "json-async-deserialize",
                     "DeserializeAsyncEnumerable",
                     "Find streaming JSON deserialization paths that may need cancellation, item limits, or backpressure review.",
                     ["audit", "performance"],
                     "False positives include already-cancelable readers with explicit item budgets.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: streaming deserialization still needs cancellation, per-item limits, and a bounded source stream.",
+                        "positive: WithCancellation, explicit record caps, and max-byte snapshot reads show streaming backpressure evidence."
+                    ],
+                },
+                new(
+                    "json-serializer-options",
+                    "JsonSerializerOptions",
+                    "Find serializer option construction and reuse sites that should show MaxDepth, naming, encoder, and case-insensitive property rationale.",
+                    ["audit", "bug"],
+                    "False positives include generated contexts and shared option declarations whose callers already enforce byte and item limits.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: inconsistent JsonSerializerOptions can silently change depth, case sensitivity, encoder, or naming behavior across CLI, MCP, and local-state payloads.",
+                        "positive: shared option instances with explicit MaxDepth, encoder scope, and documented case-insensitive token domains reduce parser triage risk."
+                    ],
+                },
+                new(
+                    "json-case-insensitive-properties",
+                    "PropertyNameCaseInsensitive",
+                    "Find case-insensitive JSON property handling that should be justified by a compatibility or protocol boundary.",
+                    ["audit", "bug"],
+                    "False positives include compatibility aliases and user-authored config formats where case-insensitive names are intentional.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: case-insensitive JSON properties can hide duplicate-key or compatibility drift when the payload contract is machine-authored.",
+                        "positive: explicit compatibility alias lifecycle, user-authored config rationale, or tests for duplicate/canonical names make the setting intentional."
+                    ],
+                },
+                new(
+                    "json-serializer-serialize",
+                    "JsonSerializer.Serialize",
+                    "Find JSON serialization sites that may need output-size, streaming, or redaction review.",
+                    ["audit", "performance"],
+                    "False positives include tiny protocol envelopes, bounded diagnostics, and test fixtures.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: JsonSerializer.Serialize can materialize unbounded output when result sets scale with workspace size.",
+                        "positive: bounded result limits, Utf8JsonWriter streaming, output caps, or small fixed DTOs make serialization size explicit."
+                    ],
+                },
+                new(
+                    "utf8-json-writer",
+                    "Utf8JsonWriter",
+                    "Find streaming JSON writers so audits can verify flush, destination ownership, and output-size policy.",
+                    ["audit", "performance"],
+                    "False positives include bounded local writers and one-shot small diagnostics.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: streaming writers still need bounded destinations, cancellation or flush ownership, and redaction policy at user-facing boundaries.",
+                        "positive: writing directly to a caller-owned stream, LocalJsonlJsonWriterOptions, or fixed-size diagnostic payloads can explain the writer."
+                    ],
+                }
             ]),
         SourceScopedRecipe(
             "dotnet-risk-patterns",
@@ -1468,19 +1556,43 @@ internal static class SearchAuditRecipes
                     "XmlReaderSettings",
                     "Find XML reader settings that should keep DtdProcessing disabled or ignored and avoid external entity resolution.",
                     ["audit", "security"],
-                    "Expected safe settings include `DtdProcessing.Ignore` or `Prohibit` and no external resolver; tests and safe fixture parsers may be false positives."),
+                    "Expected safe settings include `DtdProcessing.Ignore` or `Prohibit` and no external resolver; tests and safe fixture parsers may be false positives.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: XML reader settings must keep DTD/entity behavior explicit and disable external resolver access for user-controlled manifests.",
+                        "positive: SymbolExtractor.CreateExtractionXmlReaderSettings centralizes DtdProcessing, XmlResolver = null, and shared document/entity character limits."
+                    ],
+                },
                 new(
                     "dtd-processing",
                     "DtdProcessing",
                     "Find DTD handling changes that may re-enable entity expansion or unsafe external document access.",
                     ["audit", "security"],
-                    "Review for `Ignore` or `Prohibit`; `Parse` requires strong justification, bounded input, and resolver controls."),
+                    "Review for `Ignore` or `Prohibit`; `Parse` requires strong justification, bounded input, and resolver controls.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: DtdProcessing.Parse can re-enable entity expansion unless resolver, entity characters, and payload size are tightly bounded.",
+                        "positive: DtdProcessing.Prohibit rejects project/dependency manifests; DtdProcessing.Ignore is acceptable only with XmlResolver = null and shared XML size limits."
+                    ],
+                },
                 new(
                     "xml-resolver",
                     "XmlResolver",
                     "Find XML resolver configuration that may allow network or filesystem entity resolution.",
                     ["audit", "security"],
                     "Safe paths usually set the resolver to null or use a tightly bounded resolver.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: non-null XML resolvers can resolve external filesystem or network entities from otherwise small XML payloads.",
+                        "positive: XmlResolver = null blocks external entity resolution and should be paired with DtdProcessing.Ignore or Prohibit."
+                    ],
+                }
             ]),
         SourceScopedRecipe(
             "filesystem-traversal",
@@ -1536,13 +1648,18 @@ internal static class SearchAuditRecipes
             [
                 new(
                     "bounded-file-open-helper",
-                    "BoundedFile.OpenRead",
+                    "BoundedFile.OpenReadFor",
                     "Find reads routed through the shared file-open helper so audits can see the explicit share mode, long-path normalization, and bounded read category.",
                     ["audit", "performance"],
-                    "Expected positive evidence includes length-checked text reads, fixed-prefix probes, log tails, hash streams, and trusted archive sources that enforce their byte limits at the caller.",
-                    ExactSubstring: false)
+                    "Expected positive evidence includes BoundedFile.OpenReadFor* length-checked text reads, fixed-prefix probes, log tails, hash streams, and trusted archive sources that enforce their byte limits at the caller.",
+                    ExactSubstring: true)
                 {
                     MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "positive: BoundedFile.OpenReadFor* helpers centralize FileShare.ReadWrite/Delete, long-path normalization, and caller-provided byte budgets.",
+                        "risk: callers must still preserve the max-byte contract and avoid transferring the stream beyond the bounded read boundary."
+                    ],
                 },
                 new(
                     "bounded-memory-accumulator",
@@ -1562,6 +1679,11 @@ internal static class SearchAuditRecipes
                         "src/CodeIndex/Cli/SuggestionStore.cs",
                     ],
                     MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "positive: these MemoryStream hits sit behind max-byte readers, bounded HTTP content, bounded JSON streams, or capped suggestion snapshots.",
+                        "risk: MemoryStream remains eager materialization; verify any new caller keeps byte limits before writing to the accumulator."
+                    ],
                 },
                 new(
                     "bounded-full-byte-read-helper",
@@ -1573,6 +1695,11 @@ internal static class SearchAuditRecipes
                 {
                     PathPatterns = ["src/CodeIndex/Indexer/Scanning/FileContentLoader.cs"],
                     MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "positive: ReadRawBytesWithSizeLimit records a full-byte-read helper with a max-file-byte gate before allocation.",
+                        "risk: direct callers must preserve grow-after-length-check behavior so files cannot expand past the checked size before reading."
+                    ],
                 }
             ]),
         SourceScopedRecipe(
@@ -1661,6 +1788,48 @@ internal static class SearchAuditRecipes
                     [
                         "risk: OpenRead call sites can inherit default sharing or transfer stream ownership across subsystem boundaries.",
                         "positive: BoundedFile.OpenRead, archive-entry ownership, or immediate using scopes generally explain the site."
+                    ],
+                },
+                new(
+                    "stream-reader-ownership",
+                    "StreamReader",
+                    "Find StreamReader ownership boundaries that should show encoding, leave-open, cancellation, and max-character behavior.",
+                    ["audit", "performance"],
+                    "False positives include tiny trusted test helpers and fixed in-memory protocol snippets.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: StreamReader can hide whole-stream text materialization, implicit encoding choices, or ownership transfer of the underlying stream.",
+                        "positive: bounded source streams, explicit encoding, leaveOpen intent, and line-by-line capped readers make the boundary auditable."
+                    ],
+                },
+                new(
+                    "stream-writer-ownership",
+                    "StreamWriter",
+                    "Find StreamWriter ownership boundaries that should show flush, leave-open, encoding, and output-size behavior.",
+                    ["audit", "performance"],
+                    "False positives include fixed small local files and test fixtures.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: StreamWriter can buffer unbounded output or close caller-owned streams unexpectedly when ownership is ambiguous.",
+                        "positive: using scopes, explicit UTF-8/no-BOM choices, leaveOpen intent, and bounded DTO/result emission explain safe writer use."
+                    ],
+                },
+                new(
+                    "read-to-end-materialization",
+                    "ReadToEnd",
+                    "Find read-to-end materialization sites that should prove payload size was bounded before text allocation.",
+                    ["audit", "performance"],
+                    "False positives include already-bounded StringReader fixtures and small process output snippets.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: ReadToEnd materializes all remaining text and can bypass line, byte, or cancellation budgets.",
+                        "positive: bounded in-memory readers, pre-capped process output, or prior max-byte file reads make the call intentional."
                     ],
                 },
                 new(
