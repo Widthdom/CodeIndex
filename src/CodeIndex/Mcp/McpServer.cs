@@ -185,6 +185,8 @@ public partial class McpServer : IDisposable
     internal const int MaxConfiguredResponseBytes = 64 * 1024 * 1024;
     internal const int MaxClientResponseJsonBytes = 1 * 1024 * 1024;
     internal const int MaxMcpPaginationOffset = 10_000;
+    internal const int DefaultToolsListPageSize = 24;
+    internal const int MaxToolsListPageSize = 24;
     internal const int MaxMcpMapDepth = 32;
     internal const double MinKeepAliveIntervalSeconds = 1.0;
     internal const double MaxKeepAliveIntervalSeconds = 300.0;
@@ -1506,7 +1508,7 @@ public partial class McpServer : IDisposable
         return await DispatchWithRequestCancellationAsync(id, isolateRequestDb, () => method switch
         {
             "initialize" => Task.FromResult<JsonNode>(HandleInitialize(id, request["params"])),
-            "tools/list" => Task.FromResult<JsonNode>(HandleToolsList(id)),
+            "tools/list" => Task.FromResult<JsonNode>(HandleToolsList(id, request["params"])),
             "tools/call" => HandleToolsCallAsync(id, request["params"]),
             "resources/list" => Task.FromResult<JsonNode>(HandleResourcesList(id, request["params"])),
             "resources/read" => Task.FromResult<JsonNode>(HandleResourcesRead(id, request["params"])),
