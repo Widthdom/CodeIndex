@@ -1435,6 +1435,14 @@ public partial class QueryCommandRunnerTests
             .GetProperty("queries")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "file-read-all-text");
+        var cancellationGapQuery = recipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "cancellation-gap");
+        var processStartInfoQuery = recipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "process-start-info");
         var pathCaseQuery = recipe
             .GetProperty("queries")
             .EnumerateArray()
@@ -1459,6 +1467,10 @@ public partial class QueryCommandRunnerTests
             .GetProperty("queries")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "bearer-token");
+        var jsonDocumentParseQuery = jsonRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "json-document-parse");
         var dogfoodRegexQuery = dogfoodRecipe
             .GetProperty("queries")
             .EnumerateArray()
@@ -1564,6 +1576,8 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("False positives", query.GetProperty("false_positive_guidance").GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.Contains(query.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("DiagnosticRedactor", StringComparison.Ordinal));
         Assert.Contains(fileReadAllTextQuery.GetProperty("exclude_origins").EnumerateArray(), origin => origin.GetString() == "help_text");
+        Assert.Contains(cancellationGapQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "cancellation_intent");
+        Assert.Contains(processStartInfoQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "process_launch_boundary");
         Assert.Equal("catch", emptyCatchQuery.GetProperty("query").GetString());
         Assert.False(emptyCatchQuery.GetProperty("exact_substring").GetBoolean());
         Assert.Contains(emptyCatchQuery.GetProperty("match_origins").EnumerateArray(), origin => origin.GetString() == "code");
@@ -1619,7 +1633,11 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(authTokenRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "github-token");
         Assert.Contains(authTokenRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "api-token");
         Assert.Contains(authTokenRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "token-secret");
+        Assert.Contains(authBearerQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "secret_origin");
+        Assert.Contains(authBearerQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "source_origin");
         Assert.Contains(authBearerQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("bearer tokens", StringComparison.Ordinal));
+        Assert.Contains(jsonDocumentParseQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "parser_guard_evidence");
+        Assert.Contains(jsonDocumentParseQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "guard_evidence");
         Assert.Contains(dogfoodRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "exception-message-classifier");
         Assert.Contains(dogfoodRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "plugin-activator");
         Assert.Equal(" Regex.", dogfoodRegexQuery.GetProperty("query").GetString());
@@ -1704,11 +1722,20 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(".Result", phraseResultQuery.GetProperty("query").GetString());
         Assert.Contains(phraseResultQuery.GetProperty("match_origins").EnumerateArray(), origin => origin.GetString() == "code");
         Assert.Contains(phraseResultQuery.GetProperty("result_kinds").EnumerateArray(), kind => kind.GetString() == "identifier");
+        Assert.Contains(phraseResultQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "task_result_intent");
+        var taskResultClassifier = phraseResultQuery
+            .GetProperty("classifiers")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "task_result_intent");
+        Assert.Contains(taskResultClassifier.GetProperty("categories").EnumerateArray(), item => item.GetProperty("name").GetString() == "task_blocking");
+        Assert.Contains(taskResultClassifier.GetProperty("categories").EnumerateArray(), item => item.GetProperty("name").GetString() == "dto_result_property");
         Assert.Contains("DTO", phraseResultQuery.GetProperty("false_positive_guidance").GetString(), StringComparison.Ordinal);
         Assert.Equal("Skip =", phraseSkipQuery.GetProperty("query").GetString());
         Assert.Contains(phraseSkipQuery.GetProperty("path_patterns").EnumerateArray(), path => path.GetString() == "tests/**");
+        Assert.Contains(phraseSkipQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "active_skip_governance");
         Assert.Equal("TODO", phraseTodoQuery.GetProperty("query").GetString());
         Assert.Contains(phraseTodoQuery.GetProperty("match_origins").EnumerateArray(), origin => origin.GetString() == "comment");
+        Assert.Contains(phraseTodoQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "source_origin");
 
         static void AssertRegexBoundedGuardFilters(JsonElement query)
         {
@@ -1728,6 +1755,49 @@ public partial class QueryCommandRunnerTests
                 filter.GetProperty("direction").GetString() == "after" &&
                 filter.GetProperty("query").GetString() == "MatchTimeout(" &&
                 filter.GetProperty("scope").GetString() == "same_line");
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RecipeRunJsonIncludesClassifierMetadata_Issue4312()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_classifiers_4312");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                public sealed class App
+                {
+                    public string Result { get; init; } = "";
+                    public void Run()
+                    {
+                        _ = Result;
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "phrase-risk-patterns/task-result-property-review", "--db", dbPath, "--json", "--limit", "5"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var query = Assert.Single(document.RootElement.GetProperty("queries").EnumerateArray());
+            var classifiers = query.GetProperty("classifiers").EnumerateArray().ToArray();
+
+            Assert.Contains(classifiers, classifier => classifier.GetProperty("name").GetString() == "task_result_intent");
+            Assert.Contains(classifiers, classifier => classifier.GetProperty("name").GetString() == "source_origin");
+            var taskClassifier = classifiers.Single(classifier => classifier.GetProperty("name").GetString() == "task_result_intent");
+            Assert.Contains(taskClassifier.GetProperty("evidence_fields").EnumerateArray(), field => field.GetString() == "enclosing_symbol_name");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 

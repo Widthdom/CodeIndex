@@ -98,6 +98,8 @@ public static partial class QueryCommandRunner
                 Console.WriteLine($"    false positives: {query.FalsePositiveGuidance}");
                 if (query.StringComparisonTaxonomy is not null)
                     Console.WriteLine($"    string comparison domains: {FormatSearchRecipeStringComparisonDomains(query.StringComparisonTaxonomy)}");
+                if (query.Classifiers.Count > 0)
+                    Console.WriteLine($"    classifiers: {string.Join(", ", query.Classifiers.Select(classifier => classifier.Name))}");
                 if (query.BroadCatchTaxonomy is not null)
                 {
                     Console.WriteLine($"    broad catch boundaries: {string.Join(", ", query.BroadCatchTaxonomy.BoundaryCategories.Select(category => category.Name))}");
@@ -406,6 +408,20 @@ public static partial class QueryCommandRunner
             yield return origin;
         foreach (var kind in query.ResultKinds)
             yield return kind;
+        foreach (var classifier in query.Classifiers)
+        {
+            yield return classifier.Name;
+            yield return classifier.Description;
+            yield return classifier.TriageGuidance;
+            foreach (var category in classifier.Categories)
+            {
+                yield return category.Name;
+                yield return category.Description;
+                yield return category.ReviewGuidance;
+            }
+            foreach (var evidenceField in classifier.EvidenceFields)
+                yield return evidenceField;
+        }
     }
 
     private static bool DiscoveryFilterMatches(string filter, params string[] fields)
@@ -1105,6 +1121,7 @@ public static partial class QueryCommandRunner
                 [],
                 [],
                 [],
+                [],
                 null,
                 null,
                 null,
@@ -1204,6 +1221,7 @@ public static partial class QueryCommandRunner
                 [.. recipeQuery.MatchOrigins],
                 [.. recipeQuery.ExcludeOrigins],
                 [.. recipeQuery.ResultKinds],
+                [.. recipeQuery.Classifiers],
                 recipeQuery.StringComparisonTaxonomy,
                 recipeQuery.BroadCatchTaxonomy,
                 recipeQuery.NullableContractTaxonomy,
@@ -1274,6 +1292,7 @@ public static partial class QueryCommandRunner
                 [.. recipeQuery.MatchOrigins],
                 [.. recipeQuery.ExcludeOrigins],
                 [.. recipeQuery.ResultKinds],
+                [.. recipeQuery.Classifiers],
                 recipeQuery.StringComparisonTaxonomy,
                 recipeQuery.BroadCatchTaxonomy,
                 rows.Count,
@@ -2426,6 +2445,7 @@ public static partial class QueryCommandRunner
             [.. query.MatchOrigins],
             [.. query.ExcludeOrigins],
             [.. query.ResultKinds],
+            [.. query.Classifiers],
             query.StringComparisonTaxonomy,
             query.BroadCatchTaxonomy,
             query.NullableContractTaxonomy,
