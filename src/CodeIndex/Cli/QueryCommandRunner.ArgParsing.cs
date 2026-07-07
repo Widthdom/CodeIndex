@@ -447,7 +447,7 @@ public static partial class QueryCommandRunner
                     }
                     else
                     {
-                        AddParseError($"Error: unsupported --capability value '{ConsoleUi.FormatBoundedValue(capabilityValue)}'. Use graph, references, symbols, missing-graph, missing-references, missing-symbols, or search-only.");
+                        AddParseError($"Error: unsupported --capability value '{ConsoleUi.FormatBoundedValue(capabilityValue)}'. Use all, none, graph, references, symbols, missing-any, missing-graph, missing-references, missing-symbols, or search-only.");
                     }
                     break;
                 case "--language":

@@ -109,7 +109,7 @@ while skipping references for only the over-limit file.
 | Editor lookup | `cdidx lsp --db .cdidx/codeindex.db` starts a read-only LSP shim for editors that can launch an LSP command. |
 | Freshness | `status --check`, `--files`, `--commits`, `--changed-between`, and `--watch` keep the DB aligned with the workspace. |
 | Validation | `cdidx validate` reports encoding and line-ending issues in indexed files. See [Validate indexed files](USER_GUIDE.md#validate-indexed-files). |
-| Language coverage | `cdidx languages --json` is the live capability probe; add `--language`, `--extension`, or `--alias` to look up one row. See [Supported languages](USER_GUIDE.md#supported-languages). |
+| Language coverage | `cdidx languages --json` is the live capability probe; add `--format count`, `--summary-only`, `--capability <filter>`, `--language`, `--extension`, or `--alias` to narrow output. See [Supported languages](USER_GUIDE.md#supported-languages). |
 | Custom extraction | Extension aliases and regex-backed symbol patterns are documented in [Custom Language Extraction](DEVELOPER_GUIDE.md#custom-language-extraction). |
 | Operations | Install channels, proxy diagnostics, release verification, upgrade, uninstall, troubleshooting, and output controls live in the [User Guide](USER_GUIDE.md). |
 | Internals | Architecture, database schema, status trust fields, release workflow, and extractor contracts live in the [Developer Guide](DEVELOPER_GUIDE.md). |

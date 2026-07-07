@@ -2557,6 +2557,59 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunLanguages_FormatCountReturnsCapabilitySummary_Issue4316()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_languages_format_count_issue4316");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App { }\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/main.adb", "ada", "procedure Main is begin null; end Main;\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunLanguages(["--db", dbPath, "--indexed-only", "--capability", "missing-any", "--format", "count"], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+
+            Assert.Equal("count", root.GetProperty("format").GetString());
+            Assert.True(root.GetProperty("count").GetInt32() > 0);
+            Assert.Equal(root.GetProperty("count").GetInt32(), root.GetProperty("language_count").GetInt32());
+            Assert.Equal(root.GetProperty("count").GetInt32(), root.GetProperty("indexed_language_count").GetInt32());
+            Assert.True(root.GetProperty("indexed_file_count").GetInt64() > 0);
+            Assert.Equal("missing-any", Assert.Single(root.GetProperty("capability_filters").EnumerateArray().ToList()).GetString());
+            Assert.Equal(root.GetProperty("count").GetInt32(), root.GetProperty("capability_counts").GetProperty("missing_any").GetInt32());
+            Assert.False(root.TryGetProperty("languages", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunLanguages_SummaryOnlyJsonReturnsCapabilitySummary_Issue4316()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(["--json", "--summary-only", "--capability", "all"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        using var document = ParseJsonOutput(stdout);
+        var root = document.RootElement;
+
+        Assert.True(root.GetProperty("summary_only").GetBoolean());
+        Assert.True(root.GetProperty("count").GetInt32() > 0);
+        Assert.Equal(root.GetProperty("count").GetInt32(), root.GetProperty("capability_counts").GetProperty("all").GetInt32());
+        Assert.Equal("all", Assert.Single(root.GetProperty("capability_filters").EnumerateArray().ToList()).GetString());
+        Assert.False(root.TryGetProperty("languages", out _));
+    }
+
+    [Fact]
     public void RunLanguages_JsonIncludesUnsupportedCapabilityGuidance_Issue4122()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() =>
@@ -2585,11 +2638,13 @@ public partial class QueryCommandRunnerTests
         Assert.Empty(languages["csharp"].GetProperty("unsupported_guidance").EnumerateArray());
     }
 
-    [Fact]
-    public void RunLanguages_JsonCapabilitySearchOnlyFiltersAllExtractionGaps()
+    [Theory]
+    [InlineData("search-only")]
+    [InlineData("none")]
+    public void RunLanguages_JsonCapabilityNoneFiltersAllExtractionGaps_Issue4316(string capability)
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() =>
-            QueryCommandRunner.RunLanguages(["--json", "--capability", "search-only"], _jsonOptions));
+            QueryCommandRunner.RunLanguages(["--json", "--capability", capability], _jsonOptions));
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
         Assert.Equal(string.Empty, stderr);
@@ -2616,6 +2671,9 @@ public partial class QueryCommandRunnerTests
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Contains("unsupported --capability value 'lint'", stderr);
+        Assert.Contains("all", stderr);
+        Assert.Contains("none", stderr);
+        Assert.Contains("missing-any", stderr);
         Assert.Contains("missing-references", stderr);
         Assert.Contains("search-only", stderr);
     }

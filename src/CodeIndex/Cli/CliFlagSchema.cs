@@ -135,7 +135,7 @@ internal static class CliFlagSchema
     private static readonly string[] ByteFormatCommands = ["files", "map"];
     private static readonly string[] EntrypointConfidenceCommands = ["map"];
     private static readonly string[] MapSectionCommands = ["map"];
-    private static readonly string[] SummaryOnlyCommands = ["map", "search", "recipes", "audit", "symbols", "files", "deps", "unused", "hotspots"];
+    private static readonly string[] SummaryOnlyCommands = ["map", "search", "recipes", "audit", "symbols", "files", "deps", "unused", "hotspots", "languages"];
     private static readonly string[] DependencyCycleCommands = ["deps"];
     private static readonly string[] LanguagesFilterCommands = ["languages"];
 
@@ -203,7 +203,7 @@ internal static class CliFlagSchema
 
     private static readonly string[] FormatCommands =
     [
-        "search", "recipes", "audit", "definition", "references", "callers", "callees", "symbols", "files", "find", "map", "inspect", "validate", "deps", "suggestions",
+        "search", "recipes", "audit", "definition", "references", "callers", "callees", "symbols", "files", "find", "map", "inspect", "validate", "deps", "suggestions", "languages",
     ];
 
     private static readonly string[] ProfileCommands =
@@ -281,13 +281,13 @@ internal static class CliFlagSchema
             new() { Name = "--bytes", Description = "Files: sort by size and show raw byte counts in human output; map: show raw byte counts", Commands = Set(ByteFormatCommands) },
             new() { Name = "--min-entrypoint-confidence", ValuePlaceholder = "<0.0..1.0>", Description = "Map: omit entrypoint candidates below this confidence", Commands = Set(EntrypointConfidenceCommands) },
             new() { Name = "--sections", ValuePlaceholder = "<tree,languages,hotspots,metrics>", Description = "Map: comma-separated response sections to include", Commands = Set(MapSectionCommands) },
-            new() { Name = "--summary-only", Description = "Map/Diff/Recipes/Audit/Files/Symbols/Deps/Hotspots: return only aggregate summary fields where supported", Commands = Set(SummaryOnlyCommands) },
+            new() { Name = "--summary-only", Description = "Map/Diff/Recipes/Audit/Files/Symbols/Deps/Hotspots/Languages: return only aggregate summary fields where supported", Commands = Set(SummaryOnlyCommands) },
             new() { Name = "--cycles", Description = "Deps: return dependency cycles from a bounded approximate candidate-edge scan", Commands = Set(DependencyCycleCommands) },
             new() { Name = "--suppress-noise", Description = "Deps: suppress generic framework/noise symbols in edge symbol samples", Commands = Set("deps") },
             new() { Name = "--symbol", ValuePlaceholder = "<name>", Description = "Deps: keep only edges with an exact sampled symbol name", Commands = Set("deps") },
             new() { Name = "--symbol-family", ValuePlaceholder = "<prefix>", Description = "Deps: keep only edges with a sampled symbol prefix/family", Commands = Set("deps") },
             new() { Name = "--indexed-only", Description = "Languages: list only languages present in the current index", Commands = Set(LanguagesFilterCommands) },
-            new() { Name = "--capability", ValuePlaceholder = "<graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only>", Description = "Languages: filter by language capability or capability gap", Commands = Set(LanguagesFilterCommands) },
+            new() { Name = "--capability", ValuePlaceholder = "<all|none|graph|references|symbols|missing-any|missing-graph|missing-references|missing-symbols|search-only>", Description = "Languages: filter by language capability or capability gap", Commands = Set(LanguagesFilterCommands) },
             new() { Name = "--query", ValuePlaceholder = "<query>", Description = "Literal query", Commands = Set(QueryCommands) },
             new() { Name = "--recipe", ValuePlaceholder = "<name|name/query>", Description = "Search: run a built-in audit recipe query set, optionally selecting one child query", Commands = Set("search") },
             new() { Name = "--include-query", ValuePlaceholder = "<name>", Description = "Search recipe: include one child query; repeat or comma-separate values", Commands = Set("search") },
