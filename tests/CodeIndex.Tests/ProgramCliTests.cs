@@ -328,11 +328,13 @@ public class ProgramCliTests
         Assert.Contains("Usage:", stdout);
         Assert.Contains(expectedUsage, stdout);
         Assert.Contains("Run `cdidx --help`", stdout);
-        if (command is "mcp" or "completions" or "references" or "backfill-fold" or "excerpt" or "inspect" or "status")
+        if (command is "mcp" or "completions" or "references" or "callers" or "callees" or "backfill-fold" or "excerpt" or "inspect" or "status")
         {
             Assert.Contains("Notes:", stdout);
             if (command is "mcp" or "completions")
                 Assert.Contains("--json is not supported", stdout);
+            if (command is "references" or "callers" or "callees")
+                Assert.Contains("--json and --format json emit JSON Lines", stdout);
         }
         else
         {
@@ -1146,6 +1148,25 @@ public class ProgramCliTests
         Assert.Contains("- submit_attempt_count: `1`", stdout);
         Assert.Contains("- last_submit_error: `HttpRequestException: network unavailable`", stdout);
         Assert.DoesNotContain("Add parser support", stdout);
+    }
+
+    [ProductionRuntimeFact]
+    public void Suggestions_ExportMarkdownJsonFlagReturnsStructuredError_Issue4319()
+    {
+        using var fixture = SuggestionFixture.Create();
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess([
+            "suggestions", "export", "--db", fixture.DbPath, "--format", "markdown", "--json"
+        ]);
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var doc = JsonDocument.Parse(stdout);
+        var root = doc.RootElement;
+        Assert.Equal("error", root.GetProperty("status").GetString());
+        Assert.Contains("--format markdown", root.GetProperty("message").GetString());
+        Assert.Contains("--format json", root.GetProperty("hint").GetString());
+        Assert.DoesNotContain("# cdidx Suggestions", stdout);
     }
 
     [ProductionRuntimeFact]

@@ -149,6 +149,8 @@ public static class ConsoleUi
         ("recipes", "Alias for `cdidx search --list-recipes`; use --names or --summary-only for small automation-friendly JSON."),
         ("audit", "Alias for `cdidx search --recipe <recipe>`; low-output flags include --results-only, --search-fields, --format count --summary-only, issue-drafts --summary-only, --max-json-bytes, and --snippet-lines 0."),
         ("references", "--json and --format json emit JSON Lines (one JSON object per result), not a single JSON array."),
+        ("callers", "--json and --format json emit JSON Lines (one JSON object per result), not a single JSON array."),
+        ("callees", "--json and --format json emit JSON Lines (one JSON object per result), not a single JSON array."),
         ("references", "`refs` is a compatibility alias for `references`; prefer `references` in scripts and documentation."),
         ("excerpt", "Line ranges can be supplied as `path:line` or `path:start-end`; explicit --start/--end flags override range parsing."),
         ("excerpt", "--focus-line and --focus-length each require --focus-column so clamped excerpts know the column to keep visible."),
