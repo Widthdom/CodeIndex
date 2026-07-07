@@ -2313,6 +2313,82 @@ internal static class SearchAuditRecipes
                 }
             ]),
         SourceScopedRecipe(
+            "memory-allocation-boundaries",
+            "Audit pooled-buffer ownership, sensitive buffer return policy, stack allocation bounds, and MemoryMarshal boundaries.",
+            [
+                new(
+                    "array-pool-usage",
+                    "ArrayPool",
+                    "Find ArrayPool usage so Rent, ownership transfer, and Return paths can be reviewed together.",
+                    ["audit", "performance"],
+                    "False positives include tests and fixed helpers whose try/finally return policy is already covered nearby.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: rented buffers can leak or retain sensitive bytes when Return is not paired on every exception path.",
+                        "positive: local try/finally, ownership-transfer comments, or shared return helpers make pooled-buffer lifetime auditable."
+                    ],
+                },
+                new(
+                    "array-pool-return",
+                    ".Shared.Return",
+                    "Find direct ArrayPool.Shared.Return calls so clearing policy and exception-safe pairing can be reviewed.",
+                    ["audit", "performance", "security"],
+                    "False positives include non-sensitive protocol buffers and tests that intentionally assert return behavior.",
+                    ExactSubstring: true)
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: returning a sensitive buffer without clearing can retain token, payload, or path material in the shared pool.",
+                        "positive: clearArray:true, Array.Clear over used bytes, or SensitiveBufferPolicy helpers document the intended clearing policy."
+                    ],
+                },
+                new(
+                    "sensitive-buffer-return-policy",
+                    "SensitiveBufferPolicy.Return",
+                    "Find centralized sensitive/non-sensitive buffer return helpers so clear-on-return contracts remain visible.",
+                    ["audit", "security"],
+                    "False positives include the policy implementation itself and tests that assert policy behavior.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "positive: SensitiveBufferPolicy helpers make clear-on-return decisions explicit for token, payload, copy, and protocol buffers.",
+                        "risk: call sites still need review for correct used-byte counts and ownership transfer before returning a pooled buffer."
+                    ],
+                },
+                new(
+                    "stackalloc-buffer",
+                    "stackalloc",
+                    "Find stackalloc buffers so size bounds and sensitive-data clearing can be verified.",
+                    ["audit", "performance", "security"],
+                    "False positives include fixed tiny spans and tests that intentionally cover stack thresholds.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: input-derived stackalloc sizes can overflow the stack or retain sensitive bytes unless bounded and cleared.",
+                        "positive: small constants, named stack thresholds, fallback to ArrayPool, and try/finally clearing make stack allocation intentional."
+                    ],
+                },
+                new(
+                    "memory-marshal-boundary",
+                    "MemoryMarshal",
+                    "Find MemoryMarshal boundaries where span reinterpretation, pinning, or layout assumptions need review.",
+                    ["audit", "bug", "performance"],
+                    "False positives include tests and isolated low-level helpers with documented layout contracts.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: MemoryMarshal can bypass type, lifetime, or alignment checks and should stay inside small documented helpers.",
+                        "positive: fixed layout tests, scoped spans, and no pooled-buffer ownership transfer reduce review risk."
+                    ],
+                }
+            ]),
+        SourceScopedRecipe(
             "concurrency-state-audit",
             "Audit shared-state, locking, cancellation-registration, background-worker, and cache-ownership boundaries.",
             [

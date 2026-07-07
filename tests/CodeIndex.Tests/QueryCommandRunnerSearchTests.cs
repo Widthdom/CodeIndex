@@ -2266,7 +2266,7 @@ public partial class QueryCommandRunnerTests
         };
 
         Assert.Equal(
-            ["risky-code", "string-comparison-semantics", "auth-token-audit", "dogfood-risk-patterns", "sqlite-query-policy-surfaces", "json-parse-apis", "text-encoding-boundaries", "dotnet-risk-patterns", "unsupported-operation-boundaries", "nullable-contracts", "xml-parser-security", "filesystem-traversal", "bounded-read-evidence", "resource-materialization-audit", "concurrency-state-audit", "phrase-risk-patterns", "broad-token-audit"],
+            ["risky-code", "string-comparison-semantics", "auth-token-audit", "dogfood-risk-patterns", "sqlite-query-policy-surfaces", "json-parse-apis", "text-encoding-boundaries", "dotnet-risk-patterns", "unsupported-operation-boundaries", "nullable-contracts", "xml-parser-security", "filesystem-traversal", "bounded-read-evidence", "resource-materialization-audit", "memory-allocation-boundaries", "concurrency-state-audit", "phrase-risk-patterns", "broad-token-audit"],
             recipes.Select(recipe => recipe.Name).ToArray());
 
         AssertRecipe(
@@ -2469,6 +2469,18 @@ public partial class QueryCommandRunnerTests
                 "string-builder-materialization",
                 "query-mcp-toarray-materialization",
                 "query-mcp-tolist-materialization"
+            ]);
+        AssertRecipe(
+            "memory-allocation-boundaries",
+            SearchAuditRecipes.DefaultAuditScope,
+            ["src/**"],
+            expectedSourceExcludes,
+            [
+                "array-pool-usage",
+                "array-pool-return",
+                "sensitive-buffer-return-policy",
+                "stackalloc-buffer",
+                "memory-marshal-boundary"
             ]);
         AssertRecipe(
             "concurrency-state-audit",
@@ -4909,6 +4921,81 @@ public partial class QueryCommandRunnerTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_MemoryAllocationBoundaryRecipeFindsPoolStackAndMarshal_Issue4330()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_memory_allocation_4330");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/PooledBuffers.cs",
+                "csharp",
+                """
+                using System.Buffers;
+                using System.Runtime.InteropServices;
+
+                public static class PooledBuffers
+                {
+                    public static void Run(ReadOnlySpan<int> numbers)
+                    {
+                        byte[] rented = ArrayPool<byte>.Shared.Rent(4096);
+                        Span<byte> scratch = stackalloc byte[64];
+                        try
+                        {
+                            MemoryMarshal.AsBytes(numbers).CopyTo(scratch);
+                        }
+                        finally
+                        {
+                            SensitiveBufferPolicy.ReturnSensitiveCopyBuffer(rented);
+                            ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+                        }
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "tests/PooledBuffersTests.cs",
+                "csharp",
+                """
+                using System.Buffers;
+
+                public static class PooledBuffersTests
+                {
+                    public static void Fixture() => _ = ArrayPool<byte>.Shared.Rent(1);
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "memory-allocation-boundaries", "--db", dbPath, "--json", "--limit", "10"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var queries = document.RootElement.GetProperty("queries").EnumerateArray().ToList();
+
+            AssertRecipeQueryPath(queries, "array-pool-usage", "src/PooledBuffers.cs");
+            AssertRecipeQueryPath(queries, "array-pool-return", "src/PooledBuffers.cs");
+            AssertRecipeQueryPath(queries, "sensitive-buffer-return-policy", "src/PooledBuffers.cs");
+            AssertRecipeQueryPath(queries, "stackalloc-buffer", "src/PooledBuffers.cs");
+            AssertRecipeQueryPath(queries, "memory-marshal-boundary", "src/PooledBuffers.cs");
+            Assert.DoesNotContain(queries.SelectMany(query => query.GetProperty("results").EnumerateArray()), result => result.GetProperty("path").GetString() == "tests/PooledBuffersTests.cs");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+
+        static void AssertRecipeQueryPath(List<JsonElement> queries, string queryName, string path)
+        {
+            var query = queries.Single(item => item.GetProperty("name").GetString() == queryName);
+            Assert.True(query.GetProperty("count").GetInt32() >= 1);
+            Assert.Contains(query.GetProperty("results").EnumerateArray(), result => result.GetProperty("path").GetString() == path);
         }
     }
 
