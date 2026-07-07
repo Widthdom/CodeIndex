@@ -52,6 +52,7 @@ internal static class CliContractManifest
         new(nameof(CommandErrorCodes.RegexMatchTimeout), CommandErrorCodes.RegexMatchTimeout, null),
         new(nameof(CommandErrorCodes.FileSystemCaseProbeFailed), CommandErrorCodes.FileSystemCaseProbeFailed, CommandExitCodes.DatabaseError),
         new(nameof(CommandErrorCodes.CheckpointNotFound), CommandErrorCodes.CheckpointNotFound, CommandExitCodes.NotFound),
+        new(nameof(CommandErrorCodes.WorkspaceManifestInvalid), CommandErrorCodes.WorkspaceManifestInvalid, null),
     ];
 
     public static IReadOnlyList<Type> CliJsonRootTypes { get; } = LoadCliJsonRootTypes();

@@ -45,6 +45,51 @@ public class WorkspaceCommandRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData("list")]
+    [InlineData("status")]
+    public void WorkspaceListJson_InvalidMemberShape_ReturnsStructuredError_Issue4359(string command)
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_invalid_shape");
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """
+                {
+                  "members": [
+                    { "name": "member-a", "path": "member-a" },
+                    { "name": "member-b", "path": "member-b" }
+                  ]
+                }
+                """);
+
+            var previous = Environment.CurrentDirectory;
+            try
+            {
+                Environment.CurrentDirectory = root;
+                var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run([command, "--json"], _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                Assert.Equal(string.Empty, stderr);
+
+                using var document = JsonDocument.Parse(stdout);
+                var rootElement = document.RootElement;
+                Assert.Equal("error", rootElement.GetProperty("status").GetString());
+                Assert.Equal(CommandErrorCodes.WorkspaceManifestInvalid, rootElement.GetProperty("error_code").GetString());
+                Assert.Equal("workspace_manifest_invalid", rootElement.GetProperty("category").GetString());
+                Assert.Contains("members[0] must be a string", rootElement.GetProperty("message").GetString());
+                Assert.Contains("members` must be an array of relative path strings", rootElement.GetProperty("hint").GetString());
+            }
+            finally
+            {
+                Environment.CurrentDirectory = previous;
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
     [Fact]
     public void WorkspaceManifestLoader_Load_RejectsOversizedManifest()
     {
