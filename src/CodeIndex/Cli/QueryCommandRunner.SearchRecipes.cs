@@ -768,6 +768,8 @@ public static partial class QueryCommandRunner
             args.Add("--exact");
         if (options.ExactSubstring)
             args.Add("--exact-substring");
+        if (options.TokenBoundary)
+            args.Add("--token-boundary");
         if (options.Prefix)
             args.Add("--prefix");
         foreach (var guardFilter in options.GuardFilters)
@@ -1672,7 +1674,8 @@ public static partial class QueryCommandRunner
                 !options.NoVisibilityRank,
                 guardFilters: options.GuardFilters,
                 guardWindow: options.GuardWindow,
-                guardScope: options.GuardScope);
+                guardScope: options.GuardScope,
+                tokenBoundary: options.TokenBoundary);
             var rows = BuildSearchDisplayRows(results, options, userExact, namedQuery.Query);
             var truncated = TrimSearchRowsToRequestedLimit(rows, options.Limit);
             AttachExactSubstringHint(
@@ -2192,6 +2195,8 @@ public static partial class QueryCommandRunner
             args.Add("--exact");
         if (options.ExactSubstring)
             args.Add("--exact-substring");
+        if (options.TokenBoundary)
+            args.Add("--token-boundary");
         foreach (var guardFilter in options.GuardFilters)
             AddReplayValueOption(args, BuildSearchGuardReplayOptionName(guardFilter), guardFilter.Query);
         if (options.GuardFilters.Count > 0 && options.GuardWindow != DbReader.DefaultSearchGuardWindow)

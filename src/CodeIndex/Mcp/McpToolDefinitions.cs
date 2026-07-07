@@ -20,7 +20,7 @@ public partial class McpServer
         {
             CreateToolDefinition(
                 "search",
-                "Use this when starting broad code discovery, checking error text, or running named search audit recipes. Prefer it before shell grep; common next step is `excerpt`, `definition`, or `references` on the best hit. Returns snippets plus `result_stable_at`, `next_cursor`, and `next_step_suggestion` or `recovery_hint`. Use `prefix`/trailing `*` to widen token matching, `rawQuery` for FTS5 syntax, and `exactSubstring` for case-sensitive identity. Details and examples: USER_GUIDE.md#search. / 広いコード調査、エラー文言確認、search audit recipe 実行の起点に使う。shell grep より優先し、次は最有力ヒットに `excerpt` / `definition` / `references` を使う。`prefix` / 末尾 `*` / `rawQuery` / `exactSubstring` の詳細と例は USER_GUIDE.md#search を参照。",
+                "Use this when starting broad code discovery, checking error text, or running named search audit recipes. Prefer it before shell grep; common next step is `excerpt`, `definition`, or `references` on the best hit. Returns snippets plus `result_stable_at`, `next_cursor`, and `next_step_suggestion` or `recovery_hint`. Use `prefix`/trailing `*` to widen token matching, `rawQuery` for FTS5 syntax, `exactSubstring` for case-sensitive identity, and `tokenBoundary` when a code phrase must not match inside longer identifiers. Details and examples: USER_GUIDE.md#search. / 広いコード調査、エラー文言確認、search audit recipe 実行の起点に使う。shell grep より優先し、次は最有力ヒットに `excerpt` / `definition` / `references` を使う。`prefix` / 末尾 `*` / `rawQuery` / `exactSubstring` / `tokenBoundary` の詳細と例は USER_GUIDE.md#search を参照。",
                 new JsonObject
                 {
                     ["type"] = "object",
@@ -44,8 +44,9 @@ public partial class McpServer
                         ["since"] = new JsonObject { ["type"] = "string", ["description"] = "Filter to files modified since this ISO 8601 timestamp" },
                         ["noDedup"] = new JsonObject { ["type"] = "boolean", ["description"] = "Disable overlapping-chunk deduplication and return every raw chunk hit; useful for debugging chunk boundaries or measuring raw match density.", ["default"] = false },
                         ["exactSubstring"] = new JsonObject { ["type"] = "boolean", ["description"] = "Preferred explicit name for search's exact mode: case-sensitive exact substring match (bypasses FTS5).", ["default"] = false },
+                        ["tokenBoundary"] = new JsonObject { ["type"] = "boolean", ["description"] = "Case-sensitive exact code-phrase match that also requires identifier/token boundaries around the full query, so `new HttpClient` does not match `new HttpClientHandler`.", ["default"] = false },
                         ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "Backward-compatible alias for `exactSubstring`.", ["default"] = false },
-                        ["prefix"] = new JsonObject { ["type"] = "boolean", ["description"] = "Opt into FTS5 prefix expansion for every token in `query`. Cannot be combined with `exact`/`exactSubstring`.", ["default"] = false },
+                        ["prefix"] = new JsonObject { ["type"] = "boolean", ["description"] = "Opt into FTS5 prefix expansion for every token in `query`. Cannot be combined with `exact`/`exactSubstring`/`tokenBoundary`.", ["default"] = false },
                         ["requireBefore"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Keep search matches only when this guard query appears within `guardWindow` lines before the primary match. Accepts a string or string array." },
                         ["requireAfter"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Keep search matches only when this guard query appears within `guardWindow` lines after the primary match. Accepts a string or string array." },
                         ["rejectBefore"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Drop search matches when this guard query appears within `guardWindow` lines before the primary match. Accepts a string or string array." },
@@ -918,7 +919,7 @@ public partial class McpServer
         switch (name)
         {
             case "query":
-                AppendConstraintDescription(obj, "Use identifiers, symbol names, error messages, config keys, or short code/text fragments; add exactName/exactSubstring when identity matters.");
+                AppendConstraintDescription(obj, "Use identifiers, symbol names, error messages, config keys, or short code/text fragments; add exactName/exactSubstring/tokenBoundary when identity matters.");
                 break;
             case "exactName":
                 AppendConstraintDescription(obj, "Use this when the symbol name must match exactly, e.g. `Run` should not also match `RunAsync`.");
@@ -941,6 +942,9 @@ public partial class McpServer
         {
             case ("search", "exactSubstring"):
                 AppendConstraintDescription(obj, "Use this for case-sensitive exact text identity when tokenization, punctuation, emoji, or prefix matching would be misleading.");
+                break;
+            case ("search", "tokenBoundary"):
+                AppendConstraintDescription(obj, "Use this for exact code phrases that should stop at identifier/token boundaries, such as matching `new HttpClient` without `new HttpClientHandler`.");
                 break;
             case ("search", "exact"):
                 AppendConstraintDescription(obj, "Alias of `exactSubstring`; use `exactSubstring` in new calls for search text identity.");

@@ -309,6 +309,7 @@ public partial class McpServerTests
         var searchProperties = tools.First(t => t!["name"]!.GetValue<string>() == "search")!["inputSchema"]!["properties"]!;
         Assert.Contains("identifiers", searchProperties["query"]!["description"]!.GetValue<string>(), StringComparison.Ordinal);
         Assert.Contains("case-sensitive exact text identity", searchProperties["exactSubstring"]!["description"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Contains("identifier/token boundaries", searchProperties["tokenBoundary"]!["description"]!.GetValue<string>(), StringComparison.Ordinal);
         Assert.Contains("partial tokens", searchProperties["prefix"]!["description"]!.GetValue<string>(), StringComparison.Ordinal);
         Assert.Contains("narrow by module", searchProperties["path"]!["description"]!.GetValue<string>(), StringComparison.Ordinal);
         Assert.Contains("production-code investigation", searchProperties["excludeTests"]!["description"]!.GetValue<string>(), StringComparison.Ordinal);

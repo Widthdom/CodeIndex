@@ -66,6 +66,75 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_TokenBoundaryFiltersLongerIdentifiers_Issue4323()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_token_boundary_4323");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/client.cs", "csharp", "using System.Net.Http;\nvar client = new HttpClient();\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/handler.cs", "csharp", "using System.Net.Http;\nvar handler = new HttpClientHandler();\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/object-init.cs", "csharp", "using System;\nusing System.Net.Http;\nvar client = new HttpClient { Timeout = TimeSpan.FromSeconds(1) };\n");
+
+            var (exactExitCode, exactStdout, exactStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["new HttpClient", "--db", dbPath, "--exact-substring", "--count", "--json"],
+                _jsonOptions));
+            var (boundaryExitCode, boundaryStdout, boundaryStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["new HttpClient", "--db", dbPath, "--token-boundary", "--count", "--json"],
+                _jsonOptions));
+            var (groupExitCode, groupStdout, groupStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["new HttpClient", "--db", dbPath, "--token-boundary", "--group-by", "file", "--count", "--json"],
+                _jsonOptions));
+            var (ftsExitCode, _, ftsStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["new HttpClient", "--db", dbPath, "--token-boundary", "--fts"],
+                _jsonOptions));
+            var (recipeExitCode, _, recipeStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code", "--db", dbPath, "--token-boundary"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exactExitCode);
+            Assert.Equal(string.Empty, exactStderr);
+            using (var exactDocument = ParseJsonOutput(exactStdout))
+            {
+                Assert.Equal(3, exactDocument.RootElement.GetProperty("count").GetInt32());
+                Assert.Equal(3, exactDocument.RootElement.GetProperty("file_count").GetInt32());
+            }
+
+            Assert.Equal(CommandExitCodes.Success, boundaryExitCode);
+            Assert.Equal(string.Empty, boundaryStderr);
+            using (var boundaryDocument = ParseJsonOutput(boundaryStdout))
+            {
+                var root = boundaryDocument.RootElement;
+                Assert.Equal(2, root.GetProperty("count").GetInt32());
+                Assert.Equal(2, root.GetProperty("file_count").GetInt32());
+                Assert.True(root.GetProperty("query_context").GetProperty("token_boundary").GetBoolean());
+                Assert.False(root.TryGetProperty("exact_substring_hint", out _));
+            }
+
+            Assert.Equal(CommandExitCodes.Success, groupExitCode);
+            Assert.Equal(string.Empty, groupStderr);
+            using (var groupDocument = ParseJsonOutput(groupStdout))
+            {
+                var root = groupDocument.RootElement;
+                Assert.Equal(2, root.GetProperty("count").GetInt32());
+                var files = root.GetProperty("groups").EnumerateArray().Select(group => group.GetProperty("file").GetString()).ToArray();
+                Assert.Contains("src/client.cs", files);
+                Assert.Contains("src/object-init.cs", files);
+                Assert.DoesNotContain("src/handler.cs", files);
+            }
+
+            Assert.Equal(CommandExitCodes.UsageError, ftsExitCode);
+            Assert.Contains("--token-boundary cannot be combined with --fts", ftsStderr);
+            Assert.Equal(CommandExitCodes.UsageError, recipeExitCode);
+            Assert.Contains("--token-boundary is only supported for ad hoc search", recipeStderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_EditorAndDelimitedFormatsUsePrimaryMatchSpan_Issue3931()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_primary_match_span_3931");

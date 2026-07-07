@@ -878,7 +878,7 @@ public partial class McpServer
                 "maxHops" or "maxDepth" or "depth" or "parallelism" or "maxFileBytes" or "maxSymbolsPerFile" or "maxReferencesPerFile" or "debounce" or
                 "staleAfterSeconds" or
                 "guardWindow" or "maxOutputBytes" or "maxResponseBytes" => "integer",
-            "check" or "excludeTests" or "includeGenerated" or "indexedOnly" or "rawQuery" or "noDedup" or "exactSubstring" or
+            "check" or "excludeTests" or "includeGenerated" or "indexedOnly" or "rawQuery" or "noDedup" or "exactSubstring" or "tokenBoundary" or
                 "exactName" or "exact" or "prefix" or "countOnly" or "includeBody" or "lsp_compatible" or
                 "lspCompatible" or
                 "regex" or "withPaths" or "rebuild" or "dryRun" or "dry_run" or "force" or
@@ -1028,12 +1028,13 @@ public partial class McpServer
     {
         var legacyExact = args?["exact"]?.GetValue<bool>() ?? false;
         var exactSubstring = args?["exactSubstring"]?.GetValue<bool>() ?? false;
+        var tokenBoundary = args?["tokenBoundary"]?.GetValue<bool>() ?? false;
         var exactName = args?["exactName"]?.GetValue<bool>() ?? false;
 
-        if (CountTrue(legacyExact, exactSubstring, exactName) > 1)
+        if (CountTrue(legacyExact, exactSubstring, tokenBoundary, exactName) > 1)
         {
             exact = false;
-            error = "Pass only one of 'exact', 'exactSubstring', 'exactName'.";
+            error = "Pass only one of 'exact', 'exactSubstring', 'tokenBoundary', 'exactName'.";
             return false;
         }
 
@@ -1786,9 +1787,13 @@ public partial class McpServer
         var countOnly = ReadCountOnly(args) || format == "count";
         if (!TryResolveSearchExactArgument(args, out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
+        var tokenBoundary = args?["tokenBoundary"]?.GetValue<bool>() ?? false;
+        var exactSearch = exact || tokenBoundary;
         var prefix = args?["prefix"]?.GetValue<bool>() ?? false;
-        if (prefix && exact)
-            return CreateToolErrorResponse(id, "'prefix' cannot be combined with 'exact' / 'exactSubstring' (exact uses instr(), not FTS5 prefix phrases).");
+        if (tokenBoundary && rawQuery)
+            return CreateToolErrorResponse(id, "'tokenBoundary' cannot be combined with 'rawQuery'.");
+        if (prefix && exactSearch)
+            return CreateToolErrorResponse(id, "'prefix' cannot be combined with 'exact' / 'exactSubstring' / 'tokenBoundary' (exact uses instr(), not FTS5 prefix phrases).");
         if (TryReadSearchGuardFilters(id, args, out var guardFilters) is JsonNode guardError)
             return guardError;
         if (TryReadSearchGuardScope(id, args, out var guardScope) is JsonNode guardScopeError)
@@ -1796,7 +1801,7 @@ public partial class McpServer
         var guardWindow = ReadOptionalIntArgument(args, "guardWindow") ?? DbReader.DefaultSearchGuardWindow;
         if (guardWindow < 0 || guardWindow > DbReader.MaxSearchGuardWindow)
             return CreateToolErrorResponse(id, $"'guardWindow' must be between 0 and {DbReader.MaxSearchGuardWindow}; got {guardWindow}.");
-        var suggestExactSubstring = SearchQueryAdvisor.ShouldSuggestExactSubstring(query, rawQuery, exact, prefix);
+        var suggestExactSubstring = SearchQueryAdvisor.ShouldSuggestExactSubstring(query, rawQuery, exactSearch, prefix);
 
         return WithDbReader(id, args, reader =>
         {
@@ -1805,7 +1810,7 @@ public partial class McpServer
                 List<SearchResult> countResults;
                 try
                 {
-                    countResults = reader.Search(query, MaxLimit, lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix, guardFilters: guardFilters, guardWindow: guardWindow, guardScope: guardScope);
+                    countResults = reader.Search(query, MaxLimit, lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exactSearch, prefix, guardFilters: guardFilters, guardWindow: guardWindow, guardScope: guardScope, tokenBoundary: tokenBoundary);
                 }
                 catch (SearchQueryLimitException)
                 {
@@ -1819,6 +1824,8 @@ public partial class McpServer
                 var payload = BuildCountOnlyPayload(countResults.Count, truncatedCount ? null : countResults.Count, truncatedCount, countResults, result => result.Path);
                 payload["query"] = query;
                 payload["rawQuery"] = rawQuery;
+                if (tokenBoundary)
+                    payload["tokenBoundary"] = true;
                 payload["snippetFocus"] = snippetFocusText.Trim().ToLowerInvariant();
                 payload["path"] = PathEcho(pathPatterns);
                 payload["excludeTests"] = excludeTests;
@@ -1834,7 +1841,7 @@ public partial class McpServer
             List<SearchResult> results;
             try
             {
-                results = reader.Search(query, FetchLimitForEnvelope(limit), lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix, cursor: cursor, guardFilters: guardFilters, guardWindow: guardWindow, guardScope: guardScope);
+                results = reader.Search(query, FetchLimitForEnvelope(limit), lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exactSearch, prefix, cursor: cursor, guardFilters: guardFilters, guardWindow: guardWindow, guardScope: guardScope, tokenBoundary: tokenBoundary);
             }
             catch (SearchQueryLimitException)
             {
@@ -1852,6 +1859,7 @@ public partial class McpServer
                 {
                     ["query"] = query,
                     ["rawQuery"] = rawQuery,
+                    ["tokenBoundary"] = tokenBoundary,
                     ["snippetLines"] = snippetLines,
                     ["snippetFocus"] = snippetFocusText.Trim().ToLowerInvariant(),
                     ["maxLineWidth"] = maxLineWidth,
@@ -1882,14 +1890,15 @@ public partial class McpServer
 
             var queryContext = SearchSnippetFormatter.PrepareQueryContext(query);
             var compactResults = SearchSnippetFormatter
-                .ToCompactResults(results, queryContext, snippetLines, exact, maxLineWidth, lang, snippetFocus, exposeLiteralHighlights: exact)
+                .ToCompactResults(results, queryContext, snippetLines, exactSearch, maxLineWidth, lang, snippetFocus, exposeLiteralHighlights: exactSearch)
                 .ToList();
             foreach (var compact in compactResults)
-                SearchSnippetFormatter.ApplyOutputMetadata(compact, snippetLines, maxLineWidth, exact, rawQuery);
+                SearchSnippetFormatter.ApplyOutputMetadata(compact, snippetLines, maxLineWidth, exactSearch, rawQuery);
             var structured = new JsonObject
             {
                 ["query"] = query,
                 ["rawQuery"] = rawQuery,
+                ["tokenBoundary"] = tokenBoundary,
                 ["cursor"] = cursorValue,
                 ["snippetLines"] = snippetLines,
                 ["snippetFocus"] = snippetFocusText.Trim().ToLowerInvariant(),
@@ -1956,6 +1965,8 @@ public partial class McpServer
         if (!TryReadSinceArgument(args, out var since, out var sinceError))
             return CreateToolErrorResponse(id, sinceError!);
         var deduplicate = !(args?["noDedup"]?.GetValue<bool>() ?? false);
+        if (args?["tokenBoundary"]?.GetValue<bool>() ?? false)
+            return CreateToolErrorResponse(id, "'tokenBoundary' is only supported for ad hoc search, not recipe execution.");
         if (!TryResolveSearchExactArgument(args, out var userExact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
         var hasExactOverride = args?["exact"] is not null || args?["exactSubstring"] is not null;

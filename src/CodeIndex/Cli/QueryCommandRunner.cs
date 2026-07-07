@@ -125,6 +125,7 @@ public sealed class QueryCommandOptions
     public bool ExcludeFixtures { get; init; }
     public bool ExactName { get; init; }
     public bool ExactSubstring { get; init; }
+    public bool TokenBoundary { get; init; }
     public bool CheckWorkspace { get; init; }
     public TimeSpan? StaleAfter { get; init; }
     public IReadOnlySet<string>? StatusCheckScopes { get; init; }

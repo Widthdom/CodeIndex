@@ -112,6 +112,7 @@ public static partial class QueryCommandRunner
         List<string>? parseErrors = null;
         bool exactName = false;
         bool exactSubstring = false;
+        bool tokenBoundary = false;
         bool dbPathExplicit = false;
         bool readOnly = false;
         bool dryRun = false;
@@ -984,6 +985,9 @@ public static partial class QueryCommandRunner
                 case "--exact-substring":
                     exactSubstring = true;
                     break;
+                case "--token-boundary":
+                    tokenBoundary = true;
+                    break;
                 case "--prefix":
                     prefix = true;
                     break;
@@ -1615,6 +1619,7 @@ public static partial class QueryCommandRunner
             ExcludeFixtures = excludeFixtures,
             ExactName = exactName,
             ExactSubstring = exactSubstring,
+            TokenBoundary = tokenBoundary,
             CheckWorkspace = checkWorkspace,
             StaleAfter = staleAfter,
             StatusCheckScopes = statusCheckScopes,
@@ -2531,10 +2536,10 @@ public static partial class QueryCommandRunner
 
     private static bool TryRejectMultipleExactFlags(QueryCommandOptions options, out string? error)
     {
-        var count = (options.Exact ? 1 : 0) + (options.ExactSubstring ? 1 : 0) + (options.ExactName ? 1 : 0);
+        var count = (options.Exact ? 1 : 0) + (options.ExactSubstring ? 1 : 0) + (options.ExactName ? 1 : 0) + (options.TokenBoundary ? 1 : 0);
         if (count > 1)
         {
-            error = "Error: pass only one of --exact, --exact-substring, --exact-name.";
+            error = "Error: pass only one of --exact, --exact-substring, --token-boundary, --exact-name.";
             return false;
         }
 

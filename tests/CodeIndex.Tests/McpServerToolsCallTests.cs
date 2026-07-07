@@ -929,6 +929,27 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Search_TokenBoundaryFiltersLongerIdentifiers_Issue4323()
+    {
+        InsertIndexedFile("src/client.cs", "csharp", "using System.Net.Http;\nvar client = new HttpClient();\n");
+        InsertIndexedFile("src/handler.cs", "csharp", "using System.Net.Http;\nvar handler = new HttpClientHandler();\n");
+        InsertIndexedFile("src/object-init.cs", "csharp", "using System;\nusing System.Net.Http;\nvar client = new HttpClient { Timeout = TimeSpan.FromSeconds(1) };\n");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"new HttpClient","tokenBoundary":true,"limit":10}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        var results = structured["results"]!.AsArray();
+        var paths = results.Select(result => result!["path"]!.GetValue<string>()).ToArray();
+        Assert.True(structured["tokenBoundary"]!.GetValue<bool>());
+        Assert.Equal(2, results.Count);
+        Assert.Contains("src/client.cs", paths);
+        Assert.Contains("src/object-init.cs", paths);
+        Assert.DoesNotContain("src/handler.cs", paths);
+        Assert.NotNull(results[0]!["highlights"]);
+    }
+
+    [Fact]
     public void ToolsCall_Search_PunctuationHeavyQueryAddsExactSubstringRecoveryHint()
     {
         InsertIndexedFile("src/sql.cs", "csharp", "var CommandText = $\"SELECT 1\";\nvar CommandText = other;\n");
@@ -939,7 +960,7 @@ public partial class McpServerTests
         var recoveryHint = response["result"]!["structuredContent"]!["recovery_hint"]!;
         Assert.Equal("punctuation_heavy_query", recoveryHint["reason"]!.GetValue<string>());
         Assert.Equal(
-            "This looks like a literal code phrase; rerun the search with exactSubstring=true for punctuation-sensitive matching.",
+            "This looks like a literal code phrase; rerun the search with exactSubstring=true for punctuation-sensitive matching. Use token-boundary search when longer identifiers should not match shorter code phrases.",
             recoveryHint["suggested_action"]!.GetValue<string>());
         Assert.Equal("search", recoveryHint["tool"]!.GetValue<string>());
         Assert.Equal("CommandText = $", recoveryHint["args"]!["query"]!.GetValue<string>());
