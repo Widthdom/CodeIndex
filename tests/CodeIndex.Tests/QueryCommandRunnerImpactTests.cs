@@ -219,6 +219,31 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunImpact_ExactNameFlagIsAccepted_Issue4315()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_impact_exact_name_issue4315");
+        try
+        {
+            var dbPath = CreateIndexedDbWithSingleFile(projectRoot, markGraphReady: true);
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["HandleRequest", "--db", dbPath, "--json", "--max-hops", "0", "--exact-name"],
+                _jsonOptions));
+
+            Assert.True(exitCode == CommandExitCodes.Success, $"stdout: {stdout}\nstderr: {stderr}");
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(1, json.GetProperty("definition_count").GetInt32());
+            Assert.Equal("HandleRequest", json.GetProperty("query").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunImpact_StrictReturnsFeatureUnavailableForResolutionFailure()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_impact_strict_resolution_failure");
