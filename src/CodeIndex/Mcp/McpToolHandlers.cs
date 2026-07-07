@@ -6252,6 +6252,17 @@ public partial class McpServer
                 // Best-effort; never fail an otherwise-successful index run.
                 indexRunDiagnostics.Add(IndexCommandRunner.FormatIndexRunDiagnostic("path_case_sensitivity_metadata_write_failed", ex));
             }
+            try
+            {
+                writer.SetMeta(
+                    DbContext.IndexedFollowSymlinksPolicyMetaKey,
+                    symlinkPolicy.ToString().ToLowerInvariant());
+            }
+            catch (Exception ex)
+            {
+                // Best-effort; never fail an otherwise-successful index run.
+                indexRunDiagnostics.Add(IndexCommandRunner.FormatIndexRunDiagnostic("indexed_symlink_policy_metadata_write_failed", ex));
+            }
             IndexCommandRunner.StampLastIndexRunDiagnostics(writer, indexRunDiagnostics);
             writer.ClearBatchInProgress();
             readinessTxn.Commit();

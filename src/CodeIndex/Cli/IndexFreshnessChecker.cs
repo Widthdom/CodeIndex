@@ -58,7 +58,14 @@ internal static class IndexFreshnessChecker
         if (pathCaseSensitive.HasValue)
             PathCasing.SeedFromWorkspace(projectRoot, ignoreCase);
         var ignoreRuleRoot = GitHelper.TryGetRepositoryRoot(projectRoot, cancellationToken) ?? Path.GetFullPath(projectRoot);
-        var indexer = new FileIndexer(projectRoot, ignoreCase, ignoreRuleRoot);
+        var symlinkPolicy = ReadIndexedSymlinkPolicy(reader);
+        var indexer = new FileIndexer(
+            projectRoot,
+            ignoreCase,
+            ignoreRuleRoot,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: null,
+            symlinkPolicy: symlinkPolicy);
         var scan = indexer.ScanFilesDetailed(cancellationToken: cancellationToken);
         foreach (var error in scan.Errors)
         {
@@ -181,6 +188,20 @@ internal static class IndexFreshnessChecker
                 AddSample(result.MissingFiles, path);
             }
         }
+    }
+
+    private static FileIndexer.SymlinkPolicy ReadIndexedSymlinkPolicy(DbReader reader)
+    {
+        var raw = reader.GetMetaString(DbContext.IndexedFollowSymlinksPolicyMetaKey);
+        if (string.IsNullOrWhiteSpace(raw))
+            return FileIndexer.SymlinkPolicy.None;
+
+        return raw.Trim().ToLowerInvariant() switch
+        {
+            "internal" => FileIndexer.SymlinkPolicy.Internal,
+            "all" => FileIndexer.SymlinkPolicy.All,
+            _ => FileIndexer.SymlinkPolicy.None,
+        };
     }
 
     private readonly record struct WorkspaceFileTarget(

@@ -1181,6 +1181,7 @@ public static partial class IndexCommandRunner
         if (errors == 0)
         {
             StampIndexedHeadMetadata(writer, projectRoot, indexRunDiagnostics, cancellationToken);
+            StampIndexedSymlinkPolicy(writer, options.SymlinkPolicy, indexRunDiagnostics);
             StampCommitScopedFreshHeadMetadata(writer, options, projectRoot, currentHeadCommit, indexRunDiagnostics, cancellationToken);
             if (options.MemoryTrace)
                 memorySamples.Add(CaptureMemorySample("finalize", stopwatch));
