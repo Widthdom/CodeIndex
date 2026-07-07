@@ -246,6 +246,26 @@ internal static class SearchAuditRecipes
         ],
         ["path", "match_origins", "test_file", "test_symbol", "test_fixture"],
         "Review active Skip assignments as test governance metadata, not just lexical matches.");
+    private static readonly SearchRecipeClassifierJsonResult BroadCatchBoundaryClassifier = new(
+        "broad_catch_boundary",
+        "Classifies broad catch clauses by intentional boundary type before deciding whether the catch should be narrowed, rethrown, or documented.",
+        [.. BroadExceptionCatchTaxonomy.BoundaryCategories.Select(category => new SearchRecipeClassifierCategoryJsonResult(
+            category.Name,
+            category.Description,
+            category.ExpectedDiagnosticBehavior))],
+        ["path", "enclosing_symbol_name", "guard_evidence", "risk_evidence", "match_origins"],
+        BroadExceptionCatchTaxonomy.TriageGuidance);
+    private static readonly SearchRecipeClassifierJsonResult DiagnosticRedactionClassifier = new(
+        "diagnostic_redaction",
+        "Classifies exception-message and broad-catch diagnostic paths by sanitized output, bounded private suppression, debug logging, or raw echo risk.",
+        [
+            new("sanitized_user_visible", "The path emits a stable error code, bounded user message, or redacted diagnostic.", "Prefer DiagnosticRedactor, CommandErrorWriter.FormatSanitizedException, or protocol-specific bounded error payloads."),
+            new("private_or_best_effort_suppression", "The exception stays private because cleanup/probe failure should not replace the primary result.", "Keep comments or tests near the boundary explaining why suppression is intentional."),
+            new("debug_or_support_bundle", "The diagnostic is limited to debug logging, local traces, or support-bundle material.", "Verify the path is opt-in, scoped, and redacted before it leaves the local trust boundary."),
+            new("raw_exception_echo", "Raw exception text can cross CLI, JSON, MCP, LSP, support-bundle, or GitHub issue output.", "Route through the existing diagnostic/error formatting policy or add a stable sanitized wrapper.")
+        ],
+        ["path", "enclosing_symbol_name", "risk_evidence", "guard_evidence", "match_origins", "result_kinds"],
+        "Trace raw exception text to its output boundary; user-visible diagnostics should be bounded and redacted, while private cleanup/probe suppression needs explicit intent.");
 
     private static List<SearchGuardFilter> BoundedRegexEvidenceGuardFilters() =>
     [
@@ -385,6 +405,7 @@ internal static class SearchAuditRecipes
                         "risk: raw exception messages can carry absolute paths, command lines, SQL, or secret-like values into user-visible output.",
                         "positive: DiagnosticRedactor, CommandErrorWriter.FormatSanitizedException, or a dedicated sanitizer nearby is strong safe evidence."
                     ],
+                    Classifiers = [DiagnosticRedactionClassifier],
                 },
                 new(
                     "cancellation-gap",
@@ -414,6 +435,7 @@ internal static class SearchAuditRecipes
                         "risk: broad or empty catch clauses can swallow recovery diagnostics or hide unexpected failures.",
                         "positive: explicit rethrow, translation to a stable error contract, or documented best-effort cleanup can make a catch intentional."
                     ],
+                    Classifiers = [BroadCatchBoundaryClassifier],
                 },
                 new(
                     "broad-exception-catch",
@@ -424,6 +446,7 @@ internal static class SearchAuditRecipes
                 {
                     MatchOrigins = ["code"],
                     BroadCatchTaxonomy = BroadExceptionCatchTaxonomy,
+                    Classifiers = [BroadCatchBoundaryClassifier, DiagnosticRedactionClassifier],
                 },
                 new(
                     "process-start-info",
@@ -865,6 +888,7 @@ internal static class SearchAuditRecipes
                         "positive: typed exception properties, error codes, or normalized diagnostic classifiers are safer evidence."
                     ],
                     MatchOrigins = ["code"],
+                    Classifiers = [DiagnosticRedactionClassifier],
                 },
                 DogfoodStaticRegexApiQuery(
                     "static-regex-api",
@@ -933,6 +957,7 @@ internal static class SearchAuditRecipes
                         "positive: logging, aggregation, retry policy, or explicit non-critical cleanup comments reduce filing priority."
                     ],
                     MatchOrigins = ["code"],
+                    Classifiers = [BroadCatchBoundaryClassifier, DiagnosticRedactionClassifier],
                 },
                 new(
                     "wall-clock-deadline",

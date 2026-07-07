@@ -1082,9 +1082,9 @@ next to the evidence path. For example,
 `classifiers` describe the triage dimensions that downstream tools should use,
 such as `source_origin`, `guard_evidence`, `secret_origin`,
 `parser_guard_evidence`, `process_launch_boundary`, `cancellation_intent`,
-`task_result_intent`, and `active_skip_governance`; each classifier lists
-categories, evidence fields, and guidance so noisy audit terms can be separated
-before filing.
+`task_result_intent`, `active_skip_governance`, `broad_catch_boundary`, and
+`diagnostic_redaction`; each classifier lists categories, evidence fields, and
+guidance so noisy audit terms can be separated before filing.
 `risky-code/broad-exception-catch` includes broad-catch boundary categories and
 expected diagnostic behaviors so users can distinguish intentional top-level,
 cleanup, probe, diagnostic-sanitization, and worker boundaries from catches that
@@ -3858,8 +3858,9 @@ issue-draft export や下流の triage tool が evidence path の近くに revie
 保持できます。`classifiers` は下流 tool が使うべき triage の軸を表し、
 `source_origin`、`guard_evidence`、`secret_origin`、`parser_guard_evidence`、
 `process_launch_boundary`、`cancellation_intent`、`task_result_intent`、
-`active_skip_governance` などの classifier が category、evidence field、guidance を
-持つため、ノイズの多い audit term を起票前に切り分けられます。
+`active_skip_governance`、`broad_catch_boundary`、`diagnostic_redaction` などの
+classifier が category、evidence field、guidance を持つため、ノイズの多い audit term を
+起票前に切り分けられます。
 たとえば `risky-code/broad-exception-catch` は
 broad catch の境界カテゴリと期待される diagnostic behavior を含めるため、意図的な
 top-level、cleanup、probe、diagnostic-sanitization、worker 境界と、narrowing または
