@@ -2378,7 +2378,7 @@ public partial class QueryCommandRunnerTests
         };
 
         Assert.Equal(
-            ["risky-code", "string-comparison-semantics", "auth-token-audit", "dogfood-risk-patterns", "sqlite-query-policy-surfaces", "json-parse-apis", "dotnet-risk-patterns", "unsupported-operation-boundaries", "nullable-contracts", "xml-parser-security", "filesystem-traversal", "bounded-read-evidence", "resource-materialization-audit", "concurrency-state-audit", "phrase-risk-patterns", "broad-token-audit"],
+            ["risky-code", "string-comparison-semantics", "auth-token-audit", "dogfood-risk-patterns", "sqlite-query-policy-surfaces", "json-parse-apis", "dotnet-risk-patterns", "unsupported-operation-boundaries", "nullable-contracts", "xml-parser-security", "filesystem-traversal", "filesystem-mutation-boundaries", "bounded-read-evidence", "resource-materialization-audit", "concurrency-state-audit", "phrase-risk-patterns", "broad-token-audit"],
             recipes.Select(recipe => recipe.Name).ToArray());
 
         AssertRecipe(
@@ -2603,6 +2603,26 @@ public partial class QueryCommandRunnerTests
             ["src/**"],
             expectedSourceExcludes,
             ["enumerate-files", "enumerate-directories", "enumerate-file-system-entries", "enumerate-without-options", "enumeration-options"]);
+        AssertRecipe(
+            "filesystem-mutation-boundaries",
+            SearchAuditRecipes.DefaultAuditScope,
+            ["src/**"],
+            expectedSourceExcludes,
+            [
+                "path-full-normalization",
+                "long-path-normalization",
+                "file-delete-boundary",
+                "directory-delete-boundary",
+                "file-move-boundary",
+                "file-copy-boundary",
+                "temp-path-boundary",
+                "temp-file-name-boundary",
+                "symlink-reparse-policy",
+                "cleanup-target-guard",
+                "watcher-boundary",
+                "posix-mode-boundary",
+                "path-filter-boundary"
+            ]);
         AssertRecipe(
             "bounded-read-evidence",
             SearchAuditRecipes.DefaultAuditScope,

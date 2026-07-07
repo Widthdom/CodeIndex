@@ -2227,6 +2227,157 @@ internal static class SearchAuditRecipes
                     "Review option combinations against cancellation, budget, long-path, and permission behavior.")
             ]),
         SourceScopedRecipe(
+            "filesystem-mutation-boundaries",
+            "Audit path normalization, destructive file operations, temp paths, symlink policy, and path-filter guard evidence together.",
+            [
+                new(
+                    "path-full-normalization",
+                    "Path.GetFullPath",
+                    "Find path canonicalization sites that should be classified by trust boundary and filesystem case-sensitivity assumptions.",
+                    ["audit", "security"],
+                    "False positives include display-only normalization and tests; prioritize user input, archive import/export, DB paths, and cleanup targets.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: full-path normalization alone does not prove root containment, symlink/reparse policy, or case-sensitivity correctness.",
+                        "positive: pair with PathCasing, root containment checks, LongPath normalization, or typed diagnostics before filesystem mutation."
+                    ],
+                },
+                new(
+                    "long-path-normalization",
+                    "LongPath.EnsureWindowsPrefix",
+                    "Find long-path normalization boundaries that should stay paired with containment checks and platform-specific filesystem probes.",
+                    ["audit", "security"],
+                    "False positives include wrappers whose only job is centralizing Windows long-path behavior.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "positive: LongPath helpers centralize Windows prefix handling before IO APIs.",
+                        "risk: long-path normalization must not replace root containment, symlink/reparse rejection, or path redaction."
+                    ],
+                },
+                new(
+                    "file-delete-boundary",
+                    "File.Delete",
+                    "Find file deletion call sites that require owned-state, caller-approved output, or bounded best-effort cleanup justification.",
+                    ["audit", "security"],
+                    "False positives include test cleanup and intentionally scoped temp fixtures.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: deletion must be protected from path traversal, symlink/reparse redirection, and TOCTOU-sensitive target swaps.",
+                        "positive: FileSystemBoundary validation, .cdidx ownership, AtomicFileWriter rollback, or explicit temp-root containment can justify the mutation."
+                    ],
+                },
+                new(
+                    "directory-delete-boundary",
+                    "Directory.Delete",
+                    "Find recursive and non-recursive directory deletions that need root containment, symlink policy, retry bounds, and ownership evidence.",
+                    ["audit", "security"],
+                    "False positives include tests and known-owned fixture directories.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: recursive directory deletion can cross a symlink/reparse boundary or race with target replacement unless guarded.",
+                        "positive: TryValidateDirectoryCleanupTarget, owned .cdidx roots, and bounded retry loops are expected safe evidence."
+                    ],
+                },
+                new(
+                    "file-move-boundary",
+                    "File.Move",
+                    "Find file move and overwrite boundaries that need atomicity, destination containment, and replacement-policy review.",
+                    ["audit", "security"],
+                    "False positives include same-root staging moves with explicit overwrite/rollback policy.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: move/overwrite operations can replace caller-controlled or symlinked destinations without root containment.",
+                        "positive: AtomicFileWriter, FileSystemBoundary validation, and temp-file ownership explain intentional moves."
+                    ],
+                },
+                new(
+                    "file-copy-boundary",
+                    "File.Copy",
+                    "Find copy operations that need source/destination trust classification, size limits, and overwrite-policy review.",
+                    ["audit", "security", "performance"],
+                    "False positives include fixed test resources and already-bounded archive snapshot helpers.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: copying from untrusted or symlinked paths can bypass size, containment, or overwrite expectations.",
+                        "positive: bounded stream copy, manifest length checks, and explicit destination ownership are expected evidence."
+                    ],
+                },
+                new(
+                    "temp-path-boundary",
+                    "Path.GetTempPath",
+                    "Find system temp-root usage that should create per-run owned subdirectories and validate cleanup targets.",
+                    ["audit", "security"],
+                    "False positives include tests and wrappers that immediately create a private random child directory.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: shared temp roots are attacker-writable on many systems; cleanup and overwrite code must operate inside owned children only.",
+                        "positive: random scoped temp directories, FileSystemBoundary cleanup validation, and bounded cleanup retries reduce risk."
+                    ],
+                },
+                new(
+                    "temp-file-name-boundary",
+                    "Path.GetTempFileName",
+                    "Find temp-file allocation sites that should avoid shared predictable names and document ownership before mutation.",
+                    ["audit", "security"],
+                    "False positives include tests; production code should usually prefer owned temp directories plus random names."),
+                new(
+                    "symlink-reparse-policy",
+                    "IsSymlinkOrReparsePoint",
+                    "Find symlink/reparse-point detection surfaces that should guard traversal, cleanup, import/export, and plugin loading boundaries.",
+                    ["audit", "security"],
+                    "Review both positive and negative checks; tests and platform probes may be intentional.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "positive: central symlink/reparse detection keeps traversal and mutation code auditable.",
+                        "risk: direct IO after a stale probe can still race; prefer validation immediately before mutation."
+                    ],
+                },
+                new(
+                    "cleanup-target-guard",
+                    "TryValidateDirectoryCleanupTarget",
+                    "Find positive cleanup guard evidence for recursive deletion and temp-root pruning.",
+                    ["audit", "security"],
+                    "This is positive evidence; still verify the caller passes the correct trusted root and handles false results.")
+                {
+                    Severity = "info",
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "watcher-boundary",
+                    "FileSystemWatcher",
+                    "Find filesystem watcher surfaces where path normalization, symlink policy, debounce, and rename/delete races need review.",
+                    ["audit", "security"],
+                    "False positives include disabled watcher setup and tests."),
+                new(
+                    "posix-mode-boundary",
+                    "UnixFileMode",
+                    "Find POSIX mode reads/writes that should be paired with platform guards and non-fatal diagnostics.",
+                    ["audit", "security"],
+                    "False positives include tests and status-only reporting."),
+                new(
+                    "path-filter-boundary",
+                    "PathPattern",
+                    "Find glob/path filter policy surfaces where normalization, case sensitivity, and exclusion semantics need review.",
+                    ["audit", "security"],
+                    "False positives include recipe metadata and test-only path pattern definitions.")
+            ]),
+        SourceScopedRecipe(
             "bounded-read-evidence",
             "Positive audit searches for max-byte file-read helpers, explicit file-open policy, and bounded downstream accumulators.",
             [
