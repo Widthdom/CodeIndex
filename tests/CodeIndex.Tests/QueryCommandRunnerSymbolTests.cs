@@ -121,6 +121,101 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_NameOptionDefaultsToExactName_Issue4315()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_name_exact_issue4315");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/McpServer.Core.cs",
+                "csharp",
+                """
+                namespace Demo;
+
+                public partial class McpServer
+                {
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "tests/McpServerTests.cs",
+                "csharp",
+                """
+                namespace Demo.Tests;
+
+                public class McpServerTests
+                {
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--name", "McpServer", "--db", dbPath, "--json=array", "--kind", "class", "--lang", "csharp"],
+                _jsonOptions));
+
+            Assert.True(exitCode == CommandExitCodes.Success, $"stdout: {stdout}\nstderr: {stderr}");
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var rows = document.RootElement.EnumerateArray().ToList();
+
+            Assert.Single(rows);
+            Assert.Equal("McpServer", rows[0].GetProperty("name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunGoto_PartialClassReturnsRepresentativeLocation_Issue4315()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_goto_partial_issue4315");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.McpServer.cs",
+                "csharp",
+                """
+                namespace Demo;
+
+                public partial class McpServer
+                {
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/B.McpServer.cs",
+                "csharp",
+                """
+                namespace Demo;
+
+                public partial class McpServer
+                {
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunGoto(
+                ["McpServer", "--db", dbPath, "--kind", "class", "--lang", "csharp"],
+                _jsonOptions));
+
+            Assert.True(exitCode == CommandExitCodes.Success, $"stdout: {stdout}\nstderr: {stderr}");
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var location = document.RootElement;
+
+            Assert.Contains("src/A.McpServer.cs", location.GetProperty("uri").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_CountJsonMaxJsonBytesRejectsBareVerbatimZero_Issue4165()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(

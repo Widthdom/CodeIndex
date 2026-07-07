@@ -24,6 +24,11 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteSnippetLinesZeroUnsupportedError(options, "impact"))
             return CommandExitCodes.UsageError;
+        if (!TryResolveNameExactMode(options, "impact", out _, out var exactError))
+        {
+            CommandErrorWriter.WriteStderr(exactError);
+            return CommandExitCodes.UsageError;
+        }
         if (TryWriteBlankQueryError(options, "impact"))
             return CommandExitCodes.UsageError;
         if (string.IsNullOrWhiteSpace(options.Query))

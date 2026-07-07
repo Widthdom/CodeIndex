@@ -148,7 +148,7 @@ internal static class CliFlagSchema
 
     private static readonly string[] ExactNameCommands =
     [
-        "definition", "goto", "references", "callers", "callees", "symbols", "inspect",
+        "definition", "goto", "references", "callers", "callees", "symbols", "impact", "inspect",
     ];
 
     // `--exact-substring` is only meaningful on `search`; other name commands accept it
@@ -157,7 +157,7 @@ internal static class CliFlagSchema
     // パーサで受理するだけ。補完では `search` 以外には出さない。
     private static readonly string[] ExactSubstringAccepted =
     [
-        "definition", "goto", "references", "callers", "callees", "symbols", "inspect",
+        "definition", "goto", "references", "callers", "callees", "symbols", "impact", "inspect",
     ];
 
     private static readonly string[] BodyCommands = ["definition", "references", "callers", "callees", "impact", "inspect"];
