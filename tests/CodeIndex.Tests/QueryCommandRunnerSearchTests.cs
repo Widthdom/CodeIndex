@@ -2378,7 +2378,7 @@ public partial class QueryCommandRunnerTests
         };
 
         Assert.Equal(
-            ["risky-code", "string-comparison-semantics", "auth-token-audit", "dogfood-risk-patterns", "sqlite-query-policy-surfaces", "json-parse-apis", "dotnet-risk-patterns", "unsupported-operation-boundaries", "nullable-contracts", "xml-parser-security", "filesystem-traversal", "filesystem-mutation-boundaries", "bounded-read-evidence", "resource-materialization-audit", "concurrency-state-audit", "phrase-risk-patterns", "broad-token-audit"],
+            ["risky-code", "string-comparison-semantics", "auth-token-audit", "dogfood-risk-patterns", "sqlite-query-policy-surfaces", "json-parse-apis", "text-encoding-boundaries", "dotnet-risk-patterns", "unsupported-operation-boundaries", "nullable-contracts", "xml-parser-security", "filesystem-traversal", "filesystem-mutation-boundaries", "bounded-read-evidence", "resource-materialization-audit", "memory-allocation-boundaries", "concurrency-state-audit", "phrase-risk-patterns", "broad-token-audit"],
             recipes.Select(recipe => recipe.Name).ToArray());
 
         AssertRecipe(
@@ -2534,6 +2534,21 @@ public partial class QueryCommandRunnerTests
                 "utf8-json-writer"
             ]);
         AssertRecipe(
+            "text-encoding-boundaries",
+            SearchAuditRecipes.DefaultAuditScope,
+            ["src/**"],
+            expectedSourceExcludes,
+            [
+                "utf8-encoding-boundary",
+                "utf8-encoding-constructor",
+                "stream-reader-bom-policy",
+                "stream-reader-encoding-boundary",
+                "stream-writer-encoding-boundary",
+                "default-encoding-boundary",
+                "code-page-encoding-boundary",
+                "unicode-normalization-boundary"
+            ]);
+        AssertRecipe(
             "dotnet-risk-patterns",
             SearchAuditRecipes.DefaultAuditScope,
             ["src/**"],
@@ -2645,7 +2660,21 @@ public partial class QueryCommandRunnerTests
                 "stream-writer-ownership",
                 "read-to-end-materialization",
                 "memory-stream-materialization",
-                "query-mcp-toarray-materialization"
+                "string-builder-materialization",
+                "query-mcp-toarray-materialization",
+                "query-mcp-tolist-materialization"
+            ]);
+        AssertRecipe(
+            "memory-allocation-boundaries",
+            SearchAuditRecipes.DefaultAuditScope,
+            ["src/**"],
+            expectedSourceExcludes,
+            [
+                "array-pool-usage",
+                "array-pool-return",
+                "sensitive-buffer-return-policy",
+                "stackalloc-buffer",
+                "memory-marshal-boundary"
             ]);
         AssertRecipe(
             "concurrency-state-audit",
@@ -4455,6 +4484,78 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_TextEncodingBoundaryRecipeFindsReaderWriterAndNormalization_Issue4327()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_text_encoding_4327");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/encoding.cs",
+                "csharp",
+                """
+                using System.Text;
+
+                public sealed class EncodingBoundaries
+                {
+                    public void Run(Stream input, Stream output, string text)
+                    {
+                        var strict = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+                        using var reader = new StreamReader(input, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, bufferSize: 4096, leaveOpen: true);
+                        using var writer = new StreamWriter(output, strict, bufferSize: 4096, leaveOpen: true);
+                        _ = Encoding.Default;
+                        _ = Encoding.GetEncoding("shift_jis");
+                        _ = text.Normalize(NormalizationForm.FormKC);
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "tests/EncodingTests.cs",
+                "csharp",
+                """
+                using System.Text;
+
+                public sealed class EncodingTests
+                {
+                    public void Fixture() => _ = Encoding.Default;
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "text-encoding-boundaries", "--db", dbPath, "--json", "--limit", "10"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var queries = document.RootElement.GetProperty("queries").EnumerateArray().ToList();
+
+            AssertRecipeQueryPath(queries, "utf8-encoding-boundary", "src/encoding.cs");
+            AssertRecipeQueryPath(queries, "utf8-encoding-constructor", "src/encoding.cs");
+            AssertRecipeQueryPath(queries, "stream-reader-bom-policy", "src/encoding.cs");
+            AssertRecipeQueryPath(queries, "stream-reader-encoding-boundary", "src/encoding.cs");
+            AssertRecipeQueryPath(queries, "stream-writer-encoding-boundary", "src/encoding.cs");
+            AssertRecipeQueryPath(queries, "default-encoding-boundary", "src/encoding.cs");
+            AssertRecipeQueryPath(queries, "code-page-encoding-boundary", "src/encoding.cs");
+            AssertRecipeQueryPath(queries, "unicode-normalization-boundary", "src/encoding.cs");
+            Assert.DoesNotContain(queries.SelectMany(query => query.GetProperty("results").EnumerateArray()), result => result.GetProperty("path").GetString() == "tests/EncodingTests.cs");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+
+        static void AssertRecipeQueryPath(List<JsonElement> queries, string queryName, string path)
+        {
+            var query = queries.Single(item => item.GetProperty("name").GetString() == queryName);
+            Assert.True(query.GetProperty("count").GetInt32() >= 1);
+            Assert.Contains(query.GetProperty("results").EnumerateArray(), result => result.GetProperty("path").GetString() == path);
+        }
+    }
+
+    [Fact]
     public void RunSearch_FocusedAuditRecipesFindDotnetXmlAndFilesystemApis_Issues3731_3694_3693()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_focused_audit_recipes");
@@ -5088,6 +5189,148 @@ public partial class QueryCommandRunnerTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_ResourceMaterializationRecipeFindsEagerBuildersAndLists_Issue4304()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_resource_materialization_4304");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/CodeIndex/Cli/QueryCommandRunner.Materialization.cs",
+                "csharp",
+                """
+                using System.Text;
+
+                public static class QueryCommandRunnerMaterialization
+                {
+                    public static object Build(IEnumerable<string> values)
+                    {
+                        var list = values.ToList();
+                        var builder = new StringBuilder();
+                        foreach (var value in list)
+                            builder.AppendLine(value);
+                        return builder.ToString();
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/CodeIndex/Indexer/IndexerMaterialization.cs",
+                "csharp",
+                """
+                public static class IndexerMaterialization
+                {
+                    public static object Build(IEnumerable<string> values) => values.ToList();
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "resource-materialization-audit", "--db", dbPath, "--json", "--limit", "10"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var queries = document.RootElement.GetProperty("queries").EnumerateArray().ToList();
+
+            var builderQuery = queries.Single(query => query.GetProperty("name").GetString() == "string-builder-materialization");
+            Assert.Equal(1, builderQuery.GetProperty("count").GetInt32());
+            Assert.Equal("src/CodeIndex/Cli/QueryCommandRunner.Materialization.cs", builderQuery.GetProperty("results")[0].GetProperty("path").GetString());
+
+            var toListQuery = queries.Single(query => query.GetProperty("name").GetString() == "query-mcp-tolist-materialization");
+            var toListPaths = toListQuery
+                .GetProperty("results")
+                .EnumerateArray()
+                .Select(result => result.GetProperty("path").GetString())
+                .ToArray();
+
+            Assert.Equal(1, toListQuery.GetProperty("count").GetInt32());
+            Assert.Contains("src/CodeIndex/Cli/QueryCommandRunner.Materialization.cs", toListPaths);
+            Assert.DoesNotContain("src/CodeIndex/Indexer/IndexerMaterialization.cs", toListPaths);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_MemoryAllocationBoundaryRecipeFindsPoolStackAndMarshal_Issue4330()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_memory_allocation_4330");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/PooledBuffers.cs",
+                "csharp",
+                """
+                using System.Buffers;
+                using System.Runtime.InteropServices;
+
+                public static class PooledBuffers
+                {
+                    public static void Run(ReadOnlySpan<int> numbers)
+                    {
+                        byte[] rented = ArrayPool<byte>.Shared.Rent(4096);
+                        Span<byte> scratch = stackalloc byte[64];
+                        try
+                        {
+                            MemoryMarshal.AsBytes(numbers).CopyTo(scratch);
+                        }
+                        finally
+                        {
+                            SensitiveBufferPolicy.ReturnSensitiveCopyBuffer(rented);
+                            ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+                        }
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "tests/PooledBuffersTests.cs",
+                "csharp",
+                """
+                using System.Buffers;
+
+                public static class PooledBuffersTests
+                {
+                    public static void Fixture() => _ = ArrayPool<byte>.Shared.Rent(1);
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "memory-allocation-boundaries", "--db", dbPath, "--json", "--limit", "10"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var queries = document.RootElement.GetProperty("queries").EnumerateArray().ToList();
+
+            AssertRecipeQueryPath(queries, "array-pool-usage", "src/PooledBuffers.cs");
+            AssertRecipeQueryPath(queries, "array-pool-return", "src/PooledBuffers.cs");
+            AssertRecipeQueryPath(queries, "sensitive-buffer-return-policy", "src/PooledBuffers.cs");
+            AssertRecipeQueryPath(queries, "stackalloc-buffer", "src/PooledBuffers.cs");
+            AssertRecipeQueryPath(queries, "memory-marshal-boundary", "src/PooledBuffers.cs");
+            Assert.DoesNotContain(queries.SelectMany(query => query.GetProperty("results").EnumerateArray()), result => result.GetProperty("path").GetString() == "tests/PooledBuffersTests.cs");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+
+        static void AssertRecipeQueryPath(List<JsonElement> queries, string queryName, string path)
+        {
+            var query = queries.Single(item => item.GetProperty("name").GetString() == queryName);
+            Assert.True(query.GetProperty("count").GetInt32() >= 1);
+            Assert.Contains(query.GetProperty("results").EnumerateArray(), result => result.GetProperty("path").GetString() == path);
         }
     }
 

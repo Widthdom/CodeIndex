@@ -1276,8 +1276,8 @@ internal static class SearchAuditRecipes
                 {
                     RiskEvidence =
                     [
-                        "risk: MaxValue sentinels can bypass practical bounds for allocation, traversal, timeout, or query limits.",
-                        "positive: explicit clamping, saturation helper names, or test-only probes are safer evidence."
+                        "risk: MaxValue sentinels can bypass practical bounds for allocation, traversal, database pagination, JSON/output byte budgets, timeout, rate, or query limits.",
+                        "positive: explicit clamping, paged query/output contracts, saturation helper names, or test-only probes are safer evidence."
                     ],
                     MatchOrigins = ["code"],
                 },
@@ -1690,6 +1690,123 @@ internal static class SearchAuditRecipes
                     ],
                 }
             ], ParserGuardClassifier, GuardEvidenceClassifier)),
+        SourceScopedRecipe(
+            "text-encoding-boundaries",
+            "Audit text encoding, BOM detection, stream reader/writer ownership, and Unicode normalization boundaries.",
+            [
+                new(
+                    "utf8-encoding-boundary",
+                    "Encoding.UTF8",
+                    "Find UTF-8 encoding boundaries so generated JSON, NDJSON, SARIF, ctags, reports, and protocol outputs can confirm stable UTF-8 behavior.",
+                    ["audit", "bug"],
+                    "False positives include constants and tests; prioritize file, stream, process, and protocol boundaries.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: implicit or inconsistent text encodings can corrupt generated artifacts or hide replacement-character behavior across platforms.",
+                        "positive: explicit UTF-8 policy, shared JsonWriterOptions, or boundary tests for invalid bytes and replacement characters make the site auditable."
+                    ],
+                },
+                new(
+                    "utf8-encoding-constructor",
+                    "UTF8Encoding",
+                    "Find custom UTF8Encoding construction so BOM emission and invalid-byte fallback behavior are explicit.",
+                    ["audit", "bug"],
+                    "False positives include fixture encodings and tests that intentionally vary fallback or BOM settings.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: UTF8Encoding constructor flags control BOM emission and throw-on-invalid-byte behavior, which can drift between readers and generated outputs.",
+                        "positive: explicit encoderShouldEmitUTF8Identifier and throwOnInvalidBytes arguments with tests make the contract clear."
+                    ],
+                },
+                new(
+                    "stream-reader-bom-policy",
+                    "detectEncodingFromByteOrderMarks",
+                    "Find StreamReader BOM-detection policy so input boundaries can distinguish fixture compatibility from stable UTF-8 contracts.",
+                    ["audit", "bug"],
+                    "False positives include tests and local compatibility probes.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: BOM auto-detection can make input behavior differ from generated-output UTF-8 contracts unless the boundary is intentional.",
+                        "positive: named compatibility readers, fixture tests, or explicit UTF-8-only readers make the boundary easier to classify."
+                    ],
+                },
+                new(
+                    "stream-reader-encoding-boundary",
+                    "StreamReader",
+                    "Find StreamReader boundaries that should show encoding, BOM detection, leave-open ownership, cancellation, and max-character behavior.",
+                    ["audit", "performance"],
+                    "False positives include tiny trusted test helpers and fixed in-memory protocol snippets.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: StreamReader can hide implicit encoding choices, replacement fallback, and ownership transfer of the underlying stream.",
+                        "positive: explicit encoding, detectEncodingFromByteOrderMarks choice, leaveOpen intent, and bounded line/byte readers make the boundary auditable."
+                    ],
+                },
+                new(
+                    "stream-writer-encoding-boundary",
+                    "StreamWriter",
+                    "Find StreamWriter boundaries that should show UTF-8/no-BOM policy, flush behavior, leave-open ownership, and output-size behavior.",
+                    ["audit", "performance"],
+                    "False positives include fixed small local files and test fixtures.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: StreamWriter can emit platform- or constructor-dependent encodings and close caller-owned streams unexpectedly.",
+                        "positive: explicit UTF-8/no-BOM choices, using scopes, leaveOpen intent, and bounded DTO/result emission explain safe writer use."
+                    ],
+                },
+                new(
+                    "default-encoding-boundary",
+                    "Encoding.Default",
+                    "Find platform-default encoding usage that should usually be replaced with an explicit boundary encoding.",
+                    ["audit", "portability"],
+                    "False positives include compatibility shims that intentionally mirror a legacy platform default.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: Encoding.Default varies by runtime and platform, making generated or parsed text non-reproducible.",
+                        "positive: legacy compatibility wrappers should document the source format and keep generated outputs on explicit UTF-8."
+                    ],
+                },
+                new(
+                    "code-page-encoding-boundary",
+                    "Encoding.GetEncoding",
+                    "Find code-page lookup sites so non-UTF-8 compatibility boundaries stay isolated from generated output contracts.",
+                    ["audit", "portability"],
+                    "False positives include tests and legacy importers with explicit source-format coverage.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: code-page lookup can introduce platform registration requirements and inconsistent fallback behavior.",
+                        "positive: isolated import paths, EncodingProvider setup, and tests for invalid bytes reduce portability risk."
+                    ],
+                },
+                new(
+                    "unicode-normalization-boundary",
+                    "NormalizationForm",
+                    "Find Unicode normalization decisions that should be tied to path, identifier, or user-text semantics.",
+                    ["audit", "bug", "portability"],
+                    "False positives include tests and shared normalization helpers whose domain is already documented.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: normalization can change identifier, path, or human-text equality semantics if applied outside its intended domain.",
+                        "positive: domain-specific helpers and tests for composed/decomposed forms make normalization intent auditable."
+                    ],
+                }
+            ]),
         SourceScopedRecipe(
             "dotnet-risk-patterns",
             "Audit common .NET reliability and security patterns that regularly need manual review.",
@@ -2582,6 +2699,20 @@ internal static class SearchAuditRecipes
                     ],
                 },
                 new(
+                    "string-builder-materialization",
+                    "StringBuilder",
+                    "Find StringBuilder accumulation sites so bounded output builders and unbounded protocol/result buffers can be separated.",
+                    ["audit", "performance"],
+                    "False positives include fixed-format diagnostics, tiny local formatting helpers, and builders capped by a nearby byte or item limit.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: StringBuilder can accumulate workspace-sized output before JSON, NDJSON, SARIF, ctags, report, or MCP response caps are enforced.",
+                        "positive: fixed initial capacity, explicit item/byte caps, streaming writers, or small local formatting scope make the accumulation auditable."
+                    ],
+                },
+                new(
                     "query-mcp-toarray-materialization",
                     "ToArray()",
                     "Find eager ToArray conversions in query and MCP paths where result materialization can scale with workspace or protocol size.",
@@ -2598,6 +2729,101 @@ internal static class SearchAuditRecipes
                     [
                         "risk: eager ToArray in query/MCP paths can materialize large result sets before limit, pagination, or JSON-size policy is applied.",
                         "positive: bounded list sizes, option metadata, or immutable snapshot requirements can make the conversion intentional."
+                    ],
+                },
+                new(
+                    "query-mcp-tolist-materialization",
+                    "ToList()",
+                    "Find eager ToList conversions in query and MCP paths where result materialization can scale with workspace or protocol size.",
+                    ["audit", "performance"],
+                    "False positives include small option lists and fixed protocol metadata; prioritize search results, module lists, path sets, and JSON arrays.")
+                {
+                    PathPatterns =
+                    [
+                        "src/CodeIndex/Cli/QueryCommandRunner*.cs",
+                        "src/CodeIndex/Mcp/**",
+                    ],
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: eager ToList in query/MCP paths can materialize large result sets before limit, pagination, or JSON-size policy is applied.",
+                        "positive: bounded list sizes, option metadata, or immutable snapshot requirements can make the conversion intentional."
+                    ],
+                }
+            ]),
+        SourceScopedRecipe(
+            "memory-allocation-boundaries",
+            "Audit pooled-buffer ownership, sensitive buffer return policy, stack allocation bounds, and MemoryMarshal boundaries.",
+            [
+                new(
+                    "array-pool-usage",
+                    "ArrayPool",
+                    "Find ArrayPool usage so Rent, ownership transfer, and Return paths can be reviewed together.",
+                    ["audit", "performance"],
+                    "False positives include tests and fixed helpers whose try/finally return policy is already covered nearby.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: rented buffers can leak or retain sensitive bytes when Return is not paired on every exception path.",
+                        "positive: local try/finally, ownership-transfer comments, or shared return helpers make pooled-buffer lifetime auditable."
+                    ],
+                },
+                new(
+                    "array-pool-return",
+                    ".Shared.Return",
+                    "Find direct ArrayPool.Shared.Return calls so clearing policy and exception-safe pairing can be reviewed.",
+                    ["audit", "performance", "security"],
+                    "False positives include non-sensitive protocol buffers and tests that intentionally assert return behavior.",
+                    ExactSubstring: true)
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: returning a sensitive buffer without clearing can retain token, payload, or path material in the shared pool.",
+                        "positive: clearArray:true, Array.Clear over used bytes, or SensitiveBufferPolicy helpers document the intended clearing policy."
+                    ],
+                },
+                new(
+                    "sensitive-buffer-return-policy",
+                    "SensitiveBufferPolicy.Return",
+                    "Find centralized sensitive/non-sensitive buffer return helpers so clear-on-return contracts remain visible.",
+                    ["audit", "security"],
+                    "False positives include the policy implementation itself and tests that assert policy behavior.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "positive: SensitiveBufferPolicy helpers make clear-on-return decisions explicit for token, payload, copy, and protocol buffers.",
+                        "risk: call sites still need review for correct used-byte counts and ownership transfer before returning a pooled buffer."
+                    ],
+                },
+                new(
+                    "stackalloc-buffer",
+                    "stackalloc",
+                    "Find stackalloc buffers so size bounds and sensitive-data clearing can be verified.",
+                    ["audit", "performance", "security"],
+                    "False positives include fixed tiny spans and tests that intentionally cover stack thresholds.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: input-derived stackalloc sizes can overflow the stack or retain sensitive bytes unless bounded and cleared.",
+                        "positive: small constants, named stack thresholds, fallback to ArrayPool, and try/finally clearing make stack allocation intentional."
+                    ],
+                },
+                new(
+                    "memory-marshal-boundary",
+                    "MemoryMarshal",
+                    "Find MemoryMarshal boundaries where span reinterpretation, pinning, or layout assumptions need review.",
+                    ["audit", "bug", "performance"],
+                    "False positives include tests and isolated low-level helpers with documented layout contracts.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: MemoryMarshal can bypass type, lifetime, or alignment checks and should stay inside small documented helpers.",
+                        "positive: fixed layout tests, scoped spans, and no pooled-buffer ownership transfer reduce review risk."
                     ],
                 }
             ]),
