@@ -2089,7 +2089,7 @@ public partial class QueryCommandRunnerTests
             SearchAuditRecipes.DefaultAuditScope,
             ["src/**"],
             expectedSourceExcludes,
-            ["sqlite-addwithvalue", "sqlite-quoted-identifier", "sqlite-typed-parameter", "regex-construction", "bounded-regex-alias", "fully-qualified-regex-construction", "static-regex-is-match", "static-regex-is-match-negated", "static-regex-is-match-parenthesized", "static-regex-match", "static-regex-match-negated", "static-regex-match-parenthesized", "static-regex-matches", "static-regex-matches-negated", "static-regex-matches-parenthesized", "static-regex-replace", "static-regex-replace-negated", "static-regex-replace-parenthesized", "static-regex-split", "static-regex-split-negated", "static-regex-split-parenthesized", "cancellation-token-none", "sync-wait-call", "sync-over-async"]);
+            ["sqlite-addwithvalue", "sqlite-quoted-identifier", "sqlite-typed-parameter", "regex-construction", "bounded-regex-alias", "fully-qualified-regex-construction", "static-regex-is-match", "static-regex-is-match-negated", "static-regex-is-match-parenthesized", "static-regex-match", "static-regex-match-negated", "static-regex-match-parenthesized", "static-regex-matches", "static-regex-matches-negated", "static-regex-matches-parenthesized", "static-regex-replace", "static-regex-replace-negated", "static-regex-replace-parenthesized", "static-regex-split", "static-regex-split-negated", "static-regex-split-parenthesized", "cancellation-token-none", "cancellation-token-source", "cancellation-registration", "task-run-scheduling", "task-delay-backoff", "wait-for-exit-boundary", "semaphore-slim-boundary", "task-completion-source", "http-listener-lifetime", "sync-wait-call", "sync-over-async"]);
         AssertRecipe(
             "unsupported-operation-boundaries",
             SearchAuditRecipes.DefaultAuditScope,
@@ -2177,6 +2177,39 @@ public partial class QueryCommandRunnerTests
                 Assert.False(string.IsNullOrWhiteSpace(query.FalsePositiveGuidance));
             });
         }
+    }
+
+    [Fact]
+    public void RunSearch_DotnetRiskAsyncLifecycleQueriesClassifyCancellationAndScheduling_Issue4298()
+    {
+        using var env = EnvironmentVariableScope.Capture(SearchAuditRecipes.RecipePathsEnvironmentVariable);
+        env.Set(SearchAuditRecipes.RecipePathsEnvironmentVariable, null);
+
+        var recipe = Assert.Single(SearchAuditRecipes.All, item => item.Name == "dotnet-risk-patterns");
+        var queryNames = recipe.Queries.Select(query => query.Name).ToArray();
+
+        Assert.Contains("cancellation-token-source", queryNames);
+        Assert.Contains("cancellation-registration", queryNames);
+        Assert.Contains("task-run-scheduling", queryNames);
+        Assert.Contains("task-delay-backoff", queryNames);
+        Assert.Contains("wait-for-exit-boundary", queryNames);
+        Assert.Contains("semaphore-slim-boundary", queryNames);
+        Assert.Contains("task-completion-source", queryNames);
+        Assert.Contains("http-listener-lifetime", queryNames);
+
+        var registration = Assert.Single(recipe.Queries, query => query.Name == "cancellation-registration");
+        var taskRun = Assert.Single(recipe.Queries, query => query.Name == "task-run-scheduling");
+        var semaphore = Assert.Single(recipe.Queries, query => query.Name == "semaphore-slim-boundary");
+
+        Assert.Equal("Register(", registration.Query);
+        Assert.Contains("CancellationToken.Register", registration.FalsePositiveGuidance, StringComparison.Ordinal);
+        Assert.Contains("disposing the registration", registration.RiskEvidence[1], StringComparison.Ordinal);
+        Assert.Equal("Task.Run", taskRun.Query);
+        Assert.Contains("exception observation", taskRun.Description, StringComparison.Ordinal);
+        Assert.Contains("observed tasks", taskRun.RiskEvidence[1], StringComparison.Ordinal);
+        Assert.Equal("SemaphoreSlim", semaphore.Query);
+        Assert.Contains("try/finally Release", semaphore.RiskEvidence[1], StringComparison.Ordinal);
+        Assert.All(new[] { registration, taskRun, semaphore }, query => Assert.Equal(["code"], query.MatchOrigins));
     }
 
     [Fact]

@@ -1277,6 +1277,118 @@ internal static class SearchAuditRecipes
                     ["audit", "bug"],
                     "False positives include intentionally detached background work and APIs without a meaningful caller token."),
                 new(
+                    "cancellation-token-source",
+                    "CancellationTokenSource",
+                    "Find cancellation-token source ownership boundaries that may need linked-token, timeout, or disposal review.",
+                    ["audit", "bug"],
+                    "False positives include small local using scopes and tests; prioritize command, MCP, LSP, worker, HTTP, and database lifetimes.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: CancellationTokenSource ownership can leak timers, registrations, or shutdown signals when disposal and cancellation ordering are unclear.",
+                        "positive: using/await using scopes, linked-token ownership comments, and explicit timeout budgets make source lifetime intentional."
+                    ],
+                },
+                new(
+                    "cancellation-registration",
+                    "Register(",
+                    "Find registration callbacks that may need cancellation-token disposal, lock-free callback bodies, or teardown ordering review.",
+                    ["audit", "bug"],
+                    "False positives include DI/service registration and event registration; prioritize CancellationToken.Register and callbacks that touch shared state.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: CancellationToken.Register callbacks can run during shutdown and should not hold locks, call user/plugin code, or outlive the owning operation.",
+                        "positive: disposing the registration, isolating callback state, or using static callbacks with bounded work reduces cancellation-lifetime risk."
+                    ],
+                },
+                new(
+                    "task-run-scheduling",
+                    "Task.Run",
+                    "Find background scheduling boundaries where cancellation, ExecutionContext flow, exception observation, and finally-block ownership need review.",
+                    ["audit", "bug"],
+                    "False positives include tiny CPU offloads and tests; prioritize command, MCP, worker, index, and transport scheduling.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: Task.Run can detach work from caller cancellation and hide exceptions unless the returned task is observed or deliberately owned.",
+                        "positive: captured cancellation tokens, observed tasks, explicit background-task observers, and documented fire-and-forget ownership make scheduling intentional."
+                    ],
+                },
+                new(
+                    "task-delay-backoff",
+                    "Task.Delay",
+                    "Find timer, debounce, retry, and polling delays that should carry cancellation, monotonic time, and disposal semantics.",
+                    ["audit", "bug", "performance"],
+                    "False positives include bounded tests and deliberate retry sleeps; prioritize runtime debounce, retry/backoff, watch-loop, and shutdown delays.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: Task.Delay without a caller token can stall cancellation or leave retry/backoff loops alive during disposal.",
+                        "positive: cancellation-token overloads, explicit timeout budgets, TimeProvider usage, and deterministic teardown tests make delays auditable."
+                    ],
+                },
+                new(
+                    "wait-for-exit-boundary",
+                    "WaitForExit",
+                    "Find process-drain boundaries where synchronous waits need timeout, cancellation, and process-tree cleanup review.",
+                    ["audit", "bug"],
+                    "False positives include already-bounded process cleanup and tests that assert timeout behavior.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: WaitForExit can block shutdown or cancellation if process output, timeout, and kill-tree behavior are not coordinated.",
+                        "positive: bounded waits, cancellation-aware process runners, output-drain ordering, and timeout diagnostics make process cleanup intentional."
+                    ],
+                },
+                new(
+                    "semaphore-slim-boundary",
+                    "SemaphoreSlim",
+                    "Find async and sync gate boundaries where fairness, cancellation, release-on-exception, and disposal ordering need review.",
+                    ["audit", "bug"],
+                    "False positives include small local throttles; prioritize shared command, DB writer, MCP, HTTP transport, and event-stream gates.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: SemaphoreSlim gates can leak permits or block cancellation when Wait/WaitAsync and Release are not paired across exception paths.",
+                        "positive: try/finally Release, WaitAsync with caller tokens, and bounded disposal/shutdown paths make gate ownership explicit."
+                    ],
+                },
+                new(
+                    "task-completion-source",
+                    "TaskCompletionSource",
+                    "Find completion-signal boundaries that may need RunContinuationsAsynchronously, cancellation, and completion-race review.",
+                    ["audit", "bug"],
+                    "False positives include test-only signals; prioritize production shutdown, protocol, worker, and transport completions.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: TaskCompletionSource can inline continuations or race completion/cancellation when ownership is not centralized.",
+                        "positive: TaskCreationOptions.RunContinuationsAsynchronously, TrySet* usage, and deterministic cancellation tests make completion boundaries safer."
+                    ],
+                },
+                new(
+                    "http-listener-lifetime",
+                    "HttpListener",
+                    "Find HTTP listener lifetimes that need cancellation-aware accept loops, deterministic Close/Stop ordering, and bounded disposal.",
+                    ["audit", "bug"],
+                    "False positives include platform guards and tests; prioritize MCP HTTP transport and support-server loops.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: HttpListener accept loops can hang shutdown or surface ObjectDisposedException inconsistently unless cancellation and disposal ordering are explicit.",
+                        "positive: cancellation-aware accept loops, close-before-await ordering, and bounded disposal tests make listener lifetime intentional."
+                    ],
+                },
+                new(
                     "sync-wait-call",
                     ".Wait(",
                     "Find synchronous Wait calls that may block cancellation, async continuations, or shutdown paths.",

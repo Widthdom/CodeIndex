@@ -1099,6 +1099,11 @@ Built-in recipes include `risky-code`, `json-parse-apis`,
 `filesystem-traversal`, `bounded-read-evidence`, `resource-materialization-audit`,
 `phrase-risk-patterns`, and the
 opt-in broad `broad-token-audit` recipe.
+Use `dotnet-risk-patterns` for .NET cancellation and liveness triage; its async
+child queries cover `CancellationTokenSource`, `Register(`, `Task.Run`,
+`Task.Delay`, `WaitForExit`, `SemaphoreSlim`, `TaskCompletionSource`, and
+`HttpListener` alongside `CancellationToken.None`, `.Wait(`, and
+`GetAwaiter().GetResult`.
 Use `phrase-risk-patterns` for noisy audit phrases such as `async void`,
 `throw new Exception`, `.Result`, `unsafe`, `Skip =`, `Version="`, `TODO`, and
 `Obsolete` when you need exact-substring, origin, result-kind, file-kind, or
@@ -3835,6 +3840,11 @@ search audit recipe は、名前付き recipe を複数の curated search query 
 `nullable-contracts`、`filesystem-traversal`、`bounded-read-evidence`、
 `resource-materialization-audit`、`phrase-risk-patterns`、
 `broad-token-audit` があります。
+`dotnet-risk-patterns` は .NET の cancellation と liveness の triage にも使えます。
+async 系の child query は `CancellationToken.None`、`.Wait(`、
+`GetAwaiter().GetResult` に加えて、`CancellationTokenSource`、`Register(`、
+`Task.Run`、`Task.Delay`、`WaitForExit`、`SemaphoreSlim`、
+`TaskCompletionSource`、`HttpListener` を対象にします。
 `phrase-risk-patterns` は `async void`、`throw new Exception`、`.Result`、`unsafe`、
 `Skip =`、`Version="`、`TODO`、`Obsolete` のようなノイズの多い監査語句を対象に、
 issue 化前に exact-substring、origin、result-kind、file-kind、production/test scope の
