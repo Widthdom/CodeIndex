@@ -4640,7 +4640,7 @@ public partial class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("pass only one of --exact, --exact-substring, --exact-name", stderr);
+            Assert.Contains("pass only one of --exact, --exact-substring, --token-boundary, --exact-name", stderr);
         }
         finally
         {
@@ -4660,7 +4660,7 @@ public partial class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("pass only one of --exact, --exact-substring, --exact-name", stderr);
+            Assert.Contains("pass only one of --exact, --exact-substring, --token-boundary, --exact-name", stderr);
         }
         finally
         {

@@ -3550,7 +3550,8 @@ public partial class McpServerTests
         Assert.True(response["result"]!["isError"]!.GetValue<bool>());
         var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
         Assert.True(
-            text.Contains("Pass only one of 'exact', 'exactSubstring', 'exactName'.", StringComparison.Ordinal)
+            text.Contains("Pass only one of 'exact', 'exactSubstring', 'tokenBoundary', 'exactName'.", StringComparison.Ordinal)
+            || text.Contains("Pass only one of 'exact', 'exactSubstring', 'exactName'.", StringComparison.Ordinal)
             || text.Contains("Unknown argument", StringComparison.Ordinal));
     }
 
