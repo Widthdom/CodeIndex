@@ -1141,6 +1141,66 @@ internal static class SearchAuditRecipes
                     ["audit", "bug"],
                     "False positives include tests and intentionally unconstrained values that cannot affect SQL shape."),
                 new(
+                    "sqlite-policy-shared-create-command",
+                    "SqliteConnectionPolicy.CreateCommand",
+                    "Find SQLite command creation routed through the shared connection policy helper so audits can separate policy-compliant command construction from raw CreateCommand sites.",
+                    ["audit", "security"],
+                    "Expected safe hits create commands through SqliteConnectionPolicy; still verify the subsequent SQL text and parameters.")
+                {
+                    Severity = "info",
+                    RiskEvidence =
+                    [
+                        "positive: SqliteConnectionPolicy.CreateCommand centralizes command timeout and connection policy for SQLite commands.",
+                        "review: surrounding CommandText still needs value parameterization, bounded dynamic identifiers, and cancellation review."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "sqlite-policy-typed-parameter",
+                    "SqliteCommandPolicy.Add",
+                    "Find SQLite command paths using typed parameter helpers so audits can separate explicit binding from provider-inferred AddWithValue usage.",
+                    ["audit", "bug"],
+                    "Expected safe hits use AddText/AddInt64/AddDouble/AddBlob/AddLimit/AddOffset-style helpers; still verify parameter values are bounded for their query shape.")
+                {
+                    Severity = "info",
+                    RiskEvidence =
+                    [
+                        "positive: SqliteCommandPolicy typed helpers avoid AddWithValue provider inference and keep parameter binding auditable.",
+                        "review: ensure every data value in nearby SQL is bound through a typed helper rather than interpolated into CommandText."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "sqlite-policy-identifier-quoting",
+                    "SqliteIdentifier.Quote",
+                    "Find dynamic SQLite identifier construction that uses shared identifier quoting so audits can separate quoted identifiers from value interpolation.",
+                    ["audit", "security"],
+                    "Expected safe hits quote table, column, index, or PRAGMA identifiers; still verify user data remains parameterized.")
+                {
+                    Severity = "info",
+                    RiskEvidence =
+                    [
+                        "positive: SqliteIdentifier.Quote constrains dynamic SQL identifier interpolation to quoted SQLite identifiers.",
+                        "review: quoted identifiers are not value parameters; nearby user values should still use typed SqliteCommandPolicy parameters."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "sqlite-policy-pragma-helper",
+                    "DbPragmaPolicy.",
+                    "Find SQLite PRAGMA construction routed through the shared allowlisted PRAGMA helper policy.",
+                    ["audit", "security"],
+                    "Expected safe hits use DbPragmaPolicy constants or bounded builders for PRAGMA statements.")
+                {
+                    Severity = "info",
+                    RiskEvidence =
+                    [
+                        "positive: DbPragmaPolicy keeps PRAGMA names and values allowlisted or bounded where SQLite cannot use ordinary parameters.",
+                        "review: raw PRAGMA CommandText outside the helper remains a higher-risk surface."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
                     "sqlite-policy-pragma",
                     "PRAGMA",
                     "Find SQLite PRAGMA surfaces that may need allowlisted names, bounded values, and read-only fallback review.",

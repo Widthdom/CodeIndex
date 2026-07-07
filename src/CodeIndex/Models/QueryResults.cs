@@ -1580,6 +1580,8 @@ public sealed record VacuumResult(
     long? WalSizeBytesBefore,
     long? DbSizeBytesAfter,
     long? WalSizeBytesAfter,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? WalCheckpointTimingNote,
     long AutoVacuumModeBefore,
     string AutoVacuumModeBeforeName,
     long AutoVacuumModeAfter,

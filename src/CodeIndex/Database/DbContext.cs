@@ -802,12 +802,18 @@ public class DbContext : IDisposable
             WalSizeBytesBefore: before.WalSizeBytes,
             DbSizeBytesAfter: after.DbSizeBytes,
             WalSizeBytesAfter: after.WalSizeBytes,
+            WalCheckpointTimingNote: BuildWalCheckpointTimingNote(dryRun),
             AutoVacuumModeBefore: before.AutoVacuumMode,
             AutoVacuumModeBeforeName: MaintenanceGuidanceBuilder.FormatAutoVacuumMode(before.AutoVacuumMode) ?? "unknown",
             AutoVacuumModeAfter: after.AutoVacuumMode,
             AutoVacuumModeAfterName: MaintenanceGuidanceBuilder.FormatAutoVacuumMode(after.AutoVacuumMode) ?? "unknown",
             MaintenanceGuidance: guidance);
     }
+
+    private static string? BuildWalCheckpointTimingNote(bool dryRun)
+        => dryRun
+            ? null
+            : "wal_size_bytes_after is sampled before the vacuum connection closes; SQLite may checkpoint or truncate WAL pages after command cleanup, so a later status call can report a smaller wal_size_bytes value.";
 
     private static void ReportMaintenanceProgress(string operation, string phase, string dbPath)
     {
