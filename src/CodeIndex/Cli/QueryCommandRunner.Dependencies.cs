@@ -508,7 +508,15 @@ public static partial class QueryCommandRunner
             WriteUsageError(
                 "--summary-only is only supported with deps JSON output.",
                 GetUsageLineOrThrow("deps"),
-                "Use `cdidx deps --json --summary-only` or `cdidx deps --format json-graph --summary-only`.");
+                "Use `cdidx deps --json --summary-only`.");
+            return CommandExitCodes.UsageError;
+        }
+        if (options.SummaryOnly && depsFormat == OutputFormatJsonGraph)
+        {
+            WriteUsageError(
+                "deps --summary-only is not supported with --format json-graph because summary mode does not emit graph-shaped nodes or edges.",
+                GetUsageLineOrThrow("deps"),
+                "Use `cdidx deps --json --summary-only --path <glob>` for a compact summary, or remove --summary-only for json-graph output.");
             return CommandExitCodes.UsageError;
         }
 
