@@ -355,10 +355,16 @@ public static partial class QueryCommandRunner
                 ["elapsed_ms"] = Math.Round(entry.ElapsedMs, 3),
                 ["rows_scanned"] = entry.RowsScanned,
             });
+            var sql = Database.DbDebug.FormatSqlForProfile(
+                entry.Sql,
+                out var sqlTruncated,
+                out var sqlRedactedChars);
             queries.Add(new JsonObject
             {
                 ["name"] = name,
-                ["sql"] = entry.Sql,
+                ["sql"] = sql,
+                ["sql_truncated"] = sqlTruncated,
+                ["sql_redacted_chars"] = sqlRedactedChars,
             });
             foreach (var row in entry.QueryPlan)
             {
@@ -380,6 +386,8 @@ public static partial class QueryCommandRunner
                 ["phases"] = phases,
                 ["query_plan"] = queryPlan,
                 ["queries"] = queries,
+                ["sql_text_limit_chars"] = Database.DbDebug.MaxSlowQuerySqlChars,
+                ["redaction"] = $"SQL literals and path-like values are redacted; SQL text is capped at {Database.DbDebug.MaxSlowQuerySqlChars.ToString(CultureInfo.InvariantCulture)} characters per statement.",
             },
         }.ToJsonString(jsonOptions));
     }

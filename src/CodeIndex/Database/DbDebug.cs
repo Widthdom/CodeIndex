@@ -282,11 +282,16 @@ public static class DbDebug
     }
 
     internal static string FormatSqlForSlowQueryLog(string sql)
+        => FormatSqlForProfile(sql, out _, out _);
+
+    internal static string FormatSqlForProfile(string sql, out bool truncated, out int redactedChars)
     {
         var singleLine = sql.ReplaceLineEndings(" ");
         var redacted = DiagnosticRedactor.RedactSensitiveText(
             DiagnosticRedactor.RedactSqlLiterals(singleLine),
             redactPaths: true);
+        redactedChars = redacted.Length;
+        truncated = redacted.Length > MaxSlowQuerySqlChars;
         return TruncateDiagnosticText(redacted, MaxSlowQuerySqlChars);
     }
 

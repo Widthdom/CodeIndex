@@ -199,6 +199,25 @@ public class DbDebugTests
     }
 
     [Fact]
+    public void FormatSqlForProfile_RedactsAndBoundsSqlWithMetadata_Issue4332()
+    {
+        var path = "/Users/example/private/project/secret_module.cs";
+        var sql = "SELECT * FROM files WHERE path = '" + path + "' " +
+            string.Join(" ", Enumerable.Range(0, DbDebug.MaxSlowQuerySqlChars).Select(i => $"UNION ALL SELECT column_{i}"));
+
+        var formatted = DbDebug.FormatSqlForProfile(sql, out var truncated, out var redactedChars);
+
+        Assert.True(truncated);
+        Assert.True(redactedChars > DbDebug.MaxSlowQuerySqlChars);
+        Assert.True(formatted.Length <= DbDebug.MaxSlowQuerySqlChars, $"SQL text was {formatted.Length} chars.");
+        Assert.Contains("path = '<redacted>'", formatted);
+        Assert.Contains("...<truncated>", formatted);
+        Assert.DoesNotContain(path, formatted);
+        Assert.DoesNotContain('\r', formatted);
+        Assert.DoesNotContain('\n', formatted);
+    }
+
+    [Fact]
     public void DumpToStderr_NoOp_WhenDisabled()
     {
         using var env = EnvironmentVariableScope.Capture("CDIDX_DEBUG");
