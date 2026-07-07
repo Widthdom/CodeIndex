@@ -419,14 +419,16 @@ public static partial class QueryCommandRunner
                     if (inlineValue == null)
                     {
                         json = true;
-                        outputFormat = OutputFormatJson;
+                        if (outputFormat == OutputFormatText)
+                            outputFormat = OutputFormatJson;
                     }
                     else if (TryParseJsonOutputFormat(inlineValue, out var parsedJsonOutputFormat))
                     {
                         json = true;
                         jsonOutputFormat = parsedJsonOutputFormat;
                         jsonOutputFormatExplicit = true;
-                        outputFormat = OutputFormatJson;
+                        if (outputFormat == OutputFormatText)
+                            outputFormat = OutputFormatJson;
                     }
                     else
                     {

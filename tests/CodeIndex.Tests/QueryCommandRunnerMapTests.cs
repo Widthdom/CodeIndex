@@ -223,7 +223,7 @@ public partial class QueryCommandRunnerTests
             TestProjectHelper.InsertIndexedFile(dbPath, "src/LargeOne.cs", "csharp", largerFile);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
-                ["--db", dbPath, "--format", "issue-drafts", "--summary-only"],
+                ["--db", dbPath, "--format", "issue-drafts", "--summary-only", "--json", "--limit", "10", "--exclude-tests"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
@@ -231,6 +231,7 @@ public partial class QueryCommandRunnerTests
             using var document = ParseJsonOutput(stdout);
             var root = document.RootElement;
 
+            Assert.Equal("issue-drafts", root.GetProperty("format").GetString());
             Assert.True(root.GetProperty("summary_only").GetBoolean());
             Assert.Equal(1, root.GetProperty("count").GetInt32());
             Assert.Equal(0, root.GetProperty("emitted_count").GetInt32());
