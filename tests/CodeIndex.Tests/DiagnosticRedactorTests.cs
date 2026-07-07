@@ -31,6 +31,12 @@ public class DiagnosticRedactorTests
 
     [Theory]
     [InlineData("--github-token")]
+    [InlineData("github_token")]
+    [InlineData("bearer")]
+    [InlineData("BearerToken")]
+    [InlineData("api-token")]
+    [InlineData("access_token")]
+    [InlineData("AuthorizationHeader")]
     [InlineData("CDIDX_ACCESS_KEY")]
     [InlineData("serviceCredential")]
     [InlineData("authorization")]
@@ -64,6 +70,23 @@ public class DiagnosticRedactorTests
 
         Assert.Equal(expected, redacted);
         Assert.DoesNotContain("visible4175", redacted);
+    }
+
+    [Theory]
+    [InlineData("Bearer bearer-secret-4299", "Bearer <redacted>", "bearer-secret-4299")]
+    [InlineData("github_token=ghp_abcdefghijklmnopqrstuvwxyz", "github_token=<redacted>", "ghp_abcdefghijklmnopqrstuvwxyz")]
+    [InlineData("api-token=hunter2", "api-token=<redacted>", "hunter2")]
+    [InlineData("access_token=hunter2", "access_token=<redacted>", "hunter2")]
+    [InlineData("AuthorizationHeader=hunter2", "AuthorizationHeader=<redacted>", "hunter2")]
+    public void RedactSensitiveText_RedactsTokenAndAuthorizationVariants_Issue4299(
+        string input,
+        string expected,
+        string secret)
+    {
+        var redacted = DiagnosticRedactor.RedactSensitiveText(input);
+
+        Assert.Equal(expected, redacted);
+        Assert.DoesNotContain(secret, redacted);
     }
 
     [Theory]

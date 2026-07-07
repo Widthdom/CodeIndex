@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Net;
-using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -65,7 +64,7 @@ internal static class GitHubIssueReporter
     private const string ScrubInputTruncatedText = "\n[truncated]";
     private const string ApiErrorBodyTruncatedText = " [response body truncated]";
     private static readonly Regex SensitiveJsonFieldPattern = new(
-        "(\"(?:token|access_token|authorization|password|secret|client_secret|private_key|api_key)\"\\s*:\\s*)(\"(?:\\\\.|[^\"])*\"|[^,}\\]\\s]+)",
+        $@"(""[^""]*(?:{SensitiveNameClassifier.RegexFragmentPattern})[^""]*""\s*:\s*)(""(?:\\.|[^""])*""|[^,}}\]\s]+)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
         TimeSpan.FromMilliseconds(100));
     // Static HttpClient singleton — .NET best practice for reuse.
@@ -598,10 +597,7 @@ internal static class GitHubIssueReporter
     }
 
     private static void ApplyAuthenticatedGitHubApiHeaders(HttpRequestMessage requestMessage, string token)
-    {
-        GitHubHttpClientFactory.ApplyDefaultHeaders(requestMessage.Headers);
-        requestMessage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-    }
+        => GitHubHttpClientFactory.ApplyAuthenticatedGitHubApiHeaders(requestMessage, token);
 
     /// <summary>
     /// Remove fenced code blocks and inline code spans from a string before
@@ -953,12 +949,7 @@ internal static class GitHubIssueReporter
     }
 
     private static bool IsSensitiveApiErrorField(string fieldName) =>
-        fieldName.Contains("token", StringComparison.OrdinalIgnoreCase)
-        || fieldName.Contains("secret", StringComparison.OrdinalIgnoreCase)
-        || fieldName.Contains("password", StringComparison.OrdinalIgnoreCase)
-        || fieldName.Equals("authorization", StringComparison.OrdinalIgnoreCase)
-        || fieldName.Equals("api_key", StringComparison.OrdinalIgnoreCase)
-        || fieldName.Equals("private_key", StringComparison.OrdinalIgnoreCase);
+        DiagnosticRedactor.IsSensitiveName(fieldName);
 
     private static string RedactSensitiveJsonLikeFields(string errorBody)
     {
@@ -987,20 +978,37 @@ internal static class GitHubIssueReporter
             return null;
 
         if (response.Headers.RetryAfter?.Delta is { } delta)
-            return nowUtc.Add(delta).ToUniversalTime();
+            return GitHubHttpClientFactory.ClampRetryAfterDelta(nowUtc, delta);
 
         if (response.Headers.RetryAfter?.Date is { } retryDate)
-            return retryDate.UtcDateTime;
+            return GitHubHttpClientFactory.ClampRetryAfterDate(nowUtc, retryDate.UtcDateTime);
 
         if (response.Headers.TryGetValues("x-ratelimit-reset", out var resetValues))
         {
             foreach (var value in resetValues)
             {
-                if (long.TryParse(value, out var epochSeconds))
-                    return DateTimeOffset.FromUnixTimeSeconds(epochSeconds).UtcDateTime;
+                if (TryParseUnixEpochSeconds(value, out var retryAt))
+                    return GitHubHttpClientFactory.ClampRetryAfterDate(nowUtc, retryAt);
             }
         }
 
-        return nowUtc.Add(DefaultRateLimitRetryDelay);
+        return GitHubHttpClientFactory.ClampRetryAfterDelta(nowUtc, DefaultRateLimitRetryDelay);
+    }
+
+    private static bool TryParseUnixEpochSeconds(string value, out DateTime retryAtUtc)
+    {
+        retryAtUtc = default;
+        if (!long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var epochSeconds))
+            return false;
+
+        try
+        {
+            retryAtUtc = DateTimeOffset.FromUnixTimeSeconds(epochSeconds).UtcDateTime;
+            return true;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return false;
+        }
     }
 }
