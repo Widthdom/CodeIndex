@@ -121,6 +121,25 @@ public class CliFlagSchemaTests
     }
 
     [Fact]
+    public void AuditAggregationFlags_SurfaceDocumentedRecipeGrouping_Issues4301_4339()
+    {
+        var accepted = CliFlagSchema.GetAcceptedFlagNamesForCommand("audit");
+        foreach (var flag in new[] { "--count", "--group-by", "--count-by", "--unique" })
+            Assert.Contains(flag, accepted);
+
+        var completionFlags = CliFlagSchema.GetCompletionFlagsForCommand("audit").ToList();
+        var groupBy = Assert.Single(completionFlags, flag => flag.Name == "--group-by");
+        var countBy = Assert.Single(completionFlags, flag => flag.Name == "--count-by");
+        var unique = Assert.Single(completionFlags, flag => flag.Name == "--unique");
+
+        foreach (var placeholder in new[] { groupBy.ValuePlaceholder, countBy.ValuePlaceholder, unique.ValuePlaceholder })
+        {
+            Assert.Contains("return-type", placeholder, StringComparison.Ordinal);
+            Assert.Contains("subsystem", placeholder, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void UpgradeFlags_SurfaceImplementedSelectionAndJsonOptions()
     {
         var accepted = CliFlagSchema.GetAcceptedFlagNamesForCommand("upgrade");

@@ -25,8 +25,10 @@ public static partial class QueryCommandRunner
                     null,
                     null,
                     null,
+                    null,
                     null))
                 .ToList();
+            var normalizedGroupBy = NormalizeSearchAggregationKey(options.GroupBy!);
             var fileGroupSelection = ApplySearchGroupOutputSelection(fileCountGroups, options);
 
             if (options.Json)
@@ -35,7 +37,7 @@ public static partial class QueryCommandRunner
                         new SearchGroupedCountJsonResult(
                             JsonOutputContract.ApiVersion,
                             options.Query!,
-                            options.GroupBy!,
+                            normalizedGroupBy,
                             totalCount,
                             fileGroups.Count,
                             fileGroupSelection.Groups.Count,
@@ -52,7 +54,7 @@ public static partial class QueryCommandRunner
             }
             else
             {
-                WriteSearchGroupedCounts(options.GroupBy!, fileGroupSelection.Groups, totalCount, fileGroups.Count, fileGroupSelection.TotalGroups);
+                WriteSearchGroupedCounts(normalizedGroupBy, fileGroupSelection.Groups, totalCount, fileGroups.Count, fileGroupSelection.TotalGroups);
                 WriteExactSubstringHintIfNeeded(exactSubstringHint);
             }
 
@@ -61,19 +63,20 @@ public static partial class QueryCommandRunner
 
         var results = reader.Search(options.Query!, int.MaxValue, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank, guardFilters: options.GuardFilters, guardWindow: options.GuardWindow, guardScope: options.GuardScope);
         var displayRows = BuildSearchDisplayRows(results, options, exact);
-        var groups = BuildSearchGroupedCounts(options.GroupBy!, displayRows);
+        var groupBy = NormalizeSearchAggregationKey(options.GroupBy!);
+        var groups = BuildSearchGroupedCounts(groupBy, displayRows);
         var fallbackGroupSelection = ApplySearchGroupOutputSelection(groups, options);
         var fileCount = displayRows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count();
 
         if (options.Json)
         {
             var json = JsonSerializer.Serialize(
-                    new SearchGroupedCountJsonResult(
-                        JsonOutputContract.ApiVersion,
-                        options.Query!,
-                        options.GroupBy!,
-                        displayRows.Count,
-                        fileCount,
+                        new SearchGroupedCountJsonResult(
+                            JsonOutputContract.ApiVersion,
+                            options.Query!,
+                            groupBy,
+                            displayRows.Count,
+                            fileCount,
                         fallbackGroupSelection.Groups.Count,
                         fallbackGroupSelection.TotalGroups,
                         fallbackGroupSelection.Truncated,
@@ -88,7 +91,7 @@ public static partial class QueryCommandRunner
         }
         else
         {
-            WriteSearchGroupedCounts(options.GroupBy!, fallbackGroupSelection.Groups, displayRows.Count, fileCount, fallbackGroupSelection.TotalGroups);
+            WriteSearchGroupedCounts(groupBy, fallbackGroupSelection.Groups, displayRows.Count, fileCount, fallbackGroupSelection.TotalGroups);
             WriteExactSubstringHintIfNeeded(exactSubstringHint);
         }
 
@@ -103,6 +106,7 @@ public static partial class QueryCommandRunner
                     group.Key,
                     group.Count(),
                     group.Key,
+                    null,
                     null,
                     null,
                     null,
@@ -125,7 +129,41 @@ public static partial class QueryCommandRunner
                         null,
                         null,
                         null,
+                        null,
                         null))
+                    .OrderByDescending(group => group.Count)
+                    .ThenBy(group => group.Key, StringComparer.Ordinal)
+                    .ToList()
+            : groupBy == "return_type"
+                ? rows
+                    .GroupBy(row => NormalizeSearchReturnTypeGroupKey(row.Result.EnclosingSymbolReturnType), StringComparer.Ordinal)
+                    .Select(group => new SearchGroupedCountItemJsonResult(
+                        group.Key,
+                        group.Count(),
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        group.Key == NoSearchReturnTypeGroupKey ? null : group.Key))
+                    .OrderByDescending(group => group.Count)
+                    .ThenBy(group => group.Key, StringComparer.Ordinal)
+                    .ToList()
+            : groupBy == "subsystem"
+                ? rows
+                    .GroupBy(row => BuildSearchSubsystemGroupKey(row.Result.Path), StringComparer.Ordinal)
+                    .Select(group => new SearchGroupedCountItemJsonResult(
+                        group.Key,
+                        group.Count(),
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        group.Key == NoSearchSubsystemGroupKey ? null : group.Key))
                     .OrderByDescending(group => group.Count)
                     .ThenBy(group => group.Key, StringComparer.Ordinal)
                     .ToList()
@@ -143,11 +181,61 @@ public static partial class QueryCommandRunner
                         result.EnclosingSymbolKind,
                         result.EnclosingSymbolStartLine,
                         result.EnclosingSymbolEndLine,
-                        result.EnclosingContainerName);
+                        result.EnclosingContainerName,
+                        result.EnclosingSymbolReturnType);
                 })
                 .OrderByDescending(group => group.Count)
                 .ThenBy(group => group.Key, StringComparer.Ordinal)
                 .ToList();
+
+    private const string NoSearchReturnTypeGroupKey = "<no return type>";
+    private const string NoSearchSubsystemGroupKey = "<unknown subsystem>";
+
+    private static string NormalizeSearchReturnTypeGroupKey(string? returnType)
+        => string.IsNullOrWhiteSpace(returnType) ? NoSearchReturnTypeGroupKey : returnType.Trim();
+
+    private static string BuildSearchSubsystemGroupKey(string path)
+    {
+        var normalized = path.Replace('\\', '/');
+        if (normalized.StartsWith("src/CodeIndex/", StringComparison.Ordinal))
+        {
+            var rest = normalized["src/CodeIndex/".Length..];
+            var slashIndex = rest.IndexOf('/');
+            if (slashIndex < 0)
+                return "core";
+
+            return NormalizeSearchSubsystemSegment(rest[..slashIndex]);
+        }
+
+        if (normalized.StartsWith("src/", StringComparison.Ordinal))
+            return "source";
+        if (normalized.StartsWith("tests/", StringComparison.Ordinal))
+            return "tests";
+        if (normalized.StartsWith("docs/", StringComparison.Ordinal))
+            return "docs";
+        if (normalized.StartsWith("tools/", StringComparison.Ordinal))
+            return "tools";
+
+        return NoSearchSubsystemGroupKey;
+    }
+
+    private static string NormalizeSearchSubsystemSegment(string segment)
+        => segment switch
+        {
+            "Cli" => "cli",
+            "Database" => "database",
+            "Indexer" => "extractor",
+            "Lsp" => "lsp",
+            "Mcp" => "mcp",
+            "Models" => "models",
+            "Diagnostics" => "diagnostics",
+            "Security" => "security",
+            "Telemetry" => "telemetry",
+            "Archives" => "archives",
+            _ => string.IsNullOrWhiteSpace(segment)
+                ? NoSearchSubsystemGroupKey
+                : segment.Trim().ToLowerInvariant()
+        };
 
     private static string BuildSearchSymbolGroupKey(SearchResult result)
         => result.EnclosingSymbolName == null
@@ -180,6 +268,16 @@ public static partial class QueryCommandRunner
                 continue;
             }
             if (groupBy == "origin")
+            {
+                Console.WriteLine($"{group.Count,8} {group.Key}");
+                continue;
+            }
+            if (groupBy == "return_type")
+            {
+                Console.WriteLine($"{group.Count,8} {group.Key}");
+                continue;
+            }
+            if (groupBy == "subsystem")
             {
                 Console.WriteLine($"{group.Count,8} {group.Key}");
                 continue;
@@ -256,7 +354,19 @@ public static partial class QueryCommandRunner
     }
 
     private static string NormalizeSearchAggregationKey(string key)
-        => key == "path" ? "file" : key;
+        => key switch
+        {
+            "path" => "file",
+            "return-type" or "return_type" or "nullable-return-type" or "nullable_return_type" => "return_type",
+            "sub-system" or "sub_system" => "subsystem",
+            _ => key
+        };
+
+    private static bool IsSupportedSearchGroupByValue(string value)
+        => value != "path" && IsSupportedSearchAggregationValue(value);
+
+    private static bool IsSupportedSearchAggregationValue(string value)
+        => NormalizeSearchAggregationKey(value) is "file" or "symbol" or "origin" or "return_type" or "subsystem";
 
     private static SearchOutputSelection ApplySearchOutputSelection(List<SearchDisplayRow> rows, QueryCommandOptions options)
     {

@@ -106,7 +106,7 @@ internal static class CliFlagSchema
     private static readonly string[] CountCommands =
     [
         "search", "definition", "references", "callers", "callees", "symbols",
-        "files", "find", "impact", "unused", "hotspots",
+        "files", "find", "impact", "unused", "hotspots", "audit",
     ];
     private static readonly string[] StrictNotFoundCommands =
     [
@@ -326,8 +326,8 @@ internal static class CliFlagSchema
             new() { Name = "--reject-after", ValuePlaceholder = "<query>", Description = "Search: reject primary matches with a nearby guard query after them", Commands = Set("search") },
             new() { Name = "--guard-window", ValuePlaceholder = "<n>", Description = "Search: line window for require/reject guard queries", Commands = Set("search") },
             new() { Name = "--guard-scope", ValuePlaceholder = "<window|same-line>", Description = "Search: evaluate guard queries in the line window or on the same line as the primary match", Commands = Set("search") },
-            new() { Name = "--unique", ValuePlaceholder = "<path|file|symbol|origin>", Description = "Search recipes: emit unique aggregation rows", Commands = Set("search") },
-            new() { Name = "--count-by", ValuePlaceholder = "<path|file|symbol|origin>", Description = "Search recipes: count matches grouped by path/file, symbol, or origin", Commands = Set("search") },
+            new() { Name = "--unique", ValuePlaceholder = "<path|file|symbol|origin|return-type|subsystem>", Description = "Search/Audit recipes: emit unique aggregation rows", Commands = Set("search", "audit") },
+            new() { Name = "--count-by", ValuePlaceholder = "<path|file|symbol|origin|return-type|subsystem>", Description = "Search/Audit recipes: count matches grouped by path/file, symbol, origin, enclosing return type, or subsystem", Commands = Set("search", "audit") },
             new() { Name = "--origin", ValuePlaceholder = "<code|comment|string_literal|regex_literal|help_text>", Description = "Search: alias for --match-origin; keep only matches from selected origins", Commands = Set("search") },
             new() { Name = "--match-origin", ValuePlaceholder = "<code|comment|string_literal|regex_literal|help_text>", Description = "Search: keep only matches from selected origins; repeat or comma-separate values", Commands = Set("search") },
             new() { Name = "--exclude-origin", ValuePlaceholder = "<code|comment|string_literal|regex_literal|help_text>", Description = "Search: drop matches from selected origins; repeat or comma-separate values", Commands = Set("search") },
@@ -368,7 +368,7 @@ internal static class CliFlagSchema
             new() { Name = "--depth", ValuePlaceholder = "<n>", Description = "Map: cap module depth; impact: deprecated alias for --max-hops", Commands = Set("impact", "map") },
             new() { Name = "--with-paths", Description = "Impact: include shortest call chains per caller", Commands = Set("impact") },
             new() { Name = "--reverse", Description = "Reverse direction (show dependents)", Commands = Set("deps") },
-            new() { Name = "--group-by", ValuePlaceholder = "<file|symbol|origin|statement>", Description = "Search: group --count rows by file, symbol, or origin; hotspots: symbol/file grouping, with statement only for --lang sql", Commands = Set("hotspots", "search") },
+            new() { Name = "--group-by", ValuePlaceholder = "<file|symbol|origin|return-type|subsystem|statement>", Description = "Search/Audit: group --count rows by file, symbol, origin, enclosing return type, or subsystem; hotspots: symbol/file grouping, with statement only for --lang sql", Commands = Set("hotspots", "search", "audit") },
             new() { Name = "--group-by-name", Description = "Hotspots: collapse same-name rows; JSON keeps capped paths plus full definition details", Commands = Set("hotspots") },
             new() { Name = "--check", Description = "Verify status freshness/readiness", Commands = Set("status") },
             new() { Name = "--config", Description = "Print effective configuration with source attribution", Commands = Set("status") },

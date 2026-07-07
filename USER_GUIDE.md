@@ -1019,6 +1019,8 @@ cdidx search --recipe risky-code --format count --summary-only --max-json-bytes 
 cdidx search --named-query pack="dotnet pack" --named-query push="nuget push" --format compact  # named ad hoc batch with compact snippets
 cdidx search "catch (Exception" --group-by file --count --json    # rank broad audit hits by file
 cdidx search "JsonDocument.Parse" --group-by symbol --count --json # rank broad audit hits by enclosing symbol
+cdidx audit nullable-contracts/return-null-contract --group-by return-type --count --json  # rank nullable-return hits by enclosing return type
+cdidx audit nullable-contracts --group-by subsystem --count --json # split nullable-contract hits by source subsystem
 cdidx search "catch (Exception" --count-by origin --json          # count broad audit hits by match origin
 cdidx search "Directory.Delete" --origin code --exclude-origin comment --result-kind call_site --json=array  # focus on code call sites
 cdidx search "Authorization" --format grouped --per-file-limit 2  # file-grouped JSON with representative matches
@@ -1145,9 +1147,9 @@ streams can be projected with `--search-fields` including `query_name` and
 with `--max-json-bytes` for NDJSON. Recipe count output can use
 `--format count --summary-only --max-json-bytes <n>` to emit only recipe/scope
 names, aggregate counts, per-query counts, and query freshness. Recipe count
-aggregations support `--count-by path|file|symbol|origin`,
-`--group-by file|symbol|origin --count`, and
-`--unique path|file|symbol|origin`.
+aggregations support `--count-by path|file|symbol|origin|return-type|subsystem`,
+`--group-by file|symbol|origin|return-type|subsystem --count`, and
+`--unique path|file|symbol|origin|return-type|subsystem`.
 Other search export formats and `--json=array` are rejected for recipe modes
 because recipe output is grouped by query or list metadata.
 Recipe JSON and compact output apply `--limit` per query, include a `summary`
@@ -3801,6 +3803,8 @@ cdidx search --recipe risky-code --format count --summary-only --max-json-bytes 
 cdidx search --named-query pack="dotnet pack" --named-query push="nuget push" --format compact  # 名前付き ad hoc batch と compact snippet
 cdidx search "catch (Exception" --group-by file --count --json    # 広い audit hit を file 別にランク付け
 cdidx search "JsonDocument.Parse" --group-by symbol --count --json # 広い audit hit を enclosing symbol 別にランク付け
+cdidx audit nullable-contracts/return-null-contract --group-by return-type --count --json  # nullable return の hit を囲む戻り値型別にランク付け
+cdidx audit nullable-contracts --group-by subsystem --count --json # nullable contract の hit を source subsystem 別に分割
 cdidx search "catch (Exception" --count-by origin --json          # 広い audit hit を match origin 別に集計
 cdidx search "Directory.Delete" --origin code --exclude-origin comment --result-kind call_site --json=array  # コード上の呼び出し候補に絞る
 cdidx search "Authorization" --format grouped --per-file-limit 2  # file grouped JSON と代表 match
@@ -3915,8 +3919,8 @@ compact metadata が必要なら `cdidx recipes --summary-only --json` を使い
 `query_name` と `recipe` を含む `--search-fields` で投影でき、`--total-limit` で
 child query 全体の emitted row 数を制限でき、NDJSON では `--max-json-bytes` で byte 数を制限できます。
 recipe count output は `--format count --summary-only --max-json-bytes <n>` により、recipe / scope 名、
-aggregate count、query ごとの count、query freshness だけを出力できます。recipe の count aggregation は `--count-by path|file|symbol|origin`、
-`--group-by file|symbol|origin --count`、`--unique path|file|symbol|origin` に対応します。
+aggregate count、query ごとの count、query freshness だけを出力できます。recipe の count aggregation は `--count-by path|file|symbol|origin|return-type|subsystem`、
+`--group-by file|symbol|origin|return-type|subsystem --count`、`--unique path|file|symbol|origin|return-type|subsystem` に対応します。
 その他の search export format と `--json=array` は、recipe output が query または
 list metadata ごとに grouped されるため usage error で拒否します。
 recipe の JSON/compact output は `--limit` を query ごとに適用し、emitted/truncated

@@ -328,6 +328,7 @@ public partial class DbReader
             result.EnclosingSymbolStartLine = symbol.StartLine;
             result.EnclosingSymbolEndLine = symbol.EndLine;
             result.EnclosingContainerName = symbol.ContainerName;
+            result.EnclosingSymbolReturnType = symbol.ReturnType;
         }
     }
 
@@ -419,12 +420,14 @@ public partial class DbReader
         var startLineSql = GetSymbolColumnSql("start_line", "s.line", "s");
         var endLineSql = GetSymbolColumnSql("end_line", "s.line", "s");
         var containerNameSql = GetSymbolColumnSql("container_name", symbolAlias: "s");
+        var returnTypeSql = GetSymbolColumnSql("return_type", symbolAlias: "s");
         cmd.CommandText = $@"
             SELECT s.name,
                    s.kind,
                    {startLineSql} AS start_line,
                    {endLineSql} AS end_line,
-                   {containerNameSql} AS container_name
+                   {containerNameSql} AS container_name,
+                   {returnTypeSql} AS return_type
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE f.path = @path
@@ -457,10 +460,11 @@ public partial class DbReader
             reader.GetString(1),
             reader.GetInt32(2),
             reader.GetInt32(3),
-            GetNullableString(reader, 4));
+            GetNullableString(reader, 4),
+            GetNullableString(reader, 5));
     }
 
-    private sealed record SearchEnclosingSymbol(string Name, string Kind, int StartLine, int EndLine, string? ContainerName);
+    private sealed record SearchEnclosingSymbol(string Name, string Kind, int StartLine, int EndLine, string? ContainerName, string? ReturnType);
 
     public QueryCountResult CountSearchResults(string query, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true, IReadOnlyList<SearchGuardFilter>? guardFilters = null, int guardWindow = DefaultSearchGuardWindow, SearchGuardScope guardScope = SearchGuardScope.Window)
     {

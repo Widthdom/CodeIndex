@@ -359,7 +359,13 @@ internal sealed record SearchGroupedCountItemJsonResult(
     [property: JsonPropertyName("symbol_kind")] string? SymbolKind,
     [property: JsonPropertyName("symbol_start_line")] int? SymbolStartLine,
     [property: JsonPropertyName("symbol_end_line")] int? SymbolEndLine,
-    [property: JsonPropertyName("container_name")] string? ContainerName);
+    [property: JsonPropertyName("container_name")] string? ContainerName,
+    [property: JsonPropertyName("return_type")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? ReturnType = null,
+    [property: JsonPropertyName("subsystem")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? Subsystem = null);
 
 internal sealed record SearchAggregationJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
