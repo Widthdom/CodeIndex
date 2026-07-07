@@ -546,6 +546,37 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
+    public void GetRateLimitRetryAt_TreatsUnspecifiedNowAsUtc_Issue4321()
+    {
+        using var response = new HttpResponseMessage((HttpStatusCode)429);
+        response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(60));
+        var now = new DateTime(2031, 5, 2, 9, 0, 0, DateTimeKind.Unspecified);
+
+        var retryAt = GitHubIssueReporter.GetRateLimitRetryAt(response, now);
+
+        var expected = new DateTime(2031, 5, 2, 9, 1, 0, DateTimeKind.Utc);
+        Assert.Equal(expected, retryAt);
+        Assert.Equal(DateTimeKind.Utc, retryAt!.Value.Kind);
+    }
+
+    [Fact]
+    public void BuildRateLimitErrorDetail_NormalizesLocalRetryAtForMachineDetail_Issue4321()
+    {
+        var expectedUtc = new DateTime(2031, 5, 2, 9, 0, 0, DateTimeKind.Utc);
+        var local = expectedUtc.ToLocalTime();
+
+        var detail = GitHubIssueReporter.BuildRateLimitErrorDetail(429, "{\"message\":\"rate\"}", local);
+
+        const string marker = "next_retry_at=";
+        var markerIndex = detail.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(markerIndex >= 0, detail);
+        var raw = detail[(markerIndex + marker.Length)..];
+        var parsed = DateTime.Parse(raw, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+        Assert.Equal(DateTimeKind.Utc, parsed.Kind);
+        Assert.Equal(expectedUtc, parsed);
+    }
+
+    [Fact]
     public void GetRateLimitRetryAt_ClampsExcessiveRetryAfterDelta_Issue4329()
     {
         using var response = new HttpResponseMessage((HttpStatusCode)429);

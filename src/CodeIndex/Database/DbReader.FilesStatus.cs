@@ -951,27 +951,27 @@ public partial class DbReader
         }
     }
 
-    // Parse an ISO-8601 UTC timestamp persisted via SetMeta. Returns null when the raw
-    // value is missing or malformed so a partial / legacy stamp degrades gracefully.
-    // The stamp is always written as a UTC "o" round-trip string, so RoundtripKind alone
-    // preserves the offset / Kind without AssumeUniversal (which conflicts with RoundtripKind).
-    // ISO-8601 UTC 文字列を DateTime にする。欠落・解析失敗は null。
-    // stamp は常に UTC "o" 形式なので RoundtripKind だけで Kind / offset を維持する
-    // （AssumeUniversal と併用すると ArgumentException）。
-    private static DateTime? ParseMetaDateTime(string? raw)
+    // Parse an ISO-8601 timestamp persisted via SetMeta. Offsetless legacy values are
+    // treated as UTC, while explicit offsets are honored before normalizing to UTC JSON.
+    // SetMeta で保存された ISO-8601 timestamp を読む。offset の無い legacy 値は UTC 扱いし、
+    // 明示 offset は尊重してから UTC の JSON 値へ正規化する。
+    private static DateTimeOffset? ParseMetaDateTimeOffset(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw))
             return null;
-        if (DateTime.TryParse(
+        if (DateTimeOffset.TryParse(
                 raw,
                 System.Globalization.CultureInfo.InvariantCulture,
-                System.Globalization.DateTimeStyles.RoundtripKind,
+                System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
                 out var value))
         {
-            return value.Kind == DateTimeKind.Utc ? value : value.ToUniversalTime();
+            return value.ToUniversalTime();
         }
         return null;
     }
+
+    private static DateTime? ParseMetaDateTime(string? raw)
+        => ParseMetaDateTimeOffset(raw)?.UtcDateTime;
 
     // Parse a "true" / "false" meta string into a nullable bool. Returns null when the raw
     // value is missing or unrecognized so a partial / legacy stamp degrades gracefully.
