@@ -150,6 +150,23 @@ public static partial class QueryCommandRunner
                     .OrderByDescending(group => group.Count)
                     .ThenBy(group => group.Key, StringComparer.Ordinal)
                     .ToList()
+            : groupBy == "subsystem"
+                ? rows
+                    .GroupBy(row => BuildSearchSubsystemGroupKey(row.Result.Path), StringComparer.Ordinal)
+                    .Select(group => new SearchGroupedCountItemJsonResult(
+                        group.Key,
+                        group.Count(),
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        group.Key == NoSearchSubsystemGroupKey ? null : group.Key))
+                    .OrderByDescending(group => group.Count)
+                    .ThenBy(group => group.Key, StringComparer.Ordinal)
+                    .ToList()
             : rows
                 .GroupBy(row => BuildSearchSymbolGroupKey(row.Result), StringComparer.Ordinal)
                 .Select(group =>
@@ -172,9 +189,53 @@ public static partial class QueryCommandRunner
                 .ToList();
 
     private const string NoSearchReturnTypeGroupKey = "<no return type>";
+    private const string NoSearchSubsystemGroupKey = "<unknown subsystem>";
 
     private static string NormalizeSearchReturnTypeGroupKey(string? returnType)
         => string.IsNullOrWhiteSpace(returnType) ? NoSearchReturnTypeGroupKey : returnType.Trim();
+
+    private static string BuildSearchSubsystemGroupKey(string path)
+    {
+        var normalized = path.Replace('\\', '/');
+        if (normalized.StartsWith("src/CodeIndex/", StringComparison.Ordinal))
+        {
+            var rest = normalized["src/CodeIndex/".Length..];
+            var slashIndex = rest.IndexOf('/');
+            if (slashIndex < 0)
+                return "core";
+
+            return NormalizeSearchSubsystemSegment(rest[..slashIndex]);
+        }
+
+        if (normalized.StartsWith("src/", StringComparison.Ordinal))
+            return "source";
+        if (normalized.StartsWith("tests/", StringComparison.Ordinal))
+            return "tests";
+        if (normalized.StartsWith("docs/", StringComparison.Ordinal))
+            return "docs";
+        if (normalized.StartsWith("tools/", StringComparison.Ordinal))
+            return "tools";
+
+        return NoSearchSubsystemGroupKey;
+    }
+
+    private static string NormalizeSearchSubsystemSegment(string segment)
+        => segment switch
+        {
+            "Cli" => "cli",
+            "Database" => "database",
+            "Indexer" => "extractor",
+            "Lsp" => "lsp",
+            "Mcp" => "mcp",
+            "Models" => "models",
+            "Diagnostics" => "diagnostics",
+            "Security" => "security",
+            "Telemetry" => "telemetry",
+            "Archives" => "archives",
+            _ => string.IsNullOrWhiteSpace(segment)
+                ? NoSearchSubsystemGroupKey
+                : segment.Trim().ToLowerInvariant()
+        };
 
     private static string BuildSearchSymbolGroupKey(SearchResult result)
         => result.EnclosingSymbolName == null
@@ -212,6 +273,11 @@ public static partial class QueryCommandRunner
                 continue;
             }
             if (groupBy == "return_type")
+            {
+                Console.WriteLine($"{group.Count,8} {group.Key}");
+                continue;
+            }
+            if (groupBy == "subsystem")
             {
                 Console.WriteLine($"{group.Count,8} {group.Key}");
                 continue;
@@ -292,6 +358,7 @@ public static partial class QueryCommandRunner
         {
             "path" => "file",
             "return-type" or "return_type" or "nullable-return-type" or "nullable_return_type" => "return_type",
+            "sub-system" or "sub_system" => "subsystem",
             _ => key
         };
 
@@ -299,7 +366,7 @@ public static partial class QueryCommandRunner
         => value != "path" && IsSupportedSearchAggregationValue(value);
 
     private static bool IsSupportedSearchAggregationValue(string value)
-        => NormalizeSearchAggregationKey(value) is "file" or "symbol" or "origin" or "return_type";
+        => NormalizeSearchAggregationKey(value) is "file" or "symbol" or "origin" or "return_type" or "subsystem";
 
     private static SearchOutputSelection ApplySearchOutputSelection(List<SearchDisplayRow> rows, QueryCommandOptions options)
     {

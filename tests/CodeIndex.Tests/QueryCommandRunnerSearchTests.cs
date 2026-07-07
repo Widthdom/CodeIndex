@@ -1020,6 +1020,74 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_NullableRecipeGroupBySubsystemCountsSourceAreas_Issue4339()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_nullable_subsystem_4339");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            foreach (var (path, typeName, methodName) in new[]
+            {
+                ("src/CodeIndex/Cli/CommandNulls.cs", "CliNulls", "ReadCli"),
+                ("src/CodeIndex/Mcp/McpNulls.cs", "McpNulls", "ReadMcp"),
+                ("src/CodeIndex/Lsp/LspNulls.cs", "LspNulls", "ReadLsp"),
+                ("src/CodeIndex/Database/DbNulls.cs", "DbNulls", "ReadDb"),
+                ("src/CodeIndex/Indexer/ExtractorNulls.cs", "ExtractorNulls", "ReadExtractor"),
+            })
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    path,
+                    "csharp",
+                    $$"""
+                    public sealed class {{typeName}}
+                    {
+                        public string? {{methodName}}()
+                        {
+                            return null;
+                        }
+                    }
+                    """);
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "--recipe",
+                    "nullable-contracts/return-null-contract",
+                    "--db",
+                    dbPath,
+                    "--lang",
+                    "csharp",
+                    "--group-by",
+                    "subsystem",
+                    "--count",
+                    "--json"
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var query = Assert.Single(root.GetProperty("queries").EnumerateArray());
+            var groups = query.GetProperty("groups").EnumerateArray().ToList();
+
+            Assert.Equal("subsystem", root.GetProperty("group_by").GetString());
+            Assert.Equal(5, query.GetProperty("count").GetInt32());
+            foreach (var subsystem in new[] { "cli", "mcp", "lsp", "database", "extractor" })
+            {
+                Assert.Contains(groups, group =>
+                    group.GetProperty("subsystem").GetString() == subsystem &&
+                    group.GetProperty("count").GetInt32() == 1);
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_GroupByRequiresCount_Issue3388()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_group_by_requires_count");

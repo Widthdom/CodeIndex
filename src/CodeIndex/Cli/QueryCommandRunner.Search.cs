@@ -347,9 +347,9 @@ public static partial class QueryCommandRunner
                 if (!IsSupportedSearchGroupByValue(options.GroupBy))
                 {
                     WriteUsageError(
-                        "--group-by for recipe search must be one of file, symbol, origin, or return-type.",
+                        "--group-by for recipe search must be one of file, symbol, origin, return-type, or subsystem.",
                         GetUsageLineOrThrow("search"),
-                        "Use `cdidx search --recipe <name> --group-by file --count`, `--group-by symbol --count`, `--group-by return-type --count`, or `--count-by origin`.");
+                        "Use `cdidx search --recipe <name> --group-by file --count`, `--group-by symbol --count`, `--group-by return-type --count`, `--group-by subsystem --count`, or `--count-by origin`.");
                     return CommandExitCodes.UsageError;
                 }
                 if (!options.CountOnly)
@@ -364,17 +364,17 @@ public static partial class QueryCommandRunner
             if (options.CountBy != null && !IsSupportedSearchAggregationValue(options.CountBy))
             {
                 WriteUsageError(
-                    "--count-by for recipe search must be one of path, file, symbol, origin, or return-type.",
+                    "--count-by for recipe search must be one of path, file, symbol, origin, return-type, or subsystem.",
                     GetUsageLineOrThrow("search"),
-                    "Use `--count-by path`, `--count-by symbol`, `--count-by return-type`, or `--count-by origin`.");
+                    "Use `--count-by path`, `--count-by symbol`, `--count-by return-type`, `--count-by subsystem`, or `--count-by origin`.");
                 return CommandExitCodes.UsageError;
             }
             if (options.UniqueBy != null && !IsSupportedSearchAggregationValue(options.UniqueBy))
             {
                 WriteUsageError(
-                    "--unique for recipe search must be one of path, file, symbol, origin, or return-type.",
+                    "--unique for recipe search must be one of path, file, symbol, origin, return-type, or subsystem.",
                     GetUsageLineOrThrow("search"),
-                    "Use `--unique path`, `--unique symbol`, `--unique return-type`, or `--unique origin`.");
+                    "Use `--unique path`, `--unique symbol`, `--unique return-type`, `--unique subsystem`, or `--unique origin`.");
                 return CommandExitCodes.UsageError;
             }
             if (options.CountBy != null && options.UniqueBy != null)
@@ -443,9 +443,9 @@ public static partial class QueryCommandRunner
             if (!IsSupportedSearchGroupByValue(options.GroupBy))
             {
                 WriteUsageError(
-                    "--group-by for search must be one of file, symbol, origin, or return-type.",
+                    "--group-by for search must be one of file, symbol, origin, return-type, or subsystem.",
                     GetUsageLineOrThrow("search"),
-                    "Use `cdidx search <query> --group-by file --count`, `--group-by symbol --count`, `--group-by return-type --count`, or `--count-by origin`.");
+                    "Use `cdidx search <query> --group-by file --count`, `--group-by symbol --count`, `--group-by return-type --count`, `--group-by subsystem --count`, or `--count-by origin`.");
                 return CommandExitCodes.UsageError;
             }
             if (!options.CountOnly)
@@ -524,17 +524,17 @@ public static partial class QueryCommandRunner
         if (options.CountBy != null && !IsSupportedSearchAggregationValue(options.CountBy))
         {
             WriteUsageError(
-                "--count-by for search must be one of path, file, symbol, origin, or return-type.",
+                "--count-by for search must be one of path, file, symbol, origin, return-type, or subsystem.",
                 GetUsageLineOrThrow("search"),
-                "Use `--count-by path`, `--count-by symbol`, `--count-by return-type`, or `--count-by origin`.");
+                "Use `--count-by path`, `--count-by symbol`, `--count-by return-type`, `--count-by subsystem`, or `--count-by origin`.");
             return CommandExitCodes.UsageError;
         }
         if (options.UniqueBy != null && !IsSupportedSearchAggregationValue(options.UniqueBy))
         {
             WriteUsageError(
-                "--unique for search must be one of path, file, symbol, origin, or return-type.",
+                "--unique for search must be one of path, file, symbol, origin, return-type, or subsystem.",
                 GetUsageLineOrThrow("search"),
-                "Use `--unique path`, `--unique symbol`, `--unique return-type`, or `--unique origin`.");
+                "Use `--unique path`, `--unique symbol`, `--unique return-type`, `--unique subsystem`, or `--unique origin`.");
             return CommandExitCodes.UsageError;
         }
         if (options.OutputFormat == OutputFormatIssueDrafts)
