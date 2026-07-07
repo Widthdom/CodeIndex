@@ -982,20 +982,37 @@ internal static class GitHubIssueReporter
             return null;
 
         if (response.Headers.RetryAfter?.Delta is { } delta)
-            return nowUtc.Add(delta).ToUniversalTime();
+            return GitHubHttpClientFactory.ClampRetryAfterDelta(nowUtc, delta);
 
         if (response.Headers.RetryAfter?.Date is { } retryDate)
-            return retryDate.UtcDateTime;
+            return GitHubHttpClientFactory.ClampRetryAfterDate(nowUtc, retryDate.UtcDateTime);
 
         if (response.Headers.TryGetValues("x-ratelimit-reset", out var resetValues))
         {
             foreach (var value in resetValues)
             {
-                if (long.TryParse(value, out var epochSeconds))
-                    return DateTimeOffset.FromUnixTimeSeconds(epochSeconds).UtcDateTime;
+                if (TryParseUnixEpochSeconds(value, out var retryAt))
+                    return GitHubHttpClientFactory.ClampRetryAfterDate(nowUtc, retryAt);
             }
         }
 
-        return nowUtc.Add(DefaultRateLimitRetryDelay);
+        return GitHubHttpClientFactory.ClampRetryAfterDelta(nowUtc, DefaultRateLimitRetryDelay);
+    }
+
+    private static bool TryParseUnixEpochSeconds(string value, out DateTime retryAtUtc)
+    {
+        retryAtUtc = default;
+        if (!long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var epochSeconds))
+            return false;
+
+        try
+        {
+            retryAtUtc = DateTimeOffset.FromUnixTimeSeconds(epochSeconds).UtcDateTime;
+            return true;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return false;
+        }
     }
 }

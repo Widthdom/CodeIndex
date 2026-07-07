@@ -546,15 +546,72 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
+    public void GetRateLimitRetryAt_ClampsExcessiveRetryAfterDelta_Issue4329()
+    {
+        using var response = new HttpResponseMessage((HttpStatusCode)429);
+        response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromDays(30));
+        var now = new DateTime(2026, 5, 23, 10, 0, 0, DateTimeKind.Utc);
+
+        var retryAt = GitHubIssueReporter.GetRateLimitRetryAt(response, now);
+
+        Assert.Equal(now.Add(GitHubHttpClientFactory.MaxRetryAfterDelay), retryAt);
+    }
+
+    [Fact]
+    public void GetRateLimitRetryAt_ClampsPastRetryAfterDateToNow_Issue4329()
+    {
+        using var response = new HttpResponseMessage((HttpStatusCode)429);
+        var now = new DateTime(2026, 5, 23, 10, 0, 0, DateTimeKind.Utc);
+        response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(
+            new DateTimeOffset(now.AddMinutes(-5)));
+
+        var retryAt = GitHubIssueReporter.GetRateLimitRetryAt(response, now);
+
+        Assert.Equal(now, retryAt);
+    }
+
+    [Fact]
     public void GetRateLimitRetryAt_UsesResetHeaderForForbiddenExhaustedLimit()
     {
         using var response = new HttpResponseMessage(HttpStatusCode.Forbidden);
+        var now = new DateTime(2026, 5, 23, 10, 0, 0, DateTimeKind.Utc);
+        var resetAt = now.AddMinutes(20);
         response.Headers.TryAddWithoutValidation("x-ratelimit-remaining", "0");
-        response.Headers.TryAddWithoutValidation("x-ratelimit-reset", "1770000000");
+        response.Headers.TryAddWithoutValidation(
+            "x-ratelimit-reset",
+            new DateTimeOffset(resetAt, TimeSpan.Zero).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture));
 
-        var retryAt = GitHubIssueReporter.GetRateLimitRetryAt(response, new DateTime(2026, 5, 23, 10, 0, 0, DateTimeKind.Utc));
+        var retryAt = GitHubIssueReporter.GetRateLimitRetryAt(response, now);
 
-        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1770000000).UtcDateTime, retryAt);
+        Assert.Equal(resetAt, retryAt);
+    }
+
+    [Fact]
+    public void GetRateLimitRetryAt_ClampsExcessiveResetHeader_Issue4329()
+    {
+        using var response = new HttpResponseMessage(HttpStatusCode.Forbidden);
+        var now = new DateTime(2026, 5, 23, 10, 0, 0, DateTimeKind.Utc);
+        response.Headers.TryAddWithoutValidation("x-ratelimit-remaining", "0");
+        response.Headers.TryAddWithoutValidation(
+            "x-ratelimit-reset",
+            new DateTimeOffset(now.AddYears(20), TimeSpan.Zero).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture));
+
+        var retryAt = GitHubIssueReporter.GetRateLimitRetryAt(response, now);
+
+        Assert.Equal(now.Add(GitHubHttpClientFactory.MaxRetryAfterDelay), retryAt);
+    }
+
+    [Fact]
+    public void GetRateLimitRetryAt_InvalidResetHeaderFallsBackToBoundedDefault_Issue4329()
+    {
+        using var response = new HttpResponseMessage(HttpStatusCode.Forbidden);
+        var now = new DateTime(2026, 5, 23, 10, 0, 0, DateTimeKind.Utc);
+        response.Headers.TryAddWithoutValidation("x-ratelimit-remaining", "0");
+        response.Headers.TryAddWithoutValidation("x-ratelimit-reset", long.MaxValue.ToString(CultureInfo.InvariantCulture));
+
+        var retryAt = GitHubIssueReporter.GetRateLimitRetryAt(response, now);
+
+        Assert.Equal(now.AddMinutes(1), retryAt);
     }
 
     // --- Idempotency-on-retry tests / 再試行時の冪等性テスト ---

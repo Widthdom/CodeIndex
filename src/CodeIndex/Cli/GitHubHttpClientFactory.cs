@@ -9,6 +9,7 @@ internal static class GitHubHttpClientFactory
     internal const string ProxyDefaultCredentialsEnvironmentVariable = "CDIDX_GITHUB_PROXY_USE_DEFAULT_CREDENTIALS";
     internal const int MaxRetryAttempts = 3;
     internal static readonly TimeSpan MaxRequestTimeout = TimeSpan.FromMinutes(5);
+    internal static readonly TimeSpan MaxRetryAfterDelay = TimeSpan.FromHours(1);
     private static readonly TimeSpan[] RetryDelays =
     [
         TimeSpan.FromMilliseconds(100),
@@ -150,6 +151,27 @@ internal static class GitHubHttpClientFactory
             headers.UserAgent.Add(new ProductInfoHeaderValue(new ProductHeaderValue("cdidx")));
     }
 
+    internal static DateTime ClampRetryAfterDelta(DateTime nowUtc, TimeSpan delta)
+    {
+        nowUtc = NormalizeUtc(nowUtc);
+        if (delta <= TimeSpan.Zero)
+            return nowUtc;
+
+        var boundedDelta = delta > MaxRetryAfterDelay ? MaxRetryAfterDelay : delta;
+        return AddOrMax(nowUtc, boundedDelta);
+    }
+
+    internal static DateTime ClampRetryAfterDate(DateTime nowUtc, DateTime retryAtUtc)
+    {
+        nowUtc = NormalizeUtc(nowUtc);
+        retryAtUtc = NormalizeUtc(retryAtUtc);
+        if (retryAtUtc <= nowUtc)
+            return nowUtc;
+
+        var maxRetryAt = AddOrMax(nowUtc, MaxRetryAfterDelay);
+        return retryAtUtc > maxRetryAt ? maxRetryAt : retryAtUtc;
+    }
+
     internal static async Task EnsureSuccessStatusCodeWithBoundedDiagnosticsAsync(
         HttpResponseMessage response,
         string operation,
@@ -189,4 +211,10 @@ internal static class GitHubHttpClientFactory
 
     internal static OperationTimeoutBudget NormalizeRequestTimeoutBudget(TimeSpan timeout)
         => OperationTimeoutBudget.FromTimeoutOrDefault(timeout, MaxRequestTimeout).Clamp(MaxRequestTimeout);
+
+    private static DateTime NormalizeUtc(DateTime value)
+        => value.Kind == DateTimeKind.Utc ? value : value.ToUniversalTime();
+
+    private static DateTime AddOrMax(DateTime value, TimeSpan delta)
+        => DateTime.MaxValue - value < delta ? DateTime.MaxValue : value.Add(delta);
 }
