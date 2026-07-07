@@ -1088,6 +1088,11 @@ such as `source_origin`, `guard_evidence`, `secret_origin`,
 `task_result_intent`, `active_skip_governance`, `broad_catch_boundary`, and
 `diagnostic_redaction`; each classifier lists categories, evidence fields, and
 guidance so noisy audit terms can be separated before filing.
+`dogfood-risk-patterns` includes process-launch boundary child queries for
+`ProcessStartInfo`, `Process.Start`, `ArgumentList`, `UseShellExecute`,
+working-directory choices, stdout/stderr redirection, waits, termination, shared
+launch/environment policies, and broad plugin/hook/trust-override discovery
+terms.
 `risky-code/broad-exception-catch` includes broad-catch boundary categories and
 expected diagnostic behaviors so users can distinguish intentional top-level,
 cleanup, probe, diagnostic-sanitization, and worker boundaries from catches that
@@ -3885,6 +3890,10 @@ issue-draft export や下流の triage tool が evidence path の近くに revie
 `active_skip_governance`、`broad_catch_boundary`、`diagnostic_redaction` などの
 classifier が category、evidence field、guidance を持つため、ノイズの多い audit term を
 起票前に切り分けられます。
+`dogfood-risk-patterns` は `ProcessStartInfo`、`Process.Start`、`ArgumentList`、
+`UseShellExecute`、working-directory 選択、stdout/stderr redirection、wait、
+termination、共有 launch/environment policy、広めの plugin/hook/trust-override
+discovery 用語を process-launch boundary の child query として含みます。
 たとえば `risky-code/broad-exception-catch` は
 broad catch の境界カテゴリと期待される diagnostic behavior を含めるため、意図的な
 top-level、cleanup、probe、diagnostic-sanitization、worker 境界と、narrowing または

@@ -1626,6 +1626,30 @@ public partial class QueryCommandRunnerTests
             .GetProperty("queries")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "suppressed-cleanup-diagnostics");
+        var dogfoodProcessPolicyQuery = dogfoodRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "process-launch-policy");
+        var dogfoodProcessStartInfoQuery = dogfoodRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "process-start-info");
+        var dogfoodProcessWaitQuery = dogfoodRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "process-wait-for-exit");
+        var dogfoodPluginTermQuery = dogfoodRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "plugin-term");
+        var dogfoodHookTermQuery = dogfoodRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "hook-term");
+        var dogfoodTrustOverridesQuery = dogfoodRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "trust-overrides-contract");
         var sqlitePolicyCommandTextQuery = sqlitePolicyRecipe
             .GetProperty("queries")
             .EnumerateArray()
@@ -1852,6 +1876,17 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(dogfoodExceptionMessageQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "diagnostic_redaction");
         Assert.Contains(suppressedCleanupQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "broad_catch_boundary");
         Assert.Contains(suppressedCleanupQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "diagnostic_redaction");
+        Assert.Equal("info", dogfoodProcessPolicyQuery.GetProperty("severity").GetString());
+        Assert.Contains(dogfoodProcessPolicyQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("ProcessLaunchPolicy centralizes", StringComparison.Ordinal));
+        Assert.Contains(dogfoodProcessStartInfoQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "process_launch_boundary");
+        Assert.Contains(dogfoodProcessStartInfoQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("UseShellExecute", StringComparison.Ordinal));
+        Assert.Contains(dogfoodProcessWaitQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("timeout", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("low", dogfoodPluginTermQuery.GetProperty("severity").GetString());
+        Assert.Equal("low", dogfoodHookTermQuery.GetProperty("severity").GetString());
+        Assert.Contains(dogfoodPluginTermQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("CamelCase", StringComparison.Ordinal));
+        Assert.Contains(dogfoodHookTermQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("CamelCase", StringComparison.Ordinal));
+        Assert.Equal("info", dogfoodTrustOverridesQuery.GetProperty("severity").GetString());
+        Assert.Contains(dogfoodTrustOverridesQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("sanitized", StringComparison.Ordinal));
         Assert.Equal(" Regex.", dogfoodRegexQuery.GetProperty("query").GetString());
         Assert.Contains(dogfoodRegexQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("raw System.Text.RegularExpressions.Regex static APIs", StringComparison.Ordinal));
         Assert.Contains(dogfoodRegexQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("BoundedRegex aliases and instance names ending in Regex are filtered out", StringComparison.Ordinal));
@@ -2350,7 +2385,23 @@ public partial class QueryCommandRunnerTests
                 "raw-sql-command-text",
                 "pragma-command",
                 "environment-variable-parser",
+                "process-launch-policy",
+                "subprocess-environment-policy",
+                "process-start-info",
+                "process-start-direct",
+                "process-argument-list",
+                "process-shell-execute",
+                "process-working-directory",
+                "process-redirect-output",
+                "process-redirect-error",
+                "process-wait-for-exit",
+                "process-kill",
+                "current-directory-boundary",
+                "set-current-directory",
                 "plugin-activator",
+                "plugin-term",
+                "hook-term",
+                "trust-overrides-contract",
                 "assembly-load-context"
             ]);
         AssertRecipe(
@@ -4955,6 +5006,7 @@ public partial class QueryCommandRunnerTests
                 "src/dogfood.cs",
                 "csharp",
                 """
+                using System.Diagnostics;
                 using System.Runtime.Loader;
                 using System.Text.Encodings.Web;
                 using System.Text.RegularExpressions;
@@ -4963,6 +5015,22 @@ public partial class QueryCommandRunnerTests
                 {
                     public void Run(Exception ex, DbCommand command, Type pluginType)
                     {
+                        var rawStartInfo = new ProcessStartInfo();
+                        var startInfo = ProcessLaunchPolicy.CreateNoShellStartInfo(
+                            fileName: "dotnet",
+                            workingDirectory: Environment.CurrentDirectory,
+                            redirectStandardOutput: true,
+                            redirectStandardError: true);
+                        SubprocessEnvironmentPolicy.ApplyGitEnvironment(startInfo);
+                        startInfo.ArgumentList.Add("--info");
+                        startInfo.UseShellExecute = false;
+                        startInfo.WorkingDirectory = Environment.CurrentDirectory;
+                        startInfo.RedirectStandardOutput = true;
+                        startInfo.RedirectStandardError = true;
+                        using var process = Process.Start(startInfo);
+                        process.WaitForExit();
+                        process.Kill();
+                        Environment.SetCurrentDirectory(Environment.CurrentDirectory);
                         if (ex.Message.Contains("locked", StringComparison.OrdinalIgnoreCase))
                             Console.WriteLine("classified");
                         Regex.IsMatch("payload", "p.*");
@@ -4972,8 +5040,10 @@ public partial class QueryCommandRunnerTests
                         var limit = int.MaxValue;
                         command.CommandText = "PRAGMA table_info(user_input)";
                         var plugin = Activator.CreateInstance(pluginType);
+                        var hook = "post extraction hook";
+                        var trust_overrides = "trust_overrides";
                         var context = AssemblyLoadContext.GetLoadContext(pluginType.Assembly);
-                        Console.WriteLine($"{stamp}{local}{limit}{plugin}{context}");
+                        Console.WriteLine($"{rawStartInfo}{stamp}{local}{limit}{plugin}{hook}{trust_overrides}{context}");
                     }
                 }
                 """);
@@ -4983,7 +5053,7 @@ public partial class QueryCommandRunnerTests
                     "--recipe",
                     "dogfood-risk-patterns",
                     "--include-query",
-                    "exception-message-classifier,static-regex-api,relaxed-json-encoder,wall-clock-deadline,local-wall-clock-deadline,max-value-sentinel,raw-sql-command-text,pragma-command,plugin-activator,assembly-load-context",
+                    "exception-message-classifier,static-regex-api,relaxed-json-encoder,wall-clock-deadline,local-wall-clock-deadline,max-value-sentinel,raw-sql-command-text,pragma-command,process-launch-policy,subprocess-environment-policy,process-start-info,process-start-direct,process-argument-list,process-shell-execute,process-working-directory,process-redirect-output,process-redirect-error,process-wait-for-exit,process-kill,current-directory-boundary,set-current-directory,plugin-activator,plugin-term,hook-term,trust-overrides-contract,assembly-load-context",
                     "--db",
                     dbPath,
                     "--json",
@@ -5001,7 +5071,11 @@ public partial class QueryCommandRunnerTests
             Assert.Contains(queries, query => query.GetProperty("name").GetString() == "exception-message-classifier");
             Assert.Contains(queries, query => query.GetProperty("name").GetString() == "static-regex-api");
             Assert.Contains(queries, query => query.GetProperty("name").GetString() == "relaxed-json-encoder");
+            Assert.Contains(queries, query => query.GetProperty("name").GetString() == "process-start-info");
+            Assert.Contains(queries, query => query.GetProperty("name").GetString() == "process-wait-for-exit");
             Assert.Contains(queries, query => query.GetProperty("name").GetString() == "plugin-activator");
+            Assert.Contains(queries, query => query.GetProperty("name").GetString() == "hook-term");
+            Assert.Contains(queries, query => query.GetProperty("name").GetString() == "trust-overrides-contract");
             Assert.All(queries, query => Assert.Contains(query.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.StartsWith("risk:", StringComparison.Ordinal)));
         }
         finally
