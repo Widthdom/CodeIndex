@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Database;
@@ -14,7 +15,7 @@ public partial class McpServer
     /// Return the list of available tools.
     /// 利用可能なツール一覧を返す。
     /// </summary>
-    private JsonNode HandleToolsList(JsonNode? id)
+    private JsonNode HandleToolsList(JsonNode? id, JsonNode? listParams)
     {
         var tools = new JsonArray
         {
@@ -610,15 +611,66 @@ public partial class McpServer
             filtered.Add(tool!.DeepClone());
         }
 
+        var pageSize = DefaultToolsListPageSize;
+        if (listParams?["limit"] is JsonNode limitNode
+            && (limitNode is not JsonValue limitValue
+                || !limitValue.TryGetValue<int>(out pageSize)
+                || pageSize < 1
+                || pageSize > MaxToolsListPageSize))
+        {
+            return CreateToolsListLimitError(id);
+        }
+
+        var offset = 0;
+        if (listParams?["cursor"] is JsonNode cursorNode
+            && (cursorNode is not JsonValue cursorValue
+                || !cursorValue.TryGetValue<string>(out var cursor)
+                || !int.TryParse(cursor, NumberStyles.None, CultureInfo.InvariantCulture, out offset)
+                || offset < 0
+                || offset > MaxMcpPaginationOffset))
+        {
+            return CreateToolsListCursorError(id);
+        }
+
+        var page = new JsonArray();
+        for (var i = offset; i < filtered.Count && page.Count < pageSize; i++)
+            page.Add(filtered[i]!.DeepClone());
+
         var result = new JsonObject
         {
-            ["tools"] = filtered,
-            ["_meta"] = BuildToolsListCatalogMeta(filtered),
+            ["tools"] = page,
+            ["_meta"] = BuildToolsListCatalogMeta(filtered, page.Count, offset, pageSize),
         };
+        var nextOffset = offset + pageSize;
+        if (nextOffset <= MaxMcpPaginationOffset && nextOffset < filtered.Count)
+            result["nextCursor"] = nextOffset.ToString(CultureInfo.InvariantCulture);
         return CreateSuccessResponse(id, result);
     }
 
-    private static JsonObject BuildToolsListCatalogMeta(JsonArray tools)
+    private static JsonObject CreateToolsListCursorError(JsonNode? id)
+        => CreateErrorResponse(hasId: true, id: id, code: -32602,
+            message: $"tools/list cursor must be a non-negative pagination offset no greater than {MaxMcpPaginationOffset}.",
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: "Use the `nextCursor` value returned by the previous tools/list response, or omit params.cursor to start from the first page.",
+            retrySafe: false,
+            extraData: new JsonObject
+            {
+                ["max_pagination_offset"] = MaxMcpPaginationOffset,
+            });
+
+    private static JsonObject CreateToolsListLimitError(JsonNode? id)
+        => CreateErrorResponse(hasId: true, id: id, code: -32602,
+            message: $"tools/list limit must be between 1 and {MaxToolsListPageSize}.",
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: "Use params.limit only when you need a smaller discovery page, or omit it for the default tools/list page.",
+            retrySafe: false,
+            extraData: new JsonObject
+            {
+                ["default_tools_list_page_size"] = DefaultToolsListPageSize,
+                ["max_tools_list_page_size"] = MaxToolsListPageSize,
+            });
+
+    private static JsonObject BuildToolsListCatalogMeta(JsonArray tools, int returnedToolCount, int offset, int pageSize)
     {
         var enabledToolNames = GetAdvertisedToolNames(tools);
         return new JsonObject
@@ -662,6 +714,20 @@ public partial class McpServer
                 ["input_schemas_are_authoritative"] = true,
                 ["annotations_describe_read_only_or_mutating_behavior"] = true,
                 ["respect_tool_filtering"] = true,
+                ["pagination_supported"] = true,
+                ["cursor_param"] = "params.cursor",
+                ["limit_param"] = "params.limit",
+                ["next_cursor_field"] = "result.nextCursor",
+            },
+            ["response_controls"] = new JsonObject
+            {
+                ["tools_total"] = tools.Count,
+                ["tools_returned"] = returnedToolCount,
+                ["tools_offset"] = offset,
+                ["tools_page_size"] = pageSize,
+                ["default_tools_list_page_size"] = DefaultToolsListPageSize,
+                ["max_tools_list_page_size"] = MaxToolsListPageSize,
+                ["max_pagination_offset"] = MaxMcpPaginationOffset,
             },
         };
     }

@@ -2451,7 +2451,9 @@ public partial class QueryCommandRunnerTests
                 "stream-writer-ownership",
                 "read-to-end-materialization",
                 "memory-stream-materialization",
-                "query-mcp-toarray-materialization"
+                "string-builder-materialization",
+                "query-mcp-toarray-materialization",
+                "query-mcp-tolist-materialization"
             ]);
         AssertRecipe(
             "concurrency-state-audit",
@@ -4749,6 +4751,73 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("src/CodeIndex/Mcp/McpToolHandlers.Example.cs", paths);
             Assert.DoesNotContain("src/CodeIndex/Indexer/IndexerExample.cs", paths);
             Assert.Contains(query.GetProperty("path_patterns").EnumerateArray(), path => path.GetString() == "src/CodeIndex/Mcp/**");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_ResourceMaterializationRecipeFindsEagerBuildersAndLists_Issue4304()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_resource_materialization_4304");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/CodeIndex/Cli/QueryCommandRunner.Materialization.cs",
+                "csharp",
+                """
+                using System.Text;
+
+                public static class QueryCommandRunnerMaterialization
+                {
+                    public static object Build(IEnumerable<string> values)
+                    {
+                        var list = values.ToList();
+                        var builder = new StringBuilder();
+                        foreach (var value in list)
+                            builder.AppendLine(value);
+                        return builder.ToString();
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/CodeIndex/Indexer/IndexerMaterialization.cs",
+                "csharp",
+                """
+                public static class IndexerMaterialization
+                {
+                    public static object Build(IEnumerable<string> values) => values.ToList();
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "resource-materialization-audit", "--db", dbPath, "--json", "--limit", "10"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var queries = document.RootElement.GetProperty("queries").EnumerateArray().ToList();
+
+            var builderQuery = queries.Single(query => query.GetProperty("name").GetString() == "string-builder-materialization");
+            Assert.Equal(1, builderQuery.GetProperty("count").GetInt32());
+            Assert.Equal("src/CodeIndex/Cli/QueryCommandRunner.Materialization.cs", builderQuery.GetProperty("results")[0].GetProperty("path").GetString());
+
+            var toListQuery = queries.Single(query => query.GetProperty("name").GetString() == "query-mcp-tolist-materialization");
+            var toListPaths = toListQuery
+                .GetProperty("results")
+                .EnumerateArray()
+                .Select(result => result.GetProperty("path").GetString())
+                .ToArray();
+
+            Assert.Equal(1, toListQuery.GetProperty("count").GetInt32());
+            Assert.Contains("src/CodeIndex/Cli/QueryCommandRunner.Materialization.cs", toListPaths);
+            Assert.DoesNotContain("src/CodeIndex/Indexer/IndexerMaterialization.cs", toListPaths);
         }
         finally
         {

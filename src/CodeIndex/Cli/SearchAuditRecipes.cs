@@ -996,8 +996,8 @@ internal static class SearchAuditRecipes
                 {
                     RiskEvidence =
                     [
-                        "risk: MaxValue sentinels can bypass practical bounds for allocation, traversal, timeout, or query limits.",
-                        "positive: explicit clamping, saturation helper names, or test-only probes are safer evidence."
+                        "risk: MaxValue sentinels can bypass practical bounds for allocation, traversal, database pagination, JSON/output byte budgets, timeout, rate, or query limits.",
+                        "positive: explicit clamping, paged query/output contracts, saturation helper names, or test-only probes are safer evidence."
                     ],
                     MatchOrigins = ["code"],
                 },
@@ -2143,6 +2143,20 @@ internal static class SearchAuditRecipes
                     ],
                 },
                 new(
+                    "string-builder-materialization",
+                    "StringBuilder",
+                    "Find StringBuilder accumulation sites so bounded output builders and unbounded protocol/result buffers can be separated.",
+                    ["audit", "performance"],
+                    "False positives include fixed-format diagnostics, tiny local formatting helpers, and builders capped by a nearby byte or item limit.")
+                {
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: StringBuilder can accumulate workspace-sized output before JSON, NDJSON, SARIF, ctags, report, or MCP response caps are enforced.",
+                        "positive: fixed initial capacity, explicit item/byte caps, streaming writers, or small local formatting scope make the accumulation auditable."
+                    ],
+                },
+                new(
                     "query-mcp-toarray-materialization",
                     "ToArray()",
                     "Find eager ToArray conversions in query and MCP paths where result materialization can scale with workspace or protocol size.",
@@ -2158,6 +2172,25 @@ internal static class SearchAuditRecipes
                     RiskEvidence =
                     [
                         "risk: eager ToArray in query/MCP paths can materialize large result sets before limit, pagination, or JSON-size policy is applied.",
+                        "positive: bounded list sizes, option metadata, or immutable snapshot requirements can make the conversion intentional."
+                    ],
+                },
+                new(
+                    "query-mcp-tolist-materialization",
+                    "ToList()",
+                    "Find eager ToList conversions in query and MCP paths where result materialization can scale with workspace or protocol size.",
+                    ["audit", "performance"],
+                    "False positives include small option lists and fixed protocol metadata; prioritize search results, module lists, path sets, and JSON arrays.")
+                {
+                    PathPatterns =
+                    [
+                        "src/CodeIndex/Cli/QueryCommandRunner*.cs",
+                        "src/CodeIndex/Mcp/**",
+                    ],
+                    MatchOrigins = ["code"],
+                    RiskEvidence =
+                    [
+                        "risk: eager ToList in query/MCP paths can materialize large result sets before limit, pagination, or JSON-size policy is applied.",
                         "positive: bounded list sizes, option metadata, or immutable snapshot requirements can make the conversion intentional."
                     ],
                 }
