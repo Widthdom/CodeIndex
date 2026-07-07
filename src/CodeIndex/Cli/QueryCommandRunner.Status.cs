@@ -620,6 +620,12 @@ public static partial class QueryCommandRunner
         }
         if (rebuild)
             args.Add("--rebuild");
+        var symlinkPolicy = NormalizeIndexedSymlinkPolicy(status.IndexedFollowSymlinksPolicy);
+        if (symlinkPolicy != null)
+        {
+            args.Add("--follow-symlinks");
+            args.Add(symlinkPolicy);
+        }
 
         return new StatusRepairCommand
         {
@@ -631,6 +637,19 @@ public static partial class QueryCommandRunner
                 safetyNote,
                 "Avoid running concurrently with another cdidx index writer for the same database.",
             ],
+        };
+    }
+
+    private static string? NormalizeIndexedSymlinkPolicy(string? rawPolicy)
+    {
+        if (string.IsNullOrWhiteSpace(rawPolicy))
+            return null;
+
+        return rawPolicy.Trim().ToLowerInvariant() switch
+        {
+            "internal" => "internal",
+            "all" => "all",
+            _ => null,
         };
     }
 

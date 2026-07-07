@@ -6228,6 +6228,17 @@ public sealed class Caller
             Assert.Equal(0, check.GetProperty("missing_file_count").GetInt32());
             Assert.Equal(1, check.GetProperty("indexed_file_count").GetInt32());
             Assert.Contains("src/outside-link/Outside.cs", ReadIndexedPaths(dbPath));
+
+            File.WriteAllText(Path.Combine(outsideRoot, "NewOutside.cs"), "public class NewOutside { }\n");
+            var (staleExitCode, staleStatusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--check", "--json"]);
+            var repairCommand = Assert.Single(staleStatusJson.GetProperty("repair_commands").EnumerateArray());
+            var repairArgs = repairCommand.GetProperty("args").EnumerateArray().Select(arg => arg.GetString()).ToArray();
+            var followSymlinksIndex = Array.IndexOf(repairArgs, "--follow-symlinks");
+
+            Assert.Equal(1, staleExitCode);
+            Assert.Equal("workspace_stale", staleStatusJson.GetProperty("failed_checks")[0].GetString());
+            Assert.InRange(followSymlinksIndex, 0, repairArgs.Length - 2);
+            Assert.Equal("all", repairArgs[followSymlinksIndex + 1]);
         }
         finally
         {
