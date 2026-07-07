@@ -3831,6 +3831,20 @@ internal sealed record SearchRecipeQueryResultJsonResult(
     [property: JsonPropertyName("next_cursor")] string? NextCursor,
     [property: JsonPropertyName("results")] List<CompactSearchResult> Results);
 
+internal sealed record SearchNamedBatchCountSummaryRunJsonResult(
+    [property: JsonPropertyName("api_version")] string ApiVersion,
+    [property: JsonPropertyName("query_count")] int QueryCount,
+    [property: JsonPropertyName("result_count")] int ResultCount,
+    [property: JsonPropertyName("file_count")] int FileCount,
+    [property: JsonPropertyName("query_freshness")] SearchRecipeQueryFreshnessJsonResult QueryFreshness,
+    [property: JsonPropertyName("queries")] List<SearchNamedBatchCountSummaryQueryJsonResult> Queries);
+
+internal sealed record SearchNamedBatchCountSummaryQueryJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("query")] string Query,
+    [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("file_count")] int FileCount);
+
 internal sealed record SearchRecipeCountRunJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
     [property: JsonPropertyName("recipe")] SearchRecipeListItemJsonResult Recipe,

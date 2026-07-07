@@ -810,6 +810,8 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(SearchQueryHint))]
 [JsonSerializable(typeof(SearchNamedBatchQueryResultJsonResult))]
 [JsonSerializable(typeof(SearchNamedBatchRunJsonResult))]
+[JsonSerializable(typeof(SearchNamedBatchCountSummaryQueryJsonResult))]
+[JsonSerializable(typeof(SearchNamedBatchCountSummaryRunJsonResult))]
 [JsonSerializable(typeof(SearchRecipeListItemJsonResult))]
 [JsonSerializable(typeof(SearchRecipeListJsonResult))]
 [JsonSerializable(typeof(SearchRecipeNameListJsonResult))]

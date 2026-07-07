@@ -76,6 +76,8 @@ cdidx unused --compact --by-bucket
 cdidx map --compact --max-json-bytes 65536
 cdidx map --format issue-drafts --limit 10
 cdidx search --recipe risky-code --format compact --max-json-bytes 65536
+cdidx search --recipe risky-code --format compact --summary-only --json
+cdidx search --named-query todo=TODO --named-query fixme=FIXME --format count --summary-only --json
 cdidx validate
 ```
 
@@ -282,6 +284,8 @@ cdidx unused --compact --by-bucket
 cdidx map --compact --max-json-bytes 65536
 cdidx map --format issue-drafts --limit 10
 cdidx search --recipe risky-code --format compact --max-json-bytes 65536
+cdidx search --recipe risky-code --format compact --summary-only --json
+cdidx search --named-query todo=TODO --named-query fixme=FIXME --format count --summary-only --json
 cdidx validate
 ```
 
