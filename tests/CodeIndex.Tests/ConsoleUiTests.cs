@@ -968,7 +968,7 @@ public class ConsoleUiTests
         Assert.Contains("generated for version", output);
         Assert.Contains("Regenerate this script after upgrading cdidx.", output);
         Assert.Contains("Register-ArgumentCompleter -Native -CommandName cdidx", output);
-        Assert.Contains("$commands = @('index', 'backfill-fold'", output);
+        Assert.Contains("$commands = @('index', 'hooks', 'backfill-fold'", output);
         Assert.Contains("'--help', '--version', '--license'", output);
         Assert.Contains("'search' { $flags = @(", output);
         Assert.Contains("'--lang' { $langs", output);
@@ -978,6 +978,60 @@ public class ConsoleUiTests
         Assert.Contains("[string]::IsNullOrEmpty($wordToComplete) -and $tokens.Count -ge 1", output);
         Assert.Contains("$afterLastToken = $lastElement -and $cursorPosition -gt $lastElement.Extent.EndOffset", output);
         Assert.Contains("$tokens.Count -le 2 -and -not ([string]::IsNullOrEmpty($wordToComplete)) -and -not $afterLastToken", output);
+    }
+
+    [Theory]
+    [InlineData("bash")]
+    [InlineData("zsh")]
+    [InlineData("fish")]
+    [InlineData("powershell")]
+    public void CompletionRenderer_TopLevelCommandsMatchCatalog_Issue4347(string shell)
+    {
+        var output = ConsoleCompletionRenderer.GetCompletionScript(shell);
+
+        foreach (var command in CliCommandCatalog.Commands)
+        {
+            switch (shell)
+            {
+                case "bash":
+                    Assert.Contains($" {command} ", $" {ExtractBetween(output, "commands=\"", "\"")} ");
+                    break;
+                case "zsh":
+                    Assert.Contains($"'{command}:{command} command'", output);
+                    break;
+                case "fish":
+                    Assert.Contains($"complete -c cdidx -n '__fish_use_subcommand' -a '{command}' -d '{command} command'", output);
+                    break;
+                case "powershell":
+                    Assert.Contains($"'{command.Replace("'", "''", StringComparison.Ordinal)}'", ExtractBetween(output, "$commands = @(", ")"));
+                    break;
+            }
+        }
+    }
+
+    [Fact]
+    public void CompletionRenderer_IncludesNestedCommandFamilies_Issue4347()
+    {
+        var bash = ConsoleCompletionRenderer.GetCompletionScript("bash");
+        var zsh = ConsoleCompletionRenderer.GetCompletionScript("zsh");
+        var fish = ConsoleCompletionRenderer.GetCompletionScript("fish");
+        var powershell = ConsoleCompletionRenderer.GetCompletionScript("powershell");
+
+        foreach (var expected in new[] { "hooks) COMPREPLY=($(compgen -W \"install uninstall status\"", "workspace) COMPREPLY=($(compgen -W \"list status use current\"", "config) COMPREPLY=($(compgen -W \"show\"", "db) COMPREPLY=($(compgen -W \"integrity schema prune checkpoint checkpoints restore restore-backups\"" })
+            Assert.Contains(expected, bash);
+
+        foreach (var expected in new[] { "'install:install subcommand'", "'list:list subcommand'", "'show:show subcommand'", "'schema:schema subcommand'", "'prune:prune subcommand'" })
+            Assert.Contains(expected, zsh);
+
+        Assert.Contains("complete -c cdidx -n '__fish_seen_subcommand_from hooks' -a 'install uninstall status' -d 'hooks subcommand'", fish);
+        Assert.Contains("complete -c cdidx -n '__fish_seen_subcommand_from workspace' -a 'list status use current' -d 'workspace subcommand'", fish);
+        Assert.Contains("complete -c cdidx -n '__fish_seen_subcommand_from config' -a 'show' -d 'config subcommand'", fish);
+        Assert.Contains("complete -c cdidx -n '__fish_seen_subcommand_from db' -a 'integrity schema prune checkpoint checkpoints restore restore-backups' -d 'db subcommand'", fish);
+
+        Assert.Contains("'hooks' = @('install', 'uninstall', 'status')", powershell);
+        Assert.Contains("'workspace' = @('list', 'status', 'use', 'current')", powershell);
+        Assert.Contains("'config' = @('show')", powershell);
+        Assert.Contains("'db' = @('integrity', 'schema', 'prune', 'checkpoint', 'checkpoints', 'restore', 'restore-backups')", powershell);
     }
 
     [Theory]
@@ -1010,7 +1064,7 @@ public class ConsoleUiTests
             # cdidx bash completions generated for version <version>
             # Regenerate this script after upgrading cdidx.
             _cdidx() {
-            commands="index backfill-fold optimize search recipes audit definition goto references callers callees symbols files find excerpt map inspect outline status validate-config validate deps impact unused hotspots suggestions languages batch mcp completions db vacuum report license upgrade"
+            commands="index hooks backfill-fold optimize vacuum search recipes audit definition goto references callers callees symbols files find excerpt map inspect outline status workspace config upgrade validate-config doctor db diff report validate deps impact unused hotspots suggestions export import languages batch mcp lsp completions license"
             COMPREPLY=($(compgen -W "$commands --help --version --license --pretty --quiet -q --silent --color --palette --ascii --metrics --debug-unsafe --strict-version --log-format --log-retain-count --log-max-size-mb --no-progress" -- "$cur"))
             elif [ "$cmd" = "search" ]; then
             complete -F _cdidx cdidx
@@ -1047,7 +1101,7 @@ public class ConsoleUiTests
             # cdidx PowerShell completions generated for version <version>
             # Regenerate this script after upgrading cdidx.
             Register-ArgumentCompleter -Native -CommandName cdidx -ScriptBlock {
-            $commands = @('index', 'backfill-fold', 'optimize', 'search', 'recipes', 'audit', 'definition', 'goto', 'references', 'callers', 'callees', 'symbols', 'files', 'find', 'excerpt', 'map', 'inspect', 'outline', 'status', 'validate-config', 'validate', 'deps', 'impact', 'unused', 'hotspots', 'suggestions', 'languages', 'batch', 'mcp', 'completions', 'db', 'vacuum', 'report', 'license', 'upgrade')
+            $commands = @('index', 'hooks', 'backfill-fold', 'optimize', 'vacuum', 'search', 'recipes', 'audit', 'definition', 'goto', 'references', 'callers', 'callees', 'symbols', 'files', 'find', 'excerpt', 'map', 'inspect', 'outline', 'status', 'workspace', 'config', 'upgrade', 'validate-config', 'doctor', 'db', 'diff', 'report', 'validate', 'deps', 'impact', 'unused', 'hotspots', 'suggestions', 'export', 'import', 'languages', 'batch', 'mcp', 'lsp', 'completions', 'license')
             $topLevelFlags = @('--pretty', '--quiet', '-q', '--silent', '--color', '--palette', '--ascii', '--metrics', '--debug-unsafe', '--strict-version', '--log-format', '--log-retain-count', '--log-max-size-mb', '--no-progress')
             switch ($subcmd) {
             'search' { $flags = @(...) }

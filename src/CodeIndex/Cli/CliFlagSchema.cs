@@ -59,9 +59,9 @@ internal static class CliFlagSchema
     // サブコマンド一覧の正本。ConsoleUi.Commands と一致することをテストで確認する。
     public static IReadOnlyList<string> AllCommands { get; } =
     [
-        "index", "backfill-fold", "optimize", "search", "recipes", "audit", "definition", "goto", "references", "callers", "callees",
-        "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status", "validate-config",
-        "validate", "deps", "impact", "unused", "hotspots", "suggestions", "languages", "batch", "mcp", "completions", "db", "vacuum", "report", "license", "upgrade",
+        "index", "hooks", "backfill-fold", "optimize", "vacuum", "search", "recipes", "audit", "definition", "goto", "references", "callers", "callees",
+        "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status", "workspace", "config", "upgrade", "validate-config",
+        "doctor", "db", "diff", "report", "validate", "deps", "impact", "unused", "hotspots", "suggestions", "export", "import", "languages", "batch", "mcp", "lsp", "completions", "license",
     ];
 
     // Commands that accept the `--` end-of-options marker so a user can pass a literal
