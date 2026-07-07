@@ -611,8 +611,12 @@ public partial class McpServer
             filtered.Add(tool!.DeepClone());
         }
 
+        if (listParams is not null && listParams is not JsonObject)
+            return CreateToolsListParamsError(id);
+
+        var paramsObject = listParams as JsonObject;
         var pageSize = DefaultToolsListPageSize;
-        if (listParams?["limit"] is JsonNode limitNode
+        if (paramsObject?["limit"] is JsonNode limitNode
             && (limitNode is not JsonValue limitValue
                 || !limitValue.TryGetValue<int>(out pageSize)
                 || pageSize < 1
@@ -622,7 +626,7 @@ public partial class McpServer
         }
 
         var offset = 0;
-        if (listParams?["cursor"] is JsonNode cursorNode
+        if (paramsObject?["cursor"] is JsonNode cursorNode
             && (cursorNode is not JsonValue cursorValue
                 || !cursorValue.TryGetValue<string>(out var cursor)
                 || !int.TryParse(cursor, NumberStyles.None, CultureInfo.InvariantCulture, out offset)
@@ -657,6 +661,13 @@ public partial class McpServer
             {
                 ["max_pagination_offset"] = MaxMcpPaginationOffset,
             });
+
+    private static JsonObject CreateToolsListParamsError(JsonNode? id)
+        => CreateErrorResponse(hasId: true, id: id, code: -32602,
+            message: "tools/list params must be an object when present.",
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: "Omit params for the default tools/list response, or pass an object such as {\"limit\": 3}.",
+            retrySafe: false);
 
     private static JsonObject CreateToolsListLimitError(JsonNode? id)
         => CreateErrorResponse(hasId: true, id: id, code: -32602,

@@ -188,6 +188,12 @@ public partial class McpServerTests
     [Fact]
     public void ToolsList_InvalidPaginationParamsReturnInvalidParams_Issue4304()
     {
+        var invalidParams = JsonNode.Parse("""{"jsonrpc":"2.0","id":0,"method":"tools/list","params":[]}""")!;
+        var paramsResponse = _server.HandleMessage(invalidParams)!;
+
+        Assert.Equal(-32602, paramsResponse["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("invalid_argument", paramsResponse["error"]!["data"]!["category"]!.GetValue<string>());
+
         var invalidCursor = new JsonObject
         {
             ["jsonrpc"] = "2.0",
