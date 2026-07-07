@@ -135,7 +135,7 @@ public partial class DbReader
         var exactLiteralBoost = !exactSearch && !rawQuery && ShouldBoostExactLiteralSearch(query);
         var guardedRequestedLimit = Math.Max(0, guardRequestedLimit ?? limit);
         var guardedCandidateLimit = hasGuardFilters ? GetGuardedSearchCandidateLimit(guardedRequestedLimit, cursor) : 0;
-        var tokenBoundaryCandidateLimit = tokenBoundary && !hasGuardFilters ? GetTokenBoundarySearchCandidateLimit(guardedRequestedLimit, cursor) : 0;
+        var tokenBoundaryCandidateLimit = tokenBoundary && !hasGuardFilters ? int.MaxValue : 0;
         using var cmd = _conn.CreateCommand();
         string sql;
 
@@ -360,11 +360,6 @@ public partial class DbReader
 
     private static int AddSearchCandidateSentinel(int candidateLimit)
         => candidateLimit == int.MaxValue ? candidateLimit : candidateLimit + 1;
-
-    private static int GetTokenBoundarySearchCandidateLimit(int limit, SearchCursor? cursor)
-        => limit == int.MaxValue && cursor == null
-            ? int.MaxValue
-            : GetGuardedSearchCandidateLimit(limit, cursor);
 
     private static void TrackGuardCandidate(Dictionary<string, int> counts, string key)
     {
