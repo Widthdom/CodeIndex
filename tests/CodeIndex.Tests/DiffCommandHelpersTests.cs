@@ -72,6 +72,7 @@ public sealed class DiffCommandHelpersTests
             ["src/Right.cs"],
             null,
             null,
+            null,
             5,
             false);
 
