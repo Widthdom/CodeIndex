@@ -386,8 +386,10 @@ public static partial class IndexCommandRunner
             }
             else
             {
+                var skipWorktreePaths = GitHelper.TryGetSkipWorktreePaths(projectPath, cancellationToken);
                 dryDeleteCandidates = changedFiles
-                    .Where(path => !File.Exists(LongPath.EnsureWindowsPrefix(Path.Combine(projectPath, path.Replace('/', Path.DirectorySeparatorChar)))));
+                    .Where(path => !IsSparseSkippedPath(skipWorktreePaths, path)
+                                   && !File.Exists(LongPath.EnsureWindowsPrefix(Path.Combine(projectPath, path.Replace('/', Path.DirectorySeparatorChar)))));
                 dryCandidates = changedFiles
                     .Select(path => Path.Combine(projectPath, path.Replace('/', Path.DirectorySeparatorChar)))
                     .Where(p => File.Exists(LongPath.EnsureWindowsPrefix(p)));

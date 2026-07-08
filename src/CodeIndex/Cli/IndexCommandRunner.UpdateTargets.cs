@@ -1,5 +1,6 @@
 using System.Text.Json;
 using CodeIndex.Diagnostics;
+using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
 
@@ -16,6 +17,17 @@ public static partial class IndexCommandRunner
     {
         targetPaths = new HashSet<string>(StringComparer.Ordinal);
         relevantIgnoreFileChanged = false;
+        HashSet<string>? skipWorktreePaths = null;
+
+        bool IsMissingSparseSkippedTarget(string relativePath)
+        {
+            var absolutePath = Path.Combine(projectRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (File.Exists(LongPath.EnsureWindowsPrefix(absolutePath)))
+                return false;
+
+            skipWorktreePaths ??= GitHelper.TryGetSkipWorktreePaths(projectRoot, cancellationToken);
+            return IsSparseSkippedPath(skipWorktreePaths, relativePath);
+        }
 
         if (options.Commits.Count > 0)
         {
@@ -31,7 +43,11 @@ public static partial class IndexCommandRunner
                     var normalized = NormalizeCommitFileTargets(projectRoot, repoRoot, changedFiles, out var commitTouchedRelevantIgnoreFile);
                     relevantIgnoreFileChanged |= commitTouchedRelevantIgnoreFile;
                     foreach (var f in normalized)
+                    {
+                        if (IsMissingSparseSkippedTarget(f))
+                            continue;
                         targetPaths.Add(f);
+                    }
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -73,7 +89,11 @@ public static partial class IndexCommandRunner
                 var normalized = NormalizeCommitFileTargets(projectRoot, repoRoot, changedFiles, out var rangeTouchedRelevantIgnoreFile);
                 relevantIgnoreFileChanged |= rangeTouchedRelevantIgnoreFile;
                 foreach (var f in normalized)
+                {
+                    if (IsMissingSparseSkippedTarget(f))
+                        continue;
                     targetPaths.Add(f);
+                }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -109,6 +129,10 @@ public static partial class IndexCommandRunner
 
         return null;
     }
+
+    private static bool IsSparseSkippedPath(IReadOnlySet<string>? skipWorktreePaths, string relativePath)
+        => skipWorktreePaths != null
+           && skipWorktreePaths.Contains(FileIndexer.NormalizeIndexPath(relativePath));
 
     private static void WriteIndexJsonLiveness(IndexCommandOptions options, string message)
     {
