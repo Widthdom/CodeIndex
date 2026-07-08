@@ -125,6 +125,18 @@ public static partial class QueryCommandRunner
                 "the field is absent when Git comparison is unavailable or history is not comparable.",
                 "Run `cdidx index <projectPath>` when the value is positive before trusting freshness-sensitive results."),
             new(
+                "data_dir_mode",
+                "Data directory mode",
+                "the field reports the current cdidx data directory's Unix permission mode, such as `0700`, when the platform exposes it.",
+                "the field is absent for URI databases, missing directories, platforms without Unix file modes, or readers that cannot inspect the directory.",
+                "Use this field for support-safe permission audits; inspect the data directory locally when the field is absent or broader than expected."),
+            new(
+                "unknown_extension_file_count",
+                "Unknown extension inventory",
+                "`0` means the last successful full scan found no non-empty unknown extensions; positive values summarize skipped files with extensions that no language recognized.",
+                "the field is absent in legacy indexes or before a current scanner stamps unknown-extension inventory metadata.",
+                "Review `unknown_extension_files` and `unknown_extension_groups` in `cdidx status --json`, then update ignores or language support before rebuilding."),
+            new(
                 "head_freshness",
                 "Compact HEAD freshness summary",
                 "`state=fresh` means `status --check` proved the index matches the workspace; without `--check`, `state=head_current` means only the runtime HEAD matched `indexed_head` (see `indexed_head_source`).",

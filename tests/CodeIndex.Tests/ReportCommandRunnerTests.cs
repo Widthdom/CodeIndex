@@ -63,6 +63,15 @@ public class ReportCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_RedactPathsAcceptedForReportParity_Issue4313()
+    {
+        var options = ReportCommandRunner.ParseArgs(["--output", "x.tgz", "--json", "--redact-paths"]);
+
+        Assert.True(options.Json);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
     public void ParseArgs_IncludeArgsOptsInToLiteralLog()
     {
         var options = ReportCommandRunner.ParseArgs(["--output", "x.tgz", "--include-args"]);
@@ -997,6 +1006,42 @@ public class ReportCommandRunnerTests
             Assert.Equal(ReportCommandRunner.RedactedPlaceholder, json.GetProperty("output_path").GetString());
             Assert.Equal(ReportCommandRunner.RedactedPlaceholder, json.GetProperty("db_path").GetString());
             Assert.True(json.GetProperty("db_included").GetBoolean());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
+    public void Run_JsonMode_RedactPathsFlagKeepsSupportSafeSummary_Issue4313()
+    {
+        var workDir = CreateWorkDir();
+        var dbPath = Path.Combine(workDir, "codeindex.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+
+            var output = Path.Combine(workDir, "bundle.tgz");
+            var (exitCode, stdout, stderr) = RunAndCaptureStreams([
+                "--output", output,
+                "--db", dbPath,
+                "--no-log",
+                "--json",
+                "--redact-paths",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var root = document.RootElement;
+            Assert.Equal(ReportCommandRunner.RedactedPlaceholder, root.GetProperty("output_path").GetString());
+            Assert.Equal(ReportCommandRunner.RedactedPlaceholder, root.GetProperty("db_path").GetString());
+            Assert.DoesNotContain(workDir, stdout, StringComparison.Ordinal);
+            Assert.True(File.Exists(output));
         }
         finally
         {

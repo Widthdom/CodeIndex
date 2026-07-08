@@ -406,6 +406,7 @@ internal static class CliFlagSchema
             new() { Name = "--debounce", ValuePlaceholder = "<ms>", Description = "Watch only: coalesce file events into one update after <ms> of quiet (default 500)", Commands = Set("index") },
             new() { Name = "--watch-pending-path-limit", ValuePlaceholder = "<n>", Description = "Watch only: changed-path queue limit before full-rescan fallback", Commands = Set("index") },
             new() { Name = "--output", ShortName = "-o", ValuePlaceholder = "<path>", Description = "Output bundle path", Commands = Set("report") },
+            new() { Name = "--redact-paths", Description = "Report: accepted for doctor/report parity; report paths are redacted by default", Commands = Set("report") },
             new() { Name = "--no-log", Description = "Exclude global tool log from bundle", Commands = Set("report") },
             new() { Name = "--include-args", Description = "Include args in bundle log", Commands = Set("report") },
             new() { Name = "--log-lines", ValuePlaceholder = "<n>", Description = "Number of log lines to include in bundle (clamped to 2000)", Commands = Set("report") },
