@@ -32,6 +32,7 @@ public partial class FileIndexer
     {
         var fileName = Path.GetFileName(relativePath.AsSpan());
         return fileName.EndsWith(".Designer.cs".AsSpan(), StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith(".Generated.cs".AsSpan(), StringComparison.OrdinalIgnoreCase)
             || fileName.EndsWith(".g.cs".AsSpan(), StringComparison.OrdinalIgnoreCase)
             || fileName.EndsWith(".g.dart".AsSpan(), StringComparison.OrdinalIgnoreCase)
             || fileName.EndsWith(".gen.go".AsSpan(), StringComparison.OrdinalIgnoreCase)
