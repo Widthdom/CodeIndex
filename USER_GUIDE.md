@@ -2403,6 +2403,10 @@ cdidx ./myproject --changed-between old-branch new-branch --json
 If the refs are not known, use `cdidx ./myproject --json` and verify with `cdidx status --check --json`.
 ~~~
 
+### AI Protocol Boundary Quick Reference
+
+cdidx exposes separate JSON-RPC integration surfaces with different framing and limits. MCP stdio uses LF-delimited UTF-8 JSON-RPC lines and keeps human diagnostics on stderr. MCP HTTP uses POST request/response JSON-RPC with optional bearer authentication, body-size limits, queue/concurrency limits, and opt-in `(tool, caller)` rate limiting. LSP stdio uses standard `Content-Length` framed messages and has its own header/body caps. Discovery output is bounded: MCP `tools/list` is paginated and returns `nextCursor`, graph-style MCP calls clamp pagination offsets, and `status` reports the active MCP limits and rate-limit state.
+
 ### MCP Server (for Claude Code, Cursor, Windsurf, etc.)
 
 cdidx includes a built-in **MCP (Model Context Protocol) server**. MCP is a standard protocol that lets AI coding tools communicate with external programs. When you run `cdidx mcp`, cdidx starts listening on stdin/stdout — your AI tool sends search requests as JSON, and cdidx returns results instantly from the pre-built index.
@@ -5180,6 +5184,10 @@ cdidx ./myproject --changed-between old-branch new-branch --json
 
 ref が分からない場合は `cdidx ./myproject --json` を使い、`cdidx status --check --json` で検証してください。
 ~~~
+
+### AI プロトコル境界クイックリファレンス
+
+cdidx は framing と制限が異なる JSON-RPC integration surface を分けて公開します。MCP stdio は LF 区切りの UTF-8 JSON-RPC 行を使い、人間向け diagnostic は stderr に出します。MCP HTTP は POST request / response JSON-RPC を使い、任意の bearer authentication、body-size limit、queue / concurrency limit、opt-in の `(tool, caller)` rate limit を適用します。LSP stdio は標準の `Content-Length` framed message を使い、独自の header / body 上限を持ちます。discovery output は bounded です。MCP `tools/list` は pagination され `nextCursor` を返し、graph 系 MCP call は pagination offset を clamp し、`status` は有効な MCP limit と rate-limit state を報告します。
 
 ### MCP サーバー（Claude Code、Cursor、Windsurf 等に対応）
 
