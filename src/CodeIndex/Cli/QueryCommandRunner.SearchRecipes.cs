@@ -1127,6 +1127,7 @@ public static partial class QueryCommandRunner
                 null,
                 null,
                 null,
+                null,
                 rows.Count,
                 rows.Count,
                 rows.Count,
@@ -1206,6 +1207,7 @@ public static partial class QueryCommandRunner
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
             var availableCount = rows.Count;
             var truncated = TrimSearchRowsToRequestedLimit(rows, resultLimit);
+            ApplySearchRecipeAuditClassifications(recipeQuery, rows);
             var minimumOmitted = truncated ? Math.Max(1, availableCount - rows.Count) : 0;
             total += rows.Count;
             queryResults.Add(new SearchRecipeQueryResultJsonResult(
@@ -1227,6 +1229,7 @@ public static partial class QueryCommandRunner
                 recipeQuery.StringComparisonTaxonomy,
                 recipeQuery.BroadCatchTaxonomy,
                 recipeQuery.NullableContractTaxonomy,
+                BuildSearchRecipeClassifierCounts(rows),
                 rows.Count,
                 rows.Count,
                 rows.Count + minimumOmitted,
@@ -1280,6 +1283,7 @@ public static partial class QueryCommandRunner
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, recipeQuery: recipeQuery);
             var availableCount = rows.Count;
             var truncated = TrimSearchRowsToRequestedLimit(rows, resultLimit);
+            ApplySearchRecipeAuditClassifications(recipeQuery, rows);
             var minimumOmitted = truncated ? Math.Max(1, availableCount - rows.Count) : 0;
             total += rows.Count;
             queryResults.Add(new SearchRecipeCompactQueryResultJsonResult(
@@ -1297,6 +1301,7 @@ public static partial class QueryCommandRunner
                 [.. recipeQuery.Classifiers],
                 recipeQuery.StringComparisonTaxonomy,
                 recipeQuery.BroadCatchTaxonomy,
+                BuildSearchRecipeClassifierCounts(rows),
                 rows.Count,
                 rows.Count,
                 rows.Count + minimumOmitted,
@@ -1358,6 +1363,7 @@ public static partial class QueryCommandRunner
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
             results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
+            ApplySearchRecipeAuditClassifications(recipeQuery, rows);
             var count = rows.Count;
             var fileCountForQuery = rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count();
             foreach (var path in rows.Select(row => row.Result.Path))
@@ -1375,12 +1381,232 @@ public static partial class QueryCommandRunner
                 count,
                 fileCountForQuery,
                 false,
+                BuildSearchRecipeClassifierCounts(rows),
                 BuildSearchRecipeTopFiles(rows)));
         }
 
         fileCount = paths.Count;
         return queryCounts;
     }
+
+    private static void ApplySearchRecipeAuditClassifications(SearchAuditRecipeQuery recipeQuery, List<SearchDisplayRow> rows)
+    {
+        var taskResultClassifier = recipeQuery.Classifiers
+            .FirstOrDefault(classifier => string.Equals(classifier.Name, "task_result_intent", StringComparison.Ordinal));
+        if (taskResultClassifier == null)
+            return;
+
+        foreach (var row in rows)
+        {
+            var classification = TryClassifyTaskResultIntent(taskResultClassifier, row);
+            if (classification == null)
+                continue;
+
+            row.Compact.AuditClassifications ??= [];
+            row.Compact.AuditClassifications.Add(classification);
+        }
+    }
+
+    private static SearchAuditClassificationJsonResult? TryClassifyTaskResultIntent(
+        SearchRecipeClassifierJsonResult classifier,
+        SearchDisplayRow row)
+    {
+        var evidence = GetTaskResultIntentEvidence(row);
+        if (evidence == null)
+            return null;
+
+        var categoryMetadata = classifier.Categories
+            .FirstOrDefault(category => string.Equals(category.Name, evidence.Category, StringComparison.Ordinal));
+        if (categoryMetadata == null)
+            return null;
+
+        var details = new List<string>
+        {
+            $"reason:{evidence.Reason}",
+        };
+        if (!string.IsNullOrWhiteSpace(evidence.Receiver))
+            details.Add($"receiver:{evidence.Receiver}");
+        if (evidence.Line.HasValue)
+            details.Add($"line:{evidence.Line.Value.ToString(CultureInfo.InvariantCulture)}");
+        if (!string.IsNullOrWhiteSpace(row.Compact.EnclosingSymbolName))
+            details.Add($"enclosing_symbol_name:{row.Compact.EnclosingSymbolName}");
+        if (!string.IsNullOrWhiteSpace(row.Compact.EnclosingSymbolKind))
+            details.Add($"enclosing_symbol_kind:{row.Compact.EnclosingSymbolKind}");
+
+        return new SearchAuditClassificationJsonResult(
+            classifier.Name,
+            categoryMetadata.Name,
+            categoryMetadata.Description,
+            categoryMetadata.ReviewGuidance,
+            details);
+    }
+
+    private static TaskResultIntentEvidence? GetTaskResultIntentEvidence(SearchDisplayRow row)
+    {
+        var highlight = row.Compact.Highlights
+            .FirstOrDefault(highlight => highlight.Text.Contains(".Result", StringComparison.Ordinal));
+        var lineText = highlight?.Text
+            ?? row.Compact.Snippet
+                .Split('\n', StringSplitOptions.None)
+                .FirstOrDefault(line => line.Contains(".Result", StringComparison.Ordinal));
+        if (string.IsNullOrWhiteSpace(lineText))
+            return null;
+
+        var receiver = ExtractTaskResultReceiver(lineText);
+        var category = ClassifyTaskResultIntent(lineText, receiver, out var reason);
+        return new TaskResultIntentEvidence(category, receiver, highlight?.Line, reason);
+    }
+
+    private static string ClassifyTaskResultIntent(string lineText, string? receiver, out string reason)
+    {
+        if (lineText.Contains("Task.FromResult", StringComparison.Ordinal)
+            || lineText.Contains("Task.Run", StringComparison.Ordinal)
+            || lineText.Contains(".AsTask().Result", StringComparison.Ordinal)
+            || ContainsAsyncInvocationResult(lineText)
+            || ContainsIdentifierFragment(receiver, "task")
+            || ContainsIdentifierFragment(receiver, "valueTask"))
+        {
+            reason = "task_like_receiver";
+            return "task_blocking";
+        }
+
+        if (lineText.Contains(".Result.", StringComparison.Ordinal)
+            || ContainsIdentifierFragment(receiver, "result")
+            || ContainsIdentifierFragment(receiver, "dto")
+            || ContainsIdentifierFragment(receiver, "model")
+            || ContainsIdentifierFragment(receiver, "response")
+            || ContainsIdentifierFragment(receiver, "payload")
+            || IsKnownResultWrapperReceiver(receiver))
+        {
+            reason = "result_wrapper_receiver";
+            return "dto_result_property";
+        }
+
+        reason = "receiver_unclear";
+        return "unclear_receiver";
+    }
+
+    private static bool ContainsIdentifierFragment(string? value, string fragment)
+        => !string.IsNullOrWhiteSpace(value)
+            && value.Contains(fragment, StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsKnownResultWrapperReceiver(string? receiver)
+        => receiver is not null
+            && (receiver.Equals("row", StringComparison.OrdinalIgnoreCase)
+                || receiver.Equals("query", StringComparison.OrdinalIgnoreCase)
+                || receiver.Equals("command", StringComparison.OrdinalIgnoreCase)
+                || receiver.Equals("parse", StringComparison.OrdinalIgnoreCase)
+                || receiver.Equals("preflight", StringComparison.OrdinalIgnoreCase));
+
+    private static string? ExtractTaskResultReceiver(string lineText)
+    {
+        var resultIndex = lineText.IndexOf(".Result", StringComparison.Ordinal);
+        if (resultIndex <= 0)
+            return null;
+
+        var invocationReceiver = ExtractInvocationReceiverBeforeResult(lineText, resultIndex);
+        if (!string.IsNullOrWhiteSpace(invocationReceiver))
+            return invocationReceiver;
+
+        var end = resultIndex;
+        while (end > 0 && char.IsWhiteSpace(lineText[end - 1]))
+            end--;
+
+        var start = end - 1;
+        while (start >= 0 && IsTaskResultReceiverChar(lineText[start]))
+            start--;
+
+        var receiver = lineText[(start + 1)..end].Trim('.', '?');
+        return string.IsNullOrWhiteSpace(receiver)
+            ? null
+            : receiver.Length <= 96 ? receiver : receiver[^96..];
+    }
+
+    private static bool IsTaskResultReceiverChar(char ch)
+        => char.IsLetterOrDigit(ch) || ch is '_' or '.' or ')' or ']' or '?';
+
+    private static bool ContainsAsyncInvocationResult(string lineText)
+    {
+        var resultIndex = lineText.IndexOf(".Result", StringComparison.Ordinal);
+        var invocationReceiver = resultIndex > 0
+            ? ExtractInvocationReceiverBeforeResult(lineText, resultIndex)
+            : null;
+        return invocationReceiver?.EndsWith("Async", StringComparison.Ordinal) == true;
+    }
+
+    private static string? ExtractInvocationReceiverBeforeResult(string lineText, int resultIndex)
+    {
+        var end = resultIndex;
+        while (end > 0 && char.IsWhiteSpace(lineText[end - 1]))
+            end--;
+        if (end == 0 || lineText[end - 1] != ')')
+            return null;
+
+        var depth = 0;
+        for (var i = end - 1; i >= 0; i--)
+        {
+            if (lineText[i] == ')')
+            {
+                depth++;
+                continue;
+            }
+
+            if (lineText[i] != '(')
+                continue;
+
+            depth--;
+            if (depth != 0)
+                continue;
+
+            var nameEnd = i;
+            while (nameEnd > 0 && char.IsWhiteSpace(lineText[nameEnd - 1]))
+                nameEnd--;
+            var nameStart = nameEnd - 1;
+            while (nameStart >= 0 && (char.IsLetterOrDigit(lineText[nameStart]) || lineText[nameStart] == '_'))
+                nameStart--;
+
+            var receiver = lineText[(nameStart + 1)..nameEnd];
+            return string.IsNullOrWhiteSpace(receiver) ? null : receiver;
+        }
+
+        return null;
+    }
+
+    private static List<SearchRecipeClassifierCountJsonResult>? BuildSearchRecipeClassifierCounts(List<SearchDisplayRow> rows)
+    {
+        var classifications = rows
+            .SelectMany(row => row.Compact.AuditClassifications ?? [])
+            .ToList();
+        if (classifications.Count == 0)
+            return null;
+
+        return classifications
+            .GroupBy(classification => classification.Classifier, StringComparer.Ordinal)
+            .Select(classifierGroup => new SearchRecipeClassifierCountJsonResult(
+                classifierGroup.Key,
+                classifierGroup
+                    .GroupBy(classification => classification.Category, StringComparer.Ordinal)
+                    .Select(categoryGroup =>
+                    {
+                        var representative = categoryGroup.First();
+                        return new SearchRecipeClassifierCategoryCountJsonResult(
+                            categoryGroup.Key,
+                            categoryGroup.Count(),
+                            representative.Description,
+                            representative.ReviewGuidance);
+                    })
+                    .OrderByDescending(category => category.Count)
+                    .ThenBy(category => category.Name, StringComparer.Ordinal)
+                    .ToList()))
+            .OrderBy(classifier => classifier.Classifier, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    private sealed record TaskResultIntentEvidence(
+        string Category,
+        string? Receiver,
+        int? Line,
+        string Reason);
 
     private static List<SearchRecipeAggregationQueryJsonResult> CollectSearchRecipeAggregationResults(
         DbReader reader,
