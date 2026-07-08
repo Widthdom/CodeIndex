@@ -854,6 +854,88 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_NamedQueriesCountSummaryJsonCountsAllMatches_Issue4308()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_named_queries_count_4308");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "release/pack.md",
+                "markdown",
+                "Run dotnet pack before publishing.");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "release/pack-extra.md",
+                "markdown",
+                "Run dotnet pack after signing.");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "release/push.md",
+                "markdown",
+                "Run nuget push after package validation.");
+
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--named-query=pack=dotnet pack", "--named-query=push=nuget push", "--db", dbPath, "--format", "count", "--json", "--limit", "1"],
+                _jsonOptions));
+            var (summaryExitCode, summaryStdout, summaryStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--named-query=pack=dotnet pack", "--named-query=push=nuget push", "--db", dbPath, "--summary-only", "--json", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Equal(CommandExitCodes.Success, summaryExitCode);
+            Assert.Equal(string.Empty, countStderr);
+            Assert.Equal(string.Empty, summaryStderr);
+            using var countDocument = ParseJsonOutput(countStdout);
+            using var summaryDocument = ParseJsonOutput(summaryStdout);
+            var countRoot = countDocument.RootElement;
+            var summaryRoot = summaryDocument.RootElement;
+            Assert.Equal(2, countRoot.GetProperty("query_count").GetInt32());
+            Assert.Equal(3, countRoot.GetProperty("result_count").GetInt32());
+            Assert.Equal(3, countRoot.GetProperty("file_count").GetInt32());
+            Assert.Equal(3, summaryRoot.GetProperty("result_count").GetInt32());
+            var pack = Assert.Single(countRoot.GetProperty("queries").EnumerateArray(), query => query.GetProperty("name").GetString() == "pack");
+            Assert.Equal("dotnet pack", pack.GetProperty("query").GetString());
+            Assert.Equal(2, pack.GetProperty("count").GetInt32());
+            Assert.Equal(2, pack.GetProperty("file_count").GetInt32());
+            Assert.False(pack.TryGetProperty("results", out _));
+            Assert.Equal(2, countRoot.GetProperty("query_freshness").GetProperty("positive_evidence_query_count").GetInt32());
+            Assert.Equal(0, countRoot.GetProperty("query_freshness").GetProperty("zero_result_query_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RecipeCompactSummaryOnlyJsonUsesCountSummary_Issue4308()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_recipe_compact_summary_4308");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "resource-materialization-audit", "--db", dbPath, "--format", "compact", "--summary-only", "--json", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            Assert.Equal("resource-materialization-audit", root.GetProperty("recipe").GetString());
+            Assert.Equal("source", root.GetProperty("scope").GetString());
+            Assert.False(root.TryGetProperty("results", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_NamedQueriesRejectExactPrefixConflict_Issue3481()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_named_queries_exact_prefix");

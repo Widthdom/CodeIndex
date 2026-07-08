@@ -688,6 +688,36 @@ public static partial class QueryCommandRunner
         return false;
     }
 
+    private static int RunSearchNamedBatchCount(QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool userExact)
+    {
+        return WithDb(options, jsonOptions, reader =>
+        {
+            var queryCounts = CountSearchNamedBatchQueryResults(reader, options, userExact, out var total, out var fileCount);
+
+            if (options.Json)
+            {
+                var json = JsonSerializer.Serialize(
+                    new SearchNamedBatchCountSummaryRunJsonResult(
+                        JsonOutputContract.ApiVersion,
+                        queryCounts.Count,
+                        total,
+                        fileCount,
+                        BuildSearchRecipeQueryFreshness(queryCounts.Select(query => (query.Name, query.Count))),
+                        queryCounts),
+                    CliJsonSerializerContextFactory.Create(jsonOptions).SearchNamedBatchCountSummaryRunJsonResult);
+                return WriteJsonObjectWithOptionalByteLimit(
+                    json,
+                    options,
+                    "named-query count summary",
+                    "Use a larger --max-json-bytes value or narrow the named-query selection.");
+            }
+
+            Console.WriteLine(total.ToString(CultureInfo.InvariantCulture));
+            CommandErrorWriter.WriteStderr($"({total} named-query results in {fileCount} files across {queryCounts.Count} queries)");
+            return CommandExitCodes.Success;
+        });
+    }
+
     private static int RunSearchNamedBatch(QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool userExact)
     {
         return WithDb(options, jsonOptions, reader =>

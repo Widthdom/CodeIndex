@@ -1396,6 +1396,7 @@ internal static partial class ProgramRunner
     internal static int MapCodeIndexExceptionExitCode(string code) => code switch
     {
         CommandErrorCodes.DbNotFound => CommandExitCodes.NotFound,
+        CommandErrorCodes.CheckpointNotFound => CommandExitCodes.NotFound,
         CommandErrorCodes.DbLocked => CommandExitCodes.TransientDatabaseError,
         CommandErrorCodes.DbNotWritable => CommandExitCodes.DatabaseError,
         CommandErrorCodes.DbIntegrityFailed => CommandExitCodes.DatabaseError,
