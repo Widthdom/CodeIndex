@@ -23,12 +23,18 @@ namespace CodeIndex.Database;
 /// emits a one-shot stderr warning, so a stale `CDIDX_DEBUG=unsafe` left in a
 /// shell profile or CI environment cannot quietly leak indexed source content
 /// (#1530).
+/// Unsafe mode is still a bounded preview: each raw string is capped at
+/// <see cref="MaxUnsafeStringChars"/> characters, and hashing uses only
+/// short-lived managed buffers plus stack-local length buffers that are copied
+/// synchronously into the hash state.
 /// CDIDX_DEBUG=1 のときだけ、直近の SQL・バインドパラメータ・直近の行を追跡し、
 /// reader 例外（例: "The data is NULL at ordinal N"）を具体的なクエリと行に結び付ける。
 /// 既定ではテキスト値はハッシュ化（長さと SHA256 先頭）される。CDIDX_DEBUG=unsafe を環境変数だけで
 /// 指定しても生テキストは出ない。プロセス起動時に `--debug-unsafe` を明示する必要があり、
 /// 指定しなかった場合は redacted にフォールバックして stderr に一度だけ警告を出す。
 /// シェルプロファイルや CI に残った `CDIDX_DEBUG=unsafe` で索引済みソースが漏れるのを防ぐ（#1530）。
+/// unsafe mode でも raw string は <see cref="MaxUnsafeStringChars"/> 文字までに制限し、
+/// hash 用の managed buffer と stack-local な長さ buffer は同期的に hash state へコピーするだけで保持しない。
 /// </summary>
 public static class DbDebug
 {
@@ -37,6 +43,7 @@ public static class DbDebug
     internal const int MaxQueryPlanRows = 64;
     internal const int MaxQueryPlanDetailChars = 512;
     internal const int MaxSlowQuerySqlChars = 200;
+    internal const int MaxUnsafeStringChars = 200;
     private const string DiagnosticTruncationMarker = "...<truncated>";
     private static readonly byte[] s_hashSalt = RandomNumberGenerator.GetBytes(16);
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<SqliteDataReader, ActiveProfile> s_activeProfiles = new();
@@ -467,7 +474,11 @@ public static class DbDebug
     {
         if (mode == DebugMode.Unsafe)
         {
-            var shown = s.Length <= 200 ? s : s.Substring(0, 200) + $"…<+{s.Length - 200}>";
+            // Explicit unsafe mode is still a bounded diagnostic preview, not
+            // an unbounded raw dump of workspace or DB text.
+            var shown = s.Length <= MaxUnsafeStringChars
+                ? s
+                : s.Substring(0, MaxUnsafeStringChars) + $"…<+{s.Length - MaxUnsafeStringChars}>";
             return "\"" + shown + "\"";
         }
         if (LooksLikePathName(valueName))

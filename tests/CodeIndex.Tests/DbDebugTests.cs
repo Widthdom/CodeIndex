@@ -545,6 +545,43 @@ public class DbDebugTests
     }
 
     [Fact]
+    public void DumpToStderr_UnsafeMode_BoundsRawStringPreview_Issue4324()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_DEBUG");
+        env.Set("CDIDX_DEBUG", "unsafe");
+        DbDebug.EnableUnsafeForProcess();
+        var visiblePrefix = new string('A', DbDebug.MaxUnsafeStringChars);
+        const string hiddenTail = "TAIL_SECRET_TOKEN";
+        var rawValue = visiblePrefix + hiddenTail;
+        try
+        {
+            DbDebug.ResetContext();
+            using var conn = new SqliteConnection("Data Source=:memory:");
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT @value AS content";
+            cmd.Parameters.AddWithValue("@value", rawValue);
+            using (var reader = cmd.ExecuteTrackedReader())
+            {
+                Assert.True(reader.TrackedRead());
+                _ = reader.GetString(0);
+            }
+
+            var output = CaptureStderr(() => DbDebug.DumpToStderr(new InvalidOperationException("boom")));
+
+            Assert.Contains("Mode: unsafe", output);
+            Assert.Contains(visiblePrefix, output);
+            Assert.Contains($"…<+{hiddenTail.Length}>", output);
+            Assert.DoesNotContain(hiddenTail, output);
+        }
+        finally
+        {
+            DbDebug.ResetContext();
+            DbDebug.ResetForTesting();
+        }
+    }
+
+    [Fact]
     public void DumpToStderr_UnsafeEnvAlone_DowngradesToRedactedAndWarns()
     {
         // Issue #1530: a stale `CDIDX_DEBUG=unsafe` in a shell profile or CI env
