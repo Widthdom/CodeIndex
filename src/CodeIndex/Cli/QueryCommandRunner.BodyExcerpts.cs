@@ -193,21 +193,27 @@ public static partial class QueryCommandRunner
             ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, dbPath);
     }
 
-    private static void WriteDefinitionJsonResult(DefinitionResult result, QueryCommandOptions options, ExactQuerySignal? exactSignal, JsonSerializerOptions jsonOptions)
+    private static int WriteDefinitionJsonResult(DefinitionResult result, QueryCommandOptions options, ExactQuerySignal? exactSignal, JsonSerializerOptions jsonOptions)
     {
         var payload = JsonSerializer.SerializeToNode(result, CliJsonSerializerContextFactory.Create(jsonOptions).DefinitionResult)!.AsObject();
         ApplyBodyModeDefinitionContentPolicy(payload, options);
         if (exactSignal.HasValue)
             AddExactJsonFields(payload, exactSignal.Value);
-        Console.WriteLine(payload.ToJsonString(jsonOptions));
+        return WriteJsonPayloadWithOptionalByteLimit(
+            payload,
+            options,
+            jsonOptions,
+            "definition",
+            "definition",
+            "Use --format compact for locations, omit --body unless body snippets are needed, reduce --limit, or increase --max-json-bytes.");
     }
 
     private static void ApplyBodyModeDefinitionContentPolicy(JsonObject payload, QueryCommandOptions options)
     {
+        var reason = options.IncludeBody ? "body_content_field" : "definition_content_not_requested";
+        OmitDefinitionContent(payload, reason);
         if (!options.IncludeBody)
-            return;
-
-        OmitDefinitionContent(payload, "body_content_field");
+            OmitDefinitionBodyContent(payload);
     }
 
     private static void ApplyInspectDefinitionContentPolicy(JsonObject payload, QueryCommandOptions options)

@@ -9,7 +9,7 @@ namespace CodeIndex.Cli;
 
 internal static class SuggestionsCommandRunner
 {
-    private const string Usage = "Usage: cdidx suggestions [list|show|export] [id] [--db <path>] [--json] [--status <all|draft|submitted_pending_triage|open_in_upstream|resolved_in_upstream|wont_fix|duplicate|superseded|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--limit <n>] [--offset <n>] [--format <json|markdown|issue-drafts>] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>] [--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>]";
+    private const string Usage = "Usage: cdidx suggestions [list|show|export|add] [id|description] [--db <path>] [--json] [--description <text>] [--context <text>] [--title <text>] [--evidence-path <path>] [--status <all|draft|submitted_pending_triage|open_in_upstream|resolved_in_upstream|wont_fix|duplicate|superseded|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--limit <n>] [--offset <n>] [--format <json|markdown|issue-drafts>] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>] [--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>]";
     internal const int MaxOpenIssuesJsonBytes = IssueDuplicatePreflight.MaxOpenIssuesJsonBytes;
     internal const int MaxOpenIssuesJsonDepth = IssueDuplicatePreflight.MaxOpenIssuesJsonDepth;
     internal const int MaxSuggestionExportTextFieldLength = 4096;
@@ -45,6 +45,9 @@ internal static class SuggestionsCommandRunner
             return WriteUsageError("--limit and --offset can only be used with `suggestions list` or `suggestions export`.", options.Json, jsonOptions);
 
         var store = CreateStore(options.DbPath);
+        if (verb == "add")
+            return RunAdd(store, options, jsonOptions);
+
         var records = ApplyFilters(store.LoadAll(), options)
             .OrderByDescending(s => s.CreatedAt)
             .ThenBy(s => s.Hash, StringComparer.Ordinal)
@@ -60,6 +63,65 @@ internal static class SuggestionsCommandRunner
             "export" => RunExport(outputRecords, options, jsonOptions, cancellationToken),
             _ => WriteUsageError($"Unknown suggestions subcommand: {verb}", options.Json, jsonOptions)
         };
+    }
+
+    private static int RunAdd(SuggestionStore store, Options options, JsonSerializerOptions jsonOptions)
+    {
+        if (options.HasPagination || options.Since != null || options.StatusSpecified || options.FormatSpecified)
+            return WriteUsageError("suggestions add cannot be combined with --status, --since, --limit, --offset, or --format.", options.Json, jsonOptions);
+        if (options.Description != null && options.Id != null)
+            return WriteUsageError("suggestions add accepts either a positional description or --description, not both.", options.Json, jsonOptions);
+
+        var description = NormalizeOptional(options.Description ?? options.Id);
+        if (description == null)
+            return WriteUsageError("suggestions add requires --description <text> or a positional description.", options.Json, jsonOptions);
+
+        var category = NormalizeOptional(options.Category)?.ToLowerInvariant() ?? "other";
+        if (!SuggestionRecord.ValidCategories.Contains(category, StringComparer.Ordinal))
+            return WriteUsageError($"--category must be one of {string.Join(", ", SuggestionRecord.ValidCategories)}.", options.Json, jsonOptions);
+
+        var language = NormalizeOptional(options.Language);
+        var context = NormalizeOptional(options.Context);
+        var title = NormalizeOptional(options.Title);
+        var agent = NormalizeOptional(options.Agent) ?? "cdidx-cli";
+        var evidencePaths = options.EvidencePaths
+            .Select(NormalizeOptional)
+            .Where(value => value != null)
+            .Cast<string>()
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var record = new SuggestionRecord
+        {
+            Category = category,
+            Language = language,
+            Description = description,
+            Context = context,
+            Agent = agent,
+            Hash = SuggestionStore.ComputeHash(category, language, description),
+            CreatedByAgent = agent,
+            SampledTitle = title,
+            EvidencePaths = evidencePaths.Length == 0 ? null : evidencePaths,
+        };
+
+        var created = store.TryAdd(record);
+        var stored = store.LoadAll().FirstOrDefault(candidate => string.Equals(candidate.Hash, record.Hash, StringComparison.Ordinal))
+            ?? record;
+
+        if (options.Json)
+        {
+            CommandOutputWriter.WriteJson(
+                new SuggestionAddJsonResult(
+                    JsonOutputContract.ApiVersion,
+                    created,
+                    !created,
+                    ToDetail(stored)),
+                CliJsonSerializerContextFactory.Create(jsonOptions).SuggestionAddJsonResult);
+            return CommandExitCodes.Success;
+        }
+
+        var action = created ? "Added suggestion" : "Suggestion already exists";
+        Console.WriteLine($"{action}: {ShortId(stored.Hash)}");
+        return CommandExitCodes.Success;
     }
 
     private static int RunList(List<SuggestionRecord> records, Options options, JsonSerializerOptions jsonOptions)
@@ -315,6 +377,12 @@ internal static class SuggestionsCommandRunner
     }
 
     private static string ShortId(string hash) => hash.Length <= 12 ? hash : hash[..12];
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
 
     private static string FormatTitle(string description, int maxLength)
     {
@@ -703,6 +771,7 @@ internal static class SuggestionsCommandRunner
                     options.Status = status;
                     if (!IsValidStatusFilter(options.Status))
                         options.Error = "Error: --status must be one of all, draft, submitted_pending_triage, open_in_upstream, resolved_in_upstream, wont_fix, duplicate, superseded, submitted, unsubmitted.";
+                    options.StatusSpecified = true;
                     break;
                 case "--language":
                 case "--lang":
@@ -720,6 +789,38 @@ internal static class SuggestionsCommandRunner
                         return options;
                     }
                     options.Category = category;
+                    break;
+                case "--description":
+                    if (!TryReadSchemaValue("--description", out var description, out var descriptionError))
+                    {
+                        options.Error = descriptionError;
+                        return options;
+                    }
+                    options.Description = description;
+                    break;
+                case "--context":
+                    if (!TryReadSchemaValue("--context", out var context, out var contextError))
+                    {
+                        options.Error = contextError;
+                        return options;
+                    }
+                    options.Context = context;
+                    break;
+                case "--title":
+                    if (!TryReadSchemaValue("--title", out var title, out var titleError))
+                    {
+                        options.Error = titleError;
+                        return options;
+                    }
+                    options.Title = title;
+                    break;
+                case "--evidence-path":
+                    if (!TryReadSchemaValue("--evidence-path", out var evidencePath, out var evidencePathError))
+                    {
+                        options.Error = evidencePathError;
+                        return options;
+                    }
+                    options.EvidencePaths.Add(evidencePath);
                     break;
                 case "--agent":
                     if (!TryReadSchemaValue("--agent", out var agent, out var agentError))
@@ -776,6 +877,7 @@ internal static class SuggestionsCommandRunner
                     options.ExportFormat = format;
                     if (!IsValidExportFormat(options.ExportFormat))
                         options.Error = "Error: --format must be one of json, markdown, issue-drafts.";
+                    options.FormatSpecified = true;
                     break;
                 case "--open-issues":
                     if (!TryReadSchemaValue("--open-issues", out var openIssuesPath, out var openIssuesError))
@@ -909,10 +1011,16 @@ internal static class SuggestionsCommandRunner
         public string ExportFormat { get; set; } = "json";
         public string? Language { get; set; }
         public string? Category { get; set; }
+        public string? Description { get; set; }
+        public string? Context { get; set; }
+        public string? Title { get; set; }
+        public List<string> EvidencePaths { get; } = [];
         public string? Agent { get; set; }
         public int? Limit { get; set; }
         public int Offset { get; set; }
         public bool OffsetSpecified { get; set; }
+        public bool StatusSpecified { get; set; }
+        public bool FormatSpecified { get; set; }
         public string? OpenIssuesPath { get; set; }
         public string? OpenIssuesRepository { get; set; }
         public string DuplicateConfidence { get; set; } = IssueDuplicatePreflight.DefaultDuplicateConfidence;
@@ -924,6 +1032,12 @@ internal static class SuggestionsCommandRunner
         public bool HasPagination => Limit.HasValue || OffsetSpecified;
     }
 }
+
+internal sealed record SuggestionAddJsonResult(
+    [property: JsonPropertyName("api_version")] string ApiVersion,
+    [property: JsonPropertyName("created")] bool Created,
+    [property: JsonPropertyName("duplicate")] bool Duplicate,
+    [property: JsonPropertyName("suggestion")] SuggestionDetailJsonResult Suggestion);
 
 internal sealed record SuggestionListItemJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,

@@ -1319,6 +1319,42 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunImpact_JsonDefinitionRowsAreCappedByLimit_Issue4311()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_definition_limit_4311");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Services.cs", "csharp",
+                """
+                namespace A { public class FooService { } }
+                namespace B { public class FooService { } }
+                namespace C { public class FooService { } }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["FooService", "--db", dbPath, "--json", "--limit", "1"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(3, json.GetProperty("definition_count").GetInt32());
+            Assert.Equal(1, json.GetProperty("definition_limit").GetInt32());
+            Assert.True(json.GetProperty("definitions_truncated").GetBoolean());
+            Assert.Equal(2, json.GetProperty("definitions_omitted").GetInt32());
+            Assert.Single(json.GetProperty("definitions").EnumerateArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunImpact_DuplicateDefinitionsInOneFileHumanOutputMentionsDefinitionAndFileCounts()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_same_file_duplicate_human");

@@ -966,7 +966,7 @@ internal static class GitHubIssueReporter
     }
 
     internal static string BuildRateLimitErrorDetail(int statusCode, string errorBody, DateTime nextRetryAt) =>
-        $"{BuildApiErrorDetail(statusCode, errorBody)}; next_retry_at={nextRetryAt:O}";
+        $"{BuildApiErrorDetail(statusCode, errorBody)}; next_retry_at={NormalizeUtc(nextRetryAt):O}";
 
     internal static DateTime? GetRateLimitRetryAt(HttpResponseMessage response, DateTime nowUtc)
     {
@@ -1011,4 +1011,11 @@ internal static class GitHubIssueReporter
             return false;
         }
     }
+
+    private static DateTime NormalizeUtc(DateTime value) => value.Kind switch
+    {
+        DateTimeKind.Utc => value,
+        DateTimeKind.Local => value.ToUniversalTime(),
+        _ => DateTime.SpecifyKind(value, DateTimeKind.Utc),
+    };
 }

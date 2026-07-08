@@ -218,6 +218,7 @@ local index automatically:
 |---|---|
 | Refresh command | The installed hook runs `cdidx index <selected-project-path> --quiet` before the commit completes. When `--project` is omitted, the selected path is the current directory at install time. |
 | Quiet mode | `--quiet` suppresses normal progress and success output for hook contexts while still printing indexing errors to stderr and returning a non-zero exit code. |
+| Status JSON diagnostics | `cdidx hooks status --json` keeps `project_path`, `hook_path`, and `chained_hook_path` for compatibility, and also emits `diagnostic_project_path`, `diagnostic_hook_path`, and `diagnostic_chained_hook_path` with path-sanitized values for logs and support bundles. |
 | Existing hooks | If `.git/hooks/pre-commit` already exists, `cdidx hooks install` moves it to `.git/hooks/pre-commit.cdidx-chain` and calls it after the cdidx refresh, preserving tools such as Husky, pre-commit, and lefthook. |
 | Intentional skip | Use `git commit --no-verify` when you intentionally need to skip all pre-commit hooks. |
 
@@ -1091,6 +1092,11 @@ such as `source_origin`, `guard_evidence`, `secret_origin`,
 `task_result_intent`, `active_skip_governance`, `broad_catch_boundary`, and
 `diagnostic_redaction`; each classifier lists categories, evidence fields, and
 guidance so noisy audit terms can be separated before filing.
+`dogfood-risk-patterns` includes process-launch boundary child queries for
+`ProcessStartInfo`, `Process.Start`, `ArgumentList`, `UseShellExecute`,
+working-directory choices, stdout/stderr redirection, waits, termination, shared
+launch/environment policies, and broad plugin/hook/trust-override discovery
+terms.
 `risky-code/broad-exception-catch` includes broad-catch boundary categories and
 expected diagnostic behaviors so users can distinguish intentional top-level,
 cleanup, probe, diagnostic-sanitization, and worker boundaries from catches that
@@ -3002,6 +3008,7 @@ pre-commit hook をインストールします:
 |---|---|
 | 更新コマンド | インストールされた hook はコミット完了前に `cdidx index <selected-project-path> --quiet` を実行します。`--project` を省略した場合、選択パスはインストール時のカレントディレクトリです。 |
 | quiet mode | `--quiet` は hook 環境向けに通常の進捗・成功出力を抑制しつつ、indexing エラーは引き続き stderr に出力し、非ゼロの終了コードを返します。 |
+| status JSON 診断 | `cdidx hooks status --json` は互換性のため `project_path`、`hook_path`、`chained_hook_path` を維持しつつ、ログやサポートバンドル向けに path をサニタイズした `diagnostic_project_path`、`diagnostic_hook_path`、`diagnostic_chained_hook_path` も出力します。 |
 | 既存 hook の扱い | リポジトリに `.git/hooks/pre-commit` がある場合、`cdidx hooks install` はそれを `.git/hooks/pre-commit.cdidx-chain` に移動し、cdidx の更新後に呼び出すため、Husky、pre-commit、lefthook などのツールも維持されます。 |
 | 意図的な skip | すべての pre-commit hook を意図的にスキップする必要があるときは `git commit --no-verify` を使ってください。 |
 
@@ -3897,6 +3904,10 @@ issue-draft export や下流の triage tool が evidence path の近くに revie
 `active_skip_governance`、`broad_catch_boundary`、`diagnostic_redaction` などの
 classifier が category、evidence field、guidance を持つため、ノイズの多い audit term を
 起票前に切り分けられます。
+`dogfood-risk-patterns` は `ProcessStartInfo`、`Process.Start`、`ArgumentList`、
+`UseShellExecute`、working-directory 選択、stdout/stderr redirection、wait、
+termination、共有 launch/environment policy、広めの plugin/hook/trust-override
+discovery 用語を process-launch boundary の child query として含みます。
 たとえば `risky-code/broad-exception-catch` は
 broad catch の境界カテゴリと期待される diagnostic behavior を含めるため、意図的な
 top-level、cleanup、probe、diagnostic-sanitization、worker 境界と、narrowing または

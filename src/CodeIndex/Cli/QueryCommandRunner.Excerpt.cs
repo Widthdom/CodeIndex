@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using CodeIndex.Database;
 
 namespace CodeIndex.Cli;
@@ -134,7 +135,18 @@ public static partial class QueryCommandRunner
 
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(excerpt, CliJsonSerializerContextFactory.Create(jsonOptions).FileExcerptResult));
+                var payload = JsonSerializer.SerializeToNode(excerpt, CliJsonSerializerContextFactory.Create(jsonOptions).FileExcerptResult)!.AsObject();
+                if (!options.NoSemanticTokens && excerpt.SemanticTokens is { Count: > 0 })
+                    payload["semantic_tokens_hint"] = "Use --no-semantic-tokens to omit semantic_tokens for compact JSON.";
+                var writeExitCode = WriteJsonPayloadWithOptionalByteLimit(
+                    payload,
+                    options,
+                    jsonOptions,
+                    "excerpt",
+                    "excerpt",
+                    "Use --no-semantic-tokens, reduce the excerpt range/context, clamp --max-line-width, or increase --max-json-bytes.");
+                if (writeExitCode != CommandExitCodes.Success)
+                    return writeExitCode;
             }
             else
             {
