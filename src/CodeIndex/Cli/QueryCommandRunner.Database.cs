@@ -18,7 +18,10 @@ public static partial class QueryCommandRunner
         CancellationToken cancellationToken = default)
     {
         var dbPath = options.DbPath;
-        if (s_batchReader == null)
+        var batchReader = s_batchReader != null && !options.DbPathExplicit
+            ? s_batchReader
+            : null;
+        if (batchReader == null)
         {
             if (string.IsNullOrWhiteSpace(dbPath))
             {
@@ -64,13 +67,13 @@ public static partial class QueryCommandRunner
         if (profiling)
             Database.DbDebug.BeginProfile(options.SlowQueryMs);
         DbContext? db = null;
-        var databaseReadyForQueries = s_batchReader != null;
+        var databaseReadyForQueries = batchReader != null;
         try
         {
             DbReader reader;
-            if (s_batchReader != null)
+            if (batchReader != null)
             {
-                reader = s_batchReader;
+                reader = batchReader;
             }
             else
             {
@@ -84,7 +87,10 @@ public static partial class QueryCommandRunner
 
             reader.IncludeGenerated = options.IncludeGenerated;
             var previousProjectRoot = s_activeQueryProjectRoot;
-            s_activeQueryProjectRoot = ResolveProjectFilterRoot(dbPath, options.DbPathExplicit).Root;
+            var projectRootResolution = s_batchReader != null && options.DbPathExplicit
+                ? ResolveProjectRootForDbPath(dbPath, options.DbPathExplicit)
+                : ResolveProjectFilterRoot(dbPath, options.DbPathExplicit);
+            s_activeQueryProjectRoot = projectRootResolution.Root;
             int exitCode;
             try
             {
@@ -195,6 +201,17 @@ public static partial class QueryCommandRunner
             $"{FormatDbDiagnosticValue(dbPath)} does not appear to be a valid CodeIndex database ({validationReason}).",
             "rebuild with `cdidx index <projectPath> --db <path>` to create a fresh database.",
             "database");
+    }
+
+    private static ProjectFilterRootResolution ResolveProjectRootForDbPath(string dbPath, bool dbPathExplicit)
+    {
+        var projectRoot = DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit);
+        if (!string.IsNullOrWhiteSpace(projectRoot))
+            return new ProjectFilterRootResolution(Path.GetFullPath(projectRoot), null);
+
+        return new ProjectFilterRootResolution(
+            Path.GetFullPath(Environment.CurrentDirectory),
+            ProjectFilterRootFallbackReasonCurrentDirectory);
     }
 
     private static string? GetDataDirectoryPath(string? dbPath)
