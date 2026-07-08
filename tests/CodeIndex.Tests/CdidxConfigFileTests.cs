@@ -28,7 +28,7 @@ public class CdidxConfigFileTests
     }
 
     [Fact]
-    public void RunValidate_NoConfigJson_ReturnsValidWithNullPath_Issue3892()
+    public void RunValidate_NoConfigJson_ReturnsExplicitNotFoundStatus_Issue4320()
     {
         var dir = CreateTempDir();
         var previous = Environment.CurrentDirectory;
@@ -45,6 +45,10 @@ public class CdidxConfigFileTests
             var payload = document.RootElement;
             Assert.True(payload.GetProperty("valid").GetBoolean());
             Assert.Equal(JsonValueKind.Null, payload.GetProperty("path").ValueKind);
+            Assert.Equal("not_found", payload.GetProperty("status").GetString());
+            Assert.Equal("no supported config file was found", payload.GetProperty("reason").GetString());
+            Assert.False(payload.GetProperty("config_file_found").GetBoolean());
+            Assert.False(payload.GetProperty("validated").GetBoolean());
         }
         finally
         {

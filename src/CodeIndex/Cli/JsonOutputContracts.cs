@@ -673,7 +673,11 @@ internal sealed record VersionInfoJsonResult(
 internal sealed record ValidateConfigJsonResult(
     [property: JsonPropertyName("valid")] bool Valid,
     [property: JsonPropertyName("path")]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Path);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Path,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("reason")] string? Reason,
+    [property: JsonPropertyName("config_file_found")] bool ConfigFileFound,
+    [property: JsonPropertyName("validated")] bool Validated);
 
 [JsonSourceGenerationOptions(
     WriteIndented = false,
