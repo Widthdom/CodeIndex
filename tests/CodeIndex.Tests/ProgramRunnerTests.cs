@@ -2443,6 +2443,56 @@ exit 7
         }
     }
 
+    [Fact]
+    public void RunUpgrade_CheckOnlyJsonLatestChannelReportsSelection_Issue4346()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture("XDG_CACHE_HOME", UpdateChecker.DisableEnvVar);
+            var cacheRoot = TestProjectHelper.CreateTempProject("cdidx_update_cache_latest_channel");
+            try
+            {
+                env.Set("XDG_CACHE_HOME", cacheRoot);
+                env.Set(UpdateChecker.DisableEnvVar, null);
+                WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["upgrade", "--check-only", "--json", "--channel", "latest"],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                using var doc = JsonDocument.Parse(stdout);
+                var root = doc.RootElement;
+                Assert.Equal("v9.9.9", root.GetProperty("latest_version").GetString());
+                Assert.Equal("latest", root.GetProperty("selected_channel").GetString());
+                Assert.Equal("latest", root.GetProperty("selection_source").GetString());
+                Assert.False(root.GetProperty("include_prerelease").GetBoolean());
+                Assert.False(root.GetProperty("install_attempted").GetBoolean());
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(cacheRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void RunUpgrade_InvalidChannelHintListsAdvertisedValues_Issue4346()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["upgrade", "--check-only", "--channel", "nightly"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("unsupported upgrade channel 'nightly'", stderr);
+            Assert.Contains("--channel stable|latest|prerelease", stderr);
+        }
+    }
+
     [Theory]
     [InlineData("v1.2.3", true)]
     [InlineData("1.2.3", false)]
@@ -2686,13 +2736,48 @@ exit 7
                     ["upgrade", "--check-only", "--json", "--prerelease"],
                     appVersion: "1.10.0"));
 
-                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(CommandExitCodes.RuntimeError, exitCode);
                 Assert.Empty(stderr);
                 using var doc = JsonDocument.Parse(stdout);
                 var root = doc.RootElement;
                 Assert.Equal("prerelease_not_found", root.GetProperty("error").GetString());
                 Assert.Equal("release_metadata", root.GetProperty("error_category").GetString());
                 Assert.Contains("omit --prerelease", root.GetProperty("error_hint").GetString(), StringComparison.Ordinal);
+                Assert.True(root.GetProperty("include_prerelease").GetBoolean());
+                Assert.False(root.GetProperty("install_attempted").GetBoolean());
+            }
+            finally
+            {
+                ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+            }
+        }
+    }
+
+    [Fact]
+    public void RunUpgrade_CheckOnlyJsonPrereleaseInvalidResponseIsNonZero_Issue4346()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+            ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
+                new StaticResponseHandler(new ByteArrayContent(Encoding.UTF8.GetBytes("not json"))))
+            {
+                Timeout = Timeout.InfiniteTimeSpan,
+            };
+
+            try
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["upgrade", "--check-only", "--json", "--channel", "prerelease"],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.RuntimeError, exitCode);
+                Assert.Empty(stderr);
+                using var doc = JsonDocument.Parse(stdout);
+                var root = doc.RootElement;
+                Assert.Equal("invalid_response", root.GetProperty("error").GetString());
+                Assert.Equal("response", root.GetProperty("error_category").GetString());
+                Assert.False(root.GetProperty("update_available").GetBoolean());
                 Assert.True(root.GetProperty("include_prerelease").GetBoolean());
                 Assert.False(root.GetProperty("install_attempted").GetBoolean());
             }

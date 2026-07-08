@@ -3343,7 +3343,7 @@ internal static partial class ProgramRunner
                 if (!TryApplyUpgradeChannel(cmdArgs[++i], out selectedChannel, out includePrerelease, out var channelError))
                     return WriteUpgradeUsageError(channelError);
 
-                selectionSource = selectedChannel == "prerelease" ? "prerelease" : "latest";
+                selectionSource = selectedChannel;
                 continue;
             }
             if (arg.StartsWith("--channel=", StringComparison.Ordinal))
@@ -3351,7 +3351,7 @@ internal static partial class ProgramRunner
                 if (!TryApplyUpgradeChannel(arg["--channel=".Length..], out selectedChannel, out includePrerelease, out var channelError))
                     return WriteUpgradeUsageError(channelError);
 
-                selectionSource = selectedChannel == "prerelease" ? "prerelease" : "latest";
+                selectionSource = selectedChannel;
                 continue;
             }
             if (arg == "--version")
@@ -3396,6 +3396,9 @@ internal static partial class ProgramRunner
         var shouldInstall = result.LatestVersion != null && (explicitVersion != null || result.UpdateAvailable);
         if (checkOnly || !shouldInstall)
         {
+            var metadataFailureExitCode = result.Error is null
+                ? CommandExitCodes.Success
+                : CommandExitCodes.RuntimeError;
             if (wantsJson)
             {
                 Console.WriteLine(JsonSerializer.Serialize(
@@ -3415,7 +3418,7 @@ internal static partial class ProgramRunner
                 Console.WriteLine($"Could not select a cdidx {selectedChannel} release ({result.Error}); current: {result.CurrentVersion}.");
             else
                 Console.WriteLine($"cdidx is up to date (current: {result.CurrentVersion}).");
-            return CommandExitCodes.Success;
+            return metadataFailureExitCode;
         }
 
         var selectedReleaseTag = result.LatestVersion!;
@@ -3595,7 +3598,7 @@ internal static partial class ProgramRunner
     private static int WriteUpgradeUsageError(string message)
     {
         CommandErrorWriter.WriteStderr($"Error: {message}");
-        CommandErrorWriter.WriteStderr("Hint: use `cdidx upgrade [--check-only] [--channel stable|prerelease] [--prerelease] [--version vX.Y.Z]`.");
+        CommandErrorWriter.WriteStderr("Hint: use `cdidx upgrade [--check-only] [--channel stable|latest|prerelease] [--prerelease] [--version vX.Y.Z]`.");
         return CommandExitCodes.UsageError;
     }
 
@@ -3612,8 +3615,10 @@ internal static partial class ProgramRunner
         switch (rawChannel.Trim().ToLowerInvariant())
         {
             case "stable":
-            case "latest":
                 selectedChannel = "stable";
+                return true;
+            case "latest":
+                selectedChannel = "latest";
                 return true;
             case "prerelease":
             case "preview":

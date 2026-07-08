@@ -60,6 +60,7 @@ internal static class ExportImportCommandRunner
         string? dbPath = null;
         var wantsJson = Array.Exists(args, arg => arg == "--json");
         var prunePaths = false;
+        var importMode = "import";
         var dryRun = false;
 
         for (var i = 0; i < args.Length; i++)
@@ -77,6 +78,7 @@ internal static class ExportImportCommandRunner
             }
             if (arg is "--dry-run" or "--check")
             {
+                importMode = arg == "--check" ? "check" : "dry_run";
                 dryRun = true;
                 continue;
             }
@@ -188,7 +190,7 @@ internal static class ExportImportCommandRunner
 
             if (dryRun)
             {
-                AddImportValidationPhase(validationPhases, PhaseReplaceDb, "skipped", "dry-run does not replace the destination database");
+                AddImportValidationPhase(validationPhases, PhaseReplaceDb, "skipped", $"{importMode} mode does not replace the destination database");
                 var manifest = importedManifest ?? throw new InvalidDataException("archive manifest was not loaded");
                 if (wantsJson)
                 {
@@ -198,6 +200,7 @@ internal static class ExportImportCommandRunner
                             "success",
                             Path.GetFullPath(archivePath),
                             fullDbPath,
+                            importMode,
                             dryRun,
                             prunePaths,
                             prunePaths ? importTargetProjectRoot : null,
@@ -225,15 +228,21 @@ internal static class ExportImportCommandRunner
 
             phase = PhaseReplaceDb;
             ReplaceImportedDatabase(tempPath, fullDbPath, cancellationToken);
+            AddImportValidationPhase(validationPhases, PhaseReplaceDb);
             if (wantsJson)
             {
                 var manifest = importedManifest ?? throw new InvalidDataException("archive manifest was not loaded");
                 Console.WriteLine(JsonSerializer.Serialize(
                     new ImportResult(
                         "1",
+                        "success",
+                        Path.GetFullPath(archivePath),
                         fullDbPath,
+                        importMode,
+                        DryRun: false,
                         prunePaths,
                         prunePaths ? importTargetProjectRoot : null,
+                        validationPhases,
                         UnknownExtensionFileCount: manifest.UnknownExtensionFileCount,
                         UnknownExtensionFiles: manifest.UnknownExtensionFiles,
                         UnknownExtensionFilesTruncated: manifest.UnknownExtensionFilesTruncated,
@@ -278,7 +287,15 @@ internal static class ExportImportCommandRunner
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or SqliteException)
         {
-            return WriteImportError(wantsJson, jsonOptions, phase, "import_failed", $"import failed ({CommandErrorWriter.FormatSanitizedException(ex)}).", "check the archive path and destination database permissions.", ImportUsage);
+            return WriteImportError(
+                wantsJson,
+                jsonOptions,
+                phase,
+                "import_failed",
+                $"import failed ({CommandErrorWriter.FormatSanitizedException(ex)}).",
+                "check the archive path and destination database permissions.",
+                ImportUsage,
+                rootCause: ClassifyImportFailureRootCause(phase, ex));
         }
         finally
         {
@@ -1501,8 +1518,9 @@ internal static class ExportImportCommandRunner
         string hint,
         string usage,
         int exitCode = CommandExitCodes.UsageError,
-        IReadOnlyList<ExportImportDiagnosticResult>? diagnostics = null)
-        => WriteStructuredError(json, jsonOptions, ImportCommandName, phase, errorCode, message, hint, usage, exitCode, diagnostics);
+        IReadOnlyList<ExportImportDiagnosticResult>? diagnostics = null,
+        string? rootCause = null)
+        => WriteStructuredError(json, jsonOptions, ImportCommandName, phase, errorCode, message, hint, usage, exitCode, diagnostics, rootCause);
 
     private static int WriteExportError(
         bool json,
@@ -1526,12 +1544,13 @@ internal static class ExportImportCommandRunner
         string hint,
         string usage,
         int exitCode,
-        IReadOnlyList<ExportImportDiagnosticResult>? diagnostics)
+        IReadOnlyList<ExportImportDiagnosticResult>? diagnostics,
+        string? rootCause = null)
     {
         if (json)
         {
             Console.WriteLine(JsonSerializer.Serialize(
-                new ExportImportErrorResult("1", "error", command, phase, errorCode, message, hint, usage, diagnostics),
+                new ExportImportErrorResult("1", "error", command, phase, errorCode, message, hint, usage, rootCause, diagnostics),
                 CliJsonSerializerContextFactory.Create(jsonOptions).ExportImportErrorResult));
             return exitCode;
         }
@@ -1545,6 +1564,17 @@ internal static class ExportImportCommandRunner
         string status = "success",
         string? message = null)
         => validationPhases.Add(new ImportValidationPhaseResult(phase, status, message));
+
+    private static string ClassifyImportFailureRootCause(string phase, Exception exception)
+        => exception switch
+        {
+            InvalidDataException when phase == PhaseOpenArchive => "invalid_archive",
+            UnauthorizedAccessException => "permission_denied",
+            SqliteException => "sqlite_error",
+            IOException => "io_error",
+            InvalidDataException => "invalid_data",
+            _ => "unknown",
+        };
 
     internal sealed record ExportManifest(
         [property: JsonPropertyName("format_version")]
@@ -1610,6 +1640,9 @@ internal static class ExportImportCommandRunner
         [property: JsonPropertyName("message")] string Message,
         [property: JsonPropertyName("hint")] string Hint,
         [property: JsonPropertyName("usage")] string Usage,
+        [property: JsonPropertyName("root_cause")]
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        string? RootCause = null,
         [property: JsonPropertyName("diagnostics")]
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         IReadOnlyList<ExportImportDiagnosticResult>? Diagnostics = null);
@@ -1628,6 +1661,7 @@ internal static class ExportImportCommandRunner
         [property: JsonPropertyName("status")] string Status,
         [property: JsonPropertyName("archive_path")] string ArchivePath,
         [property: JsonPropertyName("db_path")] string DbPath,
+        [property: JsonPropertyName("mode")] string Mode,
         [property: JsonPropertyName("dry_run")] bool DryRun,
         [property: JsonPropertyName("pruned_paths")] bool PrunedPaths,
         [property: JsonPropertyName("pruned_project_root")]
@@ -1667,12 +1701,17 @@ internal static class ExportImportCommandRunner
         [property: JsonPropertyName("filters")] CtagsExportFilterResult Filters,
         [property: JsonPropertyName("metadata_fields")] IReadOnlyList<string> MetadataFields);
     internal sealed record ImportResult(
-        string ApiVersion,
-        string DbPath,
-        bool PrunedPaths,
+        [property: JsonPropertyName("api_version")] string ApiVersion,
+        [property: JsonPropertyName("status")] string Status,
+        [property: JsonPropertyName("archive_path")] string ArchivePath,
+        [property: JsonPropertyName("db_path")] string DbPath,
+        [property: JsonPropertyName("mode")] string Mode,
+        [property: JsonPropertyName("dry_run")] bool DryRun,
+        [property: JsonPropertyName("pruned_paths")] bool PrunedPaths,
         [property: JsonPropertyName("pruned_project_root")]
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         string? PrunedProjectRoot,
+        [property: JsonPropertyName("validation_phases")] IReadOnlyList<ImportValidationPhaseResult> ValidationPhases,
         [property: JsonPropertyName("unknown_extension_file_count")] long? UnknownExtensionFileCount = null,
         [property: JsonPropertyName("unknown_extension_files")] string[]? UnknownExtensionFiles = null,
         [property: JsonPropertyName("unknown_extension_files_truncated")] bool? UnknownExtensionFilesTruncated = null,
