@@ -272,6 +272,7 @@ internal static class CliFlagSchema
             new() { Name = "--min-confidence", ValuePlaceholder = "<medium|low>", Description = "Unused: return symbols at or above this confidence", Commands = Set(UnusedFilterCommands) },
             new() { Name = "--actionable", Description = "Unused: preset for private medium-confidence cleanup candidates", Commands = Set(UnusedFilterCommands) },
             new() { Name = "--all", Description = "goto: return all matching LSP locations; find: search all indexed files instead of requiring --path; unused: include low-confidence contract-domain candidates suppressed by default", Commands = Set(AllResultCommands) },
+            new() { Name = "--line-scan-limit", ValuePlaceholder = "<n>", Description = "Find: override the --all indexed-line scan cap", Commands = Set("find") },
             new() { Name = "--rank-by", ValuePlaceholder = "<weighted|count|kind>", Description = "Rank callers/callees by weighted structural score, raw count, or kind bucket", Commands = Set(RankByCommands) },
             new() { Name = "--sort", ValuePlaceholder = "<mode>", Description = "Symbols/outline: order audit output by a ranking signal; outline also accepts source, kind, references, size, complexity, path, and name", Commands = Set(SymbolSortCommands) },
             new() { Name = "--raw-kinds", Description = "Show raw reference kinds instead of logical graph kinds", Commands = Set(RawKindsCommands) },
