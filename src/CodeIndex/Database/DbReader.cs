@@ -1839,21 +1839,26 @@ public partial class DbReader : IDisposable
         => reader.IsDBNull(ordinal) ? reader.GetInt32(fallbackOrdinal) : reader.GetInt32(ordinal);
 
     // Offsetless timestamps stored by SQLite (e.g. CURRENT_TIMESTAMP, or a UTC DateTime written
-    // through Microsoft.Data.Sqlite) are treated as UTC. Parsing offsetless input via
-    // DateTime.TryParse defaults to AssumeLocal, so without AssumeUniversal|AdjustToUniversal
-    // the value would silently shift by the local TZ offset before being re-stamped as UTC,
-    // which is the cross-TZ drift Issue #1545 describes.
-    // SQLiteが保存するオフセットなしのタイムスタンプはUTC扱い。AssumeUniversal|AdjustToUniversalを
-    // 付けないとローカル時刻として解釈→UTCにリラベルで暗黙にズレるため、Issue #1545対応として明示する。
+    // through Microsoft.Data.Sqlite) are treated as UTC. Local DateTime instances still represent
+    // local wall-clock instants and are converted to UTC before comparison or JSON output.
+    // SQLiteが保存するオフセットなしのタイムスタンプはUTC扱い。Local DateTime はローカル時刻の
+    // instant として UTC に変換してから比較・JSON 出力に渡す。
     private static DateTime? ParseDateTimeValue(object value)
     {
         return value switch
         {
-            DateTime dateTime => dateTime.Kind == DateTimeKind.Utc ? dateTime : DateTime.SpecifyKind(dateTime, DateTimeKind.Utc),
+            DateTime dateTime => NormalizeUtc(dateTime),
             string text when DateTime.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsed) => parsed,
             _ => null,
         };
     }
+
+    private static DateTime NormalizeUtc(DateTime value) => value.Kind switch
+    {
+        DateTimeKind.Utc => value,
+        DateTimeKind.Local => value.ToUniversalTime(),
+        _ => DateTime.SpecifyKind(value, DateTimeKind.Utc),
+    };
 
     /// <summary>
     /// Get all file validation issues from the index.

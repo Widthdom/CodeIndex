@@ -192,6 +192,21 @@ internal static class SearchAuditRecipes
         ],
         ["path", "match_origins", "match_facets.origin", "test_file", "test_symbol", "test_fixture", "result_kinds"],
         "Use origin and test/fixture facets before filing noisy lexical hits; prefer source-scoped recipes or --origin code/comment when the raw term appears in docs or metadata.");
+    private static readonly SearchRecipeClassifierJsonResult TimestampBoundaryClassifier = new(
+        "timestamp_boundary",
+        "Classifies DateTime and DateTimeOffset hits by timestamp boundary before changing UTC, offset, cache-expiry, display, or elapsed-time behavior.",
+        [
+            new("persisted_utc_or_offset", "Persisted database or file metadata timestamp that must round-trip as UTC or with an explicit offset.", "Treat offsetless persisted values as a documented UTC contract or migrate to an offset-aware representation."),
+            new("filesystem_timestamp", "Filesystem last-write or metadata timestamp crossing OS and repository boundaries.", "Keep filesystem timestamps in UTC at the boundary and avoid local-time comparisons in freshness decisions."),
+            new("runtime_wall_clock", "Process wall-clock timestamp used for audit logs, diagnostics, metadata, or user-facing status.", "Use TimeProvider or UTC/offset-aware types when the timestamp leaves the process or enters JSON."),
+            new("network_api_timestamp", "HTTP, GitHub, or protocol timestamp such as Retry-After, rate-limit reset, or release metadata.", "Normalize API timestamps to UTC/offset-aware values before comparing with process clock values."),
+            new("cache_expiry", "Cache freshness or expiry calculation based on checked-at or retry-after timestamps.", "Use a single UTC/offset contract for both the cached stamp and the current clock."),
+            new("support_json", "Machine-facing status, support bundle, or diagnostics JSON field.", "Emit UTC or an explicit offset so consumers do not infer local time."),
+            new("human_display", "Formatting path intended only for people reading CLI or log text.", "Display formatting may be local or contextual, but should not feed persistence or comparison logic."),
+            new("monotonic_elapsed", "Elapsed-time, timeout, retry-delay, or duration measurement.", "Prefer Stopwatch, timeout budgets, or monotonic clock helpers instead of wall-clock subtraction.")
+        ],
+        ["path", "enclosing_symbol_name", "risk_evidence", "match_origins", "result_kinds"],
+        "Classify the timestamp boundary first. Persisted and machine-facing values need explicit UTC or offset semantics; cache expiry must compare like-with-like clocks; elapsed-time and timeout logic should use monotonic duration primitives rather than DateTime wall-clock subtraction.");
     private static readonly SearchRecipeClassifierJsonResult GuardEvidenceClassifier = new(
         "guard_evidence",
         "Classifies whether nearby guard checks explain why a risky API call is already bounded, filtered, or intentionally rejected.",
@@ -477,6 +492,31 @@ internal static class SearchAuditRecipes
             ],
             GuardFilters = BoundedRegexEvidenceGuardFilters(),
             MatchOrigins = ["code"],
+        };
+
+    private static readonly string[] TimestampBoundaryRiskEvidence =
+    [
+        "risk: timestamp hits must be classified as persisted database/file metadata, filesystem clock, process wall clock, network/API timestamp, human display, support JSON, cache expiry, or monotonic elapsed-time before changing behavior.",
+        "risk: persisted and machine-facing timestamps should be UTC or carry an explicit offset; do not compare offsetless local wall time with UTC freshness fields.",
+        "positive: Stopwatch, TimeProvider.GetUtcNow, DateTimeOffset, and round-trip O formatting are useful evidence only when they match the boundary being measured or serialized."
+    ];
+
+    private static SearchAuditRecipeQuery TimestampBoundaryQuery(
+        string name,
+        string query,
+        string description,
+        string falsePositiveGuidance,
+        params string[] riskEvidence)
+        => new(
+            name,
+            query,
+            description,
+            ["audit", "bug"],
+            falsePositiveGuidance)
+        {
+            RiskEvidence = [.. TimestampBoundaryRiskEvidence, .. riskEvidence],
+            MatchOrigins = ["code"],
+            Classifiers = [TimestampBoundaryClassifier, SourceOriginClassifier],
         };
 
     private static readonly List<SearchAuditRecipe> BuiltInRecipes =
@@ -1605,6 +1645,89 @@ internal static class SearchAuditRecipes
                     ],
                     MatchOrigins = ["code"],
                 }
+            ]),
+        SourceScopedRecipe(
+            "timestamp-timezone-boundaries",
+            "Audit timestamp and elapsed-time boundaries so persisted database values, filesystem stamps, process clocks, network/API metadata, support JSON, cache expiry, human display, and monotonic timing keep explicit UTC or offset semantics.",
+            [
+                TimestampBoundaryQuery(
+                    "datetime-now-local-wall-clock",
+                    "DateTime.Now",
+                    "Find local wall-clock timestamps that can drift across timezones, daylight-saving transitions, or host settings.",
+                    "False positives include display-only formatting paths that never feed persistence, cache expiry, support JSON, or elapsed-time decisions.",
+                    "risk: DateTime.Now is local wall-clock time and should not feed persisted database stamps, freshness comparisons, retry scheduling, or machine-facing JSON without an explicit conversion boundary."),
+                TimestampBoundaryQuery(
+                    "datetime-utcnow-wall-clock",
+                    "DateTime.UtcNow",
+                    "Find UTC wall-clock timestamps that still need classification apart from monotonic elapsed-time measurement.",
+                    "False positives include durable audit metadata and support JSON fields that are intentionally UTC and covered by tests.",
+                    "risk: DateTime.UtcNow is wall-clock time; use it for timestamps, not elapsed-time measurement or timeout deadlines."),
+                TimestampBoundaryQuery(
+                    "datetimeoffset-utcnow-offset-clock",
+                    "DateTimeOffset.UtcNow",
+                    "Find offset-aware UTC timestamps used for persistence, API metadata, or support JSON.",
+                    "False positives include fields that already serialize as UTC or explicit offsets with round-trip tests.",
+                    "positive: DateTimeOffset.UtcNow is a good boundary type when the value crosses JSON, API, or cache contracts that need an explicit offset."),
+                TimestampBoundaryQuery(
+                    "timeprovider-utcnow-injected-clock",
+                    "GetUtcNow",
+                    "Find injectable UTC clock boundaries used for deterministic tests, cache expiry, or process diagnostics.",
+                    "False positives include wrappers that already normalize the returned timestamp before persistence or JSON output.",
+                    "positive: TimeProvider.GetUtcNow keeps wall-clock timestamps testable, but callers still need UTC/offset and monotonic-vs-wall-clock classification."),
+                TimestampBoundaryQuery(
+                    "datetime-kind-contract",
+                    "DateTimeKind",
+                    "Find DateTime kind checks and contracts that decide whether values are UTC, local, or offsetless.",
+                    "False positives include tests that intentionally construct all DateTimeKind variants.",
+                    "risk: DateTimeKind.Unspecified needs an explicit boundary contract; it must not silently inherit the host local timezone in persisted or support JSON paths."),
+                TimestampBoundaryQuery(
+                    "specifykind-utc-relabel",
+                    "DateTime.SpecifyKind",
+                    "Find timestamp relabeling sites that may need conversion rather than kind replacement.",
+                    "False positives include legacy offsetless values that are explicitly documented and tested as UTC.",
+                    "risk: DateTime.SpecifyKind can relabel local wall-clock values as UTC without conversion; verify the source value is truly offsetless UTC before accepting it."),
+                TimestampBoundaryQuery(
+                    "to-universal-time-conversion",
+                    "ToUniversalTime",
+                    "Find local-to-UTC conversion boundaries used before persistence, comparison, or serialization.",
+                    "False positives include conversions immediately before human-only formatting or tests that assert local-time behavior.",
+                    "risk: ToUniversalTime is correct for local instants but can mis-handle offsetless values unless the unspecified-kind contract is explicit."),
+                TimestampBoundaryQuery(
+                    "roundtrip-timestamp-format",
+                    "ToString(\"O\"",
+                    "Find round-trip timestamp formatting for persisted metadata, support JSON-adjacent diagnostics, or API detail strings.",
+                    "False positives include tests and non-timestamp string formatting fixtures.",
+                    "positive: the O format is appropriate for machine timestamps when the input kind or offset has already been normalized."),
+                TimestampBoundaryQuery(
+                    "datetime-tryparse-boundary",
+                    "DateTime.TryParse",
+                    "Find DateTime parsers that need invariant culture, UTC/offset assumptions, and local-time drift tests.",
+                    "False positives include parsers whose input is human-entered display text and remains human-facing.",
+                    "risk: DateTime.TryParse defaults can infer local time; machine timestamp parsers should specify invariant culture and UTC or offset behavior."),
+                TimestampBoundaryQuery(
+                    "datetimeoffset-tryparse-boundary",
+                    "DateTimeOffset.TryParse",
+                    "Find offset-aware timestamp parsers for persisted metadata, API values, and support diagnostics.",
+                    "False positives include tests that only validate rejected malformed timestamps.",
+                    "positive: DateTimeOffset.TryParse can preserve explicit offsets, but offsetless inputs still need a documented UTC or local-time assumption."),
+                TimestampBoundaryQuery(
+                    "unix-epoch-timestamp",
+                    "FromUnixTimeSeconds",
+                    "Find Unix epoch conversions that define network/API or cache reset timestamp boundaries.",
+                    "False positives include examples and tests that do not feed retry or freshness decisions.",
+                    "positive: Unix epoch conversion is UTC by contract, but downstream comparisons should still stay UTC or offset-aware."),
+                TimestampBoundaryQuery(
+                    "stopwatch-monotonic-elapsed",
+                    "Stopwatch",
+                    "Find monotonic elapsed-time measurement sites to separate duration logic from wall-clock timestamps.",
+                    "False positives include diagnostics that only report elapsed durations and do not compare against timestamps.",
+                    "positive: Stopwatch is the expected primitive for elapsed-time measurement, timeout diagnostics, and performance durations."),
+                TimestampBoundaryQuery(
+                    "timeout-duration-boundary",
+                    "Timeout",
+                    "Find timeout and retry-delay boundaries that should be duration-based rather than wall-clock timestamp comparisons.",
+                    "False positives include constant names or diagnostics that do not schedule, compare, or enforce durations.",
+                    "risk: timeout paths should compare duration budgets or monotonic elapsed time, not mixed local and UTC wall-clock timestamps.")
             ]),
         SourceScopedRecipe(
             "sqlite-query-policy-surfaces",

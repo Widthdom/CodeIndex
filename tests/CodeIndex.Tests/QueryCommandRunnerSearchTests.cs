@@ -2263,6 +2263,123 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_TimestampTimezoneRecipeDocumentsClockBoundaries_Issue4321()
+    {
+        using var env = EnvironmentVariableScope.Capture(SearchAuditRecipes.RecipePathsEnvironmentVariable);
+        env.Set(SearchAuditRecipes.RecipePathsEnvironmentVariable, null);
+
+        var recipe = Assert.Single(SearchAuditRecipes.All, item => item.Name == "timestamp-timezone-boundaries");
+        var queryNames = recipe.Queries.Select(query => query.Name).ToArray();
+
+        Assert.Equal(SearchAuditRecipes.DefaultAuditScope, recipe.DefaultScope);
+        Assert.Contains("UTC or offset", recipe.Description, StringComparison.Ordinal);
+        Assert.Contains("datetime-now-local-wall-clock", queryNames);
+        Assert.Contains("datetime-utcnow-wall-clock", queryNames);
+        Assert.Contains("datetimeoffset-utcnow-offset-clock", queryNames);
+        Assert.Contains("timeprovider-utcnow-injected-clock", queryNames);
+        Assert.Contains("stopwatch-monotonic-elapsed", queryNames);
+        Assert.Contains("timeout-duration-boundary", queryNames);
+
+        var utcQuery = Assert.Single(recipe.Queries, query => query.Name == "datetime-utcnow-wall-clock");
+        Assert.Contains(utcQuery.RiskEvidence, evidence => evidence.Contains("persisted and machine-facing", StringComparison.Ordinal));
+        Assert.Contains(utcQuery.RiskEvidence, evidence => evidence.Contains("support JSON", StringComparison.Ordinal));
+        var classifier = Assert.Single(utcQuery.Classifiers, item => item.Name == "timestamp_boundary");
+        Assert.Contains(classifier.Categories, category => category.Name == "persisted_utc_or_offset");
+        Assert.Contains(classifier.Categories, category => category.Name == "cache_expiry");
+        Assert.Contains(classifier.Categories, category => category.Name == "monotonic_elapsed");
+    }
+
+    [Fact]
+    public void RunSearch_TimestampTimezoneRecipeCoversRepresentativeApis_Issue4321()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_timestamp_timezone_recipe_4321");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/time.cs",
+                "csharp",
+                """
+                using System;
+                using System.Diagnostics;
+                using System.Globalization;
+                using System.Threading;
+
+                public sealed class TimeBoundaries
+                {
+                    public void Run()
+                    {
+                        var local = DateTime.Now;
+                        var utc = DateTime.UtcNow;
+                        var offset = DateTimeOffset.UtcNow;
+                        var injected = TimeProvider.System.GetUtcNow();
+                        var parsed = DateTime.TryParse("2031-05-02T09:00:00Z", CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsedDate);
+                        var offsetParsed = DateTimeOffset.TryParse("2031-05-02T09:00:00+00:00", CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsedOffset);
+                        var relabeled = DateTime.SpecifyKind(parsedDate, DateTimeKind.Utc);
+                        var converted = local.ToUniversalTime();
+                        var roundtrip = utc.ToString("O", CultureInfo.InvariantCulture);
+                        var epoch = DateTimeOffset.FromUnixTimeSeconds(1);
+                        var stopwatch = Stopwatch.StartNew();
+                        using var timeout = new CancellationTokenSource(Timeout.InfiniteTimeSpan);
+                        Console.WriteLine($"{offset}{injected}{parsed}{offsetParsed}{relabeled}{converted}{roundtrip}{epoch}{stopwatch.Elapsed}{timeout}");
+                    }
+                }
+                """);
+            var queryNames = new[]
+            {
+                "datetime-now-local-wall-clock",
+                "datetime-utcnow-wall-clock",
+                "datetimeoffset-utcnow-offset-clock",
+                "timeprovider-utcnow-injected-clock",
+                "datetime-kind-contract",
+                "specifykind-utc-relabel",
+                "to-universal-time-conversion",
+                "roundtrip-timestamp-format",
+                "datetime-tryparse-boundary",
+                "datetimeoffset-tryparse-boundary",
+                "unix-epoch-timestamp",
+                "stopwatch-monotonic-elapsed",
+                "timeout-duration-boundary"
+            };
+            var args = new List<string>
+            {
+                "--recipe",
+                "timestamp-timezone-boundaries",
+                "--db",
+                dbPath,
+                "--json",
+                "--limit",
+                "50"
+            };
+            foreach (var queryName in queryNames)
+            {
+                args.Add("--include-query");
+                args.Add(queryName);
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(args.ToArray(), _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var queries = document.RootElement.GetProperty("queries").EnumerateArray().ToList();
+            Assert.Equal(queryNames, queries.Select(query => query.GetProperty("name").GetString() ?? string.Empty).ToArray());
+            Assert.All(queries, query => Assert.True(
+                query.GetProperty("count").GetInt32() >= 1,
+                query.GetProperty("name").GetString()));
+            var stopwatch = queries.Single(query => query.GetProperty("name").GetString() == "stopwatch-monotonic-elapsed");
+            Assert.Contains(
+                stopwatch.GetProperty("classifiers").EnumerateArray(),
+                classifier => classifier.GetProperty("name").GetString() == "timestamp_boundary");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_ListRecipesNamesJsonEmitsDeterministicSmallPayload_Issue4064()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
@@ -2495,7 +2612,7 @@ public partial class QueryCommandRunnerTests
         };
 
         Assert.Equal(
-            ["risky-code", "string-comparison-semantics", "auth-token-audit", "dogfood-risk-patterns", "sqlite-query-policy-surfaces", "json-parse-apis", "text-encoding-boundaries", "dotnet-risk-patterns", "unsupported-operation-boundaries", "nullable-contracts", "xml-parser-security", "filesystem-traversal", "bounded-read-evidence", "resource-materialization-audit", "memory-allocation-boundaries", "concurrency-state-audit", "phrase-risk-patterns", "broad-token-audit"],
+            ["risky-code", "string-comparison-semantics", "auth-token-audit", "dogfood-risk-patterns", "timestamp-timezone-boundaries", "sqlite-query-policy-surfaces", "json-parse-apis", "text-encoding-boundaries", "dotnet-risk-patterns", "unsupported-operation-boundaries", "nullable-contracts", "xml-parser-security", "filesystem-traversal", "bounded-read-evidence", "resource-materialization-audit", "memory-allocation-boundaries", "concurrency-state-audit", "phrase-risk-patterns", "broad-token-audit"],
             recipes.Select(recipe => recipe.Name).ToArray());
 
         AssertRecipe(
@@ -2619,6 +2736,26 @@ public partial class QueryCommandRunnerTests
                 "hook-term",
                 "trust-overrides-contract",
                 "assembly-load-context"
+            ]);
+        AssertRecipe(
+            "timestamp-timezone-boundaries",
+            SearchAuditRecipes.DefaultAuditScope,
+            ["src/**"],
+            expectedSourceExcludes,
+            [
+                "datetime-now-local-wall-clock",
+                "datetime-utcnow-wall-clock",
+                "datetimeoffset-utcnow-offset-clock",
+                "timeprovider-utcnow-injected-clock",
+                "datetime-kind-contract",
+                "specifykind-utc-relabel",
+                "to-universal-time-conversion",
+                "roundtrip-timestamp-format",
+                "datetime-tryparse-boundary",
+                "datetimeoffset-tryparse-boundary",
+                "unix-epoch-timestamp",
+                "stopwatch-monotonic-elapsed",
+                "timeout-duration-boundary"
             ]);
         AssertRecipe(
             "sqlite-query-policy-surfaces",
