@@ -121,8 +121,8 @@ public partial class McpServerTests
         var message = McpServer.BuildJsonParseErrorLog("Expected ':'");
 
         Assert.Contains("JSON parse error", message);
-        Assert.Contains("Send one UTF-8 JSON-RPC object per line", message);
-        Assert.Contains("retry", message);
+        Assert.Contains("MCP stdio expects one UTF-8 JSON-RPC object per LF-delimited line", message);
+        Assert.Contains("do not send LSP Content-Length framing", message);
     }
 
     [Fact]
