@@ -2407,6 +2407,8 @@ If the refs are not known, use `cdidx ./myproject --json` and verify with `cdidx
 
 cdidx includes a built-in **MCP (Model Context Protocol) server**. MCP is a standard protocol that lets AI coding tools communicate with external programs. When you run `cdidx mcp`, cdidx starts listening on stdin/stdout — your AI tool sends search requests as JSON, and cdidx returns results instantly from the pre-built index.
 
+MCP stdio is line protocol: send one compact UTF-8 JSON-RPC object per LF-delimited line. It is not LSP `Content-Length` framing. stdout is reserved for JSON-RPC payloads only; startup, shutdown, audit, rate-limit, timeout, and parse diagnostics are written to stderr and persistent logs. HTTP MCP uses request/response JSON-RPC over POST with its own bearer-auth and body-size limits.
+
 ### LSP Server (for LSP-native editors)
 
 `cdidx lsp --db .cdidx/codeindex.db` starts a read-only Language Server Protocol
@@ -5174,6 +5176,8 @@ ref が分からない場合は `cdidx ./myproject --json` を使い、`cdidx st
 ### MCP サーバー（Claude Code、Cursor、Windsurf 等に対応）
 
 cdidxには**MCP（Model Context Protocol）サーバー**が組み込まれています。MCPは、AIコーディングツールが外部プログラムと通信するための標準プロトコルです。`cdidx mcp` を実行すると、cdidxがstdin/stdoutで待機し、AIツールからの検索リクエストをJSONで受け取り、構築済みインデックスから即座に結果を返します。
+
+MCP stdio は line protocol です。LF 区切りの各行に compact な UTF-8 JSON-RPC object を 1 つ送ってください。LSP の `Content-Length` framing ではありません。stdout は JSON-RPC payload 専用で、startup、shutdown、audit、rate-limit、timeout、parse diagnostic は stderr と persistent log に出力されます。HTTP MCP は POST 上の request / response JSON-RPC を使い、独自の bearer authentication と body-size limit を適用します。
 
 ### LSP サーバー（LSP-native editor 向け）
 

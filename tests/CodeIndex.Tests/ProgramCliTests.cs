@@ -333,6 +333,11 @@ public class ProgramCliTests
             Assert.Contains("Notes:", stdout);
             if (command is "mcp" or "completions")
                 Assert.Contains("--json is not supported", stdout);
+            if (command is "mcp")
+            {
+                Assert.Contains("LF-delimited line", stdout);
+                Assert.Contains("lifecycle diagnostics go to stderr", stdout);
+            }
             if (command is "references" or "callers" or "callees")
                 Assert.Contains("--json and --format json emit JSON Lines", stdout);
         }
@@ -900,6 +905,8 @@ public class ProgramCliTests
         Assert.Contains("--json is not supported for mcp", stderr);
         Assert.Contains("Usage: cdidx mcp", stderr);
         Assert.Contains("Note: --json is not supported", stderr);
+        Assert.Contains("LF-delimited line", stderr);
+        Assert.Contains("lifecycle diagnostics are written to stderr", stderr);
     }
 
     [ProductionRuntimeFact]
