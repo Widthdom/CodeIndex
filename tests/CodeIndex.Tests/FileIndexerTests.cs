@@ -6088,11 +6088,11 @@ public partial class FileIndexerTests
             }
             catch (IOException) when (attempt < 4)
             {
-                Thread.Sleep(100);
+                TestProjectHelper.WaitForFileSystemReleaseRetry();
             }
             catch (UnauthorizedAccessException) when (attempt < 4)
             {
-                Thread.Sleep(100);
+                TestProjectHelper.WaitForFileSystemReleaseRetry();
             }
         }
     }

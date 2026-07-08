@@ -1713,36 +1713,26 @@ public class HttpMcpTransportTests : IDisposable
         ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord> records,
         int expectedCount)
     {
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            if (records.Count >= expectedCount)
-                return records.ToArray();
+        await TestDeterminism.WaitUntilAsync(
+            () => records.Count >= expectedCount,
+            $"{expectedCount} request log records",
+            getDiagnostics: () =>
+            {
+                var snapshot = records.ToArray();
+                var observed = string.Join(
+                    ", ",
+                    snapshot.Select(record => $"{record.Method} {record.Path} {record.StatusCode} auth={record.AuthOutcome} id={record.RequestId ?? "<none>"}"));
+                return $"observed={snapshot.Length}: {observed}";
+            });
 
-            await Task.Delay(10);
-        }
-
-        var snapshot = records.ToArray();
-        var observed = string.Join(
-            ", ",
-            snapshot.Select(record => $"{record.Method} {record.Path} {record.StatusCode} auth={record.AuthOutcome} id={record.RequestId ?? "<none>"}"));
-        Assert.Fail($"Expected {expectedCount} request log records, but observed {snapshot.Length}: {observed}");
-        return snapshot;
+        return records.ToArray();
     }
 
     private static async Task WaitForRequestLogDropAsync(McpHttpHarness harness)
-    {
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            if (harness.RequestLogDroppedCount > 0)
-                return;
-
-            await Task.Delay(10);
-        }
-
-        Assert.Fail("Expected the request log queue to report at least one dropped record.");
-    }
+        => await TestDeterminism.WaitUntilAsync(
+            () => harness.RequestLogDroppedCount > 0,
+            "request log queue to report at least one dropped record",
+            getDiagnostics: () => $"dropped={harness.RequestLogDroppedCount}");
 
     private static void AssertTooManyRequests(HttpResponseMessage response, string rejectionReason)
     {
@@ -1770,18 +1760,7 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition, string description)
-    {
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            if (condition())
-                return;
-
-            await Task.Delay(10);
-        }
-
-        Assert.Fail($"Timed out waiting for {description}.");
-    }
+        => await TestDeterminism.WaitUntilAsync(condition, description);
 
     private static string BuildNestedCancellationNotification(int nestedObjectCount)
     {
@@ -1899,13 +1878,11 @@ public class HttpMcpTransportTests : IDisposable
             // background task may not have entered GetContextAsync yet by the time the test posts.
             // listener が GetContextAsync に入る前に POST が来ないよう、ごく短い待機を挟む。
             await Task.Yield();
-            var healthReadyDeadline = DateTimeOffset.UtcNow.AddSeconds(5);
-            while (transport.HealthJsonProvider is null
-                && !loopTask.IsCompleted
-                && DateTimeOffset.UtcNow < healthReadyDeadline)
-            {
-                await Task.Delay(10);
-            }
+            await TestDeterminism.WaitUntilAsync(
+                () => transport.HealthJsonProvider is not null || loopTask.IsCompleted,
+                "MCP HTTP health provider to become ready",
+                timeout: TimeSpan.FromSeconds(5),
+                getDiagnostics: () => $"health_provider_ready={transport.HealthJsonProvider is not null}, loop_completed={loopTask.IsCompleted}");
             if (loopTask.IsCompleted)
                 await loopTask.ConfigureAwait(false);
             if (transport.HealthJsonProvider is null)

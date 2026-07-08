@@ -6694,18 +6694,6 @@ public sealed class Caller
         throw new InvalidOperationException("Could not locate built cdidx.dll from test output path / テスト出力パスから cdidx.dll を特定できませんでした");
     }
 
-    private static void AssertFileDoesNotAppear(string path, TimeSpan duration)
-    {
-        var deadline = DateTimeOffset.UtcNow.Add(duration);
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            if (File.Exists(path))
-                throw new InvalidOperationException("The timed-out symbol extraction worker continued running after the callback returned.");
-
-            Thread.Sleep(25);
-        }
-    }
-
     private static void WriteSymbolWorkerPatternConfig(string projectRoot, string content)
         => WriteSymbolWorkerPatternConfig(projectRoot, "toydsl.yaml", content);
 

@@ -58,6 +58,35 @@ public class TestDeterminismTests
     }
 
     [Fact]
+    public void WaitUntil_PollsUntilConditionIsTrue()
+    {
+        var polls = 0;
+
+        TestDeterminism.WaitUntil(
+            () => Interlocked.Increment(ref polls) >= 3,
+            "third poll",
+            timeout: TimeSpan.FromSeconds(1),
+            pollInterval: TimeSpan.FromMilliseconds(1));
+
+        Assert.True(polls >= 3);
+    }
+
+    [Fact]
+    public void WaitUntil_TimeoutIncludesDiagnostics()
+    {
+        var ex = Assert.ThrowsAny<XunitException>(() =>
+            TestDeterminism.WaitUntil(
+                () => false,
+                "missing condition",
+                timeout: TimeSpan.FromMilliseconds(5),
+                pollInterval: TimeSpan.FromMilliseconds(1),
+                getDiagnostics: () => "observed=0"));
+
+        Assert.Contains("missing condition", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("observed=0", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task WaitUntilOrTimeoutAsync_ReturnsFalseOnTimeout()
     {
         var observed = await TestDeterminism.WaitUntilOrTimeoutAsync(
@@ -78,6 +107,33 @@ public class TestDeterminismTests
             TimeSpan.FromMilliseconds(5));
 
         blocker.SetResult();
+    }
+
+    [Fact]
+    public void AssertConditionRemainsTrue_ReturnsWhenConditionStaysTrue()
+    {
+        TestDeterminism.AssertConditionRemainsTrue(
+            () => true,
+            "stable condition",
+            TimeSpan.FromMilliseconds(5),
+            pollInterval: TimeSpan.FromMilliseconds(1));
+    }
+
+    [Fact]
+    public void AssertConditionRemainsTrue_FailureIncludesDiagnostics()
+    {
+        var polls = 0;
+
+        var ex = Assert.ThrowsAny<XunitException>(() =>
+            TestDeterminism.AssertConditionRemainsTrue(
+                () => Interlocked.Increment(ref polls) < 3,
+                "stable condition",
+                TimeSpan.FromSeconds(1),
+                pollInterval: TimeSpan.FromMilliseconds(1),
+                getDiagnostics: () => $"polls={polls}"));
+
+        Assert.Contains("stable condition", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("polls=", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]

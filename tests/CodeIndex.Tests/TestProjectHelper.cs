@@ -197,13 +197,13 @@ internal static class TestProjectHelper
                 // 毎回の cleanup で SQLite pool を落とすと並列テスト全体へ波及するため、
                 // 通常経路では触らない。Windows で削除失敗したときだけ最終手段として解放する。
                 SqlitePoolCleanup.ClearPoolsForWindowsFileRelease();
-                Thread.Sleep(100);
+                WaitForFileSystemReleaseRetry();
                 ClearAttributes(path);
             }
             catch (UnauthorizedAccessException) when (attempt < 4)
             {
                 SqlitePoolCleanup.ClearPoolsForWindowsFileRelease();
-                Thread.Sleep(100);
+                WaitForFileSystemReleaseRetry();
                 ClearAttributes(path);
             }
         }
@@ -228,14 +228,21 @@ internal static class TestProjectHelper
             catch (IOException) when (attempt < 4)
             {
                 SqlitePoolCleanup.ClearPoolsForWindowsFileRelease();
-                Thread.Sleep(100);
+                WaitForFileSystemReleaseRetry();
             }
             catch (UnauthorizedAccessException) when (attempt < 4)
             {
                 SqlitePoolCleanup.ClearPoolsForWindowsFileRelease();
-                Thread.Sleep(100);
+                WaitForFileSystemReleaseRetry();
             }
         }
+    }
+
+    internal static void WaitForFileSystemReleaseRetry()
+    {
+        // Windows and SQLite can release file handles just after a failed cleanup attempt.
+        // Keep that bounded blocking delay in one helper instead of scattering fixed sleeps.
+        Thread.Sleep(100);
     }
 
     private static void ClearAttributes(string path)

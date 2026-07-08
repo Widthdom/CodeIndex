@@ -128,13 +128,13 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - `PropertyBasedParserTests.cs`
   FsCheck-driven property tests for parser-heavy paths called out in issue #1572: `ArgHelper.WantsHelp` and `ProgramRunner.IsProjectPathArg` never throw on arbitrary inputs; `FileIndexer.NormalizePathSeparators` is idempotent under double application; the literal-safe FTS5 sanitizer (`DbReader.SanitizeFtsQuery`) always emits a query that a real in-memory FTS5 virtual table can parse. They complement, not replace, the example-based tests in `ArgHelperTests.cs` / `QueryCommandRunnerTests.cs`.
 - `TestProjectHelper.cs`, `TestDeterminism.cs`, `RepositoryTestPaths.cs`, `TestConsoleLock.cs`
-  Shared test helpers. Use `TestProjectHelper.DeleteDirectory` / `DeleteFile` for ordinary temp cleanup and `DeleteSqliteDatabaseFiles` when SQLite `-wal` / `-shm` sidecars must be removed with the database. Use `TestDeterminism` for bounded polling, eventual assertions, blocked-task observation, same-start concurrent workers, and seeded random inputs. MCP indexing tests should route temporary codeindex DB cleanup through this helper as well. Do not copy local retry loops unless the test needs a genuinely specialized path shape such as Windows long-path fixtures.
+  Shared test helpers. Use `TestProjectHelper.DeleteDirectory` / `DeleteFile` for ordinary temp cleanup and `DeleteSqliteDatabaseFiles` when SQLite `-wal` / `-shm` sidecars must be removed with the database. Use `TestProjectHelper.WaitForFileSystemReleaseRetry` only inside bounded cleanup retry loops that are reacting to a failed filesystem delete. Use `TestDeterminism` for bounded polling, eventual assertions, blocked-task observation, same-start concurrent workers, and seeded random inputs. MCP indexing tests should route temporary codeindex DB cleanup through this helper as well. Do not copy local retry loops unless the test needs a genuinely specialized path shape such as Windows long-path fixtures.
 
 ## Conventions
 
 - Keep test names descriptive. The current suite mostly uses `Method_Scenario_ExpectedBehavior`.
 - Keep tests deterministic. Do not depend on machine-global git config, locale-specific output, or ambient files.
-- Prefer `ManualTimeProvider` for fake clocks and `TestDeterminism.CreateRandom` for randomized fixture input so repeated test runs replay the same timeline and data. Use `TestDeterminism.WaitUntilAsync` for bounded polling/eventual assertions instead of local `Task.Delay` loops or fixed sleeps, and use `TestDeterminism.RunConcurrentlyAsync` when a test needs workers to start from the same gate.
+- Prefer `ManualTimeProvider` for fake clocks and `TestDeterminism.CreateRandom` for randomized fixture input so repeated test runs replay the same timeline and data. Use `TestDeterminism.WaitUntilAsync` or the synchronous `WaitUntil` for bounded polling/eventual assertions instead of local `Task.Delay` loops or fixed sleeps. Use `AssertConditionRemainsTrue` for short absence/stability observations, and `TestDeterminism.RunConcurrentlyAsync` when a test needs workers to start from the same gate.
 - Prefer small fixtures and explicit assertions over broad snapshot-style checks. The one narrow exception is the `--json` output contract harness (`JsonOutputSnapshotTests`), which pins the full field shape on purpose — see "JSON `--json` output snapshots" below.
 - When repeated expected-value construction obscures a boundary contract such as raw bytes vs canonical content, use a narrowly named local helper instead of duplicating the low-level expression at each assertion.
 - When a production comment or error string is bilingual, preserve that expectation in tests where it matters.
@@ -183,9 +183,9 @@ Use these helpers when possible so test behavior stays consistent across files a
 
 Use `ManualTimeProvider` when production code accepts a `TimeProvider`, and advance it explicitly with `Advance(...)` instead of sampling wall-clock time in fixture data.
 
-Use `TestDeterminism.WaitUntilAsync(...)` for eventual assertions and asynchronous polling. It applies a shared timeout and poll interval, and accepts a diagnostic callback so timeout failures include the observed state. For loops that should stop after either enough work or a slow-host cap, use `WaitUntilOrTimeoutAsync(...)`.
+Use `TestDeterminism.WaitUntilAsync(...)` for eventual assertions and asynchronous polling, or `WaitUntil(...)` when the surrounding test is synchronous. Both apply a shared timeout and poll interval, and accept a diagnostic callback so timeout failures include the observed state. For loops that should stop after either enough work or a slow-host cap, use `WaitUntilOrTimeoutAsync(...)`.
 
-Use `TestDeterminism.AssertTaskRemainsBlockedAsync(...)` when a test needs a short bounded observation that a task has not completed, and `RunConcurrentlyAsync(...)` when workers should be released from one gate. Use `CreateRandom(...)` for deterministic pseudo-random fixture data instead of constructing ambient or time-seeded `Random` instances.
+Use `TestDeterminism.AssertTaskRemainsBlockedAsync(...)` when a test needs a short bounded observation that a task has not completed, and `AssertConditionRemainsTrue(...)` when a synchronous test must prove an absence or stability condition remains true for a bounded window. Use `RunConcurrentlyAsync(...)` when workers should be released from one gate. Use `CreateRandom(...)` for deterministic pseudo-random fixture data instead of constructing ambient or time-seeded `Random` instances.
 
 ### `RepositoryTestPaths`
 
@@ -399,13 +399,13 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `PropertyBasedParserTests.cs`
   issue #1572 で挙げられたパーサー系経路に対する FsCheck 駆動の property テスト: `ArgHelper.WantsHelp` と `ProgramRunner.IsProjectPathArg` が任意入力で例外を投げないこと、`FileIndexer.NormalizePathSeparators` が二重適用で idempotent であること、literal-safe な FTS5 サニタイザ (`DbReader.SanitizeFtsQuery`) が常にインメモリ FTS5 仮想テーブルで parse 可能なクエリを出力すること。`ArgHelperTests.cs` / `QueryCommandRunnerTests.cs` の例ベーステストを置き換えるものではなく補完します。
 - `TestProjectHelper.cs`、`TestDeterminism.cs`、`RepositoryTestPaths.cs`、`TestConsoleLock.cs`
-  共有テストヘルパー。通常の temp cleanup は `TestProjectHelper.DeleteDirectory` / `DeleteFile` を使い、SQLite の `-wal` / `-shm` sidecar を DB と一緒に消す必要がある場合は `DeleteSqliteDatabaseFiles` を使ってください。境界付きポーリング、最終的な条件成立のアサーション、ブロック中タスクの観測、同時開始するワーカー、固定シード乱数入力には `TestDeterminism` を使ってください。MCP indexing test の一時 codeindex DB cleanup もこの helper に寄せてください。Windows long-path fixture のように特殊な path shape が必要な場合を除き、ローカルの retry loop をコピーしないでください。
+  共有テストヘルパー。通常の temp cleanup は `TestProjectHelper.DeleteDirectory` / `DeleteFile` を使い、SQLite の `-wal` / `-shm` sidecar を DB と一緒に消す必要がある場合は `DeleteSqliteDatabaseFiles` を使ってください。失敗した filesystem delete に反応する bounded cleanup retry loop の中だけ、`TestProjectHelper.WaitForFileSystemReleaseRetry` を使ってください。境界付きポーリング、最終的な条件成立のアサーション、ブロック中タスクの観測、同時開始するワーカー、固定シード乱数入力には `TestDeterminism` を使ってください。MCP indexing test の一時 codeindex DB cleanup もこの helper に寄せてください。Windows long-path fixture のように特殊な path shape が必要な場合を除き、ローカルの retry loop をコピーしないでください。
 
 ## 規約
 
 - テスト名は説明的にする。現在のスイートは `Method_Scenario_ExpectedBehavior` 形式が中心です。
 - テストは決定的に保つ。マシン全体の git 設定、ロケール依存出力、外部の残存ファイルに依存しないこと。
-- 本番コードが `TimeProvider` を受け取れる場合は `ManualTimeProvider` を使い、fixture data の時刻は wall clock ではなく明示的に進めてください。ランダム入力は `TestDeterminism.CreateRandom` を使い、同じ timeline とデータを再実行できるようにします。境界付きポーリング / 最終的な条件成立のアサーションには、ローカルの `Task.Delay` loop や固定 sleep ではなく `TestDeterminism.WaitUntilAsync` を使い、ワーカーを同じ gate から開始したい場合は `TestDeterminism.RunConcurrentlyAsync` を使ってください。
+- 本番コードが `TimeProvider` を受け取れる場合は `ManualTimeProvider` を使い、fixture data の時刻は wall clock ではなく明示的に進めてください。ランダム入力は `TestDeterminism.CreateRandom` を使い、同じ timeline とデータを再実行できるようにします。境界付きポーリング / 最終的な条件成立のアサーションには、ローカルの `Task.Delay` loop や固定 sleep ではなく `TestDeterminism.WaitUntilAsync` または同期版の `WaitUntil` を使い、短い不在・安定性の観測には `AssertConditionRemainsTrue` を使ってください。ワーカーを同じ gate から開始したい場合は `TestDeterminism.RunConcurrentlyAsync` を使ってください。
 - 広いスナップショット風の検証より、小さなフィクスチャと明示的な assertion を優先する。例外は `--json` 出力契約の harness (`JsonOutputSnapshotTests`) で、こちらは意図的にフィールド形状全体を固定します（下記「JSON `--json` 出力 snapshot」参照）。
 - raw bytes と canonical content のような境界契約で期待値生成が重複して読みづらくなる場合は、各 assertion に低レベル式を複製せず、契約名が分かる小さな local helper に寄せてください。
 - 境界を証明するテストでは、その境界をまたぐ最小の fixture を使う。1 ページ、1 chunk、1 cache、1 offset overflow で十分なら、それ以上に synthetic data を増やさない。ただし、より大きいサイズ自体が契約の一部なら例外です。
@@ -455,9 +455,9 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 
 本番コードが `TimeProvider` を受け取れる場合は `ManualTimeProvider` を使い、fixture data の時刻は wall clock から読むのではなく `Advance(...)` で明示的に進めてください。
 
-最終的な条件成立のアサーションや非同期ポーリングには `TestDeterminism.WaitUntilAsync(...)` を使います。共通 timeout と poll interval を適用し、diagnostic callback を渡せるため timeout failure に観測状態を含められます。十分な作業量に達した場合か遅い host 向け上限に達した場合のどちらでも止めたいループでは `WaitUntilOrTimeoutAsync(...)` を使います。
+最終的な条件成立のアサーションや非同期ポーリングには `TestDeterminism.WaitUntilAsync(...)` を使い、周囲のテストが同期処理の場合は `WaitUntil(...)` を使います。どちらも共通 timeout と poll interval を適用し、diagnostic callback を渡せるため timeout failure に観測状態を含められます。十分な作業量に達した場合か遅い host 向け上限に達した場合のどちらでも止めたいループでは `WaitUntilOrTimeoutAsync(...)` を使います。
 
-短い観測時間だけ task が未完了であることを確認する場合は `TestDeterminism.AssertTaskRemainsBlockedAsync(...)`、ワーカーを 1 つの gate から同時に解放したい場合は `RunConcurrentlyAsync(...)` を使います。擬似ランダムな fixture data には、ambient または時刻 seed の `Random` を直接作らず `CreateRandom(...)` を使ってください。
+短い観測時間だけ task が未完了であることを確認する場合は `TestDeterminism.AssertTaskRemainsBlockedAsync(...)`、同期テストで不在や安定性の条件が bounded window の間 true のままであることを確認する場合は `AssertConditionRemainsTrue(...)` を使います。ワーカーを 1 つの gate から同時に解放したい場合は `RunConcurrentlyAsync(...)` を使います。擬似ランダムな fixture data には、ambient または時刻 seed の `Random` を直接作らず `CreateRandom(...)` を使ってください。
 
 ### `RepositoryTestPaths`
 
