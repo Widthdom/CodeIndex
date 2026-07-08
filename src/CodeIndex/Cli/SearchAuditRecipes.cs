@@ -1338,6 +1338,202 @@ internal static class SearchAuditRecipes
                     MatchOrigins = ["code"],
                 },
                 new(
+                    "process-launch-policy",
+                    "ProcessLaunchPolicy",
+                    "Find shared process launch policy wrappers used as positive evidence for subprocess trust boundaries.",
+                    ["audit", "security"],
+                    "Use this with process-start-info and process-start-direct to distinguish shared launch policy from ad hoc process setup.")
+                {
+                    Severity = "info",
+                    RiskEvidence =
+                    [
+                        "positive: ProcessLaunchPolicy centralizes no-shell process configuration, argument-list setup, and redirected stream defaults.",
+                        "risk: wrapper call sites still need review for executable path trust, working directory selection, timeout/cancellation, and diagnostics."
+                    ],
+                    MatchOrigins = ["code"],
+                    Classifiers = [ProcessLaunchClassifier],
+                },
+                new(
+                    "subprocess-environment-policy",
+                    "SubprocessEnvironmentPolicy",
+                    "Find shared subprocess environment scrubbing used as positive evidence for inherited-environment boundaries.",
+                    ["audit", "security"],
+                    "Use this with process launch hits to verify whether subprocesses inherit only allowlisted environment variables.")
+                {
+                    Severity = "info",
+                    RiskEvidence =
+                    [
+                        "positive: SubprocessEnvironmentPolicy makes inherited environment handling explicit for worker, git, and child CLI launches.",
+                        "risk: launch sites without this evidence may inherit prompts, credentials, or tool-specific state unintentionally."
+                    ],
+                    MatchOrigins = ["code"],
+                    Classifiers = [ProcessLaunchClassifier],
+                },
+                new(
+                    "process-start-info",
+                    "ProcessStartInfo",
+                    "Find external process launch configuration that may need argument, environment, cwd, and shell-use review.",
+                    ["audit", "security"],
+                    "False positives include tests and launch wrappers that already validate arguments, scrub environment variables, and disable shell expansion.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: launch sites need review for UseShellExecute, ArgumentList, WorkingDirectory, environment mutation, stdout/stderr drain, timeout, cancellation, and redacted diagnostics.",
+                        "positive: ProcessLaunchPolicy, SubprocessEnvironmentPolicy, ArgumentList, UseShellExecute=false, redirected stream draining, and bounded WaitForExitAsync are useful guard evidence."
+                    ],
+                    MatchOrigins = ["code"],
+                    Classifiers = [ProcessLaunchClassifier],
+                },
+                new(
+                    "process-start-direct",
+                    "Process.Start",
+                    "Find direct process launches that may need a shared safe-launch wrapper or explicit argument handling.",
+                    ["audit", "security"],
+                    "False positives include simple URL/document open helpers or test fixtures with trusted inputs.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: direct Process.Start calls can bypass no-shell defaults, argument-list construction, environment scrubbing, timeout, and output-drain policy.",
+                        "positive: passing a ProcessStartInfo produced by a shared wrapper is safer than string command interpolation."
+                    ],
+                    MatchOrigins = ["code"],
+                    Classifiers = [ProcessLaunchClassifier],
+                },
+                new(
+                    "process-argument-list",
+                    "ArgumentList",
+                    "Find process argument-list construction as positive evidence against shell or command-line interpolation.",
+                    ["audit", "security"],
+                    "Review whether every untrusted argument flows through ArgumentList rather than a shell-expanded command string.")
+                {
+                    Severity = "info",
+                    RiskEvidence =
+                    [
+                        "positive: ArgumentList avoids shell parsing for individual arguments when UseShellExecute is false.",
+                        "risk: argument-list evidence does not validate executable path trust, working directory, environment, or timeout behavior."
+                    ],
+                    MatchOrigins = ["code"],
+                    Classifiers = [ProcessLaunchClassifier],
+                },
+                new(
+                    "process-shell-execute",
+                    "UseShellExecute",
+                    "Find shell-execution toggles that decide whether the platform shell participates in process launch.",
+                    ["audit", "security"],
+                    "False positives include assertions that verify UseShellExecute is false.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: UseShellExecute=true can reintroduce shell expansion, file association behavior, and inherited shell state.",
+                        "positive: UseShellExecute=false with ArgumentList and redirected stream handling is preferred for subprocess boundaries."
+                    ],
+                    MatchOrigins = ["code"],
+                    Classifiers = [ProcessLaunchClassifier],
+                },
+                new(
+                    "process-working-directory",
+                    "WorkingDirectory",
+                    "Find process working-directory choices that may cross workspace, plugin, or installer trust boundaries.",
+                    ["audit", "security"],
+                    "False positives include assertions over already-normalized temporary directories.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: cwd controls relative path resolution for child processes and can drift across plugin, installer, or test-helper boundaries.",
+                        "positive: normalized workspace containment checks or explicit trusted system directories reduce risk."
+                    ],
+                    MatchOrigins = ["code"],
+                    Classifiers = [ProcessLaunchClassifier],
+                },
+                new(
+                    "process-redirect-output",
+                    "RedirectStandardOutput",
+                    "Find stdout redirection choices that should be paired with bounded draining and cancellation.",
+                    ["audit", "bug"],
+                    "False positives include tests that assert process-launch defaults.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: redirected stdout must be drained without unbounded buffering or deadlocking the child process.",
+                        "positive: bounded readers, concurrent stderr draining, cancellation, and timeout handling are safer evidence."
+                    ],
+                    MatchOrigins = ["code"],
+                    Classifiers = [ProcessLaunchClassifier],
+                },
+                new(
+                    "process-redirect-error",
+                    "RedirectStandardError",
+                    "Find stderr redirection choices that should be paired with bounded draining and sanitized diagnostics.",
+                    ["audit", "bug"],
+                    "False positives include tests that assert process-launch defaults.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: redirected stderr can deadlock or leak command diagnostics if it is not drained and sanitized deliberately.",
+                        "positive: bounded concurrent stderr draining plus CommandErrorWriter or DiagnosticSanitizer evidence lowers risk."
+                    ],
+                    MatchOrigins = ["code"],
+                    Classifiers = [ProcessLaunchClassifier],
+                },
+                new(
+                    "process-wait-for-exit",
+                    "WaitForExit",
+                    "Find process waits that may need timeout, cancellation, and output-drain review.",
+                    ["audit", "bug"],
+                    "False positives include bounded WaitForExitAsync calls with caller cancellation and explicit timeout handling.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: process waits can hang indefinitely or race output draining when cancellation and timeout policy are unclear.",
+                        "positive: WaitForExitAsync with a caller token, bounded timeout, and post-drain handling is safer evidence."
+                    ],
+                    MatchOrigins = ["code"],
+                    Classifiers = [ProcessLaunchClassifier],
+                },
+                new(
+                    "process-kill",
+                    "Kill(",
+                    "Find child-process termination paths that may need process-tree and cleanup review.",
+                    ["audit", "bug"],
+                    "False positives include tests that intentionally exercise termination behavior.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: child termination can leave process trees, temp files, or partial diagnostics behind without explicit cleanup policy.",
+                        "positive: bounded timeout branches, kill-entire-tree intent, and cleanup diagnostics make termination behavior easier to audit."
+                    ],
+                    MatchOrigins = ["code"],
+                    Classifiers = [ProcessLaunchClassifier],
+                },
+                new(
+                    "current-directory-boundary",
+                    "Environment.CurrentDirectory",
+                    "Find current-directory dependencies that may affect command, plugin, or embedded-host boundaries.",
+                    ["audit", "bug"],
+                    "False positives include tests that intentionally assert cwd behavior.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: relying on process cwd can make command behavior depend on host launch context or plugin side effects.",
+                        "positive: explicit project-root resolution and cwd drift diagnostics reduce ambiguity."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "set-current-directory",
+                    "SetCurrentDirectory",
+                    "Find process cwd mutations that may need restore, isolation, and concurrency review.",
+                    ["audit", "bug"],
+                    "False positives include isolated tests with try/finally restoration.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: mutating process cwd is process-wide and can race other command, plugin, or test-helper work.",
+                        "positive: try/finally restoration, serial test isolation, or avoiding cwd mutation altogether lowers risk."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
                     "plugin-activator",
                     "Activator.CreateInstance",
                     "Find plugin constructor paths that may need constructor side-effect and lifecycle review.",
@@ -1350,6 +1546,50 @@ internal static class SearchAuditRecipes
                         "positive: allowlisted types, explicit constructor contracts, and disposal/lifecycle handling are safer evidence."
                     ],
                     MatchOrigins = ["code"],
+                },
+                new(
+                    "plugin-term",
+                    "plugin",
+                    "Find broad plugin terminology that helps catch tokenization gaps around concrete plugin type names.",
+                    ["audit", "security"],
+                    "This is an intentionally broad discovery query; triage with match origins, file paths, and nearby concrete type names.")
+                {
+                    Severity = "low",
+                    RiskEvidence =
+                    [
+                        "risk: plugin discovery, trust gates, constructors, and load contexts execute extension code and need explicit boundaries.",
+                        "positive: broad plugin hits make CamelCase or concrete-type naming gaps visible during dogfood audits."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "hook-term",
+                    "hook",
+                    "Find broad hook terminology that helps catch tokenization gaps around post-extraction and git hook surfaces.",
+                    ["audit", "security"],
+                    "This is an intentionally broad discovery query; triage with match origins, hook type names, and callback budget evidence.")
+                {
+                    Severity = "low",
+                    RiskEvidence =
+                    [
+                        "risk: hooks can execute extension or git automation code and need clear trust, timeout, and diagnostics boundaries.",
+                        "positive: broad hook hits make CamelCase or concrete-type naming gaps visible during dogfood audits."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "trust-overrides-contract",
+                    "trust_overrides",
+                    "Find machine-readable trust override output contracts for plugin and hook trust-boundary review.",
+                    ["audit", "security"],
+                    "False positives include tests that only assert stable JSON field names.")
+                {
+                    Severity = "info",
+                    RiskEvidence =
+                    [
+                        "risk: trust override output must identify the opt-in surface without leaking raw local sensitive paths or secret-like values.",
+                        "positive: sanitized value, sanitized effective_path, environment variable, and reason fields make trust decisions auditable."
+                    ],
                 },
                 new(
                     "assembly-load-context",

@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
@@ -283,7 +284,7 @@ public static class HookCommandRunner
         Exception ex)
     {
         var message = $"{action} {ConsoleUi.FormatBoundedValue(path)} ({CommandErrorWriter.FormatSanitizedException(ex)}).";
-        warnings.Add(new HookCommandWarningJsonResult(category, path, message));
+        warnings.Add(new HookCommandWarningJsonResult(category, path, DiagnosticSanitizer.ForPath(path), message));
     }
 
     private static string BuildHookScript(string chainedHookPath, string projectPath)
@@ -335,7 +336,16 @@ fi
         if (json)
         {
             Console.WriteLine(JsonSerializer.Serialize(
-                new HookCommandJsonResult(status, message, projectPath, hookPath, chainedHookPath, hasWarnings ? warnings : null),
+                new HookCommandJsonResult(
+                    status,
+                    message,
+                    projectPath,
+                    hookPath,
+                    chainedHookPath,
+                    DiagnosticSanitizer.ForPath(projectPath),
+                    hookPath == null ? null : DiagnosticSanitizer.ForPath(hookPath),
+                    chainedHookPath == null ? null : DiagnosticSanitizer.ForPath(chainedHookPath),
+                    hasWarnings ? warnings : null),
                 CliJsonSerializerContextFactory.Create(jsonOptions).HookCommandJsonResult));
         }
         else
@@ -372,6 +382,7 @@ public sealed record HookCommandOptions(string? Command, string? ProjectPath, bo
 public sealed record HookCommandWarningJsonResult(
     [property: JsonPropertyName("category")] string Category,
     [property: JsonPropertyName("path")] string Path,
+    [property: JsonPropertyName("diagnostic_path")] string DiagnosticPath,
     [property: JsonPropertyName("message")] string Message);
 
 public sealed record HookCommandJsonResult(
@@ -380,4 +391,7 @@ public sealed record HookCommandJsonResult(
     string ProjectPath,
     string? HookPath,
     string? ChainedHookPath,
+    string DiagnosticProjectPath,
+    string? DiagnosticHookPath,
+    string? DiagnosticChainedHookPath,
     IReadOnlyList<HookCommandWarningJsonResult>? Warnings = null);
