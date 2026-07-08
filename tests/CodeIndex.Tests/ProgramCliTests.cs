@@ -530,8 +530,25 @@ public class ProgramCliTests
             Assert.Equal(string.Empty, importStderr);
             Assert.True(File.Exists(importedDbPath));
             using var document = JsonDocument.Parse(importStdout);
-            Assert.Equal("1", document.RootElement.GetProperty("api_version").GetString());
-            Assert.Equal(Path.GetFullPath(importedDbPath), document.RootElement.GetProperty("db_path").GetString());
+            var root = document.RootElement;
+            Assert.Equal("1", root.GetProperty("api_version").GetString());
+            Assert.Equal("success", root.GetProperty("status").GetString());
+            Assert.Equal(Path.GetFullPath(archivePath), root.GetProperty("archive_path").GetString());
+            Assert.Equal(Path.GetFullPath(importedDbPath), root.GetProperty("db_path").GetString());
+            Assert.Equal("import", root.GetProperty("mode").GetString());
+            Assert.False(root.GetProperty("dry_run").GetBoolean());
+            var phases = root.GetProperty("validation_phases")
+                .EnumerateArray()
+                .ToDictionary(
+                    phase => phase.GetProperty("phase").GetString()!,
+                    phase => phase.GetProperty("status").GetString()!,
+                    StringComparer.Ordinal);
+            Assert.Equal("success", phases["open_archive"]);
+            Assert.Equal("success", phases["manifest"]);
+            Assert.Equal("success", phases["database_entry"]);
+            Assert.Equal("success", phases["sha256"]);
+            Assert.Equal("success", phases["sqlite_validate"]);
+            Assert.Equal("success", phases["replace_db"]);
         }
         finally
         {
@@ -569,6 +586,7 @@ public class ProgramCliTests
             using var document = JsonDocument.Parse(dryRunStdout);
             var root = document.RootElement;
             Assert.Equal("success", root.GetProperty("status").GetString());
+            Assert.Equal("dry_run", root.GetProperty("mode").GetString());
             Assert.True(root.GetProperty("dry_run").GetBoolean());
             Assert.True(root.GetProperty("pruned_paths").GetBoolean());
             Assert.True(root.GetProperty("replacement_would_be_allowed").GetBoolean());
@@ -585,6 +603,77 @@ public class ProgramCliTests
             Assert.Equal("success", phases["sqlite_validate"]);
             Assert.Equal("success", phases["prune_paths"]);
             Assert.Equal("skipped", phases["replace_db"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [ProductionRuntimeFact]
+    public void ImportArchive_CheckJsonDistinguishesCheckMode_Issue4328()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_import_check_json");
+        try
+        {
+            var sourceDbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(sourceDbPath, "src/app.cs", "csharp", "class App { void Run() {} }\n");
+            var archivePath = Path.Combine(projectRoot, "codeindex.cdidx.zip");
+            var destinationDbPath = Path.Combine(projectRoot, "destination", "codeindex.db");
+            Directory.CreateDirectory(Path.GetDirectoryName(destinationDbPath)!);
+            File.WriteAllText(destinationDbPath, "existing db");
+
+            var (exportExit, _, exportStderr) = RunCliInSubprocess(["export", archivePath, "--db", sourceDbPath]);
+            var (checkExit, checkStdout, checkStderr) = RunCliInSubprocess([
+                "import", archivePath, "--db", destinationDbPath, "--check", "--json"
+            ]);
+
+            Assert.True(exportExit == 0, exportStderr);
+            Assert.Equal(CommandExitCodes.Success, checkExit);
+            Assert.Equal(string.Empty, checkStderr);
+            Assert.Equal("existing db", File.ReadAllText(destinationDbPath));
+
+            using var document = JsonDocument.Parse(checkStdout);
+            var root = document.RootElement;
+            Assert.Equal("success", root.GetProperty("status").GetString());
+            Assert.Equal("check", root.GetProperty("mode").GetString());
+            Assert.True(root.GetProperty("dry_run").GetBoolean());
+            var replaceDbPhase = root.GetProperty("validation_phases")
+                .EnumerateArray()
+                .Single(phase => phase.GetProperty("phase").GetString() == "replace_db");
+            Assert.Equal("skipped", replaceDbPhase.GetProperty("status").GetString());
+            Assert.Contains("check mode", replaceDbPhase.GetProperty("message").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [ProductionRuntimeFact]
+    public void ImportArchive_InvalidArchiveJsonReportsRootCause_Issue4328()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_import_invalid_archive");
+        try
+        {
+            var archivePath = Path.Combine(projectRoot, "not-an-archive.zip");
+            var dbPath = Path.Combine(projectRoot, "imported", "codeindex.db");
+            File.WriteAllText(archivePath, "not a zip archive");
+
+            var (exitCode, stdout, stderr) = RunCliInSubprocess([
+                "import", archivePath, "--db", dbPath, "--json"
+            ]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var root = document.RootElement;
+            Assert.Equal("error", root.GetProperty("status").GetString());
+            Assert.Equal("import", root.GetProperty("command").GetString());
+            Assert.Equal("open_archive", root.GetProperty("phase").GetString());
+            Assert.Equal("import_failed", root.GetProperty("error_code").GetString());
+            Assert.Equal("invalid_archive", root.GetProperty("root_cause").GetString());
+            Assert.False(File.Exists(dbPath));
         }
         finally
         {
