@@ -17,7 +17,8 @@ internal sealed record WorkspaceManifest(
 internal sealed record WorkspaceListJsonResult(
     WorkspaceManifest? Manifest,
     IReadOnlyList<WorkspaceMember> Members,
-    WorkspaceManifestStatusJsonResult ManifestStatus)
+    WorkspaceManifestStatusJsonResult ManifestStatus,
+    ActiveWorkspaceJsonResult? ActiveWorkspaceStatus = null)
 {
     [JsonPropertyName("manifest_found")]
     public bool ManifestFound => Manifest is not null;
@@ -61,6 +62,69 @@ internal sealed record ActiveWorkspaceJsonResult
                 Reason = "active",
                 Code = "active_workspace_set",
             };
+
+    internal static ActiveWorkspaceJsonResult FromWorkspaceStatus(
+        ActiveWorkspaceState? state,
+        string? path,
+        WorkspaceManifest? manifest)
+    {
+        var result = From(state, path);
+        if (state is null
+            || manifest is null
+            || string.Equals(state.Name, "default", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(state.Name, "env", StringComparison.OrdinalIgnoreCase))
+        {
+            return result;
+        }
+
+        var member = FindActiveManifestMember(state, manifest);
+        if (member is null)
+        {
+            return result with
+            {
+                Status = "stale",
+                Reason = "manifest_member_not_found",
+                Code = "active_workspace_member_not_found",
+            };
+        }
+
+        if (!member.Exists)
+        {
+            return result with
+            {
+                Status = "missing",
+                Reason = "manifest_member_missing",
+                Code = "active_workspace_member_missing",
+            };
+        }
+
+        return result;
+    }
+
+    private static WorkspaceMember? FindActiveManifestMember(ActiveWorkspaceState state, WorkspaceManifest manifest)
+    {
+        var comparison = PathCasing.ComparisonFor(manifest.Root);
+        var singleStrategy = string.Equals(manifest.IndexStrategy, "single", StringComparison.OrdinalIgnoreCase);
+        foreach (var member in manifest.Members)
+        {
+            if (singleStrategy)
+            {
+                if (string.Equals(System.IO.Path.GetFileName(member.Path), state.Name, comparison)
+                    && PathCasing.PathsEqual(manifest.Root, state.Root)
+                    && PathCasing.PathsEqual(member.DbPath, state.DbPath))
+                {
+                    return member;
+                }
+            }
+            else if (PathCasing.PathsEqual(member.Path, state.Root)
+                     && PathCasing.PathsEqual(member.DbPath, state.DbPath))
+            {
+                return member;
+            }
+        }
+
+        return null;
+    }
 }
 
 internal sealed record ConfigShowJsonResult(

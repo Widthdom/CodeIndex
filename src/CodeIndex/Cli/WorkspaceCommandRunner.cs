@@ -17,14 +17,14 @@ internal static class WorkspaceCommandRunner
         return args[0] switch
         {
             "list" => List(json, jsonOptions),
-            "status" => List(json, jsonOptions),
+            "status" => List(json, jsonOptions, includeActiveWorkspaceStatus: true),
             "current" => Current(json, jsonOptions),
             "use" => Use(args[1..], json, jsonOptions),
             _ => CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, "Unknown workspace command.", CommandExitCodes.UsageError, "use `cdidx workspace list`, `cdidx workspace use <name>`, or `cdidx workspace current`.")
         };
     }
 
-    private static int List(bool json, JsonSerializerOptions jsonOptions)
+    private static int List(bool json, JsonSerializerOptions jsonOptions, bool includeActiveWorkspaceStatus = false)
     {
         var discovery = WorkspaceManifestLoader.Discover(Environment.CurrentDirectory);
         if (discovery.Path == null)
@@ -37,7 +37,13 @@ internal static class WorkspaceCommandRunner
                     null,
                     discovery.SearchedPaths,
                     discovery.SupportedFiles);
-                Console.WriteLine(JsonSerializer.Serialize(new WorkspaceListJsonResult(null, Array.Empty<WorkspaceMember>(), manifestStatus), jsonOptions));
+                Console.WriteLine(JsonSerializer.Serialize(
+                    new WorkspaceListJsonResult(
+                        null,
+                        Array.Empty<WorkspaceMember>(),
+                        manifestStatus,
+                        BuildActiveWorkspaceStatus(includeActiveWorkspaceStatus, manifest: null)),
+                    jsonOptions));
             }
             else
                 Console.WriteLine("No cdidx.workspace.json or .cdidx-workspace.json found.");
@@ -62,7 +68,13 @@ internal static class WorkspaceCommandRunner
                 manifest.Path,
                 discovery.SearchedPaths,
                 discovery.SupportedFiles);
-            Console.WriteLine(JsonSerializer.Serialize(new WorkspaceListJsonResult(manifest, manifest.Members, manifestStatus), jsonOptions));
+            Console.WriteLine(JsonSerializer.Serialize(
+                new WorkspaceListJsonResult(
+                    manifest,
+                    manifest.Members,
+                    manifestStatus,
+                    BuildActiveWorkspaceStatus(includeActiveWorkspaceStatus, manifest)),
+                jsonOptions));
             return CommandExitCodes.Success;
         }
 
@@ -72,6 +84,11 @@ internal static class WorkspaceCommandRunner
             Console.WriteLine($"  {(member.Exists ? "ok" : "missing")}  {member.Path}  ->  {member.DbPath}");
         return CommandExitCodes.Success;
     }
+
+    private static ActiveWorkspaceJsonResult? BuildActiveWorkspaceStatus(bool include, WorkspaceManifest? manifest)
+        => include
+            ? ActiveWorkspaceJsonResult.FromWorkspaceStatus(ActiveWorkspace.Load(), path: null, manifest)
+            : null;
 
     private static int Current(bool json, JsonSerializerOptions jsonOptions)
     {
