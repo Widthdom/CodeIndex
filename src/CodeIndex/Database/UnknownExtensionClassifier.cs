@@ -309,7 +309,7 @@ internal static class UnknownExtensionClassifier
         var fileName = Path.GetFileName(normalizedPath).ToLowerInvariant();
         var lowerPath = normalizedPath.ToLowerInvariant();
 
-        if (fileName is ".git" or ".gitattributes" or ".gitkeep" || lowerPath.StartsWith(".git/", StringComparison.Ordinal))
+        if (fileName is ".git" or ".gitattributes" or ".gitignore" or ".gitkeep" or ".cdidxignore" || lowerPath.StartsWith(".git/", StringComparison.Ordinal))
             return ("repository_metadata", "ignore_configuration");
         if (lowerPath.StartsWith("licenses/", StringComparison.Ordinal) || fileName.Contains("license", StringComparison.Ordinal))
             return ("license", "ignore_configuration");

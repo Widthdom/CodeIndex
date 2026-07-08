@@ -30,7 +30,7 @@ internal static partial class ProgramRunner
             return true;
         }
 
-        if (args[0] is "--help-all" or "--help-extended")
+        if (args[0] is "--help-all" or "--help-extended" or "help-all" or "help-extended")
         {
             ConsoleUi.PrintUsageFull(showBanner: true);
             exitCode = CommandExitCodes.Success;

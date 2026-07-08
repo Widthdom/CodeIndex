@@ -131,6 +131,12 @@ public static partial class QueryCommandRunner
                 "`state=stale`, `state=head_changed`, `state=check_unavailable`, or `state=unchecked` means consumers should inspect `state_reason`, `indexed_head_source`, and the nested head fields before trusting freshness-sensitive results.",
                 "Use this summary for machine routing, and use `indexed_head_sha` over legacy `indexed_head_commit` when `indexed_head_source=latest_index`."),
             new(
+                "index_matches_workspace",
+                "Workspace freshness check",
+                "`true` means `status --check` compared the current workspace with the index and found no missing, changed, deleted, or stale tracked files.",
+                "`false` means the index does not fully match the workspace, and absence means the workspace check was not requested or could not run.",
+                "Run `cdidx status --check --json` for mismatch details, then run `cdidx index <projectPath>` to refresh the index."),
+            new(
                 "path_case_sensitive",
                 "Filesystem case sensitivity",
                 "`true` means the indexed workspace path comparison is case-sensitive; `false` means case-insensitive.",

@@ -272,7 +272,8 @@ public class ConsoleUiTests
         Assert.Contains("                              run `cdidx backfill-fold` or check fold_ready.", output);
         Assert.Contains("--kind <kind>              definition/symbols/outline/hotspots/unused: symbol kind; references: reference kind (call/instantiate/subscribe/attribute/annotation/bcl_regex_without_timeout); callers/callees: call-graph kinds only (call/instantiate/subscribe — metadata kinds rejected, use references instead); validate: issue kind", output);
         Assert.Contains("--severity <s>             validate only: filter issues by severity: info, warning, error", output);
-        Assert.Contains("--count                    Count only; search/definition/references/callers/callees/symbols/files/find/unused/hotspots ignore --limit, impact still uses visible page counts", output);
+        Assert.Contains("--count                    Count only; result limits are ignored by count", output);
+        Assert.Contains("scan caps can still mark approximate counts as degraded", output);
         Assert.Contains("--no-dedup                 search only: return every raw overlapping chunk hit (debug/density)", output);
         Assert.Contains("--commits <commit-ref> [commit-ref ...]", output);
         Assert.Contains("Update only files changed in the specified git", output);
@@ -284,9 +285,10 @@ public class ConsoleUiTests
         Assert.Contains("cdidx excerpt <path[:line|:start-end]> [--line <line>|--start <line>|--start-line <line>] [--end <line>|--end-line <line>] [--context <n>|--before <n>|--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json] [--no-semantic-tokens] [--max-json-bytes <n>] [--verbose]", output);
         Assert.Contains("--focus-column <n>         find/excerpt: focus a specific 1-based column", output);
         Assert.Contains("--focus-line <line>        find/excerpt: focus a specific line", output);
-        Assert.Contains("cdidx map [--db <path>] [--json] [--format <text|json|compact|issue-drafts>] [--pretty] [--compact] [--summary-only] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--bytes] [--sections <tree,languages,hotspots,metrics>] [--depth <n>] [--min-entrypoint-confidence <0.0..1.0>] [--max-json-bytes <n>]", output);
-        Assert.Contains("cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json[=array]] [--format <text|json|count|compact|lsp|qf|sarif>] [--summary-only] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--sort <hotspot|references|size|complexity|path>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]", output);
-        Assert.Contains("--sort <mode>              Symbols/outline: order audit output by a ranking signal; outline also accepts source, kind, span, and name", output);
+        Assert.Contains("cdidx map [--db <path>] [--json] [--format <text|json|compact|issue-drafts>] [--pretty] [--compact] [--summary-only] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--bytes] [--sections <summary,tree,languages,hotspots,metrics|list>] [--depth <n>] [--min-entrypoint-confidence <0.0..1.0>] [--max-json-bytes <n>]", output);
+        Assert.Contains("cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json[=array]] [--compact] [--format <text|json|count|compact|lsp|qf|sarif>] [--summary-only] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--sort <hotspot|references|size|complexity|path>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]", output);
+        Assert.Contains("--sort <mode>              Symbols/outline: order audit output by a ranking", output);
+        Assert.Contains("source, kind, references, size, complexity, path, and name", output);
         Assert.Contains("cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json[=ndjson|array]] [--format <text|json|count|compact>] [--summary-only] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]", output);
         Assert.Contains("cdidx validate [--db <path>] [--json[=array]] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--severity <info|warning|error>] [--path <glob>]", output);
         Assert.Contains("Note: if a query itself starts with '-', pass it with --query <query> or -- <query>", output);
@@ -406,7 +408,7 @@ public class ConsoleUiTests
         var output = CaptureFullUsageOutput(showBanner: false);
 
         AssertSearchUsageFragments(output);
-        Assert.Contains("cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json[=array]] [--format <text|json|count|compact|lsp|qf|sarif>] [--summary-only] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--sort <hotspot|references|size|complexity|path>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]", output);
+        Assert.Contains("cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json[=array]] [--compact] [--format <text|json|count|compact|lsp|qf|sarif>] [--summary-only] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--sort <hotspot|references|size|complexity|path>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]", output);
         Assert.Contains("cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json[=ndjson|array]] [--format <text|json|count|compact>] [--summary-only] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]", output);
         Assert.Contains("cdidx hotspots [--db <path>] [--json] [--summary-only] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]", output);
         Assert.Contains("cdidx unused", output);
@@ -1373,6 +1375,8 @@ public class ConsoleUiTests
         Assert.Contains("batch", tokens);
         Assert.Contains("cmd", tokens);
         Assert.Contains("yml", tokens);
+        Assert.DoesNotContain("gnu assembler", langs);
+        Assert.DoesNotContain("visual basic", langs);
     }
 
     [Theory]

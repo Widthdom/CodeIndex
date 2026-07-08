@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
@@ -23,7 +24,9 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("languages", options))
             return CommandExitCodes.UsageError;
-        var json = options.Json;
+        if (TryWriteUnsupportedOutputFormat("languages", options, LanguageOutputFormats, "Use `--format json` for language rows or `--format count` for aggregate capability totals."))
+            return CommandExitCodes.UsageError;
+        var json = options.Json || options.CountOnly || options.OutputFormat == OutputFormatCount || options.SummaryOnly;
 
         var langExtensions = FileIndexer.GetLanguageExtensions();
         var symbolLangs = SymbolExtractor.GetSupportedLanguages();
@@ -86,6 +89,14 @@ public static partial class QueryCommandRunner
                 .Where(kv => options.LanguageCapabilities.All(capability => LanguageMatchesCapability(kv.Value, capability)))
                 .OrderBy(kv => kv.Key, StringComparer.Ordinal)
                 .ToList();
+
+            if (json && (options.SummaryOnly || options.CountOnly || options.OutputFormat == OutputFormatCount))
+            {
+                CommandOutputWriter.WriteJsonNode(
+                    BuildLanguageSummaryPayload(filtered, sorted.Count, indexedLanguageCounts, options),
+                    jsonOptions);
+                return CommandExitCodes.Success;
+            }
 
             if (json)
             {
@@ -171,7 +182,8 @@ public static partial class QueryCommandRunner
 
     private static bool ShouldLoadLanguageIndexedCounts(QueryCommandOptions options)
     {
-        if (!HasLanguageLookup(options))
+        var shouldLoadForDbBackedSummary = options.SummaryOnly || options.CountOnly || options.OutputFormat == OutputFormatCount;
+        if (!HasLanguageLookup(options) && !shouldLoadForDbBackedSummary)
             return false;
         if (options.DbPathExplicit)
             return true;
@@ -219,9 +231,12 @@ public static partial class QueryCommandRunner
     private static bool LanguageMatchesCapability(LanguageSupportInfo language, string capability)
         => capability switch
         {
+            LanguageCapabilityAll => language.Symbols && language.References && language.Graph,
+            LanguageCapabilityNone => !language.Symbols && !language.References && !language.Graph,
             LanguageCapabilitySymbols => language.Symbols,
             LanguageCapabilityReferences => language.References,
             LanguageCapabilityGraph => language.Graph,
+            LanguageCapabilityMissingAny => language.CapabilityGaps.Count > 0,
             LanguageCapabilityMissingSymbols => !language.Symbols,
             LanguageCapabilityMissingReferences => !language.References,
             LanguageCapabilityMissingGraph => !language.Graph,
@@ -236,9 +251,92 @@ public static partial class QueryCommandRunner
             LanguageCapabilityGraph or
             LanguageCapabilityReferences or
             LanguageCapabilitySymbols or
+            LanguageCapabilityAll or
+            LanguageCapabilityNone or
+            LanguageCapabilityMissingAny or
             LanguageCapabilityMissingGraph or
             LanguageCapabilityMissingReferences or
             LanguageCapabilityMissingSymbols or
             LanguageCapabilitySearchOnly;
+    }
+
+    private static JsonObject BuildLanguageSummaryPayload(
+        IReadOnlyList<KeyValuePair<string, LanguageSupportInfo>> languages,
+        int totalLanguageCount,
+        IReadOnlyDictionary<string, long>? indexedLanguageCounts,
+        QueryCommandOptions options)
+    {
+        var payload = new JsonObject
+        {
+            ["api_version"] = JsonOutputContract.ApiVersion,
+            ["count"] = languages.Count,
+            ["language_count"] = languages.Count,
+            ["total_language_count"] = totalLanguageCount,
+            ["capability_counts"] = BuildLanguageCapabilityCounts(languages),
+        };
+
+        if (options.OutputFormat == OutputFormatCount)
+            payload["format"] = OutputFormatCount;
+        if (options.SummaryOnly)
+            payload["summary_only"] = true;
+        if (options.LanguagesIndexedOnly)
+            payload["indexed_only"] = true;
+        if (options.LanguageCapabilities.Count > 0)
+            payload["capability_filters"] = BuildStringArray(options.LanguageCapabilities);
+        if (options.LanguageLookups.Count > 0)
+            payload["language_filters"] = BuildStringArray(options.LanguageLookups);
+        if (options.LanguageExtensionLookups.Count > 0)
+            payload["extension_filters"] = BuildStringArray(options.LanguageExtensionLookups);
+        if (options.LanguageAliasLookups.Count > 0)
+            payload["alias_filters"] = BuildStringArray(options.LanguageAliasLookups);
+
+        if (indexedLanguageCounts != null)
+        {
+            var indexedLanguages = languages
+                .Where(kv => GetIndexedLanguageCount(indexedLanguageCounts, kv.Key).GetValueOrDefault() > 0)
+                .ToList();
+            long indexedFileCount = 0;
+            foreach (var (lang, _) in indexedLanguages)
+                indexedFileCount += GetIndexedLanguageCount(indexedLanguageCounts, lang).GetValueOrDefault();
+
+            payload["indexed_language_count"] = indexedLanguages.Count;
+            payload["indexed_file_count"] = indexedFileCount;
+            payload["indexed_capability_counts"] = BuildLanguageCapabilityCounts(indexedLanguages);
+        }
+
+        return payload;
+    }
+
+    private static JsonObject BuildLanguageCapabilityCounts(IReadOnlyList<KeyValuePair<string, LanguageSupportInfo>> languages)
+    {
+        static bool HasAll(LanguageSupportInfo language)
+            => language.Symbols && language.References && language.Graph;
+        static bool HasNone(LanguageSupportInfo language)
+            => !language.Symbols && !language.References && !language.Graph;
+        static bool IsSymbolOnly(LanguageSupportInfo language)
+            => language.Symbols && !language.References && !language.Graph;
+
+        return new JsonObject
+        {
+            ["all"] = languages.Count(kv => HasAll(kv.Value)),
+            ["none"] = languages.Count(kv => HasNone(kv.Value)),
+            ["search_only"] = languages.Count(kv => HasNone(kv.Value)),
+            ["symbols"] = languages.Count(kv => kv.Value.Symbols),
+            ["references"] = languages.Count(kv => kv.Value.References),
+            ["graph"] = languages.Count(kv => kv.Value.Graph),
+            ["symbol_only"] = languages.Count(kv => IsSymbolOnly(kv.Value)),
+            ["missing_any"] = languages.Count(kv => kv.Value.CapabilityGaps.Count > 0),
+            ["missing_symbols"] = languages.Count(kv => !kv.Value.Symbols),
+            ["missing_references"] = languages.Count(kv => !kv.Value.References),
+            ["missing_graph"] = languages.Count(kv => !kv.Value.Graph),
+        };
+    }
+
+    private static JsonArray BuildStringArray(IEnumerable<string> values)
+    {
+        var array = new JsonArray();
+        foreach (var value in values)
+            array.Add(value);
+        return array;
     }
 }

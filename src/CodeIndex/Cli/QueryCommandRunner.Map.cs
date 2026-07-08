@@ -30,11 +30,13 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("map", options))
             return CommandExitCodes.UsageError;
+        if (options.MapSections?.Contains("list", StringComparer.Ordinal) == true)
+            return WriteRepoMapSectionsList(options, jsonOptions);
         if (options.MapSummaryOnly && options.MapSections != null)
             return CommandErrorWriter.Write(
                 "--summary-only cannot be combined with --sections.",
                 CommandExitCodes.UsageError,
-                "choose --summary-only for aggregate fields only, or --sections <tree,languages,hotspots,metrics> for selected detail sections.",
+                "choose --summary-only for aggregate fields only, --sections list to discover sections, or --sections <summary,tree,languages,hotspots,metrics> for selected detail sections.",
                 ConsoleUi.GetUsageLine("map"));
         var mapEmitsJson = options.Json || options.OutputFormat is OutputFormatCompact or OutputFormatIssueDrafts;
         if (options.MaxJsonBytes.HasValue && !mapEmitsJson)
@@ -152,6 +154,41 @@ public static partial class QueryCommandRunner
     private static bool MapSectionEnabled(QueryCommandOptions options, string section)
         => !options.MapSummaryOnly && (options.MapSections == null || options.MapSections.Contains(section, StringComparer.Ordinal));
 
+    private static int WriteRepoMapSectionsList(QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+    {
+        var sections = new[] { "summary", "tree", "languages", "hotspots", "metrics" };
+        if (options.Json || options.OutputFormat is OutputFormatJson or OutputFormatCompact or OutputFormatIssueDrafts)
+        {
+            var payload = new JsonObject
+            {
+                ["api_version"] = JsonOutputContract.ApiVersion,
+                ["sections"] = BuildStringArrayJson(sections),
+                ["aliases"] = new JsonObject
+                {
+                    ["modules"] = "tree",
+                    ["module"] = "tree",
+                    ["entrypoints"] = "hotspots",
+                    ["entrypoint"] = "hotspots",
+                    ["largest-files"] = "metrics",
+                    ["largest"] = "metrics",
+                },
+                ["section_properties"] = BuildRepoMapSectionProperties(sections),
+            };
+            CommandOutputWriter.WriteJsonNode(payload, jsonOptions);
+        }
+        else
+        {
+            Console.WriteLine("summary");
+            Console.WriteLine("tree");
+            Console.WriteLine("languages");
+            Console.WriteLine("hotspots");
+            Console.WriteLine("metrics");
+            CommandErrorWriter.WriteStderr("Aliases: modules=tree, entrypoints=hotspots, largest-files=metrics");
+        }
+
+        return CommandExitCodes.Success;
+    }
+
     private static void ApplyRepoMapDepth(RepoMapResult map, int depth)
     {
         map.Modules = map.Modules
@@ -267,6 +304,7 @@ public static partial class QueryCommandRunner
             .Where(IsRepoMapOversizedFileCandidate)
             .Select(BuildRepoMapIssueDraftJson)
             .ToArray();
+        var summaryOnly = options.MapSummaryOnly || options.SummaryOnly;
         var sourceLimit = options.Compact ? GetCompactSourceLimit(GetCompactSectionLimit(options)) : options.Limit;
         var largestFilesTruncated = map.FileCount > map.LargestFiles.Count && map.LargestFiles.Count >= sourceLimit;
         var payload = new JsonObject
@@ -274,7 +312,10 @@ public static partial class QueryCommandRunner
             ["api_version"] = JsonOutputContract.ApiVersion,
             ["format"] = OutputFormatIssueDrafts,
             ["count"] = candidates.Length,
-            ["issue_drafts"] = new JsonArray(candidates),
+            ["emitted_count"] = summaryOnly ? 0 : candidates.Length,
+            ["omitted_count"] = summaryOnly ? candidates.Length : 0,
+            ["truncated"] = largestFilesTruncated,
+            ["issue_drafts"] = summaryOnly ? new JsonArray() : new JsonArray(candidates),
             ["groups"] = BuildRepoMapIssueDraftGroupsJson(candidates),
             ["thresholds"] = new JsonObject
             {
@@ -294,6 +335,20 @@ public static partial class QueryCommandRunner
             },
             ["query_context"] = BuildQueryContextJson(options, jsonOptions),
         };
+        if (summaryOnly)
+        {
+            payload["summary_only"] = true;
+            if (candidates.Length > 0)
+            {
+                payload["summary_only_omitted_count"] = candidates.Length;
+                payload["omitted_by"] = new JsonArray("summary_only");
+            }
+        }
+        if (largestFilesTruncated)
+        {
+            payload["row_limit_reached"] = true;
+            payload["limit_omitted_count"] = Math.Max(0, map.FileCount - map.LargestFiles.Count);
+        }
         if (map.ProjectRoot != null)
             payload["project_root"] = map.ProjectRoot;
         if (map.GitHead != null)
@@ -411,6 +466,7 @@ public static partial class QueryCommandRunner
 
     private static readonly IReadOnlyDictionary<string, string[]> RepoMapSectionJsonProperties = new Dictionary<string, string[]>(StringComparer.Ordinal)
     {
+        ["summary"] = RepoMapSummaryJsonProperties.ToArray(),
         ["languages"] = ["languages"],
         ["tree"] = ["modules"],
         ["hotspots"] = ["top_files", "symbol_rich_files", "reference_rich_files", "entrypoints"],

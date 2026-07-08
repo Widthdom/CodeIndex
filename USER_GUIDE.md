@@ -2121,8 +2121,10 @@ Use `cdidx languages --json` as the live capability probe. JSON rows expose
 Add `--indexed-only` when you only want languages present in the current DB, add
 `--language <name>`, `--extension <ext>`, or `--alias <alias>` when you need one
 disambiguated language row, and add
-`--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only`
-when auditing a specific structured capability or capability gap. This matrix
+`--capability all|none|graph|references|symbols|missing-any|missing-graph|missing-references|missing-symbols|search-only`
+when auditing a specific structured capability or capability gap. Use
+`--format count` or `--summary-only --json` when automation needs only compact
+capability totals instead of the full language row matrix. This matrix
 explains the common extraction behavior so users know when to trust structured
 commands and when to fall back to `search`.
 Rows with unsupported references or graph queries include `unsupported_guidance`
@@ -4886,7 +4888,8 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 `--language`、`--extension`、`--alias` による DB 参照付き lookup では `indexed_file_count` も含まれます。
 現在の DB に存在する言語だけを見たい場合は `--indexed-only`、言語名・拡張子・表示 alias から 1 行を特定したい場合は
 `--language <name>`、`--extension <ext>`、`--alias <alias>`、特定の構造化 capability や capability gap を監査する場合は
-`--capability graph|references|symbols|missing-graph|missing-references|missing-symbols|search-only` を追加します。この matrix は、構造化 command を信頼できる場面と
+`--capability all|none|graph|references|symbols|missing-any|missing-graph|missing-references|missing-symbols|search-only` を追加します。
+自動化で full row matrix ではなく小さな capability 集計だけが必要な場合は、`--format count` または `--summary-only --json` を使います。この matrix は、構造化 command を信頼できる場面と
 `search` に戻るべき場面を判断するための概要です。
 参照抽出やグラフクエリが未対応の行では、`unsupported_guidance` に未対応の機能、説明メッセージ、
 次に安全に使う `recommended_commands` が入ります。

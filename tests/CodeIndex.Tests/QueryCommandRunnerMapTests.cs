@@ -25,6 +25,37 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunMap_ParseSectionAliases_StoresCanonicalSelectors_Issue4317()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["--json", "--sections", "summary,modules,entrypoints,largest-files"],
+            jsonDefault: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
+
+        Assert.Equal(["summary", "tree", "hotspots", "metrics"], options.MapSections);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void RunMap_SectionsListJson_PrintsDiscoverableSectionMetadata_Issue4317()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+            ["--json", "--sections", "list"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var root = document.RootElement;
+
+        Assert.Contains("tree", root.GetProperty("sections").EnumerateArray().Select(section => section.GetString()));
+        Assert.Contains("hotspots", root.GetProperty("sections").EnumerateArray().Select(section => section.GetString()));
+        Assert.Equal("hotspots", root.GetProperty("aliases").GetProperty("entrypoints").GetString());
+        Assert.True(root.GetProperty("section_properties").TryGetProperty("summary", out _));
+    }
+
+    [Fact]
     public void RunMap_ParseSummaryOnly_StoresSelector()
     {
         var options = QueryCommandRunner.ParseArgs(
@@ -174,6 +205,41 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(1, largestFiles.GetProperty("source_limit").GetInt32());
             Assert.Equal(2, largestFiles.GetProperty("total_files").GetInt32());
             Assert.True(largestFiles.GetProperty("truncated").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunMap_FormatIssueDraftsSummaryOnly_OmitsRowsButKeepsGroups_Issue4317()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_issue_drafts_summary");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var largerFile = string.Join('\n', Enumerable.Range(1, QueryCommandRunner.MapIssueDraftLineThreshold + 20).Select(line => $"// large {line}")) + "\n";
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/LargeOne.cs", "csharp", largerFile);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--format", "issue-drafts", "--summary-only", "--json", "--limit", "10", "--exclude-tests"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+
+            Assert.Equal("issue-drafts", root.GetProperty("format").GetString());
+            Assert.True(root.GetProperty("summary_only").GetBoolean());
+            Assert.Equal(1, root.GetProperty("count").GetInt32());
+            Assert.Equal(0, root.GetProperty("emitted_count").GetInt32());
+            Assert.Equal(1, root.GetProperty("omitted_count").GetInt32());
+            Assert.Equal(1, root.GetProperty("summary_only_omitted_count").GetInt32());
+            Assert.Empty(root.GetProperty("issue_drafts").EnumerateArray());
+            Assert.Equal(1, root.GetProperty("groups").GetProperty("oversized_file").GetProperty("count").GetInt32());
+            Assert.Equal("summary_only", Assert.Single(root.GetProperty("omitted_by").EnumerateArray().ToList()).GetString());
         }
         finally
         {

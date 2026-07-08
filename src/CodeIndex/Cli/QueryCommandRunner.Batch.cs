@@ -429,6 +429,8 @@ public static partial class QueryCommandRunner
             "outline" => RunOutline(subArgs, jsonOptions),
             "status" => RunStatus(subArgs, jsonOptions),
             "validate" => RunValidate(subArgs, jsonOptions),
+            "languages" => RunLanguages(subArgs, jsonOptions),
+            "recipes" => RunBatchRecipesCommand(subArgs, jsonOptions),
             "impact" => RunImpact(subArgs, jsonOptions),
             "deps" => RunDeps(subArgs, jsonOptions),
             "unused" => RunUnused(subArgs, jsonOptions),
@@ -436,10 +438,18 @@ public static partial class QueryCommandRunner
             _ => WriteBatchUnsupportedCommand(commandName),
         };
 
+    private static int RunBatchRecipesCommand(string[] subArgs, JsonSerializerOptions jsonOptions)
+    {
+        var searchArgs = new string[subArgs.Length + 1];
+        searchArgs[0] = "--list-recipes";
+        Array.Copy(subArgs, 0, searchArgs, 1, subArgs.Length);
+        return RunSearch(searchArgs, jsonOptions);
+    }
+
     private static int WriteBatchUnsupportedCommand(string commandName)
     {
-        CommandErrorWriter.WriteStderr($"Error: batch only supports query commands; '{commandName}' is not supported.");
-        CommandErrorWriter.WriteStderr("Hint: use one of search, definition, references, callers, callees, symbols, files, find, excerpt, map, inspect, outline, status, validate, impact, deps, unused, or hotspots.");
+        CommandErrorWriter.WriteStderr($"Error: batch only supports query and read-only discovery commands; '{commandName}' is not supported.");
+        CommandErrorWriter.WriteStderr("Hint: use one of search, definition, references, callers, callees, symbols, files, find, excerpt, map, inspect, outline, status, validate, languages, recipes, impact, deps, unused, or hotspots.");
         return CommandExitCodes.UsageError;
     }
 

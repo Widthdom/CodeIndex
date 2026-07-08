@@ -986,7 +986,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("unknown", unsupportedRecord.GetProperty("command").GetString());
             Assert.Equal(CommandExitCodes.UsageError, unsupportedRecord.GetProperty("exit_code").GetInt32());
             Assert.Equal(string.Empty, unsupportedRecord.GetProperty("stdout").GetString());
-            Assert.Contains("batch only supports query commands", unsupportedRecord.GetProperty("stderr").GetString());
+            Assert.Contains("batch only supports query and read-only discovery commands", unsupportedRecord.GetProperty("stderr").GetString());
 
             var summary = summaryDocument.RootElement;
             Assert.Equal("batch_summary", summary.GetProperty("record").GetString());
@@ -1049,13 +1049,66 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("error", unsupportedRecord.GetProperty("status").GetString());
             Assert.Equal("unknown", unsupportedRecord.GetProperty("command").GetString());
             Assert.Equal(string.Empty, unsupportedRecord.GetProperty("stdout").GetString());
-            Assert.Contains("batch only supports query commands", unsupportedRecord.GetProperty("stderr").GetString());
+            Assert.Contains("batch only supports query and read-only discovery commands", unsupportedRecord.GetProperty("stderr").GetString());
 
             var summary = summaryDocument.RootElement;
             Assert.Equal("batch_summary", summary.GetProperty("record").GetString());
             Assert.Equal(2, summary.GetProperty("commands_processed").GetInt32());
             Assert.Equal(0, summary.GetProperty("line_errors").GetInt32());
             Assert.Equal(1, summary.GetProperty("command_failures").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunBatch_JsonSummaryAllowsReadOnlyDiscoveryCommands_Issue4317()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_discovery_commands");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "public class App { }\n");
+            var input = """
+            ["languages","--format","count"]
+            ["recipes","--names"]
+
+            """;
+
+            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+                input,
+                () => QueryCommandRunner.RunBatch(["--db", dbPath, "--json-summary"], _jsonOptions));
+            var lines = ParseJsonLines(stdout);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(3, lines.Count);
+            using var languagesRecordDocument = lines[0];
+            using var recipesRecordDocument = lines[1];
+            using var summaryDocument = lines[2];
+
+            var languagesRecord = languagesRecordDocument.RootElement;
+            Assert.Equal("batch_result", languagesRecord.GetProperty("record").GetString());
+            Assert.Equal("ok", languagesRecord.GetProperty("status").GetString());
+            Assert.Equal("languages", languagesRecord.GetProperty("command").GetString());
+            using (var languagesOutput = ParseJsonOutput(languagesRecord.GetProperty("stdout").GetString()!))
+            {
+                Assert.Equal("count", languagesOutput.RootElement.GetProperty("format").GetString());
+                Assert.True(languagesOutput.RootElement.GetProperty("language_count").GetInt32() > 0);
+            }
+
+            var recipesRecord = recipesRecordDocument.RootElement;
+            Assert.Equal("batch_result", recipesRecord.GetProperty("record").GetString());
+            Assert.Equal("ok", recipesRecord.GetProperty("status").GetString());
+            Assert.Equal("recipes", recipesRecord.GetProperty("command").GetString());
+            Assert.NotEqual(string.Empty, recipesRecord.GetProperty("stdout").GetString());
+
+            var summary = summaryDocument.RootElement;
+            Assert.Equal("batch_summary", summary.GetProperty("record").GetString());
+            Assert.Equal(2, summary.GetProperty("commands_processed").GetInt32());
+            Assert.Equal(0, summary.GetProperty("command_failures").GetInt32());
         }
         finally
         {
@@ -1237,7 +1290,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Equal(string.Empty, stdout);
-            Assert.Contains("batch only supports query commands", stderr);
+            Assert.Contains("batch only supports query and read-only discovery commands", stderr);
             Assert.DoesNotContain("character limit", stderr);
         }
         finally
@@ -1263,7 +1316,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Equal(string.Empty, stdout);
             Assert.Contains($"argument 1 exceeds the {QueryCommandRunner.BatchMaxArgumentChars} character limit", stderr);
-            Assert.DoesNotContain("batch only supports query commands", stderr);
+            Assert.DoesNotContain("batch only supports query and read-only discovery commands", stderr);
         }
         finally
         {
@@ -2557,6 +2610,59 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunLanguages_FormatCountReturnsCapabilitySummary_Issue4316()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_languages_format_count_issue4316");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App { }\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/main.adb", "ada", "procedure Main is begin null; end Main;\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunLanguages(["--db", dbPath, "--indexed-only", "--capability", "missing-any", "--format", "count"], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+
+            Assert.Equal("count", root.GetProperty("format").GetString());
+            Assert.True(root.GetProperty("count").GetInt32() > 0);
+            Assert.Equal(root.GetProperty("count").GetInt32(), root.GetProperty("language_count").GetInt32());
+            Assert.Equal(root.GetProperty("count").GetInt32(), root.GetProperty("indexed_language_count").GetInt32());
+            Assert.True(root.GetProperty("indexed_file_count").GetInt64() > 0);
+            Assert.Equal("missing-any", Assert.Single(root.GetProperty("capability_filters").EnumerateArray().ToList()).GetString());
+            Assert.Equal(root.GetProperty("count").GetInt32(), root.GetProperty("capability_counts").GetProperty("missing_any").GetInt32());
+            Assert.False(root.TryGetProperty("languages", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunLanguages_SummaryOnlyJsonReturnsCapabilitySummary_Issue4316()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(["--json", "--summary-only", "--capability", "all"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        using var document = ParseJsonOutput(stdout);
+        var root = document.RootElement;
+
+        Assert.True(root.GetProperty("summary_only").GetBoolean());
+        Assert.True(root.GetProperty("count").GetInt32() > 0);
+        Assert.Equal(root.GetProperty("count").GetInt32(), root.GetProperty("capability_counts").GetProperty("all").GetInt32());
+        Assert.Equal("all", Assert.Single(root.GetProperty("capability_filters").EnumerateArray().ToList()).GetString());
+        Assert.False(root.TryGetProperty("languages", out _));
+    }
+
+    [Fact]
     public void RunLanguages_JsonIncludesUnsupportedCapabilityGuidance_Issue4122()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() =>
@@ -2585,11 +2691,13 @@ public partial class QueryCommandRunnerTests
         Assert.Empty(languages["csharp"].GetProperty("unsupported_guidance").EnumerateArray());
     }
 
-    [Fact]
-    public void RunLanguages_JsonCapabilitySearchOnlyFiltersAllExtractionGaps()
+    [Theory]
+    [InlineData("search-only")]
+    [InlineData("none")]
+    public void RunLanguages_JsonCapabilityNoneFiltersAllExtractionGaps_Issue4316(string capability)
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() =>
-            QueryCommandRunner.RunLanguages(["--json", "--capability", "search-only"], _jsonOptions));
+            QueryCommandRunner.RunLanguages(["--json", "--capability", capability], _jsonOptions));
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
         Assert.Equal(string.Empty, stderr);
@@ -2616,6 +2724,9 @@ public partial class QueryCommandRunnerTests
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Contains("unsupported --capability value 'lint'", stderr);
+        Assert.Contains("all", stderr);
+        Assert.Contains("none", stderr);
+        Assert.Contains("missing-any", stderr);
         Assert.Contains("missing-references", stderr);
         Assert.Contains("search-only", stderr);
     }

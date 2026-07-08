@@ -89,6 +89,69 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_CompactAliasReturnsBoundedRows_Issue4317()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_compact_alias_issue4317");
+        try
+        {
+            var dbPath = CreateSymbolsEditorFormatFixtureDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Run", "--db", dbPath, "--compact", "--exact-name", "--sort", "hotspot", "--lang", "csharp", "--kind", "function", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.True(exitCode == CommandExitCodes.Success, stderr);
+            Assert.Equal(string.Empty, stderr);
+
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var row = Assert.Single(root.GetProperty("symbols").EnumerateArray().ToList());
+
+            Assert.Equal("compact", root.GetProperty("format").GetString());
+            Assert.Equal(1, root.GetProperty("emitted_count").GetInt32());
+            Assert.Equal("Run", row.GetProperty("name").GetString());
+            Assert.Equal("src/App.cs", row.GetProperty("path").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("--")]
+    [InlineData("--query")]
+    public void RunSymbols_CompactLiteralQueryIsNotExpanded_Issue4317(string queryPrefix)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_compact_literal_issue4317");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var args = queryPrefix == "--"
+                ? new[] { "--", "--compact", "--db", dbPath, "--format", "count" }
+                : ["--query", "--compact", "--db", dbPath, "--format", "count"];
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                args,
+                _jsonOptions));
+
+            Assert.True(exitCode == CommandExitCodes.Success, stderr);
+            Assert.Equal(string.Empty, stderr);
+
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+
+            Assert.Equal("--compact", root.GetProperty("query").GetString());
+            Assert.False(root.TryGetProperty("format", out _));
+            Assert.Equal(0, root.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_SummaryOnlyJsonOmitsRowsWithMetadata_Issue4165()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_summary_only_issue4165");
@@ -110,7 +173,9 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(0, root.GetProperty("emitted_count").GetInt32());
             Assert.Equal(1, root.GetProperty("omitted_count").GetInt32());
             Assert.True(root.GetProperty("summary_only").GetBoolean());
-            Assert.True(root.GetProperty("truncated").GetBoolean());
+            Assert.False(root.GetProperty("truncated").GetBoolean());
+            Assert.Equal(1, root.GetProperty("summary_only_omitted_count").GetInt32());
+            Assert.False(root.TryGetProperty("row_limit_reached", out _));
             Assert.False(root.TryGetProperty("symbols", out _));
             Assert.Equal("summary_only", Assert.Single(root.GetProperty("omitted_by").EnumerateArray().ToList()).GetString());
         }
@@ -5827,6 +5892,21 @@ public partial class QueryCommandRunnerTests
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void RunHotspots_RankByReturnsGuidedUsageError_Issue4317()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+            ["--rank-by", "fan-in", "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--rank-by is not supported by hotspots", stderr);
+        Assert.Contains("fan-in/fan-out traversal", stderr);
+        Assert.Contains("callers", stderr);
+        Assert.Contains("callees", stderr);
     }
 
     [Fact]
