@@ -1303,6 +1303,7 @@ public static partial class QueryCommandRunner
                     unusedActionable = true;
                     break;
                 case "--include-generated":
+                case "--generated":
                     includeGenerated = true;
                     break;
                 case "--since":
@@ -1846,6 +1847,15 @@ public static partial class QueryCommandRunner
                 case "nearbysymbols":
                     canonical = "nearby_symbols";
                     break;
+                case "outline":
+                case "outline_only":
+                case "outlineonly":
+                    foreach (var outlineField in new[] { "file", "definitions", "nearby_symbols" })
+                    {
+                        if (seen.Add(outlineField))
+                            fields.Add(outlineField);
+                    }
+                    continue;
                 case "reference":
                 case "references":
                 case "refs":
@@ -1860,7 +1870,7 @@ public static partial class QueryCommandRunner
                     canonical = "callees";
                     break;
                 default:
-                    addParseError($"Error: unsupported --fields value '{ConsoleUi.FormatBoundedValue(rawField)}'. Use one or more of all, file, workspace, graph, definitions, body, source_excerpt, nearby_symbols, references, callers, callees.");
+                    addParseError($"Error: unsupported --fields value '{ConsoleUi.FormatBoundedValue(rawField)}'. Use one or more of all, file, workspace, graph, definitions, body, source_excerpt, nearby_symbols, outline, references, callers, callees.");
                     continue;
             }
 

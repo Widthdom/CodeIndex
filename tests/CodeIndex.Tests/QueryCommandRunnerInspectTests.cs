@@ -284,6 +284,21 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_ParseFieldsOutline_ExpandsOutlineFields_Issue4342()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["--fields", "outline"],
+            jsonDefault: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
+
+        Assert.True(options.Json);
+        Assert.False(options.IncludeBody);
+        Assert.Equal(["file", "definitions", "nearby_symbols"], options.InspectFields);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
     public void RunInspect_OutlineOnlyJsonEmitsSummaryGroups_Issue4067()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_outline_only_4067");

@@ -194,7 +194,7 @@ ownership boundaries so behavior changes remain reviewable and testable.
 
 ### Workspaces
 
-`cdidx.workspace.json` and `.cdidx-workspace.json` declare monorepo members without adding a YAML dependency. Workspace manifests are capped at 64 KiB, 16 JSON nesting levels, 1024 members, 4096 characters per member path, and 255 characters for `default_db_name`. The supported schema is additive: `members` is an array of member paths that must be relative to and resolve under the manifest directory, `index_strategy` is `per_member` or `single` with unknown values rejected, `default_db_name` is a plain file name that overrides `codeindex.db`, and `shared_ignores` is reserved for shared ignore policy. Invalid `members` entries are rejected with bounded diagnostics, and valid entries are normalized and deduplicated with the workspace path casing policy before DB paths are materialized. `cdidx workspace list` and `cdidx workspace status` report member DB paths.
+`cdidx.workspace.json` and `.cdidx-workspace.json` declare monorepo members without adding a YAML dependency. Workspace manifests are capped at 64 KiB, 16 JSON nesting levels, 1024 members, 4096 characters per member path, and 255 characters for `default_db_name`. The supported schema is additive: `members` is an array of member paths that must be relative to and resolve under the manifest directory, `index_strategy` is `per_member` or `single` with unknown values rejected, `default_db_name` is a plain file name that overrides `codeindex.db`, and `shared_ignores` is reserved for shared ignore policy. Invalid `members` entries are rejected with bounded diagnostics, and valid entries are normalized and deduplicated with the workspace path casing policy before DB paths are materialized. `cdidx workspace list` and `cdidx workspace status` report member DB paths. In JSON mode, invalid manifest schema or safety failures are returned as a structured `workspace_manifest_invalid` error instead of falling through to the top-level crash handler.
 
 `cdidx workspace use <name>` writes an existing manifest member or `default` workspace to the per-user config directory, rejects missing manifest members, and rejects ambiguous member directory names. Query DB resolution keeps existing precedence: explicit `--db`, then explicit `--data-dir` / `CDIDX_DATA_DIR`, then active workspace state, then ancestor/CWD discovery.
 
@@ -2577,6 +2577,8 @@ manifest directory 配下に残る member path、
 invalid な `members` entries は件数を制限した diagnostics で拒否され、有効な entry は DB path を
 作る前に workspace path casing policy で正規化・重複排除されます。
 `cdidx workspace list` と `cdidx workspace status` は member DB path を報告します。
+JSON mode では、manifest schema または safety validation の失敗は top-level crash handler へ
+落とさず、構造化された `workspace_manifest_invalid` error として返します。
 
 `cdidx workspace use <name>` は active workspace を per-user config directory に保存します。
 query DB 解決の優先順位は既存どおり、明示 `--db`、明示 `--data-dir` / `CDIDX_DATA_DIR`、

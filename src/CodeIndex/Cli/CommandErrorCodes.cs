@@ -62,4 +62,7 @@ internal static class CommandErrorCodes
 
     /// <summary>Requested database checkpoint name does not exist.</summary>
     public const string CheckpointNotFound = "E016_CHECKPOINT_NOT_FOUND";
+
+    /// <summary>Workspace manifest JSON was found but failed schema or safety validation.</summary>
+    public const string WorkspaceManifestInvalid = "E017_WORKSPACE_MANIFEST_INVALID";
 }

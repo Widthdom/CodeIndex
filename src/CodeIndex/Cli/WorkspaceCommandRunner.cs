@@ -44,7 +44,15 @@ internal static class WorkspaceCommandRunner
             return CommandExitCodes.Success;
         }
 
-        var manifest = WorkspaceManifestLoader.Load(discovery.Path);
+        WorkspaceManifest manifest;
+        try
+        {
+            manifest = WorkspaceManifestLoader.Load(discovery.Path);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or JsonException)
+        {
+            return WriteManifestValidationError(json, jsonOptions, ex);
+        }
 
         if (json)
         {
@@ -148,4 +156,14 @@ internal static class WorkspaceCommandRunner
         => path.Length <= MaxAmbiguousMemberPathChars
             ? path
             : path[..(MaxAmbiguousMemberPathChars - 3)] + "...";
+
+    private static int WriteManifestValidationError(bool json, JsonSerializerOptions jsonOptions, Exception ex)
+        => CommandErrorWriter.WriteJsonOrHuman(
+            json,
+            jsonOptions,
+            $"workspace manifest is invalid: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}",
+            CommandExitCodes.UsageError,
+            "Fix the workspace manifest; `members` must be an array of relative path strings.",
+            errorCode: CommandErrorCodes.WorkspaceManifestInvalid,
+            category: "workspace_manifest_invalid");
 }

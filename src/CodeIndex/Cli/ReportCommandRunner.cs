@@ -663,6 +663,8 @@ public static class ReportCommandRunner
                 case "--json":
                     options.Json = true;
                     break;
+                case "--redact-paths":
+                    break;
                 case "--no-log":
                     options.IncludeLog = false;
                     break;

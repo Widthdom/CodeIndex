@@ -631,7 +631,14 @@ internal static class CdidxConfigFile
                 "fix or remove the discovered config file.");
         }
 
-        var payload = new ValidateConfigJsonResult(true, result.Path);
+        var configFileFound = result.Loaded;
+        var payload = new ValidateConfigJsonResult(
+            true,
+            result.Path,
+            configFileFound ? "valid" : StatusNotFound,
+            configFileFound ? null : "no supported config file was found",
+            configFileFound,
+            configFileFound);
         Console.WriteLine(JsonSerializer.Serialize(
             payload,
             CliJsonSerializerContextFactory.Create(jsonOptions).ValidateConfigJsonResult));

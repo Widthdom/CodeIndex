@@ -7229,12 +7229,21 @@ public partial class QueryCommandRunnerTests
             Assert.True(phases.GetArrayLength() > 0);
             Assert.True(queryPlan.GetArrayLength() > 0);
             Assert.True(queries.GetArrayLength() > 0);
+            Assert.Equal(DbDebug.MaxSlowQuerySqlChars, profile.GetProperty("sql_text_limit_chars").GetInt32());
+            Assert.Contains("SQL literals", profile.GetProperty("redaction").GetString());
             Assert.Equal("sql_1", phases[0].GetProperty("name").GetString());
             Assert.True(phases[0].GetProperty("elapsed_ms").GetDouble() >= 0);
             Assert.True(phases[0].GetProperty("rows_scanned").GetInt32() >= 0);
             Assert.False(string.IsNullOrWhiteSpace(queryPlan[0].GetProperty("detail").GetString()));
             Assert.Contains(queries.EnumerateArray(), query =>
-                query.GetProperty("sql").GetString()?.Contains("SELECT", StringComparison.OrdinalIgnoreCase) == true);
+            {
+                var sql = query.GetProperty("sql").GetString();
+                Assert.NotNull(sql);
+                Assert.True(sql.Length <= DbDebug.MaxSlowQuerySqlChars, $"SQL text was {sql.Length} chars.");
+                Assert.True(query.TryGetProperty("sql_truncated", out _));
+                Assert.True(query.GetProperty("sql_redacted_chars").GetInt32() >= sql.Length);
+                return sql.Contains("SELECT", StringComparison.OrdinalIgnoreCase);
+            });
         }
         finally
         {

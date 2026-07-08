@@ -49,6 +49,7 @@ public static partial class QueryCommandRunner
         "--results-only",
         "--next-steps",
         "--source-only",
+        "--generated",
         "--no-semantic-tokens",
     ];
 

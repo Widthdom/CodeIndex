@@ -193,6 +193,29 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunFiles_GeneratedAliasIncludesGeneratedFiles_Issue4342()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_files_generated_alias_4342");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Generated.g.cs", "csharp", "public class Generated { }\n", isGenerated: true);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
+                ["--db", dbPath, "--generated", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunFiles_ExcludePathFilterAcceptsLeadingDashValue()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_files_exclude_path_leading_dash");
@@ -1363,6 +1386,8 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("indexed_head_sha", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
         Assert.Contains("indexed_head_commit", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
         Assert.Contains("index_matches_workspace", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("data_dir_mode", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("unknown_extension_file_count", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
         Assert.Contains("path_case_sensitive", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
     }
 
@@ -1382,6 +1407,27 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("status --check", json.GetProperty("ready").GetString());
         Assert.Contains("missing, changed, deleted, or stale", json.GetProperty("ready").GetString());
         Assert.Contains("cdidx index <projectPath>", json.GetProperty("remediation").GetString());
+    }
+
+    [Theory]
+    [InlineData("data_dir_mode", "Data directory mode", "Unix permission mode")]
+    [InlineData("unknown_extension_file_count", "Unknown extension inventory", "unknown extensions")]
+    public void RunStatus_ExplainJson_PrintsSupportSafeFieldDescriptions_Issue4313(
+        string field,
+        string label,
+        string readyText)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--explain", field, "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
+        Assert.Equal(field, json.GetProperty("field").GetString());
+        Assert.Equal(label, json.GetProperty("label").GetString());
+        Assert.Contains(readyText, json.GetProperty("ready").GetString());
     }
 
     [Fact]

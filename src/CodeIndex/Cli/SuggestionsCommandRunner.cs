@@ -43,6 +43,12 @@ internal static class SuggestionsCommandRunner
             return WriteUsageError("--repo can only be used with `suggestions export --format issue-drafts --open-issues github`.", options.Json, jsonOptions);
         if (verb == "show" && options.HasPagination)
             return WriteUsageError("--limit and --offset can only be used with `suggestions list` or `suggestions export`.", options.Json, jsonOptions);
+        if (verb == "export" && options.Json && options.ExportFormat == "markdown")
+            return WriteUsageError(
+                "`suggestions export --format markdown` cannot be combined with --json; use --format json or remove --json.",
+                options.Json,
+                jsonOptions,
+                "Use `suggestions export --format json --json` for JSON output, or remove `--json` to export Markdown.");
 
         var store = CreateStore(options.DbPath);
         if (verb == "add")
@@ -692,13 +698,13 @@ internal static class SuggestionsCommandRunner
         return CommandExitCodes.UsageError;
     }
 
-    private static int WriteUsageError(string message, bool json, JsonSerializerOptions jsonOptions)
+    private static int WriteUsageError(string message, bool json, JsonSerializerOptions jsonOptions, string? hint = null)
         => CommandErrorWriter.WriteJsonOrHuman(
             json,
             jsonOptions,
             message,
             CommandExitCodes.UsageError,
-            CommandErrorWriter.DefaultHint,
+            hint ?? CommandErrorWriter.DefaultHint,
             Usage);
 
     private static string StripErrorPrefix(string message)
