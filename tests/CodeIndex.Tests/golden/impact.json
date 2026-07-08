@@ -31,6 +31,7 @@
   "definition_output_count": 1,
   "definition_result_scope": "definition_sites",
   "definitions_collapsed": false,
+  "definition_limit": 20,
   "definitions": [
     {
       "api_version": "1",

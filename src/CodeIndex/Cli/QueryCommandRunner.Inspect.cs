@@ -134,7 +134,15 @@ public static partial class QueryCommandRunner
                 ApplyInspectFieldSelection(payload, options, jsonOptions);
                 ApplyInspectDefinitionContentPolicy(payload, options);
                 AddInspectBodyModeJsonFields(payload, options, analysis);
-                Console.WriteLine(payload.ToJsonString(jsonOptions));
+                var writeExitCode = WriteJsonPayloadWithOptionalByteLimit(
+                    payload,
+                    options,
+                    jsonOptions,
+                    "inspect",
+                    "inspect",
+                    "Use --compact, --fields <csv>, --body-only with --body-lines <n>, or increase --max-json-bytes.");
+                if (writeExitCode != CommandExitCodes.Success)
+                    return writeExitCode;
             }
             else
             {

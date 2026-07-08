@@ -192,6 +192,21 @@ internal static class SearchAuditRecipes
         ],
         ["path", "match_origins", "match_facets.origin", "test_file", "test_symbol", "test_fixture", "result_kinds"],
         "Use origin and test/fixture facets before filing noisy lexical hits; prefer source-scoped recipes or --origin code/comment when the raw term appears in docs or metadata.");
+    private static readonly SearchRecipeClassifierJsonResult TimestampBoundaryClassifier = new(
+        "timestamp_boundary",
+        "Classifies DateTime and DateTimeOffset hits by timestamp boundary before changing UTC, offset, cache-expiry, display, or elapsed-time behavior.",
+        [
+            new("persisted_utc_or_offset", "Persisted database or file metadata timestamp that must round-trip as UTC or with an explicit offset.", "Treat offsetless persisted values as a documented UTC contract or migrate to an offset-aware representation."),
+            new("filesystem_timestamp", "Filesystem last-write or metadata timestamp crossing OS and repository boundaries.", "Keep filesystem timestamps in UTC at the boundary and avoid local-time comparisons in freshness decisions."),
+            new("runtime_wall_clock", "Process wall-clock timestamp used for audit logs, diagnostics, metadata, or user-facing status.", "Use TimeProvider or UTC/offset-aware types when the timestamp leaves the process or enters JSON."),
+            new("network_api_timestamp", "HTTP, GitHub, or protocol timestamp such as Retry-After, rate-limit reset, or release metadata.", "Normalize API timestamps to UTC/offset-aware values before comparing with process clock values."),
+            new("cache_expiry", "Cache freshness or expiry calculation based on checked-at or retry-after timestamps.", "Use a single UTC/offset contract for both the cached stamp and the current clock."),
+            new("support_json", "Machine-facing status, support bundle, or diagnostics JSON field.", "Emit UTC or an explicit offset so consumers do not infer local time."),
+            new("human_display", "Formatting path intended only for people reading CLI or log text.", "Display formatting may be local or contextual, but should not feed persistence or comparison logic."),
+            new("monotonic_elapsed", "Elapsed-time, timeout, retry-delay, or duration measurement.", "Prefer Stopwatch, timeout budgets, or monotonic clock helpers instead of wall-clock subtraction.")
+        ],
+        ["path", "enclosing_symbol_name", "risk_evidence", "match_origins", "result_kinds"],
+        "Classify the timestamp boundary first. Persisted and machine-facing values need explicit UTC or offset semantics; cache expiry must compare like-with-like clocks; elapsed-time and timeout logic should use monotonic duration primitives rather than DateTime wall-clock subtraction.");
     private static readonly SearchRecipeClassifierJsonResult GuardEvidenceClassifier = new(
         "guard_evidence",
         "Classifies whether nearby guard checks explain why a risky API call is already bounded, filtered, or intentionally rejected.",
@@ -477,6 +492,31 @@ internal static class SearchAuditRecipes
             ],
             GuardFilters = BoundedRegexEvidenceGuardFilters(),
             MatchOrigins = ["code"],
+        };
+
+    private static readonly string[] TimestampBoundaryRiskEvidence =
+    [
+        "risk: timestamp hits must be classified as persisted database/file metadata, filesystem clock, process wall clock, network/API timestamp, human display, support JSON, cache expiry, or monotonic elapsed-time before changing behavior.",
+        "risk: persisted and machine-facing timestamps should be UTC or carry an explicit offset; do not compare offsetless local wall time with UTC freshness fields.",
+        "positive: Stopwatch, TimeProvider.GetUtcNow, DateTimeOffset, and round-trip O formatting are useful evidence only when they match the boundary being measured or serialized."
+    ];
+
+    private static SearchAuditRecipeQuery TimestampBoundaryQuery(
+        string name,
+        string query,
+        string description,
+        string falsePositiveGuidance,
+        params string[] riskEvidence)
+        => new(
+            name,
+            query,
+            description,
+            ["audit", "bug"],
+            falsePositiveGuidance)
+        {
+            RiskEvidence = [.. TimestampBoundaryRiskEvidence, .. riskEvidence],
+            MatchOrigins = ["code"],
+            Classifiers = [TimestampBoundaryClassifier, SourceOriginClassifier],
         };
 
     private static readonly List<SearchAuditRecipe> BuiltInRecipes =
@@ -1338,6 +1378,202 @@ internal static class SearchAuditRecipes
                     MatchOrigins = ["code"],
                 },
                 new(
+                    "process-launch-policy",
+                    "ProcessLaunchPolicy",
+                    "Find shared process launch policy wrappers used as positive evidence for subprocess trust boundaries.",
+                    ["audit", "security"],
+                    "Use this with process-start-info and process-start-direct to distinguish shared launch policy from ad hoc process setup.")
+                {
+                    Severity = "info",
+                    RiskEvidence =
+                    [
+                        "positive: ProcessLaunchPolicy centralizes no-shell process configuration, argument-list setup, and redirected stream defaults.",
+                        "risk: wrapper call sites still need review for executable path trust, working directory selection, timeout/cancellation, and diagnostics."
+                    ],
+                    MatchOrigins = ["code"],
+                    Classifiers = [ProcessLaunchClassifier],
+                },
+                new(
+                    "subprocess-environment-policy",
+                    "SubprocessEnvironmentPolicy",
+                    "Find shared subprocess environment scrubbing used as positive evidence for inherited-environment boundaries.",
+                    ["audit", "security"],
+                    "Use this with process launch hits to verify whether subprocesses inherit only allowlisted environment variables.")
+                {
+                    Severity = "info",
+                    RiskEvidence =
+                    [
+                        "positive: SubprocessEnvironmentPolicy makes inherited environment handling explicit for worker, git, and child CLI launches.",
+                        "risk: launch sites without this evidence may inherit prompts, credentials, or tool-specific state unintentionally."
+                    ],
+                    MatchOrigins = ["code"],
+                    Classifiers = [ProcessLaunchClassifier],
+                },
+                new(
+                    "process-start-info",
+                    "ProcessStartInfo",
+                    "Find external process launch configuration that may need argument, environment, cwd, and shell-use review.",
+                    ["audit", "security"],
+                    "False positives include tests and launch wrappers that already validate arguments, scrub environment variables, and disable shell expansion.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: launch sites need review for UseShellExecute, ArgumentList, WorkingDirectory, environment mutation, stdout/stderr drain, timeout, cancellation, and redacted diagnostics.",
+                        "positive: ProcessLaunchPolicy, SubprocessEnvironmentPolicy, ArgumentList, UseShellExecute=false, redirected stream draining, and bounded WaitForExitAsync are useful guard evidence."
+                    ],
+                    MatchOrigins = ["code"],
+                    Classifiers = [ProcessLaunchClassifier],
+                },
+                new(
+                    "process-start-direct",
+                    "Process.Start",
+                    "Find direct process launches that may need a shared safe-launch wrapper or explicit argument handling.",
+                    ["audit", "security"],
+                    "False positives include simple URL/document open helpers or test fixtures with trusted inputs.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: direct Process.Start calls can bypass no-shell defaults, argument-list construction, environment scrubbing, timeout, and output-drain policy.",
+                        "positive: passing a ProcessStartInfo produced by a shared wrapper is safer than string command interpolation."
+                    ],
+                    MatchOrigins = ["code"],
+                    Classifiers = [ProcessLaunchClassifier],
+                },
+                new(
+                    "process-argument-list",
+                    "ArgumentList",
+                    "Find process argument-list construction as positive evidence against shell or command-line interpolation.",
+                    ["audit", "security"],
+                    "Review whether every untrusted argument flows through ArgumentList rather than a shell-expanded command string.")
+                {
+                    Severity = "info",
+                    RiskEvidence =
+                    [
+                        "positive: ArgumentList avoids shell parsing for individual arguments when UseShellExecute is false.",
+                        "risk: argument-list evidence does not validate executable path trust, working directory, environment, or timeout behavior."
+                    ],
+                    MatchOrigins = ["code"],
+                    Classifiers = [ProcessLaunchClassifier],
+                },
+                new(
+                    "process-shell-execute",
+                    "UseShellExecute",
+                    "Find shell-execution toggles that decide whether the platform shell participates in process launch.",
+                    ["audit", "security"],
+                    "False positives include assertions that verify UseShellExecute is false.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: UseShellExecute=true can reintroduce shell expansion, file association behavior, and inherited shell state.",
+                        "positive: UseShellExecute=false with ArgumentList and redirected stream handling is preferred for subprocess boundaries."
+                    ],
+                    MatchOrigins = ["code"],
+                    Classifiers = [ProcessLaunchClassifier],
+                },
+                new(
+                    "process-working-directory",
+                    "WorkingDirectory",
+                    "Find process working-directory choices that may cross workspace, plugin, or installer trust boundaries.",
+                    ["audit", "security"],
+                    "False positives include assertions over already-normalized temporary directories.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: cwd controls relative path resolution for child processes and can drift across plugin, installer, or test-helper boundaries.",
+                        "positive: normalized workspace containment checks or explicit trusted system directories reduce risk."
+                    ],
+                    MatchOrigins = ["code"],
+                    Classifiers = [ProcessLaunchClassifier],
+                },
+                new(
+                    "process-redirect-output",
+                    "RedirectStandardOutput",
+                    "Find stdout redirection choices that should be paired with bounded draining and cancellation.",
+                    ["audit", "bug"],
+                    "False positives include tests that assert process-launch defaults.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: redirected stdout must be drained without unbounded buffering or deadlocking the child process.",
+                        "positive: bounded readers, concurrent stderr draining, cancellation, and timeout handling are safer evidence."
+                    ],
+                    MatchOrigins = ["code"],
+                    Classifiers = [ProcessLaunchClassifier],
+                },
+                new(
+                    "process-redirect-error",
+                    "RedirectStandardError",
+                    "Find stderr redirection choices that should be paired with bounded draining and sanitized diagnostics.",
+                    ["audit", "bug"],
+                    "False positives include tests that assert process-launch defaults.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: redirected stderr can deadlock or leak command diagnostics if it is not drained and sanitized deliberately.",
+                        "positive: bounded concurrent stderr draining plus CommandErrorWriter or DiagnosticSanitizer evidence lowers risk."
+                    ],
+                    MatchOrigins = ["code"],
+                    Classifiers = [ProcessLaunchClassifier],
+                },
+                new(
+                    "process-wait-for-exit",
+                    "WaitForExit",
+                    "Find process waits that may need timeout, cancellation, and output-drain review.",
+                    ["audit", "bug"],
+                    "False positives include bounded WaitForExitAsync calls with caller cancellation and explicit timeout handling.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: process waits can hang indefinitely or race output draining when cancellation and timeout policy are unclear.",
+                        "positive: WaitForExitAsync with a caller token, bounded timeout, and post-drain handling is safer evidence."
+                    ],
+                    MatchOrigins = ["code"],
+                    Classifiers = [ProcessLaunchClassifier],
+                },
+                new(
+                    "process-kill",
+                    "Kill(",
+                    "Find child-process termination paths that may need process-tree and cleanup review.",
+                    ["audit", "bug"],
+                    "False positives include tests that intentionally exercise termination behavior.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: child termination can leave process trees, temp files, or partial diagnostics behind without explicit cleanup policy.",
+                        "positive: bounded timeout branches, kill-entire-tree intent, and cleanup diagnostics make termination behavior easier to audit."
+                    ],
+                    MatchOrigins = ["code"],
+                    Classifiers = [ProcessLaunchClassifier],
+                },
+                new(
+                    "current-directory-boundary",
+                    "Environment.CurrentDirectory",
+                    "Find current-directory dependencies that may affect command, plugin, or embedded-host boundaries.",
+                    ["audit", "bug"],
+                    "False positives include tests that intentionally assert cwd behavior.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: relying on process cwd can make command behavior depend on host launch context or plugin side effects.",
+                        "positive: explicit project-root resolution and cwd drift diagnostics reduce ambiguity."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "set-current-directory",
+                    "SetCurrentDirectory",
+                    "Find process cwd mutations that may need restore, isolation, and concurrency review.",
+                    ["audit", "bug"],
+                    "False positives include isolated tests with try/finally restoration.")
+                {
+                    RiskEvidence =
+                    [
+                        "risk: mutating process cwd is process-wide and can race other command, plugin, or test-helper work.",
+                        "positive: try/finally restoration, serial test isolation, or avoiding cwd mutation altogether lowers risk."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
                     "plugin-activator",
                     "Activator.CreateInstance",
                     "Find plugin constructor paths that may need constructor side-effect and lifecycle review.",
@@ -1350,6 +1586,50 @@ internal static class SearchAuditRecipes
                         "positive: allowlisted types, explicit constructor contracts, and disposal/lifecycle handling are safer evidence."
                     ],
                     MatchOrigins = ["code"],
+                },
+                new(
+                    "plugin-term",
+                    "plugin",
+                    "Find broad plugin terminology that helps catch tokenization gaps around concrete plugin type names.",
+                    ["audit", "security"],
+                    "This is an intentionally broad discovery query; triage with match origins, file paths, and nearby concrete type names.")
+                {
+                    Severity = "low",
+                    RiskEvidence =
+                    [
+                        "risk: plugin discovery, trust gates, constructors, and load contexts execute extension code and need explicit boundaries.",
+                        "positive: broad plugin hits make CamelCase or concrete-type naming gaps visible during dogfood audits."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "hook-term",
+                    "hook",
+                    "Find broad hook terminology that helps catch tokenization gaps around post-extraction and git hook surfaces.",
+                    ["audit", "security"],
+                    "This is an intentionally broad discovery query; triage with match origins, hook type names, and callback budget evidence.")
+                {
+                    Severity = "low",
+                    RiskEvidence =
+                    [
+                        "risk: hooks can execute extension or git automation code and need clear trust, timeout, and diagnostics boundaries.",
+                        "positive: broad hook hits make CamelCase or concrete-type naming gaps visible during dogfood audits."
+                    ],
+                    MatchOrigins = ["code"],
+                },
+                new(
+                    "trust-overrides-contract",
+                    "trust_overrides",
+                    "Find machine-readable trust override output contracts for plugin and hook trust-boundary review.",
+                    ["audit", "security"],
+                    "False positives include tests that only assert stable JSON field names.")
+                {
+                    Severity = "info",
+                    RiskEvidence =
+                    [
+                        "risk: trust override output must identify the opt-in surface without leaking raw local sensitive paths or secret-like values.",
+                        "positive: sanitized value, sanitized effective_path, environment variable, and reason fields make trust decisions auditable."
+                    ],
                 },
                 new(
                     "assembly-load-context",
@@ -1365,6 +1645,89 @@ internal static class SearchAuditRecipes
                     ],
                     MatchOrigins = ["code"],
                 }
+            ]),
+        SourceScopedRecipe(
+            "timestamp-timezone-boundaries",
+            "Audit timestamp and elapsed-time boundaries so persisted database values, filesystem stamps, process clocks, network/API metadata, support JSON, cache expiry, human display, and monotonic timing keep explicit UTC or offset semantics.",
+            [
+                TimestampBoundaryQuery(
+                    "datetime-now-local-wall-clock",
+                    "DateTime.Now",
+                    "Find local wall-clock timestamps that can drift across timezones, daylight-saving transitions, or host settings.",
+                    "False positives include display-only formatting paths that never feed persistence, cache expiry, support JSON, or elapsed-time decisions.",
+                    "risk: DateTime.Now is local wall-clock time and should not feed persisted database stamps, freshness comparisons, retry scheduling, or machine-facing JSON without an explicit conversion boundary."),
+                TimestampBoundaryQuery(
+                    "datetime-utcnow-wall-clock",
+                    "DateTime.UtcNow",
+                    "Find UTC wall-clock timestamps that still need classification apart from monotonic elapsed-time measurement.",
+                    "False positives include durable audit metadata and support JSON fields that are intentionally UTC and covered by tests.",
+                    "risk: DateTime.UtcNow is wall-clock time; use it for timestamps, not elapsed-time measurement or timeout deadlines."),
+                TimestampBoundaryQuery(
+                    "datetimeoffset-utcnow-offset-clock",
+                    "DateTimeOffset.UtcNow",
+                    "Find offset-aware UTC timestamps used for persistence, API metadata, or support JSON.",
+                    "False positives include fields that already serialize as UTC or explicit offsets with round-trip tests.",
+                    "positive: DateTimeOffset.UtcNow is a good boundary type when the value crosses JSON, API, or cache contracts that need an explicit offset."),
+                TimestampBoundaryQuery(
+                    "timeprovider-utcnow-injected-clock",
+                    "GetUtcNow",
+                    "Find injectable UTC clock boundaries used for deterministic tests, cache expiry, or process diagnostics.",
+                    "False positives include wrappers that already normalize the returned timestamp before persistence or JSON output.",
+                    "positive: TimeProvider.GetUtcNow keeps wall-clock timestamps testable, but callers still need UTC/offset and monotonic-vs-wall-clock classification."),
+                TimestampBoundaryQuery(
+                    "datetime-kind-contract",
+                    "DateTimeKind",
+                    "Find DateTime kind checks and contracts that decide whether values are UTC, local, or offsetless.",
+                    "False positives include tests that intentionally construct all DateTimeKind variants.",
+                    "risk: DateTimeKind.Unspecified needs an explicit boundary contract; it must not silently inherit the host local timezone in persisted or support JSON paths."),
+                TimestampBoundaryQuery(
+                    "specifykind-utc-relabel",
+                    "DateTime.SpecifyKind",
+                    "Find timestamp relabeling sites that may need conversion rather than kind replacement.",
+                    "False positives include legacy offsetless values that are explicitly documented and tested as UTC.",
+                    "risk: DateTime.SpecifyKind can relabel local wall-clock values as UTC without conversion; verify the source value is truly offsetless UTC before accepting it."),
+                TimestampBoundaryQuery(
+                    "to-universal-time-conversion",
+                    "ToUniversalTime",
+                    "Find local-to-UTC conversion boundaries used before persistence, comparison, or serialization.",
+                    "False positives include conversions immediately before human-only formatting or tests that assert local-time behavior.",
+                    "risk: ToUniversalTime is correct for local instants but can mis-handle offsetless values unless the unspecified-kind contract is explicit."),
+                TimestampBoundaryQuery(
+                    "roundtrip-timestamp-format",
+                    "ToString(\"O\"",
+                    "Find round-trip timestamp formatting for persisted metadata, support JSON-adjacent diagnostics, or API detail strings.",
+                    "False positives include tests and non-timestamp string formatting fixtures.",
+                    "positive: the O format is appropriate for machine timestamps when the input kind or offset has already been normalized."),
+                TimestampBoundaryQuery(
+                    "datetime-tryparse-boundary",
+                    "DateTime.TryParse",
+                    "Find DateTime parsers that need invariant culture, UTC/offset assumptions, and local-time drift tests.",
+                    "False positives include parsers whose input is human-entered display text and remains human-facing.",
+                    "risk: DateTime.TryParse defaults can infer local time; machine timestamp parsers should specify invariant culture and UTC or offset behavior."),
+                TimestampBoundaryQuery(
+                    "datetimeoffset-tryparse-boundary",
+                    "DateTimeOffset.TryParse",
+                    "Find offset-aware timestamp parsers for persisted metadata, API values, and support diagnostics.",
+                    "False positives include tests that only validate rejected malformed timestamps.",
+                    "positive: DateTimeOffset.TryParse can preserve explicit offsets, but offsetless inputs still need a documented UTC or local-time assumption."),
+                TimestampBoundaryQuery(
+                    "unix-epoch-timestamp",
+                    "FromUnixTimeSeconds",
+                    "Find Unix epoch conversions that define network/API or cache reset timestamp boundaries.",
+                    "False positives include examples and tests that do not feed retry or freshness decisions.",
+                    "positive: Unix epoch conversion is UTC by contract, but downstream comparisons should still stay UTC or offset-aware."),
+                TimestampBoundaryQuery(
+                    "stopwatch-monotonic-elapsed",
+                    "Stopwatch",
+                    "Find monotonic elapsed-time measurement sites to separate duration logic from wall-clock timestamps.",
+                    "False positives include diagnostics that only report elapsed durations and do not compare against timestamps.",
+                    "positive: Stopwatch is the expected primitive for elapsed-time measurement, timeout diagnostics, and performance durations."),
+                TimestampBoundaryQuery(
+                    "timeout-duration-boundary",
+                    "Timeout",
+                    "Find timeout and retry-delay boundaries that should be duration-based rather than wall-clock timestamp comparisons.",
+                    "False positives include constant names or diagnostics that do not schedule, compare, or enforce durations.",
+                    "risk: timeout paths should compare duration budgets or monotonic elapsed time, not mixed local and UTC wall-clock timestamps.")
             ]),
         SourceScopedRecipe(
             "sqlite-query-policy-surfaces",
@@ -3830,6 +4193,20 @@ internal sealed record SearchRecipeQueryResultJsonResult(
     [property: JsonPropertyName("truncated")] bool Truncated,
     [property: JsonPropertyName("next_cursor")] string? NextCursor,
     [property: JsonPropertyName("results")] List<CompactSearchResult> Results);
+
+internal sealed record SearchNamedBatchCountSummaryRunJsonResult(
+    [property: JsonPropertyName("api_version")] string ApiVersion,
+    [property: JsonPropertyName("query_count")] int QueryCount,
+    [property: JsonPropertyName("result_count")] int ResultCount,
+    [property: JsonPropertyName("file_count")] int FileCount,
+    [property: JsonPropertyName("query_freshness")] SearchRecipeQueryFreshnessJsonResult QueryFreshness,
+    [property: JsonPropertyName("queries")] List<SearchNamedBatchCountSummaryQueryJsonResult> Queries);
+
+internal sealed record SearchNamedBatchCountSummaryQueryJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("query")] string Query,
+    [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("file_count")] int FileCount);
 
 internal sealed record SearchRecipeCountRunJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,

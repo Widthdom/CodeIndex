@@ -154,13 +154,17 @@ public static partial class QueryCommandRunner
         }
         if (options.SummaryOnly
             && !options.ListRecipes
+            && options.NamedSearchQueries.Count == 0
             && !(options.RecipeName != null
-                && (options.CountOnly || options.OutputFormat == OutputFormatIssueDrafts)))
+                && (options.CountOnly
+                    || options.Compact
+                    || options.OutputFormat == OutputFormatCompact
+                    || options.OutputFormat == OutputFormatIssueDrafts)))
         {
             WriteUsageError(
-                "--summary-only is only supported with `cdidx recipes` / `cdidx search --list-recipes`, recipe count output, or recipe issue-drafts output.",
+                "--summary-only is only supported with `cdidx recipes` / `cdidx search --list-recipes`, named-query count output, recipe count output, or recipe issue-drafts output.",
                 GetUsageLineOrThrow("search"),
-                "Use `cdidx recipes --summary-only --json`, `cdidx search --recipe <name> --format count --summary-only`, or `cdidx search --recipe <name> --format issue-drafts --summary-only`.");
+                "Use `cdidx recipes --summary-only --json`, `cdidx search --named-query <name>=<query> --summary-only --json`, `cdidx search --recipe <name> --format compact --summary-only --json`, `cdidx search --recipe <name> --format count --summary-only`, or `cdidx search --recipe <name> --format issue-drafts --summary-only`.");
             return CommandExitCodes.UsageError;
         }
         if (options.OutputFormat == OutputFormatIssueDrafts && options.JsonOutputFormat == JsonOutputFormatArray)
@@ -265,20 +269,12 @@ public static partial class QueryCommandRunner
                     "Remove --open-issues for ad hoc named batches.");
                 return CommandExitCodes.UsageError;
             }
-            if (options.CountOnly)
+            if (options.OutputFormat is not OutputFormatText and not OutputFormatJson and not OutputFormatCount and not OutputFormatCompact)
             {
                 WriteUsageError(
-                    "--count is not supported with --named-query.",
+                    "--format csv/tsv/lsp/qf/sarif/issue-drafts is not supported with --named-query.",
                     GetUsageLineOrThrow("search"),
-                    "Use `cdidx search --named-query <name>=<query> --json` for per-query counts.");
-                return CommandExitCodes.UsageError;
-            }
-            if (options.OutputFormat is not OutputFormatText and not OutputFormatJson and not OutputFormatCompact)
-            {
-                WriteUsageError(
-                    "--format count/csv/tsv/lsp/qf/sarif/issue-drafts is not supported with --named-query.",
-                    GetUsageLineOrThrow("search"),
-                    "Use plain text output, `--json`, or `--format compact` for grouped ad hoc results.");
+                    "Use plain text output, `--json`, `--format count`, or `--format compact` for grouped ad hoc results.");
                 return CommandExitCodes.UsageError;
             }
             if (options.JsonOutputFormat == JsonOutputFormatArray)
@@ -297,6 +293,9 @@ public static partial class QueryCommandRunner
                     "Use `--json` or `--format compact` with --named-query when bounding named batch output.");
                 return CommandExitCodes.UsageError;
             }
+
+            if (options.CountOnly || options.SummaryOnly)
+                return RunSearchNamedBatchCount(options, jsonOptions, exactSearch);
 
             return RunSearchNamedBatch(options, jsonOptions, exactSearch);
         }
@@ -418,7 +417,7 @@ public static partial class QueryCommandRunner
                 return CommandExitCodes.UsageError;
             }
 
-            if (options.CountOnly)
+            if (options.CountOnly || (options.SummaryOnly && (options.Compact || options.OutputFormat == OutputFormatCompact)))
             {
                 if (options.GroupBy != null || options.CountBy != null || options.UniqueBy != null)
                     return RunSearchRecipeAggregation(options, jsonOptions, exact);

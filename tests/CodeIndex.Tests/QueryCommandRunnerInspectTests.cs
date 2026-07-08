@@ -665,6 +665,43 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_JsonMaxBytesRejectsOversizedPayload_Issue4311()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_json_max_bytes_4311");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Target.cs",
+                "csharp",
+                """
+                public class Target
+                {
+                    public int Compute()
+                    {
+                        return 42;
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Compute", "--db", dbPath, "--json", "--max-json-bytes", "64"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("inspect JSON output", stderr);
+            Assert.Contains("--max-json-bytes 64", stderr);
+            Assert.Contains("--compact", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_BodyOnlyJson_EmitsDefinitionBodiesOnly_Issue3056()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_body_only_json");

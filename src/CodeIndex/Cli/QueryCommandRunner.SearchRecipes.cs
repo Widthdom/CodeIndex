@@ -1696,6 +1696,52 @@ public static partial class QueryCommandRunner
         return queryResults;
     }
 
+    private static List<SearchNamedBatchCountSummaryQueryJsonResult> CountSearchNamedBatchQueryResults(
+        DbReader reader,
+        QueryCommandOptions options,
+        bool userExact,
+        out int total,
+        out int fileCount)
+    {
+        var queryCounts = new List<SearchNamedBatchCountSummaryQueryJsonResult>();
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        total = 0;
+        foreach (var namedQuery in options.NamedSearchQueries)
+        {
+            var results = reader.Search(
+                namedQuery.Query,
+                int.MaxValue,
+                options.Lang,
+                options.RawFts,
+                options.PathPatterns,
+                options.ExcludePaths,
+                options.ExcludeTests,
+                !options.NoDedup,
+                options.Since,
+                userExact,
+                options.Prefix,
+                !options.NoVisibilityRank,
+                guardFilters: options.GuardFilters,
+                guardWindow: options.GuardWindow,
+                guardScope: options.GuardScope);
+            var rows = BuildSearchDisplayRows(results, options, userExact, namedQuery.Query);
+            var count = rows.Count;
+            var fileCountForQuery = rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count();
+            foreach (var path in rows.Select(row => row.Result.Path))
+                paths.Add(path);
+
+            total += count;
+            queryCounts.Add(new SearchNamedBatchCountSummaryQueryJsonResult(
+                namedQuery.Name,
+                namedQuery.Query,
+                count,
+                fileCountForQuery));
+        }
+
+        fileCount = paths.Count;
+        return queryCounts;
+    }
+
     private static List<SearchResult> ApplySearchRecipeFileRejectQueries(
         DbReader reader,
         List<SearchResult> results,
