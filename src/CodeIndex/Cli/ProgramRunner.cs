@@ -2554,6 +2554,8 @@ internal static partial class ProgramRunner
     {
         CommandErrorWriter.WriteStderr("Usage: cdidx lsp [--db <path>]");
         CommandErrorWriter.WriteStderr("Runs a read-only Language Server Protocol server over stdio using an existing CodeIndex database.");
+        CommandErrorWriter.WriteStderr("Protocol: LSP stdio uses Content-Length framing; unsupported optional methods are not advertised and return JSON-RPC -32601.");
+        CommandErrorWriter.WriteStderr("Completion: index-backed symbol completion only, resolveProvider=false; unmatched or no-token positions return an empty item list.");
     }
 
     private sealed record McpRunOptions(

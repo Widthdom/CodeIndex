@@ -146,6 +146,8 @@ public static class ConsoleUi
     [
         ("mcp", "--json is not supported; MCP requests and responses are JSON-RPC over the selected transport."),
         ("mcp", "stdio transport uses one UTF-8 JSON-RPC object per LF-delimited line, not LSP Content-Length framing; lifecycle diagnostics go to stderr."),
+        ("lsp", "LSP stdio uses Content-Length framing; unsupported optional methods are not advertised and return JSON-RPC -32601."),
+        ("lsp", "Completion is index-backed symbol completion with resolveProvider=false; unmatched or no-token positions return an empty item list."),
         ("completions", "--json is not supported; output is a shell script for the selected shell."),
         ("recipes", "Alias for `cdidx search --list-recipes`; use --names or --summary-only for small automation-friendly JSON."),
         ("audit", "Alias for `cdidx search --recipe <recipe>`; low-output flags include --results-only, --search-fields, --format count --summary-only, issue-drafts --summary-only, --max-json-bytes, and --snippet-lines 0."),

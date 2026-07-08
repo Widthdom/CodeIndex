@@ -270,6 +270,10 @@ public class LspServerTests
             Assert.False(capabilities["completionProvider"]!["resolveProvider"]!.GetValue<bool>());
             Assert.False(capabilities["codeLensProvider"]!["resolveProvider"]!.GetValue<bool>());
             Assert.False(capabilities["inlayHintProvider"]!["resolveProvider"]!.GetValue<bool>());
+            Assert.Null(capabilities["renameProvider"]);
+            Assert.Null(capabilities["foldingRangeProvider"]);
+            Assert.Null(capabilities["selectionRangeProvider"]);
+            Assert.Null(capabilities["signatureHelpProvider"]);
             Assert.True(capabilities["semanticTokensProvider"]!["full"]!.GetValue<bool>());
             Assert.Contains(capabilities["semanticTokensProvider"]!["legend"]!["tokenTypes"]!.AsArray(), node => node!.GetValue<string>() == "class");
             Assert.True(capabilities["workspace"]!["workspaceFolders"]!["supported"]!.GetValue<bool>());
@@ -395,6 +399,37 @@ public class LspServerTests
         }
     }
 
+    [Theory]
+    [InlineData("textDocument/prepareRename")]
+    [InlineData("textDocument/rename")]
+    [InlineData("textDocument/foldingRange")]
+    [InlineData("textDocument/selectionRange")]
+    [InlineData("textDocument/signatureHelp")]
+    public void HandleMessage_UnsupportedOptionalMethods_ReturnMethodNotFound_Issue4360(string method)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_optional_methods");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "class App { void Run() { } }\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", File.ReadAllText(sourcePath));
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = CreatePositionRequest(method, sourcePath, 4360, 0, 6);
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            Assert.Equal(-32601, response!["error"]!["code"]!.GetValue<int>());
+            Assert.Equal("Method not found: " + method, response["error"]!["message"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void HandleMessage_RicherProviders_ReturnIndexBackedResponses_Issue3536()
     {
@@ -440,6 +475,39 @@ public class LspServerTests
             var inlayHints = server.HandleMessage(CreateTextDocumentRequest("textDocument/inlayHint", sourcePath, 35367));
             Assert.NotNull(inlayHints);
             Assert.NotEmpty(inlayHints!["result"]!.AsArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_Completion_ReturnsEmptyListWhenNoIndexedSymbolMatches_Issue4360()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_completion_empty");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            var source = """
+                public class App
+                {
+                    public int Count() { return 1; }
+                    public void Call() { MissingPrefix(); }
+                }
+                """;
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var missingCharacter = CharacterOf(source, 3, "MissingPrefix();") + 3;
+
+            var completion = server.HandleMessage(CreatePositionRequest("textDocument/completion", sourcePath, 43601, 3, missingCharacter));
+
+            Assert.NotNull(completion);
+            Assert.False(completion!["result"]!["isIncomplete"]!.GetValue<bool>());
+            Assert.Empty(completion["result"]!["items"]!.AsArray());
         }
         finally
         {

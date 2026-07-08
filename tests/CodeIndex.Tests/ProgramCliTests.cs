@@ -317,6 +317,7 @@ public class ProgramCliTests
     [InlineData("import", "cdidx import <archive>")]
     [InlineData("doctor", "cdidx doctor")]
     [InlineData("mcp", "cdidx mcp")]
+    [InlineData("lsp", "cdidx lsp")]
     [InlineData("completions", "cdidx completions <shell>")]
     [InlineData("license", "cdidx license")]
     public void SubcommandHelp_PrintsCommandSpecificUsage(string command, string expectedUsage)
@@ -328,7 +329,7 @@ public class ProgramCliTests
         Assert.Contains("Usage:", stdout);
         Assert.Contains(expectedUsage, stdout);
         Assert.Contains("Run `cdidx --help`", stdout);
-        if (command is "mcp" or "completions" or "references" or "callers" or "callees" or "backfill-fold" or "excerpt" or "inspect" or "status")
+        if (command is "mcp" or "lsp" or "completions" or "references" or "callers" or "callees" or "backfill-fold" or "excerpt" or "inspect" or "status")
         {
             Assert.Contains("Notes:", stdout);
             if (command is "mcp" or "completions")
@@ -337,6 +338,12 @@ public class ProgramCliTests
             {
                 Assert.Contains("LF-delimited line", stdout);
                 Assert.Contains("lifecycle diagnostics go to stderr", stdout);
+            }
+            if (command is "lsp")
+            {
+                Assert.Contains("Content-Length framing", stdout);
+                Assert.Contains("unsupported optional methods", stdout);
+                Assert.Contains("index-backed symbol completion", stdout);
             }
             if (command is "references" or "callers" or "callees")
                 Assert.Contains("--json and --format json emit JSON Lines", stdout);

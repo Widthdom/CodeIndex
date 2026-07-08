@@ -2421,6 +2421,14 @@ but do not speak MCP. It also advertises full `textDocument` sync and
 conservative `hover`, `completion`, `documentHighlight`, `semanticTokens/full`,
 `codeLens`, and `inlayHint` providers backed by indexed symbols and references
 where available.
+Optional LSP methods that are not implemented are also not advertised. In the
+current support matrix, `textDocument/prepareRename`, `textDocument/rename`,
+`textDocument/foldingRange`, `textDocument/selectionRange`, and
+`textDocument/signatureHelp` return JSON-RPC `-32601` (`Method not found`).
+Completion is symbol-index-backed: it searches indexed symbols for the token at
+the requested position, does not provide keyword/path completion, advertises
+`resolveProvider=false`, and returns an empty item list when the position has no
+token or no indexed symbol match.
 Open buffers sent through `textDocument/didOpen`, `textDocument/didChange`, and
 `textDocument/didClose` are kept in a bounded in-memory cache: each document is
 capped at 4194304 bytes, the session holds at most 64 live documents and
@@ -5191,6 +5199,13 @@ MCP stdio は line protocol です。LF 区切りの各行に compact な UTF-8 
 indexed symbols / references で答えられる範囲に限定した `hover`、`completion`、
 `documentHighlight`、`semanticTokens/full`、`codeLens`、`inlayHint` provider を
 advertise します。
+未実装の optional LSP method は advertise しません。現在の support matrix では
+`textDocument/prepareRename`、`textDocument/rename`、`textDocument/foldingRange`、
+`textDocument/selectionRange`、`textDocument/signatureHelp` は JSON-RPC `-32601`
+（`Method not found`）を返します。completion は symbol index ベースです。要求位置の
+token で indexed symbol を検索し、keyword / path completion は提供せず、
+`resolveProvider=false` を advertise し、位置に token がない場合や indexed symbol に一致しない
+場合は空の item list を返します。
 `textDocument/didOpen`、`textDocument/didChange`、`textDocument/didClose` で送られた
 open buffer は上限付きの in-memory cache に保持されます。各 document は 4194304 bytes、
 session 全体では最大 64 live documents / 16777216 aggregate live-document bytes に制限され、
