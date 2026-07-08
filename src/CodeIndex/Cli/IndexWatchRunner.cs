@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization.Metadata;
 using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 
@@ -38,6 +40,14 @@ internal static class IndexWatchRunner
         int maxPendingPaths,
         bool ignoreCase)
         => BuildWatchContract(debounce, maxPendingPaths, ignoreCase);
+
+    internal static bool ShouldIgnoreWatchInternalPathForTesting(
+        string projectRoot,
+        string resolvedDbPath,
+        string fullPath,
+        bool ignoreCase,
+        bool dbPathExplicit)
+        => ShouldIgnoreWatchInternalPath(projectRoot, resolvedDbPath, fullPath, ignoreCase, dbPathExplicit);
 
     public static int Run(
         IndexCommandOptions baseOptions,
@@ -88,6 +98,7 @@ internal static class IndexWatchRunner
         var debounce = TimeSpan.FromMilliseconds(baseOptions.WatchDebounceMs ?? DefaultDebounceMs);
         var maxPendingPaths = baseOptions.WatchPendingPathLimit;
         var ignoreCase = GitHelper.ResolveIgnoreCase(projectRoot, cancellationToken);
+        var dbPathExplicit = !string.IsNullOrWhiteSpace(baseOptions.DbPath);
         var batcher = new FileChangeBatcher(debounce, ignoreCase: ignoreCase, maxPendingPaths: maxPendingPaths);
 
         var ignoreRuleRoot = GitHelper.TryGetRepositoryRoot(projectRoot, cancellationToken) ?? Path.GetFullPath(projectRoot);
@@ -114,10 +125,17 @@ internal static class IndexWatchRunner
 
                 try
                 {
-                    // The watcher root encloses .git / .cdidx / build outputs; ShouldSkipPath
-                    // honors .gitignore / .cdidxignore / built-in SkipDirs, so we drop noisy
-                    // events at the source instead of paying for a full sub-update every save.
-                    // root は .git / .cdidx / ビルド出力も含むため、ShouldSkipPath で除外して
+                    // Drop CodeIndex-owned DB/data-dir side effects before the general source
+                    // filter so watch batches cannot self-trigger on SQLite or lock sidecars.
+                    // DB/data-dir の副作用は通常フィルタより先に落とし、SQLite/lock sidecar
+                    // で watch バッチが自己トリガーしないようにする。
+                    if (ShouldIgnoreWatchInternalPath(projectRoot, resolvedDbPath, fullPath, ignoreCase, dbPathExplicit))
+                        return;
+
+                    // The watcher root encloses .git / build outputs; ShouldSkipPath honors
+                    // .gitignore / .cdidxignore / built-in SkipDirs, so we drop noisy events
+                    // at the source instead of paying for a full sub-update every save.
+                    // root は .git / ビルド出力も含むため、ShouldSkipPath で除外して
                     // 余計なサブ更新を防ぐ。
                     if (fileIndexer.ShouldSkipPath(fullPath))
                         return;
@@ -279,6 +297,76 @@ internal static class IndexWatchRunner
             watchExitCode = subRunExitCode;
     }
 
+    private static bool ShouldIgnoreWatchInternalPath(
+        string projectRoot,
+        string resolvedDbPath,
+        string fullPath,
+        bool ignoreCase,
+        bool dbPathExplicit)
+    {
+        var comparison = ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var normalizedPath = Path.GetFullPath(fullPath);
+        var normalizedProjectRoot = Path.GetFullPath(projectRoot);
+        var normalizedDbPath = Path.GetFullPath(DbPathResolver.NormalizeDbPath(resolvedDbPath));
+
+        var defaultDataDir = Path.Combine(normalizedProjectRoot, ".cdidx");
+        if (IsSameOrUnderDirectory(defaultDataDir, normalizedPath, comparison))
+            return true;
+
+        var dbDirectory = Path.GetDirectoryName(normalizedDbPath);
+        if (!dbPathExplicit && !string.IsNullOrEmpty(dbDirectory)
+            && IsSameOrUnderDirectory(dbDirectory, normalizedPath, comparison))
+        {
+            return true;
+        }
+
+        if (IsSamePath(normalizedPath, normalizedDbPath, comparison))
+            return true;
+
+        foreach (var suffix in new[] { "-wal", "-shm", "-journal" })
+        {
+            if (IsSamePath(normalizedPath, normalizedDbPath + suffix, comparison))
+                return true;
+        }
+
+        var lockPath = IndexLock.GetLockPath(normalizedDbPath);
+        if (IsSamePath(normalizedPath, lockPath, comparison)
+            || IsSamePath(normalizedPath, IndexLock.GetInfoPath(lockPath), comparison)
+            || normalizedPath.StartsWith(lockPath + ".", comparison))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsSameOrUnderDirectory(string directory, string fullPath, StringComparison comparison)
+    {
+        var normalizedDirectory = Path.GetFullPath(directory);
+        if (IsSamePath(normalizedDirectory, fullPath, comparison))
+            return true;
+
+        var directoryPrefix = Path.EndsInDirectorySeparator(normalizedDirectory)
+            ? normalizedDirectory
+            : normalizedDirectory + Path.DirectorySeparatorChar;
+        return fullPath.StartsWith(directoryPrefix, comparison);
+    }
+
+    private static bool IsSamePath(string left, string right, StringComparison comparison)
+        => string.Equals(
+            TrimDirectorySeparators(left),
+            TrimDirectorySeparators(right),
+            comparison);
+
+    private static string TrimDirectorySeparators(string value)
+    {
+        var root = Path.GetPathRoot(value);
+        var trimmed = value.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return string.IsNullOrEmpty(trimmed) && !string.IsNullOrEmpty(root)
+            ? root
+            : trimmed;
+    }
+
     private static List<string> BuildSubRunArgs(IndexCommandOptions baseOptions, string? resolvedDbPath = null)
     {
         // Always pass --json so sub-runs produce a single JSON-line summary on stdout. The
@@ -391,7 +479,7 @@ internal static class IndexWatchRunner
             // Pre-pend a watch-event header line so MCP clients can distinguish watch
             // batches from the initial scan. The underlying sub-run result follows.
             // watch バッチであることを示すヘッダ行を先頭に流し、その後にサブ実行 JSON を出す。
-            Console.Out.WriteLine(JsonSerializer.Serialize(new IndexWatchEventJsonResult
+            var watchEvent = new IndexWatchEventJsonResult
             {
                 Status = eventStatus,
                 Phase = phase,
@@ -407,7 +495,12 @@ internal static class IndexWatchRunner
                 SubRunParseStatus = summary.ParseStatus,
                 SubRunParseReason = summary.ParseReason,
                 Reason = failureReason,
-            }, CliJsonSerializerContextFactory.Create(jsonOptions).IndexWatchEventJsonResult));
+            };
+            var payload = JsonSerializer
+                .SerializeToNode(watchEvent, CliJsonSerializerContextFactory.Create(jsonOptions).IndexWatchEventJsonResult)!
+                .AsObject();
+            AddWatchSubRunSummaryFields(payload, status, subRunExitCode, summary);
+            Console.Out.WriteLine(payload.ToJsonString(EnsureJsonNodeSerializerOptions(jsonOptions)));
 
             if (!TryWriteSpooledSubRunOutput(spoolPath, out var endedWithLineBreak))
             {
@@ -556,6 +649,41 @@ internal static class IndexWatchRunner
     }
 
 
+    private static void AddWatchSubRunSummaryFields(JsonObject payload, string requestedStatus, int subRunExitCode, WatchSubRunSummary summary)
+    {
+        if (!string.Equals(requestedStatus, "rescanned", StringComparison.Ordinal))
+            return;
+
+        payload["rescan_scope"] = "full_workspace";
+        payload["rescan_completed"] = subRunExitCode == CommandExitCodes.Success && summary.ParseStatus == "parsed";
+
+        if (summary.FilesTotal is long filesTotal)
+            payload["files_total"] = filesTotal;
+        if (summary.FilesScanned is int filesScanned)
+            payload["files_scanned"] = filesScanned;
+        if (summary.FilesSkipped is int filesSkipped)
+        {
+            payload["files_skipped"] = filesSkipped;
+            if (filesSkipped > 0)
+                payload["files_skipped_category"] = "unchanged_or_reused_files";
+        }
+        if (summary.FilesPurged is int filesPurged)
+            payload["files_purged"] = filesPurged;
+        if (summary.Warnings is int warnings)
+            payload["warnings"] = warnings;
+    }
+
+    private static JsonSerializerOptions EnsureJsonNodeSerializerOptions(JsonSerializerOptions jsonOptions)
+    {
+        if (jsonOptions.TypeInfoResolver != null)
+            return jsonOptions;
+
+        return new JsonSerializerOptions(jsonOptions)
+        {
+            TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
+        };
+    }
+
     private static string FormatHumanSummary(string status, int? batchSize, long elapsedMs, string subRunJson, int exitCode)
     {
         var prefix = status switch
@@ -581,6 +709,15 @@ internal static class IndexWatchRunner
             details.Add($"updated {summary.Updated.GetValueOrDefault()}");
             details.Add($"removed {summary.Removed.GetValueOrDefault()}");
             details.Add($"errors {summary.Errors.GetValueOrDefault()}");
+            if (string.Equals(status, "rescanned", StringComparison.Ordinal))
+            {
+                if (summary.FilesScanned is int filesScanned)
+                    details.Add($"scanned {filesScanned}");
+                if (summary.FilesSkipped is int filesSkipped)
+                    details.Add($"skipped {filesSkipped}");
+                if (summary.FilesPurged is int filesPurged)
+                    details.Add($"purged {filesPurged}");
+            }
         }
 
         var detail = details.Count > 0 ? $" ({string.Join(", ", details)})" : string.Empty;
@@ -591,10 +728,10 @@ internal static class IndexWatchRunner
     {
         var trimmedLength = TrimTrailingLineBreaks(subRunJson);
         if (trimmedLength == 0)
-            return new WatchSubRunSummary(null, null, null, "missing", "sub-run emitted no JSON");
+            return WatchSubRunSummary.Unparsed("missing", "sub-run emitted no JSON");
 
         if (trimmedLength > MaxHumanSummarySubRunJsonChars)
-            return new WatchSubRunSummary(null, null, null, "too_large", $"sub-run JSON exceeded {MaxHumanSummarySubRunJsonChars.ToString(CultureInfo.InvariantCulture)} characters");
+            return WatchSubRunSummary.Unparsed("too_large", $"sub-run JSON exceeded {MaxHumanSummarySubRunJsonChars.ToString(CultureInfo.InvariantCulture)} characters");
 
         try
         {
@@ -606,24 +743,34 @@ internal static class IndexWatchRunner
             if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("summary", out var summary)
                 || summary.ValueKind != JsonValueKind.Object)
             {
-                return new WatchSubRunSummary(null, null, null, "missing_summary", "sub-run JSON did not contain an object summary");
+                return WatchSubRunSummary.Unparsed("missing_summary", "sub-run JSON did not contain an object summary");
             }
 
             return new WatchSubRunSummary(
                 TryReadInt32(summary, "updated") ?? 0,
                 TryReadInt32(summary, "removed") ?? 0,
                 TryReadInt32(summary, "errors") ?? 0,
+                TryReadInt64(summary, "files_total"),
+                TryReadInt32(summary, "files_scanned"),
+                TryReadInt32(summary, "files_skipped") ?? TryReadInt32(summary, "skipped"),
+                TryReadInt32(summary, "files_purged"),
+                TryReadInt32(summary, "warnings"),
                 "parsed",
                 null);
         }
         catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
-            return new WatchSubRunSummary(null, null, null, "invalid_json", CommandErrorWriter.FormatSanitizedExceptionMessage(ex));
+            return WatchSubRunSummary.Unparsed("invalid_json", CommandErrorWriter.FormatSanitizedExceptionMessage(ex));
         }
     }
 
     private static int? TryReadInt32(JsonElement element, string propertyName)
         => element.TryGetProperty(propertyName, out var property) && property.TryGetInt32(out var value)
+            ? value
+            : null;
+
+    private static long? TryReadInt64(JsonElement element, string propertyName)
+        => element.TryGetProperty(propertyName, out var property) && property.TryGetInt64(out var value)
             ? value
             : null;
 
@@ -818,8 +965,17 @@ internal static class IndexWatchRunner
         int? Updated,
         int? Removed,
         int? Errors,
+        long? FilesTotal,
+        int? FilesScanned,
+        int? FilesSkipped,
+        int? FilesPurged,
+        int? Warnings,
         string ParseStatus,
-        string? ParseReason);
+        string? ParseReason)
+    {
+        internal static WatchSubRunSummary Unparsed(string parseStatus, string parseReason)
+            => new(null, null, null, null, null, null, null, null, parseStatus, parseReason);
+    }
 }
 
 /// <summary>

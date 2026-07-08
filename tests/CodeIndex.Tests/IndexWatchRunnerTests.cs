@@ -173,6 +173,114 @@ public class IndexWatchRunnerTests
     }
 
     [Fact]
+    public void ShouldIgnoreWatchInternalPath_DefaultDataDir_IgnoresCdidxArtifacts_Issue4351()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var internalPaths = new[]
+            {
+                dbPath,
+                dbPath + "-wal",
+                dbPath + "-shm",
+                dbPath + ".lock",
+                dbPath + ".lock.info",
+                dbPath + ".lock.tmp",
+                Path.Combine(projectRoot, ".cdidx", "lock"),
+                Path.Combine(projectRoot, ".cdidx", "lock.info"),
+                Path.Combine(projectRoot, ".cdidx", "lock.tmp"),
+                Path.Combine(projectRoot, ".cdidx", "nested", "state.tmp"),
+            };
+
+            Assert.All(internalPaths, path =>
+                Assert.True(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+                    projectRoot,
+                    dbPath,
+                    path,
+                    ignoreCase: false,
+                    dbPathExplicit: false)));
+            Assert.False(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+                projectRoot,
+                dbPath,
+                Path.Combine(projectRoot, "src", "app.cs"),
+                ignoreCase: false,
+                dbPathExplicit: false));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ShouldIgnoreWatchInternalPath_ExplicitDb_IgnoresOnlyDbSidecarsAndDefaultCdidx_Issue4351()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, "src", "watch.db");
+            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+
+            Assert.True(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+                projectRoot,
+                dbPath,
+                dbPath + "-wal",
+                ignoreCase: false,
+                dbPathExplicit: true));
+            Assert.True(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+                projectRoot,
+                dbPath,
+                dbPath + ".lock.info",
+                ignoreCase: false,
+                dbPathExplicit: true));
+            Assert.True(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+                projectRoot,
+                dbPath,
+                Path.Combine(projectRoot, ".cdidx", "suggestions-codeindex.json"),
+                ignoreCase: false,
+                dbPathExplicit: true));
+            Assert.False(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+                projectRoot,
+                dbPath,
+                Path.Combine(projectRoot, "src", "app.cs"),
+                ignoreCase: false,
+                dbPathExplicit: true));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ShouldIgnoreWatchInternalPath_DataDirResolution_IgnoresResolvedDbParent_Issue4351()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, ".custom-cdidx", "codeindex.db");
+
+            Assert.True(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+                projectRoot,
+                dbPath,
+                Path.Combine(projectRoot, ".custom-cdidx", "lock.info"),
+                ignoreCase: false,
+                dbPathExplicit: false));
+            Assert.False(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+                projectRoot,
+                dbPath,
+                Path.Combine(projectRoot, ".custom-cdidx-source", "app.cs"),
+                ignoreCase: false,
+                dbPathExplicit: false));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void FileChangeBatcher_NewEventDuringWait_ExtendsDebounce()
     {
         var timeProvider = new ManualTimeProvider();
@@ -422,6 +530,97 @@ public class IndexWatchRunnerTests
         }
         finally
         {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void InvokeSubRunAndEmit_JsonFullRescan_EmitsCompletionAndScanCounters_Issue4356()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            var srcDir = Path.Combine(projectRoot, "src");
+            Directory.CreateDirectory(srcDir);
+            File.WriteAllText(Path.Combine(srcDir, "A.cs"), "namespace Demo; public sealed class A { public string Name => \"A\"; }\n");
+
+            var prebuildJson = RunIndexAndCapture([projectRoot, "--db", dbPath, "--json"], out var prebuildExit);
+            Assert.Equal(CommandExitCodes.Success, prebuildExit);
+            Assert.Contains("\"status\"", prebuildJson, StringComparison.Ordinal);
+
+            var bPath = Path.Combine(srcDir, "B.cs");
+            var cPath = Path.Combine(srcDir, "C.cs");
+            File.WriteAllText(bPath, "namespace Demo; public sealed class B { public string Name => \"B\"; }\n");
+            File.WriteAllText(cPath, "namespace Demo; public sealed class C { public string Name => \"C\"; }\n");
+
+            var timeProvider = new ManualTimeProvider();
+            var batcher = new FileChangeBatcher(TimeSpan.FromMilliseconds(100), timeProvider, maxPendingPaths: 1);
+            batcher.Add(bPath);
+            batcher.Add(cPath);
+            timeProvider.Advance(TimeSpan.FromMilliseconds(200));
+            Assert.True(batcher.TryDrain(out var overflowBatch, out var fullRescan, out var overflowReason));
+            Assert.Empty(overflowBatch);
+            Assert.True(fullRescan);
+            Assert.Contains("pending path limit exceeded", overflowReason);
+
+            var options = new IndexCommandOptions
+            {
+                ProjectPath = projectRoot,
+                DbPath = dbPath,
+                Json = true,
+                Watch = true,
+                WatchPendingPathLimit = 1,
+            };
+            var method = typeof(IndexWatchRunner).GetMethod("InvokeSubRunAndEmit", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(method);
+            var args = new List<string> { projectRoot, "--json", "--quiet", "--db", dbPath };
+            string capturedOut;
+            int exitCode;
+
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                var originalErr = Console.Error;
+                using var stdout = new StringWriter();
+                using var stderr = new StringWriter();
+                Console.SetOut(stdout);
+                Console.SetError(stderr);
+                try
+                {
+                    exitCode = Assert.IsType<int>(method.Invoke(
+                        null,
+                        [options, _jsonOptions, args, Stopwatch.StartNew(), "rescanned", null, "incremental", null]));
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                    Console.SetError(originalErr);
+                }
+                capturedOut = stdout.ToString();
+            }
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            var firstLine = Assert.Single(capturedOut.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Take(1));
+            using var doc = JsonDocument.Parse(firstLine);
+            var root = doc.RootElement;
+            Assert.Equal("rescanned", root.GetProperty("status").GetString());
+            Assert.Equal("incremental", root.GetProperty("phase").GetString());
+            Assert.Equal("full_workspace", root.GetProperty("rescan_scope").GetString());
+            Assert.True(root.GetProperty("rescan_completed").GetBoolean());
+            Assert.True(root.GetProperty("files_total").GetInt64() >= 3);
+            Assert.True(root.GetProperty("files_scanned").GetInt32() >= 2);
+            Assert.True(root.GetProperty("files_skipped").GetInt32() >= 0);
+            Assert.True(root.GetProperty("files_purged").GetInt32() >= 0);
+            if (root.GetProperty("files_skipped").GetInt32() > 0)
+                Assert.Equal("unchanged_or_reused_files", root.GetProperty("files_skipped_category").GetString());
+
+            Assert.True(HasIndexedFile(dbPath, "src/B.cs"));
+            Assert.True(HasIndexedFile(dbPath, "src/C.cs"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -931,6 +1130,15 @@ public class IndexWatchRunnerTests
                 Console.SetOut(originalOut);
             }
         }
+    }
+
+    private static bool HasIndexedFile(string dbPath, string filePath)
+    {
+        using var db = new DbContext(dbPath);
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM files WHERE path = @path";
+        cmd.Parameters.AddWithValue("@path", filePath);
+        return cmd.ExecuteScalar() != null;
     }
 
     private static string CreateTempProject()
