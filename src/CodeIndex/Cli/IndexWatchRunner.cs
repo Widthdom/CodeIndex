@@ -39,6 +39,14 @@ internal static class IndexWatchRunner
         bool ignoreCase)
         => BuildWatchContract(debounce, maxPendingPaths, ignoreCase);
 
+    internal static bool ShouldIgnoreWatchInternalPathForTesting(
+        string projectRoot,
+        string resolvedDbPath,
+        string fullPath,
+        bool ignoreCase,
+        bool dbPathExplicit)
+        => ShouldIgnoreWatchInternalPath(projectRoot, resolvedDbPath, fullPath, ignoreCase, dbPathExplicit);
+
     public static int Run(
         IndexCommandOptions baseOptions,
         JsonSerializerOptions jsonOptions,
@@ -88,6 +96,7 @@ internal static class IndexWatchRunner
         var debounce = TimeSpan.FromMilliseconds(baseOptions.WatchDebounceMs ?? DefaultDebounceMs);
         var maxPendingPaths = baseOptions.WatchPendingPathLimit;
         var ignoreCase = GitHelper.ResolveIgnoreCase(projectRoot, cancellationToken);
+        var dbPathExplicit = !string.IsNullOrWhiteSpace(baseOptions.DbPath);
         var batcher = new FileChangeBatcher(debounce, ignoreCase: ignoreCase, maxPendingPaths: maxPendingPaths);
 
         var ignoreRuleRoot = GitHelper.TryGetRepositoryRoot(projectRoot, cancellationToken) ?? Path.GetFullPath(projectRoot);
@@ -114,10 +123,17 @@ internal static class IndexWatchRunner
 
                 try
                 {
-                    // The watcher root encloses .git / .cdidx / build outputs; ShouldSkipPath
-                    // honors .gitignore / .cdidxignore / built-in SkipDirs, so we drop noisy
-                    // events at the source instead of paying for a full sub-update every save.
-                    // root は .git / .cdidx / ビルド出力も含むため、ShouldSkipPath で除外して
+                    // Drop CodeIndex-owned DB/data-dir side effects before the general source
+                    // filter so watch batches cannot self-trigger on SQLite or lock sidecars.
+                    // DB/data-dir の副作用は通常フィルタより先に落とし、SQLite/lock sidecar
+                    // で watch バッチが自己トリガーしないようにする。
+                    if (ShouldIgnoreWatchInternalPath(projectRoot, resolvedDbPath, fullPath, ignoreCase, dbPathExplicit))
+                        return;
+
+                    // The watcher root encloses .git / build outputs; ShouldSkipPath honors
+                    // .gitignore / .cdidxignore / built-in SkipDirs, so we drop noisy events
+                    // at the source instead of paying for a full sub-update every save.
+                    // root は .git / ビルド出力も含むため、ShouldSkipPath で除外して
                     // 余計なサブ更新を防ぐ。
                     if (fileIndexer.ShouldSkipPath(fullPath))
                         return;
@@ -277,6 +293,76 @@ internal static class IndexWatchRunner
     {
         if (subRunExitCode != CommandExitCodes.Success)
             watchExitCode = subRunExitCode;
+    }
+
+    private static bool ShouldIgnoreWatchInternalPath(
+        string projectRoot,
+        string resolvedDbPath,
+        string fullPath,
+        bool ignoreCase,
+        bool dbPathExplicit)
+    {
+        var comparison = ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var normalizedPath = Path.GetFullPath(fullPath);
+        var normalizedProjectRoot = Path.GetFullPath(projectRoot);
+        var normalizedDbPath = Path.GetFullPath(DbPathResolver.NormalizeDbPath(resolvedDbPath));
+
+        var defaultDataDir = Path.Combine(normalizedProjectRoot, ".cdidx");
+        if (IsSameOrUnderDirectory(defaultDataDir, normalizedPath, comparison))
+            return true;
+
+        var dbDirectory = Path.GetDirectoryName(normalizedDbPath);
+        if (!dbPathExplicit && !string.IsNullOrEmpty(dbDirectory)
+            && IsSameOrUnderDirectory(dbDirectory, normalizedPath, comparison))
+        {
+            return true;
+        }
+
+        if (IsSamePath(normalizedPath, normalizedDbPath, comparison))
+            return true;
+
+        foreach (var suffix in new[] { "-wal", "-shm", "-journal" })
+        {
+            if (IsSamePath(normalizedPath, normalizedDbPath + suffix, comparison))
+                return true;
+        }
+
+        var lockPath = IndexLock.GetLockPath(normalizedDbPath);
+        if (IsSamePath(normalizedPath, lockPath, comparison)
+            || IsSamePath(normalizedPath, IndexLock.GetInfoPath(lockPath), comparison)
+            || normalizedPath.StartsWith(lockPath + ".", comparison))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsSameOrUnderDirectory(string directory, string fullPath, StringComparison comparison)
+    {
+        var normalizedDirectory = Path.GetFullPath(directory);
+        if (IsSamePath(normalizedDirectory, fullPath, comparison))
+            return true;
+
+        var directoryPrefix = Path.EndsInDirectorySeparator(normalizedDirectory)
+            ? normalizedDirectory
+            : normalizedDirectory + Path.DirectorySeparatorChar;
+        return fullPath.StartsWith(directoryPrefix, comparison);
+    }
+
+    private static bool IsSamePath(string left, string right, StringComparison comparison)
+        => string.Equals(
+            TrimDirectorySeparators(left),
+            TrimDirectorySeparators(right),
+            comparison);
+
+    private static string TrimDirectorySeparators(string value)
+    {
+        var root = Path.GetPathRoot(value);
+        var trimmed = value.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return string.IsNullOrEmpty(trimmed) && !string.IsNullOrEmpty(root)
+            ? root
+            : trimmed;
     }
 
     private static List<string> BuildSubRunArgs(IndexCommandOptions baseOptions, string? resolvedDbPath = null)

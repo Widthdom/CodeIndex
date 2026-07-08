@@ -173,6 +173,114 @@ public class IndexWatchRunnerTests
     }
 
     [Fact]
+    public void ShouldIgnoreWatchInternalPath_DefaultDataDir_IgnoresCdidxArtifacts_Issue4351()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var internalPaths = new[]
+            {
+                dbPath,
+                dbPath + "-wal",
+                dbPath + "-shm",
+                dbPath + ".lock",
+                dbPath + ".lock.info",
+                dbPath + ".lock.tmp",
+                Path.Combine(projectRoot, ".cdidx", "lock"),
+                Path.Combine(projectRoot, ".cdidx", "lock.info"),
+                Path.Combine(projectRoot, ".cdidx", "lock.tmp"),
+                Path.Combine(projectRoot, ".cdidx", "nested", "state.tmp"),
+            };
+
+            Assert.All(internalPaths, path =>
+                Assert.True(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+                    projectRoot,
+                    dbPath,
+                    path,
+                    ignoreCase: false,
+                    dbPathExplicit: false)));
+            Assert.False(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+                projectRoot,
+                dbPath,
+                Path.Combine(projectRoot, "src", "app.cs"),
+                ignoreCase: false,
+                dbPathExplicit: false));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ShouldIgnoreWatchInternalPath_ExplicitDb_IgnoresOnlyDbSidecarsAndDefaultCdidx_Issue4351()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, "src", "watch.db");
+            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+
+            Assert.True(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+                projectRoot,
+                dbPath,
+                dbPath + "-wal",
+                ignoreCase: false,
+                dbPathExplicit: true));
+            Assert.True(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+                projectRoot,
+                dbPath,
+                dbPath + ".lock.info",
+                ignoreCase: false,
+                dbPathExplicit: true));
+            Assert.True(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+                projectRoot,
+                dbPath,
+                Path.Combine(projectRoot, ".cdidx", "suggestions-codeindex.json"),
+                ignoreCase: false,
+                dbPathExplicit: true));
+            Assert.False(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+                projectRoot,
+                dbPath,
+                Path.Combine(projectRoot, "src", "app.cs"),
+                ignoreCase: false,
+                dbPathExplicit: true));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ShouldIgnoreWatchInternalPath_DataDirResolution_IgnoresResolvedDbParent_Issue4351()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, ".custom-cdidx", "codeindex.db");
+
+            Assert.True(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+                projectRoot,
+                dbPath,
+                Path.Combine(projectRoot, ".custom-cdidx", "lock.info"),
+                ignoreCase: false,
+                dbPathExplicit: false));
+            Assert.False(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+                projectRoot,
+                dbPath,
+                Path.Combine(projectRoot, ".custom-cdidx-source", "app.cs"),
+                ignoreCase: false,
+                dbPathExplicit: false));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void FileChangeBatcher_NewEventDuringWait_ExtendsDebounce()
     {
         var timeProvider = new ManualTimeProvider();
