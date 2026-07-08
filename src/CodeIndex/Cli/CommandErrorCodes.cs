@@ -59,4 +59,7 @@ internal static class CommandErrorCodes
 
     /// <summary>Filesystem case-sensitivity probing failed before a safe path-casing policy could be selected.</summary>
     public const string FileSystemCaseProbeFailed = "E015_FS_CASE_PROBE_FAILED";
+
+    /// <summary>Requested database checkpoint name does not exist.</summary>
+    public const string CheckpointNotFound = "E016_CHECKPOINT_NOT_FOUND";
 }

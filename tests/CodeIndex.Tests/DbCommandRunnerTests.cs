@@ -650,6 +650,53 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void Run_RestoreMissingCheckpoint_JsonUsesCheckpointErrorCode_Issue4337()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_restore_missing_checkpoint_4337");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        try
+        {
+            InitializeEmptyDb(dbPath);
+
+            var (exitCode, json) = RunAndCaptureJson(["restore", "missing", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("checkpoint not found", json.GetProperty("message").GetString(), StringComparison.Ordinal);
+            Assert.Equal(CommandErrorCodes.CheckpointNotFound, json.GetProperty("error_code").GetString());
+            Assert.Contains("checkpoints --list", json.GetProperty("hint").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteWorkDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void Run_CheckpointHyphenatedName_DryRunAndWriteUseSameName_Issue4337()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_hyphen_4337");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        try
+        {
+            InitializeEmptyDb(dbPath);
+
+            var (dryRunExit, dryRunJson) = RunAndCaptureJson(["checkpoint", "round7-real", "--dry-run", "--db", dbPath, "--json"]);
+            var (writeExit, writeJson) = RunAndCaptureJson(["checkpoint", "round7-real", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, dryRunExit);
+            Assert.Equal(CommandExitCodes.Success, writeExit);
+            Assert.Equal("round7-real", dryRunJson.GetProperty("name").GetString());
+            Assert.Equal("round7-real", writeJson.GetProperty("name").GetString());
+            Assert.True(Directory.Exists(writeJson.GetProperty("checkpoint_path").GetString()));
+        }
+        finally
+        {
+            DeleteWorkDirectory(root);
+        }
+    }
+
+    [Fact]
     public void Run_CheckpointDryRun_JsonPreviewsFilesWithoutCreatingCheckpoint_Issue3937()
     {
         var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_dry_run");

@@ -854,6 +854,88 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_NamedQueriesCountSummaryJsonCountsAllMatches_Issue4308()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_named_queries_count_4308");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "release/pack.md",
+                "markdown",
+                "Run dotnet pack before publishing.");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "release/pack-extra.md",
+                "markdown",
+                "Run dotnet pack after signing.");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "release/push.md",
+                "markdown",
+                "Run nuget push after package validation.");
+
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--named-query=pack=dotnet pack", "--named-query=push=nuget push", "--db", dbPath, "--format", "count", "--json", "--limit", "1"],
+                _jsonOptions));
+            var (summaryExitCode, summaryStdout, summaryStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--named-query=pack=dotnet pack", "--named-query=push=nuget push", "--db", dbPath, "--summary-only", "--json", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Equal(CommandExitCodes.Success, summaryExitCode);
+            Assert.Equal(string.Empty, countStderr);
+            Assert.Equal(string.Empty, summaryStderr);
+            using var countDocument = ParseJsonOutput(countStdout);
+            using var summaryDocument = ParseJsonOutput(summaryStdout);
+            var countRoot = countDocument.RootElement;
+            var summaryRoot = summaryDocument.RootElement;
+            Assert.Equal(2, countRoot.GetProperty("query_count").GetInt32());
+            Assert.Equal(3, countRoot.GetProperty("result_count").GetInt32());
+            Assert.Equal(3, countRoot.GetProperty("file_count").GetInt32());
+            Assert.Equal(3, summaryRoot.GetProperty("result_count").GetInt32());
+            var pack = Assert.Single(countRoot.GetProperty("queries").EnumerateArray(), query => query.GetProperty("name").GetString() == "pack");
+            Assert.Equal("dotnet pack", pack.GetProperty("query").GetString());
+            Assert.Equal(2, pack.GetProperty("count").GetInt32());
+            Assert.Equal(2, pack.GetProperty("file_count").GetInt32());
+            Assert.False(pack.TryGetProperty("results", out _));
+            Assert.Equal(2, countRoot.GetProperty("query_freshness").GetProperty("positive_evidence_query_count").GetInt32());
+            Assert.Equal(0, countRoot.GetProperty("query_freshness").GetProperty("zero_result_query_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RecipeCompactSummaryOnlyJsonUsesCountSummary_Issue4308()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_recipe_compact_summary_4308");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "resource-materialization-audit", "--db", dbPath, "--format", "compact", "--summary-only", "--json", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            Assert.Equal("resource-materialization-audit", root.GetProperty("recipe").GetString());
+            Assert.Equal("source", root.GetProperty("scope").GetString());
+            Assert.False(root.TryGetProperty("results", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_NamedQueriesRejectExactPrefixConflict_Issue3481()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_named_queries_exact_prefix");
@@ -1703,6 +1785,30 @@ public partial class QueryCommandRunnerTests
             .GetProperty("queries")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "suppressed-cleanup-diagnostics");
+        var dogfoodProcessPolicyQuery = dogfoodRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "process-launch-policy");
+        var dogfoodProcessStartInfoQuery = dogfoodRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "process-start-info");
+        var dogfoodProcessWaitQuery = dogfoodRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "process-wait-for-exit");
+        var dogfoodPluginTermQuery = dogfoodRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "plugin-term");
+        var dogfoodHookTermQuery = dogfoodRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "hook-term");
+        var dogfoodTrustOverridesQuery = dogfoodRecipe
+            .GetProperty("queries")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == "trust-overrides-contract");
         var sqlitePolicyCommandTextQuery = sqlitePolicyRecipe
             .GetProperty("queries")
             .EnumerateArray()
@@ -1961,6 +2067,17 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(dogfoodExceptionMessageQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "diagnostic_redaction");
         Assert.Contains(suppressedCleanupQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "broad_catch_boundary");
         Assert.Contains(suppressedCleanupQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "diagnostic_redaction");
+        Assert.Equal("info", dogfoodProcessPolicyQuery.GetProperty("severity").GetString());
+        Assert.Contains(dogfoodProcessPolicyQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("ProcessLaunchPolicy centralizes", StringComparison.Ordinal));
+        Assert.Contains(dogfoodProcessStartInfoQuery.GetProperty("classifiers").EnumerateArray(), item => item.GetProperty("name").GetString() == "process_launch_boundary");
+        Assert.Contains(dogfoodProcessStartInfoQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("UseShellExecute", StringComparison.Ordinal));
+        Assert.Contains(dogfoodProcessWaitQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("timeout", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("low", dogfoodPluginTermQuery.GetProperty("severity").GetString());
+        Assert.Equal("low", dogfoodHookTermQuery.GetProperty("severity").GetString());
+        Assert.Contains(dogfoodPluginTermQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("CamelCase", StringComparison.Ordinal));
+        Assert.Contains(dogfoodHookTermQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("CamelCase", StringComparison.Ordinal));
+        Assert.Equal("info", dogfoodTrustOverridesQuery.GetProperty("severity").GetString());
+        Assert.Contains(dogfoodTrustOverridesQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("sanitized", StringComparison.Ordinal));
         Assert.Equal(" Regex.", dogfoodRegexQuery.GetProperty("query").GetString());
         Assert.Contains(dogfoodRegexQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("raw System.Text.RegularExpressions.Regex static APIs", StringComparison.Ordinal));
         Assert.Contains(dogfoodRegexQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("BoundedRegex aliases and instance names ending in Regex are filtered out", StringComparison.Ordinal));
@@ -2138,6 +2255,123 @@ public partial class QueryCommandRunnerTests
             Assert.Contains(classifiers, classifier => classifier.GetProperty("name").GetString() == "source_origin");
             var taskClassifier = classifiers.Single(classifier => classifier.GetProperty("name").GetString() == "task_result_intent");
             Assert.Contains(taskClassifier.GetProperty("evidence_fields").EnumerateArray(), field => field.GetString() == "enclosing_symbol_name");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_TimestampTimezoneRecipeDocumentsClockBoundaries_Issue4321()
+    {
+        using var env = EnvironmentVariableScope.Capture(SearchAuditRecipes.RecipePathsEnvironmentVariable);
+        env.Set(SearchAuditRecipes.RecipePathsEnvironmentVariable, null);
+
+        var recipe = Assert.Single(SearchAuditRecipes.All, item => item.Name == "timestamp-timezone-boundaries");
+        var queryNames = recipe.Queries.Select(query => query.Name).ToArray();
+
+        Assert.Equal(SearchAuditRecipes.DefaultAuditScope, recipe.DefaultScope);
+        Assert.Contains("UTC or offset", recipe.Description, StringComparison.Ordinal);
+        Assert.Contains("datetime-now-local-wall-clock", queryNames);
+        Assert.Contains("datetime-utcnow-wall-clock", queryNames);
+        Assert.Contains("datetimeoffset-utcnow-offset-clock", queryNames);
+        Assert.Contains("timeprovider-utcnow-injected-clock", queryNames);
+        Assert.Contains("stopwatch-monotonic-elapsed", queryNames);
+        Assert.Contains("timeout-duration-boundary", queryNames);
+
+        var utcQuery = Assert.Single(recipe.Queries, query => query.Name == "datetime-utcnow-wall-clock");
+        Assert.Contains(utcQuery.RiskEvidence, evidence => evidence.Contains("persisted and machine-facing", StringComparison.Ordinal));
+        Assert.Contains(utcQuery.RiskEvidence, evidence => evidence.Contains("support JSON", StringComparison.Ordinal));
+        var classifier = Assert.Single(utcQuery.Classifiers, item => item.Name == "timestamp_boundary");
+        Assert.Contains(classifier.Categories, category => category.Name == "persisted_utc_or_offset");
+        Assert.Contains(classifier.Categories, category => category.Name == "cache_expiry");
+        Assert.Contains(classifier.Categories, category => category.Name == "monotonic_elapsed");
+    }
+
+    [Fact]
+    public void RunSearch_TimestampTimezoneRecipeCoversRepresentativeApis_Issue4321()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_timestamp_timezone_recipe_4321");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/time.cs",
+                "csharp",
+                """
+                using System;
+                using System.Diagnostics;
+                using System.Globalization;
+                using System.Threading;
+
+                public sealed class TimeBoundaries
+                {
+                    public void Run()
+                    {
+                        var local = DateTime.Now;
+                        var utc = DateTime.UtcNow;
+                        var offset = DateTimeOffset.UtcNow;
+                        var injected = TimeProvider.System.GetUtcNow();
+                        var parsed = DateTime.TryParse("2031-05-02T09:00:00Z", CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsedDate);
+                        var offsetParsed = DateTimeOffset.TryParse("2031-05-02T09:00:00+00:00", CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsedOffset);
+                        var relabeled = DateTime.SpecifyKind(parsedDate, DateTimeKind.Utc);
+                        var converted = local.ToUniversalTime();
+                        var roundtrip = utc.ToString("O", CultureInfo.InvariantCulture);
+                        var epoch = DateTimeOffset.FromUnixTimeSeconds(1);
+                        var stopwatch = Stopwatch.StartNew();
+                        using var timeout = new CancellationTokenSource(Timeout.InfiniteTimeSpan);
+                        Console.WriteLine($"{offset}{injected}{parsed}{offsetParsed}{relabeled}{converted}{roundtrip}{epoch}{stopwatch.Elapsed}{timeout}");
+                    }
+                }
+                """);
+            var queryNames = new[]
+            {
+                "datetime-now-local-wall-clock",
+                "datetime-utcnow-wall-clock",
+                "datetimeoffset-utcnow-offset-clock",
+                "timeprovider-utcnow-injected-clock",
+                "datetime-kind-contract",
+                "specifykind-utc-relabel",
+                "to-universal-time-conversion",
+                "roundtrip-timestamp-format",
+                "datetime-tryparse-boundary",
+                "datetimeoffset-tryparse-boundary",
+                "unix-epoch-timestamp",
+                "stopwatch-monotonic-elapsed",
+                "timeout-duration-boundary"
+            };
+            var args = new List<string>
+            {
+                "--recipe",
+                "timestamp-timezone-boundaries",
+                "--db",
+                dbPath,
+                "--json",
+                "--limit",
+                "50"
+            };
+            foreach (var queryName in queryNames)
+            {
+                args.Add("--include-query");
+                args.Add(queryName);
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(args.ToArray(), _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var queries = document.RootElement.GetProperty("queries").EnumerateArray().ToList();
+            Assert.Equal(queryNames, queries.Select(query => query.GetProperty("name").GetString() ?? string.Empty).ToArray());
+            Assert.All(queries, query => Assert.True(
+                query.GetProperty("count").GetInt32() >= 1,
+                query.GetProperty("name").GetString()));
+            var stopwatch = queries.Single(query => query.GetProperty("name").GetString() == "stopwatch-monotonic-elapsed");
+            Assert.Contains(
+                stopwatch.GetProperty("classifiers").EnumerateArray(),
+                classifier => classifier.GetProperty("name").GetString() == "timestamp_boundary");
         }
         finally
         {
@@ -2378,7 +2612,7 @@ public partial class QueryCommandRunnerTests
         };
 
         Assert.Equal(
-            ["risky-code", "string-comparison-semantics", "auth-token-audit", "dogfood-risk-patterns", "sqlite-query-policy-surfaces", "json-parse-apis", "text-encoding-boundaries", "dotnet-risk-patterns", "unsupported-operation-boundaries", "nullable-contracts", "xml-parser-security", "filesystem-traversal", "filesystem-mutation-boundaries", "bounded-read-evidence", "resource-materialization-audit", "memory-allocation-boundaries", "concurrency-state-audit", "phrase-risk-patterns", "broad-token-audit"],
+            ["risky-code", "string-comparison-semantics", "auth-token-audit", "dogfood-risk-patterns", "timestamp-timezone-boundaries", "sqlite-query-policy-surfaces", "json-parse-apis", "text-encoding-boundaries", "dotnet-risk-patterns", "unsupported-operation-boundaries", "nullable-contracts", "xml-parser-security", "filesystem-traversal", "filesystem-mutation-boundaries", "bounded-read-evidence", "resource-materialization-audit", "memory-allocation-boundaries", "concurrency-state-audit", "phrase-risk-patterns", "broad-token-audit"],
             recipes.Select(recipe => recipe.Name).ToArray());
 
         AssertRecipe(
@@ -2484,8 +2718,44 @@ public partial class QueryCommandRunnerTests
                 "raw-sql-command-text",
                 "pragma-command",
                 "environment-variable-parser",
+                "process-launch-policy",
+                "subprocess-environment-policy",
+                "process-start-info",
+                "process-start-direct",
+                "process-argument-list",
+                "process-shell-execute",
+                "process-working-directory",
+                "process-redirect-output",
+                "process-redirect-error",
+                "process-wait-for-exit",
+                "process-kill",
+                "current-directory-boundary",
+                "set-current-directory",
                 "plugin-activator",
+                "plugin-term",
+                "hook-term",
+                "trust-overrides-contract",
                 "assembly-load-context"
+            ]);
+        AssertRecipe(
+            "timestamp-timezone-boundaries",
+            SearchAuditRecipes.DefaultAuditScope,
+            ["src/**"],
+            expectedSourceExcludes,
+            [
+                "datetime-now-local-wall-clock",
+                "datetime-utcnow-wall-clock",
+                "datetimeoffset-utcnow-offset-clock",
+                "timeprovider-utcnow-injected-clock",
+                "datetime-kind-contract",
+                "specifykind-utc-relabel",
+                "to-universal-time-conversion",
+                "roundtrip-timestamp-format",
+                "datetime-tryparse-boundary",
+                "datetimeoffset-tryparse-boundary",
+                "unix-epoch-timestamp",
+                "stopwatch-monotonic-elapsed",
+                "timeout-duration-boundary"
             ]);
         AssertRecipe(
             "sqlite-query-policy-surfaces",
@@ -5533,6 +5803,7 @@ public partial class QueryCommandRunnerTests
                 "src/dogfood.cs",
                 "csharp",
                 """
+                using System.Diagnostics;
                 using System.Runtime.Loader;
                 using System.Text.Encodings.Web;
                 using System.Text.RegularExpressions;
@@ -5541,6 +5812,22 @@ public partial class QueryCommandRunnerTests
                 {
                     public void Run(Exception ex, DbCommand command, Type pluginType)
                     {
+                        var rawStartInfo = new ProcessStartInfo();
+                        var startInfo = ProcessLaunchPolicy.CreateNoShellStartInfo(
+                            fileName: "dotnet",
+                            workingDirectory: Environment.CurrentDirectory,
+                            redirectStandardOutput: true,
+                            redirectStandardError: true);
+                        SubprocessEnvironmentPolicy.ApplyGitEnvironment(startInfo);
+                        startInfo.ArgumentList.Add("--info");
+                        startInfo.UseShellExecute = false;
+                        startInfo.WorkingDirectory = Environment.CurrentDirectory;
+                        startInfo.RedirectStandardOutput = true;
+                        startInfo.RedirectStandardError = true;
+                        using var process = Process.Start(startInfo);
+                        process.WaitForExit();
+                        process.Kill();
+                        Environment.SetCurrentDirectory(Environment.CurrentDirectory);
                         if (ex.Message.Contains("locked", StringComparison.OrdinalIgnoreCase))
                             Console.WriteLine("classified");
                         Regex.IsMatch("payload", "p.*");
@@ -5550,8 +5837,10 @@ public partial class QueryCommandRunnerTests
                         var limit = int.MaxValue;
                         command.CommandText = "PRAGMA table_info(user_input)";
                         var plugin = Activator.CreateInstance(pluginType);
+                        var hook = "post extraction hook";
+                        var trust_overrides = "trust_overrides";
                         var context = AssemblyLoadContext.GetLoadContext(pluginType.Assembly);
-                        Console.WriteLine($"{stamp}{local}{limit}{plugin}{context}");
+                        Console.WriteLine($"{rawStartInfo}{stamp}{local}{limit}{plugin}{hook}{trust_overrides}{context}");
                     }
                 }
                 """);
@@ -5561,7 +5850,7 @@ public partial class QueryCommandRunnerTests
                     "--recipe",
                     "dogfood-risk-patterns",
                     "--include-query",
-                    "exception-message-classifier,static-regex-api,relaxed-json-encoder,wall-clock-deadline,local-wall-clock-deadline,max-value-sentinel,raw-sql-command-text,pragma-command,plugin-activator,assembly-load-context",
+                    "exception-message-classifier,static-regex-api,relaxed-json-encoder,wall-clock-deadline,local-wall-clock-deadline,max-value-sentinel,raw-sql-command-text,pragma-command,process-launch-policy,subprocess-environment-policy,process-start-info,process-start-direct,process-argument-list,process-shell-execute,process-working-directory,process-redirect-output,process-redirect-error,process-wait-for-exit,process-kill,current-directory-boundary,set-current-directory,plugin-activator,plugin-term,hook-term,trust-overrides-contract,assembly-load-context",
                     "--db",
                     dbPath,
                     "--json",
@@ -5579,7 +5868,11 @@ public partial class QueryCommandRunnerTests
             Assert.Contains(queries, query => query.GetProperty("name").GetString() == "exception-message-classifier");
             Assert.Contains(queries, query => query.GetProperty("name").GetString() == "static-regex-api");
             Assert.Contains(queries, query => query.GetProperty("name").GetString() == "relaxed-json-encoder");
+            Assert.Contains(queries, query => query.GetProperty("name").GetString() == "process-start-info");
+            Assert.Contains(queries, query => query.GetProperty("name").GetString() == "process-wait-for-exit");
             Assert.Contains(queries, query => query.GetProperty("name").GetString() == "plugin-activator");
+            Assert.Contains(queries, query => query.GetProperty("name").GetString() == "hook-term");
+            Assert.Contains(queries, query => query.GetProperty("name").GetString() == "trust-overrides-contract");
             Assert.All(queries, query => Assert.Contains(query.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.StartsWith("risk:", StringComparison.Ordinal)));
         }
         finally
@@ -8251,7 +8544,68 @@ jobs:
             Assert.Equal(3, json.GetProperty("end_line").GetInt32());
             Assert.Contains("public class Sample", json.GetProperty("content").GetString());
             Assert.False(json.TryGetProperty("semantic_tokens", out _));
+            Assert.False(json.TryGetProperty("semantic_tokens_hint", out _));
             Assert.True(json.TryGetProperty("content_line_spans", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunExcerpt_JsonSemanticTokensIncludesCompactHint_Issue4311()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_semantic_hint_4311");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Sample.cs",
+                "csharp",
+                "namespace Demo;\npublic class Sample { }\npublic class Other { }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                ["src/Sample.cs", "--db", dbPath, "--line", "2", "--context", "1", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(json.GetProperty("semantic_tokens").GetArrayLength() > 0);
+            Assert.Contains("--no-semantic-tokens", json.GetProperty("semantic_tokens_hint").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunExcerpt_JsonMaxBytesRejectsOversizedPayload_Issue4311()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_json_max_bytes_4311");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Sample.cs",
+                "csharp",
+                "namespace Demo;\npublic class Sample { }\npublic class Other { }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                ["src/Sample.cs", "--db", dbPath, "--line", "2", "--context", "1", "--json", "--max-json-bytes", "64"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("excerpt JSON output", stderr);
+            Assert.Contains("--max-json-bytes 64", stderr);
+            Assert.Contains("--no-semantic-tokens", stderr);
         }
         finally
         {

@@ -526,7 +526,7 @@ public static class DbCommandRunner
         {
             checkpointPath = GetCheckpointPath(fullDbPath, options.Name);
             if (!Directory.Exists(checkpointPath))
-                return WriteCommandError(options.Json, jsonOptions, $"checkpoint not found: {FormatCheckpointNameForDiagnostic(options.Name)}", CommandExitCodes.NotFound, "Run `cdidx db checkpoints --list` to see available checkpoints.", CommandErrorCodes.DbNotFound);
+                return WriteCommandError(options.Json, jsonOptions, $"checkpoint not found: {FormatCheckpointNameForDiagnostic(options.Name)}", CommandExitCodes.NotFound, "Run `cdidx db checkpoints --list` to see available checkpoints.", CommandErrorCodes.CheckpointNotFound);
 
             var backupPath = RestoreCheckpoint(fullDbPath, options.Name, checkpointPath);
             if (options.Json)

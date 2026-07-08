@@ -1004,7 +1004,7 @@ public class StatusResult
     public string? IndexedHeadBranch { get; set; }
     [JsonPropertyName("indexed_head_timestamp")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public DateTime? IndexedHeadTimestamp { get; set; }
+    public DateTimeOffset? IndexedHeadTimestamp { get; set; }
     /// <summary>
     /// Number of commits the current Git HEAD is ahead of <see cref="IndexedHeadSha"/>.
     /// 0 means the index was built against the commit currently checked out. A positive
@@ -1284,7 +1284,7 @@ public sealed class StatusHeadFreshness
     public string? IndexedHeadBranch { get; init; }
     [JsonPropertyName("indexed_head_timestamp")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public DateTime? IndexedHeadTimestamp { get; init; }
+    public DateTimeOffset? IndexedHeadTimestamp { get; init; }
     [JsonPropertyName("workspace_check_indexed_head_commit")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? WorkspaceCheckIndexedHeadCommit { get; init; }

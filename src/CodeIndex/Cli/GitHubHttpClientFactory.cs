@@ -221,8 +221,12 @@ internal static class GitHubHttpClientFactory
     internal static OperationTimeoutBudget NormalizeRequestTimeoutBudget(TimeSpan timeout)
         => OperationTimeoutBudget.FromTimeoutOrDefault(timeout, MaxRequestTimeout).Clamp(MaxRequestTimeout);
 
-    private static DateTime NormalizeUtc(DateTime value)
-        => value.Kind == DateTimeKind.Utc ? value : value.ToUniversalTime();
+    private static DateTime NormalizeUtc(DateTime value) => value.Kind switch
+    {
+        DateTimeKind.Utc => value,
+        DateTimeKind.Local => value.ToUniversalTime(),
+        _ => DateTime.SpecifyKind(value, DateTimeKind.Utc),
+    };
 
     private static DateTime AddOrMax(DateTime value, TimeSpan delta)
         => DateTime.MaxValue - value < delta ? DateTime.MaxValue : value.Add(delta);

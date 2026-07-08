@@ -1,5 +1,7 @@
+using System.Globalization;
 using System.Reflection;
 using System.Text;
+using System.Text.Json;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
@@ -162,6 +164,37 @@ public partial class DbReaderTests : IDisposable
         Assert.Equal(["indexed_head_metadata_write_failed: IOException: denied"], status.LastIndexRun.Diagnostics);
         Assert.Equal(1, status.LastIndexRun.DiagnosticCount);
         Assert.False(status.LastIndexRun.DiagnosticsTruncated);
+    }
+
+    [Fact]
+    public void GetStatus_NormalizesIndexedHeadTimestampOffsetForMachineJson_Issue4321()
+    {
+        _writer.SetMeta(DbContext.IndexedHeadShaMetaKey, "abc123");
+        _writer.SetMeta(DbContext.IndexedHeadBranchMetaKey, "main");
+        _writer.SetMeta(DbContext.IndexedHeadTimestampMetaKey, "2031-05-02T12:30:00+09:00");
+
+        var status = _reader.GetStatus();
+
+        var expected = new DateTimeOffset(2031, 5, 2, 3, 30, 0, TimeSpan.Zero);
+        Assert.Equal(expected, status.IndexedHeadTimestamp);
+        Assert.Equal(expected.UtcDateTime, status.LastWorkspaceFreshenedAt);
+        Assert.NotNull(status.HeadFreshness);
+        Assert.Equal(expected, status.HeadFreshness!.IndexedHeadTimestamp);
+
+        var json = JsonSerializer.Serialize(status);
+        using var document = JsonDocument.Parse(json);
+        var raw = document.RootElement.GetProperty("indexed_head_timestamp").GetString();
+        var parsed = DateTimeOffset.Parse(raw!, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+        Assert.Equal(TimeSpan.Zero, parsed.Offset);
+        Assert.Equal(expected, parsed);
+
+        var nestedRaw = document.RootElement
+            .GetProperty("head_freshness")
+            .GetProperty("indexed_head_timestamp")
+            .GetString();
+        var nestedParsed = DateTimeOffset.Parse(nestedRaw!, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+        Assert.Equal(TimeSpan.Zero, nestedParsed.Offset);
+        Assert.Equal(expected, nestedParsed);
     }
 
     [Theory]
@@ -5246,6 +5279,42 @@ public partial class DbReaderTests : IDisposable
         Assert.NotNull(file!.IndexedAt);
         Assert.Equal(new DateTime(2025, 6, 4, 6, 0, 0, DateTimeKind.Utc), file.IndexedAt!.Value);
         Assert.Equal(DateTimeKind.Utc, file.IndexedAt!.Value.Kind);
+    }
+
+    [Fact]
+    public void GetFileByPath_NormalizesOffsetlessStoredTimestampsAsUtc_Issue4321()
+    {
+        InsertIndexedFile(
+            "src/offsetless4321.py",
+            "python",
+            "def stamp():\n    return 1\n");
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = """
+            UPDATE files
+            SET modified = @modified, indexed_at = @indexed_at
+            WHERE path = @path
+            """;
+        cmd.Parameters.AddWithValue("@modified", "2031-05-02T09:00:00");
+        cmd.Parameters.AddWithValue("@indexed_at", "2031-05-02 09:01:00");
+        cmd.Parameters.AddWithValue("@path", "src/offsetless4321.py");
+        cmd.ExecuteNonQuery();
+
+        var expectedModified = new DateTime(2031, 5, 2, 9, 0, 0, DateTimeKind.Utc);
+        var expectedIndexedAt = new DateTime(2031, 5, 2, 9, 1, 0, DateTimeKind.Utc);
+        var file = _reader.GetFileByPath("src/offsetless4321.py");
+
+        Assert.NotNull(file);
+        Assert.NotNull(file!.Modified);
+        Assert.Equal(expectedModified, file.Modified!.Value);
+        Assert.Equal(DateTimeKind.Utc, file.Modified.Value.Kind);
+        Assert.NotNull(file.IndexedAt);
+        Assert.Equal(expectedIndexedAt, file.IndexedAt!.Value);
+        Assert.Equal(DateTimeKind.Utc, file.IndexedAt.Value.Kind);
+
+        var status = _reader.GetStatus();
+        Assert.Equal(expectedModified, status.LatestModified);
+        Assert.Equal(DateTimeKind.Utc, status.LatestModified!.Value.Kind);
     }
 
     [Fact]

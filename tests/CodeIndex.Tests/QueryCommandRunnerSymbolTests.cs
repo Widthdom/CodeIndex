@@ -349,6 +349,75 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunDefinition_JsonDefaultsToMetadataOnly_Issue4311()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_json_metadata_only_4311");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Target.cs",
+                "csharp",
+                """
+                public class Target
+                {
+                    public int Compute()
+                    {
+                        return 42;
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Compute", "--db", dbPath, "--json", "--exact-name"],
+                _jsonOptions));
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("Compute", json.GetProperty("name").GetString());
+            Assert.False(json.TryGetProperty("content", out _));
+            Assert.False(json.TryGetProperty("body_content", out _));
+            Assert.True(json.GetProperty("content_omitted").GetBoolean());
+            Assert.Equal("definition_content_not_requested", json.GetProperty("content_omitted_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDefinition_JsonMaxBytesRejectsOversizedRows_Issue4311()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_json_max_bytes_4311");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Target.cs",
+                "csharp",
+                "public class Target { public int Compute() => 42; }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Compute", "--db", dbPath, "--json", "--exact-name", "--max-json-bytes", "20"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("definition JSON output", stderr);
+            Assert.Contains("--max-json-bytes 20", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunDefinition_JsonBodyReportsByteCapRecovery_Issue3562()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_body_byte_recovery_3562");

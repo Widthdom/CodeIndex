@@ -234,6 +234,8 @@ public class CliFlagSchemaTests
         var (withValues, flagOnly) = CliFlagSchema.GetParserFlagsPartitionedByValueBearing("suggestions");
         Assert.Contains("--lang", withValues);
         Assert.Contains("--language", withValues);
+        Assert.Contains("--description", withValues);
+        Assert.Contains("--evidence-path", withValues);
         Assert.Contains("--json", flagOnly);
         Assert.DoesNotContain("--json", withValues);
 

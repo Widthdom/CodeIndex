@@ -787,6 +787,31 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
+    public void LoadSince_NormalizesLocalAndUnspecifiedCreatedAt_Issue4321()
+    {
+        var threshold = new DateTimeOffset(2031, 5, 2, 9, 0, 0, TimeSpan.Zero);
+        var older = MakeRecord("other", null, "Older timestamp suggestion");
+        older.CreatedAt = threshold.UtcDateTime.AddTicks(-1);
+        var local = MakeRecord("other", null, "Local timestamp suggestion");
+        local.CreatedAt = threshold.UtcDateTime.ToLocalTime();
+        var unspecified = MakeRecord("other", null, "Unspecified timestamp suggestion");
+        unspecified.CreatedAt = new DateTime(2031, 5, 2, 9, 0, 0, DateTimeKind.Unspecified);
+        var options = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        };
+        File.WriteAllText(
+            Path.Combine(_tempDir, "suggestions-codeindex.json"),
+            JsonSerializer.Serialize(new[] { older, local, unspecified }, options));
+
+        var loaded = _store.LoadSince(threshold).Select(s => s.Hash).ToArray();
+
+        Assert.DoesNotContain(older.Hash, loaded);
+        Assert.Contains(local.Hash, loaded);
+        Assert.Contains(unspecified.Hash, loaded);
+    }
+
+    [Fact]
     public void LoadByCategory_IsCaseInsensitive()
     {
         var crash = MakeRecord("crash_report", "csharp", "Crash suggestion");

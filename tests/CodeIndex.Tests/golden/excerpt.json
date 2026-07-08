@@ -191,5 +191,6 @@
       "type": "variable",
       "modifiers": []
     }
-  ]
+  ],
+  "semantic_tokens_hint": "Use --no-semantic-tokens to omit semantic_tokens for compact JSON."
 }

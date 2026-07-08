@@ -82,6 +82,10 @@ public class HookCommandRunnerTests
             using var document = JsonDocument.Parse(stdout);
             Assert.Equal("absent", document.RootElement.GetProperty("status").GetString());
             Assert.Equal(projectRoot, document.RootElement.GetProperty("project_path").GetString());
+            Assert.Equal("pre-commit", document.RootElement.GetProperty("diagnostic_hook_path").GetString());
+            var diagnosticProjectPath = document.RootElement.GetProperty("diagnostic_project_path").GetString();
+            Assert.Contains("hook_status_json", diagnosticProjectPath, StringComparison.Ordinal);
+            Assert.DoesNotContain(projectRoot, diagnosticProjectPath, StringComparison.Ordinal);
         }
         finally
         {
@@ -209,11 +213,14 @@ public class HookCommandRunnerTests
             var warning = warnings[0];
             Assert.Equal("staged_hook_temp", warning.GetProperty("category").GetString());
             Assert.Contains(".pre-commit.", warning.GetProperty("path").GetString(), StringComparison.Ordinal);
+            Assert.Contains(".pre-commit.", warning.GetProperty("diagnostic_path").GetString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(projectRoot, warning.GetProperty("diagnostic_path").GetString(), StringComparison.Ordinal);
             Assert.Contains("failed to delete staged_hook_temp", warning.GetProperty("message").GetString(), StringComparison.Ordinal);
             Assert.Contains("IOException", warning.GetProperty("message").GetString(), StringComparison.Ordinal);
             var backupWarning = warnings[1];
             Assert.Equal("chained_hook_backup", backupWarning.GetProperty("category").GetString());
             Assert.Contains("pre-commit.cdidx-chain", backupWarning.GetProperty("path").GetString(), StringComparison.Ordinal);
+            Assert.Equal("pre-commit.cdidx-chain", backupWarning.GetProperty("diagnostic_path").GetString());
             Assert.Contains("failed to back up existing hook", backupWarning.GetProperty("message").GetString(), StringComparison.Ordinal);
         }
         finally
@@ -247,6 +254,7 @@ public class HookCommandRunnerTests
             var warning = document.RootElement.GetProperty("warnings")[0];
             Assert.Equal("managed_hook", warning.GetProperty("category").GetString());
             Assert.Equal(hookPath, warning.GetProperty("path").GetString());
+            Assert.Equal("pre-commit", warning.GetProperty("diagnostic_path").GetString());
             Assert.Contains("failed to delete managed_hook", warning.GetProperty("message").GetString(), StringComparison.Ordinal);
             Assert.Contains("IOException", warning.GetProperty("message").GetString(), StringComparison.Ordinal);
         }
@@ -282,6 +290,7 @@ public class HookCommandRunnerTests
             var warning = document.RootElement.GetProperty("warnings")[0];
             Assert.Equal("chained_hook_backup", warning.GetProperty("category").GetString());
             Assert.Equal(chainedHookPath, warning.GetProperty("path").GetString());
+            Assert.Equal("pre-commit.cdidx-chain", warning.GetProperty("diagnostic_path").GetString());
             Assert.Contains("failed to restore chained hook backup", warning.GetProperty("message").GetString(), StringComparison.Ordinal);
             Assert.Contains("IOException", warning.GetProperty("message").GetString(), StringComparison.Ordinal);
         }
@@ -366,6 +375,30 @@ public class HookCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stdout);
             Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Index_QuietFailureSuppressesBannerButKeepsError_Issue4340()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("quiet_failure");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, ".cdidx"), "not a directory\n");
+            File.WriteAllText(Path.Combine(projectRoot, "Program.cs"), "class Program { static void Main() {} }\n");
+
+            var (exitCode, stdout, stderr) = RunIndexAndCaptureStreams([projectRoot, "--quiet"]);
+
+            Assert.NotEqual(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.DoesNotContain("Project :", stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain("Output  :", stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain("Mode    :", stderr, StringComparison.Ordinal);
+            Assert.Contains("Error", stderr, StringComparison.Ordinal);
         }
         finally
         {

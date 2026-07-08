@@ -92,7 +92,7 @@ public partial class DbReader
         // #1509: 同じ snapshot 内で HEAD metadata を引き、counts / freshness と整合させる。
         var indexedHeadSha = TryGetMetaStringInternal(DbContext.IndexedHeadShaMetaKey);
         var indexedHeadBranch = TryGetMetaStringInternal(DbContext.IndexedHeadBranchMetaKey);
-        var indexedHeadTimestamp = ParseMetaDateTime(TryGetMetaStringInternal(DbContext.IndexedHeadTimestampMetaKey));
+        var indexedHeadTimestamp = ParseMetaDateTimeOffset(TryGetMetaStringInternal(DbContext.IndexedHeadTimestampMetaKey));
         var unknownExtensionFileCount = ParseMetaLong(TryGetMetaStringInternal(DbContext.UnknownExtensionFileCountMetaKey));
         var unknownExtensionFiles = ParseMetaStringList(TryGetMetaStringInternal(DbContext.UnknownExtensionFilePathsMetaKey));
         var unknownExtensionFilesTruncated = ParseMetaBool(TryGetMetaStringInternal(DbContext.UnknownExtensionFilesTruncatedMetaKey));
@@ -150,7 +150,7 @@ public partial class DbReader
             UnknownExtensionCategoryCounts = unknownExtensionCategoryCounts,
             UnknownExtensionGroups = unknownExtensionGroups,
             IndexedAt = freshness.IndexedAt,
-            LastWorkspaceFreshenedAt = lastIndexRun?.StartedAt ?? indexedHeadTimestamp,
+            LastWorkspaceFreshenedAt = lastIndexRun?.StartedAt ?? indexedHeadTimestamp?.UtcDateTime,
             LatestModified = freshness.LatestModified,
             IndexedHeadSha = indexedHeadSha,
             IndexedHeadBranch = indexedHeadBranch,
