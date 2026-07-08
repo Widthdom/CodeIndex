@@ -2275,6 +2275,7 @@ public static partial class IndexCommandRunner
             // ここで stamp する。full scan / partial update を問わず最新の HEAD を保存する。
             TryStampIndexedHeadMetadata(writer, currentHeadCommit, currentHeadBranch, indexRunDiagnostics);
             StampWorkspacePathCaseSensitivity(writer, projectRoot, indexRunDiagnostics, cancellationToken);
+            StampIndexedSymlinkPolicy(writer, options.SymlinkPolicy, indexRunDiagnostics);
             if (options.MemoryTrace)
                 memorySamples.Add(CaptureMemorySample("finalize", stopwatch));
             var memoryTimelineForStamp = BuildMemoryTimeline(memorySamples);

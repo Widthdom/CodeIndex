@@ -185,7 +185,27 @@ public static class DiffCommandRunner
             OR key = 'sql_graph_contract_version'
             OR key LIKE 'symbol_extractor_version_%'
             OR key LIKE 'metadata_target_version_%'
+        ORDER BY
+            key,
+            value
+        """;
+
+    private const string OperationalMetaRowsSql = """
+        SELECT
+            key,
+            value
+        FROM codeindex_meta
+        WHERE
+            key = 'indexed_project_root'
+            OR key = 'indexed_follow_symlinks_policy'
+            OR key = 'indexed_head_commit'
+            OR key = 'indexed_head_commit_branch'
+            OR key = 'indexed_head_sha'
+            OR key = 'indexed_head_branch'
+            OR key = 'indexed_head_timestamp'
+            OR key = 'commit_scoped_fresh_head_sha'
             OR key = 'workspace_path_case_sensitive'
+            OR key LIKE 'last_index_run_%'
             OR key = 'unknown_extension_file_count'
             OR key = 'unknown_extension_file_paths_json'
             OR key = 'unknown_extension_files_truncated'
@@ -248,6 +268,7 @@ public static class DiffCommandRunner
         var filesOnlyInRight = new List<string>();
         var symbolsOnlyInLeft = new List<string>();
         var symbolsOnlyInRight = new List<string>();
+        List<DiffMetadataDriftJsonResult>? metadataDrift = null;
         var diagnostics = new List<DiffDiagnosticJsonResult>();
         var identical =
             summary.SchemaVersionsEqual &&
@@ -278,6 +299,11 @@ public static class DiffCommandRunner
             symbolsOnlyInRight = symbolDiff.OnlyInRight;
             identical = identical && symbolDiff.Equal;
             AddTruncationDiagnostic(diagnostics, symbolDiff.Truncated, "symbol differences");
+
+            cancellationToken.ThrowIfCancellationRequested();
+            var metadataDiff = DiffMetadataRows(leftConnection, rightConnection, options.Limit, cancellationToken);
+            metadataDrift = metadataDiff.Drift;
+            AddTruncationDiagnostic(diagnostics, metadataDiff.Truncated, "metadata differences");
         }
 
         if (identical)
@@ -304,6 +330,7 @@ public static class DiffCommandRunner
             filesOnlyInRight,
             options.Detailed ? symbolsOnlyInLeft : null,
             options.Detailed ? symbolsOnlyInRight : null,
+            options.Detailed ? metadataDrift : null,
             options.Limit,
             options.Detailed,
             truncated,
@@ -345,8 +372,82 @@ public static class DiffCommandRunner
             [],
             options.Detailed ? [] : null,
             options.Detailed ? [] : null,
+            options.Detailed ? [] : null,
             options.Limit,
             options.Detailed);
+    }
+
+    private static MetadataRowsDiff DiffMetadataRows(
+        SqliteConnection leftConnection,
+        SqliteConnection rightConnection,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        if (limit == 0)
+        {
+            var rowsEqual = RowsEqual(leftConnection, rightConnection, OperationalMetaRowsSql, cancellationToken);
+            return new MetadataRowsDiff(rowsEqual, [], !rowsEqual);
+        }
+
+        using var leftCommand = leftConnection.CreateCommand();
+        leftCommand.CommandText = OperationalMetaRowsSql;
+        using var rightCommand = rightConnection.CreateCommand();
+        rightCommand.CommandText = OperationalMetaRowsSql;
+        using var leftReader = leftCommand.ExecuteReader();
+        using var rightReader = rightCommand.ExecuteReader();
+
+        var drift = new List<DiffMetadataDriftJsonResult>(limit);
+        var leftRowsRead = 0;
+        var rightRowsRead = 0;
+        var leftHasValue = TryReadMetadataRow(leftReader, out var leftValue, ref leftRowsRead, "left", cancellationToken);
+        var rightHasValue = TryReadMetadataRow(rightReader, out var rightValue, ref rightRowsRead, "right", cancellationToken);
+        var equal = true;
+        var truncated = false;
+
+        while (leftHasValue || rightHasValue)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var comparison = leftHasValue && rightHasValue
+                ? string.CompareOrdinal(leftValue.Key, rightValue.Key)
+                : leftHasValue ? -1 : 1;
+
+            if (comparison == 0)
+            {
+                if (!string.Equals(leftValue.Value, rightValue.Value, StringComparison.Ordinal))
+                {
+                    equal = false;
+                    if (drift.Count < limit)
+                        drift.Add(new DiffMetadataDriftJsonResult(leftValue.Key, leftValue.Value, rightValue.Value));
+                    else
+                        truncated = true;
+                }
+
+                leftHasValue = TryReadMetadataRow(leftReader, out leftValue, ref leftRowsRead, "left", cancellationToken);
+                rightHasValue = TryReadMetadataRow(rightReader, out rightValue, ref rightRowsRead, "right", cancellationToken);
+                continue;
+            }
+
+            equal = false;
+            if (comparison < 0)
+            {
+                if (drift.Count < limit)
+                    drift.Add(new DiffMetadataDriftJsonResult(leftValue.Key, leftValue.Value, null));
+                else
+                    truncated = true;
+                leftHasValue = TryReadMetadataRow(leftReader, out leftValue, ref leftRowsRead, "left", cancellationToken);
+            }
+            else
+            {
+                if (drift.Count < limit)
+                    drift.Add(new DiffMetadataDriftJsonResult(rightValue.Key, null, rightValue.Value));
+                else
+                    truncated = true;
+                rightHasValue = TryReadMetadataRow(rightReader, out rightValue, ref rightRowsRead, "right", cancellationToken);
+            }
+
+        }
+
+        return new MetadataRowsDiff(equal, drift, truncated);
     }
 
     private static OrderedRowsDiff DiffOrderedRows(
@@ -641,6 +742,23 @@ public static class DiffCommandRunner
         return true;
     }
 
+    private static bool TryReadMetadataRow(SqliteDataReader reader, out MetadataRow value, ref int rowsRead, string side, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!reader.Read())
+        {
+            value = MetadataRow.Empty;
+            return false;
+        }
+
+        IncrementDiffRowsRead(ref rowsRead, side);
+        var key = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
+        var rawValue = reader.IsDBNull(1) ? null : reader.GetString(1);
+        EnsureDiffRowByteBudget(EstimateDiffValueBytes(key) + EstimateDiffValueBytes(rawValue), side);
+        value = new MetadataRow(key, rawValue);
+        return true;
+    }
+
     private static void IncrementDiffRowsRead(ref int rowsRead, string side)
     {
         rowsRead++;
@@ -823,10 +941,22 @@ public static class DiffCommandRunner
         List<string> OnlyInRight,
         bool Truncated);
 
+    private sealed record MetadataRowsDiff(
+        bool Equal,
+        List<DiffMetadataDriftJsonResult> Drift,
+        bool Truncated);
+
     private sealed record DiffRow(
         object?[] SortValues)
     {
         public static readonly DiffRow Empty = new([]);
+    }
+
+    private readonly record struct MetadataRow(
+        string Key,
+        string? Value)
+    {
+        public static readonly MetadataRow Empty = new(string.Empty, null);
     }
 
     private sealed record DiffDbHeader(

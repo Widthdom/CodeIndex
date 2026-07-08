@@ -300,6 +300,7 @@ internal sealed record DiffJsonResult(
     [property: JsonPropertyName("files_only_in_right")] List<string> FilesOnlyInRight,
     [property: JsonPropertyName("symbols_only_in_left")] List<string>? SymbolsOnlyInLeft,
     [property: JsonPropertyName("symbols_only_in_right")] List<string>? SymbolsOnlyInRight,
+    [property: JsonPropertyName("metadata_drift")] List<DiffMetadataDriftJsonResult>? MetadataDrift,
     [property: JsonPropertyName("limit")] int Limit,
     [property: JsonPropertyName("detailed")] bool Detailed,
     [property: JsonPropertyName("truncated")] bool Truncated = false,
@@ -308,6 +309,11 @@ internal sealed record DiffJsonResult(
 internal sealed record DiffDiagnosticJsonResult(
     [property: JsonPropertyName("code")] string Code,
     [property: JsonPropertyName("message")] string Message);
+
+internal sealed record DiffMetadataDriftJsonResult(
+    [property: JsonPropertyName("key")] string Key,
+    [property: JsonPropertyName("left_value")] string? LeftValue,
+    [property: JsonPropertyName("right_value")] string? RightValue);
 
 internal sealed record DiffSummaryOnlyJsonResult(
     [property: JsonPropertyName("status")] string Status,
@@ -708,6 +714,7 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(Dictionary<string, int>))]
 [JsonSerializable(typeof(Dictionary<string, long>))]
 [JsonSerializable(typeof(DiffJsonResult))]
+[JsonSerializable(typeof(DiffMetadataDriftJsonResult))]
 [JsonSerializable(typeof(DiffSummaryOnlyJsonResult))]
 [JsonSerializable(typeof(DiffSummaryJsonResult))]
 [JsonSerializable(typeof(ExactZeroHintResult))]

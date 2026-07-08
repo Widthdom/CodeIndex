@@ -1231,6 +1231,8 @@ public class StatusResult
     [JsonPropertyName("path_case_sensitive")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? PathCaseSensitive { get; set; }
+    [JsonIgnore]
+    public string? IndexedFollowSymlinksPolicy { get; set; }
     /// <summary>
     /// Connection-level SQLite PRAGMA values that affect WAL durability and checkpoint
     /// behavior for the current reader. Exposed so automation can verify the index DB is

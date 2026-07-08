@@ -117,6 +117,7 @@ public partial class DbReader
         // consistency with the other freshness signals; missing on legacy DBs.
         // #1546: case-sensitivity stamp も同 snapshot で読む。stamp 無し旧 DB は null。
         var pathCaseSensitive = ParseMetaBool(TryGetMetaStringInternal(DbContext.WorkspacePathCaseSensitiveMetaKey));
+        var indexedFollowSymlinksPolicy = TryGetMetaStringInternal(DbContext.IndexedFollowSymlinksPolicyMetaKey);
         var dbPragmaSettings = GetDbPragmaSettings();
         var preparedCommandCache = GetPreparedCommandCacheStatus();
         var dbSizeBytes = TryGetDatabaseFileSize();
@@ -174,6 +175,7 @@ public partial class DbReader
             IndexNewerThanReader = _indexNewerThanReader,
             IndexNewerThanReaderReason = _indexNewerThanReaderReason,
             PathCaseSensitive = pathCaseSensitive,
+            IndexedFollowSymlinksPolicy = indexedFollowSymlinksPolicy,
             DbPragmaSettings = dbPragmaSettings,
             PreparedCommandCache = preparedCommandCache,
             MaintenanceGuidance = maintenanceGuidance,

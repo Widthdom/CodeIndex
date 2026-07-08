@@ -1053,6 +1053,22 @@ public static partial class IndexCommandRunner
         StampWorkspacePathCaseSensitivity(writer, projectRoot, diagnostics, cancellationToken);
     }
 
+    private static void StampIndexedSymlinkPolicy(DbWriter writer, FileIndexer.SymlinkPolicy symlinkPolicy, List<string>? diagnostics)
+    {
+        try
+        {
+            writer.SetMeta(
+                DbContext.IndexedFollowSymlinksPolicyMetaKey,
+                symlinkPolicy.ToString().ToLowerInvariant());
+        }
+        catch (Exception ex)
+        {
+            // Best-effort metadata only; never fail an otherwise-successful index run.
+            // best-effort のみ。stamp 失敗で index 全体を落とさない。
+            RecordIndexRunDiagnostic(diagnostics, "indexed_symlink_policy_metadata_write_failed", ex);
+        }
+    }
+
     private static void StampIndexedHeadMetadata(DbWriter writer, string? headSha, string? headBranch)
     {
         var timestamp = headSha != null

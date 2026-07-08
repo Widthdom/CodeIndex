@@ -6200,6 +6200,63 @@ public sealed class Caller
     }
 
     [Fact]
+    public void RunStatusCheck_FollowSymlinksAll_UsesPersistedPolicy_Issue4352()
+    {
+        var projectRoot = CreateTempProject();
+        var outsideRoot = CreateTempProject();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(outsideRoot, "Outside.cs"), "public class Outside { }\n");
+            try
+            {
+                Directory.CreateSymbolicLink(Path.Combine(projectRoot, "src", "outside-link"), outsideRoot);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+            {
+                return;
+            }
+
+            var (indexExitCode, _) = RunAndCaptureJson([projectRoot, "--follow-symlinks", "all", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var db = new DbContext(dbPath))
+            {
+                Assert.Equal("all", db.GetMetaString(DbContext.IndexedFollowSymlinksPolicyMetaKey));
+            }
+
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--check", "--json"]);
+            var check = statusJson.GetProperty("workspace_check");
+
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.True(statusJson.GetProperty("index_matches_workspace").GetBoolean());
+            Assert.True(check.GetProperty("matches_workspace").GetBoolean());
+            Assert.Equal("matched", check.GetProperty("reason").GetString());
+            Assert.Equal(0, check.GetProperty("missing_file_count").GetInt32());
+            Assert.Equal(1, check.GetProperty("indexed_file_count").GetInt32());
+            Assert.Contains("src/outside-link/Outside.cs", ReadIndexedPaths(dbPath));
+
+            File.WriteAllText(Path.Combine(outsideRoot, "NewOutside.cs"), "public class NewOutside { }\n");
+            var (staleExitCode, staleStatusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--check", "--json"]);
+            var repairCommand = Assert.Single(staleStatusJson.GetProperty("repair_commands").EnumerateArray());
+            var repairArgs = repairCommand.GetProperty("args").EnumerateArray().Select(arg => arg.GetString()).ToArray();
+            var followSymlinksIndex = Array.IndexOf(repairArgs, "--follow-symlinks");
+
+            Assert.Equal(1, staleExitCode);
+            Assert.Equal("workspace_stale", staleStatusJson.GetProperty("failed_checks")[0].GetString());
+            Assert.InRange(followSymlinksIndex, 0, repairArgs.Length - 2);
+            Assert.Equal("all", repairArgs[followSymlinksIndex + 1]);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+            DeleteDirectory(outsideRoot);
+        }
+    }
+
+    [Fact]
     public void RunStatusCheck_AfterCommitScopedRefreshAtHead_DoesNotReportHeadChanged()
     {
         var projectRoot = CreateTempProject();

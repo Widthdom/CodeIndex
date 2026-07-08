@@ -75,6 +75,7 @@ Production `File.Delete`, `Directory.Delete`, and `File.Move` call sites are all
 dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search File.Delete --path src/ --exclude-tests --exact-substring --count-by file --limit 80
 dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search Directory.Delete --path src/ --exclude-tests --exact-substring --count-by file --limit 80
 dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search File.Move --path src/ --exclude-tests --exact-substring --count-by file --limit 80
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search --recipe filesystem-mutation-boundaries --format count --limit 80
 ```
 
 | Surface | Ownership and boundary policy | Cleanup or rollback policy |
