@@ -57,9 +57,16 @@ jobs:
       # --locked-mode により CodeQL の restore も packages.lock.json と同じ
       # 推移依存セットに揃え、出荷物と同じ依存グラフを解析対象にする。
       # 詳細は issue #1556 参照。
+      # CodeQL restore is analysis-only; keep the lock-file boundary but avoid
+      # failing security analysis when an external certificate revocation server
+      # is temporarily unreachable.
+      # CodeQL restore は解析用のため、lock file 境界は維持しつつ、外部の証明書失効確認
+      # サーバに一時到達できないだけで security analysis 全体を落とさない。
       - name: Restore dependencies
         if: matrix.language == 'csharp'
-        run: dotnet restore CodeIndex.sln --locked-mode
+        env:
+          NUGET_CERT_REVOCATION_MODE: offline
+        run: dotnet restore CodeIndex.sln --locked-mode -p:WarningsNotAsErrors=NU3018
 
       - name: Build for CodeQL
         if: matrix.language == 'csharp'
