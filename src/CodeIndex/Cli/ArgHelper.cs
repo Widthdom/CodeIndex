@@ -22,6 +22,7 @@ public static class ArgHelper
         "--start", "--end",
         "--before", "--after",
         "--snippet-lines",
+        "--line-scan-limit",
         "--max-hops",
         "--depth",
         "--completions",

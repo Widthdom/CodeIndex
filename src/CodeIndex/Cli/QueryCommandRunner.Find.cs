@@ -9,7 +9,8 @@ namespace CodeIndex.Cli;
 
 public static partial class QueryCommandRunner
 {
-    private const string FindUsage = "Usage: cdidx find <query> (--path <glob>|--all) [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--exact] [--regex] [--count]\n       cdidx find --query <query> (--path <glob>|--all) [...]\n       cdidx find [options] -- <query>";
+    internal const int MaxFindLineScanLimit = 10_000_000;
+    private const string FindUsage = "Usage: cdidx find <query> (--path <glob>|--all) [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--line-scan-limit <n>] [--exact] [--regex] [--count]\n       cdidx find --query <query> (--path <glob>|--all) [...]\n       cdidx find [options] -- <query>";
 
     public static int RunFind(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
@@ -21,7 +22,14 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
 
-        var findValidationError = ValidateFindArgs(preparedFindArgs);
+        if (!TryExtractFindLineScanLimit(preparedFindArgs, out var normalizedFindArgs, out var findLineScanLimit, out var lineScanLimitError))
+        {
+            CommandErrorWriter.WriteStderr(lineScanLimitError!);
+            CommandErrorWriter.WriteStderr(FindUsage);
+            return CommandExitCodes.UsageError;
+        }
+
+        var findValidationError = ValidateFindArgs(normalizedFindArgs);
         if (findValidationError != null)
         {
             CommandErrorWriter.WriteStderr(findValidationError);
@@ -30,7 +38,7 @@ public static partial class QueryCommandRunner
         }
 
         var options = ParseArgs(
-            preparedFindArgs,
+            normalizedFindArgs,
             jsonDefault: false,
             allowNamedQuery: true,
             validateDefaultSnippetLines: false);
@@ -75,12 +83,26 @@ public static partial class QueryCommandRunner
             CommandErrorWriter.WriteStderr(FindUsage);
             return CommandExitCodes.UsageError;
         }
+        if (!options.All && findLineScanLimit.HasValue)
+        {
+            CommandErrorWriter.WriteStderr("Error: --line-scan-limit is only supported with find --all");
+            CommandErrorWriter.WriteStderr("Hint: remove --line-scan-limit for scoped --path searches, or use --all to run a capped repository-wide scan.");
+            CommandErrorWriter.WriteStderr(FindUsage);
+            return CommandExitCodes.UsageError;
+        }
+        if (options.OutputFormat == OutputFormatCompact && HasFindContextOption(normalizedFindArgs))
+        {
+            CommandErrorWriter.WriteStderr("Error: find --format compact does not include snippets, so it cannot be combined with --before, --after, or --snippet-lines");
+            CommandErrorWriter.WriteStderr("Hint: use default text or JSON output when you need context, or omit context flags for compact locations.");
+            CommandErrorWriter.WriteStderr(FindUsage);
+            return CommandExitCodes.UsageError;
+        }
 
         return WithDb(options, jsonOptions, reader =>
         {
             var pathPatterns = options.All ? null : options.PathPatterns;
             var candidateFileLimit = options.All ? FindAllCandidateFileLimit : (int?)null;
-            var lineLimit = options.All ? FindAllLineScanLimit : (int?)null;
+            var lineLimit = options.All ? findLineScanLimit ?? FindAllLineScanLimit : (int?)null;
             if (options.CountOnly)
             {
                 FindCountResult counts;
@@ -378,6 +400,67 @@ public static partial class QueryCommandRunner
 
         return null;
     }
+
+    private static bool TryExtractFindLineScanLimit(
+        string[] args,
+        out string[] normalizedArgs,
+        out int? lineScanLimit,
+        out string? error)
+    {
+        var stripped = new List<string>(args.Length);
+        lineScanLimit = null;
+        error = null;
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            var rawArg = args[i];
+            string? value = null;
+            if (rawArg == "--line-scan-limit")
+            {
+                if (i + 1 >= args.Length)
+                {
+                    normalizedArgs = args;
+                    error = BuildMissingOptionValueError("--line-scan-limit");
+                    return false;
+                }
+
+                value = args[++i];
+            }
+            else if (rawArg.StartsWith("--line-scan-limit=", StringComparison.Ordinal))
+            {
+                value = rawArg["--line-scan-limit=".Length..];
+            }
+            else
+            {
+                stripped.Add(rawArg);
+                continue;
+            }
+
+            if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) || parsed <= 0)
+            {
+                normalizedArgs = args;
+                error = BuildPositiveIntegerError("--line-scan-limit", ConsoleUi.FormatBoundedValue(value), "--line-scan-limit");
+                return false;
+            }
+
+            if (parsed > MaxFindLineScanLimit)
+            {
+                normalizedArgs = args;
+                error = BuildPositiveIntegerUpperBoundError("--line-scan-limit", ConsoleUi.FormatBoundedValue(value), MaxFindLineScanLimit);
+                return false;
+            }
+
+            lineScanLimit = parsed;
+        }
+
+        normalizedArgs = [.. stripped];
+        return true;
+    }
+
+    private static bool HasFindContextOption(string[] preparedFindArgs) =>
+        HasOption(preparedFindArgs, "--before")
+        || HasOption(preparedFindArgs, "--after")
+        || HasOption(preparedFindArgs, "--snippet-lines");
 
     private static (int Before, int After, int? SnippetLines) ResolveFindContext(QueryCommandOptions options, string[] preparedFindArgs)
     {
