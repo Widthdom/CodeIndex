@@ -11,19 +11,20 @@ public static partial class QueryCommandRunner
 {
     public static int RunSymbols(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var previewOptionError = ValidatePreviewOptions("symbols", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        var effectiveCmdArgs = ExpandCompactAlias(cmdArgs);
+        var previewOptionError = ValidatePreviewOptions("symbols", effectiveCmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
         if (previewOptionError != null)
         {
             CommandErrorWriter.WriteStderr(previewOptionError);
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(
-            cmdArgs,
+            effectiveCmdArgs,
             jsonDefault: false,
             allowNamedQuery: true,
             validateDefaultSnippetLines: false,
             validateDefaultMaxLineWidth: false);
-        if (TryWriteUnsupportedOptionError("symbols", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("symbols"), options.Query))
+        if (TryWriteUnsupportedOptionError("symbols", effectiveCmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("symbols"), options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedOutputFormat("symbols", options, SymbolOutputFormats, "Use `--format json` for symbol rows, `--format compact` for bounded compact rows, `--format count` for symbol totals, or `--format lsp|qf|sarif` for editor/diagnostic locations."))
             return CommandExitCodes.UsageError;
@@ -253,6 +254,42 @@ public static partial class QueryCommandRunner
             }
             return CommandExitCodes.Success;
         });
+    }
+
+    private static string[] ExpandCompactAlias(string[] args)
+    {
+        if (!args.Any(arg => string.Equals(arg, "--compact", StringComparison.Ordinal)))
+            return args;
+
+        var valueOptions = CliFlagSchema.GetParserFlagsPartitionedByValueBearing("symbols").WithValues;
+        var expanded = new List<string>(args.Length + 1);
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (string.Equals(arg, "--", StringComparison.Ordinal))
+            {
+                expanded.Add(arg);
+                if (i + 1 < args.Length)
+                    expanded.Add(args[++i]);
+                continue;
+            }
+
+            var inlineValue = TrySplitInlineOptionValue(arg, out var inlineOptionName);
+            var normalizedArg = inlineOptionName ?? arg;
+            if (string.Equals(arg, "--compact", StringComparison.Ordinal))
+            {
+                expanded.Add("--format");
+                expanded.Add(OutputFormatCompact);
+            }
+            else
+            {
+                expanded.Add(arg);
+            }
+
+            if (!inlineValue && valueOptions.Contains(normalizedArg) && i + 1 < args.Length)
+                expanded.Add(args[++i]);
+        }
+        return expanded.ToArray();
     }
 
     private static string FormatSymbolRankSuffix(SymbolResult result)
@@ -583,8 +620,15 @@ public static partial class QueryCommandRunner
         Func<T, JsonNode?> rowFactory,
         ExactQuerySignal? exactSignal)
     {
-        var omittedCount = Math.Max(0, totalCount - emittedRows);
-        var rowLimitReached = totalCount > results.Count;
+        var summaryOnlyOmittedCount = options.SummaryOnly ? totalCount : 0;
+        var limitOmittedCount = options.SummaryOnly ? 0 : Math.Max(0, totalCount - results.Count);
+        var byteLimitOmittedCount = !options.SummaryOnly && options.MaxJsonBytes.HasValue
+            ? Math.Max(0, results.Count - emittedRows)
+            : 0;
+        var omittedCount = options.SummaryOnly
+            ? summaryOnlyOmittedCount
+            : Math.Max(0, totalCount - emittedRows);
+        var rowLimitReached = limitOmittedCount > 0;
         var byteLimitReached = !options.SummaryOnly && options.MaxJsonBytes.HasValue && emittedRows < results.Count;
         var payload = new JsonObject
         {
@@ -593,7 +637,7 @@ public static partial class QueryCommandRunner
             ["file_count"] = fileCount,
             ["emitted_count"] = emittedRows,
             ["omitted_count"] = omittedCount,
-            ["truncated"] = omittedCount > 0,
+            ["truncated"] = rowLimitReached || byteLimitReached,
         };
 
         if (options.OutputFormat == OutputFormatCompact)
@@ -602,6 +646,12 @@ public static partial class QueryCommandRunner
             payload["summary_only"] = true;
         if (options.MaxJsonBytes.HasValue)
             payload["max_json_bytes"] = options.MaxJsonBytes.Value;
+        if (summaryOnlyOmittedCount > 0)
+            payload["summary_only_omitted_count"] = summaryOnlyOmittedCount;
+        if (limitOmittedCount > 0)
+            payload["limit_omitted_count"] = limitOmittedCount;
+        if (byteLimitOmittedCount > 0)
+            payload["byte_limit_omitted_count"] = byteLimitOmittedCount;
         if (rowLimitReached)
             payload["row_limit_reached"] = true;
         if (byteLimitReached)

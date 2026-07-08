@@ -16,6 +16,14 @@ public static partial class QueryCommandRunner
             CommandErrorWriter.WriteStderr(previewOptionError);
             return CommandExitCodes.UsageError;
         }
+        if (HasOption(cmdArgs, "--rank-by"))
+        {
+            WriteUsageError(
+                "--rank-by is not supported by hotspots.",
+                GetUsageLineOrThrow("hotspots"),
+                "Hotspots are already ranked by graph-derived reference score; use --group-by symbol|file|statement or --group-by-name. For fan-in/fan-out traversal, use callers or callees with --rank-by weighted|count|kind.");
+            return CommandExitCodes.UsageError;
+        }
         var options = ParseArgs(
             cmdArgs,
             jsonDefault: false,

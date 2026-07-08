@@ -49,6 +49,13 @@ public static partial class QueryCommandRunner
         OutputFormatCompact,
     };
 
+    private static readonly HashSet<string> LanguageOutputFormats = new(StringComparer.Ordinal)
+    {
+        OutputFormatText,
+        OutputFormatJson,
+        OutputFormatCount,
+    };
+
     private static readonly HashSet<string> InspectOutputFormats = new(StringComparer.Ordinal)
     {
         OutputFormatText,

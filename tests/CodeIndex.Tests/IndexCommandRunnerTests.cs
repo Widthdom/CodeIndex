@@ -3854,6 +3854,7 @@ public sealed class Caller
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "class App { }\n");
+            File.WriteAllText(Path.Combine(projectRoot, ".cdidxignore"), "# fixture ignore config\n");
             File.WriteAllText(Path.Combine(projectRoot, "notes.mystery"), "unknown extension\n");
             File.WriteAllText(Path.Combine(projectRoot, "data.unmapped"), "also unknown\n");
 
@@ -3863,26 +3864,33 @@ public sealed class Caller
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Contains("Unknown extension files: 2", stdout);
+            Assert.Contains("Unknown extension files: 3", stdout);
+            Assert.Contains(".cdidxignore", stdout);
             Assert.Contains("data.unmapped", stdout);
             Assert.Contains("notes.mystery", stdout);
             Assert.Equal(CommandExitCodes.Success, statusExitCode);
-            Assert.Equal(2, statusJson.GetProperty("unknown_extension_file_count").GetInt64());
+            Assert.Equal(3, statusJson.GetProperty("unknown_extension_file_count").GetInt64());
             Assert.False(statusJson.GetProperty("unknown_extension_files_truncated").GetBoolean());
             Assert.Equal(50, statusJson.GetProperty("unknown_extension_file_path_limit").GetInt64());
             var paths = statusJson.GetProperty("unknown_extension_files")
                 .EnumerateArray()
                 .Select(path => path.GetString())
                 .ToArray();
-            Assert.Equal(["data.unmapped", "notes.mystery"], paths);
+            Assert.Equal([".cdidxignore", "data.unmapped", "notes.mystery"], paths);
             var extensionCounts = statusJson.GetProperty("unknown_extension_extension_counts");
+            Assert.Equal(1, extensionCounts.GetProperty(".cdidxignore").GetInt64());
             Assert.Equal(1, extensionCounts.GetProperty(".mystery").GetInt64());
             Assert.Equal(1, extensionCounts.GetProperty(".unmapped").GetInt64());
             var categoryCounts = statusJson.GetProperty("unknown_extension_category_counts");
             Assert.Equal(2, categoryCounts.GetProperty("language_support_candidate").GetInt64());
+            Assert.Equal(1, categoryCounts.GetProperty("repository_metadata").GetInt64());
             var groups = statusJson.GetProperty("unknown_extension_groups").EnumerateArray().ToArray();
-            Assert.Equal(2, groups.Length);
-            Assert.All(groups, group =>
+            Assert.Equal(3, groups.Length);
+            var repositoryGroup = groups.Single(group => group.GetProperty("extension").GetString() == ".cdidxignore");
+            Assert.Equal("repository_metadata", repositoryGroup.GetProperty("category").GetString());
+            Assert.Equal("ignore_configuration", repositoryGroup.GetProperty("recommended_action").GetString());
+            Assert.Equal(1, repositoryGroup.GetProperty("count").GetInt64());
+            Assert.All(groups.Where(group => group.GetProperty("extension").GetString() != ".cdidxignore"), group =>
             {
                 Assert.Equal("language_support_candidate", group.GetProperty("category").GetString());
                 Assert.Equal("language_support", group.GetProperty("recommended_action").GetString());
