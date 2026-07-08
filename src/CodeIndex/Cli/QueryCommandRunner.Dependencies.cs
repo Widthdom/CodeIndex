@@ -109,7 +109,7 @@ public static partial class QueryCommandRunner
                                 zeroPayload["impact_mode"] = analysis.ImpactMode;
                                 zeroPayload["heuristic"] = analysis.Heuristic;
                                 zeroPayload["file_impacts"] = new JsonArray();
-                                AddImpactDefinitionJsonFields(zeroPayload, analysis, jsonOptions);
+                                AddImpactDefinitionsJsonFields(zeroPayload, analysis, options, jsonOptions);
                                 if (analysis.ZeroResultReason != null)
                                     zeroPayload["zero_result_reason"] = analysis.ZeroResultReason;
                                 AddImpactFailureJsonFields(zeroPayload, analysis, jsonOptions);
@@ -118,7 +118,15 @@ public static partial class QueryCommandRunner
                                 AddSqlGraphContractJsonFields(zeroPayload, sqlGraphSignal);
                                 AddImpactOptionWarnings(zeroPayload, options);
                             });
-                        Console.WriteLine(payload.ToJsonString(jsonOptions));
+                        var writeExitCode = WriteJsonPayloadWithOptionalByteLimit(
+                            payload,
+                            options,
+                            jsonOptions,
+                            "impact",
+                            "impact",
+                            "Reduce --limit, lower --max-hops, use --count, or increase --max-json-bytes.");
+                        if (writeExitCode != CommandExitCodes.Success)
+                            return writeExitCode;
                     }
                     else
                     {
@@ -165,7 +173,15 @@ public static partial class QueryCommandRunner
                         AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
                         AddImpactOptionWarnings(payload, options);
                         AddCountEnvelopeJsonFields(payload, reader, jsonOptions, options);
-                        Console.WriteLine(payload.ToJsonString(jsonOptions));
+                        var writeExitCode = WriteJsonPayloadWithOptionalByteLimit(
+                            payload,
+                            options,
+                            jsonOptions,
+                            "impact",
+                            "impact count",
+                            "Reduce --limit, lower --max-hops, use --count, or increase --max-json-bytes.");
+                        if (writeExitCode != CommandExitCodes.Success)
+                            return writeExitCode;
                     }
                     else
                     {
@@ -201,7 +217,7 @@ public static partial class QueryCommandRunner
                             zeroPayload["impact_mode"] = analysis.ImpactMode;
                             zeroPayload["heuristic"] = analysis.Heuristic;
                             zeroPayload["file_impacts"] = new JsonArray();
-                            AddImpactDefinitionJsonFields(zeroPayload, analysis, jsonOptions);
+                            AddImpactDefinitionsJsonFields(zeroPayload, analysis, options, jsonOptions);
                             if (analysis.ZeroResultReason != null)
                                 zeroPayload["zero_result_reason"] = analysis.ZeroResultReason;
                             AddImpactFailureJsonFields(zeroPayload, analysis, jsonOptions);
@@ -212,7 +228,15 @@ public static partial class QueryCommandRunner
                         });
                     if (!analysis.GraphTableAvailable)
                         payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
-                    Console.WriteLine(payload.ToJsonString(jsonOptions));
+                    var writeExitCode = WriteJsonPayloadWithOptionalByteLimit(
+                        payload,
+                        options,
+                        jsonOptions,
+                        "impact",
+                        "impact",
+                        "Reduce --limit, lower --max-hops, use --count, or increase --max-json-bytes.");
+                    if (writeExitCode != CommandExitCodes.Success)
+                        return writeExitCode;
                 }
                 else if (!options.Json)
                 {
@@ -279,7 +303,7 @@ public static partial class QueryCommandRunner
                     ["callers"] = JsonSerializer.SerializeToNode(analysis.Callers, CliJsonSerializerContextFactory.Create(jsonOptions).ListImpactResult),
                     ["file_impacts"] = JsonSerializer.SerializeToNode(analysis.FileImpacts, CliJsonSerializerContextFactory.Create(jsonOptions).ListFileDependencyResult),
                 };
-                AddImpactDefinitionJsonFields(payload, analysis, jsonOptions);
+                AddImpactDefinitionsJsonFields(payload, analysis, options, jsonOptions);
                 AddImpactTerminationJsonFields(payload, analysis, jsonOptions);
                 if (analysis.TruncatedReason != null)
                     payload["truncated_reason"] = analysis.TruncatedReason;
@@ -288,7 +312,15 @@ public static partial class QueryCommandRunner
                 AddImpactFailureJsonFields(payload, analysis, jsonOptions);
                 AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
                 AddImpactOptionWarnings(payload, options);
-                Console.WriteLine(payload.ToJsonString(jsonOptions));
+                var writeExitCode = WriteJsonPayloadWithOptionalByteLimit(
+                    payload,
+                    options,
+                    jsonOptions,
+                    "impact",
+                    "impact",
+                    "Reduce --limit, lower --max-hops, use --count, or increase --max-json-bytes.");
+                if (writeExitCode != CommandExitCodes.Success)
+                    return writeExitCode;
             }
             else
             {
@@ -346,20 +378,29 @@ public static partial class QueryCommandRunner
             payload["suggestion_type"] = analysis.SuggestionType;
     }
 
-    private static void AddImpactDefinitionJsonFields(JsonObject payload, ImpactAnalysisResult analysis, JsonSerializerOptions jsonOptions)
+    private static void AddImpactDefinitionsJsonFields(JsonObject payload, ImpactAnalysisResult analysis, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
     {
         var definitions = BuildImpactDefinitionJsonResults(analysis.Definitions);
+        var definitionLimit = Math.Max(1, options.Limit);
+        var visibleDefinitions = definitions.Take(definitionLimit).ToList();
         payload["definition_count"] = analysis.DefinitionCount;
         payload["definition_file_count"] = analysis.DefinitionFileCount;
         payload["has_multiple_definitions"] = analysis.HasMultipleDefinitions;
         payload["has_class_like_definitions"] = analysis.HasClassLikeDefinitions;
         payload["has_multiple_definition_files"] = analysis.HasMultipleDefinitionFiles;
-        payload["definition_output_count"] = definitions.Count;
+        payload["definition_output_count"] = visibleDefinitions.Count;
         payload["definition_result_scope"] = definitions.Count == analysis.Definitions.Count
             ? "definition_sites"
             : "logical_partial_families";
         payload["definitions_collapsed"] = definitions.Count != analysis.Definitions.Count;
-        payload["definitions"] = JsonSerializer.SerializeToNode(definitions, CliJsonSerializerContextFactory.Create(jsonOptions).ListSymbolResult);
+        payload["definition_limit"] = definitionLimit;
+        payload["definitions"] = JsonSerializer.SerializeToNode(visibleDefinitions, CliJsonSerializerContextFactory.Create(jsonOptions).ListSymbolResult);
+        if (visibleDefinitions.Count >= definitions.Count)
+            return;
+
+        payload["definitions_truncated"] = true;
+        payload["definitions_omitted"] = definitions.Count - visibleDefinitions.Count;
+        payload["definitions_hint"] = "Raise --limit or narrow with --lang, --kind, --path, or --exclude-path to inspect additional matching definitions.";
     }
 
     private static List<SymbolResult> BuildImpactDefinitionJsonResults(IReadOnlyList<SymbolResult> definitions)

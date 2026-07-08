@@ -59,9 +59,9 @@ internal static class CliFlagSchema
     // サブコマンド一覧の正本。ConsoleUi.Commands と一致することをテストで確認する。
     public static IReadOnlyList<string> AllCommands { get; } =
     [
-        "index", "backfill-fold", "optimize", "search", "recipes", "audit", "definition", "goto", "references", "callers", "callees",
-        "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status", "validate-config",
-        "validate", "deps", "impact", "unused", "hotspots", "suggestions", "languages", "batch", "mcp", "completions", "db", "vacuum", "report", "license", "upgrade",
+        "index", "hooks", "backfill-fold", "optimize", "vacuum", "search", "recipes", "audit", "definition", "goto", "references", "callers", "callees",
+        "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status", "workspace", "config", "upgrade", "validate-config",
+        "doctor", "db", "diff", "report", "validate", "deps", "impact", "unused", "hotspots", "suggestions", "export", "import", "languages", "batch", "mcp", "lsp", "completions", "license",
     ];
 
     // Commands that accept the `--` end-of-options marker so a user can pass a literal
@@ -340,7 +340,7 @@ internal static class CliFlagSchema
             new() { Name = "--sample", ValuePlaceholder = "<n>", Description = "Search: deterministically sample returned rows down to n results", Commands = Set("search") },
             new() { Name = "--per-file-limit", ValuePlaceholder = "<n>", Description = "Search/Audit grouped output: representative matches per file", Commands = Set("search", "audit") },
             new() { Name = "--total-limit", ValuePlaceholder = "<n>", Description = "Search/Audit recipes: cap emitted rows across all child queries", Commands = Set("search", "audit") },
-            new() { Name = "--max-json-bytes", ValuePlaceholder = "<n>", Description = "Search/Recipes/Audit/Map/Files/Symbols/Deps/Hotspots JSON: bound emitted JSON bytes; discovery commands truncate rows with metadata", Commands = Set("search", "recipes", "audit", "map", "files", "symbols", "deps", "hotspots") },
+            new() { Name = "--max-json-bytes", ValuePlaceholder = "<n>", Description = "Search/Definition/Excerpt/Inspect/Impact/Recipes/Audit/Map/Files/Symbols/Deps/Hotspots JSON: bound emitted JSON bytes; discovery commands truncate rows with metadata", Commands = Set("search", "definition", "excerpt", "inspect", "impact", "recipes", "audit", "map", "files", "symbols", "deps", "hotspots") },
             new() { Name = "--next-steps", Description = "Search: print inspect/excerpt follow-up commands for top hits", Commands = Set("search") },
             new() { Name = "--exclude-comments", Description = "Search: suppress comment-only matches after origin classification", Commands = Set("search") },
             new() { Name = "--exclude-strings", Description = "Search: suppress string, regex, and help-text matches after origin classification", Commands = Set("search") },
