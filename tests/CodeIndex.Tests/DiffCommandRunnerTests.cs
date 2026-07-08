@@ -196,11 +196,11 @@ public class DiffCommandRunnerTests
 
             var (exitCode, output) = RunWithCapturedOut([leftDb, rightDb, "--json", "--detailed", "--limit", "5"]);
 
-            Assert.Equal(1, exitCode);
+            Assert.Equal(0, exitCode);
             using var document = JsonDocument.Parse(output);
             var root = document.RootElement;
-            Assert.Equal("different", root.GetProperty("status").GetString());
-            Assert.False(root.GetProperty("identical").GetBoolean());
+            Assert.Equal("identical", root.GetProperty("status").GetString());
+            Assert.True(root.GetProperty("identical").GetBoolean());
             Assert.Empty(root.GetProperty("files_only_in_left").EnumerateArray());
             Assert.Empty(root.GetProperty("files_only_in_right").EnumerateArray());
             Assert.Empty(root.GetProperty("symbols_only_in_left").EnumerateArray());
@@ -209,6 +209,40 @@ public class DiffCommandRunnerTests
             Assert.Equal("indexed_project_root", drift.GetProperty("key").GetString());
             Assert.Equal(Path.GetFullPath(leftRoot), drift.GetProperty("left_value").GetString());
             Assert.Equal(Path.GetFullPath(rightRoot), drift.GetProperty("right_value").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DetailedJsonTreatsWriterVersionAsOperationalMetadataDrift_Issue4357()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_writer_meta_left");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_writer_meta_right");
+        try
+        {
+            var leftDb = SeedDb(leftRoot, includeExtraFile: false);
+            var rightDb = SeedDb(rightRoot, includeExtraFile: false);
+            var sharedProjectRoot = Path.GetFullPath(leftRoot);
+            SetMeta(leftDb, DbContext.IndexedProjectRootMetaKey, sharedProjectRoot);
+            SetMeta(rightDb, DbContext.IndexedProjectRootMetaKey, sharedProjectRoot);
+            SetMeta(leftDb, DbContext.CdidxWriterVersionMetaKey, "writer-left");
+            SetMeta(rightDb, DbContext.CdidxWriterVersionMetaKey, "writer-right");
+
+            var (exitCode, output) = RunWithCapturedOut([leftDb, rightDb, "--json", "--detailed", "--limit", "5"]);
+
+            Assert.Equal(0, exitCode);
+            using var document = JsonDocument.Parse(output);
+            var root = document.RootElement;
+            Assert.Equal("identical", root.GetProperty("status").GetString());
+            Assert.True(root.GetProperty("identical").GetBoolean());
+            var drift = Assert.Single(root.GetProperty("metadata_drift").EnumerateArray());
+            Assert.Equal("cdidx_writer_version", drift.GetProperty("key").GetString());
+            Assert.Equal("writer-left", drift.GetProperty("left_value").GetString());
+            Assert.Equal("writer-right", drift.GetProperty("right_value").GetString());
         }
         finally
         {

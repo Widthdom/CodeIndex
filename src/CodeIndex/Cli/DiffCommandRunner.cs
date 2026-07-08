@@ -185,7 +185,18 @@ public static class DiffCommandRunner
             OR key = 'sql_graph_contract_version'
             OR key LIKE 'symbol_extractor_version_%'
             OR key LIKE 'metadata_target_version_%'
-            OR key = 'indexed_project_root'
+        ORDER BY
+            key,
+            value
+        """;
+
+    private const string OperationalMetaRowsSql = """
+        SELECT
+            key,
+            value
+        FROM codeindex_meta
+        WHERE
+            key = 'indexed_project_root'
             OR key = 'indexed_follow_symlinks_policy'
             OR key = 'indexed_head_commit'
             OR key = 'indexed_head_commit_branch'
@@ -292,7 +303,6 @@ public static class DiffCommandRunner
             cancellationToken.ThrowIfCancellationRequested();
             var metadataDiff = DiffMetadataRows(leftConnection, rightConnection, options.Limit, cancellationToken);
             metadataDrift = metadataDiff.Drift;
-            identical = identical && metadataDiff.Equal;
             AddTruncationDiagnostic(diagnostics, metadataDiff.Truncated, "metadata differences");
         }
 
@@ -375,14 +385,14 @@ public static class DiffCommandRunner
     {
         if (limit == 0)
         {
-            var rowsEqual = RowsEqual(leftConnection, rightConnection, MetaRowsSql, cancellationToken);
+            var rowsEqual = RowsEqual(leftConnection, rightConnection, OperationalMetaRowsSql, cancellationToken);
             return new MetadataRowsDiff(rowsEqual, [], !rowsEqual);
         }
 
         using var leftCommand = leftConnection.CreateCommand();
-        leftCommand.CommandText = MetaRowsSql;
+        leftCommand.CommandText = OperationalMetaRowsSql;
         using var rightCommand = rightConnection.CreateCommand();
-        rightCommand.CommandText = MetaRowsSql;
+        rightCommand.CommandText = OperationalMetaRowsSql;
         using var leftReader = leftCommand.ExecuteReader();
         using var rightReader = rightCommand.ExecuteReader();
 
