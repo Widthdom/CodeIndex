@@ -48,6 +48,42 @@ internal static class TestDeterminism
             : $"Timed out waiting for {description}. {diagnostics}");
     }
 
+    internal static void WaitUntil(
+        Func<bool> condition,
+        string description,
+        TimeSpan? timeout = null,
+        TimeSpan? pollInterval = null,
+        Func<string>? getDiagnostics = null)
+    {
+        ArgumentNullException.ThrowIfNull(condition);
+        if (string.IsNullOrWhiteSpace(description))
+            throw new ArgumentException("A wait description is required.", nameof(description));
+
+        var effectiveTimeout = timeout ?? DefaultTimeout;
+        var effectivePollInterval = pollInterval ?? DefaultPollInterval;
+        if (effectiveTimeout < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(timeout), effectiveTimeout, "Timeout must be non-negative.");
+        if (effectivePollInterval <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(pollInterval), effectivePollInterval, "Poll interval must be positive.");
+
+        var started = TimeProvider.System.GetTimestamp();
+        while (TimeProvider.System.GetElapsedTime(started) < effectiveTimeout)
+        {
+            if (condition())
+                return;
+
+            SleepUntilNextPoll(started, effectiveTimeout, effectivePollInterval);
+        }
+
+        if (condition())
+            return;
+
+        var diagnostics = getDiagnostics?.Invoke();
+        Assert.Fail(string.IsNullOrWhiteSpace(diagnostics)
+            ? $"Timed out waiting for {description}."
+            : $"Timed out waiting for {description}. {diagnostics}");
+    }
+
     internal static async Task<bool> WaitUntilOrTimeoutAsync(
         Func<bool> condition,
         TimeSpan timeout,
@@ -86,6 +122,36 @@ internal static class TestDeterminism
             Task.Delay(observationWindow ?? BlockedObservationWindow));
 
         Assert.NotSame(task, completed);
+    }
+
+    internal static void AssertConditionRemainsTrue(
+        Func<bool> condition,
+        string description,
+        TimeSpan duration,
+        TimeSpan? pollInterval = null,
+        Func<string>? getDiagnostics = null)
+    {
+        ArgumentNullException.ThrowIfNull(condition);
+        if (string.IsNullOrWhiteSpace(description))
+            throw new ArgumentException("An observation description is required.", nameof(description));
+        if (duration < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(duration), duration, "Duration must be non-negative.");
+
+        var effectivePollInterval = pollInterval ?? DefaultPollInterval;
+        if (effectivePollInterval <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(pollInterval), effectivePollInterval, "Poll interval must be positive.");
+
+        var started = TimeProvider.System.GetTimestamp();
+        while (TimeProvider.System.GetElapsedTime(started) < duration)
+        {
+            if (!condition())
+                FailConditionBecameFalse(description, getDiagnostics);
+
+            SleepUntilNextPoll(started, duration, effectivePollInterval);
+        }
+
+        if (!condition())
+            FailConditionBecameFalse(description, getDiagnostics);
     }
 
     internal static Task RunConcurrentlyAsync(params Action[] workers)
@@ -142,5 +208,24 @@ internal static class TestDeterminism
 
         start.Set();
         return await Task.WhenAll(tasks);
+    }
+
+    private static void SleepUntilNextPoll(long started, TimeSpan timeout, TimeSpan pollInterval)
+    {
+        // Synchronous tests cannot await the shared async polling helper. Keep the
+        // blocking wait centralized and bounded so call sites do not grow ad hoc sleeps.
+        var remaining = timeout - TimeProvider.System.GetElapsedTime(started);
+        if (remaining <= TimeSpan.Zero)
+            return;
+
+        Thread.Sleep(remaining < pollInterval ? remaining : pollInterval);
+    }
+
+    private static void FailConditionBecameFalse(string description, Func<string>? getDiagnostics)
+    {
+        var diagnostics = getDiagnostics?.Invoke();
+        Assert.Fail(string.IsNullOrWhiteSpace(diagnostics)
+            ? $"Condition became false while observing {description}."
+            : $"Condition became false while observing {description}. {diagnostics}");
     }
 }

@@ -792,16 +792,12 @@ public class PostExtractionHookTests
     }
 
     private static void AssertFileDoesNotAppear(string path, TimeSpan duration)
-    {
-        var deadline = DateTimeOffset.UtcNow.Add(duration);
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            if (File.Exists(path))
-                throw new InvalidOperationException("The timed-out post-extraction hook continued running after the callback returned.");
-
-            Thread.Sleep(25);
-        }
-    }
+        => TestDeterminism.AssertConditionRemainsTrue(
+            () => !File.Exists(path),
+            "timed-out post-extraction hook to remain stopped after the callback returned",
+            duration,
+            pollInterval: TimeSpan.FromMilliseconds(25),
+            getDiagnostics: () => $"path={path}");
 }
 
 public sealed class AWaitingPostExtractionHook : IPostExtractionHook

@@ -343,18 +343,7 @@ public partial class McpServerTests : IDisposable
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition, string description)
-    {
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            if (condition())
-                return;
-
-            await Task.Delay(10);
-        }
-
-        Assert.Fail($"Timed out waiting for {description}.");
-    }
+        => await TestDeterminism.WaitUntilAsync(condition, description);
 
     private void InsertIndexedFile(string path, string lang, string content, bool generated = false)
     {

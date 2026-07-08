@@ -719,19 +719,16 @@ public class McpAuditLogTests : IDisposable
 
     private static AuditLogSink.AuditLogDiagnostics WaitForAuditQueueFullDrop(AuditLogSink sink)
     {
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
-        AuditLogSink.AuditLogDiagnostics diagnostics;
-        do
-        {
-            diagnostics = sink.SnapshotDiagnostics();
-            if (diagnostics.QueueFullDropCount > 0)
-                return diagnostics;
+        var diagnostics = sink.SnapshotDiagnostics();
+        TestDeterminism.WaitUntil(
+            () =>
+            {
+                diagnostics = sink.SnapshotDiagnostics();
+                return diagnostics.QueueFullDropCount > 0;
+            },
+            "audit log queue saturation to drop at least one record",
+            getDiagnostics: () => $"queue_full_drop_count={diagnostics.QueueFullDropCount}");
 
-            Thread.Sleep(10);
-        }
-        while (DateTimeOffset.UtcNow < deadline);
-
-        Assert.Fail("Expected audit log queue saturation to drop at least one record.");
         return diagnostics;
     }
 

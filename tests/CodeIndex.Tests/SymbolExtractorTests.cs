@@ -14155,7 +14155,7 @@ public partial class SymbolExtractorTests
             }
             catch (InvalidOperationException) when (attempt < MaxAttempts)
             {
-                System.Threading.Thread.Sleep(1);
+                Thread.Yield();
             }
             catch (InvalidOperationException ex)
             {
