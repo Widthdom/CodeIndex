@@ -1038,6 +1038,24 @@ public partial class ReleaseWorkflowTests
     }
 
     [Fact]
+    public void ReleaseWorkflow_SecretAndTokenScopesStayOfficialAndMinimal_Issue4331()
+    {
+        var workflow = ReadReleaseWorkflow().ReplaceLineEndings("\n");
+
+        Assert.Contains("permissions:\n  contents: read", workflow);
+        Assert.Equal(1, CountOccurrences(workflow, "packages: write"));
+        Assert.Contains("publish-container:\n    if: github.repository == 'Widthdom/CodeIndex'", workflow);
+        Assert.Contains("publish-nuget:\n    if: github.repository == 'Widthdom/CodeIndex'", workflow);
+        Assert.Contains("permissions:\n      contents: read\n      id-token: write\n      attestations: write", workflow);
+        Assert.Contains("NUGET_TRUSTED_PUBLISHING_USER: ${{ vars.NUGET_TRUSTED_PUBLISHING_USER }}", workflow);
+        Assert.Contains("--api-key \"${{ steps.nuget-login.outputs.NUGET_API_KEY }}\"", workflow);
+        Assert.DoesNotContain("secrets.NUGET_API_KEY", workflow);
+
+        var secretLines = FindSecretLinesInUngatedReleaseJobs(workflow);
+        Assert.Empty(secretLines);
+    }
+
+    [Fact]
     public void Dependabot_DoesNotBumpIlLinkPastReleaseSdkMajor()
     {
         var dependabot = RepositoryTestPaths.ReadText(".github", "dependabot.yml");
@@ -1060,6 +1078,60 @@ public partial class ReleaseWorkflowTests
     }
 
     private static string ReadReleaseWorkflow() => RepositoryTestPaths.ReadWorkflow("release.yml");
+
+    private static int CountOccurrences(string text, string value)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = text.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += value.Length;
+        }
+
+        return count;
+    }
+
+    private static IReadOnlyList<string> FindSecretLinesInUngatedReleaseJobs(string workflow)
+    {
+        var failures = new List<string>();
+        var inJobs = false;
+        string? jobName = null;
+        var jobHasOfficialRepositoryGate = false;
+        var lines = workflow.Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            if (line == "jobs:")
+            {
+                inJobs = true;
+                continue;
+            }
+
+            if (!inJobs)
+                continue;
+
+            if (line.StartsWith("  ", StringComparison.Ordinal)
+                && !line.StartsWith("    ", StringComparison.Ordinal)
+                && line.EndsWith(':'))
+            {
+                jobName = line.Trim().TrimEnd(':');
+                jobHasOfficialRepositoryGate = false;
+                continue;
+            }
+
+            if (jobName == null)
+                continue;
+
+            if (line.Trim() == "if: github.repository == 'Widthdom/CodeIndex'")
+                jobHasOfficialRepositoryGate = true;
+
+            if (line.Contains("secrets.", StringComparison.Ordinal) && !jobHasOfficialRepositoryGate)
+                failures.Add($"{i + 1}:{jobName}:{line.Trim()}");
+        }
+
+        return failures;
+    }
 
     private static string ExtractWorkflowJob(string workflow, string jobName)
     {
