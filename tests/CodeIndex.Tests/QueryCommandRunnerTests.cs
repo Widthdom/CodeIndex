@@ -2428,7 +2428,7 @@ public partial class QueryCommandRunnerTests
         var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(args, _jsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Contains($"Error: {flag} is not supported for languages.", stderr);
+        Assert.Contains($"Error [E010_USAGE_ERROR]: {flag} is not supported for languages.", stderr);
         Assert.Contains($"Usage: {ConsoleUi.GetUsageLine("languages")}", stderr);
         Assert.DoesNotContain("requires a value", stderr);
         Assert.DoesNotContain("Warning: unknown option", stderr);
