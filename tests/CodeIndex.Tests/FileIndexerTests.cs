@@ -3243,155 +3243,113 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFiles_SubdirectoryProjectRoot_RespectsAncestorGitignoreDirectoryRule()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
         var projectRoot = Path.Combine(tempDir, "subproj");
-        try
-        {
-            Directory.CreateDirectory(projectRoot);
-            RunGit(tempDir, "init");
-            RunGit(tempDir, "config", "user.name", "CodeIndex Tests");
-            RunGit(tempDir, "config", "user.email", "tests@example.com");
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "subproj/\n");
-            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('ignored root dir')");
+        Directory.CreateDirectory(projectRoot);
+        RunGit(tempDir, "init");
+        RunGit(tempDir, "config", "user.name", "CodeIndex Tests");
+        RunGit(tempDir, "config", "user.email", "tests@example.com");
+        File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "subproj/\n");
+        File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('ignored root dir')");
 
-            var files = ScanRelativeFiles(
-                new FileIndexer(projectRoot, GitHelper.ResolveIgnoreCase(projectRoot), GitHelper.TryGetRepositoryRoot(projectRoot)),
-                projectRoot);
+        var files = ScanRelativeFiles(
+            new FileIndexer(projectRoot, GitHelper.ResolveIgnoreCase(projectRoot), GitHelper.TryGetRepositoryRoot(projectRoot)),
+            projectRoot);
 
-            Assert.Empty(files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Empty(files);
     }
 
     [Fact]
     public void ScanFiles_ProjectRootNamedNodeModules_IsIndexedButNestedSkipDirsRemainSkipped()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
         var projectRoot = Path.Combine(tempDir, "node_modules");
-        try
-        {
-            Directory.CreateDirectory(projectRoot);
-            File.WriteAllText(Path.Combine(projectRoot, "app.js"), "console.log('ignored root dir');");
-            Directory.CreateDirectory(Path.Combine(projectRoot, "node_modules"));
-            File.WriteAllText(Path.Combine(projectRoot, "node_modules", "nested.js"), "console.log('skip child');");
+        Directory.CreateDirectory(projectRoot);
+        File.WriteAllText(Path.Combine(projectRoot, "app.js"), "console.log('ignored root dir');");
+        Directory.CreateDirectory(Path.Combine(projectRoot, "node_modules"));
+        File.WriteAllText(Path.Combine(projectRoot, "node_modules", "nested.js"), "console.log('skip child');");
 
-            var files = ScanRelativeFiles(projectRoot);
+        var files = ScanRelativeFiles(projectRoot);
 
-            Assert.Equal(["app.js"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(["app.js"], files);
     }
 
     [Fact]
     public void ScanFiles_RespectsGitignoreBracketCharacterClassesAndRanges()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[ab].cs\nfile[0-9].py\n");
-            File.WriteAllText(Path.Combine(tempDir, "a.cs"), "class A { }");
-            File.WriteAllText(Path.Combine(tempDir, "b.cs"), "class B { }");
-            File.WriteAllText(Path.Combine(tempDir, "c.cs"), "class C { }");
-            File.WriteAllText(Path.Combine(tempDir, "file1.py"), "print('ignored')");
-            File.WriteAllText(Path.Combine(tempDir, "filex.py"), "print('kept')");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[ab].cs\nfile[0-9].py\n");
+        File.WriteAllText(Path.Combine(tempDir, "a.cs"), "class A { }");
+        File.WriteAllText(Path.Combine(tempDir, "b.cs"), "class B { }");
+        File.WriteAllText(Path.Combine(tempDir, "c.cs"), "class C { }");
+        File.WriteAllText(Path.Combine(tempDir, "file1.py"), "print('ignored')");
+        File.WriteAllText(Path.Combine(tempDir, "filex.py"), "print('kept')");
 
-            var files = ScanRelativeFiles(tempDir);
+        var files = ScanRelativeFiles(tempDir);
 
-            Assert.Equal([".gitignore", "c.cs", "filex.py"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal([".gitignore", "c.cs", "filex.py"], files);
     }
 
     [Fact]
     public void ScanFiles_RespectsGitignoreNegatedBracketCharacterClass()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[!a].cs\n");
-            File.WriteAllText(Path.Combine(tempDir, "a.cs"), "class A { }");
-            File.WriteAllText(Path.Combine(tempDir, "b.cs"), "class B { }");
-            File.WriteAllText(Path.Combine(tempDir, "c.cs"), "class C { }");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[!a].cs\n");
+        File.WriteAllText(Path.Combine(tempDir, "a.cs"), "class A { }");
+        File.WriteAllText(Path.Combine(tempDir, "b.cs"), "class B { }");
+        File.WriteAllText(Path.Combine(tempDir, "c.cs"), "class C { }");
 
-            var files = ScanRelativeFiles(tempDir);
+        var files = ScanRelativeFiles(tempDir);
 
-            Assert.Equal([".gitignore", "a.cs"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal([".gitignore", "a.cs"], files);
     }
 
     [Fact]
     public void ScanFiles_RespectsGitignoreBracketCharacterClassWithLeadingLiteralRightBracket()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[]].cs\n");
-            File.WriteAllText(Path.Combine(tempDir, "].cs"), "class Ignored { }");
-            File.WriteAllText(Path.Combine(tempDir, "keep.cs"), "class Kept { }");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[]].cs\n");
+        File.WriteAllText(Path.Combine(tempDir, "].cs"), "class Ignored { }");
+        File.WriteAllText(Path.Combine(tempDir, "keep.cs"), "class Kept { }");
 
-            var files = ScanRelativeFiles(tempDir);
+        var files = ScanRelativeFiles(tempDir);
 
-            Assert.Equal([".gitignore", "keep.cs"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal([".gitignore", "keep.cs"], files);
     }
 
     [Fact]
     public void ScanFiles_RespectsGitignoreAsciiPosixDigitBracketCharacterClass()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[[:digit:]].py\n");
-            File.WriteAllText(Path.Combine(tempDir, "1.py"), "print('ignored')");
-            File.WriteAllText(Path.Combine(tempDir, "١.py"), "print('kept non-ascii digit')");
-            File.WriteAllText(Path.Combine(tempDir, "a.py"), "print('kept')");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[[:digit:]].py\n");
+        File.WriteAllText(Path.Combine(tempDir, "1.py"), "print('ignored')");
+        File.WriteAllText(Path.Combine(tempDir, "١.py"), "print('kept non-ascii digit')");
+        File.WriteAllText(Path.Combine(tempDir, "a.py"), "print('kept')");
 
-            var files = ScanRelativeFiles(tempDir);
+        var files = ScanRelativeFiles(tempDir);
 
-            Assert.Equal([".gitignore", "a.py", "١.py"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal([".gitignore", "a.py", "١.py"], files);
     }
 
     [Fact]
     public void ScanFiles_RespectsGitignoreAsciiPosixUpperBracketCharacterClass()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[[:upper:]].cs\n");
-            File.WriteAllText(Path.Combine(tempDir, "A.cs"), "class Ignored { }");
-            File.WriteAllText(Path.Combine(tempDir, "É.cs"), "class KeptNonAscii { }");
-            File.WriteAllText(Path.Combine(tempDir, "keep.cs"), "class Kept { }");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[[:upper:]].cs\n");
+        File.WriteAllText(Path.Combine(tempDir, "A.cs"), "class Ignored { }");
+        File.WriteAllText(Path.Combine(tempDir, "É.cs"), "class KeptNonAscii { }");
+        File.WriteAllText(Path.Combine(tempDir, "keep.cs"), "class Kept { }");
 
-            var files = ScanRelativeFiles(tempDir);
+        var files = ScanRelativeFiles(tempDir);
 
-            Assert.Equal([".gitignore", "keep.cs", "É.cs"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal([".gitignore", "keep.cs", "É.cs"], files);
     }
 
     [Fact]
