@@ -4372,37 +4372,31 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunDeps_ExcludeTestsFiltersSourceAndTargetEdges_Issue3895()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_exclude_tests_targets");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            InsertFileWithReferences(dbPath, "src/Caller.cs", ["ProductionTarget", "TestTarget", "ToolTestTarget"]);
-            InsertFileWithReference(dbPath, "tests/TestCaller.cs", "ProductionTarget");
-            InsertFileWithReference(dbPath, "tools/CodeIndex.TestTelemetry/ToolCaller.cs", "ProductionTarget");
-            InsertFileWithSymbol(dbPath, "src/ProductionTarget.cs", "ProductionTarget");
-            InsertFileWithSymbol(dbPath, "tests/TestTarget.cs", "TestTarget");
-            InsertFileWithSymbol(dbPath, "tools/CodeIndex.TestTelemetry/Program.cs", "ToolTestTarget");
-            MarkDependencyGraphReady(dbPath);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_exclude_tests_targets");
+        var projectRoot = project.Root;
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        InsertFileWithReferences(dbPath, "src/Caller.cs", ["ProductionTarget", "TestTarget", "ToolTestTarget"]);
+        InsertFileWithReference(dbPath, "tests/TestCaller.cs", "ProductionTarget");
+        InsertFileWithReference(dbPath, "tools/CodeIndex.TestTelemetry/ToolCaller.cs", "ProductionTarget");
+        InsertFileWithSymbol(dbPath, "src/ProductionTarget.cs", "ProductionTarget");
+        InsertFileWithSymbol(dbPath, "tests/TestTarget.cs", "TestTarget");
+        InsertFileWithSymbol(dbPath, "tools/CodeIndex.TestTelemetry/Program.cs", "ToolTestTarget");
+        MarkDependencyGraphReady(dbPath);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", dbPath, "--json", "--exclude-tests", "--limit", "10", "--lang", "csharp"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--json", "--exclude-tests", "--limit", "10", "--lang", "csharp"],
+            _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var edge = Assert.Single(document.RootElement.GetProperty("edges").EnumerateArray());
+        using var document = ParseJsonOutput(stdout);
+        var edge = Assert.Single(document.RootElement.GetProperty("edges").EnumerateArray());
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(1, document.RootElement.GetProperty("count").GetInt32());
-            Assert.Equal("src/Caller.cs", edge.GetProperty("source_path").GetString());
-            Assert.Equal("src/ProductionTarget.cs", edge.GetProperty("target_path").GetString());
-            Assert.DoesNotContain("tests/", stdout);
-            Assert.DoesNotContain("CodeIndex.TestTelemetry", stdout);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(1, document.RootElement.GetProperty("count").GetInt32());
+        Assert.Equal("src/Caller.cs", edge.GetProperty("source_path").GetString());
+        Assert.Equal("src/ProductionTarget.cs", edge.GetProperty("target_path").GetString());
+        Assert.DoesNotContain("tests/", stdout);
+        Assert.DoesNotContain("CodeIndex.TestTelemetry", stdout);
     }
 
     [Fact]
@@ -4478,133 +4472,115 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunDeps_JsonFiltersNoiseSymbolsAndAddsMetadata_Issue3943()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_symbol_filter");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            InsertFileWithReferences(dbPath, "src/Caller.cs", ["Append", "AppendLine", "Encoding", "Regex", "Path", "ToString", "Write", "Domain.Alpha"]);
-            InsertFileWithReference(dbPath, "src/NoiseCaller.cs", "Regex");
-            InsertFileWithSymbols(dbPath, "src/Targets.cs", ["Append", "AppendLine", "Encoding", "Regex", "Path", "ToString", "Write", "Domain.Alpha"]);
-            MarkDependencyGraphReady(dbPath);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_symbol_filter");
+        var projectRoot = project.Root;
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        InsertFileWithReferences(dbPath, "src/Caller.cs", ["Append", "AppendLine", "Encoding", "Regex", "Path", "ToString", "Write", "Domain.Alpha"]);
+        InsertFileWithReference(dbPath, "src/NoiseCaller.cs", "Regex");
+        InsertFileWithSymbols(dbPath, "src/Targets.cs", ["Append", "AppendLine", "Encoding", "Regex", "Path", "ToString", "Write", "Domain.Alpha"]);
+        MarkDependencyGraphReady(dbPath);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                [
-                    "--db", dbPath,
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            [
+                "--db", dbPath,
                     "--json",
                     "--limit", "10",
                     "--lang", "csharp",
                     "--suppress-noise",
                     "--symbol", "Domain.Alpha",
                     "--symbol-family", "Domain."
-                ],
-                _jsonOptions));
+            ],
+            _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-            var edge = Assert.Single(json.GetProperty("edges").EnumerateArray());
-            var queryContext = json.GetProperty("query_context");
-            var symbolFilter = json.GetProperty("symbol_filter");
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
+        var edge = Assert.Single(json.GetProperty("edges").EnumerateArray());
+        var queryContext = json.GetProperty("query_context");
+        var symbolFilter = json.GetProperty("symbol_filter");
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("1", json.GetProperty("api_version").GetString());
-            Assert.Equal(1, json.GetProperty("count").GetInt32());
-            Assert.Equal("src/Caller.cs", edge.GetProperty("source_path").GetString());
-            Assert.Equal("src/Targets.cs", edge.GetProperty("target_path").GetString());
-            Assert.Equal(8, edge.GetProperty("reference_count").GetInt32());
-            Assert.True(edge.GetProperty("ranking_score").GetDouble() > 0.0);
-            Assert.Equal("Domain.Alpha", edge.GetProperty("symbols").GetString());
-            Assert.True(queryContext.GetProperty("suppress_noise").GetBoolean());
-            Assert.Equal("Domain.Alpha", queryContext.GetProperty("symbol")[0].GetString());
-            Assert.Equal("Domain.", queryContext.GetProperty("symbol_family")[0].GetString());
-            Assert.True(symbolFilter.GetProperty("suppress_noise").GetBoolean());
-            Assert.Equal(2, symbolFilter.GetProperty("edges_before").GetInt32());
-            Assert.Equal(1, symbolFilter.GetProperty("edges_after").GetInt32());
-            Assert.Equal(1, symbolFilter.GetProperty("edges_removed").GetInt32());
-            Assert.Equal(9, symbolFilter.GetProperty("symbols_before").GetInt32());
-            Assert.Equal(1, symbolFilter.GetProperty("symbols_after").GetInt32());
-            Assert.Equal(8, symbolFilter.GetProperty("symbols_removed").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal("1", json.GetProperty("api_version").GetString());
+        Assert.Equal(1, json.GetProperty("count").GetInt32());
+        Assert.Equal("src/Caller.cs", edge.GetProperty("source_path").GetString());
+        Assert.Equal("src/Targets.cs", edge.GetProperty("target_path").GetString());
+        Assert.Equal(8, edge.GetProperty("reference_count").GetInt32());
+        Assert.True(edge.GetProperty("ranking_score").GetDouble() > 0.0);
+        Assert.Equal("Domain.Alpha", edge.GetProperty("symbols").GetString());
+        Assert.True(queryContext.GetProperty("suppress_noise").GetBoolean());
+        Assert.Equal("Domain.Alpha", queryContext.GetProperty("symbol")[0].GetString());
+        Assert.Equal("Domain.", queryContext.GetProperty("symbol_family")[0].GetString());
+        Assert.True(symbolFilter.GetProperty("suppress_noise").GetBoolean());
+        Assert.Equal(2, symbolFilter.GetProperty("edges_before").GetInt32());
+        Assert.Equal(1, symbolFilter.GetProperty("edges_after").GetInt32());
+        Assert.Equal(1, symbolFilter.GetProperty("edges_removed").GetInt32());
+        Assert.Equal(9, symbolFilter.GetProperty("symbols_before").GetInt32());
+        Assert.Equal(1, symbolFilter.GetProperty("symbols_after").GetInt32());
+        Assert.Equal(8, symbolFilter.GetProperty("symbols_removed").GetInt32());
     }
 
     [Fact]
     public void RunDeps_CyclesSuppressNoiseRemovesGenericAppendCycle_Issue4114()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_append_noise_cycle");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            InsertFileWithSymbolsAndReferences(dbPath, "src/BoundedLineReader.cs", ["Append"], ["Append"]);
-            InsertFileWithSymbolsAndReferences(dbPath, "src/BoundedTextWriter.cs", ["Append"], ["Append"]);
-            MarkDependencyGraphReady(dbPath);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_append_noise_cycle");
+        var projectRoot = project.Root;
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        InsertFileWithSymbolsAndReferences(dbPath, "src/BoundedLineReader.cs", ["Append"], ["Append"]);
+        InsertFileWithSymbolsAndReferences(dbPath, "src/BoundedTextWriter.cs", ["Append"], ["Append"]);
+        MarkDependencyGraphReady(dbPath);
 
-            var (defaultExitCode, defaultStdout, defaultStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", dbPath, "--json", "--cycles", "--limit", "10", "--lang", "csharp"],
-                _jsonOptions));
+        var (defaultExitCode, defaultStdout, defaultStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--json", "--cycles", "--limit", "10", "--lang", "csharp"],
+            _jsonOptions));
 
-            using var defaultDocument = ParseJsonOutput(defaultStdout);
+        using var defaultDocument = ParseJsonOutput(defaultStdout);
 
-            Assert.Equal(CommandExitCodes.Success, defaultExitCode);
-            Assert.Equal(string.Empty, defaultStderr);
-            Assert.True(defaultDocument.RootElement.GetProperty("count").GetInt32() >= 1);
+        Assert.Equal(CommandExitCodes.Success, defaultExitCode);
+        Assert.Equal(string.Empty, defaultStderr);
+        Assert.True(defaultDocument.RootElement.GetProperty("count").GetInt32() >= 1);
 
-            var (filteredExitCode, filteredStdout, filteredStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", dbPath, "--json", "--cycles", "--limit", "10", "--lang", "csharp", "--suppress-noise"],
-                _jsonOptions));
+        var (filteredExitCode, filteredStdout, filteredStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--json", "--cycles", "--limit", "10", "--lang", "csharp", "--suppress-noise"],
+            _jsonOptions));
 
-            using var filteredDocument = ParseJsonOutput(filteredStdout);
-            var json = filteredDocument.RootElement;
-            var symbolFilter = json.GetProperty("symbol_filter");
+        using var filteredDocument = ParseJsonOutput(filteredStdout);
+        var json = filteredDocument.RootElement;
+        var symbolFilter = json.GetProperty("symbol_filter");
 
-            Assert.Equal(CommandExitCodes.Success, filteredExitCode);
-            Assert.Equal(string.Empty, filteredStderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.Empty(json.GetProperty("cycles").EnumerateArray());
-            Assert.True(symbolFilter.GetProperty("suppress_noise").GetBoolean());
-            Assert.Equal(0, symbolFilter.GetProperty("edges_after").GetInt32());
-            Assert.True(symbolFilter.GetProperty("symbols_removed").GetInt32() > 0);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, filteredExitCode);
+        Assert.Equal(string.Empty, filteredStderr);
+        Assert.Equal(0, json.GetProperty("count").GetInt32());
+        Assert.Empty(json.GetProperty("cycles").EnumerateArray());
+        Assert.True(symbolFilter.GetProperty("suppress_noise").GetBoolean());
+        Assert.Equal(0, symbolFilter.GetProperty("edges_after").GetInt32());
+        Assert.True(symbolFilter.GetProperty("symbols_removed").GetInt32() > 0);
     }
 
     [Fact]
     public void RunDeps_CyclesApplySymbolFilters_Issue3943()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_cycles_symbol_filter");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            InsertFileWithSymbolsAndReferences(dbPath, "src/A.cs", ["A"], ["B"]);
-            InsertFileWithSymbolsAndReferences(dbPath, "src/B.cs", ["B"], ["A"]);
-            MarkDependencyGraphReady(dbPath);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_cycles_symbol_filter");
+        var projectRoot = project.Root;
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        InsertFileWithSymbolsAndReferences(dbPath, "src/A.cs", ["A"], ["B"]);
+        InsertFileWithSymbolsAndReferences(dbPath, "src/B.cs", ["B"], ["A"]);
+        MarkDependencyGraphReady(dbPath);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", dbPath, "--json", "--cycles", "--symbol", "NoSuchSymbol", "--lang", "csharp"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--json", "--cycles", "--symbol", "NoSuchSymbol", "--lang", "csharp"],
+            _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-            var symbolFilter = json.GetProperty("symbol_filter");
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
+        var symbolFilter = json.GetProperty("symbol_filter");
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.Empty(json.GetProperty("cycles").EnumerateArray());
-            Assert.Equal("NoSuchSymbol", json.GetProperty("query_context").GetProperty("symbol")[0].GetString());
-            Assert.Equal(2, symbolFilter.GetProperty("edges_before").GetInt32());
-            Assert.Equal(0, symbolFilter.GetProperty("edges_after").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(0, json.GetProperty("count").GetInt32());
+        Assert.Empty(json.GetProperty("cycles").EnumerateArray());
+        Assert.Equal("NoSuchSymbol", json.GetProperty("query_context").GetProperty("symbol")[0].GetString());
+        Assert.Equal(2, symbolFilter.GetProperty("edges_before").GetInt32());
+        Assert.Equal(0, symbolFilter.GetProperty("edges_after").GetInt32());
     }
 
     [Fact]
