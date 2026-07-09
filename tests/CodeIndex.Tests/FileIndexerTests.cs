@@ -4237,92 +4237,74 @@ public partial class FileIndexerTests
     [Fact]
     public void PurgeFilesOutsideRetainedSet_UsesNfcRetainedPaths()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(tempDir);
-            var nfcPath = "Caf\u00e9.cs";
-            var nfdPath = "Cafe\u0301.cs";
-            TestProjectHelper.InsertIndexedFile(dbPath, nfcPath, "csharp", "class CafeFixture { }\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var dbPath = TestProjectHelper.CreateProjectDb(tempDir);
+        var nfcPath = "Caf\u00e9.cs";
+        var nfdPath = "Cafe\u0301.cs";
+        TestProjectHelper.InsertIndexedFile(dbPath, nfcPath, "csharp", "class CafeFixture { }\n");
 
-            using var db = new DbContext(dbPath);
-            db.InitializeSchema();
-            var writer = new DbWriter(db.Connection);
-            var retainedPaths = new[]
-                {
-                    Path.Combine(tempDir, nfdPath),
-                }
-                .Select(path => FileIndexer.NormalizeIndexPath(Path.GetRelativePath(tempDir, path)))
-                .ToHashSet(StringComparer.Ordinal);
+        using var db = new DbContext(dbPath);
+        db.InitializeSchema();
+        var writer = new DbWriter(db.Connection);
+        var retainedPaths = new[]
+            {
+                Path.Combine(tempDir, nfdPath),
+            }
+            .Select(path => FileIndexer.NormalizeIndexPath(Path.GetRelativePath(tempDir, path)))
+            .ToHashSet(StringComparer.Ordinal);
 
-            var purged = writer.PurgeFilesOutsideRetainedSet(retainedPaths);
+        var purged = writer.PurgeFilesOutsideRetainedSet(retainedPaths);
 
-            Assert.Equal(0, purged);
-            Assert.Equal(1, CountFiles(db.Connection));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(0, purged);
+        Assert.Equal(1, CountFiles(db.Connection));
     }
 
     [Fact]
     public void PurgeFilesOutsideRetainedSetWithinListedDirectories_UsesNfcPrunedDirectories()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(tempDir);
-            TestProjectHelper.InsertIndexedFile(dbPath, "Caf\u00e9/src/File.cs", "csharp", "class NestedCafe { }\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var dbPath = TestProjectHelper.CreateProjectDb(tempDir);
+        TestProjectHelper.InsertIndexedFile(dbPath, "Caf\u00e9/src/File.cs", "csharp", "class NestedCafe { }\n");
 
-            using var db = new DbContext(dbPath);
-            db.InitializeSchema();
-            var writer = new DbWriter(db.Connection);
-            var prunedDirectories = new[] { "Cafe\u0301" }
-                .Select(FileIndexer.NormalizeIndexPath)
-                .ToHashSet(StringComparer.Ordinal);
+        using var db = new DbContext(dbPath);
+        db.InitializeSchema();
+        var writer = new DbWriter(db.Connection);
+        var prunedDirectories = new[] { "Cafe\u0301" }
+            .Select(FileIndexer.NormalizeIndexPath)
+            .ToHashSet(StringComparer.Ordinal);
 
-            var purged = writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(
-                new HashSet<string>(StringComparer.Ordinal),
-                new HashSet<string>(StringComparer.Ordinal),
-                prunedDirectories);
+        var purged = writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(
+            new HashSet<string>(StringComparer.Ordinal),
+            new HashSet<string>(StringComparer.Ordinal),
+            prunedDirectories);
 
-            Assert.Equal(1, purged);
-            Assert.Equal(0, CountFiles(db.Connection));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(1, purged);
+        Assert.Equal(0, CountFiles(db.Connection));
     }
 
     [Fact]
     public void IndexFilesUpdate_UsesOriginalUnicodePathForIoAndNfcPathForDb()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var nfdPath = "Cafe\u0301.cs";
-            File.WriteAllText(Path.Combine(tempDir, nfdPath), "class FirstCafe { }\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var nfdPath = "Cafe\u0301.cs";
+        var sourcePath = TestProjectHelper.WriteTextFile(tempDir, nfdPath, "class FirstCafe { }\n");
 
-            var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
-            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([tempDir, "--json", "--quiet"], jsonOptions));
+        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([tempDir, "--json", "--quiet"], jsonOptions));
 
-            File.WriteAllText(Path.Combine(tempDir, nfdPath), "class UpdatedCafe { }\n");
-            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([tempDir, "--files", nfdPath, "--json", "--quiet"], jsonOptions));
+        File.WriteAllText(sourcePath, "class UpdatedCafe { }\n");
+        Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([tempDir, "--files", nfdPath, "--json", "--quiet"], jsonOptions));
 
-            var dbPath = Path.Combine(tempDir, ".cdidx", "codeindex.db");
-            Assert.Equal("class UpdatedCafe { }", ReadSingleChunkContent(dbPath, "Caf\u00e9.cs"));
+        var dbPath = Path.Combine(tempDir, ".cdidx", "codeindex.db");
+        Assert.Equal("class UpdatedCafe { }", ReadSingleChunkContent(dbPath, "Caf\u00e9.cs"));
 
-            File.WriteAllBytes(Path.Combine(tempDir, nfdPath), [0, 1, 2, 3]);
-            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([tempDir, "--files", nfdPath, "--json", "--quiet"], jsonOptions));
-            Assert.True(HasIndexedFile(dbPath, "Caf\u00e9.cs"));
-            Assert.True(HasFileIssue(dbPath, "Caf\u00e9.cs", "null_byte"));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        File.WriteAllBytes(sourcePath, [0, 1, 2, 3]);
+        Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([tempDir, "--files", nfdPath, "--json", "--quiet"], jsonOptions));
+        Assert.True(HasIndexedFile(dbPath, "Caf\u00e9.cs"));
+        Assert.True(HasFileIssue(dbPath, "Caf\u00e9.cs", "null_byte"));
     }
 
     [Fact]
