@@ -14,16 +14,20 @@ public partial class ReleaseWorkflowTests
     {
         var workflow = ReadReleaseWorkflow();
 
-        Assert.Contains("-p:PublishTrimmed=true", workflow);
-        Assert.DoesNotContain("-p:PublishTrimmed=false", workflow);
-        Assert.Contains("status --json", workflow);
-        Assert.Contains("Expected status --json to exit 0", workflow);
-        Assert.Contains("status --json stdout did not include files", workflow);
-        Assert.Contains("status --json stdout did not include version", workflow);
-        Assert.DoesNotContain("Expected status --json to fail on the trimmed self-contained release", workflow);
-        Assert.DoesNotContain("Expected status --json to exit 4", workflow);
-        Assert.DoesNotContain("Error [E009_FEATURE_UNAVAILABLE]: --json is not available on this trimmed build.", workflow);
-        Assert.DoesNotContain("Hint: use `cdidx mcp` for structured output", workflow);
+        AssertContainsAll(
+            workflow,
+            "-p:PublishTrimmed=true",
+            "status --json",
+            "Expected status --json to exit 0",
+            "status --json stdout did not include files",
+            "status --json stdout did not include version");
+        AssertDoesNotContainAny(
+            workflow,
+            "-p:PublishTrimmed=false",
+            "Expected status --json to fail on the trimmed self-contained release",
+            "Expected status --json to exit 4",
+            "Error [E009_FEATURE_UNAVAILABLE]: --json is not available on this trimmed build.",
+            "Hint: use `cdidx mcp` for structured output");
     }
 
     [Fact]
@@ -96,14 +100,16 @@ public partial class ReleaseWorkflowTests
         // `--output-format Json` に置き換わったように、major 間で flag が
         // 変更されている)。6.x は現行の安定 major で、`-o / -fn / -F / -t`
         // 系のモダンフラグを備える。
-        Assert.Contains("dotnet tool install --global CycloneDX --version 6.2.0", workflow);
-        Assert.Contains("dotnet-CycloneDX src/CodeIndex/CodeIndex.csproj", workflow);
-        Assert.Contains("--output-format Json", workflow);
-        Assert.Contains("--exclude-test-projects", workflow);
-        Assert.Contains("cdidx.sbom.cdx.json", workflow);
-        Assert.Contains("CodeIndex-sbom", workflow);
-        Assert.Contains("matrix.rid == 'linux-x64'", workflow);
-        Assert.Contains("'*.cdx.json'", workflow);
+        AssertContainsAll(
+            workflow,
+            "dotnet tool install --global CycloneDX --version 6.2.0",
+            "dotnet-CycloneDX src/CodeIndex/CodeIndex.csproj",
+            "--output-format Json",
+            "--exclude-test-projects",
+            "cdidx.sbom.cdx.json",
+            "CodeIndex-sbom",
+            "matrix.rid == 'linux-x64'",
+            "'*.cdx.json'");
     }
 
     // Issue #2042: NuGet publishing must fail before pack/push when the tag,
@@ -118,28 +124,32 @@ public partial class ReleaseWorkflowTests
     {
         var workflow = ReadReleaseWorkflow();
 
-        Assert.Contains("Release tag must be a v-prefixed SemVer version", workflow);
-        Assert.Contains("jq -r '.version // empty' version.json", workflow);
-        Assert.Contains("does not match release tag", workflow);
-        Assert.Contains("https://api.nuget.org/v3-flatcontainer/cdidx/${VERSION}/cdidx.${VERSION}.nupkg", workflow);
-        Assert.Contains("response_headers=\"$(mktemp \"${RUNNER_TEMP:-/tmp}/cdidx-nuget-head.XXXXXX\")\"", workflow);
-        Assert.Contains("cat \"$response_headers\"", workflow);
-        Assert.DoesNotContain("/tmp/cdidx-nuget-head", workflow);
-        Assert.Contains("NuGet package cdidx ${VERSION} is already published", workflow);
-        Assert.Contains("Expected packed package ${expected_package} was not produced", workflow);
-        Assert.Contains("Attest NuGet package artifacts", workflow);
-        Assert.Contains("nupkg/*.nupkg", workflow);
-        Assert.Contains("nupkg/*.snupkg", workflow);
-        Assert.Contains("Resolve NuGet trusted publishing user", workflow);
-        Assert.Contains("NUGET_TRUSTED_PUBLISHING_USER: ${{ vars.NUGET_TRUSTED_PUBLISHING_USER }}", workflow);
-        Assert.Contains("GitHub Actions variable NUGET_TRUSTED_PUBLISHING_USER must be set to the NuGet.org username that created the trusted publishing policy", workflow);
-        Assert.Contains("NuGet trusted publishing matches the policy creator, not the package owner", workflow);
-        Assert.Contains("NuGet/login@ebc737b6fc418a6ca0073cf116ec8dc156d8b81e # v1", workflow);
-        Assert.Contains("user: ${{ steps.nuget-user.outputs.user }}", workflow);
-        Assert.Contains("steps.nuget-login.outputs.NUGET_API_KEY", workflow);
-        Assert.DoesNotContain("user: Widthdom", workflow);
-        Assert.DoesNotContain("secrets.NUGET_API_KEY", workflow);
-        Assert.DoesNotContain("--skip-duplicate", workflow);
+        AssertContainsAll(
+            workflow,
+            "Release tag must be a v-prefixed SemVer version",
+            "jq -r '.version // empty' version.json",
+            "does not match release tag",
+            "https://api.nuget.org/v3-flatcontainer/cdidx/${VERSION}/cdidx.${VERSION}.nupkg",
+            "response_headers=\"$(mktemp \"${RUNNER_TEMP:-/tmp}/cdidx-nuget-head.XXXXXX\")\"",
+            "cat \"$response_headers\"",
+            "NuGet package cdidx ${VERSION} is already published",
+            "Expected packed package ${expected_package} was not produced",
+            "Attest NuGet package artifacts",
+            "nupkg/*.nupkg",
+            "nupkg/*.snupkg",
+            "Resolve NuGet trusted publishing user",
+            "NUGET_TRUSTED_PUBLISHING_USER: ${{ vars.NUGET_TRUSTED_PUBLISHING_USER }}",
+            "GitHub Actions variable NUGET_TRUSTED_PUBLISHING_USER must be set to the NuGet.org username that created the trusted publishing policy",
+            "NuGet trusted publishing matches the policy creator, not the package owner",
+            "NuGet/login@ebc737b6fc418a6ca0073cf116ec8dc156d8b81e # v1",
+            "user: ${{ steps.nuget-user.outputs.user }}",
+            "steps.nuget-login.outputs.NUGET_API_KEY");
+        AssertDoesNotContainAny(
+            workflow,
+            "/tmp/cdidx-nuget-head",
+            "user: Widthdom",
+            "secrets.NUGET_API_KEY",
+            "--skip-duplicate");
     }
 
     [Fact]
@@ -1075,6 +1085,18 @@ public partial class ReleaseWorkflowTests
         Assert.DoesNotContain("actions/checkout@v6", workflow);
         Assert.DoesNotContain("actions/setup-dotnet@v5", workflow);
         Assert.DoesNotContain("actions/cache@v5", workflow);
+    }
+
+    private static void AssertContainsAll(string text, params string[] expectedValues)
+    {
+        foreach (var expected in expectedValues)
+            Assert.Contains(expected, text);
+    }
+
+    private static void AssertDoesNotContainAny(string text, params string[] excludedValues)
+    {
+        foreach (var excluded in excludedValues)
+            Assert.DoesNotContain(excluded, text);
     }
 
     private static string ReadReleaseWorkflow() => RepositoryTestPaths.ReadWorkflow("release.yml");
