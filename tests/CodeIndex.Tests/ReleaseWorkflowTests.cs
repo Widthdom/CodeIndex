@@ -35,13 +35,15 @@ public partial class ReleaseWorkflowTests
     {
         var workflow = ReadReleaseWorkflow();
 
-        Assert.Contains("expected_rids=\"linux-x64 linux-arm64 osx-arm64 win-x64 win-arm64\"", workflow);
-        Assert.Contains("asset=\"CodeIndex-${rid}.zip\"", workflow);
-        Assert.Contains("asset=\"CodeIndex-${rid}.tar.gz\"", workflow);
-        Assert.Contains("Missing release archive for ${rid}", workflow);
-        Assert.Contains("CodeIndex-osx-x64.*", workflow);
-        Assert.Contains("native_asset=\"libe_sqlite3.so\"", workflow);
-        Assert.Contains("for asset in \"$binary_name\" \"$native_asset\"", workflow);
+        AssertContainsAll(
+            workflow,
+            "expected_rids=\"linux-x64 linux-arm64 osx-arm64 win-x64 win-arm64\"",
+            "asset=\"CodeIndex-${rid}.zip\"",
+            "asset=\"CodeIndex-${rid}.tar.gz\"",
+            "Missing release archive for ${rid}",
+            "CodeIndex-osx-x64.*",
+            "native_asset=\"libe_sqlite3.so\"",
+            "for asset in \"$binary_name\" \"$native_asset\"");
     }
 
     // Issue #3077: the Homebrew formula installs from the same self-contained
@@ -55,20 +57,24 @@ public partial class ReleaseWorkflowTests
     {
         var workflow = ReadReleaseWorkflow();
 
-        Assert.Contains("Download release artifacts for checksum calculation", workflow);
-        Assert.Contains("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1", workflow);
-        Assert.Contains("sha_for_artifact()", workflow);
-        Assert.Contains("find \"$artifact_root\" -type f -name \"$asset\" -print -quit", workflow);
-        Assert.DoesNotContain("CHECKSUMS_URL", workflow);
-        Assert.DoesNotContain("https://x-access-token:${TAP_TOKEN}@github.com/Widthdom/homebrew-tap.git", workflow);
-        Assert.Contains("credential_helper='!f() { echo username=x-access-token; echo \"password=${TAP_TOKEN}\"; }; f'", workflow);
-        Assert.Contains("trap cleanup EXIT", workflow);
-        Assert.Contains("native_sqlite_asset = OS.mac? ? \"libe_sqlite3.dylib\" : \"libe_sqlite3.so\"", workflow);
-        Assert.Contains("bin.install native_sqlite_asset", workflow);
-        Assert.Contains("assert_predicate bin/native_sqlite_asset, :exist?", workflow);
-        Assert.Contains("(testpath/\"Sample.cs\").write", workflow);
-        Assert.Contains("system \"#{bin}/cdidx\", testpath.to_s", workflow);
-        Assert.Contains("shell_output(\"#{bin}/cdidx status --json\")", workflow);
+        AssertContainsAll(
+            workflow,
+            "Download release artifacts for checksum calculation",
+            "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1",
+            "sha_for_artifact()",
+            "find \"$artifact_root\" -type f -name \"$asset\" -print -quit",
+            "credential_helper='!f() { echo username=x-access-token; echo \"password=${TAP_TOKEN}\"; }; f'",
+            "trap cleanup EXIT",
+            "native_sqlite_asset = OS.mac? ? \"libe_sqlite3.dylib\" : \"libe_sqlite3.so\"",
+            "bin.install native_sqlite_asset",
+            "assert_predicate bin/native_sqlite_asset, :exist?",
+            "(testpath/\"Sample.cs\").write",
+            "system \"#{bin}/cdidx\", testpath.to_s",
+            "shell_output(\"#{bin}/cdidx status --json\")");
+        AssertDoesNotContainAny(
+            workflow,
+            "CHECKSUMS_URL",
+            "https://x-access-token:${TAP_TOKEN}@github.com/Widthdom/homebrew-tap.git");
     }
 
     // Issue #1553: releases must ship a CycloneDX SBOM so enterprise consumers
@@ -157,15 +163,17 @@ public partial class ReleaseWorkflowTests
     {
         var workflow = ReadReleaseWorkflow();
 
-        Assert.Contains("preflight:", workflow);
-        Assert.Contains("name: Validate release tag", workflow);
-        Assert.Contains("permissions:\n      contents: read", workflow);
-        Assert.Contains("ref=refs/tags/${tag}", workflow);
-        Assert.Contains("ref: ${{ needs.preflight.outputs.ref }}", workflow);
-        Assert.Contains("needs: [preflight, release]", workflow);
-        Assert.Contains("needs: [preflight, create-release]", workflow);
-        Assert.Contains("needs: [preflight, verify-release-install]", workflow);
-        Assert.DoesNotContain("ref: ${{ inputs.tag_name || github.ref }}", workflow);
+        AssertContainsAll(
+            workflow,
+            "preflight:",
+            "name: Validate release tag",
+            "permissions:\n      contents: read",
+            "ref=refs/tags/${tag}",
+            "ref: ${{ needs.preflight.outputs.ref }}",
+            "needs: [preflight, release]",
+            "needs: [preflight, create-release]",
+            "needs: [preflight, verify-release-install]");
+        AssertDoesNotContainAny(workflow, "ref: ${{ inputs.tag_name || github.ref }}");
     }
 
     [Fact]
@@ -233,17 +241,19 @@ public partial class ReleaseWorkflowTests
     {
         var workflow = ReadReleaseWorkflow();
 
-        Assert.Contains("gh release list", workflow);
-        Assert.Contains("--exclude-drafts", workflow);
-        Assert.Contains("--exclude-pre-releases", workflow);
-        Assert.Contains("select(.tagName != \\\"${TAG_NAME}\\\")", workflow);
-        Assert.Contains("No previous non-draft, non-prerelease GitHub release was found", workflow);
-        Assert.Contains("Latest GitHub release tag is not a v-prefixed SemVer version", workflow);
-        Assert.Contains("dotnet run --project tools/CodeIndex.Changelog -- release-notes", workflow);
-        Assert.Contains("--previous-version \"${previous_version}\"", workflow);
-        Assert.Contains("--notes-file release-notes.md", workflow);
-        Assert.Contains("--notes-file release-install-notes.md", workflow);
-        Assert.DoesNotContain("cat release-install-notes.md >> release-notes.md", workflow);
+        AssertContainsAll(
+            workflow,
+            "gh release list",
+            "--exclude-drafts",
+            "--exclude-pre-releases",
+            "select(.tagName != \\\"${TAG_NAME}\\\")",
+            "No previous non-draft, non-prerelease GitHub release was found",
+            "Latest GitHub release tag is not a v-prefixed SemVer version",
+            "dotnet run --project tools/CodeIndex.Changelog -- release-notes",
+            "--previous-version \"${previous_version}\"",
+            "--notes-file release-notes.md",
+            "--notes-file release-install-notes.md");
+        AssertDoesNotContainAny(workflow, "cat release-install-notes.md >> release-notes.md");
     }
 
     // Issue #2756: NuGet emits the core-properties OPC part with a random
@@ -258,10 +268,12 @@ public partial class ReleaseWorkflowTests
     {
         var workflow = ReadReleaseWorkflow();
 
-        Assert.Contains("Normalize NuGet package metadata part names", workflow);
-        Assert.Contains("dotnet run --project tools/CodeIndex.PackageNormalize --", workflow);
-        Assert.Contains("nupkg/*.nupkg nupkg/*.snupkg", workflow);
-        Assert.Contains("core-properties/core-properties.psmdcp", workflow);
+        AssertContainsAll(
+            workflow,
+            "Normalize NuGet package metadata part names",
+            "dotnet run --project tools/CodeIndex.PackageNormalize --",
+            "nupkg/*.nupkg nupkg/*.snupkg",
+            "core-properties/core-properties.psmdcp");
     }
 
     [Fact]
