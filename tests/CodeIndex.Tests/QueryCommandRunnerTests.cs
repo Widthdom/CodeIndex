@@ -2394,35 +2394,28 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunLanguages_FormatCountReturnsCapabilitySummary_Issue4316()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_languages_format_count_issue4316");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App { }\n");
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/main.adb", "ada", "procedure Main is begin null; end Main;\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_languages_format_count_issue4316");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App { }\n");
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/main.adb", "ada", "procedure Main is begin null; end Main;\n");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() =>
-                QueryCommandRunner.RunLanguages(["--db", dbPath, "--indexed-only", "--capability", "missing-any", "--format", "count"], _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(["--db", dbPath, "--indexed-only", "--capability", "missing-any", "--format", "count"], _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
 
-            using var document = ParseJsonOutput(stdout);
-            var root = document.RootElement;
+        using var document = ParseJsonOutput(stdout);
+        var root = document.RootElement;
 
-            Assert.Equal("count", root.GetProperty("format").GetString());
-            Assert.True(root.GetProperty("count").GetInt32() > 0);
-            Assert.Equal(root.GetProperty("count").GetInt32(), root.GetProperty("language_count").GetInt32());
-            Assert.Equal(root.GetProperty("count").GetInt32(), root.GetProperty("indexed_language_count").GetInt32());
-            Assert.True(root.GetProperty("indexed_file_count").GetInt64() > 0);
-            Assert.Equal("missing-any", Assert.Single(root.GetProperty("capability_filters").EnumerateArray().ToList()).GetString());
-            Assert.Equal(root.GetProperty("count").GetInt32(), root.GetProperty("capability_counts").GetProperty("missing_any").GetInt32());
-            Assert.False(root.TryGetProperty("languages", out _));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal("count", root.GetProperty("format").GetString());
+        Assert.True(root.GetProperty("count").GetInt32() > 0);
+        Assert.Equal(root.GetProperty("count").GetInt32(), root.GetProperty("language_count").GetInt32());
+        Assert.Equal(root.GetProperty("count").GetInt32(), root.GetProperty("indexed_language_count").GetInt32());
+        Assert.True(root.GetProperty("indexed_file_count").GetInt64() > 0);
+        Assert.Equal("missing-any", Assert.Single(root.GetProperty("capability_filters").EnumerateArray().ToList()).GetString());
+        Assert.Equal(root.GetProperty("count").GetInt32(), root.GetProperty("capability_counts").GetProperty("missing_any").GetInt32());
+        Assert.False(root.TryGetProperty("languages", out _));
     }
 
     [Fact]
