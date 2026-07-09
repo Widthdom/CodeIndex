@@ -4459,32 +4459,25 @@ public partial class FileIndexerTests
         // から BOM を剥がし、下流に幽霊 U+FEFF を渡さないようにする。checksum は chunk
         // に保存される canonical content と同じ内容から算出し、行メタデータとのずれを防ぐ。
         // Closes #183/#1467.
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var filePath = Path.Combine(tempDir, "bom.cs");
-            var rawBytes = new byte[] { 0xEF, 0xBB, 0xBF }
-                .Concat(System.Text.Encoding.UTF8.GetBytes("using System;\nnamespace BomTest;\n"))
-                .ToArray();
-            File.WriteAllBytes(filePath, rawBytes);
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var rawBytes = new byte[] { 0xEF, 0xBB, 0xBF }
+            .Concat(Encoding.UTF8.GetBytes("using System;\nnamespace BomTest;\n"))
+            .ToArray();
+        var filePath = TestProjectHelper.WriteBinaryFile(tempDir, "bom.cs", rawBytes);
 
-            var indexer = new FileIndexer(tempDir);
-            var (record, content, _) = indexer.BuildRecord(filePath);
+        var indexer = new FileIndexer(tempDir);
+        var (record, content, _) = indexer.BuildRecord(filePath);
 
-            Assert.StartsWith("using System;", content);
-            // Culture-aware IndexOf treats U+FEFF as ignorable and spuriously matches at pos 0,
-            // so assert on the raw code-point instead of the string overload.
-            // カルチャ依存の IndexOf は U+FEFF を無視扱いで pos 0 に誤マッチするため、
-            // 文字列オーバーロードではなくコードポイントで確認する。
-            Assert.DoesNotContain('\uFEFF', content);
-            Assert.Equal(2, record.Lines);
-            var expectedChecksum = RawSha256Hex(Encoding.UTF8.GetBytes(content));
-            Assert.Equal(expectedChecksum, record.Checksum);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.StartsWith("using System;", content);
+        // Culture-aware IndexOf treats U+FEFF as ignorable and spuriously matches at pos 0,
+        // so assert on the raw code-point instead of the string overload.
+        // カルチャ依存の IndexOf は U+FEFF を無視扱いで pos 0 に誤マッチするため、
+        // 文字列オーバーロードではなくコードポイントで確認する。
+        Assert.DoesNotContain('\uFEFF', content);
+        Assert.Equal(2, record.Lines);
+        var expectedChecksum = RawSha256Hex(Encoding.UTF8.GetBytes(content));
+        Assert.Equal(expectedChecksum, record.Checksum);
     }
 
     [Fact]
@@ -4499,34 +4492,25 @@ public partial class FileIndexerTests
         // しても checksum が一致する必要がある。さもないと cross-OS clone や共有 NAS で
         // 初回索引時に全ファイルが「変更あり」扱いとなり再索引が走ってしまう。standalone
         // CR (旧 Mac classic) も同様に LF へ畳む。Closes #1544.
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var lfPath = Path.Combine(tempDir, "lf.py");
-            var crlfPath = Path.Combine(tempDir, "crlf.py");
-            var crPath = Path.Combine(tempDir, "cr.py");
-            File.WriteAllBytes(lfPath, System.Text.Encoding.UTF8.GetBytes("line1\nline2\nline3\n"));
-            File.WriteAllBytes(crlfPath, System.Text.Encoding.UTF8.GetBytes("line1\r\nline2\r\nline3\r\n"));
-            File.WriteAllBytes(crPath, System.Text.Encoding.UTF8.GetBytes("line1\rline2\rline3\r"));
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var lfPath = TestProjectHelper.WriteBinaryFile(tempDir, "lf.py", Encoding.UTF8.GetBytes("line1\nline2\nline3\n"));
+        var crlfPath = TestProjectHelper.WriteBinaryFile(tempDir, "crlf.py", Encoding.UTF8.GetBytes("line1\r\nline2\r\nline3\r\n"));
+        var crPath = TestProjectHelper.WriteBinaryFile(tempDir, "cr.py", Encoding.UTF8.GetBytes("line1\rline2\rline3\r"));
 
-            var indexer = new FileIndexer(tempDir);
-            var (lfRecord, _, _) = indexer.BuildRecord(lfPath);
-            var (crlfRecord, _, _) = indexer.BuildRecord(crlfPath);
-            var (crRecord, _, _) = indexer.BuildRecord(crPath);
+        var indexer = new FileIndexer(tempDir);
+        var (lfRecord, _, _) = indexer.BuildRecord(lfPath);
+        var (crlfRecord, _, _) = indexer.BuildRecord(crlfPath);
+        var (crRecord, _, _) = indexer.BuildRecord(crPath);
 
-            Assert.Equal(lfRecord.Checksum, crlfRecord.Checksum);
-            Assert.Equal(lfRecord.Checksum, crRecord.Checksum);
-            // Spot-check the expected value: SHA256 of the LF-normalized payload, so a
-            // future regression that re-introduces raw-byte hashing fails loudly.
-            // 期待値も固定: LF 正規化後 payload の SHA256。生バイトハッシュへ戻ると
-            // 落ちるようにしておく。
-            var expected = RawSha256Hex(Encoding.UTF8.GetBytes("line1\nline2\nline3\n"));
-            Assert.Equal(expected, lfRecord.Checksum);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(lfRecord.Checksum, crlfRecord.Checksum);
+        Assert.Equal(lfRecord.Checksum, crRecord.Checksum);
+        // Spot-check the expected value: SHA256 of the LF-normalized payload, so a
+        // future regression that re-introduces raw-byte hashing fails loudly.
+        // 期待値も固定: LF 正規化後 payload の SHA256。生バイトハッシュへ戻ると
+        // 落ちるようにしておく。
+        var expected = RawSha256Hex(Encoding.UTF8.GetBytes("line1\nline2\nline3\n"));
+        Assert.Equal(expected, lfRecord.Checksum);
     }
 
     [Fact]
@@ -4538,25 +4522,17 @@ public partial class FileIndexerTests
         // BOM のみの差分は chunk / excerpt が見る canonical content と同じ内容として
         // hash される。別のバイト列から作られた行メタデータを freshness が受け入れる
         // ずれを防ぐ。Closes #1467.
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var bomPath = Path.Combine(tempDir, "bom.cs");
-            var noBomPath = Path.Combine(tempDir, "nobom.cs");
-            var payload = System.Text.Encoding.UTF8.GetBytes("using System;\n");
-            File.WriteAllBytes(bomPath, new byte[] { 0xEF, 0xBB, 0xBF }.Concat(payload).ToArray());
-            File.WriteAllBytes(noBomPath, payload);
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var payload = Encoding.UTF8.GetBytes("using System;\n");
+        var bomPath = TestProjectHelper.WriteBinaryFile(tempDir, "bom.cs", new byte[] { 0xEF, 0xBB, 0xBF }.Concat(payload).ToArray());
+        var noBomPath = TestProjectHelper.WriteBinaryFile(tempDir, "nobom.cs", payload);
 
-            var indexer = new FileIndexer(tempDir);
-            var (bomRecord, _, _) = indexer.BuildRecord(bomPath);
-            var (noBomRecord, _, _) = indexer.BuildRecord(noBomPath);
+        var indexer = new FileIndexer(tempDir);
+        var (bomRecord, _, _) = indexer.BuildRecord(bomPath);
+        var (noBomRecord, _, _) = indexer.BuildRecord(noBomPath);
 
-            Assert.Equal(bomRecord.Checksum, noBomRecord.Checksum);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(bomRecord.Checksum, noBomRecord.Checksum);
     }
 
     [Fact]
@@ -4568,22 +4544,15 @@ public partial class FileIndexerTests
         // オンディスクバイト列が UTF-8 BOM (EF BB BF) のみのファイルも、正規化後に
         // chunk/extraction へ渡す canonical content が空になるため、保存する行数も
         // その入力と一致させる。Closes #1467/#1890.
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var filePath = Path.Combine(tempDir, "bomonly.cs");
-            File.WriteAllBytes(filePath, new byte[] { 0xEF, 0xBB, 0xBF });
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var filePath = TestProjectHelper.WriteBinaryFile(tempDir, "bomonly.cs", [0xEF, 0xBB, 0xBF]);
 
-            var indexer = new FileIndexer(tempDir);
-            var (record, content, _) = indexer.BuildRecord(filePath);
+        var indexer = new FileIndexer(tempDir);
+        var (record, content, _) = indexer.BuildRecord(filePath);
 
-            Assert.Equal(string.Empty, content);
-            Assert.Equal(0, record.Lines);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(string.Empty, content);
+        Assert.Equal(0, record.Lines);
     }
 
     [Fact]
@@ -4594,26 +4563,19 @@ public partial class FileIndexerTests
         // a phantom glyph. Closes #183.
         // mid-file UTF-8 BOM (ファイル連結やツール挿入) もデコード後の content から
         // 剥がし、search / excerpt に幽霊グリフを漏らさないようにする。Closes #183.
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var filePath = Path.Combine(tempDir, "midbom.cs");
-            var rawBytes = System.Text.Encoding.UTF8.GetBytes("using System;\n")
-                .Concat(new byte[] { 0xEF, 0xBB, 0xBF })
-                .Concat(System.Text.Encoding.UTF8.GetBytes("namespace MidBom;\n"))
-                .ToArray();
-            File.WriteAllBytes(filePath, rawBytes);
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var rawBytes = Encoding.UTF8.GetBytes("using System;\n")
+            .Concat(new byte[] { 0xEF, 0xBB, 0xBF })
+            .Concat(Encoding.UTF8.GetBytes("namespace MidBom;\n"))
+            .ToArray();
+        var filePath = TestProjectHelper.WriteBinaryFile(tempDir, "midbom.cs", rawBytes);
 
-            var indexer = new FileIndexer(tempDir);
-            var (_, content, _) = indexer.BuildRecord(filePath);
+        var indexer = new FileIndexer(tempDir);
+        var (_, content, _) = indexer.BuildRecord(filePath);
 
-            Assert.DoesNotContain('\uFEFF', content);
-            Assert.Contains("namespace MidBom;", content);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.DoesNotContain('\uFEFF', content);
+        Assert.Contains("namespace MidBom;", content);
     }
 
     [Fact]

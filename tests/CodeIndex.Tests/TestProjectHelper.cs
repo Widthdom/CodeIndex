@@ -78,6 +78,14 @@ internal static class TestProjectHelper
             WriteTextFile(projectRoot, relativePath, content);
     }
 
+    internal static string WriteBinaryFile(string projectRoot, string relativePath, byte[] content)
+    {
+        var path = ProjectPath(projectRoot, relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllBytes(path, content);
+        return path;
+    }
+
     internal static string AppendTextFile(string projectRoot, string relativePath, string content)
     {
         var path = ProjectPath(projectRoot, relativePath);
