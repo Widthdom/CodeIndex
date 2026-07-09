@@ -2240,34 +2240,27 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunLanguages_JsonIndexedOnlyListsLanguagesPresentInDatabase()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_languages_indexed_only");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App { }\n");
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/Worker.cs", "csharp", "class Worker { }\n");
-            TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "# App\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_languages_indexed_only");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App { }\n");
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/Worker.cs", "csharp", "class Worker { }\n");
+        TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "# App\n");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() =>
-                QueryCommandRunner.RunLanguages(["--json", "--indexed-only", "--db", dbPath], _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(["--json", "--indexed-only", "--db", dbPath], _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
 
-            using var document = ParseJsonOutput(stdout);
-            var names = document.RootElement.GetProperty("languages").EnumerateArray()
-                .Select(lang => lang.GetProperty("lang").GetString())
-                .ToList();
+        using var document = ParseJsonOutput(stdout);
+        var names = document.RootElement.GetProperty("languages").EnumerateArray()
+            .Select(lang => lang.GetProperty("lang").GetString())
+            .ToList();
 
-            Assert.Equal(["csharp", "markdown"], names);
-            var csharp = document.RootElement.GetProperty("languages").EnumerateArray()
-                .Single(lang => lang.GetProperty("lang").GetString() == "csharp");
-            Assert.Equal(2, csharp.GetProperty("indexed_file_count").GetInt64());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(["csharp", "markdown"], names);
+        var csharp = document.RootElement.GetProperty("languages").EnumerateArray()
+            .Single(lang => lang.GetProperty("lang").GetString() == "csharp");
+        Assert.Equal(2, csharp.GetProperty("indexed_file_count").GetInt64());
     }
 
     [Theory]
@@ -2281,32 +2274,25 @@ public partial class QueryCommandRunnerTests
         string expectedLanguage,
         long expectedIndexedFileCount)
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_languages_lookup");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App { }\n");
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/Worker.cs", "csharp", "class Worker { }\n");
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.csproj", "msbuild", "<Project />\n");
-            TestProjectHelper.InsertIndexedFile(dbPath, "config/app.yml", "yaml", "name: app\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_languages_lookup");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App { }\n");
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/Worker.cs", "csharp", "class Worker { }\n");
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/App.csproj", "msbuild", "<Project />\n");
+        TestProjectHelper.InsertIndexedFile(dbPath, "config/app.yml", "yaml", "name: app\n");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() =>
-                QueryCommandRunner.RunLanguages(["--json", flag, value, "--db", dbPath], _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(["--json", flag, value, "--db", dbPath], _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
 
-            using var document = ParseJsonOutput(stdout);
-            var languages = document.RootElement.GetProperty("languages").EnumerateArray().ToList();
-            var language = Assert.Single(languages);
+        using var document = ParseJsonOutput(stdout);
+        var languages = document.RootElement.GetProperty("languages").EnumerateArray().ToList();
+        var language = Assert.Single(languages);
 
-            Assert.Equal(expectedLanguage, language.GetProperty("lang").GetString());
-            Assert.Equal(expectedIndexedFileCount, language.GetProperty("indexed_file_count").GetInt64());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(expectedLanguage, language.GetProperty("lang").GetString());
+        Assert.Equal(expectedIndexedFileCount, language.GetProperty("indexed_file_count").GetInt64());
     }
 
     [Theory]
@@ -2326,30 +2312,23 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunLanguages_JsonIndexedOnlyCombinesWithCapabilityFilter()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_languages_indexed_capability");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App { }\n");
-            TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "# App\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_languages_indexed_capability");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App { }\n");
+        TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "# App\n");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() =>
-                QueryCommandRunner.RunLanguages(["--json", "--indexed-only", "--capability", "graph", "--db", dbPath], _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(["--json", "--indexed-only", "--capability", "graph", "--db", dbPath], _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
 
-            using var document = ParseJsonOutput(stdout);
-            var names = document.RootElement.GetProperty("languages").EnumerateArray()
-                .Select(lang => lang.GetProperty("lang").GetString())
-                .ToList();
+        using var document = ParseJsonOutput(stdout);
+        var names = document.RootElement.GetProperty("languages").EnumerateArray()
+            .Select(lang => lang.GetProperty("lang").GetString())
+            .ToList();
 
-            Assert.Equal(["csharp", "markdown"], names);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(["csharp", "markdown"], names);
     }
 
     [Theory]
