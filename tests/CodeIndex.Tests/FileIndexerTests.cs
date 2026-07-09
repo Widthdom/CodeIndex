@@ -1332,207 +1332,153 @@ public partial class FileIndexerTests
     [Fact]
     public void BuildRecordWithRawBytes_OverExplicitMaxFileBytes_ThrowsActionableOverrideMessage()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var path = Path.Combine(tempDir, "Program.cs");
-            File.WriteAllText(path, "class Program {}\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var path = Path.Combine(tempDir, "Program.cs");
+        File.WriteAllText(path, "class Program {}\n");
 
-            var indexer = new FileIndexer(tempDir, ignoreCase: false, ignoreRuleRoot: null, maxFileSizeBytes: 4);
+        var indexer = new FileIndexer(tempDir, ignoreCase: false, ignoreRuleRoot: null, maxFileSizeBytes: 4);
 
-            var ex = Assert.Throws<FileIndexer.FileTooLargeSkippedException>(() => indexer.BuildRecordWithRawBytes(path));
-            Assert.Contains("File too large", ex.Message);
-            Assert.Contains("--max-file-bytes", ex.Message);
-            Assert.Contains(FileIndexer.MaxFileSizeEnvironmentVariable, ex.Message);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        var ex = Assert.Throws<FileIndexer.FileTooLargeSkippedException>(() => indexer.BuildRecordWithRawBytes(path));
+        Assert.Contains("File too large", ex.Message);
+        Assert.Contains("--max-file-bytes", ex.Message);
+        Assert.Contains(FileIndexer.MaxFileSizeEnvironmentVariable, ex.Message);
     }
 
     [Fact]
     public void RawFileMayContainCSharpStaticInterfaceContract_TokenSplitAcrossReadBuffer_ReturnsTrue()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var path = Path.Combine(tempDir, "Program.cs");
-            var prefix = new string('x', 81920 - "inter".Length);
-            File.WriteAllText(
-                path,
-                prefix + """
-                interface IFixture
-                {
-                    static abstract int Count { get; }
-                }
-                """);
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var path = Path.Combine(tempDir, "Program.cs");
+        var prefix = new string('x', 81920 - "inter".Length);
+        File.WriteAllText(
+            path,
+            prefix + """
+            interface IFixture
+            {
+                static abstract int Count { get; }
+            }
+            """);
 
-            var indexer = new FileIndexer(tempDir, ignoreCase: false);
+        var indexer = new FileIndexer(tempDir, ignoreCase: false);
 
-            Assert.True(indexer.RawFileMayContainCSharpStaticInterfaceContract(path, "Program.cs"));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.True(indexer.RawFileMayContainCSharpStaticInterfaceContract(path, "Program.cs"));
     }
 
     [Fact]
     public void RawFileMayContainCSharpStaticInterfaceContract_MissingContractTokens_ReturnsFalse()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var path = Path.Combine(tempDir, "Program.cs");
-            File.WriteAllText(path, "public interface IFixture { static int Count => 0; }\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var path = Path.Combine(tempDir, "Program.cs");
+        File.WriteAllText(path, "public interface IFixture { static int Count => 0; }\n");
 
-            var indexer = new FileIndexer(tempDir, ignoreCase: false);
+        var indexer = new FileIndexer(tempDir, ignoreCase: false);
 
-            Assert.False(indexer.RawFileMayContainCSharpStaticInterfaceContract(path, "Program.cs"));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.False(indexer.RawFileMayContainCSharpStaticInterfaceContract(path, "Program.cs"));
     }
 
     [Fact]
     public void RawFileMayContainCSharpStaticInterfaceContract_OverExplicitMaxFileBytes_ThrowsActionableOverrideMessage()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var path = Path.Combine(tempDir, "Program.cs");
-            File.WriteAllText(path, "public interface IFixture { static abstract int Count { get; } }\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var path = Path.Combine(tempDir, "Program.cs");
+        File.WriteAllText(path, "public interface IFixture { static abstract int Count { get; } }\n");
 
-            var indexer = new FileIndexer(tempDir, ignoreCase: false, ignoreRuleRoot: null, maxFileSizeBytes: 4);
+        var indexer = new FileIndexer(tempDir, ignoreCase: false, ignoreRuleRoot: null, maxFileSizeBytes: 4);
 
-            var ex = Assert.Throws<FileIndexer.FileTooLargeSkippedException>(
-                () => indexer.RawFileMayContainCSharpStaticInterfaceContract(path, "Program.cs"));
-            Assert.Contains("File too large", ex.Message);
-            Assert.Contains("--max-file-bytes", ex.Message);
-            Assert.Contains(FileIndexer.MaxFileSizeEnvironmentVariable, ex.Message);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        var ex = Assert.Throws<FileIndexer.FileTooLargeSkippedException>(
+            () => indexer.RawFileMayContainCSharpStaticInterfaceContract(path, "Program.cs"));
+        Assert.Contains("File too large", ex.Message);
+        Assert.Contains("--max-file-bytes", ex.Message);
+        Assert.Contains(FileIndexer.MaxFileSizeEnvironmentVariable, ex.Message);
     }
 
     [Fact]
     public void BuildRecordWithRawBytes_ExplicitMaxFileBytes_AllowsLargerSourceFile()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var path = Path.Combine(tempDir, "Program.cs");
-            File.WriteAllText(path, "class Program {}\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var path = Path.Combine(tempDir, "Program.cs");
+        File.WriteAllText(path, "class Program {}\n");
 
-            var indexer = new FileIndexer(tempDir, ignoreCase: false, ignoreRuleRoot: null, maxFileSizeBytes: 64);
-            var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(path);
+        var indexer = new FileIndexer(tempDir, ignoreCase: false, ignoreRuleRoot: null, maxFileSizeBytes: 64);
+        var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(path);
 
-            Assert.Equal("Program.cs", record.Path);
-            Assert.Equal("csharp", record.Lang);
-            Assert.Equal("class Program {}\n", content);
-            Assert.Equal(content.Length, rawBytes.Length);
-            Assert.Null(warning);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal("Program.cs", record.Path);
+        Assert.Equal("csharp", record.Lang);
+        Assert.Equal("class Program {}\n", content);
+        Assert.Equal(content.Length, rawBytes.Length);
+        Assert.Null(warning);
     }
 
     [Fact]
     public void BuildLoadedRecordWithRawBytes_KnownLanguage_UsesScanResultLanguage()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var path = Path.Combine(tempDir, "script");
-            File.WriteAllText(path, "#!/bin/sh\necho hi\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var path = Path.Combine(tempDir, "script");
+        File.WriteAllText(path, "#!/bin/sh\necho hi\n");
 
-            var indexer = new FileIndexer(tempDir, ignoreCase: false);
-            var loaded = indexer.BuildLoadedRecordWithRawBytes(path, "script", knownLanguage: "python");
+        var indexer = new FileIndexer(tempDir, ignoreCase: false);
+        var loaded = indexer.BuildLoadedRecordWithRawBytes(path, "script", knownLanguage: "python");
 
-            Assert.Equal("python", loaded.Record.Lang);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal("python", loaded.Record.Lang);
     }
 
     [Fact]
     public void GetReusableDetectedLanguage_ExtensionlessScriptReturnsNullToPreserveContentDetection()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var path = Path.Combine(tempDir, "script");
-            File.WriteAllText(path, "#!/usr/bin/env python\nprint('hi')\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var path = Path.Combine(tempDir, "script");
+        File.WriteAllText(path, "#!/usr/bin/env python\nprint('hi')\n");
 
-            var indexer = new FileIndexer(tempDir, ignoreCase: false);
-            var scanResult = indexer.ScanFilesDetailed();
-            File.WriteAllText(path, "#!/usr/bin/env ruby\nputs 'hi'\n");
-            File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddSeconds(2));
+        var indexer = new FileIndexer(tempDir, ignoreCase: false);
+        var scanResult = indexer.ScanFilesDetailed();
+        File.WriteAllText(path, "#!/usr/bin/env ruby\nputs 'hi'\n");
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddSeconds(2));
 
-            var knownLanguage = FileIndexer.GetReusableDetectedLanguage(path, scanResult.FileLanguages);
-            var loaded = indexer.BuildLoadedRecordWithRawBytes(path, "script", knownLanguage);
+        var knownLanguage = FileIndexer.GetReusableDetectedLanguage(path, scanResult.FileLanguages);
+        var loaded = indexer.BuildLoadedRecordWithRawBytes(path, "script", knownLanguage);
 
-            Assert.Equal("python", scanResult.FileLanguages[path]);
-            Assert.Null(knownLanguage);
-            Assert.Equal("ruby", loaded.Record.Lang);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal("python", scanResult.FileLanguages[path]);
+        Assert.Null(knownLanguage);
+        Assert.Equal("ruby", loaded.Record.Lang);
     }
 
     [Fact]
     public void GetReusableDetectedLanguage_ExtensionlessFileNameMappingReusesScanResultLanguage()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var path = Path.Combine(tempDir, "Makefile");
-            File.WriteAllText(path, "all:\n\t@echo hi\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var path = Path.Combine(tempDir, "Makefile");
+        File.WriteAllText(path, "all:\n\t@echo hi\n");
 
-            var indexer = new FileIndexer(tempDir, ignoreCase: false);
-            var scanResult = indexer.ScanFilesDetailed();
+        var indexer = new FileIndexer(tempDir, ignoreCase: false);
+        var scanResult = indexer.ScanFilesDetailed();
 
-            Assert.Equal("makefile", FileIndexer.GetReusableDetectedLanguage(path, scanResult.FileLanguages));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal("makefile", FileIndexer.GetReusableDetectedLanguage(path, scanResult.FileLanguages));
     }
 
     [Fact]
     public void GetReusableDetectedLanguage_CHeaderReturnsNullToPreserveContentDetection()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var path = Path.Combine(tempDir, "widget.h");
-            File.WriteAllText(path, "template <typename T>\nclass Widget {};\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var path = Path.Combine(tempDir, "widget.h");
+        File.WriteAllText(path, "template <typename T>\nclass Widget {};\n");
 
-            var indexer = new FileIndexer(tempDir, ignoreCase: false);
-            var scanResult = indexer.ScanFilesDetailed();
-            var knownLanguage = FileIndexer.GetReusableDetectedLanguage(path, scanResult.FileLanguages);
-            var loaded = indexer.BuildLoadedRecordWithRawBytes(path, "widget.h", knownLanguage);
+        var indexer = new FileIndexer(tempDir, ignoreCase: false);
+        var scanResult = indexer.ScanFilesDetailed();
+        var knownLanguage = FileIndexer.GetReusableDetectedLanguage(path, scanResult.FileLanguages);
+        var loaded = indexer.BuildLoadedRecordWithRawBytes(path, "widget.h", knownLanguage);
 
-            Assert.Equal("c", scanResult.FileLanguages[path]);
-            Assert.Null(knownLanguage);
-            Assert.Equal("cpp", loaded.Record.Lang);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal("c", scanResult.FileLanguages[path]);
+        Assert.Null(knownLanguage);
+        Assert.Equal("cpp", loaded.Record.Lang);
     }
 
     [Theory]
