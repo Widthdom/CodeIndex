@@ -4586,102 +4586,86 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunDeps_WorkspaceDbJson_AggregatesAndTagsMemberDatabaseEdges()
     {
-        var primaryRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_primary");
-        var memberRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_member");
-        try
-        {
-            var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
-            var memberDb = TestProjectHelper.CreateProjectDb(memberRoot);
-            InsertFileWithReference(primaryDb, "src/PrimaryCaller.cs", "SharedTarget");
-            InsertFileWithSymbol(memberDb, "src/SharedTarget.cs", "SharedTarget");
+        using var primaryProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_primary");
+        using var memberProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_member");
+        var primaryRoot = primaryProject.Root;
+        var memberRoot = memberProject.Root;
+        var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
+        var memberDb = TestProjectHelper.CreateProjectDb(memberRoot);
+        InsertFileWithReference(primaryDb, "src/PrimaryCaller.cs", "SharedTarget");
+        InsertFileWithSymbol(memberDb, "src/SharedTarget.cs", "SharedTarget");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10", "--lang", "csharp"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10", "--lang", "csharp"],
+            _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-            var edges = json.GetProperty("edges").EnumerateArray().ToArray();
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
+        var edges = json.GetProperty("edges").EnumerateArray().ToArray();
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.NotNull(stderr);
-            Assert.Equal(1, json.GetProperty("count").GetInt32());
-            var edge = Assert.Single(edges);
-            Assert.Equal("src/PrimaryCaller.cs", edge.GetProperty("source_path").GetString());
-            Assert.Equal("src/SharedTarget.cs", edge.GetProperty("target_path").GetString());
-            Assert.Equal(Path.GetFullPath(primaryDb), edge.GetProperty("source_db").GetString());
-            Assert.Equal(Path.GetFullPath(memberDb), edge.GetProperty("target_db").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(primaryRoot);
-            TestProjectHelper.DeleteDirectory(memberRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.NotNull(stderr);
+        Assert.Equal(1, json.GetProperty("count").GetInt32());
+        var edge = Assert.Single(edges);
+        Assert.Equal("src/PrimaryCaller.cs", edge.GetProperty("source_path").GetString());
+        Assert.Equal("src/SharedTarget.cs", edge.GetProperty("target_path").GetString());
+        Assert.Equal(Path.GetFullPath(primaryDb), edge.GetProperty("source_db").GetString());
+        Assert.Equal(Path.GetFullPath(memberDb), edge.GetProperty("target_db").GetString());
     }
 
     [Fact]
     public void RunDeps_WorkspaceDbRejectsNonCodeIndexDatabase_Issue3737()
     {
-        var primaryRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_non_codeindex_primary");
-        var memberRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_non_codeindex_member");
-        try
-        {
-            var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
-            var memberDb = Path.Combine(memberRoot, "plain.sqlite");
-            CreatePlainSqliteDatabase(memberDb);
+        using var primaryProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_non_codeindex_primary");
+        using var memberProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_non_codeindex_member");
+        var primaryRoot = primaryProject.Root;
+        var memberRoot = memberProject.Root;
+        var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
+        var memberDb = Path.Combine(memberRoot, "plain.sqlite");
+        CreatePlainSqliteDatabase(memberDb);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10"],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains(CommandErrorCodes.DbError, stderr);
-            Assert.Contains("attached workspace database cannot be used for cross-database dependency query", stderr);
-            Assert.Contains("database is not an existing CodeIndex DB", stderr);
-            Assert.DoesNotContain("no such table", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(primaryRoot);
-            TestProjectHelper.DeleteDirectory(memberRoot);
-        }
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains(CommandErrorCodes.DbError, stderr);
+        Assert.Contains("attached workspace database cannot be used for cross-database dependency query", stderr);
+        Assert.Contains("database is not an existing CodeIndex DB", stderr);
+        Assert.DoesNotContain("no such table", stderr);
     }
 
     [Fact]
     public void RunDeps_WorkspaceDbRejectsNewerSchemaStamp_Issue3737()
     {
-        var primaryRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_new_schema_primary");
-        var memberRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_new_schema_member");
-        try
-        {
-            var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
-            var memberDb = TestProjectHelper.CreateProjectDb(memberRoot);
-            var unsupportedUserVersion = DbContext.CurrentSchemaVersion | (DbContext.CurrentSchemaVersion + 1);
-            SetDatabaseUserVersion(memberDb, unsupportedUserVersion);
+        using var primaryProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_new_schema_primary");
+        using var memberProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_new_schema_member");
+        var primaryRoot = primaryProject.Root;
+        var memberRoot = memberProject.Root;
+        var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
+        var memberDb = TestProjectHelper.CreateProjectDb(memberRoot);
+        var unsupportedUserVersion = DbContext.CurrentSchemaVersion | (DbContext.CurrentSchemaVersion + 1);
+        SetDatabaseUserVersion(memberDb, unsupportedUserVersion);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10"],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains(CommandErrorCodes.SchemaTooNew, stderr);
-            Assert.Contains($"user_version {unsupportedUserVersion}", stderr);
-            Assert.Contains("run the query with a current cdidx binary", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(primaryRoot);
-            TestProjectHelper.DeleteDirectory(memberRoot);
-        }
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains(CommandErrorCodes.SchemaTooNew, stderr);
+        Assert.Contains($"user_version {unsupportedUserVersion}", stderr);
+        Assert.Contains("run the query with a current cdidx binary", stderr);
     }
 
     [Fact]
     public void RunDeps_WorkspaceDbValidationUsesReadOnlyFallbackPath_Issue3737()
     {
-        var primaryRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_ro_validate_primary");
-        var memberRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_ro_validate_member");
+        using var primaryProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_ro_validate_primary");
+        using var memberProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_ro_validate_member");
+        var primaryRoot = primaryProject.Root;
+        var memberRoot = memberProject.Root;
         var originalOpenReadOnly = DbConnectionFactory.OpenReadOnlyForTesting;
         var validatedMemberThroughReadOnlyFactory = false;
         try
@@ -4719,78 +4703,64 @@ public partial class QueryCommandRunnerTests
         finally
         {
             DbConnectionFactory.OpenReadOnlyForTesting = originalOpenReadOnly;
-            TestProjectHelper.DeleteDirectory(primaryRoot);
-            TestProjectHelper.DeleteDirectory(memberRoot);
         }
     }
 
     [Fact]
     public void RunDeps_WorkspaceDbJson_CapsCrossDatabaseSymbolSample_Issue3155()
     {
-        var primaryRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_symbols_primary");
-        var memberRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_symbols_member");
-        try
-        {
-            var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
-            var memberDb = TestProjectHelper.CreateProjectDb(memberRoot);
-            var symbolNames = Enumerable
-                .Range(0, DbReader.DependencySymbolSampleLimit + 5)
-                .Select(index => $"SharedTarget{index:D2}")
-                .ToArray();
-            InsertFileWithReferences(primaryDb, "src/PrimaryCaller.cs", symbolNames);
-            InsertFileWithSymbols(memberDb, "src/SharedTargets.cs", symbolNames);
+        using var primaryProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_symbols_primary");
+        using var memberProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_symbols_member");
+        var primaryRoot = primaryProject.Root;
+        var memberRoot = memberProject.Root;
+        var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
+        var memberDb = TestProjectHelper.CreateProjectDb(memberRoot);
+        var symbolNames = Enumerable
+            .Range(0, DbReader.DependencySymbolSampleLimit + 5)
+            .Select(index => $"SharedTarget{index:D2}")
+            .ToArray();
+        InsertFileWithReferences(primaryDb, "src/PrimaryCaller.cs", symbolNames);
+        InsertFileWithSymbols(memberDb, "src/SharedTargets.cs", symbolNames);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10", "--lang", "csharp"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10", "--lang", "csharp"],
+            _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var edge = Assert.Single(document.RootElement.GetProperty("edges").EnumerateArray());
-            var sampledSymbols = edge.GetProperty("symbols").GetString()!.Split(',');
+        using var document = ParseJsonOutput(stdout);
+        var edge = Assert.Single(document.RootElement.GetProperty("edges").EnumerateArray());
+        var sampledSymbols = edge.GetProperty("symbols").GetString()!.Split(',');
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.NotNull(stderr);
-            Assert.Equal(symbolNames.Length, edge.GetProperty("reference_count").GetInt32());
-            Assert.Equal(DbReader.DependencySymbolSampleLimit, sampledSymbols.Length);
-            Assert.DoesNotContain(symbolNames[^1], sampledSymbols);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(primaryRoot);
-            TestProjectHelper.DeleteDirectory(memberRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.NotNull(stderr);
+        Assert.Equal(symbolNames.Length, edge.GetProperty("reference_count").GetInt32());
+        Assert.Equal(DbReader.DependencySymbolSampleLimit, sampledSymbols.Length);
+        Assert.DoesNotContain(symbolNames[^1], sampledSymbols);
     }
 
     [Fact]
     public void RunDeps_WorkspaceDbExcludeTestsKeepsNonTestPathSegments_Issue3834()
     {
-        var primaryRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_exclude_tests_primary");
-        var memberRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_exclude_tests_member");
-        try
-        {
-            var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
-            var memberDb = TestProjectHelper.CreateProjectDb(memberRoot);
-            InsertFileWithReference(primaryDb, "contest/PrimaryCaller.cs", "SharedTarget");
-            InsertFileWithSymbol(memberDb, "src/SharedTarget.cs", "SharedTarget");
+        using var primaryProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_exclude_tests_primary");
+        using var memberProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_exclude_tests_member");
+        var primaryRoot = primaryProject.Root;
+        var memberRoot = memberProject.Root;
+        var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
+        var memberDb = TestProjectHelper.CreateProjectDb(memberRoot);
+        InsertFileWithReference(primaryDb, "contest/PrimaryCaller.cs", "SharedTarget");
+        InsertFileWithSymbol(memberDb, "src/SharedTarget.cs", "SharedTarget");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10", "--lang", "csharp", "--exclude-tests"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10", "--lang", "csharp", "--exclude-tests"],
+            _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var edge = Assert.Single(document.RootElement.GetProperty("edges").EnumerateArray());
+        using var document = ParseJsonOutput(stdout);
+        var edge = Assert.Single(document.RootElement.GetProperty("edges").EnumerateArray());
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.NotNull(stderr);
-            Assert.Equal("contest/PrimaryCaller.cs", edge.GetProperty("source_path").GetString());
-            Assert.Equal("src/SharedTarget.cs", edge.GetProperty("target_path").GetString());
-            Assert.DoesNotContain("LIKE '%test%'", QueryCommandRunner.BuildCrossDatabaseTestPathConditionForTesting("src"));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(primaryRoot);
-            TestProjectHelper.DeleteDirectory(memberRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.NotNull(stderr);
+        Assert.Equal("contest/PrimaryCaller.cs", edge.GetProperty("source_path").GetString());
+        Assert.Equal("src/SharedTarget.cs", edge.GetProperty("target_path").GetString());
+        Assert.DoesNotContain("LIKE '%test%'", QueryCommandRunner.BuildCrossDatabaseTestPathConditionForTesting("src"));
     }
 
     [Fact]
@@ -4831,27 +4801,21 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunDeps_WorkspaceDbTooManyDistinctDatabases_ReturnsUsageError_Issue3154()
     {
-        var primaryRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_fanout_primary");
-        try
-        {
-            var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
-            var args = new List<string> { "--db", primaryDb, "--json" };
-            for (var i = 0; i < QueryCommandRunner.MaxWorkspaceDependencyDatabaseCount; i++)
-                args.AddRange(["--workspace-db", Path.Combine(Path.GetTempPath(), $"cdidx_member_{Guid.NewGuid():N}.db")]);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_fanout_primary");
+        var primaryRoot = project.Root;
+        var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
+        var args = new List<string> { "--db", primaryDb, "--json" };
+        for (var i = 0; i < QueryCommandRunner.MaxWorkspaceDependencyDatabaseCount; i++)
+            args.AddRange(["--workspace-db", Path.Combine(Path.GetTempPath(), $"cdidx_member_{Guid.NewGuid():N}.db")]);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                args.ToArray(),
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            args.ToArray(),
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains("deps --workspace-db accepts at most", stderr);
-            Assert.Contains("ordered cross-database pairs", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(primaryRoot);
-        }
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("deps --workspace-db accepts at most", stderr);
+        Assert.Contains("ordered cross-database pairs", stderr);
     }
 
     private static void InsertFileWithSymbol(string dbPath, string path, string symbolName)
