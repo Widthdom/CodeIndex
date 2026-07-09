@@ -4410,24 +4410,15 @@ public partial class FileIndexerTests
     [InlineData(".dart_tool", "package_config.json")]
     public void EvaluatePathFilter_SkipsCommonGeneratedCacheDirectories(string directoryName, string fileName)
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var cacheDir = Path.Combine(tempDir, directoryName);
-            Directory.CreateDirectory(cacheDir);
-            var path = Path.Combine(cacheDir, fileName);
-            File.WriteAllText(path, "generated");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var path = TestProjectHelper.WriteTextFile(tempDir, Path.Combine(directoryName, fileName), "generated");
 
-            var indexer = new FileIndexer(tempDir);
+        var indexer = new FileIndexer(tempDir);
 
-            Assert.Equal(
-                FileIndexer.PathFilterKind.ExcludedByDefaultDirectory,
-                indexer.EvaluatePathFilter(path).FilterKind);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(
+            FileIndexer.PathFilterKind.ExcludedByDefaultDirectory,
+            indexer.EvaluatePathFilter(path).FilterKind);
     }
 
     [Fact]
@@ -4435,22 +4426,16 @@ public partial class FileIndexerTests
     {
         // CRLF line endings in files should be normalized to LF
         // ファイル内のCRLF改行はLFに正規化される
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var filePath = Path.Combine(tempDir, "crlf.py");
-            File.WriteAllBytes(filePath, System.Text.Encoding.UTF8.GetBytes("line1\r\nline2\r\nline3\r\n"));
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var filePath = TestProjectHelper.ProjectPath(tempDir, "crlf.py");
+        File.WriteAllBytes(filePath, System.Text.Encoding.UTF8.GetBytes("line1\r\nline2\r\nline3\r\n"));
 
-            var indexer = new FileIndexer(tempDir);
-            var (record, content, _) = indexer.BuildRecord(filePath);
+        var indexer = new FileIndexer(tempDir);
+        var (record, content, _) = indexer.BuildRecord(filePath);
 
-            Assert.DoesNotContain("\r", content);
-            Assert.Equal(3, record.Lines);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.DoesNotContain("\r", content);
+        Assert.Equal(3, record.Lines);
     }
 
     [Theory]
