@@ -4286,99 +4286,87 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunDeps_CyclesJsonReportsCandidateLimitTruncation_Issue4065()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_cycle_candidate_limit");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_cycle_candidate_limit");
+        var projectRoot = project.Root;
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        for (var i = 0; i < 60; i++)
         {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            for (var i = 0; i < 60; i++)
-            {
-                var symbolName = $"Target{i}";
-                InsertFileWithSymbol(dbPath, $"src/Target{i}.cs", symbolName);
-                InsertFileWithReferences(dbPath, $"src/Source{i}.cs", [symbolName]);
-            }
-            MarkDependencyGraphReady(dbPath);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", dbPath, "--json", "--cycles", "--limit", "1", "--lang", "csharp"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.Empty(json.GetProperty("cycles").EnumerateArray());
-            Assert.True(json.GetProperty("truncated").GetBoolean());
-            Assert.Equal("candidate_limit_reached", json.GetProperty("termination_reason").GetString());
-            Assert.Equal("candidate_edge_limit", json.GetProperty("truncated_reason").GetString());
-            Assert.Equal(QueryCommandRunner.DefaultDependencyCycleGraphLimit, json.GetProperty("candidate_edge_count").GetInt32());
-            Assert.Equal(QueryCommandRunner.DefaultDependencyCycleGraphLimit, json.GetProperty("candidate_edge_limit").GetInt32());
-            Assert.Equal("bounded_approximate_candidate_edges", json.GetProperty("cycle_detection_mode").GetString());
-            Assert.Equal("partial_candidate_edge_sample", json.GetProperty("cycle_result_scope").GetString());
-            Assert.Contains("not a complete or ranked cycle set", json.GetProperty("cycle_result_note").GetString(), StringComparison.Ordinal);
-            var nextStepFlags = json.GetProperty("next_step_flags").EnumerateArray().Select(flag => flag.GetString()).ToArray();
-            Assert.Contains("--limit 100", nextStepFlags);
-            Assert.Contains("--suppress-noise", nextStepFlags);
-            Assert.Contains("--symbol <name>", nextStepFlags);
-            Assert.Contains("--symbol-family <prefix>", nextStepFlags);
-            Assert.Contains("--path <narrower-glob>", nextStepFlags);
-
-            var (textExitCode, textStdout, textStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", dbPath, "--cycles", "--limit", "1", "--lang", "csharp"],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.Success, textExitCode);
-            Assert.Equal(string.Empty, textStdout);
-            Assert.Contains("No dependency cycles found", textStderr, StringComparison.Ordinal);
-            Assert.Contains("Warning: dependency cycle detection returned partial results", textStderr, StringComparison.Ordinal);
-            Assert.Contains("not a complete or ranked cycle set", textStderr, StringComparison.Ordinal);
-            Assert.Contains("Next steps: --limit 100, --suppress-noise", textStderr, StringComparison.Ordinal);
+            var symbolName = $"Target{i}";
+            InsertFileWithSymbol(dbPath, $"src/Target{i}.cs", symbolName);
+            InsertFileWithReferences(dbPath, $"src/Source{i}.cs", [symbolName]);
         }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        MarkDependencyGraphReady(dbPath);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--json", "--cycles", "--limit", "1", "--lang", "csharp"],
+            _jsonOptions));
+
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(0, json.GetProperty("count").GetInt32());
+        Assert.Empty(json.GetProperty("cycles").EnumerateArray());
+        Assert.True(json.GetProperty("truncated").GetBoolean());
+        Assert.Equal("candidate_limit_reached", json.GetProperty("termination_reason").GetString());
+        Assert.Equal("candidate_edge_limit", json.GetProperty("truncated_reason").GetString());
+        Assert.Equal(QueryCommandRunner.DefaultDependencyCycleGraphLimit, json.GetProperty("candidate_edge_count").GetInt32());
+        Assert.Equal(QueryCommandRunner.DefaultDependencyCycleGraphLimit, json.GetProperty("candidate_edge_limit").GetInt32());
+        Assert.Equal("bounded_approximate_candidate_edges", json.GetProperty("cycle_detection_mode").GetString());
+        Assert.Equal("partial_candidate_edge_sample", json.GetProperty("cycle_result_scope").GetString());
+        Assert.Contains("not a complete or ranked cycle set", json.GetProperty("cycle_result_note").GetString(), StringComparison.Ordinal);
+        var nextStepFlags = json.GetProperty("next_step_flags").EnumerateArray().Select(flag => flag.GetString()).ToArray();
+        Assert.Contains("--limit 100", nextStepFlags);
+        Assert.Contains("--suppress-noise", nextStepFlags);
+        Assert.Contains("--symbol <name>", nextStepFlags);
+        Assert.Contains("--symbol-family <prefix>", nextStepFlags);
+        Assert.Contains("--path <narrower-glob>", nextStepFlags);
+
+        var (textExitCode, textStdout, textStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--cycles", "--limit", "1", "--lang", "csharp"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, textExitCode);
+        Assert.Equal(string.Empty, textStdout);
+        Assert.Contains("No dependency cycles found", textStderr, StringComparison.Ordinal);
+        Assert.Contains("Warning: dependency cycle detection returned partial results", textStderr, StringComparison.Ordinal);
+        Assert.Contains("not a complete or ranked cycle set", textStderr, StringComparison.Ordinal);
+        Assert.Contains("Next steps: --limit 100, --suppress-noise", textStderr, StringComparison.Ordinal);
     }
 
     [Fact]
     public void RunDeps_CyclesCandidateBudgetCountsDistinctEdges_Issue4065()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_cycle_candidate_edges");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var noiseSymbols = Enumerable.Range(0, 80)
-                .Select(index => $"Noise{index:D2}")
-                .ToArray();
-            InsertFileWithSymbols(dbPath, "src/NoiseTarget.cs", noiseSymbols);
-            InsertFileWithReferences(dbPath, "src/NoiseCaller.cs", noiseSymbols);
-            InsertFileWithSymbolsAndReferences(dbPath, "src/CycleA.cs", ["CycleA"], ["CycleB"]);
-            InsertFileWithSymbolsAndReferences(dbPath, "src/CycleB.cs", ["CycleB"], ["CycleA"]);
-            MarkDependencyGraphReady(dbPath);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_cycle_candidate_edges");
+        var projectRoot = project.Root;
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        var noiseSymbols = Enumerable.Range(0, 80)
+            .Select(index => $"Noise{index:D2}")
+            .ToArray();
+        InsertFileWithSymbols(dbPath, "src/NoiseTarget.cs", noiseSymbols);
+        InsertFileWithReferences(dbPath, "src/NoiseCaller.cs", noiseSymbols);
+        InsertFileWithSymbolsAndReferences(dbPath, "src/CycleA.cs", ["CycleA"], ["CycleB"]);
+        InsertFileWithSymbolsAndReferences(dbPath, "src/CycleB.cs", ["CycleB"], ["CycleA"]);
+        MarkDependencyGraphReady(dbPath);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", dbPath, "--json", "--cycles", "--limit", "1", "--lang", "csharp"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--json", "--cycles", "--limit", "1", "--lang", "csharp"],
+            _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-            var cycle = Assert.Single(json.GetProperty("cycles").EnumerateArray());
-            var nodes = cycle.GetProperty("nodes").EnumerateArray().Select(node => node.GetString()).ToArray();
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
+        var cycle = Assert.Single(json.GetProperty("cycles").EnumerateArray());
+        var nodes = cycle.GetProperty("nodes").EnumerateArray().Select(node => node.GetString()).ToArray();
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(1, json.GetProperty("count").GetInt32());
-            Assert.False(json.GetProperty("truncated").GetBoolean());
-            Assert.Equal("completed", json.GetProperty("termination_reason").GetString());
-            Assert.Equal(3, json.GetProperty("candidate_edge_count").GetInt32());
-            Assert.Contains("src/CycleA.cs", nodes);
-            Assert.Contains("src/CycleB.cs", nodes);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(1, json.GetProperty("count").GetInt32());
+        Assert.False(json.GetProperty("truncated").GetBoolean());
+        Assert.Equal("completed", json.GetProperty("termination_reason").GetString());
+        Assert.Equal(3, json.GetProperty("candidate_edge_count").GetInt32());
+        Assert.Contains("src/CycleA.cs", nodes);
+        Assert.Contains("src/CycleB.cs", nodes);
     }
 
     [Fact]
