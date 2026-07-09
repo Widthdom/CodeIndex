@@ -352,90 +352,72 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFiles_PerDirectoryCdidxIgnore_AppliesChildRulesWithoutLeakingToSiblings()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx-per-dir-ignore");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(tempDir, "left"));
-            Directory.CreateDirectory(Path.Combine(tempDir, "right"));
-            File.WriteAllText(Path.Combine(tempDir, ".cdidxignore"), "*.generated.py\n");
-            File.WriteAllText(Path.Combine(tempDir, "root.generated.py"), "print('ignored root')\n");
-            File.WriteAllText(Path.Combine(tempDir, "left", ".cdidxignore"), "!keep.generated.py\nlocal.py\n");
-            File.WriteAllText(Path.Combine(tempDir, "left", "keep.generated.py"), "print('kept child')\n");
-            File.WriteAllText(Path.Combine(tempDir, "left", "local.py"), "print('ignored child')\n");
-            File.WriteAllText(Path.Combine(tempDir, "right", "keep.generated.py"), "print('ignored sibling')\n");
-            File.WriteAllText(Path.Combine(tempDir, "right", "plain.py"), "print('kept sibling')\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-per-dir-ignore");
+        var tempDir = project.Root;
+        Directory.CreateDirectory(Path.Combine(tempDir, "left"));
+        Directory.CreateDirectory(Path.Combine(tempDir, "right"));
+        File.WriteAllText(Path.Combine(tempDir, ".cdidxignore"), "*.generated.py\n");
+        File.WriteAllText(Path.Combine(tempDir, "root.generated.py"), "print('ignored root')\n");
+        File.WriteAllText(Path.Combine(tempDir, "left", ".cdidxignore"), "!keep.generated.py\nlocal.py\n");
+        File.WriteAllText(Path.Combine(tempDir, "left", "keep.generated.py"), "print('kept child')\n");
+        File.WriteAllText(Path.Combine(tempDir, "left", "local.py"), "print('ignored child')\n");
+        File.WriteAllText(Path.Combine(tempDir, "right", "keep.generated.py"), "print('ignored sibling')\n");
+        File.WriteAllText(Path.Combine(tempDir, "right", "plain.py"), "print('kept sibling')\n");
 
-            var files = new FileIndexer(tempDir)
-                .ScanFiles()
-                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .ToList();
+        var files = new FileIndexer(tempDir)
+            .ScanFiles()
+            .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
 
-            Assert.Equal(["left/keep.generated.py", "right/plain.py"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(["left/keep.generated.py", "right/plain.py"], files);
     }
 
     [Fact]
     public void ScanFilesDetailed_OversizedGitignoreFailsClosedWithError()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx-oversize-gitignore");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "generated.py\n" + new string('x', 300 * 1024));
-            File.WriteAllText(Path.Combine(tempDir, "generated.py"), "print('generated')\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-oversize-gitignore");
+        var tempDir = project.Root;
+        File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "generated.py\n" + new string('x', 300 * 1024));
+        File.WriteAllText(Path.Combine(tempDir, "generated.py"), "print('generated')\n");
 
-            var result = new FileIndexer(tempDir).ScanFilesDetailed();
-            var files = result.Files
-                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
-                .ToList();
+        var result = new FileIndexer(tempDir).ScanFilesDetailed();
+        var files = result.Files
+            .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+            .ToList();
 
-            Assert.Empty(files);
-            Assert.Contains(
-                result.Errors,
-                error => error.Path == ".gitignore"
-                    && error.Severity == FileIndexer.ScanIssueSeverity.Error
-                    && error.Message.Contains("exceeds", StringComparison.OrdinalIgnoreCase));
-            Assert.True(result.HadErrors);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Empty(files);
+        Assert.Contains(
+            result.Errors,
+            error => error.Path == ".gitignore"
+                && error.Severity == FileIndexer.ScanIssueSeverity.Error
+                && error.Message.Contains("exceeds", StringComparison.OrdinalIgnoreCase));
+        Assert.True(result.HadErrors);
     }
 
     [Fact]
     public void ScanFilesDetailed_GitignoreRuleCountCapFailsClosedWithError()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx-gitignore-rule-cap");
-        try
-        {
-            var rules = Enumerable.Range(0, 4096)
-                .Select(i => $"unused{i}.py")
-                .Concat(["late.py"]);
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), string.Join('\n', rules) + "\n");
-            File.WriteAllText(Path.Combine(tempDir, "late.py"), "print('late')\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-gitignore-rule-cap");
+        var tempDir = project.Root;
+        var rules = Enumerable.Range(0, 4096)
+            .Select(i => $"unused{i}.py")
+            .Concat(["late.py"]);
+        File.WriteAllText(Path.Combine(tempDir, ".gitignore"), string.Join('\n', rules) + "\n");
+        File.WriteAllText(Path.Combine(tempDir, "late.py"), "print('late')\n");
 
-            var result = new FileIndexer(tempDir).ScanFilesDetailed();
-            var files = result.Files
-                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
-                .ToList();
+        var result = new FileIndexer(tempDir).ScanFilesDetailed();
+        var files = result.Files
+            .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+            .ToList();
 
-            Assert.Empty(files);
-            Assert.Contains(
-                result.Errors,
-                error => error.Path == ".gitignore:4097"
-                    && error.Severity == FileIndexer.ScanIssueSeverity.Error
-                    && error.Message.Contains("4096 rules", StringComparison.OrdinalIgnoreCase));
-            Assert.True(result.HadErrors);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Empty(files);
+        Assert.Contains(
+            result.Errors,
+            error => error.Path == ".gitignore:4097"
+                && error.Severity == FileIndexer.ScanIssueSeverity.Error
+                && error.Message.Contains("4096 rules", StringComparison.OrdinalIgnoreCase));
+        Assert.True(result.HadErrors);
     }
 
     [Fact]
