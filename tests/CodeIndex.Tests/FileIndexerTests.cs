@@ -80,92 +80,71 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFilesDetailed_CancelledToken_ThrowsBeforeEnumeration()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx-cancel-scan");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-cancel-scan");
+        var tempDir = project.Root;
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
-        try
-        {
-            Assert.Throws<OperationCanceledException>(() =>
-                new FileIndexer(tempDir).ScanFilesDetailed(cancellationToken: cancellation.Token));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+
+        Assert.Throws<OperationCanceledException>(() =>
+            new FileIndexer(tempDir).ScanFilesDetailed(cancellationToken: cancellation.Token));
     }
 
     [Fact]
     public void ScanFilesDetailed_DanglingFileSystemEntryScanCapsCandidatesWithWarning()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx-dangling-cap");
-        try
-        {
-            for (var i = 0; i < 5; i++)
-                File.WriteAllText(Path.Combine(tempDir, $"file{i}.cs"), $"public class C{i} {{ }}\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-dangling-cap");
+        var tempDir = project.Root;
+        for (var i = 0; i < 5; i++)
+            File.WriteAllText(Path.Combine(tempDir, $"file{i}.cs"), $"public class C{i} {{ }}\n");
 
-            var result = new FileIndexer(
-                tempDir,
-                ignoreCase: false,
-                ignoreRuleRoot: null,
-                maxFileSizeBytes: null,
-                directoryIgnoreCaseProbe: null,
-                maxDanglingFileSystemEntryScanCandidates: 3).ScanFilesDetailed();
+        var result = new FileIndexer(
+            tempDir,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: null,
+            maxDanglingFileSystemEntryScanCandidates: 3).ScanFilesDetailed();
 
-            Assert.Equal(5, result.Files.Count);
-            var warning = Assert.Single(
-                result.Errors,
-                error => error.Message.Contains("Dangling filesystem entry scan truncated", StringComparison.Ordinal));
-            Assert.Equal(FileIndexer.ScanIssueSeverity.Warning, warning.Severity);
-            Assert.Contains("Dangling filesystem entry scan truncated after 3 candidate", warning.Message);
-            Assert.False(result.HadErrors);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(5, result.Files.Count);
+        var warning = Assert.Single(
+            result.Errors,
+            error => error.Message.Contains("Dangling filesystem entry scan truncated", StringComparison.Ordinal));
+        Assert.Equal(FileIndexer.ScanIssueSeverity.Warning, warning.Severity);
+        Assert.Contains("Dangling filesystem entry scan truncated after 3 candidate", warning.Message);
+        Assert.False(result.HadErrors);
     }
 
     [Fact]
     public void Constructor_CaseProbeAvoidsRootProbeArtifacts_Issue3174()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx-case-probe-indexer");
-        try
-        {
-            _ = new FileIndexer(tempDir);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-case-probe-indexer");
+        var tempDir = project.Root;
 
-            Assert.Empty(Directory.GetFiles(tempDir, ".cdidx_case_probe_*", SearchOption.TopDirectoryOnly));
-            Assert.False(Directory.Exists(Path.Combine(tempDir, CaseSensitivityProbeDirectory.DataDirectoryName)));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        _ = new FileIndexer(tempDir);
+
+        Assert.Empty(Directory.GetFiles(tempDir, ".cdidx_case_probe_*", SearchOption.TopDirectoryOnly));
+        Assert.False(Directory.Exists(Path.Combine(tempDir, CaseSensitivityProbeDirectory.DataDirectoryName)));
     }
 
     [Fact]
     public void Constructor_CaseProbePreservesExistingCdidxDirectory_Issue3174()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx-case-probe-existing");
-        try
-        {
-            var dataDirectory = Path.Combine(tempDir, CaseSensitivityProbeDirectory.DataDirectoryName);
-            Directory.CreateDirectory(dataDirectory);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-case-probe-existing");
+        var tempDir = project.Root;
+        var dataDirectory = Path.Combine(tempDir, CaseSensitivityProbeDirectory.DataDirectoryName);
+        Directory.CreateDirectory(dataDirectory);
 
-            _ = new FileIndexer(tempDir);
+        _ = new FileIndexer(tempDir);
 
-            Assert.True(Directory.Exists(dataDirectory));
-            Assert.False(Directory.Exists(Path.Combine(dataDirectory, CaseSensitivityProbeDirectory.ProbeDirectoryName)));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.True(Directory.Exists(dataDirectory));
+        Assert.False(Directory.Exists(Path.Combine(dataDirectory, CaseSensitivityProbeDirectory.ProbeDirectoryName)));
     }
 
     [Fact]
     public void Constructor_CaseProbeFailureThrowsInsteadOfOsFallback_Issue3439()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx-case-probe-failure");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-case-probe-failure");
+        var tempDir = project.Root;
         var previousProbe = FileIndexer.FileSystemIgnoreCaseProbeForTesting;
         FileIndexer.FileSystemIgnoreCaseProbeForTesting = _ => throw new IOException("probe blocked");
         try
@@ -178,14 +157,14 @@ public partial class FileIndexerTests
         finally
         {
             FileIndexer.FileSystemIgnoreCaseProbeForTesting = previousProbe;
-            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void CaseSensitivityProbeDirectory_CleanupFailureDowngradesToDiagnostic_Issue3828()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx-case-probe-cleanup");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-case-probe-cleanup");
+        var tempDir = project.Root;
         var previousDelete = CaseSensitivityProbeDirectory.DeleteCreatedEmptyDirectoryForTesting;
         var previousSink = CaseSensitivityProbeDirectory.CleanupDiagnosticSinkForTesting;
         var diagnostics = new List<CaseSensitivityProbeCleanupDiagnostic>();
@@ -207,7 +186,6 @@ public partial class FileIndexerTests
         {
             CaseSensitivityProbeDirectory.DeleteCreatedEmptyDirectoryForTesting = previousDelete;
             CaseSensitivityProbeDirectory.CleanupDiagnosticSinkForTesting = previousSink;
-            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -217,8 +195,10 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx-case-probe-boundary");
-        var externalDir = TestProjectHelper.CreateTempProject("cdidx-case-probe-external");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-case-probe-boundary");
+        using var external = TestProjectHelper.CreateTempProjectScope("cdidx-case-probe-external");
+        var tempDir = project.Root;
+        var externalDir = external.Root;
         var probeDirectory = Path.Combine(
             tempDir,
             CaseSensitivityProbeDirectory.DataDirectoryName,
@@ -244,28 +224,20 @@ public partial class FileIndexerTests
         {
             CaseSensitivityProbeDirectory.CleanupDiagnosticSinkForTesting = previousSink;
             DeleteDirectorySymlinkIfPresent(probeDirectory);
-            TestProjectHelper.DeleteDirectory(tempDir);
-            TestProjectHelper.DeleteDirectory(externalDir);
         }
     }
 
     [Fact]
     public void FileWriteProbe_TryWriteAndDeleteEmptyFile_RemovesProbeAfterSuccess_Issue3689()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx-write-probe-success");
-        try
-        {
-            var probePath = Path.Combine(tempDir, ".cdidx-write-probe.tmp");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-write-probe-success");
+        var tempDir = project.Root;
+        var probePath = Path.Combine(tempDir, ".cdidx-write-probe.tmp");
 
-            var result = FileWriteProbe.TryWriteAndDeleteEmptyFile(probePath, Encoding.UTF8);
+        var result = FileWriteProbe.TryWriteAndDeleteEmptyFile(probePath, Encoding.UTF8);
 
-            Assert.True(result);
-            Assert.False(File.Exists(probePath));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.True(result);
+        Assert.False(File.Exists(probePath));
     }
 
     private static void DeleteDirectorySymlinkIfPresent(string path)
@@ -284,39 +256,28 @@ public partial class FileIndexerTests
     [Fact]
     public void FileWriteProbe_TryWriteAndDeleteEmptyFile_ReturnsFalseForDirectoryPath_Issue3689()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx-write-probe-failure");
-        try
-        {
-            var result = FileWriteProbe.TryWriteAndDeleteEmptyFile(tempDir, Encoding.UTF8);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-write-probe-failure");
+        var tempDir = project.Root;
 
-            Assert.False(result);
-            Assert.True(Directory.Exists(tempDir));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        var result = FileWriteProbe.TryWriteAndDeleteEmptyFile(tempDir, Encoding.UTF8);
+
+        Assert.False(result);
+        Assert.True(Directory.Exists(tempDir));
     }
 
     [Fact]
     public void FileWriteProbe_TryWriteAndDeleteEmptyFile_DoesNotOverwriteOrDeleteExistingProbe_Issue3777()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx-write-probe-existing");
-        try
-        {
-            var probePath = Path.Combine(tempDir, ".cdidx-write-probe.tmp");
-            File.WriteAllText(probePath, "existing", Encoding.UTF8);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-write-probe-existing");
+        var tempDir = project.Root;
+        var probePath = Path.Combine(tempDir, ".cdidx-write-probe.tmp");
+        File.WriteAllText(probePath, "existing", Encoding.UTF8);
 
-            var result = FileWriteProbe.TryWriteAndDeleteEmptyFile(probePath, Encoding.UTF8);
+        var result = FileWriteProbe.TryWriteAndDeleteEmptyFile(probePath, Encoding.UTF8);
 
-            Assert.False(result);
-            Assert.True(File.Exists(probePath));
-            Assert.Equal("existing", File.ReadAllText(probePath, Encoding.UTF8));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.False(result);
+        Assert.True(File.Exists(probePath));
+        Assert.Equal("existing", File.ReadAllText(probePath, Encoding.UTF8));
     }
 
     [Fact]
