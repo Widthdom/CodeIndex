@@ -5586,37 +5586,37 @@ public partial class ReferenceExtractorTests
             .Single(line => line.Contains("MyApp.Components.Forms.LoginButton", StringComparison.Ordinal))
             .IndexOf("MyApp.Components.Forms.LoginButton", StringComparison.Ordinal) + 1;
 
-        Assert.Contains(references, r => r.SymbolName == "BasePage" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "IUserActions" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Authorize" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "UserService" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "UserCard" && r.ReferenceKind == "call");
-        Assert.Contains(references, r => r.SymbolName == "Shared.DetailPanel" && r.ReferenceKind == "call" && r.Column == qualifiedComponentColumn);
-        Assert.Contains(references, r => r.SymbolName == "MyApp.Components.Forms.LoginButton" && r.ReferenceKind == "call" && r.Column == nestedComponentColumn);
-        Assert.Contains(references, r => r.SymbolName == "HandleClick" && r.ReferenceKind == "razor_event_binding");
-        Assert.DoesNotContain(references, r =>
-            r.SymbolName == "HandleClick"
-            && r.ReferenceKind == "implicit_implementation");
-        Assert.Contains(references, r =>
-            r.SymbolName == "InheritedClick"
-            && r.ReferenceKind == "razor_event_binding");
-        Assert.Contains(references, r =>
-            r.SymbolName == "InheritedClick"
-            && r.ReferenceKind == "implicit_implementation"
-            && r.ContainerKind == "interface"
-            && r.ContainerName == "IUserActions");
-        Assert.Contains(references, r => r.SymbolName == "Save" && r.ReferenceKind == "call");
-        Assert.Contains(aliasReferences, r => r.SymbolName == "UserCard" && r.ReferenceKind == "call");
-        Assert.DoesNotContain(references, r => r.SymbolName == "AdminPanel" && r.ReferenceKind == "call");
-        Assert.DoesNotContain(references, r => r.SymbolName == "AuditPanel" && r.ReferenceKind == "call");
-        Assert.DoesNotContain(references, r => r.SymbolName == "CodeStringPanel" && r.ReferenceKind == "call");
-        Assert.DoesNotContain(references, r => r.SymbolName == "CodeGenericPanel" && r.ReferenceKind == "call");
-        Assert.DoesNotContain(references, r => r.SymbolName == "CodeCommentPanel" && r.ReferenceKind == "call");
-        Assert.DoesNotContain(references, r => r.SymbolName == "InlineCodePanel" && r.ReferenceKind == "call");
-        Assert.DoesNotContain(references, r => r.SymbolName == "ElseCodePanel" && r.ReferenceKind == "call");
-        Assert.DoesNotContain(references, r => r.SymbolName == "inputRef" && r.ReferenceKind == "call");
-        Assert.DoesNotContain(references, r => r.SymbolName == "person" && r.ReferenceKind == "call");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Value" && r.ReferenceKind == "call");
+        AssertReferenceContains(references, "BasePage", "type_reference");
+        AssertReferenceContains(references, "IUserActions", "type_reference");
+        AssertReferenceContains(references, "Authorize", "type_reference");
+        AssertReferenceContains(references, "UserService", "type_reference");
+        AssertReferenceContains(references, "UserCard", "call");
+        AssertReferenceContains(references, "Shared.DetailPanel", "call", column: qualifiedComponentColumn);
+        AssertReferenceContains(references, "MyApp.Components.Forms.LoginButton", "call", column: nestedComponentColumn);
+        AssertReferenceContains(references, "HandleClick", "razor_event_binding");
+        AssertReferenceDoesNotContain(references, "HandleClick", "implicit_implementation");
+        AssertReferenceContains(references, "InheritedClick", "razor_event_binding");
+        AssertReferenceContains(
+            references,
+            "InheritedClick",
+            "implicit_implementation",
+            containerName: "IUserActions",
+            containerKind: "interface");
+        AssertReferenceContains(references, "Save", "call");
+        AssertReferenceContains(aliasReferences, "UserCard", "call");
+        AssertReferencesDoNotContainAny(
+            references,
+            "call",
+            "AdminPanel",
+            "AuditPanel",
+            "CodeStringPanel",
+            "CodeGenericPanel",
+            "CodeCommentPanel",
+            "InlineCodePanel",
+            "ElseCodePanel",
+            "inputRef",
+            "person",
+            "Value");
     }
 
     [Fact]
@@ -5645,9 +5645,9 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.Contains(references, r => r.SymbolName == "Wrapper" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        AssertReferenceContains(references, "Wrapper", "type_reference", containerName: "Match");
         Assert.Equal(2, references.Count(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match"));
-        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        AssertReferenceContains(references, "Shape", "type_reference", containerName: "Match");
     }
 
     [Fact]
@@ -6501,8 +6501,15 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.Contains(references, r => r.SymbolName == "IContract" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => (r.SymbolName is "allows" or "default" or "ref" or "unmanaged" or "notnull") && r.ReferenceKind == "type_reference");
+        AssertReferenceContains(references, "IContract", "type_reference");
+        AssertReferencesDoNotContainAny(
+            references,
+            "type_reference",
+            "allows",
+            "default",
+            "ref",
+            "unmanaged",
+            "notnull");
     }
 
     [Fact]
@@ -6531,10 +6538,10 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.Contains(references, r => r.SymbolName == "Entity" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "IContract" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "IAuditable" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => (r.SymbolName is "TValue" or "TKey" or "notnull" or "new") && r.ReferenceKind == "type_reference");
+        AssertReferenceContains(references, "Entity", "type_reference");
+        AssertReferenceContains(references, "IContract", "type_reference");
+        AssertReferenceContains(references, "IAuditable", "type_reference");
+        AssertReferencesDoNotContainAny(references, "type_reference", "TValue", "TKey", "notnull", "new");
     }
 
     [Fact]
@@ -6553,9 +6560,9 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.Contains(references, r => r.SymbolName == "Base" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "IContract" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => (r.SymbolName is "TValue" or "TItem") && r.ReferenceKind == "type_reference");
+        AssertReferenceContains(references, "Base", "type_reference");
+        AssertReferenceContains(references, "IContract", "type_reference");
+        AssertReferencesDoNotContainAny(references, "type_reference", "TValue", "TItem");
     }
 
     [Fact]
@@ -6574,8 +6581,8 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
+        AssertReferenceContains(references, "User", "type_reference");
+        AssertReferenceDoesNotContain(references, "T", "type_reference");
     }
 
     [Fact]
@@ -6594,8 +6601,8 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
+        AssertReferenceContains(references, "User", "type_reference");
+        AssertReferenceDoesNotContain(references, "T", "type_reference");
     }
 
     [Fact]
@@ -9765,13 +9772,14 @@ public partial class ReferenceExtractorTests
         string symbolName,
         string referenceKind,
         string? containerName = null,
+        string? containerKind = null,
         string? context = null,
         int? line = null,
         int? column = null)
     {
         Assert.Contains(
             references,
-            reference => ReferenceMatches(reference, symbolName, referenceKind, containerName, context, line, column));
+            reference => ReferenceMatches(reference, symbolName, referenceKind, containerName, containerKind, context, line, column));
     }
 
     private static void AssertReferenceDoesNotContain(
@@ -9779,13 +9787,23 @@ public partial class ReferenceExtractorTests
         string symbolName,
         string referenceKind,
         string? containerName = null,
+        string? containerKind = null,
         string? context = null,
         int? line = null,
         int? column = null)
     {
         Assert.DoesNotContain(
             references,
-            reference => ReferenceMatches(reference, symbolName, referenceKind, containerName, context, line, column));
+            reference => ReferenceMatches(reference, symbolName, referenceKind, containerName, containerKind, context, line, column));
+    }
+
+    private static void AssertReferencesDoNotContainAny(
+        IEnumerable<ReferenceRecord> references,
+        string referenceKind,
+        params string[] symbolNames)
+    {
+        foreach (var symbolName in symbolNames)
+            AssertReferenceDoesNotContain(references, symbolName, referenceKind);
     }
 
     private static bool ReferenceMatches(
@@ -9793,6 +9811,7 @@ public partial class ReferenceExtractorTests
         string symbolName,
         string referenceKind,
         string? containerName,
+        string? containerKind,
         string? context,
         int? line,
         int? column)
@@ -9800,6 +9819,7 @@ public partial class ReferenceExtractorTests
         return reference.SymbolName == symbolName
             && reference.ReferenceKind == referenceKind
             && (containerName is null || reference.ContainerName == containerName)
+            && (containerKind is null || reference.ContainerKind == containerKind)
             && (context is null || reference.Context == context)
             && (line is null || reference.Line == line.Value)
             && (column is null || reference.Column == column.Value);
