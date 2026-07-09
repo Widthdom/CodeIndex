@@ -64,19 +64,11 @@ public class CiWorkflowTests
             "- name: Verify Release solution build",
             "dotnet build CodeIndex.sln --configuration Release --no-restore",
             "- name: Verify formatting");
-        Assert.Contains(
-            "$collectCoverage = $CollectCoverage -eq \"true\"",
-            testScript);
-        Assert.Contains(
-            "[ValidateSet(\"true\", \"false\")]",
-            testScript);
-        Assert.Contains(
-            "-Framework \"${{ matrix.test-framework }}\"",
-            workflow);
-        Assert.Contains("Skipping XPlat Code Coverage outside ubuntu-24.04/net8.0", testScript);
-        Assert.DoesNotContain("\"--no-restore\"", testScript);
         AssertContainsAll(
             testScript,
+            "$collectCoverage = $CollectCoverage -eq \"true\"",
+            "[ValidateSet(\"true\", \"false\")]",
+            "Skipping XPlat Code Coverage outside ubuntu-24.04/net8.0",
             "--blame-crash",
             "--blame-hang",
             "--blame-hang-timeout\", \"5m",
@@ -88,51 +80,47 @@ public class CiWorkflowTests
             "if ($exitCode -ne 0)",
             "$logDirectory = Split-Path -Parent $LogPath",
             "New-Item -ItemType Directory -Force -Path $logDirectory",
-            "[System.IO.File]::WriteAllLines($LogPath, [string[]]$capturedOutput)");
+            "[System.IO.File]::WriteAllLines($LogPath, [string[]]$capturedOutput)",
+            "Write-StepOutput -Name \"summarize\" -Value \"true\"",
+            "$env:GITHUB_OUTPUT",
+            "Initial test run hit TestSessionTimeout; skipping flaky retry",
+            "Rerunning once to classify possible flakiness.",
+            "flaky-retry.txt");
         AssertDoesNotContainAny(
             testScript,
+            "\"--no-restore\"",
             "New-Item -ItemType Directory -Force -Path ./TestResults",
-            "Tee-Object");
-        Assert.Contains("id: test", workflow);
-        Assert.Contains("Write-StepOutput -Name \"summarize\" -Value \"true\"", testScript);
-        Assert.Contains("$env:GITHUB_OUTPUT", testScript);
-        Assert.Contains("steps.test.outputs.summarize == 'true' || failure()", workflow);
-        Assert.Contains(
-            "- name: Upload test results\n        if: always() && (steps.test.outputs.summarize == 'true' || failure())",
-            normalizedWorkflow);
-        Assert.Contains(
+            "Tee-Object",
+            "steps.lane.outputs.primary_lane",
+            "matrix.test-framework");
+        AssertContainsAll(
+            workflow,
+            "-Framework \"${{ matrix.test-framework }}\"",
+            "id: test",
+            "steps.test.outputs.summarize == 'true' || failure()",
             "run: dotnet run --project tools/CodeIndex.TestTelemetry --configuration Release -- summarize",
-            workflow);
-        Assert.DoesNotContain(
-            "tools/CodeIndex.TestTelemetry --configuration Release --no-build",
-            workflow);
-        Assert.DoesNotContain(
-            "if: always()\n        run: dotnet run --project tools/CodeIndex.TestTelemetry",
-            normalizedWorkflow);
-        Assert.DoesNotContain(
-            "- name: Upload test results\n        if: always()\n",
-            normalizedWorkflow);
-        Assert.Contains("Initial test run hit TestSessionTimeout; skipping flaky retry", testScript);
-        Assert.Contains("Rerunning once to classify possible flakiness.", testScript);
-        Assert.Contains("flaky-retry.txt", testScript);
-        Assert.Contains("TestResults/**/*.trx", workflow);
-        Assert.Contains("TestResults/**/*.txt", workflow);
-        Assert.Contains("TestResults/**/*.xml", workflow);
-        Assert.DoesNotContain("TestResults/**/*Sequence*.xml", workflow);
-        Assert.Contains("TestResults/**/*.dmp", workflow);
-        Assert.Contains("TestResults/**/*.dump", workflow);
-        Assert.Contains("if: always() && steps.lane.outputs.primary_lane == 'true'", workflow);
-        Assert.Contains(
+            "TestResults/**/*.trx",
+            "TestResults/**/*.txt",
+            "TestResults/**/*.xml",
+            "TestResults/**/*.dmp",
+            "TestResults/**/*.dump",
+            "if: always() && steps.lane.outputs.primary_lane == 'true'");
+        AssertContainsAll(
+            normalizedWorkflow,
+            "- name: Upload test results\n        if: always() && (steps.test.outputs.summarize == 'true' || failure())",
             "- name: Publish\n        if: steps.lane.outputs.primary_lane == 'true'",
-            normalizedWorkflow);
-        Assert.Contains(
-            "- name: Upload build artifact\n        if: steps.lane.outputs.primary_lane == 'true'",
-            normalizedWorkflow);
-        Assert.DoesNotContain("if: matrix.os == 'ubuntu-24.04' && matrix.test-framework == 'net8.0'", workflow);
-        Assert.DoesNotContain("always() && matrix.os == 'ubuntu-24.04' && matrix.test-framework == 'net8.0'", workflow);
-        Assert.DoesNotContain("always() && !(matrix.os == 'windows-2022' && matrix.test-framework == 'net9.0')", workflow);
-        Assert.DoesNotContain("steps.lane.outputs.primary_lane", testScript);
-        Assert.DoesNotContain("matrix.test-framework", testScript);
+            "- name: Upload build artifact\n        if: steps.lane.outputs.primary_lane == 'true'");
+        AssertDoesNotContainAny(
+            workflow,
+            "tools/CodeIndex.TestTelemetry --configuration Release --no-build",
+            "TestResults/**/*Sequence*.xml",
+            "if: matrix.os == 'ubuntu-24.04' && matrix.test-framework == 'net8.0'",
+            "always() && matrix.os == 'ubuntu-24.04' && matrix.test-framework == 'net8.0'",
+            "always() && !(matrix.os == 'windows-2022' && matrix.test-framework == 'net9.0')");
+        AssertDoesNotContainAny(
+            normalizedWorkflow,
+            "if: always()\n        run: dotnet run --project tools/CodeIndex.TestTelemetry",
+            "- name: Upload test results\n        if: always()\n");
         Assert.Contains("function Invoke-TestRun", normalizedTestScript);
     }
 
