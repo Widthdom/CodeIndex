@@ -2176,25 +2176,18 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void WithDb_SqliteCantOpenSurfacesAccessOpenCategory_Issue2072()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2072_cantopen");
-        try
-        {
-            var missingParent = Path.Combine(projectRoot, "missing-parent");
-            var dbUri = new Uri(Path.Combine(missingParent, "codeindex.db")).AbsoluteUri + "?mode=ro";
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_issue2072_cantopen");
+        var missingParent = Path.Combine(project.Root, "missing-parent");
+        var dbUri = new Uri(Path.Combine(missingParent, "codeindex.db")).AbsoluteUri + "?mode=ro";
 
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
-                ["--db", dbUri],
-                _jsonOptions));
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--db", dbUri],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            Assert.Contains($"Error [{CommandErrorCodes.DbNotFound}]: database not found at {Path.GetFullPath(Path.Combine(missingParent, "codeindex.db"))}", stderr);
-            Assert.Contains("Hint: the --db path resolved to:", stderr);
-            Assert.DoesNotContain("database access/open denied", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Contains($"Error [{CommandErrorCodes.DbNotFound}]: database not found at {Path.GetFullPath(Path.Combine(missingParent, "codeindex.db"))}", stderr);
+        Assert.Contains("Hint: the --db path resolved to:", stderr);
+        Assert.DoesNotContain("database access/open denied", stderr);
     }
 
     [Theory]
