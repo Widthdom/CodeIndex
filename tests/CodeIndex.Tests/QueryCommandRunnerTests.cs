@@ -2622,48 +2622,41 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunSymbolsAndReferences_AcceptDependencyPackageKinds_Issue3899()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_dependency_package_kinds");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_dependency_package_kinds");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "Directory.Packages.props",
+            "dependency_manifest",
+            """
+            <Project>
+              <ItemGroup>
+                <PackageVersion Include="Serilog" Version="3.1.1" />
+              </ItemGroup>
+            </Project>
+            """);
+
+        using (var db = new DbContext(dbPath))
+        using (var cmd = db.Connection.CreateCommand())
         {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "Directory.Packages.props",
-                "dependency_manifest",
-                """
-                <Project>
-                  <ItemGroup>
-                    <PackageVersion Include="Serilog" Version="3.1.1" />
-                  </ItemGroup>
-                </Project>
-                """);
-
-            using (var db = new DbContext(dbPath))
-            using (var cmd = db.Connection.CreateCommand())
-            {
-                new DbWriter(db.Connection).MarkGraphReady();
-                cmd.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE symbol_name = 'Serilog' AND reference_kind = 'dependency'";
-                Assert.Equal(1L, (long)cmd.ExecuteScalar()!);
-            }
-
-            var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--lang", "dependency_manifest", "--kind", "package", "--count"],
-                _jsonOptions));
-            var (referencesExitCode, referencesStdout, referencesStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Serilog", "--db", dbPath, "--lang", "dependency_manifest", "--kind", "dependency", "--count"],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
-            Assert.Equal("1", symbolsStdout.Trim());
-            Assert.Equal(string.Empty, symbolsStderr);
-            Assert.Equal(CommandExitCodes.Success, referencesExitCode);
-            Assert.Equal("1", referencesStdout.Trim());
-            Assert.Equal(string.Empty, referencesStderr);
+            new DbWriter(db.Connection).MarkGraphReady();
+            cmd.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE symbol_name = 'Serilog' AND reference_kind = 'dependency'";
+            Assert.Equal(1L, (long)cmd.ExecuteScalar()!);
         }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+
+        var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+            ["--db", dbPath, "--lang", "dependency_manifest", "--kind", "package", "--count"],
+            _jsonOptions));
+        var (referencesExitCode, referencesStdout, referencesStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+            ["Serilog", "--db", dbPath, "--lang", "dependency_manifest", "--kind", "dependency", "--count"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+        Assert.Equal("1", symbolsStdout.Trim());
+        Assert.Equal(string.Empty, symbolsStderr);
+        Assert.Equal(CommandExitCodes.Success, referencesExitCode);
+        Assert.Equal("1", referencesStdout.Trim());
+        Assert.Equal(string.Empty, referencesStderr);
     }
 
     [Fact]
