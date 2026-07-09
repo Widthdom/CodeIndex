@@ -122,7 +122,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - `PerformanceTests.cs`
   Bounded CI smoke coverage plus large-scale data benchmarks. `CiPerformanceSmoke_IndexAndSearchSmallFixture_StaysWithinBudget` and the allocation budget guards run in the default `net8.0` suite, so they are blocking PR/CI checks on the production target, but their broad budgets are intended to catch only severe indexing/search or allocation regressions rather than act as benchmarks. The 10K+ large-scale tests remain skip-by-default; run them manually with `--filter`.
 - `.github/scripts/run-dotnet-tests.ps1`
-  The `dotnet.yml` matrix test step delegates test argument construction, coverage gating, failure-log capture, TestSessionTimeout handling, and single flaky retry classification to this script. Keep workflow YAML limited to matrix/lane parameter wiring, and update `CiWorkflowTests` when changing either the script contract or artifact/summarize gating.
+  The `dotnet.yml` matrix test step delegates test argument construction, coverage gating, `TestResults` path ownership for failure-log capture, TestSessionTimeout handling, and single flaky retry classification to this script. Keep workflow YAML limited to matrix/lane parameter wiring, and update `CiWorkflowTests` when changing either the script contract or artifact/summarize gating.
 - `.github/scripts/configure-windows-test-host.ps1`
   The `dotnet.yml` and `release.yml` Windows lanes share TMP/TEMP pinning and Defender exclusion setup here so both workflows keep the same test-host performance assumptions. Update `CiWorkflowTests` when changing this script or its workflow call contract.
 - `DbRecoveryTests.cs`
@@ -402,7 +402,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `PerformanceTests.cs`
   bounded な CI smoke と大規模データベンチマークを扱います。`CiPerformanceSmoke_IndexAndSearchSmallFixture_StaysWithinBudget` と allocation budget guard は通常の `net8.0` suite で実行されるため production target 上の PR / CI blocking check ですが、benchmark ではなく重大な indexing/search または allocation 退行だけを拾う広めの budget を使います。10K+ の大規模テストは引き続きデフォルト Skip で、`--filter` で手動実行します。
 - `.github/scripts/run-dotnet-tests.ps1`
-  `dotnet.yml` の matrix test step は、test 引数構築、coverage gating、failure log capture、TestSessionTimeout handling、1 回だけの flaky retry classification をこのスクリプトに委譲します。workflow YAML は matrix/lane parameter wiring に限定し、script contract や artifact/summarize gating を変更するときは `CiWorkflowTests` も更新してください。
+  `dotnet.yml` の matrix test step は、test 引数構築、coverage gating、failure log capture 用の `TestResults` path ownership、TestSessionTimeout handling、1 回だけの flaky retry classification をこのスクリプトに委譲します。workflow YAML は matrix/lane parameter wiring に限定し、script contract や artifact/summarize gating を変更するときは `CiWorkflowTests` も更新してください。
 - `.github/scripts/configure-windows-test-host.ps1`
   `dotnet.yml` と `release.yml` の Windows lane は、TMP/TEMP 固定と Defender 除外 setup をこのスクリプトで共有します。両 workflow の test-host performance 前提を揃えるため、スクリプトまたは workflow からの呼び出し contract を変更するときは `CiWorkflowTests` も更新してください。
 - `DbRecoveryTests.cs`

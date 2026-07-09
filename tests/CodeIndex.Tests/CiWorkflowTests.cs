@@ -83,6 +83,9 @@ public class CiWorkflowTests
         Assert.Contains("--blame-hang", testScript);
         Assert.Contains("--blame-hang-timeout\", \"5m", testScript);
         Assert.Contains("test-output-first.txt", testScript);
+        Assert.Contains("$resultsDirectory = \"./TestResults\"", testScript);
+        Assert.Contains("Join-Path $resultsDirectory \"test-output-first.txt\"", testScript);
+        Assert.Contains("Join-Path $resultsDirectory \"test-output-retry.txt\"", testScript);
         Assert.Contains("[System.Collections.Generic.List[string]]::new()", testScript);
         Assert.Contains("if ($exitCode -ne 0)", testScript);
         Assert.Contains("$logDirectory = Split-Path -Parent $LogPath", testScript);
