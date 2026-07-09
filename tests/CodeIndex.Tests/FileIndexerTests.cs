@@ -426,31 +426,25 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx-hardlink");
-        try
-        {
-            var original = Path.Combine(tempDir, "original.cs");
-            var duplicate = Path.Combine(tempDir, "duplicate.cs");
-            File.WriteAllText(original, "class HardlinkFixture { }\n");
-            CreateHardLink(original, duplicate);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-hardlink");
+        var tempDir = project.Root;
+        var original = Path.Combine(tempDir, "original.cs");
+        var duplicate = Path.Combine(tempDir, "duplicate.cs");
+        File.WriteAllText(original, "class HardlinkFixture { }\n");
+        CreateHardLink(original, duplicate);
 
-            var result = new FileIndexer(tempDir).ScanFilesDetailed();
+        var result = new FileIndexer(tempDir).ScanFilesDetailed();
 
-            var files = result.Files.Select(Path.GetFileName).OrderBy(name => name, StringComparer.Ordinal).ToList();
-            Assert.Single(files);
-            Assert.Contains(files[0], new[] { "duplicate.cs", "original.cs" });
-            Assert.Contains(result.NonIndexablePaths, path => path is "duplicate.cs" or "original.cs");
-            var warning = Assert.Single(
-                result.Errors,
-                error => error.Severity == FileIndexer.ScanIssueSeverity.Warning
-                    && error.Message.Contains("hardlinked", StringComparison.OrdinalIgnoreCase));
-            Assert.Contains(warning.Path, new[] { "duplicate.cs", "original.cs" });
-            Assert.False(result.HadErrors);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        var files = result.Files.Select(Path.GetFileName).OrderBy(name => name, StringComparer.Ordinal).ToList();
+        Assert.Single(files);
+        Assert.Contains(files[0], new[] { "duplicate.cs", "original.cs" });
+        Assert.Contains(result.NonIndexablePaths, path => path is "duplicate.cs" or "original.cs");
+        var warning = Assert.Single(
+            result.Errors,
+            error => error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                && error.Message.Contains("hardlinked", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(warning.Path, new[] { "duplicate.cs", "original.cs" });
+        Assert.False(result.HadErrors);
     }
 
     [Theory]
@@ -2463,24 +2457,18 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
 
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, "real.py"), "def real(): pass\n");
-            // Dangling symlinks (target does not exist) must be skipped without aborting the scan.
-            // target が存在しない dangling symlink は、scan 全体を落とさずスキップする。
-            File.CreateSymbolicLink(Path.Combine(tempDir, "dangling.py"), "missing_target.py");
-            var missingDirectoryTarget = Path.Combine(tempDir, "missing_directory_target");
-            Directory.CreateSymbolicLink(Path.Combine(tempDir, "dangling_dir"), missingDirectoryTarget);
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        File.WriteAllText(Path.Combine(tempDir, "real.py"), "def real(): pass\n");
+        // Dangling symlinks (target does not exist) must be skipped without aborting the scan.
+        // target が存在しない dangling symlink は、scan 全体を落とさずスキップする。
+        File.CreateSymbolicLink(Path.Combine(tempDir, "dangling.py"), "missing_target.py");
+        var missingDirectoryTarget = Path.Combine(tempDir, "missing_directory_target");
+        Directory.CreateSymbolicLink(Path.Combine(tempDir, "dangling_dir"), missingDirectoryTarget);
 
-            var files = ScanRelativeFiles(tempDir);
+        var files = ScanRelativeFiles(tempDir);
 
-            Assert.Equal(["real.py"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(["real.py"], files);
     }
 
     [Fact]
