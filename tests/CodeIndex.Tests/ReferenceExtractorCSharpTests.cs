@@ -385,8 +385,7 @@ public partial class ReferenceExtractorTests
             }
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("csharp", content);
 
         var computeRefs = references.Where(r => r.SymbolName == "Compute").ToList();
         Assert.Equal(3, computeRefs.Count);
@@ -419,8 +418,7 @@ public partial class ReferenceExtractorTests
             }
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("csharp", content);
 
         var fibRefs = references.Where(r => r.SymbolName == "Fib").ToList();
         Assert.Single(fibRefs);
@@ -471,8 +469,7 @@ public partial class ReferenceExtractorTests
             }
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("csharp", content);
 
         var combineCalls = references
             .Where(reference => reference.SymbolName == "Combine" && reference.ReferenceKind == "call")
@@ -511,8 +508,7 @@ public partial class ReferenceExtractorTests
             }
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("csharp", content);
 
         Assert.Equal(1, references.Count(r => r.SymbolName == "Fire" && r.ReferenceKind == "call"));
         Assert.Equal(3, references.Count(r => r.SymbolName == "Compute" && r.ReferenceKind == "call"));
@@ -540,8 +536,7 @@ public partial class ReferenceExtractorTests
             }
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("csharp", content);
 
         var computeRef = Assert.Single(references.Where(r => r.SymbolName == "Compute"));
         Assert.Equal("function", computeRef.ContainerKind);
@@ -565,8 +560,7 @@ public partial class ReferenceExtractorTests
             }
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("csharp", content);
 
         var computeRef = Assert.Single(references.Where(r => r.SymbolName == "Compute"));
         Assert.Equal("property", computeRef.ContainerKind);
@@ -593,8 +587,7 @@ public partial class ReferenceExtractorTests
             }
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("csharp", content);
 
         var computeRef = Assert.Single(references.Where(r => r.SymbolName == "Compute"));
         Assert.Equal("property", computeRef.ContainerKind);
@@ -622,8 +615,7 @@ public partial class ReferenceExtractorTests
             }
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("csharp", content);
 
         var computeRef = Assert.Single(references.Where(r => r.SymbolName == "Compute"));
         Assert.Equal("property", computeRef.ContainerKind);
