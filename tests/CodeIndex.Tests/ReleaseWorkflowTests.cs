@@ -283,7 +283,8 @@ public partial class ReleaseWorkflowTests
     [Fact]
     public void PackageNormalizer_ParentDirectoryFlushFailureReportsPackageAlreadyReplaced_Issue3961()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_ParentDirectoryFlushFailureReportsPackageAlreadyReplaced_Issue3961));
+        using var project = TestProjectHelper.CreateTempProjectScope(nameof(PackageNormalizer_ParentDirectoryFlushFailureReportsPackageAlreadyReplaced_Issue3961));
+        var projectRoot = project.Root;
         try
         {
             var packagePath = Path.Combine(projectRoot, "flush-failure.nupkg");
@@ -304,14 +305,14 @@ public partial class ReleaseWorkflowTests
         finally
         {
             PackageNormalizeRewriteFile.FlushParentDirectoryForTesting = null;
-            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 
     [Fact]
     public void PackageNormalizeCli_ParentDirectoryFlushFailureReportsPostReplaceStateJson_Issue3961()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizeCli_ParentDirectoryFlushFailureReportsPostReplaceStateJson_Issue3961));
+        using var project = TestProjectHelper.CreateTempProjectScope(nameof(PackageNormalizeCli_ParentDirectoryFlushFailureReportsPostReplaceStateJson_Issue3961));
+        var projectRoot = project.Root;
         try
         {
             var packagePath = Path.Combine(projectRoot, "flush-failure-cli.nupkg");
@@ -340,14 +341,14 @@ public partial class ReleaseWorkflowTests
         finally
         {
             PackageNormalizeRewriteFile.FlushParentDirectoryForTesting = null;
-            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 
     [Fact]
     public void PackageNormalizer_CancellationAfterTempCreationDeletesTempAndLeavesPackage_Issue3961()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_CancellationAfterTempCreationDeletesTempAndLeavesPackage_Issue3961));
+        using var project = TestProjectHelper.CreateTempProjectScope(nameof(PackageNormalizer_CancellationAfterTempCreationDeletesTempAndLeavesPackage_Issue3961));
+        var projectRoot = project.Root;
         try
         {
             var packagePath = Path.Combine(projectRoot, "cancelled.nupkg");
@@ -378,104 +379,85 @@ public partial class ReleaseWorkflowTests
         finally
         {
             PackageNormalizeRewriteFile.TempFileCreatedForTesting = null;
-            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 
     [Fact]
     public void PackageNormalizeCli_DryRunDoesNotRewritePackage()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizeCli_DryRunDoesNotRewritePackage));
-        try
-        {
-            var packagePath = Path.Combine(projectRoot, "dry-run.nupkg");
-            CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
-            var beforeHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(packagePath)));
+        using var project = TestProjectHelper.CreateTempProjectScope(nameof(PackageNormalizeCli_DryRunDoesNotRewritePackage));
+        var projectRoot = project.Root;
+        var packagePath = Path.Combine(projectRoot, "dry-run.nupkg");
+        CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
+        var beforeHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(packagePath)));
 
-            var (exitCode, stdout, stderr) = RunPackageNormalizeCli(["--dry-run", "--summary", packagePath]);
+        var (exitCode, stdout, stderr) = RunPackageNormalizeCli(["--dry-run", "--summary", packagePath]);
 
-            var afterHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(packagePath)));
-            Assert.Equal(0, exitCode);
-            Assert.Empty(stderr);
-            Assert.Contains($"Would normalize {packagePath}", stdout);
-            Assert.Contains("Summary: inspected=1 normalized=0 unchanged=0 failed=0 skipped=1", stdout);
-            Assert.Equal(beforeHash, afterHash);
-            AssertNoNormalizeTempFiles(projectRoot, packagePath);
+        var afterHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(packagePath)));
+        Assert.Equal(0, exitCode);
+        Assert.Empty(stderr);
+        Assert.Contains($"Would normalize {packagePath}", stdout);
+        Assert.Contains("Summary: inspected=1 normalized=0 unchanged=0 failed=0 skipped=1", stdout);
+        Assert.Equal(beforeHash, afterHash);
+        AssertNoNormalizeTempFiles(projectRoot, packagePath);
 
-            using var archive = ZipFile.OpenRead(packagePath);
-            Assert.Contains(archive.Entries, entry => entry.FullName.EndsWith("random.psmdcp", StringComparison.Ordinal));
-            Assert.DoesNotContain(archive.Entries, entry => entry.FullName == PackageCorePropertiesNormalizer.CanonicalCorePropertiesPath);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        using var archive = ZipFile.OpenRead(packagePath);
+        Assert.Contains(archive.Entries, entry => entry.FullName.EndsWith("random.psmdcp", StringComparison.Ordinal));
+        Assert.DoesNotContain(archive.Entries, entry => entry.FullName == PackageCorePropertiesNormalizer.CanonicalCorePropertiesPath);
     }
 
     [Fact]
     public void PackageNormalizeCli_CancellationReportsFailureJson_Issue3961()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizeCli_CancellationReportsFailureJson_Issue3961));
-        try
-        {
-            var packagePath = Path.Combine(projectRoot, "cancelled-cli.nupkg");
-            CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
-            using var cancellation = new CancellationTokenSource();
-            cancellation.Cancel();
-            using var stdout = new StringWriter();
-            using var stderr = new StringWriter();
+        using var project = TestProjectHelper.CreateTempProjectScope(nameof(PackageNormalizeCli_CancellationReportsFailureJson_Issue3961));
+        var projectRoot = project.Root;
+        var packagePath = Path.Combine(projectRoot, "cancelled-cli.nupkg");
+        CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
 
-            var exitCode = PackageNormalizeCli.Run(["--json", packagePath], stdout, stderr, cancellation.Token);
+        var exitCode = PackageNormalizeCli.Run(["--json", packagePath], stdout, stderr, cancellation.Token);
 
-            Assert.Equal(1, exitCode);
-            Assert.Empty(stderr.ToString());
-            using var doc = JsonDocument.Parse(stdout.ToString());
-            Assert.Equal(1, doc.RootElement.GetProperty("failed").GetInt32());
-            var package = doc.RootElement.GetProperty("packages").EnumerateArray().Single();
-            Assert.Equal("failed", package.GetProperty("status").GetString());
-            Assert.Equal("Package normalization was cancelled.", package.GetProperty("error").GetString());
-            AssertNoNormalizeTempFiles(projectRoot, packagePath);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(1, exitCode);
+        Assert.Empty(stderr.ToString());
+        using var doc = JsonDocument.Parse(stdout.ToString());
+        Assert.Equal(1, doc.RootElement.GetProperty("failed").GetInt32());
+        var package = doc.RootElement.GetProperty("packages").EnumerateArray().Single();
+        Assert.Equal("failed", package.GetProperty("status").GetString());
+        Assert.Equal("Package normalization was cancelled.", package.GetProperty("error").GetString());
+        AssertNoNormalizeTempFiles(projectRoot, packagePath);
     }
 
     [Fact]
     public void PackageNormalizeCli_JsonContinueOnErrorReportsAggregateSummary()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizeCli_JsonContinueOnErrorReportsAggregateSummary));
-        try
-        {
-            var packagePath = Path.Combine(projectRoot, "good.nupkg");
-            var missingPackagePath = Path.Combine(projectRoot, "missing.nupkg");
-            CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
+        using var project = TestProjectHelper.CreateTempProjectScope(nameof(PackageNormalizeCli_JsonContinueOnErrorReportsAggregateSummary));
+        var projectRoot = project.Root;
+        var packagePath = Path.Combine(projectRoot, "good.nupkg");
+        var missingPackagePath = Path.Combine(projectRoot, "missing.nupkg");
+        CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
 
-            var (exitCode, stdout, stderr) = RunPackageNormalizeCli(["--dry-run", "--json", "--continue-on-error", missingPackagePath, packagePath]);
+        var (exitCode, stdout, stderr) = RunPackageNormalizeCli(["--dry-run", "--json", "--continue-on-error", missingPackagePath, packagePath]);
 
-            Assert.Equal(1, exitCode);
-            Assert.Empty(stderr);
-            using var doc = JsonDocument.Parse(stdout);
-            var root = doc.RootElement;
-            Assert.True(root.GetProperty("dry_run").GetBoolean());
-            Assert.True(root.GetProperty("continue_on_error").GetBoolean());
-            Assert.Equal(2, root.GetProperty("inspected").GetInt32());
-            Assert.Equal(0, root.GetProperty("normalized").GetInt32());
-            Assert.Equal(0, root.GetProperty("unchanged").GetInt32());
-            Assert.Equal(1, root.GetProperty("failed").GetInt32());
-            Assert.Equal(1, root.GetProperty("skipped").GetInt32());
+        Assert.Equal(1, exitCode);
+        Assert.Empty(stderr);
+        using var doc = JsonDocument.Parse(stdout);
+        var root = doc.RootElement;
+        Assert.True(root.GetProperty("dry_run").GetBoolean());
+        Assert.True(root.GetProperty("continue_on_error").GetBoolean());
+        Assert.Equal(2, root.GetProperty("inspected").GetInt32());
+        Assert.Equal(0, root.GetProperty("normalized").GetInt32());
+        Assert.Equal(0, root.GetProperty("unchanged").GetInt32());
+        Assert.Equal(1, root.GetProperty("failed").GetInt32());
+        Assert.Equal(1, root.GetProperty("skipped").GetInt32());
 
-            var packages = root.GetProperty("packages").EnumerateArray().ToArray();
-            Assert.Equal("failed", packages[0].GetProperty("status").GetString());
-            Assert.Equal(missingPackagePath, packages[0].GetProperty("path").GetString());
-            Assert.Equal("would_normalize", packages[1].GetProperty("status").GetString());
-            Assert.Equal(packagePath, packages[1].GetProperty("path").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        var packages = root.GetProperty("packages").EnumerateArray().ToArray();
+        Assert.Equal("failed", packages[0].GetProperty("status").GetString());
+        Assert.Equal(missingPackagePath, packages[0].GetProperty("path").GetString());
+        Assert.Equal("would_normalize", packages[1].GetProperty("status").GetString());
+        Assert.Equal(packagePath, packages[1].GetProperty("path").GetString());
     }
 
     [Fact]
