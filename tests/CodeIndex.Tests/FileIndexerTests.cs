@@ -2747,30 +2747,28 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFilesDetailed_LoadsFullAncestorIgnoreChainAndReportsIt()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var workspace = Path.Combine(tempDir, "workspace");
-            var projects = Path.Combine(workspace, "projects");
-            var projectRoot = Path.Combine(projects, "subA");
-            Directory.CreateDirectory(projectRoot);
-            File.WriteAllText(Path.Combine(workspace, ".cdidxignore"), "*.cs\n");
-            File.WriteAllText(Path.Combine(projects, ".gitignore"), "!subA/App.cs\n");
-            File.WriteAllText(Path.Combine(projectRoot, "App.cs"), "class App { }\n");
-            File.WriteAllText(Path.Combine(projectRoot, "Other.cs"), "class Other { }\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var workspace = Path.Combine(tempDir, "workspace");
+        var projects = Path.Combine(workspace, "projects");
+        var projectRoot = Path.Combine(projects, "subA");
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["workspace/.cdidxignore"] = "*.cs\n",
+                ["workspace/projects/.gitignore"] = "!subA/App.cs\n",
+                ["workspace/projects/subA/App.cs"] = "class App { }\n",
+                ["workspace/projects/subA/Other.cs"] = "class Other { }\n",
+            });
 
-            var indexer = new FileIndexer(projectRoot, ignoreCase: false, ignoreRuleRoot: workspace);
-            var result = indexer.ScanFilesDetailed();
-            var files = ToSortedRelativePaths(projectRoot, result.Files);
+        var indexer = new FileIndexer(projectRoot, ignoreCase: false, ignoreRuleRoot: workspace);
+        var result = indexer.ScanFilesDetailed();
+        var files = ToSortedRelativePaths(projectRoot, result.Files);
 
-            Assert.Equal(["App.cs"], files);
-            Assert.Equal([workspace, projects], result.AncestorIgnoreDirectories);
-            Assert.DoesNotContain(result.Errors, error => error.IsFatal);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(["App.cs"], files);
+        Assert.Equal([workspace, projects], result.AncestorIgnoreDirectories);
+        Assert.DoesNotContain(result.Errors, error => error.IsFatal);
     }
 
     [Fact]
@@ -2779,16 +2777,21 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var workspace = Path.Combine(tempDir, "workspace");
         var projects = Path.Combine(tempDir, "workspace", "projects");
         UnixFileMode? originalMode = null;
         try
         {
-            var workspace = Path.Combine(tempDir, "workspace");
             var projectRoot = Path.Combine(projects, "subA");
-            Directory.CreateDirectory(projectRoot);
-            File.WriteAllText(Path.Combine(workspace, ".cdidxignore"), "*.cs\n");
-            File.WriteAllText(Path.Combine(projectRoot, "App.cs"), "class App { }\n");
+            TestProjectHelper.WriteTextFiles(
+                tempDir,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["workspace/.cdidxignore"] = "*.cs\n",
+                    ["workspace/projects/subA/App.cs"] = "class App { }\n",
+                });
             originalMode = File.GetUnixFileMode(projects);
             SetUnixPermissions(projects, UnixFileMode.None);
 
@@ -2803,9 +2806,8 @@ public partial class FileIndexerTests
         }
         finally
         {
-            if (originalMode.HasValue)
+            if (originalMode.HasValue && Directory.Exists(projects))
                 SetUnixPermissions(projects, originalMode.Value);
-            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2815,16 +2817,21 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
         var srcDir = Path.Combine(tempDir, "src");
         var blockedDir = Path.Combine(srcDir, "blocked");
         UnixFileMode? originalMode = null;
         try
         {
-            Directory.CreateDirectory(blockedDir);
-            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('keep')");
-            File.WriteAllText(Path.Combine(srcDir, "service.py"), "print('service')");
-            File.WriteAllText(Path.Combine(blockedDir, "secret.py"), "print('secret')");
+            TestProjectHelper.WriteTextFiles(
+                tempDir,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["keep.py"] = "print('keep')",
+                    ["src/service.py"] = "print('service')",
+                    ["src/blocked/secret.py"] = "print('secret')",
+                });
             originalMode = File.GetUnixFileMode(blockedDir);
             SetUnixPermissions(blockedDir, UnixFileMode.None);
 
@@ -2846,60 +2853,55 @@ public partial class FileIndexerTests
         {
             if (originalMode.HasValue && Directory.Exists(blockedDir))
                 SetUnixPermissions(blockedDir, originalMode.Value);
-            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void ScanFilesDetailed_CheckpointedDirectories_AreSkippedAndCarriedForward()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(tempDir, "cached"));
-            Directory.CreateDirectory(Path.Combine(tempDir, "fresh"));
-            File.WriteAllText(Path.Combine(tempDir, "cached", "old.py"), "print('old')");
-            File.WriteAllText(Path.Combine(tempDir, "fresh", "new.py"), "print('new')");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["cached/old.py"] = "print('old')",
+                ["fresh/new.py"] = "print('new')",
+            });
 
-            var result = new FileIndexer(tempDir).ScanFilesDetailed(
-                new HashSet<string>(StringComparer.Ordinal) { "cached" });
-            var files = result.Files
-                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .ToList();
+        var result = new FileIndexer(tempDir).ScanFilesDetailed(
+            new HashSet<string>(StringComparer.Ordinal) { "cached" });
+        var files = result.Files
+            .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
 
-            Assert.Equal(["fresh/new.py"], files);
-            Assert.Contains("cached", result.CheckpointedDirectories);
-            Assert.Contains("fresh", result.CheckpointedDirectories);
-            Assert.DoesNotContain("cached", result.ListedDirectories);
-            Assert.DoesNotContain("cached", result.FullyScannedDirectories);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(["fresh/new.py"], files);
+        Assert.Contains("cached", result.CheckpointedDirectories);
+        Assert.Contains("fresh", result.CheckpointedDirectories);
+        Assert.DoesNotContain("cached", result.ListedDirectories);
+        Assert.DoesNotContain("cached", result.FullyScannedDirectories);
     }
 
     [Fact]
     public void ScanFilesDetailed_ReturnsLanguageCounts()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, "Program.cs"), "class Program {}");
-            File.WriteAllText(Path.Combine(tempDir, "Service.cs"), "class Service {}");
-            File.WriteAllText(Path.Combine(tempDir, "script.py"), "print('hello')");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Program.cs"] = "class Program {}",
+                ["Service.cs"] = "class Service {}",
+                ["script.py"] = "print('hello')",
+            });
 
-            var result = new FileIndexer(tempDir).ScanFilesDetailed();
+        var result = new FileIndexer(tempDir).ScanFilesDetailed();
 
-            Assert.Equal(2, result.LanguageCounts["csharp"]);
-            Assert.Equal(1, result.LanguageCounts["python"]);
-            Assert.False(result.LanguageCounts.ContainsKey("ruby"));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(2, result.LanguageCounts["csharp"]);
+        Assert.Equal(1, result.LanguageCounts["python"]);
+        Assert.False(result.LanguageCounts.ContainsKey("ruby"));
     }
 
     [Fact]
