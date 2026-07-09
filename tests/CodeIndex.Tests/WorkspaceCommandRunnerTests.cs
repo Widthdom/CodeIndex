@@ -767,367 +767,310 @@ public class WorkspaceCommandRunnerTests
     [Fact]
     public void ActiveWorkspaceEnvironment_RelativeDbPath_DoesNotOverrideQueryResolution_Issue3825()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_env_relative_project");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_active_workspace_env_relative_project");
+        var projectRoot = project.Root;
         const string RelativeDbPath = "relative_active_workspace_SENTINEL_3825.db";
-        try
-        {
-            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable);
-            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, RelativeDbPath);
 
-            DbPathResolution? query = null;
-            var (_, _, stderr) = ConsoleCapture.Capture(() =>
-            {
-                query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
-                return 0;
-            });
+        using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable);
+        Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, RelativeDbPath);
 
-            Assert.NotNull(query);
-            Assert.Contains(ActiveWorkspace.EnvironmentVariable, stderr);
-            Assert.Contains("value must be an absolute database path", stderr);
-            Assert.DoesNotContain(RelativeDbPath, stderr);
-            Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
-            Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
-        }
-        finally
+        DbPathResolution? query = null;
+        var (_, _, stderr) = ConsoleCapture.Capture(() =>
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+            query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+            return 0;
+        });
+
+        Assert.NotNull(query);
+        Assert.Contains(ActiveWorkspace.EnvironmentVariable, stderr);
+        Assert.Contains("value must be an absolute database path", stderr);
+        Assert.DoesNotContain(RelativeDbPath, stderr);
+        Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
+        Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
     }
 
     [Fact]
     public void MalformedActiveWorkspaceState_DoesNotOverrideQueryResolution()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_malformed_project");
-        var configHome = TestProjectHelper.CreateTempProject("cdidx_active_workspace_malformed_config");
-        try
-        {
-            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
-            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
-            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
-            Directory.CreateDirectory(Path.GetDirectoryName(ActiveWorkspace.StatePath)!);
-            File.WriteAllText(ActiveWorkspace.StatePath, "{");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_active_workspace_malformed_project");
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_active_workspace_malformed_config");
+        var projectRoot = project.Root;
+        var configHome = config.Root;
 
-            DbPathResolution? query = null;
-            var (_, _, stderr) = ConsoleCapture.Capture(() =>
-            {
-                query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
-                return 0;
-            });
+        using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+        Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+        Directory.CreateDirectory(Path.GetDirectoryName(ActiveWorkspace.StatePath)!);
+        File.WriteAllText(ActiveWorkspace.StatePath, "{");
 
-            Assert.NotNull(query);
-            Assert.Contains("Ignoring active workspace state", stderr);
-            Assert.DoesNotContain(configHome, stderr);
-            Assert.DoesNotContain(ActiveWorkspace.StatePath, stderr);
-            Assert.DoesNotContain("LineNumber", stderr);
-            Assert.Contains("invalid JSON", stderr);
-            Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
-            Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
-        }
-        finally
+        DbPathResolution? query = null;
+        var (_, _, stderr) = ConsoleCapture.Capture(() =>
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-            TestProjectHelper.DeleteDirectory(configHome);
-        }
+            query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+            return 0;
+        });
+
+        Assert.NotNull(query);
+        Assert.Contains("Ignoring active workspace state", stderr);
+        Assert.DoesNotContain(configHome, stderr);
+        Assert.DoesNotContain(ActiveWorkspace.StatePath, stderr);
+        Assert.DoesNotContain("LineNumber", stderr);
+        Assert.Contains("invalid JSON", stderr);
+        Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
+        Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
     }
 
     [Fact]
     public void ActiveWorkspaceState_ControlCharacterName_DoesNotOverrideQueryResolution_Issue3825()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_bad_name_project");
-        var configHome = TestProjectHelper.CreateTempProject("cdidx_active_workspace_bad_name_config");
-        try
-        {
-            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
-            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
-            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
-            Directory.CreateDirectory(Path.GetDirectoryName(ActiveWorkspace.StatePath)!);
-            File.WriteAllText(ActiveWorkspace.StatePath, $$"""
-                {
-                  "name": "bad\nname",
-                  "root": {{JsonSerializer.Serialize(projectRoot)}},
-                  "db_path": {{JsonSerializer.Serialize(Path.Combine(projectRoot, ".cdidx", "codeindex.db"))}}
-                }
-                """);
-
-            DbPathResolution? query = null;
-            var (_, _, stderr) = ConsoleCapture.Capture(() =>
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_active_workspace_bad_name_project");
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_active_workspace_bad_name_config");
+        var projectRoot = project.Root;
+        var configHome = config.Root;
+        using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+        Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+        Directory.CreateDirectory(Path.GetDirectoryName(ActiveWorkspace.StatePath)!);
+        File.WriteAllText(ActiveWorkspace.StatePath, $$"""
             {
-                query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
-                return 0;
-            });
+              "name": "bad\nname",
+              "root": {{JsonSerializer.Serialize(projectRoot)}},
+              "db_path": {{JsonSerializer.Serialize(Path.Combine(projectRoot, ".cdidx", "codeindex.db"))}}
+            }
+            """);
 
-            Assert.NotNull(query);
-            Assert.Contains("Ignoring active workspace state", stderr);
-            Assert.Contains("`name` must not contain control characters", stderr);
-            Assert.DoesNotContain("bad", stderr);
-            Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
-            Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
-        }
-        finally
+        DbPathResolution? query = null;
+        var (_, _, stderr) = ConsoleCapture.Capture(() =>
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-            TestProjectHelper.DeleteDirectory(configHome);
-        }
+            query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+            return 0;
+        });
+
+        Assert.NotNull(query);
+        Assert.Contains("Ignoring active workspace state", stderr);
+        Assert.Contains("`name` must not contain control characters", stderr);
+        Assert.DoesNotContain("bad", stderr);
+        Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
+        Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
     }
 
     [Fact]
     public void ActiveWorkspaceState_OversizedName_DoesNotOverrideQueryResolution_Issue3825()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_long_name_project");
-        var configHome = TestProjectHelper.CreateTempProject("cdidx_active_workspace_long_name_config");
-        try
-        {
-            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
-            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
-            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
-            Directory.CreateDirectory(Path.GetDirectoryName(ActiveWorkspace.StatePath)!);
-            File.WriteAllText(ActiveWorkspace.StatePath, $$"""
-                {
-                  "name": {{JsonSerializer.Serialize(new string('n', ActiveWorkspace.MaxWorkspaceNameChars + 1))}},
-                  "root": {{JsonSerializer.Serialize(projectRoot)}},
-                  "db_path": {{JsonSerializer.Serialize(Path.Combine(projectRoot, ".cdidx", "codeindex.db"))}}
-                }
-                """);
-
-            DbPathResolution? query = null;
-            var (_, _, stderr) = ConsoleCapture.Capture(() =>
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_active_workspace_long_name_project");
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_active_workspace_long_name_config");
+        var projectRoot = project.Root;
+        var configHome = config.Root;
+        using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+        Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+        Directory.CreateDirectory(Path.GetDirectoryName(ActiveWorkspace.StatePath)!);
+        File.WriteAllText(ActiveWorkspace.StatePath, $$"""
             {
-                query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
-                return 0;
-            });
+              "name": {{JsonSerializer.Serialize(new string('n', ActiveWorkspace.MaxWorkspaceNameChars + 1))}},
+              "root": {{JsonSerializer.Serialize(projectRoot)}},
+              "db_path": {{JsonSerializer.Serialize(Path.Combine(projectRoot, ".cdidx", "codeindex.db"))}}
+            }
+            """);
 
-            Assert.NotNull(query);
-            Assert.Contains("Ignoring active workspace state", stderr);
-            Assert.Contains($"`name` exceeds {ActiveWorkspace.MaxWorkspaceNameChars} characters", stderr);
-            Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
-            Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
-        }
-        finally
+        DbPathResolution? query = null;
+        var (_, _, stderr) = ConsoleCapture.Capture(() =>
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-            TestProjectHelper.DeleteDirectory(configHome);
-        }
+            query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+            return 0;
+        });
+
+        Assert.NotNull(query);
+        Assert.Contains("Ignoring active workspace state", stderr);
+        Assert.Contains($"`name` exceeds {ActiveWorkspace.MaxWorkspaceNameChars} characters", stderr);
+        Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
+        Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
     }
 
     [Fact]
     public void ActiveWorkspaceState_MissingRoot_DoesNotOverrideQueryResolution_Issue3430()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_missing_root_project");
-        var configHome = TestProjectHelper.CreateTempProject("cdidx_active_workspace_missing_root_config");
-        try
-        {
-            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
-            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
-            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
-            Directory.CreateDirectory(Path.GetDirectoryName(ActiveWorkspace.StatePath)!);
-            File.WriteAllText(ActiveWorkspace.StatePath, $$"""
-                {
-                  "name": "active",
-                  "db_path": {{JsonSerializer.Serialize(Path.Combine(projectRoot, ".cdidx", "codeindex.db"))}}
-                }
-                """);
-
-            DbPathResolution? query = null;
-            var (_, _, stderr) = ConsoleCapture.Capture(() =>
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_active_workspace_missing_root_project");
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_active_workspace_missing_root_config");
+        var projectRoot = project.Root;
+        var configHome = config.Root;
+        using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+        Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+        Directory.CreateDirectory(Path.GetDirectoryName(ActiveWorkspace.StatePath)!);
+        File.WriteAllText(ActiveWorkspace.StatePath, $$"""
             {
-                query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
-                return 0;
-            });
+              "name": "active",
+              "db_path": {{JsonSerializer.Serialize(Path.Combine(projectRoot, ".cdidx", "codeindex.db"))}}
+            }
+            """);
 
-            Assert.NotNull(query);
-            Assert.Contains("Ignoring active workspace state", stderr);
-            Assert.Contains("`root` is required", stderr);
-            Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
-            Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
-        }
-        finally
+        DbPathResolution? query = null;
+        var (_, _, stderr) = ConsoleCapture.Capture(() =>
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-            TestProjectHelper.DeleteDirectory(configHome);
-        }
+            query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+            return 0;
+        });
+
+        Assert.NotNull(query);
+        Assert.Contains("Ignoring active workspace state", stderr);
+        Assert.Contains("`root` is required", stderr);
+        Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
+        Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
     }
 
     [Fact]
     public void ActiveWorkspaceState_MissingDbPath_DoesNotOverrideQueryResolution_Issue3430()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_missing_db_project");
-        var configHome = TestProjectHelper.CreateTempProject("cdidx_active_workspace_missing_db_config");
-        try
-        {
-            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
-            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
-            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
-            Directory.CreateDirectory(Path.GetDirectoryName(ActiveWorkspace.StatePath)!);
-            File.WriteAllText(ActiveWorkspace.StatePath, $$"""
-                {
-                  "name": "active",
-                  "root": {{JsonSerializer.Serialize(projectRoot)}}
-                }
-                """);
-
-            DbPathResolution? query = null;
-            var (_, _, stderr) = ConsoleCapture.Capture(() =>
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_active_workspace_missing_db_project");
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_active_workspace_missing_db_config");
+        var projectRoot = project.Root;
+        var configHome = config.Root;
+        using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+        Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+        Directory.CreateDirectory(Path.GetDirectoryName(ActiveWorkspace.StatePath)!);
+        File.WriteAllText(ActiveWorkspace.StatePath, $$"""
             {
-                query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
-                return 0;
-            });
+              "name": "active",
+              "root": {{JsonSerializer.Serialize(projectRoot)}}
+            }
+            """);
 
-            Assert.NotNull(query);
-            Assert.Contains("Ignoring active workspace state", stderr);
-            Assert.Contains("`db_path` is required", stderr);
-            Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
-            Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
-        }
-        finally
+        DbPathResolution? query = null;
+        var (_, _, stderr) = ConsoleCapture.Capture(() =>
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-            TestProjectHelper.DeleteDirectory(configHome);
-        }
+            query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+            return 0;
+        });
+
+        Assert.NotNull(query);
+        Assert.Contains("Ignoring active workspace state", stderr);
+        Assert.Contains("`db_path` is required", stderr);
+        Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
+        Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
     }
 
     [Fact]
     public void ActiveWorkspaceState_DbPathOutsideRoot_DoesNotOverrideQueryResolution_Issue3430()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_outside_db_project");
-        var outsideRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_outside_db");
-        var configHome = TestProjectHelper.CreateTempProject("cdidx_active_workspace_outside_db_config");
-        try
-        {
-            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
-            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
-            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
-            Directory.CreateDirectory(Path.GetDirectoryName(ActiveWorkspace.StatePath)!);
-            File.WriteAllText(ActiveWorkspace.StatePath, $$"""
-                {
-                  "name": "active",
-                  "root": {{JsonSerializer.Serialize(projectRoot)}},
-                  "db_path": {{JsonSerializer.Serialize(Path.Combine(outsideRoot, ".cdidx", "codeindex.db"))}}
-                }
-                """);
-
-            DbPathResolution? query = null;
-            var (_, _, stderr) = ConsoleCapture.Capture(() =>
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_active_workspace_outside_db_project");
+        using var outside = TestProjectHelper.CreateTempProjectScope("cdidx_active_workspace_outside_db");
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_active_workspace_outside_db_config");
+        var projectRoot = project.Root;
+        var outsideRoot = outside.Root;
+        var configHome = config.Root;
+        using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+        Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+        Directory.CreateDirectory(Path.GetDirectoryName(ActiveWorkspace.StatePath)!);
+        File.WriteAllText(ActiveWorkspace.StatePath, $$"""
             {
-                query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
-                return 0;
-            });
+              "name": "active",
+              "root": {{JsonSerializer.Serialize(projectRoot)}},
+              "db_path": {{JsonSerializer.Serialize(Path.Combine(outsideRoot, ".cdidx", "codeindex.db"))}}
+            }
+            """);
 
-            Assert.NotNull(query);
-            Assert.Contains("Ignoring active workspace state", stderr);
-            Assert.Contains("`db_path` must be inside `root`", stderr);
-            Assert.DoesNotContain(outsideRoot, stderr);
-            Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
-            Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
-        }
-        finally
+        DbPathResolution? query = null;
+        var (_, _, stderr) = ConsoleCapture.Capture(() =>
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-            TestProjectHelper.DeleteDirectory(outsideRoot);
-            TestProjectHelper.DeleteDirectory(configHome);
-        }
+            query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+            return 0;
+        });
+
+        Assert.NotNull(query);
+        Assert.Contains("Ignoring active workspace state", stderr);
+        Assert.Contains("`db_path` must be inside `root`", stderr);
+        Assert.DoesNotContain(outsideRoot, stderr);
+        Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
+        Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
     }
 
     [Fact]
     public void ActiveWorkspaceState_RelativeConfigHome_DoesNotOverrideQueryResolution_Issue3430()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_relative_config_project");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_active_workspace_relative_config_project");
+        var projectRoot = project.Root;
         const string RelativeConfigHome = "relative_config_HOME_SENTINEL_3430";
-        try
-        {
-            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
-            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
-            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", RelativeConfigHome);
 
-            DbPathResolution? query = null;
-            var (_, _, stderr) = ConsoleCapture.Capture(() =>
-            {
-                query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
-                return 0;
-            });
+        using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+        Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", RelativeConfigHome);
 
-            Assert.NotNull(query);
-            Assert.Contains("Ignoring active workspace config home", stderr);
-            Assert.Contains("XDG_CONFIG_HOME must be an absolute path", stderr);
-            Assert.DoesNotContain(RelativeConfigHome, stderr);
-            Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
-            Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
-        }
-        finally
+        DbPathResolution? query = null;
+        var (_, _, stderr) = ConsoleCapture.Capture(() =>
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+            query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+            return 0;
+        });
+
+        Assert.NotNull(query);
+        Assert.Contains("Ignoring active workspace config home", stderr);
+        Assert.Contains("XDG_CONFIG_HOME must be an absolute path", stderr);
+        Assert.DoesNotContain(RelativeConfigHome, stderr);
+        Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
+        Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
     }
 
     [Fact]
     public void DeeplyNestedActiveWorkspaceState_DoesNotOverrideQueryResolution_Issue3036()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_depth_project");
-        var configHome = TestProjectHelper.CreateTempProject("cdidx_active_workspace_depth_config");
-        try
-        {
-            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
-            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
-            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
-            Directory.CreateDirectory(Path.GetDirectoryName(ActiveWorkspace.StatePath)!);
-            var activeDbPath = Path.Combine(configHome, "active.db");
-            var nestedPrefix = string.Concat(Enumerable.Repeat("""{"next":""", ActiveWorkspace.MaxStateJsonDepth + 1));
-            var nested = nestedPrefix + "0" + new string('}', ActiveWorkspace.MaxStateJsonDepth + 1);
-            File.WriteAllText(ActiveWorkspace.StatePath, $$"""
-                {
-                  "name": "active",
-                  "root": {{JsonSerializer.Serialize(configHome)}},
-                  "db_path": {{JsonSerializer.Serialize(activeDbPath)}},
-                  "extra": {{nested}}
-                }
-                """);
-
-            DbPathResolution? query = null;
-            var (_, _, stderr) = ConsoleCapture.Capture(() =>
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_active_workspace_depth_project");
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_active_workspace_depth_config");
+        var projectRoot = project.Root;
+        var configHome = config.Root;
+        using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+        Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+        Directory.CreateDirectory(Path.GetDirectoryName(ActiveWorkspace.StatePath)!);
+        var activeDbPath = Path.Combine(configHome, "active.db");
+        var nestedPrefix = string.Concat(Enumerable.Repeat("""{"next":""", ActiveWorkspace.MaxStateJsonDepth + 1));
+        var nested = nestedPrefix + "0" + new string('}', ActiveWorkspace.MaxStateJsonDepth + 1);
+        File.WriteAllText(ActiveWorkspace.StatePath, $$"""
             {
-                query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
-                return 0;
-            });
+              "name": "active",
+              "root": {{JsonSerializer.Serialize(configHome)}},
+              "db_path": {{JsonSerializer.Serialize(activeDbPath)}},
+              "extra": {{nested}}
+            }
+            """);
 
-            Assert.NotNull(query);
-            Assert.Contains("Ignoring active workspace state", stderr);
-            Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
-            Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
-        }
-        finally
+        DbPathResolution? query = null;
+        var (_, _, stderr) = ConsoleCapture.Capture(() =>
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-            TestProjectHelper.DeleteDirectory(configHome);
-        }
+            query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+            return 0;
+        });
+
+        Assert.NotNull(query);
+        Assert.Contains("Ignoring active workspace state", stderr);
+        Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
+        Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
     }
 
     [Fact]
     public void OversizedActiveWorkspaceEnvironment_DoesNotOverrideQueryResolution_Issue3164()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_env_large_project");
-        try
-        {
-            var raw = new string('a', ActiveWorkspace.MaxEnvironmentPathChars) + "TAIL_ISSUE_3164";
-            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable);
-            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, raw);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_active_workspace_env_large_project");
+        var projectRoot = project.Root;
+        var raw = new string('a', ActiveWorkspace.MaxEnvironmentPathChars) + "TAIL_ISSUE_3164";
+        using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable);
+        Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, raw);
 
-            DbPathResolution? query = null;
-            var (_, _, stderr) = ConsoleCapture.Capture(() =>
-            {
-                query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
-                return 0;
-            });
-
-            Assert.NotNull(query);
-            Assert.Contains(ActiveWorkspace.EnvironmentVariable, stderr);
-            Assert.Contains($"value exceeds {ActiveWorkspace.MaxEnvironmentPathChars} characters", stderr);
-            Assert.DoesNotContain("TAIL_ISSUE_3164", stderr);
-            Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
-            Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
-        }
-        finally
+        DbPathResolution? query = null;
+        var (_, _, stderr) = ConsoleCapture.Capture(() =>
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+            query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+            return 0;
+        });
+
+        Assert.NotNull(query);
+        Assert.Contains(ActiveWorkspace.EnvironmentVariable, stderr);
+        Assert.Contains($"value exceeds {ActiveWorkspace.MaxEnvironmentPathChars} characters", stderr);
+        Assert.DoesNotContain("TAIL_ISSUE_3164", stderr);
+        Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
+        Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
     }
 
     [Fact]
@@ -1136,60 +1079,48 @@ public class WorkspaceCommandRunnerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var configHome = TestProjectHelper.CreateTempProject("cdidx_active_workspace_private_config");
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_private_project");
-        try
-        {
-            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
-            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
-            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_active_workspace_private_config");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_active_workspace_private_project");
+        var configHome = config.Root;
+        var projectRoot = project.Root;
+        using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+        Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
 
-            ActiveWorkspace.Save(new ActiveWorkspaceState("default", projectRoot, Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+        ActiveWorkspace.Save(new ActiveWorkspaceState("default", projectRoot, Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
 
-            Assert.Equal(
-                DataDirectorySecurity.PrivateDirectoryMode,
-                File.GetUnixFileMode(Path.GetDirectoryName(ActiveWorkspace.StatePath)!) & DataDirectorySecurity.PermissionBits);
-            Assert.Equal(
-                DataDirectorySecurity.PrivateFileMode,
-                File.GetUnixFileMode(ActiveWorkspace.StatePath) & DataDirectorySecurity.PermissionBits);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-            TestProjectHelper.DeleteDirectory(configHome);
-        }
+        Assert.Equal(
+            DataDirectorySecurity.PrivateDirectoryMode,
+            File.GetUnixFileMode(Path.GetDirectoryName(ActiveWorkspace.StatePath)!) & DataDirectorySecurity.PermissionBits);
+        Assert.Equal(
+            DataDirectorySecurity.PrivateFileMode,
+            File.GetUnixFileMode(ActiveWorkspace.StatePath) & DataDirectorySecurity.PermissionBits);
     }
 
     [Fact]
     public void OversizedActiveWorkspaceState_DoesNotOverrideQueryResolution()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_large_project");
-        var configHome = TestProjectHelper.CreateTempProject("cdidx_active_workspace_large_config");
-        try
-        {
-            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
-            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
-            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
-            Directory.CreateDirectory(Path.GetDirectoryName(ActiveWorkspace.StatePath)!);
-            File.WriteAllText(ActiveWorkspace.StatePath, new string('x', 65 * 1024));
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_active_workspace_large_project");
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_active_workspace_large_config");
+        var projectRoot = project.Root;
+        var configHome = config.Root;
+        using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+        Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+        Directory.CreateDirectory(Path.GetDirectoryName(ActiveWorkspace.StatePath)!);
+        File.WriteAllText(ActiveWorkspace.StatePath, new string('x', 65 * 1024));
 
-            DbPathResolution? query = null;
-            var (_, _, stderr) = ConsoleCapture.Capture(() =>
-            {
-                query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
-                return 0;
-            });
-
-            Assert.NotNull(query);
-            Assert.Contains("file exceeds", stderr);
-            Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
-            Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
-        }
-        finally
+        DbPathResolution? query = null;
+        var (_, _, stderr) = ConsoleCapture.Capture(() =>
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-            TestProjectHelper.DeleteDirectory(configHome);
-        }
+            query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+            return 0;
+        });
+
+        Assert.NotNull(query);
+        Assert.Contains("file exceeds", stderr);
+        Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query!.DbPath);
+        Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
     }
 
     [Fact]
