@@ -1153,112 +1153,83 @@ public partial class FileIndexerTests
     [InlineData("Project.vbproj")]
     public void GetProjectMarkerFingerprint_RecognizesMsbuildProjectMarkers(string markerFileName)
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_msbuild_marker");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, markerFileName), "<Project />");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_msbuild_marker");
+        var tempDir = project.Root;
+        File.WriteAllText(Path.Combine(tempDir, markerFileName), "<Project />");
 
-            var indexer = new FileIndexer(tempDir);
+        var indexer = new FileIndexer(tempDir);
 
-            Assert.True(FileIndexer.SupportsHotspotFamilyMarkerLanguage("msbuild"));
-            Assert.False(string.IsNullOrWhiteSpace(indexer.GetProjectMarkerFingerprint("msbuild")));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.True(FileIndexer.SupportsHotspotFamilyMarkerLanguage("msbuild"));
+        Assert.False(string.IsNullOrWhiteSpace(indexer.GetProjectMarkerFingerprint("msbuild")));
     }
 
     [Fact]
     public void GetProjectMarkerFingerprint_UsesJoinedSortedMarkerPaths()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_msbuild_marker_exact");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, "Directory.Build.props"), "<Project />");
-            File.WriteAllText(Path.Combine(tempDir, "App.csproj"), "<Project />");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_msbuild_marker_exact");
+        var tempDir = project.Root;
+        File.WriteAllText(Path.Combine(tempDir, "Directory.Build.props"), "<Project />");
+        File.WriteAllText(Path.Combine(tempDir, "App.csproj"), "<Project />");
 
-            var indexer = new FileIndexer(tempDir);
-            var expectedPayload = "App.csproj\nDirectory.Build.props";
-            var expected = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(expectedPayload))).ToLowerInvariant();
+        var indexer = new FileIndexer(tempDir);
+        var expectedPayload = "App.csproj\nDirectory.Build.props";
+        var expected = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(expectedPayload))).ToLowerInvariant();
 
-            Assert.Equal(expected, indexer.GetProjectMarkerFingerprint("msbuild"));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(expected, indexer.GetProjectMarkerFingerprint("msbuild"));
     }
 
     [Fact]
     public void GetProjectMarkerFingerprint_CancelledToken_ThrowsBeforeTraversal()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_msbuild_marker_cancel");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_msbuild_marker_cancel");
+        var tempDir = project.Root;
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
-        try
-        {
-            var indexer = new FileIndexer(tempDir);
 
-            Assert.Throws<OperationCanceledException>(() =>
-                indexer.GetProjectMarkerFingerprint("msbuild", cancellation.Token));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        var indexer = new FileIndexer(tempDir);
+
+        Assert.Throws<OperationCanceledException>(() =>
+            indexer.GetProjectMarkerFingerprint("msbuild", cancellation.Token));
     }
 
     [Fact]
     public void GetProjectMarkerFingerprint_DirectoryCapTruncatesTraversal()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_msbuild_marker_dir_cap");
-        try
-        {
-            var nestedDir = Path.Combine(tempDir, "src", "App");
-            Directory.CreateDirectory(nestedDir);
-            File.WriteAllText(Path.Combine(nestedDir, "App.csproj"), "<Project />");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_msbuild_marker_dir_cap");
+        var tempDir = project.Root;
+        var nestedDir = Path.Combine(tempDir, "src", "App");
+        Directory.CreateDirectory(nestedDir);
+        File.WriteAllText(Path.Combine(nestedDir, "App.csproj"), "<Project />");
 
-            var indexer = new FileIndexer(tempDir);
+        var indexer = new FileIndexer(tempDir);
 
-            var fullFingerprint = indexer.GetProjectMarkerFingerprint("msbuild");
-            var cappedFingerprint = indexer.GetProjectMarkerFingerprintForTesting("msbuild", maxDirectories: 1, maxMarkerFiles: 100);
+        var fullFingerprint = indexer.GetProjectMarkerFingerprint("msbuild");
+        var cappedFingerprint = indexer.GetProjectMarkerFingerprintForTesting("msbuild", maxDirectories: 1, maxMarkerFiles: 100);
 
-            Assert.False(string.IsNullOrWhiteSpace(fullFingerprint));
-            Assert.False(string.IsNullOrWhiteSpace(cappedFingerprint));
-            Assert.NotEqual(fullFingerprint, cappedFingerprint);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.False(string.IsNullOrWhiteSpace(fullFingerprint));
+        Assert.False(string.IsNullOrWhiteSpace(cappedFingerprint));
+        Assert.NotEqual(fullFingerprint, cappedFingerprint);
     }
 
     [Fact]
     public void GetProjectMarkerFingerprint_DirectoryCapReportsIncompleteTraversal()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_msbuild_marker_incomplete");
-        try
-        {
-            for (var i = 0; i < 4; i++)
-                Directory.CreateDirectory(Path.Combine(tempDir, $"project-{i}"));
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_msbuild_marker_incomplete");
+        var tempDir = project.Root;
+        for (var i = 0; i < 4; i++)
+            Directory.CreateDirectory(Path.Combine(tempDir, $"project-{i}"));
 
-            var indexer = new FileIndexer(tempDir);
+        var indexer = new FileIndexer(tempDir);
 
-            var result = indexer.GetProjectMarkerFingerprintResultForTesting("msbuild", maxDirectories: 1, maxMarkerFiles: 100);
+        var result = indexer.GetProjectMarkerFingerprintResultForTesting("msbuild", maxDirectories: 1, maxMarkerFiles: 100);
 
-            Assert.False(result.IsComplete);
-            Assert.False(string.IsNullOrWhiteSpace(result.Fingerprint));
-            var warning = Assert.Single(
-                result.Warnings,
-                error => error.Message.Contains("directory budget 1", StringComparison.Ordinal));
-            Assert.Equal(FileIndexer.ScanIssueSeverity.Warning, warning.Severity);
-            Assert.Contains("Project marker discovery truncated", warning.Message, StringComparison.Ordinal);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.False(result.IsComplete);
+        Assert.False(string.IsNullOrWhiteSpace(result.Fingerprint));
+        var warning = Assert.Single(
+            result.Warnings,
+            error => error.Message.Contains("directory budget 1", StringComparison.Ordinal));
+        Assert.Equal(FileIndexer.ScanIssueSeverity.Warning, warning.Severity);
+        Assert.Contains("Project marker discovery truncated", warning.Message, StringComparison.Ordinal);
     }
 
     public static IEnumerable<object[]> ProjectMarkerTraversalFailures()
@@ -1274,7 +1245,8 @@ public partial class FileIndexerTests
     [MemberData(nameof(ProjectMarkerTraversalFailures))]
     public void GetProjectMarkerFingerprint_TraversalFailureReportsWarning_Issue3473(Exception exception)
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_msbuild_marker_warning");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_msbuild_marker_warning");
+        var tempDir = project.Root;
         var previousEnumerator = FileIndexer.EnumerateProjectMarkerDirectoriesForTesting;
         try
         {
@@ -1292,88 +1264,69 @@ public partial class FileIndexerTests
         finally
         {
             FileIndexer.EnumerateProjectMarkerDirectoriesForTesting = previousEnumerator;
-            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void GetProjectMarkerFingerprint_IgnoredGeneratedTreeDoesNotExhaustDirectoryCap()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_msbuild_marker_ignored_cap");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "generated/\n");
-            var generatedDir = Path.Combine(tempDir, "generated");
-            Directory.CreateDirectory(generatedDir);
-            for (var i = 0; i < 8; i++)
-                Directory.CreateDirectory(Path.Combine(generatedDir, $"project-{i}"));
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_msbuild_marker_ignored_cap");
+        var tempDir = project.Root;
+        File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "generated/\n");
+        var generatedDir = Path.Combine(tempDir, "generated");
+        Directory.CreateDirectory(generatedDir);
+        for (var i = 0; i < 8; i++)
+            Directory.CreateDirectory(Path.Combine(generatedDir, $"project-{i}"));
 
-            var appDir = Path.Combine(tempDir, "src", "App");
-            Directory.CreateDirectory(appDir);
-            File.WriteAllText(Path.Combine(appDir, "App.csproj"), "<Project />");
+        var appDir = Path.Combine(tempDir, "src", "App");
+        Directory.CreateDirectory(appDir);
+        File.WriteAllText(Path.Combine(appDir, "App.csproj"), "<Project />");
 
-            var indexer = new FileIndexer(tempDir);
+        var indexer = new FileIndexer(tempDir);
 
-            var result = indexer.GetProjectMarkerFingerprintResultForTesting("msbuild", maxDirectories: 4, maxMarkerFiles: 100);
+        var result = indexer.GetProjectMarkerFingerprintResultForTesting("msbuild", maxDirectories: 4, maxMarkerFiles: 100);
 
-            Assert.True(result.IsComplete);
-            Assert.False(string.IsNullOrWhiteSpace(result.Fingerprint));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.True(result.IsComplete);
+        Assert.False(string.IsNullOrWhiteSpace(result.Fingerprint));
     }
 
     [Fact]
     public void GetProjectMarkerFingerprint_FileCapTruncatesMarkerCollection()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_msbuild_marker_file_cap");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, "App.csproj"), "<Project />");
-            File.WriteAllText(Path.Combine(tempDir, "Lib.csproj"), "<Project />");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_msbuild_marker_file_cap");
+        var tempDir = project.Root;
+        File.WriteAllText(Path.Combine(tempDir, "App.csproj"), "<Project />");
+        File.WriteAllText(Path.Combine(tempDir, "Lib.csproj"), "<Project />");
 
-            var indexer = new FileIndexer(tempDir);
+        var indexer = new FileIndexer(tempDir);
 
-            var fullFingerprint = indexer.GetProjectMarkerFingerprint("msbuild");
-            var cappedFingerprint = indexer.GetProjectMarkerFingerprintForTesting("msbuild", maxDirectories: 100, maxMarkerFiles: 1);
-            var cappedResult = indexer.GetProjectMarkerFingerprintResultForTesting("msbuild", maxDirectories: 100, maxMarkerFiles: 1);
+        var fullFingerprint = indexer.GetProjectMarkerFingerprint("msbuild");
+        var cappedFingerprint = indexer.GetProjectMarkerFingerprintForTesting("msbuild", maxDirectories: 100, maxMarkerFiles: 1);
+        var cappedResult = indexer.GetProjectMarkerFingerprintResultForTesting("msbuild", maxDirectories: 100, maxMarkerFiles: 1);
 
-            Assert.False(string.IsNullOrWhiteSpace(fullFingerprint));
-            Assert.False(string.IsNullOrWhiteSpace(cappedFingerprint));
-            Assert.NotEqual(fullFingerprint, cappedFingerprint);
-            Assert.False(cappedResult.IsComplete);
-            Assert.Contains(
-                cappedResult.Warnings,
-                error => error.Message.Contains("marker file budget 1", StringComparison.Ordinal));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.False(string.IsNullOrWhiteSpace(fullFingerprint));
+        Assert.False(string.IsNullOrWhiteSpace(cappedFingerprint));
+        Assert.NotEqual(fullFingerprint, cappedFingerprint);
+        Assert.False(cappedResult.IsComplete);
+        Assert.Contains(
+            cappedResult.Warnings,
+            error => error.Message.Contains("marker file budget 1", StringComparison.Ordinal));
     }
 
     [Fact]
     public void GetFamilyScopeKey_MsbuildProjectFileIgnoresDirectoryBuildMarkersForScope()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var srcDir = Path.Combine(tempDir, "src");
-            Directory.CreateDirectory(srcDir);
-            File.WriteAllText(Path.Combine(srcDir, "App.csproj"), "<Project />");
-            File.WriteAllText(Path.Combine(srcDir, "Directory.Build.props"), "<Project />");
-            File.WriteAllText(Path.Combine(srcDir, "Directory.Build.targets"), "<Project />");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var srcDir = Path.Combine(tempDir, "src");
+        Directory.CreateDirectory(srcDir);
+        File.WriteAllText(Path.Combine(srcDir, "App.csproj"), "<Project />");
+        File.WriteAllText(Path.Combine(srcDir, "Directory.Build.props"), "<Project />");
+        File.WriteAllText(Path.Combine(srcDir, "Directory.Build.targets"), "<Project />");
 
-            var indexer = new FileIndexer(tempDir);
+        var indexer = new FileIndexer(tempDir);
 
-            Assert.Equal("src", indexer.GetFamilyScopeKey(Path.Combine(srcDir, "App.csproj"), "msbuild"));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal("src", indexer.GetFamilyScopeKey(Path.Combine(srcDir, "App.csproj"), "msbuild"));
     }
 
     [Fact]
