@@ -281,47 +281,56 @@ public partial class ReferenceExtractorTests
             && symbol.ContainerName == "IParseable"
             && symbol.Signature?.Contains("static abstract", StringComparison.Ordinal) == true);
 
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Parse"
-            && reference.ReferenceKind == "implicit_implementation"
-            && reference.ContainerName == "Parse"
-            && reference.Context == "public static Money Parse(string s) => new();");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Create"
-            && reference.ReferenceKind == "implicit_implementation"
-            && reference.ContainerName == "Create"
-            && reference.Context == "public static Money Create() => new();");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Scale"
-            && reference.ReferenceKind == "implicit_implementation"
-            && reference.ContainerName == "Scale"
-            && reference.Context == "public static int Scale => 1;");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Add"
-            && reference.ReferenceKind == "implicit_implementation"
-            && reference.ContainerName == "Add"
-            && reference.Context == "public static Money Add(Money left, Money right) => new();");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "TryParse"
-            && reference.ReferenceKind == "implicit_implementation"
-            && reference.ContainerName == "TryParse"
-            && reference.Context == "public static bool TryParse(string s, out Money value)");
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName == "Parse"
-            && reference.ReferenceKind == "implicit_implementation"
-            && reference.Context == "public static TextOnly Parse(string s) => new();");
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName == "TryParse"
-            && reference.ReferenceKind == "implicit_implementation"
-            && reference.Context == "public static bool TryParse(string s, ref WrongRef value) => true;");
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName == "Parse"
-            && reference.ReferenceKind == "implicit_implementation"
-            && reference.Context == "public static WrongReturn Parse(string s) => new();");
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName == "Scale"
-            && reference.ReferenceKind == "implicit_implementation"
-            && reference.Context == "public static int Scale => 2;");
+        AssertReferenceContains(
+            references,
+            "Parse",
+            "implicit_implementation",
+            containerName: "Parse",
+            context: "public static Money Parse(string s) => new();");
+        AssertReferenceContains(
+            references,
+            "Create",
+            "implicit_implementation",
+            containerName: "Create",
+            context: "public static Money Create() => new();");
+        AssertReferenceContains(
+            references,
+            "Scale",
+            "implicit_implementation",
+            containerName: "Scale",
+            context: "public static int Scale => 1;");
+        AssertReferenceContains(
+            references,
+            "Add",
+            "implicit_implementation",
+            containerName: "Add",
+            context: "public static Money Add(Money left, Money right) => new();");
+        AssertReferenceContains(
+            references,
+            "TryParse",
+            "implicit_implementation",
+            containerName: "TryParse",
+            context: "public static bool TryParse(string s, out Money value)");
+        AssertReferenceDoesNotContain(
+            references,
+            "Parse",
+            "implicit_implementation",
+            context: "public static TextOnly Parse(string s) => new();");
+        AssertReferenceDoesNotContain(
+            references,
+            "TryParse",
+            "implicit_implementation",
+            context: "public static bool TryParse(string s, ref WrongRef value) => true;");
+        AssertReferenceDoesNotContain(
+            references,
+            "Parse",
+            "implicit_implementation",
+            context: "public static WrongReturn Parse(string s) => new();");
+        AssertReferenceDoesNotContain(
+            references,
+            "Scale",
+            "implicit_implementation",
+            context: "public static int Scale => 2;");
     }
 
     [Fact]
@@ -351,15 +360,17 @@ public partial class ReferenceExtractorTests
             "Money.cs",
             interfaceSymbols.Concat(implementationSymbols).ToList());
 
-        Assert.DoesNotContain(sameFileOnlyReferences, reference =>
-            reference.SymbolName == "Parse"
-            && reference.ReferenceKind == "implicit_implementation"
-            && reference.Context == "public static Money Parse(string s) => new();");
-        Assert.Contains(workspaceReferences, reference =>
-            reference.SymbolName == "Parse"
-            && reference.ReferenceKind == "implicit_implementation"
-            && reference.ContainerName == "Parse"
-            && reference.Context == "public static Money Parse(string s) => new();");
+        AssertReferenceDoesNotContain(
+            sameFileOnlyReferences,
+            "Parse",
+            "implicit_implementation",
+            context: "public static Money Parse(string s) => new();");
+        AssertReferenceContains(
+            workspaceReferences,
+            "Parse",
+            "implicit_implementation",
+            containerName: "Parse",
+            context: "public static Money Parse(string s) => new();");
     }
 
     [Fact]
@@ -9593,20 +9604,10 @@ public partial class ReferenceExtractorTests
         var csharpSymbols = SymbolExtractor.Extract(1, "csharp", csharp);
         var csharpReferences = ReferenceExtractor.Extract(1, "csharp", csharp, csharpSymbols);
 
-        Assert.Contains(csharpReferences, r =>
-            r.SymbolName == "IOException"
-            && r.ReferenceKind == "type_reference"
-            && r.ContainerName == "Run");
-        Assert.Contains(csharpReferences, r =>
-            r.SymbolName == "CustomException"
-            && r.ReferenceKind == "type_reference"
-            && r.ContainerName == "Run");
-        Assert.DoesNotContain(csharpReferences, r =>
-            r.SymbolName == "ex"
-            && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(csharpReferences, r =>
-            r.SymbolName == "caught"
-            && r.ReferenceKind == "type_reference");
+        AssertReferenceContains(csharpReferences, "IOException", "type_reference", containerName: "Run");
+        AssertReferenceContains(csharpReferences, "CustomException", "type_reference", containerName: "Run");
+        AssertReferenceDoesNotContain(csharpReferences, "ex", "type_reference");
+        AssertReferenceDoesNotContain(csharpReferences, "caught", "type_reference");
 
         const string java = """
             class Service {
@@ -9620,17 +9621,9 @@ public partial class ReferenceExtractorTests
         var javaSymbols = SymbolExtractor.Extract(1, "java", java);
         var javaReferences = ReferenceExtractor.Extract(1, "java", java, javaSymbols);
 
-        Assert.Contains(javaReferences, r =>
-            r.SymbolName == "IOException"
-            && r.ReferenceKind == "type_reference"
-            && r.ContainerName == "run");
-        Assert.Contains(javaReferences, r =>
-            r.SymbolName == "CustomException"
-            && r.ReferenceKind == "type_reference"
-            && r.ContainerName == "run");
-        Assert.DoesNotContain(javaReferences, r =>
-            r.SymbolName == "ex"
-            && r.ReferenceKind == "type_reference");
+        AssertReferenceContains(javaReferences, "IOException", "type_reference", containerName: "run");
+        AssertReferenceContains(javaReferences, "CustomException", "type_reference", containerName: "run");
+        AssertReferenceDoesNotContain(javaReferences, "ex", "type_reference");
 
         const string kotlin = """
             class Service {
@@ -9645,17 +9638,9 @@ public partial class ReferenceExtractorTests
         var kotlinSymbols = SymbolExtractor.Extract(1, "kotlin", kotlin);
         var kotlinReferences = ReferenceExtractor.Extract(1, "kotlin", kotlin, kotlinSymbols);
 
-        Assert.Contains(kotlinReferences, r =>
-            r.SymbolName == "IOException"
-            && r.ReferenceKind == "type_reference"
-            && r.ContainerName == "run");
-        Assert.Contains(kotlinReferences, r =>
-            r.SymbolName == "CustomException"
-            && r.ReferenceKind == "type_reference"
-            && r.ContainerName == "run");
-        Assert.DoesNotContain(kotlinReferences, r =>
-            r.SymbolName == "ex"
-            && r.ReferenceKind == "type_reference");
+        AssertReferenceContains(kotlinReferences, "IOException", "type_reference", containerName: "run");
+        AssertReferenceContains(kotlinReferences, "CustomException", "type_reference", containerName: "run");
+        AssertReferenceDoesNotContain(kotlinReferences, "ex", "type_reference");
     }
 
     [Fact]
@@ -9773,6 +9758,47 @@ public partial class ReferenceExtractorTests
 
         var readyRef = Assert.Single(readyRefs);
         Assert.Equal("Run", readyRef.ContainerName);
+    }
+
+    private static void AssertReferenceContains(
+        IEnumerable<ReferenceRecord> references,
+        string symbolName,
+        string referenceKind,
+        string? containerName = null,
+        string? context = null,
+        int? line = null)
+    {
+        Assert.Contains(
+            references,
+            reference => ReferenceMatches(reference, symbolName, referenceKind, containerName, context, line));
+    }
+
+    private static void AssertReferenceDoesNotContain(
+        IEnumerable<ReferenceRecord> references,
+        string symbolName,
+        string referenceKind,
+        string? containerName = null,
+        string? context = null,
+        int? line = null)
+    {
+        Assert.DoesNotContain(
+            references,
+            reference => ReferenceMatches(reference, symbolName, referenceKind, containerName, context, line));
+    }
+
+    private static bool ReferenceMatches(
+        ReferenceRecord reference,
+        string symbolName,
+        string referenceKind,
+        string? containerName,
+        string? context,
+        int? line)
+    {
+        return reference.SymbolName == symbolName
+            && reference.ReferenceKind == referenceKind
+            && (containerName is null || reference.ContainerName == containerName)
+            && (context is null || reference.Context == context)
+            && (line is null || reference.Line == line.Value);
     }
 
 #if NET8_0
