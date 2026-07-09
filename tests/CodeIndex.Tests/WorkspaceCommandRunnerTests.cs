@@ -1126,82 +1126,137 @@ public class WorkspaceCommandRunnerTests
     [Fact]
     public void WorkspaceUse_RejectsUnknownManifestMember()
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_use_unknown");
-        var configHome = TestProjectHelper.CreateTempProject("cdidx_workspace_use_config");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_use_unknown");
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_use_config");
+        var root = project.Root;
+        var configHome = config.Root;
+        Directory.CreateDirectory(Path.Combine(root, "src", "A"));
+        File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """{ "members": ["src/A"] }""");
+        using var env = EnvironmentVariableScope.Capture("XDG_CONFIG_HOME");
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+
+        var previous = Environment.CurrentDirectory;
         try
         {
-            Directory.CreateDirectory(Path.Combine(root, "src", "A"));
-            File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """{ "members": ["src/A"] }""");
-            using var env = EnvironmentVariableScope.Capture("XDG_CONFIG_HOME");
-            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+            Environment.CurrentDirectory = root;
+            var (exitCode, _, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["use", "typo"], _jsonOptions));
 
-            var previous = Environment.CurrentDirectory;
-            try
-            {
-                Environment.CurrentDirectory = root;
-                var (exitCode, _, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["use", "typo"], _jsonOptions));
-
-                Assert.Equal(CommandExitCodes.UsageError, exitCode);
-                Assert.Contains("workspace member was not found", stderr);
-                Assert.False(File.Exists(ActiveWorkspace.StatePath));
-            }
-            finally
-            {
-                Environment.CurrentDirectory = previous;
-            }
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("workspace member was not found", stderr);
+            Assert.False(File.Exists(ActiveWorkspace.StatePath));
         }
         finally
         {
-            TestProjectHelper.DeleteDirectory(root);
-            TestProjectHelper.DeleteDirectory(configHome);
+            Environment.CurrentDirectory = previous;
         }
     }
 
     [Fact]
     public void WorkspaceUse_RejectsMissingManifestMember()
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_use_missing");
-        var configHome = TestProjectHelper.CreateTempProject("cdidx_workspace_use_missing_config");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_use_missing");
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_use_missing_config");
+        var root = project.Root;
+        var configHome = config.Root;
+        File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """{ "members": ["src/Missing"] }""");
+        using var env = EnvironmentVariableScope.Capture("XDG_CONFIG_HOME");
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+
+        var previous = Environment.CurrentDirectory;
         try
         {
-            File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """{ "members": ["src/Missing"] }""");
-            using var env = EnvironmentVariableScope.Capture("XDG_CONFIG_HOME");
-            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+            Environment.CurrentDirectory = root;
+            var (exitCode, _, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["use", "Missing"], _jsonOptions));
 
-            var previous = Environment.CurrentDirectory;
-            try
-            {
-                Environment.CurrentDirectory = root;
-                var (exitCode, _, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["use", "Missing"], _jsonOptions));
-
-                Assert.Equal(CommandExitCodes.UsageError, exitCode);
-                Assert.Contains("workspace member is missing on disk", stderr);
-                Assert.False(File.Exists(ActiveWorkspace.StatePath));
-            }
-            finally
-            {
-                Environment.CurrentDirectory = previous;
-            }
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("workspace member is missing on disk", stderr);
+            Assert.False(File.Exists(ActiveWorkspace.StatePath));
         }
         finally
         {
-            TestProjectHelper.DeleteDirectory(root);
-            TestProjectHelper.DeleteDirectory(configHome);
+            Environment.CurrentDirectory = previous;
         }
     }
 
     [Fact]
     public void WorkspaceUse_RejectsAmbiguousSameBasenameMembers()
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_use_ambiguous");
-        var configHome = TestProjectHelper.CreateTempProject("cdidx_workspace_use_ambiguous_config");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_use_ambiguous");
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_use_ambiguous_config");
+        var root = project.Root;
+        var configHome = config.Root;
+        Directory.CreateDirectory(Path.Combine(root, "src", "App"));
+        Directory.CreateDirectory(Path.Combine(root, "tests", "App"));
+        File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """{ "members": ["src/App", "tests/App"] }""");
+        using var env = EnvironmentVariableScope.Capture("XDG_CONFIG_HOME");
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+
+        var previous = Environment.CurrentDirectory;
         try
         {
+            Environment.CurrentDirectory = root;
+            var (exitCode, _, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["use", "App"], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("workspace member name is ambiguous", stderr);
+            Assert.Contains(Path.Combine("src", "App"), stderr);
+            Assert.Contains(Path.Combine("tests", "App"), stderr);
+            Assert.False(File.Exists(ActiveWorkspace.StatePath));
+        }
+        finally
+        {
+            Environment.CurrentDirectory = previous;
+        }
+    }
+
+    [Fact]
+    public void WorkspaceManifest_EscapingMemberDiagnosticDoesNotLeakMemberPath_Issue3805()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_manifest_escape");
+        var root = project.Root;
+        const string SentinelMember = "../SECRET_MEMBER_SENTINEL_3805";
+        var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+        File.WriteAllText(manifestPath, $$"""{ "members": [{{JsonSerializer.Serialize(SentinelMember)}}] }""");
+
+        var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+
+        Assert.Contains("member path escapes the manifest root", ex.Message);
+        Assert.DoesNotContain(SentinelMember, ex.Message);
+        Assert.DoesNotContain("SECRET_MEMBER_SENTINEL_3805", ex.Message);
+    }
+
+    [Fact]
+    public void WorkspaceManifest_LongMemberPathDiagnosticDoesNotLeakMemberValue_Issue3805()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_manifest_long_member");
+        var root = project.Root;
+        var longMember = new string('a', WorkspaceManifestLoader.MaxManifestMemberPathChars + 1) + "TAIL_SENTINEL_3805";
+        var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+        File.WriteAllText(manifestPath, $$"""{ "members": [{{JsonSerializer.Serialize(longMember)}}] }""");
+
+        var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+
+        Assert.Contains($"exceeds the {WorkspaceManifestLoader.MaxManifestMemberPathChars} character limit", ex.Message);
+        Assert.DoesNotContain("TAIL_SENTINEL_3805", ex.Message);
+    }
+
+    [Fact]
+    public void WorkspaceUse_CaseSensitiveMemberSelectionDistinguishesCaseOnlyBasenames_Issue3805()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_use_case_sensitive");
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_use_case_sensitive_config");
+        var root = project.Root;
+        var configHome = config.Root;
+        lock (PathCasingTestLock.Gate)
+        {
+            PathCasing.ResetCacheForTests();
             Directory.CreateDirectory(Path.Combine(root, "src", "App"));
-            Directory.CreateDirectory(Path.Combine(root, "tests", "App"));
-            File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """{ "members": ["src/App", "tests/App"] }""");
-            using var env = EnvironmentVariableScope.Capture("XDG_CONFIG_HOME");
+            Directory.CreateDirectory(Path.Combine(root, "src", "app"));
+            File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """{ "members": ["src/App", "src/app"] }""");
+            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
             Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+            PathCasing.SeedFromWorkspace(root, ignoreCase: false);
 
             var previous = Environment.CurrentDirectory;
             try
@@ -1209,256 +1264,141 @@ public class WorkspaceCommandRunnerTests
                 Environment.CurrentDirectory = root;
                 var (exitCode, _, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["use", "App"], _jsonOptions));
 
-                Assert.Equal(CommandExitCodes.UsageError, exitCode);
-                Assert.Contains("workspace member name is ambiguous", stderr);
-                Assert.Contains(Path.Combine("src", "App"), stderr);
-                Assert.Contains(Path.Combine("tests", "App"), stderr);
-                Assert.False(File.Exists(ActiveWorkspace.StatePath));
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                var state = ActiveWorkspace.Load();
+                Assert.NotNull(state);
+                Assert.Equal("App", state.Name);
+                Assert.Equal(Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, "src", "App")), state.Root);
             }
             finally
             {
                 Environment.CurrentDirectory = previous;
-            }
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(root);
-            TestProjectHelper.DeleteDirectory(configHome);
-        }
-    }
-
-    [Fact]
-    public void WorkspaceManifest_EscapingMemberDiagnosticDoesNotLeakMemberPath_Issue3805()
-    {
-        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_escape");
-        const string SentinelMember = "../SECRET_MEMBER_SENTINEL_3805";
-        try
-        {
-            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
-            File.WriteAllText(manifestPath, $$"""{ "members": [{{JsonSerializer.Serialize(SentinelMember)}}] }""");
-
-            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
-
-            Assert.Contains("member path escapes the manifest root", ex.Message);
-            Assert.DoesNotContain(SentinelMember, ex.Message);
-            Assert.DoesNotContain("SECRET_MEMBER_SENTINEL_3805", ex.Message);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(root);
-        }
-    }
-
-    [Fact]
-    public void WorkspaceManifest_LongMemberPathDiagnosticDoesNotLeakMemberValue_Issue3805()
-    {
-        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_long_member");
-        try
-        {
-            var longMember = new string('a', WorkspaceManifestLoader.MaxManifestMemberPathChars + 1) + "TAIL_SENTINEL_3805";
-            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
-            File.WriteAllText(manifestPath, $$"""{ "members": [{{JsonSerializer.Serialize(longMember)}}] }""");
-
-            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
-
-            Assert.Contains($"exceeds the {WorkspaceManifestLoader.MaxManifestMemberPathChars} character limit", ex.Message);
-            Assert.DoesNotContain("TAIL_SENTINEL_3805", ex.Message);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(root);
-        }
-    }
-
-    [Fact]
-    public void WorkspaceUse_CaseSensitiveMemberSelectionDistinguishesCaseOnlyBasenames_Issue3805()
-    {
-        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_use_case_sensitive");
-        var configHome = TestProjectHelper.CreateTempProject("cdidx_workspace_use_case_sensitive_config");
-        try
-        {
-            lock (PathCasingTestLock.Gate)
-            {
                 PathCasing.ResetCacheForTests();
-                Directory.CreateDirectory(Path.Combine(root, "src", "App"));
-                Directory.CreateDirectory(Path.Combine(root, "src", "app"));
-                File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """{ "members": ["src/App", "src/app"] }""");
-                using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
-                Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
-                Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
-                PathCasing.SeedFromWorkspace(root, ignoreCase: false);
-
-                var previous = Environment.CurrentDirectory;
-                try
-                {
-                    Environment.CurrentDirectory = root;
-                    var (exitCode, _, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["use", "App"], _jsonOptions));
-
-                    Assert.Equal(CommandExitCodes.Success, exitCode);
-                    Assert.Equal(string.Empty, stderr);
-                    var state = ActiveWorkspace.Load();
-                    Assert.NotNull(state);
-                    Assert.Equal("App", state.Name);
-                    Assert.Equal(Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, "src", "App")), state.Root);
-                }
-                finally
-                {
-                    Environment.CurrentDirectory = previous;
-                    PathCasing.ResetCacheForTests();
-                }
             }
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(root);
-            TestProjectHelper.DeleteDirectory(configHome);
         }
     }
 
     [Fact]
     public void WorkspaceUse_RejectsNamedWorkspaceWithoutManifest()
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_use_no_manifest");
-        var configHome = TestProjectHelper.CreateTempProject("cdidx_workspace_use_no_manifest_config");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_use_no_manifest");
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_use_no_manifest_config");
+        var root = project.Root;
+        var configHome = config.Root;
+        using var env = EnvironmentVariableScope.Capture("XDG_CONFIG_HOME");
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+
+        var previous = Environment.CurrentDirectory;
         try
         {
-            using var env = EnvironmentVariableScope.Capture("XDG_CONFIG_HOME");
-            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+            Environment.CurrentDirectory = root;
+            var (exitCode, _, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["use", "typo"], _jsonOptions));
 
-            var previous = Environment.CurrentDirectory;
-            try
-            {
-                Environment.CurrentDirectory = root;
-                var (exitCode, _, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["use", "typo"], _jsonOptions));
-
-                Assert.Equal(CommandExitCodes.UsageError, exitCode);
-                Assert.Contains("workspace manifest was not found", stderr);
-                Assert.False(File.Exists(ActiveWorkspace.StatePath));
-            }
-            finally
-            {
-                Environment.CurrentDirectory = previous;
-            }
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("workspace manifest was not found", stderr);
+            Assert.False(File.Exists(ActiveWorkspace.StatePath));
         }
         finally
         {
-            TestProjectHelper.DeleteDirectory(root);
-            TestProjectHelper.DeleteDirectory(configHome);
+            Environment.CurrentDirectory = previous;
         }
     }
 
     [Fact]
     public void WorkspaceUse_RelativeConfigHomeReturnsSafeError_Issue3430()
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_use_relative_config");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_use_relative_config");
+        var root = project.Root;
         const string RelativeConfigHome = "relative_config_HOME_SENTINEL_USE_3430";
+        using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+        Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", RelativeConfigHome);
+
+        var previous = Environment.CurrentDirectory;
         try
         {
-            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
-            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
-            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", RelativeConfigHome);
+            Environment.CurrentDirectory = root;
+            var (exitCode, _, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["use", "default"], _jsonOptions));
 
-            var previous = Environment.CurrentDirectory;
-            try
-            {
-                Environment.CurrentDirectory = root;
-                var (exitCode, _, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["use", "default"], _jsonOptions));
-
-                Assert.Equal(CommandExitCodes.UsageError, exitCode);
-                Assert.Contains("XDG_CONFIG_HOME must be an absolute path", stderr);
-                Assert.DoesNotContain(RelativeConfigHome, stderr);
-            }
-            finally
-            {
-                Environment.CurrentDirectory = previous;
-            }
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("XDG_CONFIG_HOME must be an absolute path", stderr);
+            Assert.DoesNotContain(RelativeConfigHome, stderr);
         }
         finally
         {
-            TestProjectHelper.DeleteDirectory(root);
+            Environment.CurrentDirectory = previous;
         }
     }
 
     [Fact]
     public void WorkspaceUse_SingleStrategyStoresManifestRoot_Issue3430()
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_use_single_strategy");
-        var configHome = TestProjectHelper.CreateTempProject("cdidx_workspace_use_single_strategy_config");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_use_single_strategy");
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_use_single_strategy_config");
+        var root = project.Root;
+        var configHome = config.Root;
+        Directory.CreateDirectory(Path.Combine(root, "src", "A"));
+        File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """
+            {
+              "members": ["src/A"],
+              "index_strategy": "single"
+            }
+            """);
+        using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+        Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+
+        var previous = Environment.CurrentDirectory;
         try
         {
-            Directory.CreateDirectory(Path.Combine(root, "src", "A"));
-            File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """
-                {
-                  "members": ["src/A"],
-                  "index_strategy": "single"
-                }
-                """);
-            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
-            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
-            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+            Environment.CurrentDirectory = root;
+            var (exitCode, _, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["use", "A"], _jsonOptions));
 
-            var previous = Environment.CurrentDirectory;
-            try
-            {
-                Environment.CurrentDirectory = root;
-                var (exitCode, _, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["use", "A"], _jsonOptions));
-
-                Assert.Equal(CommandExitCodes.Success, exitCode);
-                Assert.Equal(string.Empty, stderr);
-                var state = ActiveWorkspace.Load();
-                Assert.NotNull(state);
-                var expectedRoot = Path.GetFullPath(Environment.CurrentDirectory);
-                Assert.Equal(expectedRoot, state.Root);
-                Assert.Equal(Path.GetFullPath(Path.Combine(expectedRoot, ".cdidx", "codeindex.db")), state.DbPath);
-            }
-            finally
-            {
-                Environment.CurrentDirectory = previous;
-            }
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var state = ActiveWorkspace.Load();
+            Assert.NotNull(state);
+            var expectedRoot = Path.GetFullPath(Environment.CurrentDirectory);
+            Assert.Equal(expectedRoot, state.Root);
+            Assert.Equal(Path.GetFullPath(Path.Combine(expectedRoot, ".cdidx", "codeindex.db")), state.DbPath);
         }
         finally
         {
-            TestProjectHelper.DeleteDirectory(root);
-            TestProjectHelper.DeleteDirectory(configHome);
+            Environment.CurrentDirectory = previous;
         }
     }
 
     [Fact]
     public void WorkspaceUseDefault_DoesNotSelectFirstManifestMember()
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_use_default");
-        var configHome = TestProjectHelper.CreateTempProject("cdidx_workspace_use_default_config");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_use_default");
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_use_default_config");
+        var root = project.Root;
+        var configHome = config.Root;
+        Directory.CreateDirectory(Path.Combine(root, "src", "A"));
+        Directory.CreateDirectory(Path.Combine(root, "src", "B"));
+        File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """{ "members": ["src/A", "src/B"] }""");
+        using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+        Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+
+        var previous = Environment.CurrentDirectory;
         try
         {
-            Directory.CreateDirectory(Path.Combine(root, "src", "A"));
-            Directory.CreateDirectory(Path.Combine(root, "src", "B"));
-            File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """{ "members": ["src/A", "src/B"] }""");
-            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
-            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
-            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+            Environment.CurrentDirectory = root;
+            var (exitCode, _, _) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["use", "default"], _jsonOptions));
 
-            var previous = Environment.CurrentDirectory;
-            try
-            {
-                Environment.CurrentDirectory = root;
-                var (exitCode, _, _) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["use", "default"], _jsonOptions));
-
-                Assert.Equal(CommandExitCodes.Success, exitCode);
-                var state = ActiveWorkspace.Load();
-                Assert.NotNull(state);
-                var expectedRoot = Path.GetFullPath(Environment.CurrentDirectory);
-                Assert.Equal(expectedRoot, state.Root);
-                Assert.Equal(Path.GetFullPath(Path.Combine(expectedRoot, ".cdidx", "codeindex.db")), state.DbPath);
-            }
-            finally
-            {
-                Environment.CurrentDirectory = previous;
-            }
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            var state = ActiveWorkspace.Load();
+            Assert.NotNull(state);
+            var expectedRoot = Path.GetFullPath(Environment.CurrentDirectory);
+            Assert.Equal(expectedRoot, state.Root);
+            Assert.Equal(Path.GetFullPath(Path.Combine(expectedRoot, ".cdidx", "codeindex.db")), state.DbPath);
         }
         finally
         {
-            TestProjectHelper.DeleteDirectory(root);
-            TestProjectHelper.DeleteDirectory(configHome);
+            Environment.CurrentDirectory = previous;
         }
     }
 
