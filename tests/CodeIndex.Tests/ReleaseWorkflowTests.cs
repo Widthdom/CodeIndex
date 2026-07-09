@@ -967,14 +967,16 @@ public partial class ReleaseWorkflowTests
     {
         var workflow = ReadReleaseWorkflow().ReplaceLineEndings("\n");
 
-        Assert.Contains("permissions:\n  contents: read", workflow);
+        AssertContainsAll(
+            workflow,
+            "permissions:\n  contents: read",
+            "publish-container:\n    if: github.repository == 'Widthdom/CodeIndex'",
+            "publish-nuget:\n    if: github.repository == 'Widthdom/CodeIndex'",
+            "permissions:\n      contents: read\n      id-token: write\n      attestations: write",
+            "NUGET_TRUSTED_PUBLISHING_USER: ${{ vars.NUGET_TRUSTED_PUBLISHING_USER }}",
+            "--api-key \"${{ steps.nuget-login.outputs.NUGET_API_KEY }}\"");
         Assert.Equal(1, CountOccurrences(workflow, "packages: write"));
-        Assert.Contains("publish-container:\n    if: github.repository == 'Widthdom/CodeIndex'", workflow);
-        Assert.Contains("publish-nuget:\n    if: github.repository == 'Widthdom/CodeIndex'", workflow);
-        Assert.Contains("permissions:\n      contents: read\n      id-token: write\n      attestations: write", workflow);
-        Assert.Contains("NUGET_TRUSTED_PUBLISHING_USER: ${{ vars.NUGET_TRUSTED_PUBLISHING_USER }}", workflow);
-        Assert.Contains("--api-key \"${{ steps.nuget-login.outputs.NUGET_API_KEY }}\"", workflow);
-        Assert.DoesNotContain("secrets.NUGET_API_KEY", workflow);
+        AssertDoesNotContainAny(workflow, "secrets.NUGET_API_KEY");
 
         var secretLines = FindSecretLinesInUngatedReleaseJobs(workflow);
         Assert.Empty(secretLines);
@@ -985,8 +987,10 @@ public partial class ReleaseWorkflowTests
     {
         var dependabot = RepositoryTestPaths.ReadText(".github", "dependabot.yml");
 
-        Assert.Contains("dependency-name: Microsoft.NET.ILLink.Tasks", dependabot);
-        Assert.Contains("version-update:semver-major", dependabot);
+        AssertContainsAll(
+            dependabot,
+            "dependency-name: Microsoft.NET.ILLink.Tasks",
+            "version-update:semver-major");
     }
 
     [Fact]
@@ -994,12 +998,16 @@ public partial class ReleaseWorkflowTests
     {
         var workflow = RepositoryTestPaths.ReadWorkflow("mutation-testing.yml");
 
-        Assert.Contains("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2", workflow);
-        Assert.Contains("actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0", workflow);
-        Assert.Contains("actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5", workflow);
-        Assert.DoesNotContain("actions/checkout@v6", workflow);
-        Assert.DoesNotContain("actions/setup-dotnet@v5", workflow);
-        Assert.DoesNotContain("actions/cache@v5", workflow);
+        AssertContainsAll(
+            workflow,
+            "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2",
+            "actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0",
+            "actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5");
+        AssertDoesNotContainAny(
+            workflow,
+            "actions/checkout@v6",
+            "actions/setup-dotnet@v5",
+            "actions/cache@v5");
     }
 
     private static void AssertContainsAll(string text, params string[] expectedValues)
