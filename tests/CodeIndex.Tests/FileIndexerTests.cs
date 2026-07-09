@@ -3914,36 +3914,30 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFilesDetailed_FileDeletedAfterEnumeration_RecordsWarning()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx-delete-race");
-        try
-        {
-            var scriptPath = Path.Combine(tempDir, "script");
-            File.WriteAllText(scriptPath, "#!/usr/bin/env python\nprint('hello')\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-delete-race");
+        var tempDir = project.Root;
+        var scriptPath = Path.Combine(tempDir, "script");
+        File.WriteAllText(scriptPath, "#!/usr/bin/env python\nprint('hello')\n");
 
-            var indexer = new FileIndexer(
-                tempDir,
-                ignoreCase: false,
-                ignoreRuleRoot: null,
-                maxFileSizeBytes: null,
-                directoryIgnoreCaseProbe: _ => false,
-                enumerateFiles: dir => Path.GetFullPath(dir) == Path.GetFullPath(tempDir)
-                    ? DeleteBeforeProbe(scriptPath)
-                    : Directory.EnumerateFiles(dir));
+        var indexer = new FileIndexer(
+            tempDir,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: _ => false,
+            enumerateFiles: dir => Path.GetFullPath(dir) == Path.GetFullPath(tempDir)
+                ? DeleteBeforeProbe(scriptPath)
+                : Directory.EnumerateFiles(dir));
 
-            var result = indexer.ScanFilesDetailed();
+        var result = indexer.ScanFilesDetailed();
 
-            Assert.Empty(result.Files);
-            Assert.Contains("script", result.NonIndexablePaths);
-            var warning = Assert.Single(result.Errors);
-            Assert.Equal("script", warning.Path);
-            Assert.Equal(FileIndexer.ScanIssueSeverity.Warning, warning.Severity);
-            Assert.Contains("deleted during scanning", warning.Message, StringComparison.OrdinalIgnoreCase);
-            Assert.False(result.HadErrors);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Empty(result.Files);
+        Assert.Contains("script", result.NonIndexablePaths);
+        var warning = Assert.Single(result.Errors);
+        Assert.Equal("script", warning.Path);
+        Assert.Equal(FileIndexer.ScanIssueSeverity.Warning, warning.Severity);
+        Assert.Contains("deleted during scanning", warning.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(result.HadErrors);
 
         static IEnumerable<string> DeleteBeforeProbe(string path)
         {
@@ -3958,26 +3952,20 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx-dangling-symlink");
-        try
-        {
-            var linkPath = Path.Combine(tempDir, "missing-link");
-            Directory.CreateSymbolicLink(linkPath, Path.Combine(tempDir, "missing-target"));
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-dangling-symlink");
+        var tempDir = project.Root;
+        var linkPath = Path.Combine(tempDir, "missing-link");
+        Directory.CreateSymbolicLink(linkPath, Path.Combine(tempDir, "missing-target"));
 
-            var result = new FileIndexer(tempDir).ScanFilesDetailed();
+        var result = new FileIndexer(tempDir).ScanFilesDetailed();
 
-            Assert.Contains("missing-link", result.DanglingSymlinks);
-            Assert.Contains(
-                result.Errors,
-                error => error.Path == "missing-link"
-                    && error.Severity == FileIndexer.ScanIssueSeverity.Warning
-                    && error.Message.Contains("dangling symlink", StringComparison.OrdinalIgnoreCase));
-            Assert.False(result.HadErrors);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Contains("missing-link", result.DanglingSymlinks);
+        Assert.Contains(
+            result.Errors,
+            error => error.Path == "missing-link"
+                && error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                && error.Message.Contains("dangling symlink", StringComparison.OrdinalIgnoreCase));
+        Assert.False(result.HadErrors);
     }
 
     [Fact]
@@ -3986,7 +3974,8 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx-symlink-permission");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-symlink-permission");
+        var tempDir = project.Root;
         try
         {
             var targetDir = Path.Combine(tempDir, "src");
@@ -4025,7 +4014,6 @@ public partial class FileIndexerTests
         finally
         {
             FileIndexer.ResolveDirectoryLinkTargetForTesting = null;
-            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4035,38 +4023,32 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx-symlink-policy");
-        var externalDir = TestProjectHelper.CreateTempProject("cdidx-symlink-external");
-        try
-        {
-            File.WriteAllText(Path.Combine(externalDir, "external.py"), "print('external')\n");
-            var linkPath = Path.Combine(tempDir, "external");
-            Directory.CreateSymbolicLink(linkPath, externalDir);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-symlink-policy");
+        using var externalProject = TestProjectHelper.CreateTempProjectScope("cdidx-symlink-external");
+        var tempDir = project.Root;
+        var externalDir = externalProject.Root;
+        File.WriteAllText(Path.Combine(externalDir, "external.py"), "print('external')\n");
+        var linkPath = Path.Combine(tempDir, "external");
+        Directory.CreateSymbolicLink(linkPath, externalDir);
 
-            var indexer = new FileIndexer(
-                tempDir,
-                ignoreCase: false,
-                ignoreRuleRoot: null,
-                maxFileSizeBytes: null,
-                directoryIgnoreCaseProbe: null,
-                symlinkPolicy: FileIndexer.SymlinkPolicy.Internal);
+        var indexer = new FileIndexer(
+            tempDir,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: null,
+            symlinkPolicy: FileIndexer.SymlinkPolicy.Internal);
 
-            var result = indexer.ScanFilesDetailed();
+        var result = indexer.ScanFilesDetailed();
 
-            Assert.Empty(result.Files);
-            Assert.Contains(
-                result.Errors,
-                error => error.Path == "external"
-                    && error.Severity == FileIndexer.ScanIssueSeverity.Warning
-                    && error.Message.Contains("symlinked directory", StringComparison.OrdinalIgnoreCase)
-                    && error.Message.Contains("<outside project root>", StringComparison.Ordinal)
-                    && !error.Message.Contains(externalDir, StringComparison.Ordinal));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-            TestProjectHelper.DeleteDirectory(externalDir);
-        }
+        Assert.Empty(result.Files);
+        Assert.Contains(
+            result.Errors,
+            error => error.Path == "external"
+                && error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                && error.Message.Contains("symlinked directory", StringComparison.OrdinalIgnoreCase)
+                && error.Message.Contains("<outside project root>", StringComparison.Ordinal)
+                && !error.Message.Contains(externalDir, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -4075,34 +4057,28 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx-symlink-internal");
-        try
-        {
-            var targetDir = Path.Combine(tempDir, "src");
-            Directory.CreateDirectory(targetDir);
-            File.WriteAllText(Path.Combine(targetDir, "app.py"), "print('app')\n");
-            Directory.CreateSymbolicLink(Path.Combine(tempDir, "src-link"), targetDir);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-symlink-internal");
+        var tempDir = project.Root;
+        var targetDir = Path.Combine(tempDir, "src");
+        Directory.CreateDirectory(targetDir);
+        File.WriteAllText(Path.Combine(targetDir, "app.py"), "print('app')\n");
+        Directory.CreateSymbolicLink(Path.Combine(tempDir, "src-link"), targetDir);
 
-            var indexer = new FileIndexer(
-                tempDir,
-                ignoreCase: false,
-                ignoreRuleRoot: null,
-                maxFileSizeBytes: null,
-                directoryIgnoreCaseProbe: null,
-                symlinkPolicy: FileIndexer.SymlinkPolicy.Internal);
+        var indexer = new FileIndexer(
+            tempDir,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: null,
+            symlinkPolicy: FileIndexer.SymlinkPolicy.Internal);
 
-            var files = indexer.ScanFiles()
-                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .ToList();
+        var files = indexer.ScanFiles()
+            .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
 
-            Assert.Single(files);
-            Assert.Contains(files[0], new[] { "src/app.py", "src-link/app.py" });
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Single(files);
+        Assert.Contains(files[0], new[] { "src/app.py", "src-link/app.py" });
     }
 
     [Fact]
@@ -4111,34 +4087,28 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx-symlink-cycle");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('app')\n");
-            Directory.CreateSymbolicLink(Path.Combine(tempDir, "self"), tempDir);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-symlink-cycle");
+        var tempDir = project.Root;
+        File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('app')\n");
+        Directory.CreateSymbolicLink(Path.Combine(tempDir, "self"), tempDir);
 
-            var indexer = new FileIndexer(
-                tempDir,
-                ignoreCase: false,
-                ignoreRuleRoot: null,
-                maxFileSizeBytes: null,
-                directoryIgnoreCaseProbe: null,
-                symlinkPolicy: FileIndexer.SymlinkPolicy.Internal);
+        var indexer = new FileIndexer(
+            tempDir,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: null,
+            symlinkPolicy: FileIndexer.SymlinkPolicy.Internal);
 
-            var result = indexer.ScanFilesDetailed();
+        var result = indexer.ScanFilesDetailed();
 
-            Assert.Single(result.Files);
-            Assert.Contains(
-                result.Errors,
-                error => error.Path == "self"
-                    && error.Severity == FileIndexer.ScanIssueSeverity.Warning
-                    && error.Message.Contains("already scanned", StringComparison.OrdinalIgnoreCase));
-            Assert.False(result.HadErrors);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Single(result.Files);
+        Assert.Contains(
+            result.Errors,
+            error => error.Path == "self"
+                && error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                && error.Message.Contains("already scanned", StringComparison.OrdinalIgnoreCase));
+        Assert.False(result.HadErrors);
     }
 
     [Fact]
