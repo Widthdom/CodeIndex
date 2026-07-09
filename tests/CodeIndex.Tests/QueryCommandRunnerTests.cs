@@ -304,17 +304,22 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void ParseArgs_ProjectFilterExpandsSolutionProjectToPathGlob_Issue1707()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_filter");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_solution_filter");
+        var projectRoot = project.Root;
         var originalCurrentDirectory = Environment.CurrentDirectory;
         try
         {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "App"));
-            File.WriteAllText(Path.Combine(projectRoot, "CodeIndex.sln"), """
-            Microsoft Visual Studio Solution File, Format Version 12.00
-            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
-            EndProject
-            """);
-            File.WriteAllText(Path.Combine(projectRoot, "src", "App", "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            TestProjectHelper.WriteTextFiles(
+                projectRoot,
+                new Dictionary<string, string>
+                {
+                    ["CodeIndex.sln"] = """
+                                        Microsoft Visual Studio Solution File, Format Version 12.00
+                                        Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
+                                        EndProject
+                                        """,
+                    ["src/App/App.csproj"] = "<Project Sdk=\"Microsoft.NET.Sdk\" />",
+                });
 
             Environment.CurrentDirectory = projectRoot;
             var options = QueryCommandRunner.ParseArgs(["Auth", "--project", "App"], jsonDefault: false, allowNamedQuery: true);
@@ -327,25 +332,30 @@ public partial class QueryCommandRunnerTests
         finally
         {
             Environment.CurrentDirectory = originalCurrentDirectory;
-            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 
     [Fact]
     public void ParseArgs_ProjectFilterUsesIndexedProjectRootForExplicitDb_Issue3189()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_filter_explicit_db");
-        var otherRoot = TestProjectHelper.CreateTempProject("cdidx_solution_filter_other_cwd");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_solution_filter_explicit_db");
+        using var otherProject = TestProjectHelper.CreateTempProjectScope("cdidx_solution_filter_other_cwd");
+        var projectRoot = project.Root;
+        var otherRoot = otherProject.Root;
         var originalCurrentDirectory = Environment.CurrentDirectory;
         try
         {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "App"));
-            File.WriteAllText(Path.Combine(projectRoot, "CodeIndex.sln"), """
-            Microsoft Visual Studio Solution File, Format Version 12.00
-            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
-            EndProject
-            """);
-            File.WriteAllText(Path.Combine(projectRoot, "src", "App", "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            TestProjectHelper.WriteTextFiles(
+                projectRoot,
+                new Dictionary<string, string>
+                {
+                    ["CodeIndex.sln"] = """
+                                        Microsoft Visual Studio Solution File, Format Version 12.00
+                                        Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
+                                        EndProject
+                                        """,
+                    ["src/App/App.csproj"] = "<Project Sdk=\"Microsoft.NET.Sdk\" />",
+                });
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
 
             Environment.CurrentDirectory = otherRoot;
@@ -362,26 +372,29 @@ public partial class QueryCommandRunnerTests
         finally
         {
             Environment.CurrentDirectory = originalCurrentDirectory;
-            TestProjectHelper.DeleteDirectory(otherRoot);
-            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 
     [Fact]
     public void ParseArgs_ProjectFilterFallbackReportsEffectiveRoot_Issue3461()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_filter_fallback");
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_solution_filter_fallback_{Guid.NewGuid():N}.db");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_solution_filter_fallback");
+        var projectRoot = project.Root;
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_solution_filter_fallback");
         var originalCurrentDirectory = Environment.CurrentDirectory;
         try
         {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "App"));
-            File.WriteAllText(Path.Combine(projectRoot, "CodeIndex.sln"), """
-            Microsoft Visual Studio Solution File, Format Version 12.00
-            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
-            EndProject
-            """);
-            File.WriteAllText(Path.Combine(projectRoot, "src", "App", "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            TestProjectHelper.WriteTextFiles(
+                projectRoot,
+                new Dictionary<string, string>
+                {
+                    ["CodeIndex.sln"] = """
+                                        Microsoft Visual Studio Solution File, Format Version 12.00
+                                        Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
+                                        EndProject
+                                        """,
+                    ["src/App/App.csproj"] = "<Project Sdk=\"Microsoft.NET.Sdk\" />",
+                });
 
             Environment.CurrentDirectory = projectRoot;
             var expectedProjectRoot = Path.GetFullPath(Environment.CurrentDirectory);
@@ -401,15 +414,16 @@ public partial class QueryCommandRunnerTests
         {
             Environment.CurrentDirectory = originalCurrentDirectory;
             TestProjectHelper.DeleteFile(dbPath);
-            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 
     [Fact]
     public void RunDefinition_LspFormatUsesIndexedProjectRootForExplicitDb_Issue3151()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_explicit_db_root");
-        var otherRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_other_cwd");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_lsp_explicit_db_root");
+        using var otherProject = TestProjectHelper.CreateTempProjectScope("cdidx_lsp_other_cwd");
+        var projectRoot = project.Root;
+        var otherRoot = otherProject.Root;
         var originalCurrentDirectory = Environment.CurrentDirectory;
         try
         {
@@ -440,8 +454,6 @@ public partial class QueryCommandRunnerTests
         finally
         {
             Environment.CurrentDirectory = originalCurrentDirectory;
-            TestProjectHelper.DeleteDirectory(otherRoot);
-            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 
