@@ -2140,90 +2140,66 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, "ok.cs"), "class Ok { }\n");
-            File.WriteAllText(Path.Combine(tempDir, "bad\nname.cs"), "class Bad { }\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        File.WriteAllText(Path.Combine(tempDir, "ok.cs"), "class Ok { }\n");
+        File.WriteAllText(Path.Combine(tempDir, "bad\nname.cs"), "class Bad { }\n");
 
-            var result = new FileIndexer(tempDir).ScanFilesDetailed();
-            var files = ToSortedRelativePaths(tempDir, result.Files);
+        var result = new FileIndexer(tempDir).ScanFilesDetailed();
+        var files = ToSortedRelativePaths(tempDir, result.Files);
 
-            Assert.Equal(["ok.cs"], files);
-            Assert.Contains(result.NonIndexablePaths, path => path == "bad\\u000Aname.cs");
-            var warning = Assert.Single(result.Errors, error => error.Severity == FileIndexer.ScanIssueSeverity.Warning);
-            Assert.Equal("bad\\u000Aname.cs", warning.Path);
-            Assert.Contains("control characters", warning.Message);
-            Assert.False(result.HadErrors);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(["ok.cs"], files);
+        Assert.Contains(result.NonIndexablePaths, path => path == "bad\\u000Aname.cs");
+        var warning = Assert.Single(result.Errors, error => error.Severity == FileIndexer.ScanIssueSeverity.Warning);
+        Assert.Equal("bad\\u000Aname.cs", warning.Path);
+        Assert.Contains("control characters", warning.Message);
+        Assert.False(result.HadErrors);
     }
 
     [Fact]
     public void BuildRecordWithRawBytes_RejectsControlCharacterPathBeforeIo()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var indexer = new FileIndexer(tempDir);
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var indexer = new FileIndexer(tempDir);
 
-            var ex = Assert.Throws<InvalidOperationException>(
-                () => indexer.BuildRecordWithRawBytes(Path.Combine(tempDir, "bad\0name.cs")));
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => indexer.BuildRecordWithRawBytes(Path.Combine(tempDir, "bad\0name.cs")));
 
-            Assert.Contains("control characters", ex.Message);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Contains("control characters", ex.Message);
     }
 
     [Fact]
     public void EvaluatePathFilter_RejectsControlCharacterPathBeforeNormalization()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var indexer = new FileIndexer(tempDir);
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var indexer = new FileIndexer(tempDir);
 
-            var filter = indexer.EvaluatePathFilter(Path.Combine(tempDir, "bad\0name.cs"));
+        var filter = indexer.EvaluatePathFilter(Path.Combine(tempDir, "bad\0name.cs"));
 
-            Assert.Equal(FileIndexer.PathFilterKind.ExcludedByDefaultFile, filter.FilterKind);
-            Assert.True(filter.ShouldDeleteExisting);
-            var warning = Assert.Single(filter.Errors);
-            Assert.Equal(FileIndexer.ScanIssueSeverity.Warning, warning.Severity);
-            Assert.Contains("control characters", warning.Message);
-            Assert.Contains("\\u0000", warning.Path);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(FileIndexer.PathFilterKind.ExcludedByDefaultFile, filter.FilterKind);
+        Assert.True(filter.ShouldDeleteExisting);
+        var warning = Assert.Single(filter.Errors);
+        Assert.Equal(FileIndexer.ScanIssueSeverity.Warning, warning.Severity);
+        Assert.Contains("control characters", warning.Message);
+        Assert.Contains("\\u0000", warning.Path);
     }
 
     [Fact]
     public void EvaluatePathFilter_RootFileStillUsesRootIgnoreRules()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "ignored.cs\n");
-            var ignoredPath = Path.Combine(tempDir, "ignored.cs");
-            File.WriteAllText(ignoredPath, "class Ignored { }\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "ignored.cs\n");
+        var ignoredPath = Path.Combine(tempDir, "ignored.cs");
+        File.WriteAllText(ignoredPath, "class Ignored { }\n");
 
-            var indexer = new FileIndexer(tempDir);
-            var filter = indexer.EvaluatePathFilter(ignoredPath);
+        var indexer = new FileIndexer(tempDir);
+        var filter = indexer.EvaluatePathFilter(ignoredPath);
 
-            Assert.Equal(FileIndexer.PathFilterKind.IgnoredByRules, filter.FilterKind);
-            Assert.True(filter.ShouldDeleteExisting);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(FileIndexer.PathFilterKind.IgnoredByRules, filter.FilterKind);
+        Assert.True(filter.ShouldDeleteExisting);
     }
 
     [Fact]
@@ -2234,26 +2210,20 @@ public partial class FileIndexerTests
         // they appear in the tree, including nested directories.
         // AppleDouble (`._*`) は原ファイルと同じ拡張子に見えるバイナリメタデータで、ツリーの
         // どこに置かれていても index 対象にしてはならない。
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, "app.js"), "console.log('hello')");
-            File.WriteAllText(Path.Combine(tempDir, "._app.js"), "\x00\x05\x16\x07AppleDouble");
-            File.WriteAllText(Path.Combine(tempDir, "._.gitignore"), "\x00\x05\x16\x07AppleDouble");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        File.WriteAllText(Path.Combine(tempDir, "app.js"), "console.log('hello')");
+        File.WriteAllText(Path.Combine(tempDir, "._app.js"), "\x00\x05\x16\x07AppleDouble");
+        File.WriteAllText(Path.Combine(tempDir, "._.gitignore"), "\x00\x05\x16\x07AppleDouble");
 
-            var sub = Path.Combine(tempDir, "sub");
-            Directory.CreateDirectory(sub);
-            File.WriteAllText(Path.Combine(sub, "main.py"), "def hello(): pass\n");
-            File.WriteAllText(Path.Combine(sub, "._main.py"), "\x00\x05\x16\x07AppleDouble");
+        var sub = Path.Combine(tempDir, "sub");
+        Directory.CreateDirectory(sub);
+        File.WriteAllText(Path.Combine(sub, "main.py"), "def hello(): pass\n");
+        File.WriteAllText(Path.Combine(sub, "._main.py"), "\x00\x05\x16\x07AppleDouble");
 
-            var files = ScanRelativeFiles(tempDir);
+        var files = ScanRelativeFiles(tempDir);
 
-            Assert.Equal(["app.js", "sub/main.py"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(["app.js", "sub/main.py"], files);
     }
 
     [Fact]
@@ -2263,27 +2233,21 @@ public partial class FileIndexerTests
         // .gitignore, .editorconfig, and .cdidxrc.json — they do not start with `._`.
         // AppleDouble の除外は `._` 接頭辞のみで判定するため、.gitignore / .editorconfig /
         // .cdidxrc.json などの既知 dotfile は引き続き走査対象に残る必要がある。
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "node_modules\n");
-            File.WriteAllText(Path.Combine(tempDir, ".editorconfig"), "root = true\n");
-            File.WriteAllText(Path.Combine(tempDir, ".cdidxrc.json"), "{}");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "node_modules\n");
+        File.WriteAllText(Path.Combine(tempDir, ".editorconfig"), "root = true\n");
+        File.WriteAllText(Path.Combine(tempDir, ".cdidxrc.json"), "{}");
 
-            var indexer = new FileIndexer(tempDir);
-            var files = indexer.ScanFiles()
-                .Select(path => Path.GetFileName(path))
-                .OrderBy(name => name, StringComparer.Ordinal)
-                .ToList();
+        var indexer = new FileIndexer(tempDir);
+        var files = indexer.ScanFiles()
+            .Select(path => Path.GetFileName(path))
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToList();
 
-            Assert.Contains(".editorconfig", files);
-            Assert.Contains(".gitignore", files);
-            Assert.Contains(".cdidxrc.json", files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Contains(".editorconfig", files);
+        Assert.Contains(".gitignore", files);
+        Assert.Contains(".cdidxrc.json", files);
     }
 
     [Fact]
@@ -2293,22 +2257,16 @@ public partial class FileIndexerTests
         // re-indexing an AppleDouble path explicitly does not bypass the default skip.
         // --files / --commits の更新モードでも AppleDouble を明示的に対象に含められないよう、
         // walker と同じ既定除外を返すこと。
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var appleDouble = Path.Combine(tempDir, "._app.js");
-            File.WriteAllText(appleDouble, "\x00\x05\x16\x07AppleDouble");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var appleDouble = Path.Combine(tempDir, "._app.js");
+        File.WriteAllText(appleDouble, "\x00\x05\x16\x07AppleDouble");
 
-            var indexer = new FileIndexer(tempDir);
-            var filter = indexer.EvaluatePathFilter(appleDouble);
+        var indexer = new FileIndexer(tempDir);
+        var filter = indexer.EvaluatePathFilter(appleDouble);
 
-            Assert.Equal(FileIndexer.PathFilterKind.ExcludedByDefaultFile, filter.FilterKind);
-            Assert.True(filter.ShouldDeleteExisting);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(FileIndexer.PathFilterKind.ExcludedByDefaultFile, filter.FilterKind);
+        Assert.True(filter.ShouldDeleteExisting);
     }
 
     [Fact]
