@@ -185,55 +185,11 @@ public partial class ReleaseWorkflowTests
         var createJob = ExtractWorkflowJob(workflow, "create-release");
         var verifyJob = ExtractWorkflowJob(workflow, "verify-release-install");
 
-        Assert.DoesNotContain("\r\n", prepareJob);
-        Assert.DoesNotContain("\r\n", createJob);
-        Assert.DoesNotContain("\r\n", verifyJob);
-        Assert.Contains("needs: [preflight, release]", prepareJob);
-        Assert.Contains("permissions:\n      contents: read", prepareJob);
-        Assert.Contains("name: Collect release files", prepareJob);
-        Assert.Contains("name: Write release install notes", prepareJob);
-        Assert.Contains("name: Write curated release notes", prepareJob);
-        Assert.Contains("name: Upload prepared release payload", prepareJob);
-        Assert.Contains("name: release-payload", prepareJob);
-        Assert.Contains("retention-days: 1", prepareJob);
-        Assert.DoesNotContain("RELEASE_GPG_PRIVATE_KEY", prepareJob);
-        Assert.DoesNotContain("actions/attest-build-provenance", prepareJob);
-        Assert.DoesNotContain("contents: write", prepareJob);
-        Assert.DoesNotContain("environment: release-production", prepareJob);
-
-        Assert.Contains("needs: [preflight, prepare-release-files]", createJob);
-        Assert.Contains("environment: release-production", createJob);
-        Assert.Contains("permissions:\n      contents: write\n      id-token: write\n      attestations: write", createJob);
-        Assert.Contains("name: Download prepared release payload", createJob);
-        Assert.Contains("pattern: release-payload", createJob);
-        Assert.Contains("path: .", createJob);
-        Assert.Contains("merge-multiple: true", createJob);
-        Assert.Contains("name: Import release GPG key", createJob);
-        Assert.Contains("name: Sign release checksum manifest", createJob);
-        Assert.Contains("GNUPGHOME: ${{ runner.temp }}/release-gnupg", createJob);
-        Assert.Contains("name: Remove release GPG material", createJob);
-        Assert.Contains("rm -rf \"$GNUPGHOME\"", createJob);
-        Assert.Contains("name: Attest release artifacts", createJob);
-        Assert.Contains("name: Create GitHub release", createJob);
-        Assert.Contains("GH_REPO: ${{ github.repository }}", createJob);
-        Assert.DoesNotContain("name: Checkout", createJob);
-        Assert.DoesNotContain("bash install.sh", createJob);
-
-        Assert.Contains("needs: [preflight, create-release]", verifyJob);
-        Assert.Contains("permissions:\n      contents: read", verifyJob);
-        Assert.Contains("name: Verify install.sh against the published release", verifyJob);
-        Assert.Contains("releases/download/${TAG_NAME}/install.sh", verifyJob);
-        Assert.Contains("curl -fsSL", verifyJob);
-        Assert.Contains("bash install.sh \"${TAG_NAME}\"", verifyJob);
-        Assert.DoesNotContain("secrets.", verifyJob);
-        Assert.DoesNotContain("environment:", verifyJob);
-
-        Assert.Contains("name: Sign Windows executable if configured", releaseJob);
-        Assert.Contains("WIN_SIGNING_CERT_BASE64: ${{ secrets.WIN_SIGNING_CERT_BASE64 }}", releaseJob);
-        Assert.DoesNotContain("name: Warn when Windows Authenticode signing is not configured", releaseJob);
-        Assert.DoesNotContain(
-            "\n    env:\n      WIN_SIGNING_CERT_BASE64: ${{ secrets.WIN_SIGNING_CERT_BASE64 }}\n      WIN_SIGNING_CERT_PASSWORD: ${{ secrets.WIN_SIGNING_CERT_PASSWORD }}",
-            releaseJob);
+        AssertWorkflowJobsUseLfLineEndings(prepareJob, createJob, verifyJob);
+        AssertPrepareReleaseFilesJobContract(prepareJob);
+        AssertCreateReleaseJobContract(createJob);
+        AssertVerifyReleaseInstallJobContract(verifyJob);
+        AssertReleaseSigningJobContract(releaseJob);
     }
 
     [Fact]
@@ -1109,6 +1065,79 @@ public partial class ReleaseWorkflowTests
     {
         foreach (var excluded in excludedValues)
             Assert.DoesNotContain(excluded, text);
+    }
+
+    private static void AssertWorkflowJobsUseLfLineEndings(params string[] jobs)
+    {
+        foreach (var job in jobs)
+            Assert.DoesNotContain("\r\n", job);
+    }
+
+    private static void AssertPrepareReleaseFilesJobContract(string prepareJob)
+    {
+        AssertContainsAll(
+            prepareJob,
+            "needs: [preflight, release]",
+            "permissions:\n      contents: read",
+            "name: Collect release files",
+            "name: Write release install notes",
+            "name: Write curated release notes",
+            "name: Upload prepared release payload",
+            "name: release-payload",
+            "retention-days: 1");
+        AssertDoesNotContainAny(
+            prepareJob,
+            "RELEASE_GPG_PRIVATE_KEY",
+            "actions/attest-build-provenance",
+            "contents: write",
+            "environment: release-production");
+    }
+
+    private static void AssertCreateReleaseJobContract(string createJob)
+    {
+        AssertContainsAll(
+            createJob,
+            "needs: [preflight, prepare-release-files]",
+            "environment: release-production",
+            "permissions:\n      contents: write\n      id-token: write\n      attestations: write",
+            "name: Download prepared release payload",
+            "pattern: release-payload",
+            "path: .",
+            "merge-multiple: true",
+            "name: Import release GPG key",
+            "name: Sign release checksum manifest",
+            "GNUPGHOME: ${{ runner.temp }}/release-gnupg",
+            "name: Remove release GPG material",
+            "rm -rf \"$GNUPGHOME\"",
+            "name: Attest release artifacts",
+            "name: Create GitHub release",
+            "GH_REPO: ${{ github.repository }}");
+        AssertDoesNotContainAny(createJob, "name: Checkout", "bash install.sh");
+    }
+
+    private static void AssertVerifyReleaseInstallJobContract(string verifyJob)
+    {
+        AssertContainsAll(
+            verifyJob,
+            "needs: [preflight, create-release]",
+            "permissions:\n      contents: read",
+            "name: Verify install.sh against the published release",
+            "releases/download/${TAG_NAME}/install.sh",
+            "curl -fsSL",
+            "bash install.sh \"${TAG_NAME}\"");
+        AssertDoesNotContainAny(verifyJob, "secrets.", "environment:");
+    }
+
+    private static void AssertReleaseSigningJobContract(string releaseJob)
+    {
+        AssertContainsAll(
+            releaseJob,
+            "name: Sign Windows executable if configured",
+            "WIN_SIGNING_CERT_BASE64: ${{ secrets.WIN_SIGNING_CERT_BASE64 }}");
+        AssertDoesNotContainAny(
+            releaseJob,
+            "name: Warn when Windows Authenticode signing is not configured",
+            "\n    env:\n      WIN_SIGNING_CERT_BASE64: ${{ secrets.WIN_SIGNING_CERT_BASE64 }}\n      WIN_SIGNING_CERT_PASSWORD: ${{ secrets.WIN_SIGNING_CERT_PASSWORD }}");
     }
 
     private static string ReadReleaseWorkflow() => RepositoryTestPaths.ReadWorkflow("release.yml");
