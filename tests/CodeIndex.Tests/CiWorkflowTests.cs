@@ -79,20 +79,24 @@ public class CiWorkflowTests
             workflow);
         Assert.Contains("Skipping XPlat Code Coverage outside ubuntu-24.04/net8.0", testScript);
         Assert.DoesNotContain("\"--no-restore\"", testScript);
-        Assert.Contains("--blame-crash", testScript);
-        Assert.Contains("--blame-hang", testScript);
-        Assert.Contains("--blame-hang-timeout\", \"5m", testScript);
-        Assert.Contains("test-output-first.txt", testScript);
-        Assert.Contains("$resultsDirectory = \"./TestResults\"", testScript);
-        Assert.Contains("Join-Path $resultsDirectory \"test-output-first.txt\"", testScript);
-        Assert.Contains("Join-Path $resultsDirectory \"test-output-retry.txt\"", testScript);
-        Assert.Contains("[System.Collections.Generic.List[string]]::new()", testScript);
-        Assert.Contains("if ($exitCode -ne 0)", testScript);
-        Assert.Contains("$logDirectory = Split-Path -Parent $LogPath", testScript);
-        Assert.Contains("New-Item -ItemType Directory -Force -Path $logDirectory", testScript);
-        Assert.Contains("[System.IO.File]::WriteAllLines($LogPath, [string[]]$capturedOutput)", testScript);
-        Assert.DoesNotContain("New-Item -ItemType Directory -Force -Path ./TestResults", testScript);
-        Assert.DoesNotContain("Tee-Object", testScript);
+        AssertContainsAll(
+            testScript,
+            "--blame-crash",
+            "--blame-hang",
+            "--blame-hang-timeout\", \"5m",
+            "test-output-first.txt",
+            "$resultsDirectory = \"./TestResults\"",
+            "Join-Path $resultsDirectory \"test-output-first.txt\"",
+            "Join-Path $resultsDirectory \"test-output-retry.txt\"",
+            "[System.Collections.Generic.List[string]]::new()",
+            "if ($exitCode -ne 0)",
+            "$logDirectory = Split-Path -Parent $LogPath",
+            "New-Item -ItemType Directory -Force -Path $logDirectory",
+            "[System.IO.File]::WriteAllLines($LogPath, [string[]]$capturedOutput)");
+        AssertDoesNotContainAny(
+            testScript,
+            "New-Item -ItemType Directory -Force -Path ./TestResults",
+            "Tee-Object");
         Assert.Contains("id: test", workflow);
         Assert.Contains("Write-StepOutput -Name \"summarize\" -Value \"true\"", testScript);
         Assert.Contains("$env:GITHUB_OUTPUT", testScript);
@@ -287,6 +291,18 @@ public class CiWorkflowTests
         Assert.Contains(".github/scripts/run-dotnet-tests.ps1", guide);
         Assert.Contains(".github/scripts/configure-windows-test-host.ps1", guide);
         Assert.Contains("共有状態と並列実行の監査", guide);
+    }
+
+    private static void AssertContainsAll(string text, params string[] expectedValues)
+    {
+        foreach (var expected in expectedValues)
+            Assert.Contains(expected, text);
+    }
+
+    private static void AssertDoesNotContainAny(string text, params string[] excludedValues)
+    {
+        foreach (var excluded in excludedValues)
+            Assert.DoesNotContain(excluded, text);
     }
 
     private static IReadOnlyList<(string FileName, string Content)> ReadWorkflowFiles()
