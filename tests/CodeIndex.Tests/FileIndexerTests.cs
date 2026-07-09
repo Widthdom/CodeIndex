@@ -3523,31 +3523,25 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var extensionlessFifo = Path.Combine(tempDir, "tool");
-            var extensionFifo = Path.Combine(tempDir, "tool.sh");
-            var knownNameFifo = Path.Combine(tempDir, "Dockerfile");
-            CreateUnixFifo(extensionlessFifo);
-            CreateUnixFifo(extensionFifo);
-            CreateUnixFifo(knownNameFifo);
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var extensionlessFifo = TestProjectHelper.ProjectPath(tempDir, "tool");
+        var extensionFifo = TestProjectHelper.ProjectPath(tempDir, "tool.sh");
+        var knownNameFifo = TestProjectHelper.ProjectPath(tempDir, "Dockerfile");
+        CreateUnixFifo(extensionlessFifo);
+        CreateUnixFifo(extensionFifo);
+        CreateUnixFifo(knownNameFifo);
 
-            Assert.False(FileIndexer.CanIndexFile(extensionlessFifo));
-            Assert.False(FileIndexer.CanIndexFile(extensionFifo));
-            Assert.False(FileIndexer.CanIndexFile(knownNameFifo));
+        Assert.False(FileIndexer.CanIndexFile(extensionlessFifo));
+        Assert.False(FileIndexer.CanIndexFile(extensionFifo));
+        Assert.False(FileIndexer.CanIndexFile(knownNameFifo));
 
-            var indexer = new FileIndexer(tempDir);
-            var scanTask = Task.Run(() => indexer.ScanFiles());
-            var completedTask = await Task.WhenAny(scanTask, Task.Delay(TimeSpan.FromSeconds(2)));
+        var indexer = new FileIndexer(tempDir);
+        var scanTask = Task.Run(() => indexer.ScanFiles());
+        var completedTask = await Task.WhenAny(scanTask, Task.Delay(TimeSpan.FromSeconds(2)));
 
-            Assert.Same(scanTask, completedTask);
-            Assert.Empty(await scanTask);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Same(scanTask, completedTask);
+        Assert.Empty(await scanTask);
     }
 
     [Fact]
@@ -5702,29 +5696,22 @@ public partial class FileIndexerTests
     [Fact]
     public void TryComputeChecksum_FilePathAllowsConcurrentWriterShare_Issue4078()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_checksum_share");
-        try
-        {
-            var path = Path.Combine(tempDir, "sample.cs");
-            var bytes = Encoding.UTF8.GetBytes("class Sample {}\n");
-            File.WriteAllBytes(path, bytes);
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_checksum_share");
+        var tempDir = project.Root;
+        var bytes = Encoding.UTF8.GetBytes("class Sample {}\n");
+        var path = TestProjectHelper.WriteBinaryFile(tempDir, "sample.cs", bytes);
 
-            using var writer = new FileStream(
-                path,
-                FileMode.Open,
-                FileAccess.Write,
-                FileShare.ReadWrite | FileShare.Delete);
+        using var writer = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Write,
+            FileShare.ReadWrite | FileShare.Delete);
 
-            Assert.True(FileContentLoader.TryComputeChecksum(
-                path,
-                FileIndexer.DefaultMaxFileSizeBytes,
-                out var checksum));
-            Assert.Equal(FileIndexer.ComputeChecksum(bytes), checksum);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.True(FileContentLoader.TryComputeChecksum(
+            path,
+            FileIndexer.DefaultMaxFileSizeBytes,
+            out var checksum));
+        Assert.Equal(FileIndexer.ComputeChecksum(bytes), checksum);
     }
 
 }
