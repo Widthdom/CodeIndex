@@ -3050,79 +3050,75 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFiles_RespectsGitIgnoreCaseSettingFromRepository()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            RunGit(tempDir, "init");
-            RunGit(tempDir, "config", "user.name", "CodeIndex Tests");
-            RunGit(tempDir, "config", "user.email", "tests@example.com");
-            RunGit(tempDir, "config", "core.ignorecase", "true");
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "FOO.py\n");
-            File.WriteAllText(Path.Combine(tempDir, "foo.py"), "print('ignored')");
-            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('kept')");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        RunGit(tempDir, "init");
+        RunGit(tempDir, "config", "user.name", "CodeIndex Tests");
+        RunGit(tempDir, "config", "user.email", "tests@example.com");
+        RunGit(tempDir, "config", "core.ignorecase", "true");
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [".gitignore"] = "FOO.py\n",
+                ["foo.py"] = "print('ignored')",
+                ["keep.py"] = "print('kept')",
+            });
 
-            var files = ScanRelativeFiles(new FileIndexer(tempDir, GitHelper.ResolveIgnoreCase(tempDir)), tempDir);
+        var files = ScanRelativeFiles(new FileIndexer(tempDir, GitHelper.ResolveIgnoreCase(tempDir)), tempDir);
 
-            Assert.Equal([".gitignore", "keep.py"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal([".gitignore", "keep.py"], files);
     }
 
     [Fact]
     public void ScanFiles_RespectsGitIgnoreCaseSettingForAsciiOnly()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            RunGit(tempDir, "init");
-            RunGit(tempDir, "config", "user.name", "CodeIndex Tests");
-            RunGit(tempDir, "config", "user.email", "tests@example.com");
-            RunGit(tempDir, "config", "core.ignorecase", "true");
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "Å.py\n[[:upper:]].rb\n[A-Z].cs\n");
-            File.WriteAllText(Path.Combine(tempDir, "å.py"), "print('kept non-ascii fold')");
-            File.WriteAllText(Path.Combine(tempDir, "a.rb"), "puts 'ignored lower via ignorecase'");
-            File.WriteAllText(Path.Combine(tempDir, "å.rb"), "puts 'kept non-ascii lower'");
-            File.WriteAllText(Path.Combine(tempDir, "a.cs"), "class IgnoredLower { }");
-            File.WriteAllText(Path.Combine(tempDir, "å.cs"), "class KeptLower { }");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        RunGit(tempDir, "init");
+        RunGit(tempDir, "config", "user.name", "CodeIndex Tests");
+        RunGit(tempDir, "config", "user.email", "tests@example.com");
+        RunGit(tempDir, "config", "core.ignorecase", "true");
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [".gitignore"] = "Å.py\n[[:upper:]].rb\n[A-Z].cs\n",
+                ["å.py"] = "print('kept non-ascii fold')",
+                ["a.rb"] = "puts 'ignored lower via ignorecase'",
+                ["å.rb"] = "puts 'kept non-ascii lower'",
+                ["a.cs"] = "class IgnoredLower { }",
+                ["å.cs"] = "class KeptLower { }",
+            });
 
-            var files = ScanRelativeFiles(new FileIndexer(tempDir, GitHelper.ResolveIgnoreCase(tempDir)), tempDir);
+        var files = ScanRelativeFiles(new FileIndexer(tempDir, GitHelper.ResolveIgnoreCase(tempDir)), tempDir);
 
-            Assert.Equal([".gitignore", "å.cs", "å.py", "å.rb"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal([".gitignore", "å.cs", "å.py", "å.rb"], files);
     }
 
     [Fact]
     public void ScanFiles_SubdirectoryProjectRoot_RespectsAncestorGitignore()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
         var projectRoot = Path.Combine(tempDir, "subproj");
-        try
-        {
-            Directory.CreateDirectory(projectRoot);
-            RunGit(tempDir, "init");
-            RunGit(tempDir, "config", "user.name", "CodeIndex Tests");
-            RunGit(tempDir, "config", "user.email", "tests@example.com");
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "subproj/ignored.py\n");
-            File.WriteAllText(Path.Combine(projectRoot, "ignored.py"), "print('ignored')");
-            File.WriteAllText(Path.Combine(projectRoot, "keep.py"), "print('kept')");
+        RunGit(tempDir, "init");
+        RunGit(tempDir, "config", "user.name", "CodeIndex Tests");
+        RunGit(tempDir, "config", "user.email", "tests@example.com");
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [".gitignore"] = "subproj/ignored.py\n",
+                ["subproj/ignored.py"] = "print('ignored')",
+                ["subproj/keep.py"] = "print('kept')",
+            });
 
-            var files = ScanRelativeFiles(
-                new FileIndexer(projectRoot, GitHelper.ResolveIgnoreCase(projectRoot), GitHelper.TryGetRepositoryRoot(projectRoot)),
-                projectRoot);
+        var files = ScanRelativeFiles(
+            new FileIndexer(projectRoot, GitHelper.ResolveIgnoreCase(projectRoot), GitHelper.TryGetRepositoryRoot(projectRoot)),
+            projectRoot);
 
-            Assert.Equal(["keep.py"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(["keep.py"], files);
     }
 
     [Fact]
