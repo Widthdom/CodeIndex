@@ -20,79 +20,64 @@ public class FileSystemTraversalPolicyTests
     [Fact]
     public void EnumerateHelpers_DoNotRecurseIntoChildDirectories_Issue3951()
     {
-        var root = TestProjectHelper.CreateTempProject("traversal_policy");
+        using var project = TestProjectHelper.CreateTempProjectScope("traversal_policy");
+        var root = project.Root;
         var child = Path.Combine(root, "child");
-        try
-        {
-            Directory.CreateDirectory(child);
-            File.WriteAllText(Path.Combine(root, "root.txt"), "root");
-            File.WriteAllText(Path.Combine(child, "child.txt"), "child");
 
-            var files = FileSystemTraversalPolicy.EnumerateFiles(root)
-                .Select(Path.GetFileName)
-                .Order(StringComparer.Ordinal)
-                .ToArray();
-            var directories = FileSystemTraversalPolicy.EnumerateDirectories(root)
-                .Select(Path.GetFileName)
-                .Order(StringComparer.Ordinal)
-                .ToArray();
-            var entries = FileSystemTraversalPolicy.EnumerateFileSystemEntries(root)
-                .Select(Path.GetFileName)
-                .Order(StringComparer.Ordinal)
-                .ToArray();
+        Directory.CreateDirectory(child);
+        File.WriteAllText(Path.Combine(root, "root.txt"), "root");
+        File.WriteAllText(Path.Combine(child, "child.txt"), "child");
 
-            Assert.Equal(["root.txt"], files);
-            Assert.Equal(["child"], directories);
-            Assert.Equal(["child", "root.txt"], entries);
-            Assert.True(FileSystemTraversalPolicy.HasAnyFileSystemEntry(root));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(root);
-        }
+        var files = FileSystemTraversalPolicy.EnumerateFiles(root)
+            .Select(Path.GetFileName)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var directories = FileSystemTraversalPolicy.EnumerateDirectories(root)
+            .Select(Path.GetFileName)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var entries = FileSystemTraversalPolicy.EnumerateFileSystemEntries(root)
+            .Select(Path.GetFileName)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(["root.txt"], files);
+        Assert.Equal(["child"], directories);
+        Assert.Equal(["child", "root.txt"], entries);
+        Assert.True(FileSystemTraversalPolicy.HasAnyFileSystemEntry(root));
     }
 
     [Fact]
     public void EnumerateHelpers_ObserveCancellationBeforeTraversal_Issue4131()
     {
-        var root = TestProjectHelper.CreateTempProject("traversal_policy_cancel");
+        using var project = TestProjectHelper.CreateTempProjectScope("traversal_policy_cancel");
+        var root = project.Root;
         using var cancellation = new CancellationTokenSource();
-        try
-        {
-            File.WriteAllText(Path.Combine(root, "root.txt"), "root");
-            cancellation.Cancel();
 
-            Assert.Throws<OperationCanceledException>(() =>
-                FileSystemTraversalPolicy.EnumerateFiles(
-                    root,
-                    new FileSystemTraversalOptions(cancellationToken: cancellation.Token)).ToArray());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(root);
-        }
+        File.WriteAllText(Path.Combine(root, "root.txt"), "root");
+        cancellation.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() =>
+            FileSystemTraversalPolicy.EnumerateFiles(
+                root,
+                new FileSystemTraversalOptions(cancellationToken: cancellation.Token)).ToArray());
     }
 
     [Fact]
     public void EnumerateHelpers_EnforceEntryBudget_Issue4131()
     {
-        var root = TestProjectHelper.CreateTempProject("traversal_policy_budget");
-        try
-        {
-            File.WriteAllText(Path.Combine(root, "one.txt"), "one");
-            File.WriteAllText(Path.Combine(root, "two.txt"), "two");
+        using var project = TestProjectHelper.CreateTempProjectScope("traversal_policy_budget");
+        var root = project.Root;
 
-            var ex = Assert.Throws<FileSystemTraversalBudgetExceededException>(() =>
-                FileSystemTraversalPolicy.EnumerateFiles(
-                    root,
-                    new FileSystemTraversalOptions(maxEntries: 1)).ToArray());
+        File.WriteAllText(Path.Combine(root, "one.txt"), "one");
+        File.WriteAllText(Path.Combine(root, "two.txt"), "two");
 
-            Assert.Equal(1, ex.MaxEntries);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(root);
-        }
+        var ex = Assert.Throws<FileSystemTraversalBudgetExceededException>(() =>
+            FileSystemTraversalPolicy.EnumerateFiles(
+                root,
+                new FileSystemTraversalOptions(maxEntries: 1)).ToArray());
+
+        Assert.Equal(1, ex.MaxEntries);
     }
 
     [Fact]
