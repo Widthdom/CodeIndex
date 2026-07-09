@@ -2474,148 +2474,135 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFiles_RespectsGitignorePatternsAndNegation()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "secret.py\nbuild_output/\n*.generated.js\n!keep.generated.js\n");
-            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('keep')");
-            File.WriteAllText(Path.Combine(tempDir, "secret.py"), "print('secret')");
-            File.WriteAllText(Path.Combine(tempDir, "app.generated.js"), "export const ignored = true;");
-            File.WriteAllText(Path.Combine(tempDir, "keep.generated.js"), "export const kept = true;");
-            Directory.CreateDirectory(Path.Combine(tempDir, "build_output"));
-            File.WriteAllText(Path.Combine(tempDir, "build_output", "inside.py"), "print('ignored')");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [".gitignore"] = "secret.py\nbuild_output/\n*.generated.js\n!keep.generated.js\n",
+                ["keep.py"] = "print('keep')",
+                ["secret.py"] = "print('secret')",
+                ["app.generated.js"] = "export const ignored = true;",
+                ["keep.generated.js"] = "export const kept = true;",
+                ["build_output/inside.py"] = "print('ignored')",
+            });
 
-            var files = ScanRelativeFiles(tempDir);
+        var files = ScanRelativeFiles(tempDir);
 
-            Assert.Equal([".gitignore", "keep.generated.js", "keep.py"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal([".gitignore", "keep.generated.js", "keep.py"], files);
     }
 
     [Fact]
     public void ScanFiles_TrimsLeadingWhitespaceBeforeParsingIgnoreLines()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            TestProjectHelper.WriteTextFile(tempDir, ".gitignore", "  # comment\n  *.tmp\n\\ leading.py\n\\#literal.py\n", Encoding.UTF8);
-            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('keep')");
-            File.WriteAllText(Path.Combine(tempDir, "ignored.tmp"), "ignored");
-            File.WriteAllText(Path.Combine(tempDir, " leading.py"), "print('literal leading space')");
-            File.WriteAllText(Path.Combine(tempDir, "#literal.py"), "print('literal hash')");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFile(tempDir, ".gitignore", "  # comment\n  *.tmp\n\\ leading.py\n\\#literal.py\n", Encoding.UTF8);
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["keep.py"] = "print('keep')",
+                ["ignored.tmp"] = "ignored",
+                [" leading.py"] = "print('literal leading space')",
+                ["#literal.py"] = "print('literal hash')",
+            });
 
-            var files = ScanRelativeFiles(tempDir);
+        var files = ScanRelativeFiles(tempDir);
 
-            Assert.Equal([".gitignore", "keep.py"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal([".gitignore", "keep.py"], files);
     }
 
     [Fact]
     public void ScanFiles_ReportsOverlongIgnorePatternAndContinues()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            TestProjectHelper.WriteTextFile(tempDir, ".gitignore", $"{new string('a', 513)}\n*.tmp\n", Encoding.UTF8);
-            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('keep')");
-            File.WriteAllText(Path.Combine(tempDir, "ignored.tmp"), "ignored");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFile(tempDir, ".gitignore", $"{new string('a', 513)}\n*.tmp\n", Encoding.UTF8);
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["keep.py"] = "print('keep')",
+                ["ignored.tmp"] = "ignored",
+            });
 
-            var result = new FileIndexer(tempDir).ScanFilesDetailed();
-            var files = result.Files
-                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .ToList();
+        var result = new FileIndexer(tempDir).ScanFilesDetailed();
+        var files = result.Files
+            .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
 
-            Assert.Equal([".gitignore", "keep.py"], files);
-            var warning = Assert.Single(result.Errors);
-            Assert.Equal(FileIndexer.ScanIssueSeverity.Warning, warning.Severity);
-            Assert.Contains("pattern exceeds 512 characters", warning.Message);
-            Assert.False(result.HadErrors);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal([".gitignore", "keep.py"], files);
+        var warning = Assert.Single(result.Errors);
+        Assert.Equal(FileIndexer.ScanIssueSeverity.Warning, warning.Severity);
+        Assert.Contains("pattern exceeds 512 characters", warning.Message);
+        Assert.False(result.HadErrors);
     }
 
     [Fact]
     public void ScanFiles_RespectsCdidxignoreAndNestedGitignore()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(tempDir, "src"));
-            Directory.CreateDirectory(Path.Combine(tempDir, "fixtures"));
-            File.WriteAllText(Path.Combine(tempDir, ".cdidxignore"), "fixtures/\n*.cache.js\n");
-            File.WriteAllText(Path.Combine(tempDir, "src", ".gitignore"), "*.generated.cs\n");
-            File.WriteAllText(Path.Combine(tempDir, "src", "Service.cs"), "public class Service { }");
-            File.WriteAllText(Path.Combine(tempDir, "src", "Generated.generated.cs"), "public class Generated { }");
-            File.WriteAllText(Path.Combine(tempDir, "fixtures", "sample.py"), "print('fixture')");
-            File.WriteAllText(Path.Combine(tempDir, "app.cache.js"), "export const cache = true;");
-            File.WriteAllText(Path.Combine(tempDir, "app.js"), "export const app = true;");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [".cdidxignore"] = "fixtures/\n*.cache.js\n",
+                ["src/.gitignore"] = "*.generated.cs\n",
+                ["src/Service.cs"] = "public class Service { }",
+                ["src/Generated.generated.cs"] = "public class Generated { }",
+                ["fixtures/sample.py"] = "print('fixture')",
+                ["app.cache.js"] = "export const cache = true;",
+                ["app.js"] = "export const app = true;",
+            });
 
-            var files = ScanRelativeFiles(tempDir);
+        var files = ScanRelativeFiles(tempDir);
 
-            Assert.Equal(["app.js", "src/.gitignore", "src/Service.cs"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(["app.js", "src/.gitignore", "src/Service.cs"], files);
     }
 
     [Fact]
     public void ScanFiles_ReadsGitignoreAndCdidxignoreAsUtf8()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(tempDir, "資料"));
-            Directory.CreateDirectory(Path.Combine(tempDir, "cafe"));
-            TestProjectHelper.WriteTextFile(tempDir, ".gitignore", "資料/\n", Encoding.UTF8);
-            TestProjectHelper.WriteTextFile(tempDir, ".cdidxignore", "cafe/éclair.py\n", Encoding.UTF8);
-            File.WriteAllText(Path.Combine(tempDir, "資料", "ignored.py"), "print('ignored')");
-            File.WriteAllText(Path.Combine(tempDir, "cafe", "éclair.py"), "print('ignored')");
-            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('kept')");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFile(tempDir, ".gitignore", "資料/\n", Encoding.UTF8);
+        TestProjectHelper.WriteTextFile(tempDir, ".cdidxignore", "cafe/éclair.py\n", Encoding.UTF8);
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["資料/ignored.py"] = "print('ignored')",
+                ["cafe/éclair.py"] = "print('ignored')",
+                ["keep.py"] = "print('kept')",
+            });
 
-            var files = ScanRelativeFiles(tempDir);
+        var files = ScanRelativeFiles(tempDir);
 
-            Assert.Equal([".gitignore", "keep.py"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal([".gitignore", "keep.py"], files);
     }
 
     [Fact]
     public void ScanFiles_RespectsWorkspaceConfigCdidxignore()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(tempDir, ".codeindex"));
-            Directory.CreateDirectory(Path.Combine(tempDir, "generated"));
-            File.WriteAllText(Path.Combine(tempDir, ".codeindex", ".cdidxignore"), "generated/\n*.cache.js\n");
-            File.WriteAllText(Path.Combine(tempDir, "generated", "Ignored.cs"), "class Ignored { }");
-            File.WriteAllText(Path.Combine(tempDir, "app.cache.js"), "export const ignored = true;");
-            File.WriteAllText(Path.Combine(tempDir, "app.js"), "export const app = true;");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [".codeindex/.cdidxignore"] = "generated/\n*.cache.js\n",
+                ["generated/Ignored.cs"] = "class Ignored { }",
+                ["app.cache.js"] = "export const ignored = true;",
+                ["app.js"] = "export const app = true;",
+            });
 
-            var files = ScanRelativeFiles(tempDir);
+        var files = ScanRelativeFiles(tempDir);
 
-            Assert.Equal(["app.js"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(["app.js"], files);
     }
 
     [Fact]
