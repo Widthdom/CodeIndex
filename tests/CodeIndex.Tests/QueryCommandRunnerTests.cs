@@ -4168,23 +4168,7 @@ public partial class QueryCommandRunnerTests
     [InlineData("files", "files")]
     public void ZeroResultJson_SymbolAndTextCommands_EmitEnvelopeAndFreshness(string command, string resultsKey)
     {
-        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_zero_json_{command}");
-        try
-        {
-            var dbPath = CreateIndexedDbWithSingleFile(projectRoot);
-            var (exitCode, stdout, stderr) = CaptureConsole(() => RunZeroResultCommand(command, dbPath));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            AssertZeroResultPayload(json, resultsKey);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        AssertZeroResultCommandEnvelope(command, resultsKey);
     }
 
     [Theory]
@@ -4193,24 +4177,11 @@ public partial class QueryCommandRunnerTests
     [InlineData("callees")]
     public void ZeroResultJson_GraphCommands_EmitEnvelopeAndFreshness(string command)
     {
-        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_zero_json_{command}");
-        try
-        {
-            var dbPath = CreateIndexedDbWithSingleFile(projectRoot, markGraphReady: true);
-            var (exitCode, stdout, stderr) = CaptureConsole(() => RunZeroResultCommand(command, dbPath));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            AssertZeroResultPayload(json, command);
-            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        AssertZeroResultCommandEnvelope(
+            command,
+            command,
+            markGraphReady: true,
+            AssertGraphTableAvailable);
     }
 
     [Theory]
@@ -4218,24 +4189,11 @@ public partial class QueryCommandRunnerTests
     [InlineData("hotspots", "hotspots")]
     public void ZeroResultJson_AggregateCommands_EmitEnvelopeAndFreshness(string command, string resultsKey)
     {
-        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_zero_json_{command}");
-        try
-        {
-            var dbPath = CreateIndexedDbWithSingleFile(projectRoot, markGraphReady: true);
-            var (exitCode, stdout, stderr) = CaptureConsole(() => RunZeroResultCommand(command, dbPath));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            AssertZeroResultPayload(json, resultsKey);
-            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        AssertZeroResultCommandEnvelope(
+            command,
+            resultsKey,
+            markGraphReady: true,
+            AssertGraphTableAvailable);
     }
 
 
@@ -7381,6 +7339,25 @@ public partial class QueryCommandRunnerTests
         return dbPath;
     }
 
+    private void AssertZeroResultCommandEnvelope(
+        string command,
+        string resultsKey,
+        bool markGraphReady = false,
+        Action<JsonElement>? assertAdditionalPayload = null)
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope($"cdidx_zero_json_{command}");
+        var dbPath = CreateIndexedDbWithSingleFile(project.Root, markGraphReady: markGraphReady);
+        var (exitCode, stdout, stderr) = CaptureConsole(() => RunZeroResultCommand(command, dbPath));
+
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        AssertZeroResultPayload(json, resultsKey);
+        assertAdditionalPayload?.Invoke(json);
+    }
+
     private int RunZeroResultCommand(string command, string dbPath)
     {
         return command switch
@@ -7411,6 +7388,11 @@ public partial class QueryCommandRunnerTests
         Assert.True(json.TryGetProperty("indexed_at", out var indexedAt));
         Assert.Equal(JsonValueKind.String, indexedAt.ValueKind);
         Assert.False(string.IsNullOrWhiteSpace(indexedAt.GetString()));
+    }
+
+    private static void AssertGraphTableAvailable(JsonElement json)
+    {
+        Assert.True(json.GetProperty("graph_table_available").GetBoolean());
     }
 
     private static void DropGraphExactFallbackIndexes(string dbPath)
