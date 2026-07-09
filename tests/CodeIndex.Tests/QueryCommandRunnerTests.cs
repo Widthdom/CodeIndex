@@ -640,203 +640,161 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunVacuum_RejectsMissingDatabase_Issue1631()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_vacuum_missing_db");
-        try
-        {
-            var dbPath = Path.Combine(projectRoot, "missing.db");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_missing_db");
+        var dbPath = Path.Combine(project.Root, "missing.db");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
-                ["--db", dbPath],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+            ["--db", dbPath],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains(CommandErrorCodes.DbNotFound, stderr);
-            Assert.False(File.Exists(dbPath));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.NotFound, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains(CommandErrorCodes.DbNotFound, stderr);
+        Assert.False(File.Exists(dbPath));
     }
 
     [Fact]
     public void RunVacuum_RejectsNonCodeIndexDatabase_Issue1631()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_vacuum_foreign_db");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_foreign_db");
+        var dbPath = Path.Combine(project.Root, "foreign.db");
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
         {
-            var dbPath = Path.Combine(projectRoot, "foreign.db");
-            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
-            {
-                connection.Open();
-                using var command = connection.CreateCommand();
-                command.CommandText = "CREATE TABLE user_data(id INTEGER PRIMARY KEY, value TEXT);";
-                command.ExecuteNonQuery();
-            }
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
-                ["--db", dbPath],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains(CommandErrorCodes.DbError, stderr);
-            Assert.Contains("not an existing CodeIndex DB", stderr);
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "CREATE TABLE user_data(id INTEGER PRIMARY KEY, value TEXT);";
+            command.ExecuteNonQuery();
         }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+            ["--db", dbPath],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains(CommandErrorCodes.DbError, stderr);
+        Assert.Contains("not an existing CodeIndex DB", stderr);
     }
 
     [Fact]
     public void RunVacuum_RejectsLookalikeNonCodeIndexDatabase_Issue1631()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_vacuum_lookalike_db");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_lookalike_db");
+        var dbPath = Path.Combine(project.Root, "lookalike.db");
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
         {
-            var dbPath = Path.Combine(projectRoot, "lookalike.db");
-            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
-            {
-                connection.Open();
-                using var command = connection.CreateCommand();
-                command.CommandText = @"
-                    CREATE TABLE files (id INTEGER PRIMARY KEY);
-                    CREATE TABLE chunks (id INTEGER PRIMARY KEY);
-                    CREATE TABLE symbols (id INTEGER PRIMARY KEY);";
-                command.ExecuteNonQuery();
-            }
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
-                ["--db", dbPath],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains(CommandErrorCodes.DbError, stderr);
-            Assert.Contains("not an existing CodeIndex DB", stderr);
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = @"
+                CREATE TABLE files (id INTEGER PRIMARY KEY);
+                CREATE TABLE chunks (id INTEGER PRIMARY KEY);
+                CREATE TABLE symbols (id INTEGER PRIMARY KEY);";
+            command.ExecuteNonQuery();
         }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+            ["--db", dbPath],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains(CommandErrorCodes.DbError, stderr);
+        Assert.Contains("not an existing CodeIndex DB", stderr);
     }
 
     [Fact]
     public void RunVacuum_RejectsReadOnlyUriWithNeutralWritableMessage_Issue1631()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_vacuum_readonly_uri");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var dbUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_readonly_uri");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var dbUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
-                ["--db", dbUri],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+            ["--db", dbUri],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains(CommandErrorCodes.DbError, stderr);
-            Assert.Contains("database must be writable", stderr);
-            Assert.DoesNotContain("backfill-fold", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains(CommandErrorCodes.DbError, stderr);
+        Assert.Contains("database must be writable", stderr);
+        Assert.DoesNotContain("backfill-fold", stderr);
     }
 
     [Fact]
     public void RunVacuum_DryRunJsonReportsMaintenanceEstimate_Issue3564()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_vacuum_dry_run");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_dry_run");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        using (var db = new DbContext(dbPath))
         {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using (var db = new DbContext(dbPath))
-            {
-                using var command = db.Connection.CreateCommand();
-                command.CommandText = @"
-                    CREATE TABLE vacuum_payload (id INTEGER PRIMARY KEY, payload BLOB);
-                    WITH RECURSIVE n(value) AS (
-                        SELECT 1
-                        UNION ALL
-                        SELECT value + 1 FROM n WHERE value < 128
-                    )
-                    INSERT INTO vacuum_payload (payload)
-                    SELECT randomblob(4096) FROM n;
-                    DELETE FROM vacuum_payload;";
-                command.ExecuteNonQuery();
-            }
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
-                ["--db", dbPath, "--dry-run", "--json"],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            using var document = ParseJsonOutput(stdout);
-            var root = document.RootElement;
-            Assert.Equal("dry_run", root.GetProperty("status").GetString());
-            Assert.True(root.GetProperty("dry_run").GetBoolean());
-            Assert.True(root.GetProperty("estimated_pages_reclaimable").GetInt64() > 0);
-            Assert.True(root.GetProperty("estimated_bytes_reclaimable").GetInt64() > 0);
-            Assert.Equal(0, root.GetProperty("pages_reclaimed").GetInt64());
-            Assert.Equal(root.GetProperty("page_count_before").GetInt64(), root.GetProperty("page_count_after").GetInt64());
-            Assert.Equal("incremental", root.GetProperty("auto_vacuum_mode_after_name").GetString());
-            var guidance = root.GetProperty("maintenance_guidance");
-            Assert.Equal("vacuum_recommended", guidance.GetProperty("freelist_state").GetString());
-            Assert.Equal("cdidx vacuum --db <db>", guidance.GetProperty("recommended_command").GetString());
+            using var command = db.Connection.CreateCommand();
+            command.CommandText = @"
+                CREATE TABLE vacuum_payload (id INTEGER PRIMARY KEY, payload BLOB);
+                WITH RECURSIVE n(value) AS (
+                    SELECT 1
+                    UNION ALL
+                    SELECT value + 1 FROM n WHERE value < 128
+                )
+                INSERT INTO vacuum_payload (payload)
+                SELECT randomblob(4096) FROM n;
+                DELETE FROM vacuum_payload;";
+            command.ExecuteNonQuery();
         }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+            ["--db", dbPath, "--dry-run", "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var root = document.RootElement;
+        Assert.Equal("dry_run", root.GetProperty("status").GetString());
+        Assert.True(root.GetProperty("dry_run").GetBoolean());
+        Assert.True(root.GetProperty("estimated_pages_reclaimable").GetInt64() > 0);
+        Assert.True(root.GetProperty("estimated_bytes_reclaimable").GetInt64() > 0);
+        Assert.Equal(0, root.GetProperty("pages_reclaimed").GetInt64());
+        Assert.Equal(root.GetProperty("page_count_before").GetInt64(), root.GetProperty("page_count_after").GetInt64());
+        Assert.Equal("incremental", root.GetProperty("auto_vacuum_mode_after_name").GetString());
+        var guidance = root.GetProperty("maintenance_guidance");
+        Assert.Equal("vacuum_recommended", guidance.GetProperty("freelist_state").GetString());
+        Assert.Equal("cdidx vacuum --db <db>", guidance.GetProperty("recommended_command").GetString());
     }
 
     [Fact]
     public void RunVacuum_JsonExplainsWalCheckpointTiming_Issue4338()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_vacuum_wal_timing");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_wal_timing");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        using (var db = new DbContext(dbPath))
         {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using (var db = new DbContext(dbPath))
-            {
-                using var command = db.Connection.CreateCommand();
-                command.CommandText = @"
-                    CREATE TABLE vacuum_payload (id INTEGER PRIMARY KEY, payload BLOB);
-                    WITH RECURSIVE n(value) AS (
-                        SELECT 1
-                        UNION ALL
-                        SELECT value + 1 FROM n WHERE value < 128
-                    )
-                    INSERT INTO vacuum_payload (payload)
-                    SELECT randomblob(4096) FROM n;
-                    DELETE FROM vacuum_payload;";
-                command.ExecuteNonQuery();
-            }
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
-                ["--db", dbPath, "--json"],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            using var document = ParseJsonOutput(stdout);
-            var root = document.RootElement;
-            Assert.Equal("ok", root.GetProperty("status").GetString());
-            Assert.False(root.GetProperty("dry_run").GetBoolean());
-            var timingNote = root.GetProperty("wal_checkpoint_timing_note").GetString();
-            Assert.Contains("wal_size_bytes_after", timingNote, StringComparison.Ordinal);
-            Assert.Contains("checkpoint", timingNote, StringComparison.Ordinal);
+            using var command = db.Connection.CreateCommand();
+            command.CommandText = @"
+                CREATE TABLE vacuum_payload (id INTEGER PRIMARY KEY, payload BLOB);
+                WITH RECURSIVE n(value) AS (
+                    SELECT 1
+                    UNION ALL
+                    SELECT value + 1 FROM n WHERE value < 128
+                )
+                INSERT INTO vacuum_payload (payload)
+                SELECT randomblob(4096) FROM n;
+                DELETE FROM vacuum_payload;";
+            command.ExecuteNonQuery();
         }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+            ["--db", dbPath, "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var root = document.RootElement;
+        Assert.Equal("ok", root.GetProperty("status").GetString());
+        Assert.False(root.GetProperty("dry_run").GetBoolean());
+        var timingNote = root.GetProperty("wal_checkpoint_timing_note").GetString();
+        Assert.Contains("wal_size_bytes_after", timingNote, StringComparison.Ordinal);
+        Assert.Contains("checkpoint", timingNote, StringComparison.Ordinal);
     }
 
 
