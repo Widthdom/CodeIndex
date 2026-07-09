@@ -2275,26 +2275,20 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
 
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        var outsideDir = TestProjectHelper.CreateTempProject("codeindex_outside");
-        try
-        {
-            File.WriteAllText(Path.Combine(outsideDir, "outside.cs"), "class Outside { }\n");
+        using var outside = TestProjectHelper.CreateTempProjectScope("codeindex_outside");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var outsideDir = outside.Root;
+        var tempDir = project.Root;
+        File.WriteAllText(Path.Combine(outsideDir, "outside.cs"), "class Outside { }\n");
 
-            var linkDir = Path.Combine(tempDir, "linked");
-            Directory.CreateSymbolicLink(linkDir, outsideDir);
-            var linkedFile = Path.Combine(linkDir, "outside.cs");
+        var linkDir = Path.Combine(tempDir, "linked");
+        Directory.CreateSymbolicLink(linkDir, outsideDir);
+        var linkedFile = Path.Combine(linkDir, "outside.cs");
 
-            var filter = new FileIndexer(tempDir).EvaluatePathFilter(linkedFile);
+        var filter = new FileIndexer(tempDir).EvaluatePathFilter(linkedFile);
 
-            Assert.Equal(FileIndexer.PathFilterKind.OutsideProjectRoot, filter.FilterKind);
-            Assert.True(filter.ShouldDeleteExisting);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-            TestProjectHelper.DeleteDirectory(outsideDir);
-        }
+        Assert.Equal(FileIndexer.PathFilterKind.OutsideProjectRoot, filter.FilterKind);
+        Assert.True(filter.ShouldDeleteExisting);
     }
 
     [Fact]
@@ -2303,24 +2297,18 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
 
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var subDir = Path.Combine(tempDir, "sub");
-            Directory.CreateDirectory(subDir);
-            File.WriteAllText(Path.Combine(subDir, "foo.py"), "def hello(): pass\n");
-            // Directory symlink pointing at the ancestor (self-recursion if followed).
-            // 先祖を指すディレクトリ symlink（辿ると無限再帰になる）。
-            Directory.CreateSymbolicLink(Path.Combine(subDir, "parent_loop"), "..");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var subDir = Path.Combine(tempDir, "sub");
+        Directory.CreateDirectory(subDir);
+        File.WriteAllText(Path.Combine(subDir, "foo.py"), "def hello(): pass\n");
+        // Directory symlink pointing at the ancestor (self-recursion if followed).
+        // 先祖を指すディレクトリ symlink（辿ると無限再帰になる）。
+        Directory.CreateSymbolicLink(Path.Combine(subDir, "parent_loop"), "..");
 
-            var files = ScanRelativeFiles(tempDir);
+        var files = ScanRelativeFiles(tempDir);
 
-            Assert.Equal(["sub/foo.py"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(["sub/foo.py"], files);
     }
 
     [Fact]
@@ -2329,65 +2317,53 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
 
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var subDir = Path.Combine(tempDir, "sub");
-            Directory.CreateDirectory(subDir);
-            File.WriteAllText(Path.Combine(subDir, "foo.py"), "def hello(): pass\n");
-            Directory.CreateSymbolicLink(Path.Combine(subDir, "parent_loop"), "..");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var subDir = Path.Combine(tempDir, "sub");
+        Directory.CreateDirectory(subDir);
+        File.WriteAllText(Path.Combine(subDir, "foo.py"), "def hello(): pass\n");
+        Directory.CreateSymbolicLink(Path.Combine(subDir, "parent_loop"), "..");
 
-            var indexer = new FileIndexer(
-                tempDir,
-                ignoreCase: false,
-                ignoreRuleRoot: null,
-                maxFileSizeBytes: null,
-                directoryIgnoreCaseProbe: null,
-                symlinkPolicy: FileIndexer.SymlinkPolicy.All);
-            var result = indexer.ScanFilesDetailed();
-            var files = ToSortedRelativePaths(tempDir, result.Files);
+        var indexer = new FileIndexer(
+            tempDir,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: null,
+            symlinkPolicy: FileIndexer.SymlinkPolicy.All);
+        var result = indexer.ScanFilesDetailed();
+        var files = ToSortedRelativePaths(tempDir, result.Files);
 
-            Assert.Equal(["sub/foo.py"], files);
-            Assert.Contains(
-                result.Errors,
-                error => error.Severity == FileIndexer.ScanIssueSeverity.Warning
-                    && error.Path == "sub/parent_loop"
-                    && error.Message.Contains("already scanned", StringComparison.OrdinalIgnoreCase));
-            Assert.False(result.HadErrors);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(["sub/foo.py"], files);
+        Assert.Contains(
+            result.Errors,
+            error => error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                && error.Path == "sub/parent_loop"
+                && error.Message.Contains("already scanned", StringComparison.OrdinalIgnoreCase));
+        Assert.False(result.HadErrors);
     }
 
     [Fact]
     public void ScanFiles_ExcessiveDirectoryDepth_SkipsSubtreeWithWarning()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var current = tempDir;
+        for (var i = 0; i < 130; i++)
         {
-            var current = tempDir;
-            for (var i = 0; i < 130; i++)
-            {
-                current = Path.Combine(current, $"d{i:D3}");
-                Directory.CreateDirectory(current);
-            }
-            File.WriteAllText(Path.Combine(current, "too_deep.py"), "print('too deep')\n");
-
-            var result = new FileIndexer(tempDir).ScanFilesDetailed();
-
-            Assert.Empty(result.Files);
-            Assert.Contains(
-                result.Errors,
-                error => error.Severity == FileIndexer.ScanIssueSeverity.Warning
-                    && error.Message.Contains("traversal depth exceeded", StringComparison.OrdinalIgnoreCase));
-            Assert.False(result.HadErrors);
+            current = Path.Combine(current, $"d{i:D3}");
+            Directory.CreateDirectory(current);
         }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        File.WriteAllText(Path.Combine(current, "too_deep.py"), "print('too deep')\n");
+
+        var result = new FileIndexer(tempDir).ScanFilesDetailed();
+
+        Assert.Empty(result.Files);
+        Assert.Contains(
+            result.Errors,
+            error => error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                && error.Message.Contains("traversal depth exceeded", StringComparison.OrdinalIgnoreCase));
+        Assert.False(result.HadErrors);
     }
 
     [Fact]
@@ -2396,31 +2372,25 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
 
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var nested = Path.Combine(tempDir, "a", "b", "c");
-            Directory.CreateDirectory(nested);
-            File.WriteAllText(Path.Combine(nested, "foo.py"), "def hello(): pass\n");
-            // File symlink that would otherwise cause the same content to be indexed under a second path.
-            // 同じ内容が2つ目の path としても index されてしまうのを防ぐ確認。
-            File.CreateSymbolicLink(Path.Combine(tempDir, "file_symlink.py"), Path.Combine("a", "b", "c", "foo.py"));
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var nested = Path.Combine(tempDir, "a", "b", "c");
+        Directory.CreateDirectory(nested);
+        File.WriteAllText(Path.Combine(nested, "foo.py"), "def hello(): pass\n");
+        // File symlink that would otherwise cause the same content to be indexed under a second path.
+        // 同じ内容が2つ目の path としても index されてしまうのを防ぐ確認。
+        File.CreateSymbolicLink(Path.Combine(tempDir, "file_symlink.py"), Path.Combine("a", "b", "c", "foo.py"));
 
-            var indexer = new FileIndexer(tempDir);
-            var files = ScanRelativeFiles(indexer, tempDir);
+        var indexer = new FileIndexer(tempDir);
+        var files = ScanRelativeFiles(indexer, tempDir);
 
-            Assert.Equal(["a/b/c/foo.py"], files);
-            var result = indexer.ScanFilesDetailed();
-            Assert.DoesNotContain("file_symlink.py", result.DanglingSymlinks);
-            Assert.DoesNotContain(
-                result.Errors,
-                error => error.Path == "file_symlink.py"
-                    && error.Message.Contains("dangling symlink", StringComparison.OrdinalIgnoreCase));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(["a/b/c/foo.py"], files);
+        var result = indexer.ScanFilesDetailed();
+        Assert.DoesNotContain("file_symlink.py", result.DanglingSymlinks);
+        Assert.DoesNotContain(
+            result.Errors,
+            error => error.Path == "file_symlink.py"
+                && error.Message.Contains("dangling symlink", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -2429,39 +2399,33 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
 
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        var externalDir = TestProjectHelper.CreateTempProject("codeindex_external");
-        try
-        {
-            var realFile = Path.Combine(tempDir, "real.py");
-            File.WriteAllText(realFile, "x = 1\n");
-            var externalFile = Path.Combine(externalDir, "external.py");
-            File.WriteAllText(externalFile, "x = 2\n");
-            var linkPath = Path.Combine(tempDir, "alias.py");
-            File.CreateSymbolicLink(linkPath, realFile);
-            var externalLinkPath = Path.Combine(tempDir, "external_alias.py");
-            File.CreateSymbolicLink(externalLinkPath, externalFile);
+        using var external = TestProjectHelper.CreateTempProjectScope("codeindex_external");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var externalDir = external.Root;
+        var tempDir = project.Root;
+        var realFile = Path.Combine(tempDir, "real.py");
+        File.WriteAllText(realFile, "x = 1\n");
+        var externalFile = Path.Combine(externalDir, "external.py");
+        File.WriteAllText(externalFile, "x = 2\n");
+        var linkPath = Path.Combine(tempDir, "alias.py");
+        File.CreateSymbolicLink(linkPath, realFile);
+        var externalLinkPath = Path.Combine(tempDir, "external_alias.py");
+        File.CreateSymbolicLink(externalLinkPath, externalFile);
 
-            Assert.True(FileIndexer.CanIndexFile(realFile));
-            Assert.False(FileIndexer.CanIndexFile(linkPath));
-            Assert.Equal(
-                FileIndexer.FileProbeStatus.Supported,
-                FileIndexer.GetFileIndexability(linkPath, FileIndexer.SymlinkPolicy.Internal, tempDir));
-            Assert.Equal(
-                FileIndexer.FileProbeStatus.Supported,
-                FileIndexer.GetFileIndexability(linkPath, FileIndexer.SymlinkPolicy.All, tempDir));
-            Assert.Equal(
-                FileIndexer.FileProbeStatus.Unsupported,
-                FileIndexer.GetFileIndexability(externalLinkPath, FileIndexer.SymlinkPolicy.Internal, tempDir));
-            Assert.Equal(
-                FileIndexer.FileProbeStatus.Supported,
-                FileIndexer.GetFileIndexability(externalLinkPath, FileIndexer.SymlinkPolicy.All, tempDir));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-            TestProjectHelper.DeleteDirectory(externalDir);
-        }
+        Assert.True(FileIndexer.CanIndexFile(realFile));
+        Assert.False(FileIndexer.CanIndexFile(linkPath));
+        Assert.Equal(
+            FileIndexer.FileProbeStatus.Supported,
+            FileIndexer.GetFileIndexability(linkPath, FileIndexer.SymlinkPolicy.Internal, tempDir));
+        Assert.Equal(
+            FileIndexer.FileProbeStatus.Supported,
+            FileIndexer.GetFileIndexability(linkPath, FileIndexer.SymlinkPolicy.All, tempDir));
+        Assert.Equal(
+            FileIndexer.FileProbeStatus.Unsupported,
+            FileIndexer.GetFileIndexability(externalLinkPath, FileIndexer.SymlinkPolicy.Internal, tempDir));
+        Assert.Equal(
+            FileIndexer.FileProbeStatus.Supported,
+            FileIndexer.GetFileIndexability(externalLinkPath, FileIndexer.SymlinkPolicy.All, tempDir));
     }
 
     [Fact]
@@ -2470,33 +2434,27 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
 
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        var externalDir = TestProjectHelper.CreateTempProject("codeindex_external");
-        try
-        {
-            var realFile = Path.Combine(externalDir, "real.py");
-            File.WriteAllText(realFile, "x = 1\n");
-            File.CreateSymbolicLink(Path.Combine(tempDir, "alias.py"), realFile);
+        using var external = TestProjectHelper.CreateTempProjectScope("codeindex_external");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var externalDir = external.Root;
+        var tempDir = project.Root;
+        var realFile = Path.Combine(externalDir, "real.py");
+        File.WriteAllText(realFile, "x = 1\n");
+        File.CreateSymbolicLink(Path.Combine(tempDir, "alias.py"), realFile);
 
-            var indexer = new FileIndexer(
-                tempDir,
-                ignoreCase: false,
-                ignoreRuleRoot: null,
-                maxFileSizeBytes: null,
-                directoryIgnoreCaseProbe: null,
-                symlinkPolicy: FileIndexer.SymlinkPolicy.All);
-            var result = indexer.ScanFilesDetailed();
-            var files = ToSortedRelativePaths(tempDir, result.Files);
+        var indexer = new FileIndexer(
+            tempDir,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: null,
+            symlinkPolicy: FileIndexer.SymlinkPolicy.All);
+        var result = indexer.ScanFilesDetailed();
+        var files = ToSortedRelativePaths(tempDir, result.Files);
 
-            Assert.Equal(["alias.py"], files);
-            Assert.DoesNotContain("alias.py", result.DanglingSymlinks);
-            Assert.False(result.HadErrors);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-            TestProjectHelper.DeleteDirectory(externalDir);
-        }
+        Assert.Equal(["alias.py"], files);
+        Assert.DoesNotContain("alias.py", result.DanglingSymlinks);
+        Assert.False(result.HadErrors);
     }
 
     [Fact]
@@ -2505,33 +2463,27 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
 
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var skippedTargetDir = Path.Combine(tempDir, "node_modules");
-            Directory.CreateDirectory(skippedTargetDir);
-            var realFile = Path.Combine(skippedTargetDir, "real.py");
-            File.WriteAllText(realFile, "x = 1\n");
-            File.CreateSymbolicLink(Path.Combine(tempDir, "alias.py"), realFile);
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var skippedTargetDir = Path.Combine(tempDir, "node_modules");
+        Directory.CreateDirectory(skippedTargetDir);
+        var realFile = Path.Combine(skippedTargetDir, "real.py");
+        File.WriteAllText(realFile, "x = 1\n");
+        File.CreateSymbolicLink(Path.Combine(tempDir, "alias.py"), realFile);
 
-            var indexer = new FileIndexer(
-                tempDir,
-                ignoreCase: false,
-                ignoreRuleRoot: null,
-                maxFileSizeBytes: null,
-                directoryIgnoreCaseProbe: null,
-                symlinkPolicy: FileIndexer.SymlinkPolicy.Internal);
-            var result = indexer.ScanFilesDetailed();
-            var files = ToSortedRelativePaths(tempDir, result.Files);
+        var indexer = new FileIndexer(
+            tempDir,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: null,
+            symlinkPolicy: FileIndexer.SymlinkPolicy.Internal);
+        var result = indexer.ScanFilesDetailed();
+        var files = ToSortedRelativePaths(tempDir, result.Files);
 
-            Assert.Equal(["alias.py"], files);
-            Assert.DoesNotContain("alias.py", result.DanglingSymlinks);
-            Assert.False(result.HadErrors);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(["alias.py"], files);
+        Assert.DoesNotContain("alias.py", result.DanglingSymlinks);
+        Assert.False(result.HadErrors);
     }
 
     [Theory]
