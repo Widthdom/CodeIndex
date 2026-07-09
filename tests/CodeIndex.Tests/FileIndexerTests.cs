@@ -1800,10 +1800,7 @@ public partial class FileIndexerTests
             };
             TestProjectHelper.WriteTextFiles(tempDir, files);
 
-            var scanned = new FileIndexer(tempDir).ScanFiles()
-                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .ToList();
+            var scanned = ScanRelativeFiles(tempDir);
 
             var expected = files.Keys.OrderBy(n => n, StringComparer.Ordinal).ToList();
             Assert.Equal(expected, scanned);
@@ -1837,10 +1834,7 @@ public partial class FileIndexerTests
                 File.WriteAllText(Path.Combine(projectRoot, "CwdLeak.cwdtoy"), "cwd Widget\n");
                 Environment.CurrentDirectory = cwdRoot;
 
-                var scanned = new FileIndexer(projectRoot).ScanFiles()
-                    .Select(path => Path.GetRelativePath(projectRoot, path).Replace('\\', '/'))
-                    .OrderBy(path => path, StringComparer.Ordinal)
-                    .ToList();
+                var scanned = ScanRelativeFiles(projectRoot);
 
                 Assert.Equal([".cdidx/patterns/project.yaml", "Project.projecttoy"], scanned);
             }
@@ -1872,10 +1866,7 @@ public partial class FileIndexerTests
                     ["unknown.txt"] = "ignored\n",
                 });
 
-            var files = new FileIndexer(tempDir).ScanFiles()
-                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .ToList();
+            var files = ScanRelativeFiles(tempDir);
 
             Assert.Equal(["Cargo.toml", "composer.json", "package.json", "pyproject.toml", "requirements.txt"], files);
         }
@@ -2350,10 +2341,7 @@ public partial class FileIndexerTests
             File.WriteAllText(Path.Combine(tempDir, "bad\nname.cs"), "class Bad { }\n");
 
             var result = new FileIndexer(tempDir).ScanFilesDetailed();
-            var files = result.Files
-                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .ToList();
+            var files = ToSortedRelativePaths(tempDir, result.Files);
 
             Assert.Equal(["ok.cs"], files);
             Assert.Contains(result.NonIndexablePaths, path => path == "bad\\u000Aname.cs");
@@ -2770,10 +2758,7 @@ public partial class FileIndexerTests
                 directoryIgnoreCaseProbe: null,
                 symlinkPolicy: FileIndexer.SymlinkPolicy.Internal);
             var result = indexer.ScanFilesDetailed();
-            var files = result.Files
-                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .ToList();
+            var files = ToSortedRelativePaths(tempDir, result.Files);
 
             Assert.Equal(["alias.py"], files);
             Assert.DoesNotContain("alias.py", result.DanglingSymlinks);
@@ -3203,10 +3188,7 @@ public partial class FileIndexerTests
 
             var indexer = new FileIndexer(projectRoot, ignoreCase: false, ignoreRuleRoot: workspace);
             var result = indexer.ScanFilesDetailed();
-            var files = result.Files
-                .Select(path => Path.GetRelativePath(projectRoot, path).Replace('\\', '/'))
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .ToList();
+            var files = ToSortedRelativePaths(projectRoot, result.Files);
 
             Assert.Equal(["App.cs"], files);
             Assert.Equal([workspace, projects], result.AncestorIgnoreDirectories);
@@ -3734,11 +3716,7 @@ public partial class FileIndexerTests
             File.WriteAllText(Path.Combine(tempDir, "É.cs"), "class KeptNonAscii { }");
             File.WriteAllText(Path.Combine(tempDir, "keep.cs"), "class Kept { }");
 
-            var indexer = new FileIndexer(tempDir);
-            var files = indexer.ScanFiles()
-                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .ToList();
+            var files = ScanRelativeFiles(tempDir);
 
             Assert.Equal([".gitignore", "keep.cs", "É.cs"], files);
         }
@@ -3763,11 +3741,7 @@ public partial class FileIndexerTests
                     ["a.cs"] = "class Kept { }",
                 });
 
-            var indexer = new FileIndexer(tempDir);
-            var files = indexer.ScanFiles()
-                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .ToList();
+            var files = ScanRelativeFiles(tempDir);
 
             Assert.Equal([".gitignore", "a.cs"], files);
         }
@@ -3792,11 +3766,7 @@ public partial class FileIndexerTests
                     ["a.cs"] = "class Ignored { }",
                 });
 
-            var indexer = new FileIndexer(tempDir);
-            var files = indexer.ScanFiles()
-                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .ToList();
+            var files = ScanRelativeFiles(tempDir);
 
             Assert.Equal([".gitignore", "].cs"], files);
         }
@@ -3829,11 +3799,7 @@ public partial class FileIndexerTests
                     ["b.rb"] = "puts 'kept'",
                 });
 
-            var indexer = new FileIndexer(tempDir);
-            var files = indexer.ScanFiles()
-                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .ToList();
+            var files = ScanRelativeFiles(tempDir);
 
             Assert.Equal([".gitignore", "a.js", "a.py", "b.rb", "c.cs"], files);
         }
@@ -3861,11 +3827,7 @@ public partial class FileIndexerTests
                     ["keep.py"] = "print('kept')",
                 });
 
-            var indexer = new FileIndexer(tempDir);
-            var files = indexer.ScanFiles()
-                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .ToList();
+            var files = ScanRelativeFiles(tempDir);
 
             Assert.Equal([".gitignore", "keep.py"], files);
         }
