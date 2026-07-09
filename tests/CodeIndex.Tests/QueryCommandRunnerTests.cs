@@ -3613,115 +3613,108 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunExactNameQueries_StaleCSharpVerbatimCanonicalNamesReportDegradedState_Issue628()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_verbatim_stale_issue628");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/Verbatim.cs",
-                "csharp",
-                """
-                using Outer.@class;
-                using System.Collections.Generic;
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_symbols_csharp_verbatim_stale_issue628");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/Verbatim.cs",
+            "csharp",
+            """
+            using Outer.@class;
+            using System.Collections.Generic;
 
-                namespace Outer.@class;
+            namespace Outer.@class;
 
-                public class Target
-                {
-                }
-
-                public class C
-                {
-                    public static implicit operator List<@class>(C value) => new();
-                }
-                """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/GlobalType.cs",
-                "csharp",
-                """
-                public class @class
-                {
-                }
-                """);
-
-            using (var db = new DbContext(dbPath))
+            public class Target
             {
-                using var cmd = db.Connection.CreateCommand();
-                cmd.CommandText = """
-                    UPDATE symbols
-                    SET name = 'Outer.@class',
-                        name_folded = 'outer.@class'
-                    WHERE kind = 'namespace' AND name = 'Outer.class';
-                    UPDATE symbols
-                    SET name = 'Outer.@class',
-                        name_folded = 'outer.@class'
-                    WHERE kind = 'import' AND name = 'Outer.class';
-                    UPDATE symbols
-                    SET name = '@class',
-                        name_folded = '@class'
-                    WHERE kind = 'class' AND name = 'class';
-                    UPDATE symbols
-                    SET container_name = 'Outer.@class'
-                    WHERE container_name = 'Outer.class';
-                    UPDATE symbols
-                    SET name = 'implicit operator List<@class>',
-                        name_folded = 'implicit operator list<@class>'
-                    WHERE kind = 'operator' AND name = 'implicit operator List<class>';
-                    DELETE FROM codeindex_meta WHERE key = 'csharp_symbol_name_contract_version';
-                    """;
-                cmd.ExecuteNonQuery();
             }
 
-            var degradedReasonToken = "verbatim identifier";
+            public class C
+            {
+                public static implicit operator List<@class>(C value) => new();
+            }
+            """);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/GlobalType.cs",
+            "csharp",
+            """
+            public class @class
+            {
+            }
+            """);
 
-            var (classExitCode, classStdout, classStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "class", "--name", "class", "--exact-name", "--count"],
-                _jsonOptions));
-
-            using var classDocument = ParseJsonOutput(classStdout);
-            var classJson = classDocument.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, classExitCode);
-            Assert.Equal(string.Empty, classStderr);
-            Assert.Equal(0, classJson.GetProperty("count").GetInt32());
-            Assert.False(classJson.GetProperty("exact_index_available").GetBoolean());
-            Assert.Contains("csharp_symbol_name_ready=false", classJson.GetProperty("degraded_reason").GetString());
-            Assert.Contains(degradedReasonToken, classJson.GetProperty("degraded_reason").GetString());
-
-            var (namespaceExitCode, namespaceStdout, namespaceStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
-                ["Outer.class", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp", "--kind", "namespace", "--count"],
-                _jsonOptions));
-
-            using var namespaceDocument = ParseJsonOutput(namespaceStdout);
-            var namespaceJson = namespaceDocument.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, namespaceExitCode);
-            Assert.Equal(string.Empty, namespaceStderr);
-            Assert.Equal(0, namespaceJson.GetProperty("count").GetInt32());
-            Assert.False(namespaceJson.GetProperty("exact_index_available").GetBoolean());
-            Assert.Contains("csharp_symbol_name_ready=false", namespaceJson.GetProperty("degraded_reason").GetString());
-            Assert.Contains(degradedReasonToken, namespaceJson.GetProperty("degraded_reason").GetString());
-
-            var (operatorExitCode, operatorStdout, operatorStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "operator", "--name", "implicit operator List<class>", "--exact-name", "--count"],
-                _jsonOptions));
-
-            using var operatorDocument = ParseJsonOutput(operatorStdout);
-            var operatorJson = operatorDocument.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, operatorExitCode);
-            Assert.Equal(string.Empty, operatorStderr);
-            Assert.Equal(0, operatorJson.GetProperty("count").GetInt32());
-            Assert.False(operatorJson.GetProperty("exact_index_available").GetBoolean());
-            Assert.Contains("csharp_symbol_name_ready=false", operatorJson.GetProperty("degraded_reason").GetString());
-            Assert.Contains(degradedReasonToken, operatorJson.GetProperty("degraded_reason").GetString());
-        }
-        finally
+        using (var db = new DbContext(dbPath))
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
+            using var cmd = db.Connection.CreateCommand();
+            cmd.CommandText = """
+                UPDATE symbols
+                SET name = 'Outer.@class',
+                    name_folded = 'outer.@class'
+                WHERE kind = 'namespace' AND name = 'Outer.class';
+                UPDATE symbols
+                SET name = 'Outer.@class',
+                    name_folded = 'outer.@class'
+                WHERE kind = 'import' AND name = 'Outer.class';
+                UPDATE symbols
+                SET name = '@class',
+                    name_folded = '@class'
+                WHERE kind = 'class' AND name = 'class';
+                UPDATE symbols
+                SET container_name = 'Outer.@class'
+                WHERE container_name = 'Outer.class';
+                UPDATE symbols
+                SET name = 'implicit operator List<@class>',
+                    name_folded = 'implicit operator list<@class>'
+                WHERE kind = 'operator' AND name = 'implicit operator List<class>';
+                DELETE FROM codeindex_meta WHERE key = 'csharp_symbol_name_contract_version';
+                """;
+            cmd.ExecuteNonQuery();
         }
+
+        var degradedReasonToken = "verbatim identifier";
+
+        var (classExitCode, classStdout, classStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+            ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "class", "--name", "class", "--exact-name", "--count"],
+            _jsonOptions));
+
+        using var classDocument = ParseJsonOutput(classStdout);
+        var classJson = classDocument.RootElement;
+
+        Assert.Equal(CommandExitCodes.Success, classExitCode);
+        Assert.Equal(string.Empty, classStderr);
+        Assert.Equal(0, classJson.GetProperty("count").GetInt32());
+        Assert.False(classJson.GetProperty("exact_index_available").GetBoolean());
+        Assert.Contains("csharp_symbol_name_ready=false", classJson.GetProperty("degraded_reason").GetString());
+        Assert.Contains(degradedReasonToken, classJson.GetProperty("degraded_reason").GetString());
+
+        var (namespaceExitCode, namespaceStdout, namespaceStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+            ["Outer.class", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp", "--kind", "namespace", "--count"],
+            _jsonOptions));
+
+        using var namespaceDocument = ParseJsonOutput(namespaceStdout);
+        var namespaceJson = namespaceDocument.RootElement;
+
+        Assert.Equal(CommandExitCodes.Success, namespaceExitCode);
+        Assert.Equal(string.Empty, namespaceStderr);
+        Assert.Equal(0, namespaceJson.GetProperty("count").GetInt32());
+        Assert.False(namespaceJson.GetProperty("exact_index_available").GetBoolean());
+        Assert.Contains("csharp_symbol_name_ready=false", namespaceJson.GetProperty("degraded_reason").GetString());
+        Assert.Contains(degradedReasonToken, namespaceJson.GetProperty("degraded_reason").GetString());
+
+        var (operatorExitCode, operatorStdout, operatorStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+            ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "operator", "--name", "implicit operator List<class>", "--exact-name", "--count"],
+            _jsonOptions));
+
+        using var operatorDocument = ParseJsonOutput(operatorStdout);
+        var operatorJson = operatorDocument.RootElement;
+
+        Assert.Equal(CommandExitCodes.Success, operatorExitCode);
+        Assert.Equal(string.Empty, operatorStderr);
+        Assert.Equal(0, operatorJson.GetProperty("count").GetInt32());
+        Assert.False(operatorJson.GetProperty("exact_index_available").GetBoolean());
+        Assert.Contains("csharp_symbol_name_ready=false", operatorJson.GetProperty("degraded_reason").GetString());
+        Assert.Contains(degradedReasonToken, operatorJson.GetProperty("degraded_reason").GetString());
     }
 
 
