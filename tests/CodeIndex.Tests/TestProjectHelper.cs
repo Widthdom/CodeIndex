@@ -16,6 +16,9 @@ internal static class TestProjectHelper
         return projectRoot;
     }
 
+    internal static TempProjectScope CreateTempProjectScope(string prefix)
+        => new(CreateTempProject(prefix));
+
     internal static string CreateTempDbPath(string prefix)
         => Path.Combine(Path.GetTempPath(), $"{prefix}_{Guid.NewGuid():N}.db");
 
@@ -220,6 +223,21 @@ internal static class TestProjectHelper
                 WaitForFileSystemReleaseRetry();
                 ClearAttributes(path);
             }
+        }
+    }
+
+    internal sealed class TempProjectScope : IDisposable
+    {
+        internal TempProjectScope(string root)
+        {
+            Root = root;
+        }
+
+        internal string Root { get; }
+
+        public void Dispose()
+        {
+            DeleteDirectory(Root);
         }
     }
 

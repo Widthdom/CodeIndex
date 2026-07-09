@@ -235,61 +235,49 @@ public partial class ReleaseWorkflowTests
     [Fact]
     public void PackageNormalizer_RewritesRandomCorePropertiesPartDeterministically()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RewritesRandomCorePropertiesPartDeterministically));
-        try
-        {
-            var packageA = Path.Combine(projectRoot, "a.nupkg");
-            var packageB = Path.Combine(projectRoot, "b.nupkg");
+        using var project = TestProjectHelper.CreateTempProjectScope(nameof(PackageNormalizer_RewritesRandomCorePropertiesPartDeterministically));
+        var projectRoot = project.Root;
+        var packageA = Path.Combine(projectRoot, "a.nupkg");
+        var packageB = Path.Combine(projectRoot, "b.nupkg");
 
-            CreateMinimalNuGetPackage(packageA, "a1b2c3.psmdcp");
-            CreateMinimalNuGetPackage(packageB, "f9e8d7.psmdcp");
+        CreateMinimalNuGetPackage(packageA, "a1b2c3.psmdcp");
+        CreateMinimalNuGetPackage(packageB, "f9e8d7.psmdcp");
 
-            PackageCorePropertiesNormalizer.NormalizePackage(packageA);
-            PackageCorePropertiesNormalizer.NormalizePackage(packageB);
+        PackageCorePropertiesNormalizer.NormalizePackage(packageA);
+        PackageCorePropertiesNormalizer.NormalizePackage(packageB);
 
-            Assert.Equal(
-                Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(packageA))),
-                Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(packageB))));
+        Assert.Equal(
+            Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(packageA))),
+            Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(packageB))));
 
-            using var archive = ZipFile.OpenRead(packageA);
-            Assert.Contains(archive.Entries, entry => entry.FullName == PackageCorePropertiesNormalizer.CanonicalCorePropertiesPath);
-            Assert.DoesNotContain(archive.Entries, entry => entry.FullName.EndsWith("a1b2c3.psmdcp", StringComparison.Ordinal));
+        using var archive = ZipFile.OpenRead(packageA);
+        Assert.Contains(archive.Entries, entry => entry.FullName == PackageCorePropertiesNormalizer.CanonicalCorePropertiesPath);
+        Assert.DoesNotContain(archive.Entries, entry => entry.FullName.EndsWith("a1b2c3.psmdcp", StringComparison.Ordinal));
 
-            var contentTypes = ReadZipEntryText(archive, "[Content_Types].xml");
-            var relationships = ReadZipEntryText(archive, "_rels/.rels");
-            Assert.Contains("/package/services/metadata/core-properties/core-properties.psmdcp", contentTypes);
-            Assert.Contains("/package/services/metadata/core-properties/core-properties.psmdcp", relationships);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        var contentTypes = ReadZipEntryText(archive, "[Content_Types].xml");
+        var relationships = ReadZipEntryText(archive, "_rels/.rels");
+        Assert.Contains("/package/services/metadata/core-properties/core-properties.psmdcp", contentTypes);
+        Assert.Contains("/package/services/metadata/core-properties/core-properties.psmdcp", relationships);
     }
 
     [Fact]
     public void PackageNormalizer_RemovesExistingLegacyTempNeighborAndUsesRandomTempPath_Issue3996()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RemovesExistingLegacyTempNeighborAndUsesRandomTempPath_Issue3996));
-        try
-        {
-            var packagePath = Path.Combine(projectRoot, "rewrite.nupkg");
-            var legacyTempPath = packagePath + ".normalize-tmp";
-            CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
-            File.WriteAllText(legacyTempPath, "stale temp", Encoding.UTF8);
+        using var project = TestProjectHelper.CreateTempProjectScope(nameof(PackageNormalizer_RemovesExistingLegacyTempNeighborAndUsesRandomTempPath_Issue3996));
+        var projectRoot = project.Root;
+        var packagePath = Path.Combine(projectRoot, "rewrite.nupkg");
+        var legacyTempPath = packagePath + ".normalize-tmp";
+        CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
+        File.WriteAllText(legacyTempPath, "stale temp", Encoding.UTF8);
 
-            PackageCorePropertiesNormalizer.NormalizePackage(packagePath);
+        PackageCorePropertiesNormalizer.NormalizePackage(packagePath);
 
-            Assert.False(File.Exists(legacyTempPath));
-            Assert.Empty(Directory.GetFiles(projectRoot, ".cdidx-normalize-*.tmp"));
+        Assert.False(File.Exists(legacyTempPath));
+        Assert.Empty(Directory.GetFiles(projectRoot, ".cdidx-normalize-*.tmp"));
 
-            using var archive = ZipFile.OpenRead(packagePath);
-            Assert.Contains(archive.Entries, entry => entry.FullName == PackageCorePropertiesNormalizer.CanonicalCorePropertiesPath);
-            Assert.DoesNotContain(archive.Entries, entry => entry.FullName.EndsWith("random.psmdcp", StringComparison.Ordinal));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        using var archive = ZipFile.OpenRead(packagePath);
+        Assert.Contains(archive.Entries, entry => entry.FullName == PackageCorePropertiesNormalizer.CanonicalCorePropertiesPath);
+        Assert.DoesNotContain(archive.Entries, entry => entry.FullName.EndsWith("random.psmdcp", StringComparison.Ordinal));
     }
 
     [Fact]
