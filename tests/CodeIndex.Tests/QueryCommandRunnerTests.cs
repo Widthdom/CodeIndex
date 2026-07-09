@@ -540,7 +540,8 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunStatusConfig_ReportsConfigFileSourceForSearchDefaults()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_config_source");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_status_config_source");
+        var projectRoot = project.Root;
         using var env = EnvironmentVariableScope.Capture(
             QueryCommandRunner.DefaultLimitEnvironmentVariable,
             QueryCommandRunner.StaleAfterEnvironmentVariable,
@@ -548,113 +549,92 @@ public partial class QueryCommandRunnerTests
             CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + QueryCommandRunner.DefaultLimitEnvironmentVariable,
             CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + QueryCommandRunner.StaleAfterEnvironmentVariable,
             CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + "CDIDX_GLOBAL_TOOL_LOG_DIR");
-        try
-        {
-            var configDir = Path.Combine(projectRoot, ".cdidx");
-            Directory.CreateDirectory(configDir);
-            var configPath = Path.Combine(configDir, "config.json");
-            var logDir = Path.Combine(projectRoot, "logs");
-            File.WriteAllText(configPath, $$"""
-                {
-                  "search": { "limit": 44 },
-                  "stale_after": "2h",
-                  "global_tool_log_dir": {{JsonSerializer.Serialize(logDir)}}
-                }
-                """);
+        var configDir = Path.Combine(projectRoot, ".cdidx");
+        Directory.CreateDirectory(configDir);
+        var configPath = Path.Combine(configDir, "config.json");
+        var logDir = Path.Combine(projectRoot, "logs");
+        File.WriteAllText(configPath, $$"""
+            {
+              "search": { "limit": 44 },
+              "stale_after": "2h",
+              "global_tool_log_dir": {{JsonSerializer.Serialize(logDir)}}
+            }
+            """);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
-                ["status", "--config", "--json"],
-                appVersion: "test-version",
-                configStartDirectory: projectRoot));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["status", "--config", "--json"],
+            appVersion: "test-version",
+            configStartDirectory: projectRoot));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            using var document = ParseJsonOutput(stdout);
-            Assert.DoesNotContain(configPath, stdout, StringComparison.Ordinal);
-            var limit = document.RootElement.GetProperty("effective_config").GetProperty("limit");
-            Assert.Equal(44, limit.GetProperty("value").GetInt32());
-            Assert.Equal("config:config.json", limit.GetProperty("source").GetString());
-            Assert.Equal("config_file", limit.GetProperty("source_kind").GetString());
-            Assert.Equal("config.json", limit.GetProperty("source_detail").GetString());
-            var staleAfter = document.RootElement.GetProperty("effective_config").GetProperty("stale_after");
-            Assert.Equal("2h", staleAfter.GetProperty("value").GetString());
-            Assert.Equal("config:config.json", staleAfter.GetProperty("source").GetString());
-            Assert.Equal("config_file", staleAfter.GetProperty("source_kind").GetString());
-            Assert.Equal("config.json", staleAfter.GetProperty("source_detail").GetString());
-            var logPath = document.RootElement.GetProperty("effective_config").GetProperty("global_tool_log_dir");
-            Assert.Equal(logDir, logPath.GetProperty("value").GetString());
-            Assert.Equal("config:config.json", logPath.GetProperty("source").GetString());
-            Assert.Equal("config_file", logPath.GetProperty("source_kind").GetString());
-            Assert.Equal("config.json", logPath.GetProperty("source_detail").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        Assert.DoesNotContain(configPath, stdout, StringComparison.Ordinal);
+        var limit = document.RootElement.GetProperty("effective_config").GetProperty("limit");
+        Assert.Equal(44, limit.GetProperty("value").GetInt32());
+        Assert.Equal("config:config.json", limit.GetProperty("source").GetString());
+        Assert.Equal("config_file", limit.GetProperty("source_kind").GetString());
+        Assert.Equal("config.json", limit.GetProperty("source_detail").GetString());
+        var staleAfter = document.RootElement.GetProperty("effective_config").GetProperty("stale_after");
+        Assert.Equal("2h", staleAfter.GetProperty("value").GetString());
+        Assert.Equal("config:config.json", staleAfter.GetProperty("source").GetString());
+        Assert.Equal("config_file", staleAfter.GetProperty("source_kind").GetString());
+        Assert.Equal("config.json", staleAfter.GetProperty("source_detail").GetString());
+        var logPath = document.RootElement.GetProperty("effective_config").GetProperty("global_tool_log_dir");
+        Assert.Equal(logDir, logPath.GetProperty("value").GetString());
+        Assert.Equal("config:config.json", logPath.GetProperty("source").GetString());
+        Assert.Equal("config_file", logPath.GetProperty("source_kind").GetString());
+        Assert.Equal("config.json", logPath.GetProperty("source_detail").GetString());
     }
 
     [Fact]
     public void RunStatusJson_ReportsSqlitePageMetrics_Issue1631()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_page_metrics");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/app.cs",
-                "csharp",
-                "public class App { }");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_status_page_metrics");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/app.cs",
+            "csharp",
+            "public class App { }");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
-                ["--db", dbPath, "--json"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--db", dbPath, "--json"],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            using var document = ParseJsonOutput(stdout);
-            var settings = document.RootElement.GetProperty("db_pragma_settings");
-            Assert.True(settings.GetProperty("page_count").GetInt64() > 0);
-            Assert.True(settings.GetProperty("page_size").GetInt64() > 0);
-            Assert.True(settings.GetProperty("freelist_count").GetInt64() >= 0);
-            Assert.Equal(DbPragmaPolicy.DefaultBusyTimeoutMs, settings.GetProperty("busy_timeout_ms").GetInt64());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var settings = document.RootElement.GetProperty("db_pragma_settings");
+        Assert.True(settings.GetProperty("page_count").GetInt64() > 0);
+        Assert.True(settings.GetProperty("page_size").GetInt64() > 0);
+        Assert.True(settings.GetProperty("freelist_count").GetInt64() >= 0);
+        Assert.Equal(DbPragmaPolicy.DefaultBusyTimeoutMs, settings.GetProperty("busy_timeout_ms").GetInt64());
     }
 
     [Fact]
     public void RunStatusJson_ReportsConfiguredBusyTimeout_Issue3767()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_busy_timeout_3767");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_status_busy_timeout_3767");
         using var env = EnvironmentVariableScope.Capture(
             DbContext.BusyTimeoutEnvironmentVariable);
         env.Set(DbContext.BusyTimeoutEnvironmentVariable, "12345");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/app.cs",
-                "csharp",
-                "public class App { }");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/app.cs",
+            "csharp",
+            "public class App { }");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
-                ["--db", dbPath, "--json"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--db", dbPath, "--json"],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            using var document = ParseJsonOutput(stdout);
-            var settings = document.RootElement.GetProperty("db_pragma_settings");
-            Assert.Equal(12345, settings.GetProperty("busy_timeout_ms").GetInt64());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var settings = document.RootElement.GetProperty("db_pragma_settings");
+        Assert.Equal(12345, settings.GetProperty("busy_timeout_ms").GetInt64());
     }
 
     [Fact]
