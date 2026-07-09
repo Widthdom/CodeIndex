@@ -3869,25 +3869,21 @@ public partial class FileIndexerTests
     {
         // SkipDirs should be case-insensitive (e.g. "Build" matches "build")
         // SkipDirsは大文字小文字を区別しない（例: "Build"は"build"にマッチ）
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('hello')");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["app.py"] = "print('hello')",
+                ["Build/output.js"] = "var x = 1;",
+            });
 
-            var buildDir = Path.Combine(tempDir, "Build");
-            Directory.CreateDirectory(buildDir);
-            File.WriteAllText(Path.Combine(buildDir, "output.js"), "var x = 1;");
+        var indexer = new FileIndexer(tempDir);
+        var files = indexer.ScanFiles();
 
-            var indexer = new FileIndexer(tempDir);
-            var files = indexer.ScanFiles();
-
-            Assert.Single(files);
-            Assert.Contains("app.py", files[0]);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Single(files);
+        Assert.Contains("app.py", files[0]);
     }
 
     [Theory]
@@ -3903,25 +3899,16 @@ public partial class FileIndexerTests
     [InlineData(".stack-work", "build.log")]
     public void ScanFiles_SkipsCommonGeneratedCacheDirectories(string directoryName, string fileName)
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('hello')");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFile(tempDir, "app.py", "print('hello')");
+        TestProjectHelper.WriteTextFile(tempDir, Path.Combine(directoryName, fileName), "generated");
 
-            var cacheDir = Path.Combine(tempDir, directoryName);
-            Directory.CreateDirectory(cacheDir);
-            File.WriteAllText(Path.Combine(cacheDir, fileName), "generated");
+        var indexer = new FileIndexer(tempDir);
+        var files = indexer.ScanFiles();
 
-            var indexer = new FileIndexer(tempDir);
-            var files = indexer.ScanFiles();
-
-            Assert.Single(files);
-            Assert.Contains("app.py", files[0]);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Single(files);
+        Assert.Contains("app.py", files[0]);
     }
 
     [Fact]
