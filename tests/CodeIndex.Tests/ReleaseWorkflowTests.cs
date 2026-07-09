@@ -623,115 +623,91 @@ public partial class ReleaseWorkflowTests
     [Fact]
     public void PackageNormalizer_RejectsPackageThatExceedsEntryCountLimit()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RejectsPackageThatExceedsEntryCountLimit));
-        try
-        {
-            var packagePath = Path.Combine(projectRoot, "too-many-entries.nupkg");
-            CreatePackageWithEntries(
-                packagePath,
-                ("package/services/metadata/core-properties/random.psmdcp", ""),
-                ("payload.txt", "ok"));
+        using var project = TestProjectHelper.CreateTempProjectScope(nameof(PackageNormalizer_RejectsPackageThatExceedsEntryCountLimit));
+        var projectRoot = project.Root;
+        var packagePath = Path.Combine(projectRoot, "too-many-entries.nupkg");
+        CreatePackageWithEntries(
+            packagePath,
+            ("package/services/metadata/core-properties/random.psmdcp", ""),
+            ("payload.txt", "ok"));
 
-            var limits = PackageNormalizeLimits.Default with { MaxEntryCount = 1 };
+        var limits = PackageNormalizeLimits.Default with { MaxEntryCount = 1 };
 
-            var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath, limits));
-            Assert.Contains("2 ZIP entries", exception.Message);
-            Assert.Contains("limit of 1", exception.Message);
-            AssertNoNormalizeTempFiles(projectRoot, packagePath);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath, limits));
+        Assert.Contains("2 ZIP entries", exception.Message);
+        Assert.Contains("limit of 1", exception.Message);
+        AssertNoNormalizeTempFiles(projectRoot, packagePath);
     }
 
     [Fact]
     public void PackageNormalizer_RejectsEntryThatExceedsPerEntryLimit()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RejectsEntryThatExceedsPerEntryLimit));
-        try
-        {
-            var packagePath = Path.Combine(projectRoot, "large-entry.nupkg");
-            CreatePackageWithEntries(
-                packagePath,
-                ("package/services/metadata/core-properties/random.psmdcp", ""),
-                ("payload.bin", "123456"));
+        using var project = TestProjectHelper.CreateTempProjectScope(nameof(PackageNormalizer_RejectsEntryThatExceedsPerEntryLimit));
+        var projectRoot = project.Root;
+        var packagePath = Path.Combine(projectRoot, "large-entry.nupkg");
+        CreatePackageWithEntries(
+            packagePath,
+            ("package/services/metadata/core-properties/random.psmdcp", ""),
+            ("payload.bin", "123456"));
 
-            var limits = PackageNormalizeLimits.Default with
-            {
-                MaxEntryUncompressedBytes = 5,
-                MaxTotalUncompressedBytes = 100,
-            };
-
-            var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath, limits));
-            Assert.Contains("payload.bin", exception.Message);
-            Assert.Contains("per-entry limit of 5 bytes", exception.Message);
-            AssertNoNormalizeTempFiles(projectRoot, packagePath);
-        }
-        finally
+        var limits = PackageNormalizeLimits.Default with
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+            MaxEntryUncompressedBytes = 5,
+            MaxTotalUncompressedBytes = 100,
+        };
+
+        var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath, limits));
+        Assert.Contains("payload.bin", exception.Message);
+        Assert.Contains("per-entry limit of 5 bytes", exception.Message);
+        AssertNoNormalizeTempFiles(projectRoot, packagePath);
     }
 
     [Fact]
     public void PackageNormalizer_RejectsPackageThatExceedsTotalUncompressedLimit()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RejectsPackageThatExceedsTotalUncompressedLimit));
-        try
-        {
-            var packagePath = Path.Combine(projectRoot, "large-total.nupkg");
-            CreatePackageWithEntries(
-                packagePath,
-                ("package/services/metadata/core-properties/random.psmdcp", ""),
-                ("a.txt", "1234"),
-                ("b.txt", "5678"));
+        using var project = TestProjectHelper.CreateTempProjectScope(nameof(PackageNormalizer_RejectsPackageThatExceedsTotalUncompressedLimit));
+        var projectRoot = project.Root;
+        var packagePath = Path.Combine(projectRoot, "large-total.nupkg");
+        CreatePackageWithEntries(
+            packagePath,
+            ("package/services/metadata/core-properties/random.psmdcp", ""),
+            ("a.txt", "1234"),
+            ("b.txt", "5678"));
 
-            var limits = PackageNormalizeLimits.Default with
-            {
-                MaxEntryUncompressedBytes = 10,
-                MaxTotalUncompressedBytes = 6,
-            };
-
-            var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath, limits));
-            Assert.Contains("b.txt", exception.Message);
-            Assert.Contains("uncompressed size exceed the limit of 6 bytes", exception.Message);
-            AssertNoNormalizeTempFiles(projectRoot, packagePath);
-        }
-        finally
+        var limits = PackageNormalizeLimits.Default with
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+            MaxEntryUncompressedBytes = 10,
+            MaxTotalUncompressedBytes = 6,
+        };
+
+        var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath, limits));
+        Assert.Contains("b.txt", exception.Message);
+        Assert.Contains("uncompressed size exceed the limit of 6 bytes", exception.Message);
+        AssertNoNormalizeTempFiles(projectRoot, packagePath);
     }
 
     [Fact]
     public void PackageNormalizer_RejectsXmlEntryThatExceedsTextLimit()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RejectsXmlEntryThatExceedsTextLimit));
-        try
-        {
-            var packagePath = Path.Combine(projectRoot, "large-xml.nupkg");
-            CreatePackageWithEntries(
-                packagePath,
-                ("package/services/metadata/core-properties/random.psmdcp", ""),
-                ("[Content_Types].xml", "123456"));
+        using var project = TestProjectHelper.CreateTempProjectScope(nameof(PackageNormalizer_RejectsXmlEntryThatExceedsTextLimit));
+        var projectRoot = project.Root;
+        var packagePath = Path.Combine(projectRoot, "large-xml.nupkg");
+        CreatePackageWithEntries(
+            packagePath,
+            ("package/services/metadata/core-properties/random.psmdcp", ""),
+            ("[Content_Types].xml", "123456"));
 
-            var limits = PackageNormalizeLimits.Default with
-            {
-                MaxEntryUncompressedBytes = 100,
-                MaxTotalUncompressedBytes = 100,
-                MaxXmlTextChars = 5,
-            };
-
-            var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath, limits));
-            Assert.Contains("[Content_Types].xml", exception.Message);
-            Assert.Contains("text limit of 5 characters", exception.Message);
-            AssertNoNormalizeTempFiles(projectRoot, packagePath);
-        }
-        finally
+        var limits = PackageNormalizeLimits.Default with
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+            MaxEntryUncompressedBytes = 100,
+            MaxTotalUncompressedBytes = 100,
+            MaxXmlTextChars = 5,
+        };
+
+        var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath, limits));
+        Assert.Contains("[Content_Types].xml", exception.Message);
+        Assert.Contains("text limit of 5 characters", exception.Message);
+        AssertNoNormalizeTempFiles(projectRoot, packagePath);
     }
 
     [Theory]
@@ -743,141 +719,105 @@ public partial class ReleaseWorkflowTests
     [InlineData("folder//payload.txt", "must not contain empty path segments")]
     public void PackageNormalizer_RejectsUnsafeZipEntryNames(string unsafeEntryName, string expectedMessage)
     {
-        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RejectsUnsafeZipEntryNames));
-        try
-        {
-            var packagePath = Path.Combine(projectRoot, "unsafe-name.nupkg");
-            CreatePackageWithEntries(
-                packagePath,
-                ("package/services/metadata/core-properties/random.psmdcp", ""),
-                (unsafeEntryName, "payload"));
+        using var project = TestProjectHelper.CreateTempProjectScope(nameof(PackageNormalizer_RejectsUnsafeZipEntryNames));
+        var projectRoot = project.Root;
+        var packagePath = Path.Combine(projectRoot, "unsafe-name.nupkg");
+        CreatePackageWithEntries(
+            packagePath,
+            ("package/services/metadata/core-properties/random.psmdcp", ""),
+            (unsafeEntryName, "payload"));
 
-            var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
-            Assert.Contains(unsafeEntryName, exception.Message);
-            Assert.Contains(expectedMessage, exception.Message);
-            AssertNoNormalizeTempFiles(projectRoot, packagePath);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
+        Assert.Contains(unsafeEntryName, exception.Message);
+        Assert.Contains(expectedMessage, exception.Message);
+        AssertNoNormalizeTempFiles(projectRoot, packagePath);
     }
 
     [Fact]
     public void PackageNormalizer_RejectsDestinationNamesThatNormalizeToDuplicates()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RejectsDestinationNamesThatNormalizeToDuplicates));
-        try
-        {
-            var packagePath = Path.Combine(projectRoot, "duplicate-normalized-name.nupkg");
-            CreatePackageWithEntries(
-                packagePath,
-                ("package/services/metadata/core-properties/random.psmdcp", ""),
-                ("docs/readme.txt", "one"),
-                ("docs/./readme.txt", "two"));
+        using var project = TestProjectHelper.CreateTempProjectScope(nameof(PackageNormalizer_RejectsDestinationNamesThatNormalizeToDuplicates));
+        var projectRoot = project.Root;
+        var packagePath = Path.Combine(projectRoot, "duplicate-normalized-name.nupkg");
+        CreatePackageWithEntries(
+            packagePath,
+            ("package/services/metadata/core-properties/random.psmdcp", ""),
+            ("docs/readme.txt", "one"),
+            ("docs/./readme.txt", "two"));
 
-            var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
-            Assert.Contains("docs/./readme.txt", exception.Message);
-            Assert.Contains("duplicate destination name 'docs/readme.txt'", exception.Message);
-            AssertNoNormalizeTempFiles(projectRoot, packagePath);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
+        Assert.Contains("docs/./readme.txt", exception.Message);
+        Assert.Contains("duplicate destination name 'docs/readme.txt'", exception.Message);
+        AssertNoNormalizeTempFiles(projectRoot, packagePath);
     }
 
     [Fact]
     public void PackageNormalizer_RejectsDuplicateZipEntryNames()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RejectsDuplicateZipEntryNames));
-        try
-        {
-            var packagePath = Path.Combine(projectRoot, "duplicate-entry-name.nupkg");
-            CreatePackageWithEntries(
-                packagePath,
-                ("package/services/metadata/core-properties/random.psmdcp", ""),
-                ("payload.txt", "one"),
-                ("payload.txt", "two"));
+        using var project = TestProjectHelper.CreateTempProjectScope(nameof(PackageNormalizer_RejectsDuplicateZipEntryNames));
+        var projectRoot = project.Root;
+        var packagePath = Path.Combine(projectRoot, "duplicate-entry-name.nupkg");
+        CreatePackageWithEntries(
+            packagePath,
+            ("package/services/metadata/core-properties/random.psmdcp", ""),
+            ("payload.txt", "one"),
+            ("payload.txt", "two"));
 
-            var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
-            Assert.Contains("payload.txt", exception.Message);
-            Assert.Contains("duplicate destination name 'payload.txt'", exception.Message);
-            AssertNoNormalizeTempFiles(projectRoot, packagePath);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
+        Assert.Contains("payload.txt", exception.Message);
+        Assert.Contains("duplicate destination name 'payload.txt'", exception.Message);
+        AssertNoNormalizeTempFiles(projectRoot, packagePath);
     }
 
     [Fact]
     public void PackageNormalizer_ScrubsSafeExternalAttributes()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_ScrubsSafeExternalAttributes));
-        try
-        {
-            var packagePath = Path.Combine(projectRoot, "external-attributes.nupkg");
-            CreatePackageWithAttributedEntries(
-                packagePath,
-                ("package/services/metadata/core-properties/random.psmdcp", "", UnixRegularFileAttributes(493)),
-                ("payload.bin", "payload", 0x20));
+        using var project = TestProjectHelper.CreateTempProjectScope(nameof(PackageNormalizer_ScrubsSafeExternalAttributes));
+        var projectRoot = project.Root;
+        var packagePath = Path.Combine(projectRoot, "external-attributes.nupkg");
+        CreatePackageWithAttributedEntries(
+            packagePath,
+            ("package/services/metadata/core-properties/random.psmdcp", "", UnixRegularFileAttributes(493)),
+            ("payload.bin", "payload", 0x20));
 
-            PackageCorePropertiesNormalizer.NormalizePackage(packagePath);
+        PackageCorePropertiesNormalizer.NormalizePackage(packagePath);
 
-            using var archive = ZipFile.OpenRead(packagePath);
-            Assert.All(archive.Entries, entry => Assert.Equal(0, entry.ExternalAttributes));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        using var archive = ZipFile.OpenRead(packagePath);
+        Assert.All(archive.Entries, entry => Assert.Equal(0, entry.ExternalAttributes));
     }
 
     [Fact]
     public void PackageNormalizer_RejectsPosixSymlinkExternalAttributes()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RejectsPosixSymlinkExternalAttributes));
-        try
-        {
-            var packagePath = Path.Combine(projectRoot, "symlink-attributes.nupkg");
-            CreatePackageWithAttributedEntries(
-                packagePath,
-                ("package/services/metadata/core-properties/random.psmdcp", "", 0),
-                ("payload.bin", "payload", UnixSymlinkAttributes()));
+        using var project = TestProjectHelper.CreateTempProjectScope(nameof(PackageNormalizer_RejectsPosixSymlinkExternalAttributes));
+        var projectRoot = project.Root;
+        var packagePath = Path.Combine(projectRoot, "symlink-attributes.nupkg");
+        CreatePackageWithAttributedEntries(
+            packagePath,
+            ("package/services/metadata/core-properties/random.psmdcp", "", 0),
+            ("payload.bin", "payload", UnixSymlinkAttributes()));
 
-            var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
-            Assert.Contains("payload.bin", exception.Message);
-            Assert.Contains("unsafe POSIX file type symlink", exception.Message);
-            AssertNoNormalizeTempFiles(projectRoot, packagePath);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
+        Assert.Contains("payload.bin", exception.Message);
+        Assert.Contains("unsafe POSIX file type symlink", exception.Message);
+        AssertNoNormalizeTempFiles(projectRoot, packagePath);
     }
 
     [Fact]
     public void PackageNormalizer_RejectsUnsafeDosExternalAttributes()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RejectsUnsafeDosExternalAttributes));
-        try
-        {
-            var packagePath = Path.Combine(projectRoot, "dos-attributes.nupkg");
-            CreatePackageWithAttributedEntries(
-                packagePath,
-                ("package/services/metadata/core-properties/random.psmdcp", "", 0),
-                ("payload.bin", "payload", 0x04));
+        using var project = TestProjectHelper.CreateTempProjectScope(nameof(PackageNormalizer_RejectsUnsafeDosExternalAttributes));
+        var projectRoot = project.Root;
+        var packagePath = Path.Combine(projectRoot, "dos-attributes.nupkg");
+        CreatePackageWithAttributedEntries(
+            packagePath,
+            ("package/services/metadata/core-properties/random.psmdcp", "", 0),
+            ("payload.bin", "payload", 0x04));
 
-            var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
-            Assert.Contains("payload.bin", exception.Message);
-            Assert.Contains("unsafe DOS attributes 0x04", exception.Message);
-            AssertNoNormalizeTempFiles(projectRoot, packagePath);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
+        Assert.Contains("payload.bin", exception.Message);
+        Assert.Contains("unsafe DOS attributes 0x04", exception.Message);
+        AssertNoNormalizeTempFiles(projectRoot, packagePath);
     }
 
     [Fact]
