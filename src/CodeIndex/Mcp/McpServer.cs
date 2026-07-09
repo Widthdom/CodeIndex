@@ -1048,7 +1048,7 @@ public partial class McpServer : IDisposable
             DeferFrameLog(BuildJsonParseErrorLog(JsonFrameParser.FormatExceptionDetail(ex)));
             var errorResponse = CreateErrorResponse(hasId: true, id: null, code: -32700, message: "Parse error",
                 category: McpErrorEnvelope.CategoryParseError,
-                suggestion: $"Send valid JSON-RPC 2.0 framed as a single line of UTF-8 JSON with nesting depth <= {MaxJsonDepth}.",
+                suggestion: $"For MCP stdio, send one UTF-8 JSON-RPC 2.0 object per LF-delimited line with nesting depth <= {MaxJsonDepth}. Do not send LSP Content-Length framing.",
                 retrySafe: false);
             return errorResponse.ToJsonString(_jsonOptions);
         }
@@ -3563,7 +3563,7 @@ public partial class McpServer : IDisposable
         $"[cdidx-mcp] Message too large ({characterCount} chars / {byteCount} bytes), rejecting. Split the request into smaller JSON-RPC messages or shorter arguments, then retry.";
 
     internal static string BuildJsonParseErrorLog(string detail) =>
-        $"[cdidx-mcp] JSON parse error: {DiagnosticRedactor.BoundDiagnosticText(detail, JsonFrameParser.MaxParseDiagnosticChars)}. Send one UTF-8 JSON-RPC object per line and retry.";
+        $"[cdidx-mcp] JSON parse error: {DiagnosticRedactor.BoundDiagnosticText(detail, JsonFrameParser.MaxParseDiagnosticChars)}. MCP stdio expects one UTF-8 JSON-RPC object per LF-delimited line; do not send LSP Content-Length framing.";
 
     internal static string BuildUnhandledLoopErrorLog(string detail) =>
         $"[cdidx-mcp] Error: {detail}. This request was skipped; fix the request or inspect the server environment, then retry.";

@@ -2403,9 +2403,15 @@ cdidx ./myproject --changed-between old-branch new-branch --json
 If the refs are not known, use `cdidx ./myproject --json` and verify with `cdidx status --check --json`.
 ~~~
 
+### AI Protocol Boundary Quick Reference
+
+cdidx exposes separate JSON-RPC integration surfaces with different framing and limits. MCP stdio uses LF-delimited UTF-8 JSON-RPC lines and keeps human diagnostics on stderr. MCP HTTP uses POST request/response JSON-RPC with optional bearer authentication, body-size limits, queue/concurrency limits, and opt-in `(tool, caller)` rate limiting. LSP stdio uses standard `Content-Length` framed messages and has its own header/body caps. Discovery output is bounded: MCP `tools/list` is paginated and returns `nextCursor`, graph-style MCP calls clamp pagination offsets, and `status` reports the active MCP limits and rate-limit state.
+
 ### MCP Server (for Claude Code, Cursor, Windsurf, etc.)
 
 cdidx includes a built-in **MCP (Model Context Protocol) server**. MCP is a standard protocol that lets AI coding tools communicate with external programs. When you run `cdidx mcp`, cdidx starts listening on stdin/stdout — your AI tool sends search requests as JSON, and cdidx returns results instantly from the pre-built index.
+
+MCP stdio is line protocol: send one compact UTF-8 JSON-RPC object per LF-delimited line. It is not LSP `Content-Length` framing. stdout is reserved for JSON-RPC payloads only; startup, shutdown, audit, rate-limit, timeout, and parse diagnostics are written to stderr and persistent logs. HTTP MCP uses request/response JSON-RPC over POST with its own bearer-auth and body-size limits.
 
 ### LSP Server (for LSP-native editors)
 
@@ -2419,6 +2425,14 @@ but do not speak MCP. It also advertises full `textDocument` sync and
 conservative `hover`, `completion`, `documentHighlight`, `semanticTokens/full`,
 `codeLens`, and `inlayHint` providers backed by indexed symbols and references
 where available.
+Optional LSP methods that are not implemented are also not advertised. In the
+current support matrix, `textDocument/prepareRename`, `textDocument/rename`,
+`textDocument/foldingRange`, `textDocument/selectionRange`, and
+`textDocument/signatureHelp` return JSON-RPC `-32601` (`Method not found`).
+Completion is symbol-index-backed: it searches indexed symbols for the token at
+the requested position, does not provide keyword/path completion, advertises
+`resolveProvider=false`, and returns an empty item list when the position has no
+token or no indexed symbol match.
 Open buffers sent through `textDocument/didOpen`, `textDocument/didChange`, and
 `textDocument/didClose` are kept in a bounded in-memory cache: each document is
 capped at 4194304 bytes, the session holds at most 64 live documents and
@@ -5171,9 +5185,15 @@ cdidx ./myproject --changed-between old-branch new-branch --json
 ref が分からない場合は `cdidx ./myproject --json` を使い、`cdidx status --check --json` で検証してください。
 ~~~
 
+### AI プロトコル境界クイックリファレンス
+
+cdidx は framing と制限が異なる JSON-RPC integration surface を分けて公開します。MCP stdio は LF 区切りの UTF-8 JSON-RPC 行を使い、人間向け diagnostic は stderr に出します。MCP HTTP は POST request / response JSON-RPC を使い、任意の bearer authentication、body-size limit、queue / concurrency limit、opt-in の `(tool, caller)` rate limit を適用します。LSP stdio は標準の `Content-Length` framed message を使い、独自の header / body 上限を持ちます。discovery output は bounded です。MCP `tools/list` は pagination され `nextCursor` を返し、graph 系 MCP call は pagination offset を clamp し、`status` は有効な MCP limit と rate-limit state を報告します。
+
 ### MCP サーバー（Claude Code、Cursor、Windsurf 等に対応）
 
 cdidxには**MCP（Model Context Protocol）サーバー**が組み込まれています。MCPは、AIコーディングツールが外部プログラムと通信するための標準プロトコルです。`cdidx mcp` を実行すると、cdidxがstdin/stdoutで待機し、AIツールからの検索リクエストをJSONで受け取り、構築済みインデックスから即座に結果を返します。
+
+MCP stdio は line protocol です。LF 区切りの各行に compact な UTF-8 JSON-RPC object を 1 つ送ってください。LSP の `Content-Length` framing ではありません。stdout は JSON-RPC payload 専用で、startup、shutdown、audit、rate-limit、timeout、parse diagnostic は stderr と persistent log に出力されます。HTTP MCP は POST 上の request / response JSON-RPC を使い、独自の bearer authentication と body-size limit を適用します。
 
 ### LSP サーバー（LSP-native editor 向け）
 
@@ -5187,6 +5207,13 @@ cdidxには**MCP（Model Context Protocol）サーバー**が組み込まれて�
 indexed symbols / references で答えられる範囲に限定した `hover`、`completion`、
 `documentHighlight`、`semanticTokens/full`、`codeLens`、`inlayHint` provider を
 advertise します。
+未実装の optional LSP method は advertise しません。現在の support matrix では
+`textDocument/prepareRename`、`textDocument/rename`、`textDocument/foldingRange`、
+`textDocument/selectionRange`、`textDocument/signatureHelp` は JSON-RPC `-32601`
+（`Method not found`）を返します。completion は symbol index ベースです。要求位置の
+token で indexed symbol を検索し、keyword / path completion は提供せず、
+`resolveProvider=false` を advertise し、位置に token がない場合や indexed symbol に一致しない
+場合は空の item list を返します。
 `textDocument/didOpen`、`textDocument/didChange`、`textDocument/didClose` で送られた
 open buffer は上限付きの in-memory cache に保持されます。各 document は 4194304 bytes、
 session 全体では最大 64 live documents / 16777216 aggregate live-document bytes に制限され、

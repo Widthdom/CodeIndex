@@ -3,9 +3,10 @@ using System.Text;
 namespace CodeIndex.Mcp;
 
 /// <summary>
-/// Default MCP transport: line-delimited JSON-RPC over stdin/stdout. Mirrors the byte-for-byte
-/// behavior of the pre-#1558 inline loop (strict UTF-8, BOM-less UTF-8 on
-/// output, 64 KiB buffer, AutoFlush) so existing clients keep working unchanged.
+/// Default MCP transport: LF-delimited JSON-RPC over stdin/stdout. This is not LSP
+/// `Content-Length` framing. Mirrors the byte-for-byte behavior of the pre-#1558 inline loop
+/// (strict UTF-8, BOM-less UTF-8 on output, 64 KiB buffer, AutoFlush) so existing clients keep
+/// working unchanged.
 /// 既定の MCP トランスポート: stdin/stdout 上の行区切り JSON-RPC。#1558 以前のインラインループと
 /// 同じ I/O 挙動（strict UTF-8、出力 BOM なし UTF-8、64 KiB バッファ、AutoFlush）を維持し、
 /// 既存クライアントを動かしたまま透過的に置き換える。

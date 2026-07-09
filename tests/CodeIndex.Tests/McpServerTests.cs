@@ -491,6 +491,22 @@ public sealed class Caller
     }
 
     [Fact]
+    public async Task StdioTransport_ReadFrameAsync_ReadsLfDelimitedFrames_Issue4355()
+    {
+        var raw = """
+            {"jsonrpc":"2.0","id":1,"method":"ping"}
+            {"jsonrpc":"2.0","id":2,"method":"tools/list"}
+            """.Replace("\r\n", "\n", StringComparison.Ordinal);
+        await using var input = new MemoryStream(Encoding.UTF8.GetBytes(raw));
+        await using var output = new MemoryStream();
+        await using var transport = new StdioMcpTransport(input, output, bufferSize: 1024);
+
+        Assert.Equal("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", await transport.ReadFrameAsync(CancellationToken.None));
+        Assert.Equal("""{"jsonrpc":"2.0","id":2,"method":"tools/list"}""", await transport.ReadFrameAsync(CancellationToken.None));
+        Assert.Null(await transport.ReadFrameAsync(CancellationToken.None));
+    }
+
+    [Fact]
     public async Task ProcessLineAsync_UsesLfTerminatorEvenWhenWriterNewLineIsCrLf()
     {
         using var writer = new StringWriter { NewLine = "\r\n" };
@@ -2589,6 +2605,87 @@ public sealed class Caller
         Assert.Equal(-32700, response.RootElement.GetProperty("error").GetProperty("code").GetInt32());
         Assert.Equal("message_too_large", response.RootElement.GetProperty("error").GetProperty("data").GetProperty("category").GetString());
         Assert.Contains("Message too large", error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RunAsync_StdioKeepsLifecycleDiagnosticsOffStdout_Issue4355()
+    {
+        await using var input = new MemoryStream(Encoding.UTF8.GetBytes("""{"jsonrpc":"2.0","id":1,"method":"ping"}""" + "\n"));
+        await using var output = new MemoryStream();
+        await using var transport = new StdioMcpTransport(input, output, bufferSize: 1024);
+        using var server = new McpServer(_dbPath, "test");
+        using var error = new StringWriter();
+
+        await Task.Run(() =>
+        {
+            lock (TestConsoleLock.Gate)
+            {
+                var previousError = Console.Error;
+                try
+                {
+                    Console.SetError(error);
+#pragma warning disable xUnit1031
+                    server.RunAsync(transport, CancellationToken.None).GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+                }
+                finally
+                {
+                    Console.SetError(previousError);
+                }
+            }
+        });
+
+        var stdout = Encoding.UTF8.GetString(output.ToArray());
+        Assert.DoesNotContain("[cdidx-mcp]", stdout, StringComparison.Ordinal);
+        var line = Assert.Single(stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries));
+        using var response = JsonDocument.Parse(line);
+        Assert.Equal(1, response.RootElement.GetProperty("id").GetInt32());
+        Assert.Equal("ok", response.RootElement.GetProperty("result").GetProperty("status").GetString());
+
+        var stderr = error.ToString();
+        Assert.Contains("[cdidx-mcp] Starting MCP server", stderr, StringComparison.Ordinal);
+        Assert.Contains("[cdidx-mcp] Server stopped", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RunAsync_StdioContentLengthHeaderReturnsLineProtocolParseError_Issue4355()
+    {
+        await using var input = new MemoryStream(Encoding.UTF8.GetBytes("Content-Length: 42\r\n"));
+        await using var output = new MemoryStream();
+        await using var transport = new StdioMcpTransport(input, output, bufferSize: 1024);
+        using var server = new McpServer(_dbPath, "test");
+        using var error = new StringWriter();
+
+        await Task.Run(() =>
+        {
+            lock (TestConsoleLock.Gate)
+            {
+                var previousError = Console.Error;
+                try
+                {
+                    Console.SetError(error);
+#pragma warning disable xUnit1031
+                    server.RunAsync(transport, CancellationToken.None).GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+                }
+                finally
+                {
+                    Console.SetError(previousError);
+                }
+            }
+        });
+
+        var stdout = Encoding.UTF8.GetString(output.ToArray());
+        var line = Assert.Single(stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries));
+        using var response = JsonDocument.Parse(line);
+        var root = response.RootElement;
+        var errorPayload = root.GetProperty("error");
+        Assert.Equal(-32700, errorPayload.GetProperty("code").GetInt32());
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("id").ValueKind);
+        var suggestion = errorPayload.GetProperty("data").GetProperty("suggestion").GetString();
+        Assert.Contains("LF-delimited line", suggestion, StringComparison.Ordinal);
+        Assert.Contains("Do not send LSP Content-Length framing", suggestion, StringComparison.Ordinal);
+        Assert.Contains("MCP stdio expects one UTF-8 JSON-RPC object per LF-delimited line", error.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]

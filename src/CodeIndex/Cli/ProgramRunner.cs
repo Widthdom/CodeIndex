@@ -2554,6 +2554,8 @@ internal static partial class ProgramRunner
     {
         CommandErrorWriter.WriteStderr("Usage: cdidx lsp [--db <path>]");
         CommandErrorWriter.WriteStderr("Runs a read-only Language Server Protocol server over stdio using an existing CodeIndex database.");
+        CommandErrorWriter.WriteStderr("Protocol: LSP stdio uses Content-Length framing; unsupported optional methods are not advertised and return JSON-RPC -32601.");
+        CommandErrorWriter.WriteStderr("Completion: index-backed symbol completion only, resolveProvider=false; unmatched or no-token positions return an empty item list.");
     }
 
     private sealed record McpRunOptions(
@@ -2976,6 +2978,7 @@ internal static partial class ProgramRunner
     {
         CommandErrorWriter.WriteStderr("Usage: cdidx mcp [--db <path>] [--transport stdio|http] [--http-listen <host:port>] [--audit-log <path>] [--audit-log-include-values] [--audit-log-max-bytes <n>] [--suggestion-dedup-threshold <0..1>]");
         CommandErrorWriter.WriteStderr("Note: --json is not supported; MCP requests and responses are JSON-RPC over the selected transport.");
+        CommandErrorWriter.WriteStderr("stdio transport: one UTF-8 JSON-RPC object per LF-delimited line, not LSP Content-Length framing; lifecycle diagnostics are written to stderr.");
         CommandErrorWriter.WriteStderr($"HTTP limits: {HttpMcpTransport.MaxRequestBodyBytesEnvVar}=<bytes> (1..{HttpMcpTransport.MaxConfiguredRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxRequestBodyBytes.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxResponseBodyBytesEnvVar}=<bytes> (1..{HttpMcpTransport.MaxConfiguredResponseBodyBytes.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxResponseBodyBytes.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxQueueDepthEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredQueuedRequests.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxQueuedRequests.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxConcurrentHandlersEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredConcurrentHandlers.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxConcurrentHandlers.ToString(CultureInfo.InvariantCulture)}), {HttpMcpTransport.MaxEventStreamsEnvVar}=<n> (1..{HttpMcpTransport.MaxConfiguredEventStreams.ToString(CultureInfo.InvariantCulture)}, default {HttpMcpTransport.DefaultMaxEventStreams.ToString(CultureInfo.InvariantCulture)}).");
     }
 
