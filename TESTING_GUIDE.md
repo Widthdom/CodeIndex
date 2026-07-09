@@ -109,6 +109,8 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Source code leak prevention: allowed natural-language inputs vs rejected code blocks (fenced, indented, import runs, etc.).
 - `ConsoleUiTests.cs`
   Completion flag parity tests should route shared bash/zsh/fish flag extraction through one helper and keep individual tests focused on command-specific required flags or shell-specific aliases.
+- `ReportCommandRunnerTests.cs`
+  Report log-tail fixtures should use the local log-directory and log-file helpers instead of repeating `Path.Combine(workDir, "logs")`, `Directory.CreateDirectory`, and ad hoc `File.WriteAllText` setup.
 - `PostExtractionHookTests.cs`
   Post-extraction hook discovery, mutation, diagnostics, callback budgets, and collectible hook assembly cleanup. Heavy hook worker and collectible assembly-load integration tests use `ProductionRuntimeFactAttribute` and run only on the `net8.0` production target, while direct worker protocol and metadata tests remain cross-target. Timed-out and canceled callback tests use a hook delay shorter than their leak-observation window, not a full one-second absence check, so worker-kill regressions still write the completion marker before the assertion exits. These tests mutate hook-related environment variables and test-only callback budget state, so the class belongs to the `SQLite pool sensitive` non-parallel collection.
 - `GitHubIssueReporterTests.cs`
@@ -385,6 +387,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   ソースコード漏洩防止: 許容される自然言語入力 vs 拒否されるコードブロック（フェンス、インデント、import連打等）。
 - `ConsoleUiTests.cs`
   completion flag parity のテストでは、bash / zsh / fish の共有 flag extraction を 1 つの helper に通し、個別テストは command 固有の必須 flag や shell 固有 alias の確認に集中させてください。
+- `ReportCommandRunnerTests.cs`
+  report log-tail fixture では、`Path.Combine(workDir, "logs")`、`Directory.CreateDirectory`、ad hoc な `File.WriteAllText` setup を繰り返さず、ローカルの log directory / log file helper を使ってください。
 - `PostExtractionHookTests.cs`
   post-extraction hook の discovery、mutation、diagnostics、callback budget、collectible hook assembly cleanup のテスト。重い hook worker と collectible assembly-load の integration test は `ProductionRuntimeFactAttribute` を使って `net8.0` production target でのみ実行し、direct worker protocol と metadata test は cross-target のままにします。timeout / cancel された callback のテストは、hook delay を leak-observation window より短くし、1 秒丸ごとの absence check には戻しません。worker kill の回帰がある場合は assertion が終わる前に completion marker が書かれるようにします。hook 関連の環境変数と test-only callback budget 状態を変更するため、このクラスは non-parallel な `SQLite pool sensitive` collection に入れます。
 - `GitHubIssueReporterTests.cs`

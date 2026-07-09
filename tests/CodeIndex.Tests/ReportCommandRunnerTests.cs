@@ -505,10 +505,10 @@ public class ReportCommandRunnerTests
     public void Run_WithLogDirOverride_IncludesRedactedTail()
     {
         var workDir = CreateWorkDir();
-        var logDir = Path.Combine(workDir, "logs");
-        Directory.CreateDirectory(logDir);
-        File.WriteAllText(
-            Path.Combine(logDir, "stderr-20260516.log"),
+        var logDir = CreateLogDir(workDir);
+        WriteLogFile(
+            logDir,
+            "stderr-20260516.log",
             string.Join('\n',
                 "2026-05-16T03:00:00Z [INFO] session_start pid=1 version=1.21.0",
                 "2026-05-16T03:00:00Z [INFO] process_path=/Users/widthdom/.dotnet/tools/cdidx",
@@ -574,10 +574,10 @@ public class ReportCommandRunnerTests
     public void Run_WithFullyIncludedShortLog_DoesNotReportTailOmission_Issue3555()
     {
         var workDir = CreateWorkDir();
-        var logDir = Path.Combine(workDir, "logs");
-        Directory.CreateDirectory(logDir);
-        File.WriteAllText(
-            Path.Combine(logDir, "stderr-20260519.log"),
+        var logDir = CreateLogDir(workDir);
+        WriteLogFile(
+            logDir,
+            "stderr-20260519.log",
             string.Join('\n',
                 "2026-05-19T03:00:00Z [INFO] first",
                 "2026-05-19T03:00:01Z [INFO] second",
@@ -613,10 +613,10 @@ public class ReportCommandRunnerTests
     public void Run_WithTruncatedLog_ReportsTailOmission_Issue3555()
     {
         var workDir = CreateWorkDir();
-        var logDir = Path.Combine(workDir, "logs");
-        Directory.CreateDirectory(logDir);
-        File.WriteAllText(
-            Path.Combine(logDir, "stderr-20260520.log"),
+        var logDir = CreateLogDir(workDir);
+        WriteLogFile(
+            logDir,
+            "stderr-20260520.log",
             string.Join('\n',
                 "2026-05-20T03:00:00Z [INFO] omitted",
                 "2026-05-20T03:00:01Z [INFO] kept-one",
@@ -653,10 +653,10 @@ public class ReportCommandRunnerTests
     public void BuildRecentLogTail_LargeLogReadsBoundedTail_Issue2837()
     {
         var workDir = CreateWorkDir();
-        var logDir = Path.Combine(workDir, "logs");
-        Directory.CreateDirectory(logDir);
-        File.WriteAllText(
-            Path.Combine(logDir, "stderr-20260517.log"),
+        var logDir = CreateLogDir(workDir);
+        WriteLogFile(
+            logDir,
+            "stderr-20260517.log",
             new string('x', ReportCommandRunner.MaxLogFileTailBytes + 512)
             + "\noldest-tail\nnewest-tail\n");
 
@@ -703,10 +703,10 @@ public class ReportCommandRunnerTests
     public void Run_WithHugeLogLine_ReportsLineTruncation_Issue3806()
     {
         var workDir = CreateWorkDir();
-        var logDir = Path.Combine(workDir, "logs");
-        Directory.CreateDirectory(logDir);
-        File.WriteAllText(
-            Path.Combine(logDir, "stderr-20260621.log"),
+        var logDir = CreateLogDir(workDir);
+        WriteLogFile(
+            logDir,
+            "stderr-20260621.log",
             "2026-06-21T00:00:00Z [INFO] huge="
             + new string('x', ReportCommandRunner.MaxLogTailLineChars * 2)
             + "\n2026-06-21T00:00:01Z [INFO] tail\n");
@@ -793,14 +793,11 @@ public class ReportCommandRunnerTests
     public void BuildRecentLogTail_ManyLogFilesKeepsNewestBoundedCandidates_Issue3026()
     {
         var workDir = CreateWorkDir();
-        var logDir = Path.Combine(workDir, "logs");
-        Directory.CreateDirectory(logDir);
+        var logDir = CreateLogDir(workDir);
         var fileCount = ReportCommandRunner.MaxRecentLogFiles + 3;
         for (var i = 0; i < fileCount; i++)
         {
-            File.WriteAllText(
-                Path.Combine(logDir, $"stderr-20260518-{i:D4}.log"),
-                $"line-{i:D4}\n");
+            WriteLogFile(logDir, $"stderr-20260518-{i:D4}.log", $"line-{i:D4}\n");
         }
 
         var previousLogDir = Environment.GetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR");
@@ -1390,6 +1387,20 @@ public class ReportCommandRunnerTests
     private static string CreateWorkDir()
     {
         return TestProjectHelper.CreateTempProject("cdidx_report");
+    }
+
+    private static string CreateLogDir(string workDir)
+    {
+        var logDir = Path.Combine(workDir, "logs");
+        Directory.CreateDirectory(logDir);
+        return logDir;
+    }
+
+    private static string WriteLogFile(string logDir, string fileName, string content)
+    {
+        var path = Path.Combine(logDir, fileName);
+        File.WriteAllText(path, content);
+        return path;
     }
 
     private static string QuoteIdentifier(string value) => "\"" + value.Replace("\"", "\"\"") + "\"";
