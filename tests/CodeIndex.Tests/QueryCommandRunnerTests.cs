@@ -3190,35 +3190,28 @@ public partial class QueryCommandRunnerTests
     public void QueryEntrypoints_RecognizedOptionAsValueFailsClosed_Issue184(string[] commandAndArgs, string expectedFragment)
     {
         var command = commandAndArgs[0];
-        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_issue184_{command}_{expectedFragment.GetHashCode():x}");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/Issue184.cs",
-                "csharp",
-                "namespace Issue184; public class T { public void M() { } }");
-            MarkGraphAndFoldReady(dbPath);
+        using var project = TestProjectHelper.CreateTempProjectScope($"cdidx_issue184_{command}_{expectedFragment.GetHashCode():x}");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/Issue184.cs",
+            "csharp",
+            "namespace Issue184; public class T { public void M() { } }");
+        MarkGraphAndFoldReady(dbPath);
 
-            var args = commandAndArgs.Skip(1).Concat(new[] { "--db", dbPath, "--json" }).ToArray();
-            var (exitCode, stdout, stderr) = CaptureConsole(() => command switch
-            {
-                "search" => QueryCommandRunner.RunSearch(args, _jsonOptions),
-                "symbols" => QueryCommandRunner.RunSymbols(args, _jsonOptions),
-                "impact" => QueryCommandRunner.RunImpact(args, _jsonOptions),
-                _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
-            });
-
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains(expectedFragment, stderr);
-            Assert.Contains("Hint: fix the invalid or missing option value", stderr);
-        }
-        finally
+        var args = commandAndArgs.Skip(1).Concat(new[] { "--db", dbPath, "--json" }).ToArray();
+        var (exitCode, stdout, stderr) = CaptureConsole(() => command switch
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+            "search" => QueryCommandRunner.RunSearch(args, _jsonOptions),
+            "symbols" => QueryCommandRunner.RunSymbols(args, _jsonOptions),
+            "impact" => QueryCommandRunner.RunImpact(args, _jsonOptions),
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        });
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains(expectedFragment, stderr);
+        Assert.Contains("Hint: fix the invalid or missing option value", stderr);
     }
 
     // Regression lock for #184: non-repeatable value-taking options specified more than once
@@ -3235,49 +3228,42 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void QueryEntrypoints_DuplicateSingleValueOptionsWarn_Issue184()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue184_dup_single_value");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/Issue184.cs",
-                "csharp",
-                "namespace Issue184; public class T { public void M() { } }");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_issue184_dup_single_value");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/Issue184.cs",
+            "csharp",
+            "namespace Issue184; public class T { public void M() { } }");
 
-            // Warnings must fire even when the command itself returns zero results (NotFound);
-            // the duplicate flag warning is an argv-parsing concern, not a result-set concern.
-            // NotFound 等のゼロ件応答でも warn は出るべき。重複フラグは argv 解析段階の関心事で、
-            // 検索結果の有無とは独立している。
+        // Warnings must fire even when the command itself returns zero results (NotFound);
+        // the duplicate flag warning is an argv-parsing concern, not a result-set concern.
+        // NotFound 等のゼロ件応答でも warn は出るべき。重複フラグは argv 解析段階の関心事で、
+        // 検索結果の有無とは独立している。
 
-            // --limit appears twice with different values: rightmost CLI value wins, warning emitted.
-            var (exitLimit, _, stderrLimit) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["Issue184", "--db", dbPath, "--json", "--limit", "5", "--limit", "10"], _jsonOptions));
-            Assert.NotEqual(CommandExitCodes.UsageError, exitLimit);
-            Assert.Contains("Warning: --limit specified more than once; the rightmost CLI value '10' takes precedence over earlier CLI values and any environment/config default.", stderrLimit);
+        // --limit appears twice with different values: rightmost CLI value wins, warning emitted.
+        var (exitLimit, _, stderrLimit) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["Issue184", "--db", dbPath, "--json", "--limit", "5", "--limit", "10"], _jsonOptions));
+        Assert.NotEqual(CommandExitCodes.UsageError, exitLimit);
+        Assert.Contains("Warning: --limit specified more than once; the rightmost CLI value '10' takes precedence over earlier CLI values and any environment/config default.", stderrLimit);
 
-            // --top is canonicalized to --limit, so `--limit 5 --top 10` also warns.
-            var (exitTop, _, stderrTop) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["Issue184", "--db", dbPath, "--json", "--limit", "5", "--top", "10"], _jsonOptions));
-            Assert.NotEqual(CommandExitCodes.UsageError, exitTop);
-            Assert.Contains("Warning: --limit specified more than once; the rightmost CLI value '10' takes precedence over earlier CLI values and any environment/config default.", stderrTop);
+        // --top is canonicalized to --limit, so `--limit 5 --top 10` also warns.
+        var (exitTop, _, stderrTop) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["Issue184", "--db", dbPath, "--json", "--limit", "5", "--top", "10"], _jsonOptions));
+        Assert.NotEqual(CommandExitCodes.UsageError, exitTop);
+        Assert.Contains("Warning: --limit specified more than once; the rightmost CLI value '10' takes precedence over earlier CLI values and any environment/config default.", stderrTop);
 
-            // Single --limit must NOT warn.
-            var (exitSingle, _, stderrSingle) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["Issue184", "--db", dbPath, "--json", "--limit", "10"], _jsonOptions));
-            Assert.NotEqual(CommandExitCodes.UsageError, exitSingle);
-            Assert.DoesNotContain("specified more than once", stderrSingle);
+        // Single --limit must NOT warn.
+        var (exitSingle, _, stderrSingle) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["Issue184", "--db", dbPath, "--json", "--limit", "10"], _jsonOptions));
+        Assert.NotEqual(CommandExitCodes.UsageError, exitSingle);
+        Assert.DoesNotContain("specified more than once", stderrSingle);
 
-            // Repeatable --path must NOT warn on repetition.
-            var (exitPath, _, stderrPath) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["Issue184", "--db", dbPath, "--json", "--path", "src/**", "--path", "tests/**"], _jsonOptions));
-            Assert.NotEqual(CommandExitCodes.UsageError, exitPath);
-            Assert.DoesNotContain("specified more than once", stderrPath);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        // Repeatable --path must NOT warn on repetition.
+        var (exitPath, _, stderrPath) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["Issue184", "--db", dbPath, "--json", "--path", "src/**", "--path", "tests/**"], _jsonOptions));
+        Assert.NotEqual(CommandExitCodes.UsageError, exitPath);
+        Assert.DoesNotContain("specified more than once", stderrPath);
     }
 
     // Regression lock for #184 follow-up: options that legitimately accept separated
