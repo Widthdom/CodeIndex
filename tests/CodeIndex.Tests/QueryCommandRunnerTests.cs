@@ -3533,29 +3533,22 @@ public partial class QueryCommandRunnerTests
         // caller edge として誤って返す。`import` 行は runtime call ではなく構造的な dependency
         // edge なので callers/callees では graph edge として答えられない。正しい経路は
         // `references <name> --kind attribute|annotation|type_reference|import`。
-        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_{command}_reject_kind_{kind}");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var args = new[] { "Symbol", "--db", dbPath, "--kind", kind };
+        using var project = TestProjectHelper.CreateTempProjectScope($"cdidx_{command}_reject_kind_{kind}");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var args = new[] { "Symbol", "--db", dbPath, "--kind", kind };
 
-            var (exitCode, _, stderr) = command switch
-            {
-                "callers" => CaptureConsole(() => QueryCommandRunner.RunCallers(args, _jsonOptions)),
-                "callees" => CaptureConsole(() => QueryCommandRunner.RunCallees(args, _jsonOptions)),
-                _ => throw new InvalidOperationException($"Unexpected command: {command}")
-            };
-
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains($"'--kind {kind}' is not supported on '{command}'", stderr);
-            Assert.Contains($"references <name> --kind {kind}", stderr);
-            if (kind == "import")
-                Assert.Contains("Import references are structural dependency edges, not runtime calls", stderr);
-        }
-        finally
+        var (exitCode, _, stderr) = command switch
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+            "callers" => CaptureConsole(() => QueryCommandRunner.RunCallers(args, _jsonOptions)),
+            "callees" => CaptureConsole(() => QueryCommandRunner.RunCallees(args, _jsonOptions)),
+            _ => throw new InvalidOperationException($"Unexpected command: {command}")
+        };
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains($"'--kind {kind}' is not supported on '{command}'", stderr);
+        Assert.Contains($"references <name> --kind {kind}", stderr);
+        if (kind == "import")
+            Assert.Contains("Import references are structural dependency edges, not runtime calls", stderr);
     }
 
 
