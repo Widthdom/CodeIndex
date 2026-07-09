@@ -3723,121 +3723,115 @@ public partial class QueryCommandRunnerTests
     [ProductionRuntimeFact]
     public void RunSymbolsOutlineAndInspect_CSharpInterfaceAndStructContainerMetadataRoundTrips()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_container_metadata_roundtrip_issue474");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "fixture.cs"),
-                """
-                namespace EventMods
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_query_runner_container_metadata_roundtrip_issue474");
+        var projectRoot = project.Root;
+        TestProjectHelper.WriteTextFile(
+            projectRoot,
+            "src/fixture.cs",
+            """
+            namespace EventMods
+            {
+                using System;
+
+                public interface IBus
                 {
-                    using System;
-
-                    public interface IBus
-                    {
-                        event EventHandler Regular;
-                        static abstract event EventHandler StaticAbs;
-                        static virtual event EventHandler StaticVirt { add { } remove { } }
-                    }
+                    event EventHandler Regular;
+                    static abstract event EventHandler StaticAbs;
+                    static virtual event EventHandler StaticVirt { add { } remove { } }
                 }
+            }
 
-                namespace Demo
+            namespace Demo
+            {
+                public struct S
                 {
-                    public struct S
-                    {
-                        public int P { get; set; }
-                        public event System.EventHandler E;
-                    }
+                    public int P { get; set; }
+                    public event System.EventHandler E;
                 }
-                """);
+            }
+            """);
 
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (interfaceExitCode, interfaceStdout, interfaceStderr) = RunBuiltCli(
-                ["symbols", "StaticVirt", "--db", dbPath, "--json", "--kind", "event", "--exact-name", "--lang", "csharp"]);
-            var (structPropertyExitCode, structPropertyStdout, structPropertyStderr) = RunBuiltCli(
-                ["symbols", "P", "--db", dbPath, "--json", "--kind", "property", "--exact-name", "--lang", "csharp"]);
-            var (structEventExitCode, structEventStdout, structEventStderr) = RunBuiltCli(
-                ["symbols", "E", "--db", dbPath, "--json", "--kind", "event", "--exact-name", "--lang", "csharp"]);
-            var (outlineExitCode, outlineStdout, outlineStderr) = RunBuiltCli(
-                ["outline", "src/fixture.cs", "--db", dbPath, "--json"]);
-            var (inspectExitCode, inspectStdout, inspectStderr) = RunBuiltCli(
-                ["inspect", "StaticVirt", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"]);
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
+        var (interfaceExitCode, interfaceStdout, interfaceStderr) = RunBuiltCli(
+            ["symbols", "StaticVirt", "--db", dbPath, "--json", "--kind", "event", "--exact-name", "--lang", "csharp"]);
+        var (structPropertyExitCode, structPropertyStdout, structPropertyStderr) = RunBuiltCli(
+            ["symbols", "P", "--db", dbPath, "--json", "--kind", "property", "--exact-name", "--lang", "csharp"]);
+        var (structEventExitCode, structEventStdout, structEventStderr) = RunBuiltCli(
+            ["symbols", "E", "--db", dbPath, "--json", "--kind", "event", "--exact-name", "--lang", "csharp"]);
+        var (outlineExitCode, outlineStdout, outlineStderr) = RunBuiltCli(
+            ["outline", "src/fixture.cs", "--db", dbPath, "--json"]);
+        var (inspectExitCode, inspectStdout, inspectStderr) = RunBuiltCli(
+            ["inspect", "StaticVirt", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"]);
 
-            var interfaceRow = Assert.Single(ParseJsonLines(interfaceStdout)).RootElement;
-            var structPropertyRow = Assert.Single(ParseJsonLines(structPropertyStdout)).RootElement;
-            var structEventRow = Assert.Single(ParseJsonLines(structEventStdout)).RootElement;
-            using var outlineDocument = ParseJsonOutput(outlineStdout);
-            using var inspectDocument = ParseJsonOutput(inspectStdout);
-            var outlineJson = outlineDocument.RootElement;
-            var inspectJson = inspectDocument.RootElement;
-            var outlineSymbols = outlineJson.GetProperty("symbols").EnumerateArray().ToArray();
-            var inspectDefinition = Assert.Single(inspectJson.GetProperty("definitions").EnumerateArray());
+        var interfaceRow = Assert.Single(ParseJsonLines(interfaceStdout)).RootElement;
+        var structPropertyRow = Assert.Single(ParseJsonLines(structPropertyStdout)).RootElement;
+        var structEventRow = Assert.Single(ParseJsonLines(structEventStdout)).RootElement;
+        using var outlineDocument = ParseJsonOutput(outlineStdout);
+        using var inspectDocument = ParseJsonOutput(inspectStdout);
+        var outlineJson = outlineDocument.RootElement;
+        var inspectJson = inspectDocument.RootElement;
+        var outlineSymbols = outlineJson.GetProperty("symbols").EnumerateArray().ToArray();
+        var inspectDefinition = Assert.Single(inspectJson.GetProperty("definitions").EnumerateArray());
 
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, interfaceExitCode);
-            Assert.Equal(string.Empty, interfaceStderr);
-            Assert.Equal(CommandExitCodes.Success, structPropertyExitCode);
-            Assert.Equal(string.Empty, structPropertyStderr);
-            Assert.Equal(CommandExitCodes.Success, structEventExitCode);
-            Assert.Equal(string.Empty, structEventStderr);
-            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
-            Assert.Equal(string.Empty, outlineStderr);
-            Assert.Equal(CommandExitCodes.Success, inspectExitCode);
-            Assert.Equal(string.Empty, inspectStderr);
+        Assert.Equal(CommandExitCodes.Success, indexExitCode);
+        Assert.Equal(string.Empty, indexStderr);
+        Assert.Equal(CommandExitCodes.Success, interfaceExitCode);
+        Assert.Equal(string.Empty, interfaceStderr);
+        Assert.Equal(CommandExitCodes.Success, structPropertyExitCode);
+        Assert.Equal(string.Empty, structPropertyStderr);
+        Assert.Equal(CommandExitCodes.Success, structEventExitCode);
+        Assert.Equal(string.Empty, structEventStderr);
+        Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+        Assert.Equal(string.Empty, outlineStderr);
+        Assert.Equal(CommandExitCodes.Success, inspectExitCode);
+        Assert.Equal(string.Empty, inspectStderr);
 
-            Assert.Equal("StaticVirt", interfaceRow.GetProperty("name").GetString());
-            Assert.Equal("event", interfaceRow.GetProperty("kind").GetString());
-            Assert.Equal("interface", interfaceRow.GetProperty("container_kind").GetString());
-            Assert.Equal("IBus", interfaceRow.GetProperty("container_name").GetString());
+        Assert.Equal("StaticVirt", interfaceRow.GetProperty("name").GetString());
+        Assert.Equal("event", interfaceRow.GetProperty("kind").GetString());
+        Assert.Equal("interface", interfaceRow.GetProperty("container_kind").GetString());
+        Assert.Equal("IBus", interfaceRow.GetProperty("container_name").GetString());
 
-            Assert.Equal("P", structPropertyRow.GetProperty("name").GetString());
-            Assert.Equal("property", structPropertyRow.GetProperty("kind").GetString());
-            Assert.Equal("struct", structPropertyRow.GetProperty("container_kind").GetString());
-            Assert.Equal("S", structPropertyRow.GetProperty("container_name").GetString());
+        Assert.Equal("P", structPropertyRow.GetProperty("name").GetString());
+        Assert.Equal("property", structPropertyRow.GetProperty("kind").GetString());
+        Assert.Equal("struct", structPropertyRow.GetProperty("container_kind").GetString());
+        Assert.Equal("S", structPropertyRow.GetProperty("container_name").GetString());
 
-            Assert.Equal("E", structEventRow.GetProperty("name").GetString());
-            Assert.Equal("event", structEventRow.GetProperty("kind").GetString());
-            Assert.Equal("struct", structEventRow.GetProperty("container_kind").GetString());
-            Assert.Equal("S", structEventRow.GetProperty("container_name").GetString());
+        Assert.Equal("E", structEventRow.GetProperty("name").GetString());
+        Assert.Equal("event", structEventRow.GetProperty("kind").GetString());
+        Assert.Equal("struct", structEventRow.GetProperty("container_kind").GetString());
+        Assert.Equal("S", structEventRow.GetProperty("container_name").GetString());
 
-            Assert.Contains(
-                outlineSymbols,
-                symbol => symbol.TryGetProperty("name", out var name)
-                    && symbol.TryGetProperty("kind", out var kind)
-                    && symbol.TryGetProperty("container_kind", out var containerKind)
-                    && symbol.TryGetProperty("container_name", out var containerName)
-                    && name.GetString() == "StaticVirt"
-                    && kind.GetString() == "event"
-                    && containerKind.GetString() == "interface"
-                    && containerName.GetString() == "IBus");
-            Assert.Contains(
-                outlineSymbols,
-                symbol => symbol.TryGetProperty("name", out var name)
-                    && symbol.TryGetProperty("kind", out var kind)
-                    && symbol.TryGetProperty("container_kind", out var containerKind)
-                    && symbol.TryGetProperty("container_name", out var containerName)
-                    && name.GetString() == "P"
-                    && kind.GetString() == "property"
-                    && containerKind.GetString() == "struct"
-                    && containerName.GetString() == "S");
+        Assert.Contains(
+            outlineSymbols,
+            symbol => symbol.TryGetProperty("name", out var name)
+                && symbol.TryGetProperty("kind", out var kind)
+                && symbol.TryGetProperty("container_kind", out var containerKind)
+                && symbol.TryGetProperty("container_name", out var containerName)
+                && name.GetString() == "StaticVirt"
+                && kind.GetString() == "event"
+                && containerKind.GetString() == "interface"
+                && containerName.GetString() == "IBus");
+        Assert.Contains(
+            outlineSymbols,
+            symbol => symbol.TryGetProperty("name", out var name)
+                && symbol.TryGetProperty("kind", out var kind)
+                && symbol.TryGetProperty("container_kind", out var containerKind)
+                && symbol.TryGetProperty("container_name", out var containerName)
+                && name.GetString() == "P"
+                && kind.GetString() == "property"
+                && containerKind.GetString() == "struct"
+                && containerName.GetString() == "S");
 
-            Assert.Equal("StaticVirt", inspectDefinition.GetProperty("name").GetString());
-            Assert.Equal("interface", inspectDefinition.GetProperty("container_kind").GetString());
-            Assert.Equal("IBus", inspectDefinition.GetProperty("container_name").GetString());
-            Assert.Contains(
-                inspectJson.GetProperty("nearby_symbols").EnumerateArray(),
-                symbol => symbol.TryGetProperty("container_kind", out var containerKind)
-                    && symbol.TryGetProperty("container_name", out var containerName)
-                    && containerKind.GetString() == "interface"
-                    && containerName.GetString() == "IBus");
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal("StaticVirt", inspectDefinition.GetProperty("name").GetString());
+        Assert.Equal("interface", inspectDefinition.GetProperty("container_kind").GetString());
+        Assert.Equal("IBus", inspectDefinition.GetProperty("container_name").GetString());
+        Assert.Contains(
+            inspectJson.GetProperty("nearby_symbols").EnumerateArray(),
+            symbol => symbol.TryGetProperty("container_kind", out var containerKind)
+                && symbol.TryGetProperty("container_name", out var containerName)
+                && containerKind.GetString() == "interface"
+                && containerName.GetString() == "IBus");
     }
 
     [Fact]
