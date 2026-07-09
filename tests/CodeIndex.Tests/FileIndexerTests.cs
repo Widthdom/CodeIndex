@@ -1894,117 +1894,142 @@ public partial class FileIndexerTests
 
         // Exact filenames surface with their language.
         // 完全一致ファイル名が言語付きで露出する。
-        Assert.Equal("dockerfile", map["Dockerfile"]);
-        Assert.Equal("dockerfile", map["Containerfile"]);
-        Assert.Equal("makefile", map["Makefile"]);
-        Assert.Equal("makefile", map["GNUmakefile"]);
-        Assert.Equal("dependency_manifest", map["Gemfile"]);
-        Assert.Equal("ruby", map["Rakefile"]);
-        Assert.Equal("dependency_manifest", map["Podfile"]);
-        Assert.Equal("r", map["NAMESPACE"]);
-        Assert.Equal("r", map[".Rprofile"]);
-        Assert.Equal("r", map["Rprofile.site"]);
-        Assert.Equal("python", map["BUILD.bazel"]);
-        Assert.Equal("dependency_manifest", map["package.json"]);
-        Assert.Equal("dependency_manifest", map["pyproject.toml"]);
-        Assert.Equal("dependency_manifest", map["requirements.txt"]);
-        Assert.Equal("dependency_manifest", map["Cargo.toml"]);
-        Assert.Equal("dependency_manifest", map["go.mod"]);
-        Assert.Equal("dependency_manifest", map["Directory.Packages.props"]);
-        Assert.Equal("dependency_lock", map["package-lock.json"]);
-        Assert.Equal("dependency_lock", map["npm-shrinkwrap.json"]);
-        Assert.Equal("dependency_lock", map["pnpm-lock.yaml"]);
-        Assert.Equal("dependency_lock", map["Gemfile.lock"]);
-        Assert.Equal("dependency_lock", map["go.sum"]);
-        Assert.Equal("dependency_lock", map["uv.lock"]);
-        Assert.Equal("dependency_lock", map["packages.lock.json"]);
-        Assert.Equal("solution", map[".sln"]);
-        Assert.Equal("app_manifest", map[".manifest"]);
-        Assert.Equal("xml", map[".config"]);
-        Assert.Equal("xml", map[".runsettings"]);
-        Assert.Equal("config", map[".rules"]);
-        Assert.Equal("gitattributes", map[".gitattributes"]);
-        Assert.Equal("assembly", map[".s"]);
-        Assert.Equal("assembly", map[".S"]);
+        AssertLanguageMapEntries(
+            map,
+            ("Dockerfile", "dockerfile"),
+            ("Containerfile", "dockerfile"),
+            ("Makefile", "makefile"),
+            ("GNUmakefile", "makefile"),
+            ("Gemfile", "dependency_manifest"),
+            ("Rakefile", "ruby"),
+            ("Podfile", "dependency_manifest"),
+            ("NAMESPACE", "r"),
+            (".Rprofile", "r"),
+            ("Rprofile.site", "r"),
+            ("BUILD.bazel", "python"),
+            ("package.json", "dependency_manifest"),
+            ("pyproject.toml", "dependency_manifest"),
+            ("requirements.txt", "dependency_manifest"),
+            ("Cargo.toml", "dependency_manifest"),
+            ("go.mod", "dependency_manifest"),
+            ("Directory.Packages.props", "dependency_manifest"),
+            ("package-lock.json", "dependency_lock"),
+            ("npm-shrinkwrap.json", "dependency_lock"),
+            ("pnpm-lock.yaml", "dependency_lock"),
+            ("Gemfile.lock", "dependency_lock"),
+            ("go.sum", "dependency_lock"),
+            ("uv.lock", "dependency_lock"),
+            ("packages.lock.json", "dependency_lock"),
+            (".sln", "solution"),
+            (".manifest", "app_manifest"),
+            (".config", "xml"),
+            (".runsettings", "xml"),
+            (".rules", "config"),
+            (".gitattributes", "gitattributes"),
+            (".s", "assembly"),
+            (".S", "assembly"));
 
         // Prefix variants (Dockerfile.dev, Makefile.am, ...) surface as `<Prefix><suffix>` pseudo-entries.
         // プレフィックス変種は `<Prefix><suffix>` 形の擬似エントリとして露出する。
-        Assert.Equal("dockerfile", map["Dockerfile.<suffix>"]);
-        Assert.Equal("dockerfile", map["Containerfile.<suffix>"]);
-        Assert.Equal("makefile", map["Makefile.<suffix>"]);
-        Assert.Equal("makefile", map["GNUmakefile.<suffix>"]);
+        AssertLanguageMapEntries(
+            map,
+            ("Dockerfile.<suffix>", "dockerfile"),
+            ("Containerfile.<suffix>", "dockerfile"),
+            ("Makefile.<suffix>", "makefile"),
+            ("GNUmakefile.<suffix>", "makefile"));
 
         // Sass / Stylus are distinct buckets with indentation-aware conservative extraction.
         // Sass / Stylus はインデント構文向けの保守的な抽出を持つ別バケット。
-        Assert.Equal("sass", map[".sass"]);
-        Assert.Equal("stylus", map[".styl"]);
-        Assert.Equal("css", map[".scss"]);
-        Assert.Equal("css", map[".less"]);
+        AssertLanguageMapEntries(
+            map,
+            (".sass", "sass"),
+            (".styl", "stylus"),
+            (".scss", "css"),
+            (".less", "css"));
 
         // Cython lives in its own bucket for the same reason: `cdef class` / `cpdef` / `cdef` are
         // not parsed by the Python symbol extractor, so advertising `.pyx` / `.pxd` as `python`
         // would claim `symbol_extraction=true` while emitting zero symbols.
         // Cython も同様の理由で別バケット。`cdef class` / `cpdef` / `cdef` は Python の抽出器で
         // 拾えないため、python として広告すると実際には 0 件しか出ない齟齬になる。
-        Assert.Equal("cython", map[".pyx"]);
-        Assert.Equal("cython", map[".pxd"]);
-        Assert.Equal("python", map[".py"]);
-        Assert.Equal("python", map[".pyi"]);
+        AssertLanguageMapEntries(
+            map,
+            (".pyx", "cython"),
+            (".pxd", "cython"),
+            (".py", "python"),
+            (".pyi", "python"));
 
         // Issue #205 additions should also surface in the language list.
         // Issue #205 の追加分も言語一覧に露出する。
-        Assert.Equal("groovy", map[".groovy"]);
-        Assert.Equal("cuda", map[".cu"]);
-        Assert.Equal("glsl", map[".glsl"]);
-        Assert.Equal("hlsl", map[".hlsl"]);
-        Assert.Equal("wgsl", map[".wgsl"]);
-        Assert.Equal("metal", map[".metal"]);
-        Assert.Equal("assembly", map[".asm"]);
-        Assert.Equal("verilog", map[".v"]);
-        Assert.Equal("systemverilog", map[".sv"]);
-        Assert.Equal("vhdl", map[".vhd"]);
-        Assert.Equal("commonlisp", map[".lisp"]);
-        Assert.Equal("racket", map[".rkt"]);
-        Assert.Equal("pascal", map[".pas"]);
-        Assert.Equal("ada", map[".ada"]);
-        Assert.Equal("fortran", map[".f90"]);
-        Assert.Equal("raku", map[".raku"]);
-        Assert.Equal("perl", map[".t"]);
-        Assert.Equal("cobol", map[".cbl"]);
-        Assert.Equal("cobol", map[".cob"]);
-        Assert.Equal("cobol", map[".cobol"]);
-        Assert.Equal("cobol", map[".cpy"]);
+        AssertLanguageMapEntries(
+            map,
+            (".groovy", "groovy"),
+            (".cu", "cuda"),
+            (".glsl", "glsl"),
+            (".hlsl", "hlsl"),
+            (".wgsl", "wgsl"),
+            (".metal", "metal"),
+            (".asm", "assembly"),
+            (".v", "verilog"),
+            (".sv", "systemverilog"),
+            (".vhd", "vhdl"),
+            (".lisp", "commonlisp"),
+            (".rkt", "racket"),
+            (".pas", "pascal"),
+            (".ada", "ada"),
+            (".f90", "fortran"),
+            (".raku", "raku"),
+            (".t", "perl"),
+            (".cbl", "cobol"),
+            (".cob", "cobol"),
+            (".cobol", "cobol"),
+            (".cpy", "cobol"));
+
         // Mainstream extension-only languages should now be recognized for search/indexing.
         // 主要な拡張子ベース言語も search/indexing 用に認識されるべき。
-        Assert.Equal("ocaml", map[".ml"]);
-        Assert.Equal("ocaml", map[".mli"]);
-        Assert.Equal("crystal", map[".cr"]);
-        Assert.Equal("clojure", map[".clj"]);
-        Assert.Equal("clojure", map[".cljs"]);
-        Assert.Equal("clojure", map[".cljc"]);
-        Assert.Equal("clojure", map[".edn"]);
-        Assert.Equal("d", map[".d"]);
-        Assert.Equal("erlang", map[".erl"]);
-        Assert.Equal("erlang", map[".hrl"]);
-        Assert.Equal("julia", map[".jl"]);
-        Assert.Equal("nim", map[".nim"]);
-        Assert.Equal("nim", map[".nims"]);
-        Assert.Equal("perl", map[".pl"]);
-        Assert.Equal("perl", map[".pm"]);
-        Assert.Equal("perl", map[".pod"]);
-        Assert.Equal("perl", map[".psgi"]);
-        Assert.Equal("perl", map[".cgi"]);
-        Assert.Equal("perl", map[".fcgi"]);
-        Assert.Equal("perl", map[".t"]);
-        Assert.Equal("solidity", map[".sol"]);
-        Assert.Equal("tcl", map[".tcl"]);
-        Assert.Equal("tcl", map[".tk"]);
+        AssertLanguageMapEntries(
+            map,
+            (".ml", "ocaml"),
+            (".mli", "ocaml"),
+            (".cr", "crystal"),
+            (".clj", "clojure"),
+            (".cljs", "clojure"),
+            (".cljc", "clojure"),
+            (".edn", "clojure"),
+            (".d", "d"),
+            (".erl", "erlang"),
+            (".hrl", "erlang"),
+            (".jl", "julia"),
+            (".nim", "nim"),
+            (".nims", "nim"),
+            (".pl", "perl"),
+            (".pm", "perl"),
+            (".pod", "perl"),
+            (".psgi", "perl"),
+            (".cgi", "perl"),
+            (".fcgi", "perl"),
+            (".sol", "solidity"),
+            (".tcl", "tcl"),
+            (".tk", "tcl"));
 
         // Objective-C lives in its own bucket so `.m` / `.mm` are indexed instead of being skipped.
         // Objective-C は独立バケットにし、`.m` / `.mm` をスキップせずに index する。
-        Assert.Equal("objc", map[".m"]);
-        Assert.Equal("objc", map[".mm"]);
-        Assert.Equal("cpp", map[".hh"]);
+        AssertLanguageMapEntries(
+            map,
+            (".m", "objc"),
+            (".mm", "objc"),
+            (".hh", "cpp"));
+    }
+
+    private static void AssertLanguageMapEntries(
+        IReadOnlyDictionary<string, string> map,
+        params (string Entry, string Language)[] expectedEntries)
+    {
+        foreach (var (entry, language) in expectedEntries)
+        {
+            Assert.True(map.TryGetValue(entry, out var actualLanguage), $"Expected language map to contain '{entry}'.");
+            Assert.Equal(language, actualLanguage);
+        }
     }
 
     [Fact]
