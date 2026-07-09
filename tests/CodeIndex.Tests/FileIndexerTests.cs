@@ -2452,11 +2452,7 @@ public partial class FileIndexerTests
             File.WriteAllText(Path.Combine(sub, "main.py"), "def hello(): pass\n");
             File.WriteAllText(Path.Combine(sub, "._main.py"), "\x00\x05\x16\x07AppleDouble");
 
-            var indexer = new FileIndexer(tempDir);
-            var files = indexer.ScanFiles()
-                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .ToList();
+            var files = ScanRelativeFiles(tempDir);
 
             Assert.Equal(["app.js", "sub/main.py"], files);
         }
@@ -2601,10 +2597,7 @@ public partial class FileIndexerTests
                 directoryIgnoreCaseProbe: null,
                 symlinkPolicy: FileIndexer.SymlinkPolicy.All);
             var result = indexer.ScanFilesDetailed();
-            var files = result.Files
-                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .ToList();
+            var files = ToSortedRelativePaths(tempDir, result.Files);
 
             Assert.Equal(["sub/foo.py"], files);
             Assert.Contains(
@@ -2666,10 +2659,7 @@ public partial class FileIndexerTests
             File.CreateSymbolicLink(Path.Combine(tempDir, "file_symlink.py"), Path.Combine("a", "b", "c", "foo.py"));
 
             var indexer = new FileIndexer(tempDir);
-            var files = indexer.ScanFiles()
-                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .ToList();
+            var files = ScanRelativeFiles(indexer, tempDir);
 
             Assert.Equal(["a/b/c/foo.py"], files);
             var result = indexer.ScanFilesDetailed();
@@ -2872,11 +2862,7 @@ public partial class FileIndexerTests
             File.WriteAllText(Path.Combine(systemDir, "nested.py"), "print('system nested')\n");
             File.SetAttributes(systemDir, File.GetAttributes(systemDir) | FileAttributes.System);
 
-            var indexer = new FileIndexer(tempDir);
-            var files = indexer.ScanFiles()
-                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .ToList();
+            var files = ScanRelativeFiles(tempDir);
 
             Assert.Equal(["visible.py"], files);
         }
@@ -2902,11 +2888,7 @@ public partial class FileIndexerTests
             var missingDirectoryTarget = Path.Combine(tempDir, "missing_directory_target");
             Directory.CreateSymbolicLink(Path.Combine(tempDir, "dangling_dir"), missingDirectoryTarget);
 
-            var indexer = new FileIndexer(tempDir);
-            var files = indexer.ScanFiles()
-                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .ToList();
+            var files = ScanRelativeFiles(tempDir);
 
             Assert.Equal(["real.py"], files);
         }
@@ -6181,6 +6163,18 @@ public partial class FileIndexerTests
             writer.InsertIssues(fileId, FileIndexer.ValidateContent(record.Path, rawBytes, content));
         }
     }
+
+    private static List<string> ScanRelativeFiles(string projectRoot)
+        => ScanRelativeFiles(new FileIndexer(projectRoot), projectRoot);
+
+    private static List<string> ScanRelativeFiles(FileIndexer indexer, string projectRoot)
+        => ToSortedRelativePaths(projectRoot, indexer.ScanFiles());
+
+    private static List<string> ToSortedRelativePaths(string projectRoot, IEnumerable<string> paths)
+        => paths
+            .Select(path => Path.GetRelativePath(projectRoot, path).Replace('\\', '/'))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
 
     private static bool IndexedFileExists(DbContext db, string relativePath)
     {
