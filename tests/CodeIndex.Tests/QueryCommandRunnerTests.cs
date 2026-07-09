@@ -3446,40 +3446,33 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunFindThenExcerpt_JsonKeepsMatchedTokenVisible()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_excerpt_flow");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var longLine = new string('a', 320) + "TARGET" + new string('b', 320);
-            TestProjectHelper.InsertIndexedFile(dbPath, "dist/data.txt", "text", longLine);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_find_excerpt_flow");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var longLine = new string('a', 320) + "TARGET" + new string('b', 320);
+        TestProjectHelper.InsertIndexedFile(dbPath, "dist/data.txt", "text", longLine);
 
-            var (findExitCode, findStdout, findStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
-                ["TARGET", "--db", dbPath, "--path", "dist/data.txt", "--json", "--exact", "--max-line-width", "96"],
-                _jsonOptions));
+        var (findExitCode, findStdout, findStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+            ["TARGET", "--db", dbPath, "--path", "dist/data.txt", "--json", "--exact", "--max-line-width", "96"],
+            _jsonOptions));
 
-            using var findDocument = ParseJsonOutput(findStdout);
-            var findJson = findDocument.RootElement;
-            var line = findJson.GetProperty("line").GetInt32();
-            var column = findJson.GetProperty("column").GetInt32();
+        using var findDocument = ParseJsonOutput(findStdout);
+        var findJson = findDocument.RootElement;
+        var line = findJson.GetProperty("line").GetInt32();
+        var column = findJson.GetProperty("column").GetInt32();
 
-            var (excerptExitCode, excerptStdout, excerptStderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
-                ["dist/data.txt", "--db", dbPath, "--start", line.ToString(), "--end", line.ToString(), "--json", "--max-line-width", "96", "--focus-column", column.ToString(), "--focus-length", "6"],
-                _jsonOptions));
+        var (excerptExitCode, excerptStdout, excerptStderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+            ["dist/data.txt", "--db", dbPath, "--start", line.ToString(), "--end", line.ToString(), "--json", "--max-line-width", "96", "--focus-column", column.ToString(), "--focus-length", "6"],
+            _jsonOptions));
 
-            using var excerptDocument = ParseJsonOutput(excerptStdout);
-            var excerptJson = excerptDocument.RootElement;
+        using var excerptDocument = ParseJsonOutput(excerptStdout);
+        var excerptJson = excerptDocument.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, findExitCode);
-            Assert.Equal(string.Empty, findStderr);
-            Assert.Equal(CommandExitCodes.Success, excerptExitCode);
-            Assert.Equal(string.Empty, excerptStderr);
-            Assert.Contains("TARGET", excerptJson.GetProperty("content").GetString());
-            Assert.True(excerptJson.GetProperty("content_truncated").GetBoolean());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, findExitCode);
+        Assert.Equal(string.Empty, findStderr);
+        Assert.Equal(CommandExitCodes.Success, excerptExitCode);
+        Assert.Equal(string.Empty, excerptStderr);
+        Assert.Contains("TARGET", excerptJson.GetProperty("content").GetString());
+        Assert.True(excerptJson.GetProperty("content_truncated").GetBoolean());
     }
 
 
