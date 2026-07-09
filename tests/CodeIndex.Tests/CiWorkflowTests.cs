@@ -156,46 +156,60 @@ public class CiWorkflowTests
         var workflows = ReadWorkflowFiles();
         var allWorkflows = string.Join("\n", workflows.Select(static workflow => workflow.Content));
 
-        Assert.Contains("ubuntu-24.04", allWorkflows);
-        Assert.Contains("windows-2022", allWorkflows);
-        Assert.Contains("macos-14", allWorkflows);
+        AssertContainsAll(allWorkflows, "ubuntu-24.04", "windows-2022", "macos-14");
 
         foreach (var workflow in workflows)
         {
             AssertTopLevelContentsPermissionStaysReadOnly(workflow.FileName, workflow.Content);
-            Assert.DoesNotContain("ubuntu-latest", workflow.Content, StringComparison.Ordinal);
-            Assert.DoesNotContain("windows-latest", workflow.Content, StringComparison.Ordinal);
-            Assert.DoesNotContain("macos-latest", workflow.Content, StringComparison.Ordinal);
+            AssertDoesNotContainAny(
+                workflow.Content,
+                StringComparison.Ordinal,
+                "ubuntu-latest",
+                "windows-latest",
+                "macos-latest");
         }
 
         var continueOnErrorBlocks = FindStepBlocks(workflows, "continue-on-error: true").ToArray();
         var continueOnErrorBlock = Assert.Single(continueOnErrorBlocks);
         Assert.Equal("dotnet.yml", continueOnErrorBlock.FileName);
-        Assert.Contains("- name: Upload diagnostic dumps", continueOnErrorBlock.Text, StringComparison.Ordinal);
-        Assert.Contains("if: failure()", continueOnErrorBlock.Text, StringComparison.Ordinal);
-        Assert.Contains("actions/upload-artifact@", continueOnErrorBlock.Text, StringComparison.Ordinal);
+        AssertContainsAll(
+            continueOnErrorBlock.Text,
+            StringComparison.Ordinal,
+            "- name: Upload diagnostic dumps",
+            "if: failure()",
+            "actions/upload-artifact@");
 
         foreach (var uploadBlock in FindStepBlocks(workflows, "actions/upload-artifact@"))
         {
-            Assert.Contains("retention-days:", uploadBlock.Text, StringComparison.Ordinal);
+            AssertContainsAll(uploadBlock.Text, StringComparison.Ordinal, "retention-days:");
         }
 
         foreach (var downloadBlock in FindStepBlocks(workflows, "actions/download-artifact@"))
         {
-            Assert.Contains("pattern:", downloadBlock.Text, StringComparison.Ordinal);
-            Assert.Contains("path:", downloadBlock.Text, StringComparison.Ordinal);
+            AssertContainsAll(downloadBlock.Text, StringComparison.Ordinal, "pattern:", "path:");
         }
 
         foreach (var cacheBlock in FindStepBlocks(workflows, "actions/cache@"))
         {
-            Assert.Contains("hashFiles('**/packages.lock.json', 'global.json')", cacheBlock.Text, StringComparison.Ordinal);
-            Assert.DoesNotContain("restore-keys:", cacheBlock.Text, StringComparison.Ordinal);
-            Assert.DoesNotContain("'**/*.csproj'", cacheBlock.Text, StringComparison.Ordinal);
+            AssertContainsAll(
+                cacheBlock.Text,
+                StringComparison.Ordinal,
+                "hashFiles('**/packages.lock.json', 'global.json')");
+            AssertDoesNotContainAny(cacheBlock.Text, StringComparison.Ordinal, "restore-keys:", "'**/*.csproj'");
         }
 
-        Assert.Contains("key: ${{ runner.os }}-dotnet-nuget-", GetWorkflow(workflows, "dotnet.yml"), StringComparison.Ordinal);
-        Assert.Contains("key: ${{ runner.os }}-release-nuget-", GetWorkflow(workflows, "release.yml"), StringComparison.Ordinal);
-        Assert.Contains("key: ${{ runner.os }}-mutation-stryker-4.14.0-", GetWorkflow(workflows, "mutation-testing.yml"), StringComparison.Ordinal);
+        AssertContainsAll(
+            GetWorkflow(workflows, "dotnet.yml"),
+            StringComparison.Ordinal,
+            "key: ${{ runner.os }}-dotnet-nuget-");
+        AssertContainsAll(
+            GetWorkflow(workflows, "release.yml"),
+            StringComparison.Ordinal,
+            "key: ${{ runner.os }}-release-nuget-");
+        AssertContainsAll(
+            GetWorkflow(workflows, "mutation-testing.yml"),
+            StringComparison.Ordinal,
+            "key: ${{ runner.os }}-mutation-stryker-4.14.0-");
     }
 
     [Fact]
@@ -285,10 +299,25 @@ public class CiWorkflowTests
             Assert.Contains(expected, text);
     }
 
+    private static void AssertContainsAll(string text, StringComparison comparisonType, params string[] expectedValues)
+    {
+        foreach (var expected in expectedValues)
+            Assert.Contains(expected, text, comparisonType);
+    }
+
     private static void AssertDoesNotContainAny(string text, params string[] excludedValues)
     {
         foreach (var excluded in excludedValues)
             Assert.DoesNotContain(excluded, text);
+    }
+
+    private static void AssertDoesNotContainAny(
+        string text,
+        StringComparison comparisonType,
+        params string[] excludedValues)
+    {
+        foreach (var excluded in excludedValues)
+            Assert.DoesNotContain(excluded, text, comparisonType);
     }
 
     private static IReadOnlyList<(string FileName, string Content)> ReadWorkflowFiles()
