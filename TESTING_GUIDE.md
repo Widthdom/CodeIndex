@@ -162,7 +162,7 @@ Prefer the existing helper before writing new setup code.
 - `ProjectPath(projectRoot, ...)` resolves fixture paths relative to the temp project and rejects absolute paths or `..` escapes outside that root.
 - `CreateDirectory(projectRoot, ...)`, `WriteTextFile(...)`, `WriteTextFiles(...)`, `AppendTextFile(...)`, and `ReadTextFile(...)` centralize fixture directory creation and text-file setup. Prefer them over local `Path.Combine` + `Directory.CreateDirectory` + `File.*Text` chains when the path belongs to a temp project.
 - Use the `WriteTextFile(..., Encoding)` overload when fixture encoding is part of the behavior under test; do not drop back to `File.WriteAllText(Path.Combine(...), ..., encoding)` for temp-project files.
-- In `FileIndexerTests`, use the local sorted relative-path helpers for scan result assertions instead of repeating `Path.GetRelativePath(...)` + separator normalization + ordinal sorting at each call site.
+- In `FileIndexerTests`, use the local relative-path helpers for scan result assertions instead of repeating `Path.GetRelativePath(...)`, separator normalization, sorting, or set creation at each call site.
 - `InitializeGitRepo(projectRoot)` initializes git and sets repo-local `user.name` and `user.email`.
 - `CreateProjectDb(projectRoot)` creates `<projectRoot>/.cdidx/codeindex.db`, initializes schema, and seeds `codeindex_meta.indexed_project_root` to match the project root.
 - `InsertIndexedFile(...)` inserts a realistic indexed file with content-derived checksum, chunks, symbols, and references, and now passes the file path into Python symbol extraction so `__init__.py`-based re-export tests can exercise qualified package names.
@@ -437,7 +437,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `ProjectPath(projectRoot, ...)` は temp project からの相対 fixture path を解決し、その root の外へ出る絶対 path や `..` escape を拒否します。
 - `CreateDirectory(projectRoot, ...)`、`WriteTextFile(...)`、`WriteTextFiles(...)`、`AppendTextFile(...)`、`ReadTextFile(...)` は fixture directory 作成と text file setup を集約します。path が temp project に属する場合は、ローカルな `Path.Combine` + `Directory.CreateDirectory` + `File.*Text` の連鎖より優先してください。
 - fixture encoding がテスト対象の挙動に含まれる場合は `WriteTextFile(..., Encoding)` overload を使い、temp project 配下の file に対して `File.WriteAllText(Path.Combine(...), ..., encoding)` へ戻さないでください。
-- `FileIndexerTests` では、scan result assertion ごとに `Path.GetRelativePath(...)`、separator normalization、ordinal sorting を繰り返さず、ローカルの sorted relative-path helper を使ってください。
+- `FileIndexerTests` では、scan result assertion ごとに `Path.GetRelativePath(...)`、separator normalization、sorting、set creation を繰り返さず、ローカルの relative-path helper を使ってください。
 - `InitializeGitRepo(projectRoot)` は git を初期化し、repo-local の `user.name` と `user.email` を設定します。
 - `CreateProjectDb(projectRoot)` は `<projectRoot>/.cdidx/codeindex.db` を作成し、スキーマを初期化したうえで `codeindex_meta.indexed_project_root` に project root を書き込みます。
 - `InsertIndexedFile(...)` は内容由来の checksum、chunks、symbols、references を含む現実的なインデックス済みファイルを挿入し、Python の symbol extraction には file path も渡すため、`__init__.py` ベースの再エクスポートテストで package 修飾名を扱えます。

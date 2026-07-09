@@ -4834,8 +4834,7 @@ public partial class FileIndexerTests
             File.WriteAllText(Path.Combine(submoduleDir, ".git"), "gitdir: ../../.git/modules/quoted\n");
             File.WriteAllText(Path.Combine(submoduleDir, "lib.py"), "def quoted(): pass");
 
-            var files = new FileIndexer(tempDir).ScanFiles();
-            var rel = files.Select(f => Path.GetRelativePath(tempDir, f).Replace('\\', '/')).ToHashSet();
+            var rel = ToRelativePathSet(tempDir, new FileIndexer(tempDir).ScanFiles());
 
             Assert.Contains("vendor/hash#semi;module/lib.py", rel);
         }
@@ -4869,7 +4868,7 @@ public partial class FileIndexerTests
             File.WriteAllText(Path.Combine(overflowDir, "lib.py"), "def over_cap(): pass");
 
             var result = new FileIndexer(tempDir).ScanFilesDetailed();
-            var rel = result.Files.Select(f => Path.GetRelativePath(tempDir, f).Replace('\\', '/')).ToHashSet();
+            var rel = ToRelativePathSet(tempDir, result.Files);
 
             Assert.Contains("app.py", rel);
             Assert.DoesNotContain($"vendor/m{maxPaths}/lib.py", rel);
@@ -4997,10 +4996,7 @@ public partial class FileIndexerTests
             File.WriteAllText(Path.Combine(submoduleDir, ".gitignore"), "generated.py\n");
             File.WriteAllText(Path.Combine(submoduleDir, "generated.py"), "# generated");
 
-            var indexer = new FileIndexer(tempDir);
-            var files = indexer.ScanFiles();
-
-            var rel = files.Select(f => Path.GetRelativePath(tempDir, f).Replace('\\', '/')).ToHashSet();
+            var rel = ToRelativePathSet(tempDir, new FileIndexer(tempDir).ScanFiles());
             Assert.Contains("vendor/foo/lib.py", rel);
             Assert.DoesNotContain("vendor/foo/generated.py", rel);
         }
@@ -5032,10 +5028,7 @@ public partial class FileIndexerTests
             Directory.CreateDirectory(vendorDir);
             File.WriteAllText(Path.Combine(vendorDir, "dep.py"), "x = 1");
 
-            var indexer = new FileIndexer(tempDir);
-            var files = indexer.ScanFiles();
-
-            var rel = files.Select(f => Path.GetRelativePath(tempDir, f).Replace('\\', '/')).ToHashSet();
+            var rel = ToRelativePathSet(tempDir, new FileIndexer(tempDir).ScanFiles());
             Assert.Contains("third_party/foo/lib.py", rel);
             Assert.DoesNotContain("vendor/dep.py", rel);
         }
@@ -6046,6 +6039,11 @@ public partial class FileIndexerTests
             .Select(path => Path.GetRelativePath(projectRoot, path).Replace('\\', '/'))
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToList();
+
+    private static HashSet<string> ToRelativePathSet(string projectRoot, IEnumerable<string> paths)
+        => paths
+            .Select(path => Path.GetRelativePath(projectRoot, path).Replace('\\', '/'))
+            .ToHashSet(StringComparer.Ordinal);
 
     private static bool IndexedFileExists(DbContext db, string relativePath)
     {
