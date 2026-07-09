@@ -2662,14 +2662,19 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        var ignorePath = Path.Combine(tempDir, ".gitignore");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var ignorePath = TestProjectHelper.WriteTextFile(tempDir, ".gitignore", "secret.py\n");
         UnixFileMode? originalMode = null;
         try
         {
-            File.WriteAllText(ignorePath, "secret.py\n");
-            File.WriteAllText(Path.Combine(tempDir, "secret.py"), "print('secret')");
-            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('keep')");
+            TestProjectHelper.WriteTextFiles(
+                tempDir,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["secret.py"] = "print('secret')",
+                    ["keep.py"] = "print('keep')",
+                });
             originalMode = File.GetUnixFileMode(ignorePath);
             SetUnixPermissions(ignorePath, UnixFileMode.None);
 
@@ -2692,7 +2697,6 @@ public partial class FileIndexerTests
         {
             if (originalMode.HasValue && File.Exists(ignorePath))
                 SetUnixPermissions(ignorePath, originalMode.Value);
-            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -2702,17 +2706,20 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        var nestedDir = Path.Combine(tempDir, "src");
-        var ignorePath = Path.Combine(nestedDir, ".gitignore");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var ignorePath = TestProjectHelper.WriteTextFile(tempDir, "src/.gitignore", "secret.py\n");
         UnixFileMode? originalMode = null;
         try
         {
-            Directory.CreateDirectory(nestedDir);
-            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('keep')");
-            File.WriteAllText(ignorePath, "secret.py\n");
-            File.WriteAllText(Path.Combine(nestedDir, "secret.py"), "print('secret')");
-            File.WriteAllText(Path.Combine(nestedDir, "keep_nested.py"), "print('nested keep')");
+            TestProjectHelper.WriteTextFiles(
+                tempDir,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["keep.py"] = "print('keep')",
+                    ["src/secret.py"] = "print('secret')",
+                    ["src/keep_nested.py"] = "print('nested keep')",
+                });
             originalMode = File.GetUnixFileMode(ignorePath);
             SetUnixPermissions(ignorePath, UnixFileMode.None);
 
@@ -2734,7 +2741,6 @@ public partial class FileIndexerTests
         {
             if (originalMode.HasValue && File.Exists(ignorePath))
                 SetUnixPermissions(ignorePath, originalMode.Value);
-            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
