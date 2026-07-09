@@ -12,36 +12,30 @@ public class WorkspaceCommandRunnerTests
     [Fact]
     public void WorkspaceList_ReadsManifestMembers()
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_manifest");
+        var root = project.Root;
+        Directory.CreateDirectory(Path.Combine(root, "src", "A"));
+        File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """
+            {
+              "members": ["src/A"],
+              "index_strategy": "per_member",
+              "default_db_name": "index.db"
+            }
+            """);
+
+        var previous = Environment.CurrentDirectory;
         try
         {
-            Directory.CreateDirectory(Path.Combine(root, "src", "A"));
-            File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """
-                {
-                  "members": ["src/A"],
-                  "index_strategy": "per_member",
-                  "default_db_name": "index.db"
-                }
-                """);
+            Environment.CurrentDirectory = Path.Combine(root, "src", "A");
+            var (exitCode, stdout, _) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["list", "--json"], _jsonOptions));
 
-            var previous = Environment.CurrentDirectory;
-            try
-            {
-                Environment.CurrentDirectory = Path.Combine(root, "src", "A");
-                var (exitCode, stdout, _) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["list", "--json"], _jsonOptions));
-
-                Assert.Equal(CommandExitCodes.Success, exitCode);
-                Assert.Contains("cdidx.workspace.json", stdout);
-                Assert.Contains("index.db", stdout);
-            }
-            finally
-            {
-                Environment.CurrentDirectory = previous;
-            }
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("cdidx.workspace.json", stdout);
+            Assert.Contains("index.db", stdout);
         }
         finally
         {
-            TestProjectHelper.DeleteDirectory(root);
+            Environment.CurrentDirectory = previous;
         }
     }
 
@@ -50,43 +44,37 @@ public class WorkspaceCommandRunnerTests
     [InlineData("status")]
     public void WorkspaceListJson_InvalidMemberShape_ReturnsStructuredError_Issue4359(string command)
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_invalid_shape");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_manifest_invalid_shape");
+        var root = project.Root;
+        File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """
+            {
+              "members": [
+                { "name": "member-a", "path": "member-a" },
+                { "name": "member-b", "path": "member-b" }
+              ]
+            }
+            """);
+
+        var previous = Environment.CurrentDirectory;
         try
         {
-            File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """
-                {
-                  "members": [
-                    { "name": "member-a", "path": "member-a" },
-                    { "name": "member-b", "path": "member-b" }
-                  ]
-                }
-                """);
+            Environment.CurrentDirectory = root;
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run([command, "--json"], _jsonOptions));
 
-            var previous = Environment.CurrentDirectory;
-            try
-            {
-                Environment.CurrentDirectory = root;
-                var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run([command, "--json"], _jsonOptions));
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stderr);
 
-                Assert.Equal(CommandExitCodes.UsageError, exitCode);
-                Assert.Equal(string.Empty, stderr);
-
-                using var document = JsonDocument.Parse(stdout);
-                var rootElement = document.RootElement;
-                Assert.Equal("error", rootElement.GetProperty("status").GetString());
-                Assert.Equal(CommandErrorCodes.WorkspaceManifestInvalid, rootElement.GetProperty("error_code").GetString());
-                Assert.Equal("workspace_manifest_invalid", rootElement.GetProperty("category").GetString());
-                Assert.Contains("members[0] must be a string", rootElement.GetProperty("message").GetString());
-                Assert.Contains("members` must be an array of relative path strings", rootElement.GetProperty("hint").GetString());
-            }
-            finally
-            {
-                Environment.CurrentDirectory = previous;
-            }
+            using var document = JsonDocument.Parse(stdout);
+            var rootElement = document.RootElement;
+            Assert.Equal("error", rootElement.GetProperty("status").GetString());
+            Assert.Equal(CommandErrorCodes.WorkspaceManifestInvalid, rootElement.GetProperty("error_code").GetString());
+            Assert.Equal("workspace_manifest_invalid", rootElement.GetProperty("category").GetString());
+            Assert.Contains("members[0] must be a string", rootElement.GetProperty("message").GetString());
+            Assert.Contains("members` must be an array of relative path strings", rootElement.GetProperty("hint").GetString());
         }
         finally
         {
-            TestProjectHelper.DeleteDirectory(root);
+            Environment.CurrentDirectory = previous;
         }
     }
 
@@ -424,34 +412,30 @@ public class WorkspaceCommandRunnerTests
     [Fact]
     public void ConfigShow_PrintsPrecedence()
     {
-        var configHome = TestProjectHelper.CreateTempProject("cdidx_config_show_config");
-        try
-        {
-            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
-            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
-            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_config_show_config");
+        var configHome = config.Root;
+        using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+        Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+        Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
 
-            var (exitCode, stdout, _) = ConsoleCapture.Capture(() => CdidxConfigFile.RunShow(["--json"], _jsonOptions));
+        var (exitCode, stdout, _) = ConsoleCapture.Capture(() => CdidxConfigFile.RunShow(["--json"], _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            using var document = JsonDocument.Parse(stdout);
-            var root = document.RootElement;
-            Assert.False(root.TryGetProperty("active_workspace", out _));
-            Assert.Contains(
-                root.GetProperty("precedence").EnumerateArray(),
-                item => item.GetString() == "active_workspace");
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(configHome);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        using var document = JsonDocument.Parse(stdout);
+        var root = document.RootElement;
+        Assert.False(root.TryGetProperty("active_workspace", out _));
+        Assert.Contains(
+            root.GetProperty("precedence").EnumerateArray(),
+            item => item.GetString() == "active_workspace");
     }
 
     [Fact]
     public void ConfigShowJson_IncludesMissingMetadataAndEffectiveDefaults_Issue3905()
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_config_show_missing_metadata");
-        var configHome = TestProjectHelper.CreateTempProject("cdidx_config_show_missing_metadata_home");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_config_show_missing_metadata");
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_config_show_missing_metadata_home");
+        var root = project.Root;
+        var configHome = config.Root;
         var previous = Environment.CurrentDirectory;
         try
         {
@@ -504,16 +488,16 @@ public class WorkspaceCommandRunnerTests
         finally
         {
             Environment.CurrentDirectory = previous;
-            TestProjectHelper.DeleteDirectory(root);
-            TestProjectHelper.DeleteDirectory(configHome);
         }
     }
 
     [Fact]
     public void ConfigShowJson_IncludesSourcesAndRedactsSecrets_Issue3927()
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_config_show_sources");
-        var configHome = TestProjectHelper.CreateTempProject("cdidx_config_show_sources_home");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_config_show_sources");
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_config_show_sources_home");
+        var root = project.Root;
+        var configHome = config.Root;
         var previous = Environment.CurrentDirectory;
         try
         {
@@ -573,15 +557,14 @@ public class WorkspaceCommandRunnerTests
         finally
         {
             Environment.CurrentDirectory = previous;
-            TestProjectHelper.DeleteDirectory(root);
-            TestProjectHelper.DeleteDirectory(configHome);
         }
     }
 
     [Fact]
     public void ConfigShowJson_ShowPathsKeepsRawPathDiagnostics_Issue4148()
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_config_show_show_paths");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_config_show_show_paths");
+        var root = project.Root;
         var previous = Environment.CurrentDirectory;
         try
         {
@@ -609,15 +592,16 @@ public class WorkspaceCommandRunnerTests
         finally
         {
             Environment.CurrentDirectory = previous;
-            TestProjectHelper.DeleteDirectory(root);
         }
     }
 
     [Fact]
     public void ConfigShowJson_InvalidConfigReportsInvalidStatus_Issue3927()
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_config_show_invalid");
-        var configHome = TestProjectHelper.CreateTempProject("cdidx_config_show_invalid_home");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_config_show_invalid");
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_config_show_invalid_home");
+        var root = project.Root;
+        var configHome = config.Root;
         var previous = Environment.CurrentDirectory;
         try
         {
@@ -647,8 +631,6 @@ public class WorkspaceCommandRunnerTests
         finally
         {
             Environment.CurrentDirectory = previous;
-            TestProjectHelper.DeleteDirectory(root);
-            TestProjectHelper.DeleteDirectory(configHome);
         }
     }
 
@@ -668,7 +650,8 @@ public class WorkspaceCommandRunnerTests
     [Fact]
     public void WorkspaceStatusJsonNoManifest_IncludesDiscoveryMetadata_Issues3905_3956()
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_status_no_manifest");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_status_no_manifest");
+        var root = project.Root;
         var previous = Environment.CurrentDirectory;
         try
         {
@@ -699,15 +682,16 @@ public class WorkspaceCommandRunnerTests
         finally
         {
             Environment.CurrentDirectory = previous;
-            TestProjectHelper.DeleteDirectory(root);
         }
     }
 
     [Fact]
     public void WorkspaceCurrentJsonNoActiveWorkspace_ReturnsExplicitInactiveState_Issue3939()
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_current_no_active");
-        var configHome = TestProjectHelper.CreateTempProject("cdidx_workspace_current_no_active_config");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_current_no_active");
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_current_no_active_config");
+        var root = project.Root;
+        var configHome = config.Root;
         var previous = Environment.CurrentDirectory;
         try
         {
@@ -733,35 +717,27 @@ public class WorkspaceCommandRunnerTests
         finally
         {
             Environment.CurrentDirectory = previous;
-            TestProjectHelper.DeleteDirectory(root);
-            TestProjectHelper.DeleteDirectory(configHome);
         }
     }
 
     [Fact]
     public void ActiveWorkspace_AffectsQueryResolutionButNotIndexResolution()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_project");
-        var activeRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_state");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_active_workspace_project");
+        using var active = TestProjectHelper.CreateTempProjectScope("cdidx_active_workspace_state");
+        var projectRoot = project.Root;
+        var activeRoot = active.Root;
         var activeDb = Path.Combine(activeRoot, ".cdidx", "codeindex.db");
-        try
-        {
-            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable);
-            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, activeDb);
+        using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable);
+        Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, activeDb);
 
-            var query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
-            var index = DbPathResolver.ResolveForIndex(projectRoot, explicitDbPath: null, explicitDataDir: null);
+        var query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+        var index = DbPathResolver.ResolveForIndex(projectRoot, explicitDbPath: null, explicitDataDir: null);
 
-            Assert.Equal(Path.GetFullPath(activeDb), query.DbPath);
-            Assert.Equal(DbPathResolver.DataDirSourceActiveWorkspace, query.DataDirSource);
-            Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), index.DbPath);
-            Assert.Equal(DbPathResolver.DataDirSourceWorkspace, index.DataDirSource);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-            TestProjectHelper.DeleteDirectory(activeRoot);
-        }
+        Assert.Equal(Path.GetFullPath(activeDb), query.DbPath);
+        Assert.Equal(DbPathResolver.DataDirSourceActiveWorkspace, query.DataDirSource);
+        Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), index.DbPath);
+        Assert.Equal(DbPathResolver.DataDirSourceWorkspace, index.DataDirSource);
     }
 
     [Fact]
