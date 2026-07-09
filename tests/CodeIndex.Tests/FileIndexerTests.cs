@@ -2907,166 +2907,144 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFiles_RespectsRootAnchoredGitignorePatterns()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(tempDir, "root_only_dir"));
-            Directory.CreateDirectory(Path.Combine(tempDir, "src"));
-            Directory.CreateDirectory(Path.Combine(tempDir, "src", "root_only_dir"));
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "/root_only_dir/\n/secret.py\n");
-            File.WriteAllText(Path.Combine(tempDir, "root_only_dir", "root.py"), "print('ignored root dir')");
-            File.WriteAllText(Path.Combine(tempDir, "secret.py"), "print('ignored root file')");
-            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('kept root file')");
-            File.WriteAllText(Path.Combine(tempDir, "src", "root_only_dir", "nested.py"), "print('kept nested dir')");
-            File.WriteAllText(Path.Combine(tempDir, "src", "secret.py"), "print('kept nested file')");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [".gitignore"] = "/root_only_dir/\n/secret.py\n",
+                ["root_only_dir/root.py"] = "print('ignored root dir')",
+                ["secret.py"] = "print('ignored root file')",
+                ["keep.py"] = "print('kept root file')",
+                ["src/root_only_dir/nested.py"] = "print('kept nested dir')",
+                ["src/secret.py"] = "print('kept nested file')",
+            });
 
-            var files = ScanRelativeFiles(tempDir);
+        var files = ScanRelativeFiles(tempDir);
 
-            Assert.Equal([".gitignore", "keep.py", "src/root_only_dir/nested.py", "src/secret.py"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal([".gitignore", "keep.py", "src/root_only_dir/nested.py", "src/secret.py"], files);
     }
 
     [Fact]
     public void ScanFiles_RespectsGlobstarPrefixPatternAtProjectRoot()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(tempDir, "nested"));
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "**/*.min.js\n");
-            File.WriteAllText(Path.Combine(tempDir, "app.min.js"), "export const ignored = true;");
-            File.WriteAllText(Path.Combine(tempDir, "nested", "lib.min.js"), "export const nestedIgnored = true;");
-            File.WriteAllText(Path.Combine(tempDir, "app.js"), "export const kept = true;");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [".gitignore"] = "**/*.min.js\n",
+                ["app.min.js"] = "export const ignored = true;",
+                ["nested/lib.min.js"] = "export const nestedIgnored = true;",
+                ["app.js"] = "export const kept = true;",
+            });
 
-            var files = ScanRelativeFiles(tempDir);
+        var files = ScanRelativeFiles(tempDir);
 
-            Assert.Equal([".gitignore", "app.js"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal([".gitignore", "app.js"], files);
     }
 
     [Fact]
     public void ScanFiles_HandlesGitIgnoreWhitespaceLikeGit()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(
-                Path.Combine(tempDir, ".gitignore"),
-                "  #*.py\n  *.py\n*.cs\t\n");
-            File.WriteAllText(Path.Combine(tempDir, "  #x.py"), "print('kept because leading-space # is a comment')");
-            File.WriteAllText(Path.Combine(tempDir, "a.py"), "print('ignored after leading-space trim')");
-            File.WriteAllText(Path.Combine(tempDir, "  a.py"), "print('ignored by trimmed basename pattern')");
-            File.WriteAllText(Path.Combine(tempDir, "a.cs"), "public class IgnoredAfterTrailingTabTrim { }");
-            File.WriteAllText(Path.Combine(tempDir, "keep.js"), "export const kept = true;");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [".gitignore"] = "  #*.py\n  *.py\n*.cs\t\n",
+                ["  #x.py"] = "print('kept because leading-space # is a comment')",
+                ["a.py"] = "print('ignored after leading-space trim')",
+                ["  a.py"] = "print('ignored by trimmed basename pattern')",
+                ["a.cs"] = "public class IgnoredAfterTrailingTabTrim { }",
+                ["keep.js"] = "export const kept = true;",
+            });
 
-            var files = ScanRelativeFiles(tempDir);
+        var files = ScanRelativeFiles(tempDir);
 
-            Assert.Equal([".gitignore", "keep.js"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal([".gitignore", "keep.js"], files);
     }
 
     [Fact]
     public void ScanFiles_RespectsGlobstarMiddlePatternWithZeroOrMoreDirectories()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(tempDir, "foo"));
-            Directory.CreateDirectory(Path.Combine(tempDir, "foo", "deep"));
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "foo/**/bar.py\n");
-            File.WriteAllText(Path.Combine(tempDir, "foo", "bar.py"), "print('ignored shallow')");
-            File.WriteAllText(Path.Combine(tempDir, "foo", "deep", "bar.py"), "print('ignored deep')");
-            File.WriteAllText(Path.Combine(tempDir, "foo", "keep.py"), "print('kept')");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [".gitignore"] = "foo/**/bar.py\n",
+                ["foo/bar.py"] = "print('ignored shallow')",
+                ["foo/deep/bar.py"] = "print('ignored deep')",
+                ["foo/keep.py"] = "print('kept')",
+            });
 
-            var files = ScanRelativeFiles(tempDir);
+        var files = ScanRelativeFiles(tempDir);
 
-            Assert.Equal([".gitignore", "foo/keep.py"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal([".gitignore", "foo/keep.py"], files);
     }
 
     [Fact]
     public void ScanFiles_RespectsTrailingGlobstarWithoutIgnoringRootDirectoryItself()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(tempDir, "foo"));
-            Directory.CreateDirectory(Path.Combine(tempDir, "foo", "nested"));
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "foo/**\n!foo/bar.py\n");
-            File.WriteAllText(Path.Combine(tempDir, "foo", "bar.py"), "print('keep')");
-            File.WriteAllText(Path.Combine(tempDir, "foo", "nested", "ignored.py"), "print('ignored')");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [".gitignore"] = "foo/**\n!foo/bar.py\n",
+                ["foo/bar.py"] = "print('keep')",
+                ["foo/nested/ignored.py"] = "print('ignored')",
+            });
 
-            var files = ScanRelativeFiles(tempDir);
+        var files = ScanRelativeFiles(tempDir);
 
-            Assert.Equal([".gitignore", "foo/bar.py"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal([".gitignore", "foo/bar.py"], files);
     }
 
     [Fact]
     public void ScanFiles_RespectsTrailingGlobstarDirectoryPatternWithoutIgnoringRootDirectoryItself()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(tempDir, "foo"));
-            Directory.CreateDirectory(Path.Combine(tempDir, "foo", "bar"));
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "foo/**/\n!foo/bar.py\n");
-            File.WriteAllText(Path.Combine(tempDir, "foo", "bar.py"), "print('keep')");
-            File.WriteAllText(Path.Combine(tempDir, "foo", "keep.py"), "print('keep')");
-            File.WriteAllText(Path.Combine(tempDir, "foo", "bar", "ignored.py"), "print('ignored')");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [".gitignore"] = "foo/**/\n!foo/bar.py\n",
+                ["foo/bar.py"] = "print('keep')",
+                ["foo/keep.py"] = "print('keep')",
+                ["foo/bar/ignored.py"] = "print('ignored')",
+            });
 
-            var files = ScanRelativeFiles(tempDir);
+        var files = ScanRelativeFiles(tempDir);
 
-            Assert.Equal([".gitignore", "foo/bar.py", "foo/keep.py"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal([".gitignore", "foo/bar.py", "foo/keep.py"], files);
     }
 
     [Fact]
     public void ScanFiles_TreatsNonSpecialDoubleStarAsSingleSegmentWildcard()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(tempDir, "dir"));
-            Directory.CreateDirectory(Path.Combine(tempDir, "dir", "a"));
-            Directory.CreateDirectory(Path.Combine(tempDir, "dir", "a", "x"));
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "dir/a**b.py\n");
-            File.WriteAllText(Path.Combine(tempDir, "dir", "ab.py"), "print('ignored')");
-            File.WriteAllText(Path.Combine(tempDir, "dir", "axxb.py"), "print('ignored')");
-            File.WriteAllText(Path.Combine(tempDir, "dir", "a", "x", "b.py"), "print('kept')");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [".gitignore"] = "dir/a**b.py\n",
+                ["dir/ab.py"] = "print('ignored')",
+                ["dir/axxb.py"] = "print('ignored')",
+                ["dir/a/x/b.py"] = "print('kept')",
+            });
 
-            var files = ScanRelativeFiles(tempDir);
+        var files = ScanRelativeFiles(tempDir);
 
-            Assert.Equal([".gitignore", "dir/a/x/b.py"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal([".gitignore", "dir/a/x/b.py"], files);
     }
 
     [Fact]
