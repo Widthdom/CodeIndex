@@ -5303,13 +5303,13 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.Contains(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "instantiate" && r.Line == 15);
-        Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "instantiate" && r.Line == 16);
-        Assert.Contains(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "instantiate" && r.Line == 17);
-        Assert.Contains(references, r => r.SymbolName == "DoWork" && r.ReferenceKind == "call" && r.Line == 18);
-        Assert.Contains(references, r => r.SymbolName == "Process" && r.ReferenceKind == "call" && r.Line == 19);
-        Assert.DoesNotContain(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "call");
-        Assert.DoesNotContain(references, r => r.SymbolName == "List" && r.ReferenceKind == "call");
+        AssertReferenceContains(references, "Dictionary", "instantiate", line: 15);
+        AssertReferenceContains(references, "List", "instantiate", line: 16);
+        AssertReferenceContains(references, "Dictionary", "instantiate", line: 17);
+        AssertReferenceContains(references, "DoWork", "call", line: 18);
+        AssertReferenceContains(references, "Process", "call", line: 19);
+        AssertReferenceDoesNotContain(references, "Dictionary", "call");
+        AssertReferenceDoesNotContain(references, "List", "call");
     }
 
     [Fact]
@@ -5341,10 +5341,10 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.Contains(references, r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference" && r.Line == 17);
-        Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "type_reference" && r.Line == 18);
-        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference" && r.Line == 18);
-        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference" && r.Line == 10);
+        AssertReferenceContains(references, "Payload", "type_reference", line: 17);
+        AssertReferenceContains(references, "List", "type_reference", line: 18);
+        AssertReferenceContains(references, "Result", "type_reference", line: 18);
+        AssertReferenceDoesNotContain(references, "T", "type_reference", line: 10);
     }
 
     [Fact]
@@ -5378,11 +5378,11 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.Contains(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "instantiate" && r.Line == 9);
-        Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "instantiate" && r.Line == 10);
-        Assert.Contains(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "instantiate" && r.Line == 11);
-        Assert.DoesNotContain(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "call");
-        Assert.DoesNotContain(references, r => r.SymbolName == "List" && r.ReferenceKind == "call");
+        AssertReferenceContains(references, "Dictionary", "instantiate", line: 9);
+        AssertReferenceContains(references, "List", "instantiate", line: 10);
+        AssertReferenceContains(references, "Dictionary", "instantiate", line: 11);
+        AssertReferenceDoesNotContain(references, "Dictionary", "call");
+        AssertReferenceDoesNotContain(references, "List", "call");
     }
 
     [Fact]
@@ -5417,22 +5417,22 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.Contains(references, r => r.SymbolName == "Bar" && r.ReferenceKind == "instantiate" && r.Line == 11);
-        Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "instantiate" && r.Line == 12);
-        Assert.Contains(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "instantiate" && r.Line == 13);
-        Assert.Contains(references, r => r.SymbolName == "Bar" && r.ReferenceKind == "instantiate" && r.Line == 15 && r.Column == 24);
-        Assert.Contains(references, r => r.SymbolName == "Bar" && r.ReferenceKind == "instantiate" && r.Line == 15 && r.Column == 36);
+        AssertReferenceContains(references, "Bar", "instantiate", line: 11);
+        AssertReferenceContains(references, "List", "instantiate", line: 12);
+        AssertReferenceContains(references, "Dictionary", "instantiate", line: 13);
+        AssertReferenceContains(references, "Bar", "instantiate", line: 15, column: 24);
+        AssertReferenceContains(references, "Bar", "instantiate", line: 15, column: 36);
         // Built-in `int` must not produce an `instantiate int` row from `new int[] { ... }`.
         // 組み込み型 `int` は `instantiate int` を発行しない。
         Assert.DoesNotContain(references, r => r.SymbolName == "int");
         // The negative `if (true) { }` line must not match the initializer regex.
         // `if (true) { }` のような `new` を含まない `{` 開始は initializer regex にマッチしない。
-        Assert.DoesNotContain(references, r => r.SymbolName == "if" && r.ReferenceKind == "instantiate");
+        AssertReferenceDoesNotContain(references, "if", "instantiate");
         // Same target on the same line/column must not double-emit instantiate + call.
         // 同一行・同一列で `instantiate` と `call` を二重に出さない。
-        Assert.DoesNotContain(references, r => r.SymbolName == "Bar" && r.ReferenceKind == "call");
-        Assert.DoesNotContain(references, r => r.SymbolName == "List" && r.ReferenceKind == "call");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "call");
+        AssertReferenceDoesNotContain(references, "Bar", "call");
+        AssertReferenceDoesNotContain(references, "List", "call");
+        AssertReferenceDoesNotContain(references, "Dictionary", "call");
     }
 
     [Fact]
@@ -5464,9 +5464,9 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.Contains(references, r => r.SymbolName == "Foo" && r.ReferenceKind == "instantiate" && r.Line == 11);
-        Assert.Contains(references, r => r.SymbolName == "Bar" && r.ReferenceKind == "instantiate" && r.Line == 12);
-        Assert.Contains(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "instantiate" && r.Line == 13);
+        AssertReferenceContains(references, "Foo", "instantiate", line: 11);
+        AssertReferenceContains(references, "Bar", "instantiate", line: 12);
+        AssertReferenceContains(references, "Dictionary", "instantiate", line: 13);
     }
 
     [Fact]
@@ -5525,17 +5525,17 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         // new Bag (line 12) with `{` on line 13
-        Assert.Contains(references, r => r.SymbolName == "Bag" && r.ReferenceKind == "instantiate" && r.Line == 12);
+        AssertReferenceContains(references, "Bag", "instantiate", line: 12);
         // new List<Foo> (line 14) with `{` on line 15
-        Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "instantiate" && r.Line == 14);
+        AssertReferenceContains(references, "List", "instantiate", line: 14);
         // new Foo (line 16) with `{` on line 17
-        Assert.Contains(references, r => r.SymbolName == "Foo" && r.ReferenceKind == "instantiate" && r.Line == 16);
+        AssertReferenceContains(references, "Foo", "instantiate", line: 16);
         // new Foo[] (line 26) with `{` on line 27
-        Assert.Contains(references, r => r.SymbolName == "Foo" && r.ReferenceKind == "instantiate" && r.Line == 26);
+        AssertReferenceContains(references, "Foo", "instantiate", line: 26);
         // The negative `var f = new Foo` (line 37) followed by `;` (line 38) must NOT
         // emit an instantiate at that line via the trailing peek path.
         // ネガティブ: `var f = new Foo` (行 37) の次行は `;` なので trailing peek は発行しない。
-        Assert.DoesNotContain(references, r => r.SymbolName == "Foo" && r.ReferenceKind == "instantiate" && r.Line == 37);
+        AssertReferenceDoesNotContain(references, "Foo", "instantiate", line: 37);
     }
 
     [Fact]
@@ -9766,11 +9766,12 @@ public partial class ReferenceExtractorTests
         string referenceKind,
         string? containerName = null,
         string? context = null,
-        int? line = null)
+        int? line = null,
+        int? column = null)
     {
         Assert.Contains(
             references,
-            reference => ReferenceMatches(reference, symbolName, referenceKind, containerName, context, line));
+            reference => ReferenceMatches(reference, symbolName, referenceKind, containerName, context, line, column));
     }
 
     private static void AssertReferenceDoesNotContain(
@@ -9779,11 +9780,12 @@ public partial class ReferenceExtractorTests
         string referenceKind,
         string? containerName = null,
         string? context = null,
-        int? line = null)
+        int? line = null,
+        int? column = null)
     {
         Assert.DoesNotContain(
             references,
-            reference => ReferenceMatches(reference, symbolName, referenceKind, containerName, context, line));
+            reference => ReferenceMatches(reference, symbolName, referenceKind, containerName, context, line, column));
     }
 
     private static bool ReferenceMatches(
@@ -9792,13 +9794,15 @@ public partial class ReferenceExtractorTests
         string referenceKind,
         string? containerName,
         string? context,
-        int? line)
+        int? line,
+        int? column)
     {
         return reference.SymbolName == symbolName
             && reference.ReferenceKind == referenceKind
             && (containerName is null || reference.ContainerName == containerName)
             && (context is null || reference.Context == context)
-            && (line is null || reference.Line == line.Value);
+            && (line is null || reference.Line == line.Value)
+            && (column is null || reference.Column == column.Value);
     }
 
 #if NET8_0
