@@ -1697,35 +1697,28 @@ public partial class QueryCommandRunnerTests
     [InlineData("symbols", "--max-line-width", "10")]
     public void QueryCommands_RejectPreviewOptionsWhenUnsupported(string command, string option, string value)
     {
-        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_preview_reject_{command}");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope($"cdidx_preview_reject_{command}");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var args = new List<string>();
+        switch (command)
         {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var args = new List<string>();
-            switch (command)
-            {
-                case "definition":
-                case "search":
-                case "symbols":
-                    args.AddRange(["QueryCommandRunner", "--db", dbPath, option, value, "--count"]);
-                    break;
-            }
-
-            var (exitCode, _, stderr) = command switch
-            {
-                "definition" => CaptureConsole(() => QueryCommandRunner.RunDefinition([.. args], _jsonOptions)),
-                "search" => CaptureConsole(() => QueryCommandRunner.RunSearch([.. args], _jsonOptions)),
-                "symbols" => CaptureConsole(() => QueryCommandRunner.RunSymbols([.. args], _jsonOptions)),
-                _ => throw new InvalidOperationException($"Unexpected command: {command}")
-            };
-
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains($"{option} is not supported for {command}", stderr);
+            case "definition":
+            case "search":
+            case "symbols":
+                args.AddRange(["QueryCommandRunner", "--db", dbPath, option, value, "--count"]);
+                break;
         }
-        finally
+
+        var (exitCode, _, stderr) = command switch
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+            "definition" => CaptureConsole(() => QueryCommandRunner.RunDefinition([.. args], _jsonOptions)),
+            "search" => CaptureConsole(() => QueryCommandRunner.RunSearch([.. args], _jsonOptions)),
+            "symbols" => CaptureConsole(() => QueryCommandRunner.RunSymbols([.. args], _jsonOptions)),
+            _ => throw new InvalidOperationException($"Unexpected command: {command}")
+        };
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains($"{option} is not supported for {command}", stderr);
     }
 
 
