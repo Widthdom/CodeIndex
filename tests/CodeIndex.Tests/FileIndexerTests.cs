@@ -1881,6 +1881,124 @@ public partial class FileIndexerTests
         }
     }
 
+    private static readonly (string Entry, string Language)[] ExactLanguageMapEntries =
+    [
+        ("Dockerfile", "dockerfile"),
+        ("Containerfile", "dockerfile"),
+        ("Makefile", "makefile"),
+        ("GNUmakefile", "makefile"),
+        ("Gemfile", "dependency_manifest"),
+        ("Rakefile", "ruby"),
+        ("Podfile", "dependency_manifest"),
+        ("NAMESPACE", "r"),
+        (".Rprofile", "r"),
+        ("Rprofile.site", "r"),
+        ("BUILD.bazel", "python"),
+        ("package.json", "dependency_manifest"),
+        ("pyproject.toml", "dependency_manifest"),
+        ("requirements.txt", "dependency_manifest"),
+        ("Cargo.toml", "dependency_manifest"),
+        ("go.mod", "dependency_manifest"),
+        ("Directory.Packages.props", "dependency_manifest"),
+        ("package-lock.json", "dependency_lock"),
+        ("npm-shrinkwrap.json", "dependency_lock"),
+        ("pnpm-lock.yaml", "dependency_lock"),
+        ("Gemfile.lock", "dependency_lock"),
+        ("go.sum", "dependency_lock"),
+        ("uv.lock", "dependency_lock"),
+        ("packages.lock.json", "dependency_lock"),
+        (".sln", "solution"),
+        (".manifest", "app_manifest"),
+        (".config", "xml"),
+        (".runsettings", "xml"),
+        (".rules", "config"),
+        (".gitattributes", "gitattributes"),
+        (".s", "assembly"),
+        (".S", "assembly")
+    ];
+
+    private static readonly (string Entry, string Language)[] PrefixLanguageMapEntries =
+    [
+        ("Dockerfile.<suffix>", "dockerfile"),
+        ("Containerfile.<suffix>", "dockerfile"),
+        ("Makefile.<suffix>", "makefile"),
+        ("GNUmakefile.<suffix>", "makefile")
+    ];
+
+    private static readonly (string Entry, string Language)[] StyleLanguageMapEntries =
+    [
+        (".sass", "sass"),
+        (".styl", "stylus"),
+        (".scss", "css"),
+        (".less", "css")
+    ];
+
+    private static readonly (string Entry, string Language)[] PythonFamilyLanguageMapEntries =
+    [
+        (".pyx", "cython"),
+        (".pxd", "cython"),
+        (".py", "python"),
+        (".pyi", "python")
+    ];
+
+    private static readonly (string Entry, string Language)[] Issue205LanguageMapEntries =
+    [
+        (".groovy", "groovy"),
+        (".cu", "cuda"),
+        (".glsl", "glsl"),
+        (".hlsl", "hlsl"),
+        (".wgsl", "wgsl"),
+        (".metal", "metal"),
+        (".asm", "assembly"),
+        (".v", "verilog"),
+        (".sv", "systemverilog"),
+        (".vhd", "vhdl"),
+        (".lisp", "commonlisp"),
+        (".rkt", "racket"),
+        (".pas", "pascal"),
+        (".ada", "ada"),
+        (".f90", "fortran"),
+        (".raku", "raku"),
+        (".t", "perl"),
+        (".cbl", "cobol"),
+        (".cob", "cobol"),
+        (".cobol", "cobol"),
+        (".cpy", "cobol")
+    ];
+
+    private static readonly (string Entry, string Language)[] MainstreamExtensionLanguageMapEntries =
+    [
+        (".ml", "ocaml"),
+        (".mli", "ocaml"),
+        (".cr", "crystal"),
+        (".clj", "clojure"),
+        (".cljs", "clojure"),
+        (".cljc", "clojure"),
+        (".edn", "clojure"),
+        (".d", "d"),
+        (".erl", "erlang"),
+        (".hrl", "erlang"),
+        (".jl", "julia"),
+        (".nim", "nim"),
+        (".nims", "nim"),
+        (".pl", "perl"),
+        (".pm", "perl"),
+        (".pod", "perl"),
+        (".psgi", "perl"),
+        (".cgi", "perl"),
+        (".fcgi", "perl"),
+        (".sol", "solidity"),
+        (".tcl", "tcl"),
+        (".tk", "tcl")
+    ];
+
+    private static readonly (string Entry, string Language)[] ObjCLanguageMapEntries =
+    [
+        (".m", "objc"),
+        (".mm", "objc"),
+        (".hh", "cpp")
+    ];
+
     [Fact]
     public void GetLanguageExtensions_ExposesPrefixAndFileNameVariants()
     {
@@ -1892,133 +2010,13 @@ public partial class FileIndexerTests
         // Dockerfile.<suffix> / Makefile.<suffix> などのプレフィックス変種も露出させる。
         var map = FileIndexer.GetLanguageExtensions();
 
-        // Exact filenames surface with their language.
-        // 完全一致ファイル名が言語付きで露出する。
-        AssertLanguageMapEntries(
-            map,
-            ("Dockerfile", "dockerfile"),
-            ("Containerfile", "dockerfile"),
-            ("Makefile", "makefile"),
-            ("GNUmakefile", "makefile"),
-            ("Gemfile", "dependency_manifest"),
-            ("Rakefile", "ruby"),
-            ("Podfile", "dependency_manifest"),
-            ("NAMESPACE", "r"),
-            (".Rprofile", "r"),
-            ("Rprofile.site", "r"),
-            ("BUILD.bazel", "python"),
-            ("package.json", "dependency_manifest"),
-            ("pyproject.toml", "dependency_manifest"),
-            ("requirements.txt", "dependency_manifest"),
-            ("Cargo.toml", "dependency_manifest"),
-            ("go.mod", "dependency_manifest"),
-            ("Directory.Packages.props", "dependency_manifest"),
-            ("package-lock.json", "dependency_lock"),
-            ("npm-shrinkwrap.json", "dependency_lock"),
-            ("pnpm-lock.yaml", "dependency_lock"),
-            ("Gemfile.lock", "dependency_lock"),
-            ("go.sum", "dependency_lock"),
-            ("uv.lock", "dependency_lock"),
-            ("packages.lock.json", "dependency_lock"),
-            (".sln", "solution"),
-            (".manifest", "app_manifest"),
-            (".config", "xml"),
-            (".runsettings", "xml"),
-            (".rules", "config"),
-            (".gitattributes", "gitattributes"),
-            (".s", "assembly"),
-            (".S", "assembly"));
-
-        // Prefix variants (Dockerfile.dev, Makefile.am, ...) surface as `<Prefix><suffix>` pseudo-entries.
-        // プレフィックス変種は `<Prefix><suffix>` 形の擬似エントリとして露出する。
-        AssertLanguageMapEntries(
-            map,
-            ("Dockerfile.<suffix>", "dockerfile"),
-            ("Containerfile.<suffix>", "dockerfile"),
-            ("Makefile.<suffix>", "makefile"),
-            ("GNUmakefile.<suffix>", "makefile"));
-
-        // Sass / Stylus are distinct buckets with indentation-aware conservative extraction.
-        // Sass / Stylus はインデント構文向けの保守的な抽出を持つ別バケット。
-        AssertLanguageMapEntries(
-            map,
-            (".sass", "sass"),
-            (".styl", "stylus"),
-            (".scss", "css"),
-            (".less", "css"));
-
-        // Cython lives in its own bucket for the same reason: `cdef class` / `cpdef` / `cdef` are
-        // not parsed by the Python symbol extractor, so advertising `.pyx` / `.pxd` as `python`
-        // would claim `symbol_extraction=true` while emitting zero symbols.
-        // Cython も同様の理由で別バケット。`cdef class` / `cpdef` / `cdef` は Python の抽出器で
-        // 拾えないため、python として広告すると実際には 0 件しか出ない齟齬になる。
-        AssertLanguageMapEntries(
-            map,
-            (".pyx", "cython"),
-            (".pxd", "cython"),
-            (".py", "python"),
-            (".pyi", "python"));
-
-        // Issue #205 additions should also surface in the language list.
-        // Issue #205 の追加分も言語一覧に露出する。
-        AssertLanguageMapEntries(
-            map,
-            (".groovy", "groovy"),
-            (".cu", "cuda"),
-            (".glsl", "glsl"),
-            (".hlsl", "hlsl"),
-            (".wgsl", "wgsl"),
-            (".metal", "metal"),
-            (".asm", "assembly"),
-            (".v", "verilog"),
-            (".sv", "systemverilog"),
-            (".vhd", "vhdl"),
-            (".lisp", "commonlisp"),
-            (".rkt", "racket"),
-            (".pas", "pascal"),
-            (".ada", "ada"),
-            (".f90", "fortran"),
-            (".raku", "raku"),
-            (".t", "perl"),
-            (".cbl", "cobol"),
-            (".cob", "cobol"),
-            (".cobol", "cobol"),
-            (".cpy", "cobol"));
-
-        // Mainstream extension-only languages should now be recognized for search/indexing.
-        // 主要な拡張子ベース言語も search/indexing 用に認識されるべき。
-        AssertLanguageMapEntries(
-            map,
-            (".ml", "ocaml"),
-            (".mli", "ocaml"),
-            (".cr", "crystal"),
-            (".clj", "clojure"),
-            (".cljs", "clojure"),
-            (".cljc", "clojure"),
-            (".edn", "clojure"),
-            (".d", "d"),
-            (".erl", "erlang"),
-            (".hrl", "erlang"),
-            (".jl", "julia"),
-            (".nim", "nim"),
-            (".nims", "nim"),
-            (".pl", "perl"),
-            (".pm", "perl"),
-            (".pod", "perl"),
-            (".psgi", "perl"),
-            (".cgi", "perl"),
-            (".fcgi", "perl"),
-            (".sol", "solidity"),
-            (".tcl", "tcl"),
-            (".tk", "tcl"));
-
-        // Objective-C lives in its own bucket so `.m` / `.mm` are indexed instead of being skipped.
-        // Objective-C は独立バケットにし、`.m` / `.mm` をスキップせずに index する。
-        AssertLanguageMapEntries(
-            map,
-            (".m", "objc"),
-            (".mm", "objc"),
-            (".hh", "cpp"));
+        AssertLanguageMapEntries(map, ExactLanguageMapEntries);
+        AssertLanguageMapEntries(map, PrefixLanguageMapEntries);
+        AssertLanguageMapEntries(map, StyleLanguageMapEntries);
+        AssertLanguageMapEntries(map, PythonFamilyLanguageMapEntries);
+        AssertLanguageMapEntries(map, Issue205LanguageMapEntries);
+        AssertLanguageMapEntries(map, MainstreamExtensionLanguageMapEntries);
+        AssertLanguageMapEntries(map, ObjCLanguageMapEntries);
     }
 
     private static void AssertLanguageMapEntries(
