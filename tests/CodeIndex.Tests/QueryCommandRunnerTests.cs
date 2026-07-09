@@ -3339,72 +3339,64 @@ public partial class QueryCommandRunnerTests
     [InlineData("excerpt", "4097", true)]
     public void QueryEntrypoints_MaxLineWidthAboveCeilingFailClosed_Issue196(string command, string value, bool useInlineEquals)
     {
-        var projectRoot = TestProjectHelper.CreateTempProject(
+        using var project = TestProjectHelper.CreateTempProjectScope(
             $"cdidx_issue196_maxlinewidth_{command}_{value}_{(useInlineEquals ? "inline" : "space")}");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/Issue196Target.cs",
-                "csharp",
-                """"
-                namespace Issue196;
-                public class Issue196Target
-                {
-                    public void Issue196Callee() { }
-                }
-                public class Issue196Caller
-                {
-                    public void Run()
-                    {
-                        var target = new Issue196Target();
-                        target.Issue196Callee();
-                    }
-                }
-                """");
-            MarkGraphAndFoldReady(dbPath);
-
-            var excerptDir = Path.Combine(projectRoot, "src");
-            Directory.CreateDirectory(excerptDir);
-            var excerptFilePath = Path.Combine(excerptDir, "Issue196Excerpt.cs");
-            File.WriteAllText(
-                excerptFilePath,
-                "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\n");
-
-            string[] maxLineWidthArgs = useInlineEquals
-                ? [$"--max-line-width={value}"]
-                : ["--max-line-width", value];
-            string[] args = command switch
+        var projectRoot = project.Root;
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/Issue196Target.cs",
+            "csharp",
+            """"
+            namespace Issue196;
+            public class Issue196Target
             {
-                "search" => ["Issue196", "--db", dbPath, "--json", .. maxLineWidthArgs],
-                "references" => ["Issue196Callee", "--db", dbPath, "--json", .. maxLineWidthArgs],
-                "inspect" => ["Issue196Target", "--db", dbPath, "--json", .. maxLineWidthArgs],
-                "find" => ["Issue196", "--path", excerptFilePath, "--db", dbPath, "--json", .. maxLineWidthArgs],
-                "excerpt" => [excerptFilePath, "--db", dbPath, "--start", "1", "--end", "1", "--json", .. maxLineWidthArgs],
-                _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
-            };
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => command switch
+                public void Issue196Callee() { }
+            }
+            public class Issue196Caller
             {
-                "search" => QueryCommandRunner.RunSearch(args, _jsonOptions),
-                "references" => QueryCommandRunner.RunReferences(args, _jsonOptions),
-                "inspect" => QueryCommandRunner.RunInspect(args, _jsonOptions),
-                "find" => QueryCommandRunner.RunFind(args, _jsonOptions),
-                "excerpt" => QueryCommandRunner.RunExcerpt(args, _jsonOptions),
-                _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
-            });
+                public void Run()
+                {
+                    var target = new Issue196Target();
+                    target.Issue196Callee();
+                }
+            }
+            """");
+        MarkGraphAndFoldReady(dbPath);
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains($"--max-line-width must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth}", stderr);
-            Assert.Contains($"got '{value}'", stderr);
-            Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
-        }
-        finally
+        var excerptFilePath = TestProjectHelper.WriteTextFile(
+            projectRoot,
+            "src/Issue196Excerpt.cs",
+            "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\n");
+
+        string[] maxLineWidthArgs = useInlineEquals
+            ? [$"--max-line-width={value}"]
+            : ["--max-line-width", value];
+        string[] args = command switch
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+            "search" => ["Issue196", "--db", dbPath, "--json", .. maxLineWidthArgs],
+            "references" => ["Issue196Callee", "--db", dbPath, "--json", .. maxLineWidthArgs],
+            "inspect" => ["Issue196Target", "--db", dbPath, "--json", .. maxLineWidthArgs],
+            "find" => ["Issue196", "--path", excerptFilePath, "--db", dbPath, "--json", .. maxLineWidthArgs],
+            "excerpt" => [excerptFilePath, "--db", dbPath, "--start", "1", "--end", "1", "--json", .. maxLineWidthArgs],
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        };
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => command switch
+        {
+            "search" => QueryCommandRunner.RunSearch(args, _jsonOptions),
+            "references" => QueryCommandRunner.RunReferences(args, _jsonOptions),
+            "inspect" => QueryCommandRunner.RunInspect(args, _jsonOptions),
+            "find" => QueryCommandRunner.RunFind(args, _jsonOptions),
+            "excerpt" => QueryCommandRunner.RunExcerpt(args, _jsonOptions),
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        });
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains($"--max-line-width must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth}", stderr);
+        Assert.Contains($"got '{value}'", stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
     }
 
 
