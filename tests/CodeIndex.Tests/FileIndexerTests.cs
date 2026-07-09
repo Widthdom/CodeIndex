@@ -3162,12 +3162,17 @@ public partial class FileIndexerTests
     {
         using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
         var tempDir = project.Root;
-        File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[ab].cs\nfile[0-9].py\n");
-        File.WriteAllText(Path.Combine(tempDir, "a.cs"), "class A { }");
-        File.WriteAllText(Path.Combine(tempDir, "b.cs"), "class B { }");
-        File.WriteAllText(Path.Combine(tempDir, "c.cs"), "class C { }");
-        File.WriteAllText(Path.Combine(tempDir, "file1.py"), "print('ignored')");
-        File.WriteAllText(Path.Combine(tempDir, "filex.py"), "print('kept')");
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [".gitignore"] = "[ab].cs\nfile[0-9].py\n",
+                ["a.cs"] = "class A { }",
+                ["b.cs"] = "class B { }",
+                ["c.cs"] = "class C { }",
+                ["file1.py"] = "print('ignored')",
+                ["filex.py"] = "print('kept')",
+            });
 
         var files = ScanRelativeFiles(tempDir);
 
@@ -3179,10 +3184,15 @@ public partial class FileIndexerTests
     {
         using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
         var tempDir = project.Root;
-        File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[!a].cs\n");
-        File.WriteAllText(Path.Combine(tempDir, "a.cs"), "class A { }");
-        File.WriteAllText(Path.Combine(tempDir, "b.cs"), "class B { }");
-        File.WriteAllText(Path.Combine(tempDir, "c.cs"), "class C { }");
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [".gitignore"] = "[!a].cs\n",
+                ["a.cs"] = "class A { }",
+                ["b.cs"] = "class B { }",
+                ["c.cs"] = "class C { }",
+            });
 
         var files = ScanRelativeFiles(tempDir);
 
@@ -3194,9 +3204,14 @@ public partial class FileIndexerTests
     {
         using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
         var tempDir = project.Root;
-        File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[]].cs\n");
-        File.WriteAllText(Path.Combine(tempDir, "].cs"), "class Ignored { }");
-        File.WriteAllText(Path.Combine(tempDir, "keep.cs"), "class Kept { }");
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [".gitignore"] = "[]].cs\n",
+                ["].cs"] = "class Ignored { }",
+                ["keep.cs"] = "class Kept { }",
+            });
 
         var files = ScanRelativeFiles(tempDir);
 
@@ -3208,10 +3223,15 @@ public partial class FileIndexerTests
     {
         using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
         var tempDir = project.Root;
-        File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[[:digit:]].py\n");
-        File.WriteAllText(Path.Combine(tempDir, "1.py"), "print('ignored')");
-        File.WriteAllText(Path.Combine(tempDir, "١.py"), "print('kept non-ascii digit')");
-        File.WriteAllText(Path.Combine(tempDir, "a.py"), "print('kept')");
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [".gitignore"] = "[[:digit:]].py\n",
+                ["1.py"] = "print('ignored')",
+                ["١.py"] = "print('kept non-ascii digit')",
+                ["a.py"] = "print('kept')",
+            });
 
         var files = ScanRelativeFiles(tempDir);
 
@@ -3223,10 +3243,15 @@ public partial class FileIndexerTests
     {
         using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
         var tempDir = project.Root;
-        File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[[:upper:]].cs\n");
-        File.WriteAllText(Path.Combine(tempDir, "A.cs"), "class Ignored { }");
-        File.WriteAllText(Path.Combine(tempDir, "É.cs"), "class KeptNonAscii { }");
-        File.WriteAllText(Path.Combine(tempDir, "keep.cs"), "class Kept { }");
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [".gitignore"] = "[[:upper:]].cs\n",
+                ["A.cs"] = "class Ignored { }",
+                ["É.cs"] = "class KeptNonAscii { }",
+                ["keep.cs"] = "class Kept { }",
+            });
 
         var files = ScanRelativeFiles(tempDir);
 
@@ -3236,148 +3261,118 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFiles_RespectsGitignorePosixPunctBracketCharacterClass()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            TestProjectHelper.WriteTextFiles(
-                tempDir,
-                new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    [".gitignore"] = "[[:punct:]].cs\n",
-                    ["!.cs"] = "class Ignored { }",
-                    ["a.cs"] = "class Kept { }",
-                });
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [".gitignore"] = "[[:punct:]].cs\n",
+                ["!.cs"] = "class Ignored { }",
+                ["a.cs"] = "class Kept { }",
+            });
 
-            var files = ScanRelativeFiles(tempDir);
+        var files = ScanRelativeFiles(tempDir);
 
-            Assert.Equal([".gitignore", "a.cs"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal([".gitignore", "a.cs"], files);
     }
 
     [Fact]
     public void ScanFiles_RespectsGitignoreNegatedBracketCharacterClassWithLeadingLiteralRightBracket()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            TestProjectHelper.WriteTextFiles(
-                tempDir,
-                new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    [".gitignore"] = "[!]].cs\n",
-                    ["].cs"] = "class Kept { }",
-                    ["a.cs"] = "class Ignored { }",
-                });
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [".gitignore"] = "[!]].cs\n",
+                ["].cs"] = "class Kept { }",
+                ["a.cs"] = "class Ignored { }",
+            });
 
-            var files = ScanRelativeFiles(tempDir);
+        var files = ScanRelativeFiles(tempDir);
 
-            Assert.Equal([".gitignore", "].cs"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal([".gitignore", "].cs"], files);
     }
 
     [Fact]
     public void ScanFiles_RespectsGitignoreBracketNegationPrefixesAndLiteralCaret()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            TestProjectHelper.WriteTextFiles(
-                tempDir,
-                new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    [".gitignore"] = "[!a].js\n[^a].py\n[a^b].cs\n[\\^a].rb\n",
-                    ["a.js"] = "export const kept = true;",
-                    ["b.js"] = "export const ignored = true;",
-                    ["a.py"] = "print('kept')",
-                    ["b.py"] = "print('ignored')",
-                    ["a.cs"] = "class IgnoredA { }",
-                    ["^.cs"] = "class IgnoredCaret { }",
-                    ["c.cs"] = "class Kept { }",
-                    ["a.rb"] = "puts 'ignored'",
-                    ["^.rb"] = "puts 'ignored'",
-                    ["b.rb"] = "puts 'kept'",
-                });
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [".gitignore"] = "[!a].js\n[^a].py\n[a^b].cs\n[\\^a].rb\n",
+                ["a.js"] = "export const kept = true;",
+                ["b.js"] = "export const ignored = true;",
+                ["a.py"] = "print('kept')",
+                ["b.py"] = "print('ignored')",
+                ["a.cs"] = "class IgnoredA { }",
+                ["^.cs"] = "class IgnoredCaret { }",
+                ["c.cs"] = "class Kept { }",
+                ["a.rb"] = "puts 'ignored'",
+                ["^.rb"] = "puts 'ignored'",
+                ["b.rb"] = "puts 'kept'",
+            });
 
-            var files = ScanRelativeFiles(tempDir);
+        var files = ScanRelativeFiles(tempDir);
 
-            Assert.Equal([".gitignore", "a.js", "a.py", "b.rb", "c.cs"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal([".gitignore", "a.js", "a.py", "b.rb", "c.cs"], files);
     }
 
     [Fact]
     public void ScanFiles_RespectsGitignoreEscapedLiteralCharacters()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            TestProjectHelper.WriteTextFiles(
-                tempDir,
-                new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    [".gitignore"] = "foo\\ bar.py\nliteral\\[name\\].js\n\\#literal.txt\n\\!important.cs\n",
-                    ["foo bar.py"] = "print('ignored')",
-                    ["literal[name].js"] = "export const ignored = true;",
-                    ["#literal.txt"] = "ignored",
-                    ["!important.cs"] = "class Ignored { }",
-                    ["keep.py"] = "print('kept')",
-                });
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [".gitignore"] = "foo\\ bar.py\nliteral\\[name\\].js\n\\#literal.txt\n\\!important.cs\n",
+                ["foo bar.py"] = "print('ignored')",
+                ["literal[name].js"] = "export const ignored = true;",
+                ["#literal.txt"] = "ignored",
+                ["!important.cs"] = "class Ignored { }",
+                ["keep.py"] = "print('kept')",
+            });
 
-            var files = ScanRelativeFiles(tempDir);
+        var files = ScanRelativeFiles(tempDir);
 
-            Assert.Equal([".gitignore", "keep.py"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal([".gitignore", "keep.py"], files);
     }
 
     [Fact]
     public void ScanFilesDetailed_SkipsMalformedIgnoreRulesWithoutAborting()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            TestProjectHelper.WriteTextFiles(
-                tempDir,
-                new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    [".gitignore"] = "[z-a].py\n[!].cs\n[a.py\n[!a\n[^\n[\n[]\nignored.py\n",
-                    ["[a.py"] = "print('kept malformed literal')",
-                    ["ignored.py"] = "print('ignored')",
-                    ["keep.py"] = "print('kept')",
-                });
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [".gitignore"] = "[z-a].py\n[!].cs\n[a.py\n[!a\n[^\n[\n[]\nignored.py\n",
+                ["[a.py"] = "print('kept malformed literal')",
+                ["ignored.py"] = "print('ignored')",
+                ["keep.py"] = "print('kept')",
+            });
 
-            var indexer = new FileIndexer(tempDir);
-            var scanResult = indexer.ScanFilesDetailed();
-            var files = scanResult.Files
-                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .ToList();
+        var indexer = new FileIndexer(tempDir);
+        var scanResult = indexer.ScanFilesDetailed();
+        var files = scanResult.Files
+            .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
 
-            Assert.Equal([".gitignore", "[a.py", "keep.py"], files);
-            Assert.Equal(7, scanResult.Errors.Count);
-            Assert.All(scanResult.Errors, error => Assert.Contains(".gitignore:", error.Path, StringComparison.Ordinal));
-            Assert.All(scanResult.Errors, error => Assert.Contains("Invalid ignore rule skipped", error.Message, StringComparison.Ordinal));
-            Assert.Contains(scanResult.Errors, error => error.Message == "Invalid ignore rule skipped: reversed character class range");
-            Assert.All(scanResult.Errors, error => Assert.Equal(FileIndexer.ScanIssueSeverity.Warning, error.Severity));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal([".gitignore", "[a.py", "keep.py"], files);
+        Assert.Equal(7, scanResult.Errors.Count);
+        Assert.All(scanResult.Errors, error => Assert.Contains(".gitignore:", error.Path, StringComparison.Ordinal));
+        Assert.All(scanResult.Errors, error => Assert.Contains("Invalid ignore rule skipped", error.Message, StringComparison.Ordinal));
+        Assert.Contains(scanResult.Errors, error => error.Message == "Invalid ignore rule skipped: reversed character class range");
+        Assert.All(scanResult.Errors, error => Assert.Equal(FileIndexer.ScanIssueSeverity.Warning, error.Severity));
     }
 
     [Fact]
