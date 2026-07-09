@@ -266,6 +266,12 @@ public static partial class QueryCommandRunner
             query["prefix"] = true;
         if (options.NoDedup)
             query["dedup"] = false;
+        if (options.GuardFilters.Count > 0)
+        {
+            query["guard_filters"] = BuildSearchGuardFiltersJson(options.GuardFilters);
+            query["guard_window"] = options.GuardWindow;
+            query["guard_scope"] = FormatSearchGuardScope(options.GuardScope);
+        }
         if (options.RawKinds)
             query["raw_kinds"] = true;
         if (options.DependencyCycles)
@@ -286,6 +292,35 @@ public static partial class QueryCommandRunner
             query[options.ContextAfterExplicit ? "depth" : "after"] = options.ContextAfter;
         return query;
     }
+
+    private static JsonArray BuildSearchGuardFiltersJson(IReadOnlyList<SearchGuardFilter> guardFilters)
+    {
+        var filters = new JsonArray();
+        foreach (var filter in guardFilters)
+        {
+            var role = FormatQueryContextSearchGuardRole(filter.Role);
+            var direction = FormatQueryContextSearchGuardDirection(filter.Direction);
+            var item = new JsonObject
+            {
+                ["name"] = $"{role}-{direction}",
+                ["role"] = role,
+                ["direction"] = direction,
+                ["query"] = filter.Query,
+            };
+            if (filter.Scope.HasValue)
+                item["scope"] = FormatSearchGuardScope(filter.Scope.Value);
+
+            filters.Add(item);
+        }
+
+        return filters;
+    }
+
+    private static string FormatQueryContextSearchGuardRole(SearchGuardRole role)
+        => role == SearchGuardRole.Require ? "require" : "reject";
+
+    private static string FormatQueryContextSearchGuardDirection(SearchGuardDirection direction)
+        => direction == SearchGuardDirection.Before ? "before" : "after";
 
     internal static ExactZeroHintResult? BuildExactZeroHint<T>(bool shouldProbe, Func<bool> anyRelaxedMatch, Func<List<T>> relaxedSampleQuery, Func<T, string?> nameSelector)
     {

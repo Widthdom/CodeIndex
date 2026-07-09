@@ -576,7 +576,7 @@ public static partial class QueryCommandRunner
             {
                 var counts = HasSearchOriginFilters(options)
                     ? CountFilteredSearchResults(reader, options, exactSearch)
-                    : reader.CountSearchResults(options.Query, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exactSearch, options.Prefix, !options.NoVisibilityRank, options.GuardFilters, options.GuardWindow, tokenBoundary: options.TokenBoundary);
+                    : reader.CountSearchResults(options.Query, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exactSearch, options.Prefix, !options.NoVisibilityRank, options.GuardFilters, options.GuardWindow, options.GuardScope, options.TokenBoundary);
                 var queryDiagnostics = DbReader.AnalyzeFtsQuery(options.Query, options.RawFts, options.Prefix, options.Lang);
                 if (counts.Count == 0)
                 {

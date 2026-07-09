@@ -563,7 +563,9 @@ public partial class DbReader
         if (guardFilters is { Count: > 0 } || tokenBoundary)
         {
             var guardedResults = Search(query, int.MaxValue, lang, rawQuery, pathPatterns, excludePathPatterns, excludeTests, deduplicate, since, exact || tokenBoundary, prefix, visibilityRank, guardFilters: guardFilters, guardWindow: guardWindow, guardScope: guardScope, tokenBoundary: tokenBoundary);
-            return new QueryCountResult(guardedResults.Count, guardedResults.Select(result => result.Path).Distinct(StringComparer.Ordinal).Count());
+            return guardFilters is { Count: > 0 } && !tokenBoundary
+                ? CountSearchResultUnits(guardedResults)
+                : new QueryCountResult(guardedResults.Count, guardedResults.Select(result => result.Path).Distinct(StringComparer.Ordinal).Count());
         }
 
         lang = NormalizeQueryLanguage(lang);
@@ -668,12 +670,14 @@ public partial class DbReader
         if (guardFilters is { Count: > 0 } || tokenBoundary)
         {
             var guardedResults = Search(query, int.MaxValue, lang, rawQuery, pathPatterns, excludePathPatterns, excludeTests, deduplicate, since, exact || tokenBoundary, prefix, visibilityRank, guardFilters: guardFilters, guardWindow: guardWindow, guardScope: guardScope, tokenBoundary: tokenBoundary);
-            return guardedResults
-                .GroupBy(result => result.Path, StringComparer.Ordinal)
-                .Select(group => new SearchFileCountResult(group.Key, group.Count()))
-                .OrderByDescending(group => group.Count)
-                .ThenBy(group => group.Path, StringComparer.Ordinal)
-                .ToList();
+            return guardFilters is { Count: > 0 } && !tokenBoundary
+                ? CountSearchResultUnitsByFile(guardedResults)
+                : guardedResults
+                    .GroupBy(result => result.Path, StringComparer.Ordinal)
+                    .Select(group => new SearchFileCountResult(group.Key, group.Count()))
+                    .OrderByDescending(group => group.Count)
+                    .ThenBy(group => group.Path, StringComparer.Ordinal)
+                    .ToList();
         }
 
         if (!rawQuery)
@@ -769,6 +773,51 @@ public partial class DbReader
             .OrderByDescending(group => group.Count)
             .ThenBy(group => group.Path, StringComparer.Ordinal)
             .ToList();
+    }
+
+    private static QueryCountResult CountSearchResultUnits(IReadOnlyList<SearchResult> results)
+    {
+        var units = new HashSet<SearchResultUnitKey>();
+        var files = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var result in results)
+        {
+            if (!units.Add(SearchResultUnitKey.Create(result)))
+                continue;
+
+            files.Add(result.Path);
+        }
+
+        return new QueryCountResult(units.Count, files.Count);
+    }
+
+    private static List<SearchFileCountResult> CountSearchResultUnitsByFile(IReadOnlyList<SearchResult> results)
+    {
+        var units = new HashSet<SearchResultUnitKey>();
+        var countsByPath = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var result in results)
+        {
+            if (!units.Add(SearchResultUnitKey.Create(result)))
+                continue;
+
+            if (countsByPath.TryGetValue(result.Path, out var count))
+                countsByPath[result.Path] = count + 1;
+            else
+                countsByPath[result.Path] = 1;
+        }
+
+        return countsByPath
+            .Select(kv => new SearchFileCountResult(kv.Key, kv.Value))
+            .OrderByDescending(group => group.Count)
+            .ThenBy(group => group.Path, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    private readonly record struct SearchResultUnitKey(string Path, long ChunkId, int StartLine, int EndLine)
+    {
+        public static SearchResultUnitKey Create(SearchResult result)
+            => result.ChunkId != 0
+                ? new SearchResultUnitKey(result.Path, result.ChunkId, 0, 0)
+                : new SearchResultUnitKey(result.Path, 0, result.StartLine, result.EndLine);
     }
 
     private List<SearchResult> FilterSearchResultByGuards(
