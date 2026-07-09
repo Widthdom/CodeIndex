@@ -2608,67 +2608,52 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFilesDetailed_SkipsNestedGitRepositoryBoundary()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(tempDir, "nested", ".git"));
-            File.WriteAllText(Path.Combine(tempDir, "Root.cs"), "class Root { }");
-            File.WriteAllText(Path.Combine(tempDir, "nested", "Nested.cs"), "class Nested { }");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        Directory.CreateDirectory(Path.Combine(tempDir, "nested", ".git"));
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Root.cs"] = "class Root { }",
+                ["nested/Nested.cs"] = "class Nested { }",
+            });
 
-            var result = new FileIndexer(tempDir).ScanFilesDetailed();
-            var files = ToSortedRelativePaths(tempDir, result.Files);
+        var result = new FileIndexer(tempDir).ScanFilesDetailed();
+        var files = ToSortedRelativePaths(tempDir, result.Files);
 
-            Assert.Equal(["Root.cs"], files);
-            Assert.Equal(["nested"], result.NestedRepositories);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(["Root.cs"], files);
+        Assert.Equal(["nested"], result.NestedRepositories);
     }
 
     [Fact]
     public void EvaluatePathFilter_SkipsNestedGitRepositoryBoundary()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(tempDir, "nested", ".git"));
-            var nestedFile = Path.Combine(tempDir, "nested", "Nested.cs");
-            File.WriteAllText(nestedFile, "class Nested { }");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        Directory.CreateDirectory(Path.Combine(tempDir, "nested", ".git"));
+        var nestedFile = TestProjectHelper.WriteTextFile(tempDir, "nested/Nested.cs", "class Nested { }");
 
-            var indexer = new FileIndexer(tempDir);
-            var filter = indexer.EvaluatePathFilter(nestedFile);
+        var indexer = new FileIndexer(tempDir);
+        var filter = indexer.EvaluatePathFilter(nestedFile);
 
-            Assert.Equal(FileIndexer.PathFilterKind.ExcludedByDefaultDirectory, filter.FilterKind);
-            Assert.True(filter.ShouldDeleteExisting);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(FileIndexer.PathFilterKind.ExcludedByDefaultDirectory, filter.FilterKind);
+        Assert.True(filter.ShouldDeleteExisting);
     }
 
     [Fact]
     public void BuildRecord_NormalizesRelativePathToNfc()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var nfdName = "Cafe\u0301.cs";
-            var filePath = Path.Combine(tempDir, nfdName);
-            File.WriteAllText(filePath, "class Cafe { }");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var nfdName = "Cafe\u0301.cs";
+        var filePath = TestProjectHelper.WriteTextFile(tempDir, nfdName, "class Cafe { }");
 
-            var indexer = new FileIndexer(tempDir);
-            var (record, _, _) = indexer.BuildRecord(filePath);
+        var indexer = new FileIndexer(tempDir);
+        var (record, _, _) = indexer.BuildRecord(filePath);
 
-            Assert.Equal("Caf\u00e9.cs", record.Path);
-            Assert.True(record.Path.IsNormalized(NormalizationForm.FormC));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal("Caf\u00e9.cs", record.Path);
+        Assert.True(record.Path.IsNormalized(NormalizationForm.FormC));
     }
 
     [Fact]
