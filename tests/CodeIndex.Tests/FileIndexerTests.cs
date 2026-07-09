@@ -909,33 +909,28 @@ public partial class FileIndexerTests
     [Fact]
     public void LanguageMapOverrides_OversizedFileSkipsOverridesWithWarning()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_caps");
-        try
-        {
-            var oversizedPath = Path.Combine(tempDir, "large-langmap.yaml");
-            var fallbackPath = Path.Combine(tempDir, "fallback-langmap.yaml");
-            File.WriteAllText(oversizedPath, "entries:\n" + new string('a', 132 * 1024));
-            File.WriteAllText(fallbackPath, "entries:\n- extension: ok\n  language: ruby\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_langmap_caps");
+        var tempDir = project.Root;
+        var oversizedPath = Path.Combine(tempDir, "large-langmap.yaml");
+        var fallbackPath = Path.Combine(tempDir, "fallback-langmap.yaml");
+        File.WriteAllText(oversizedPath, "entries:\n" + new string('a', 132 * 1024));
+        File.WriteAllText(fallbackPath, "entries:\n- extension: ok\n  language: ruby\n");
 
-            var warnings = new List<string>();
-            var map = LanguageMapOverrides.LoadEffectiveMapFromPathsForTesting(
-                new[] { oversizedPath, fallbackPath },
-                warnings.Add);
+        var warnings = new List<string>();
+        var map = LanguageMapOverrides.LoadEffectiveMapFromPathsForTesting(
+            new[] { oversizedPath, fallbackPath },
+            warnings.Add);
 
-            Assert.False(map.ContainsKey(".skip"));
-            Assert.Equal("ruby", map[".ok"]);
-            Assert.Contains(warnings, warning => warning.Contains("exceeds", StringComparison.Ordinal));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.False(map.ContainsKey(".skip"));
+        Assert.Equal("ruby", map[".ok"]);
+        Assert.Contains(warnings, warning => warning.Contains("exceeds", StringComparison.Ordinal));
     }
 
     [Fact]
     public void LanguageMapOverrides_ReadFailureSkipsOverridesWithWarning()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_read_failure");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_langmap_read_failure");
+        var tempDir = project.Root;
         try
         {
             var unreadablePath = Path.Combine(tempDir, "unreadable-langmap.yaml");
@@ -962,187 +957,144 @@ public partial class FileIndexerTests
         finally
         {
             LanguageMapOverrides.OpenOverrideFileForTesting = null;
-            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void LanguageMapOverrides_TooManyLinesSkipsOverridesWithWarning()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_lines");
-        try
-        {
-            var tooManyLinesPath = Path.Combine(tempDir, "many-lines-langmap.yaml");
-            var fallbackPath = Path.Combine(tempDir, "fallback-langmap.yaml");
-            File.WriteAllText(tooManyLinesPath, string.Concat(Enumerable.Repeat("#\n", 16385)));
-            File.WriteAllText(fallbackPath, "entries:\n- extension: ok\n  language: ruby\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_langmap_lines");
+        var tempDir = project.Root;
+        var tooManyLinesPath = Path.Combine(tempDir, "many-lines-langmap.yaml");
+        var fallbackPath = Path.Combine(tempDir, "fallback-langmap.yaml");
+        File.WriteAllText(tooManyLinesPath, string.Concat(Enumerable.Repeat("#\n", 16385)));
+        File.WriteAllText(fallbackPath, "entries:\n- extension: ok\n  language: ruby\n");
 
-            var warnings = new List<string>();
-            var map = LanguageMapOverrides.LoadEffectiveMapFromPathsForTesting(
-                new[] { tooManyLinesPath, fallbackPath },
-                warnings.Add);
+        var warnings = new List<string>();
+        var map = LanguageMapOverrides.LoadEffectiveMapFromPathsForTesting(
+            new[] { tooManyLinesPath, fallbackPath },
+            warnings.Add);
 
-            Assert.Equal("ruby", map[".ok"]);
-            Assert.Contains(warnings, warning => warning.Contains("lines", StringComparison.Ordinal));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal("ruby", map[".ok"]);
+        Assert.Contains(warnings, warning => warning.Contains("lines", StringComparison.Ordinal));
     }
 
     [Fact]
     public void LanguageMapOverrides_OverlongLineSkipsOverridesWithWarning_Issue3706()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_line_length");
-        try
-        {
-            var overlongLinePath = Path.Combine(tempDir, "long-line-langmap.yaml");
-            var fallbackPath = Path.Combine(tempDir, "fallback-langmap.yaml");
-            File.WriteAllText(overlongLinePath, new string('x', 16 * 1024 + 1));
-            File.WriteAllText(fallbackPath, "entries:\n- extension: ok\n  language: ruby\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_langmap_line_length");
+        var tempDir = project.Root;
+        var overlongLinePath = Path.Combine(tempDir, "long-line-langmap.yaml");
+        var fallbackPath = Path.Combine(tempDir, "fallback-langmap.yaml");
+        File.WriteAllText(overlongLinePath, new string('x', 16 * 1024 + 1));
+        File.WriteAllText(fallbackPath, "entries:\n- extension: ok\n  language: ruby\n");
 
-            var warnings = new List<string>();
-            var map = LanguageMapOverrides.LoadEffectiveMapFromPathsForTesting(
-                new[] { overlongLinePath, fallbackPath },
-                warnings.Add);
+        var warnings = new List<string>();
+        var map = LanguageMapOverrides.LoadEffectiveMapFromPathsForTesting(
+            new[] { overlongLinePath, fallbackPath },
+            warnings.Add);
 
-            Assert.Equal("ruby", map[".ok"]);
-            Assert.Contains(warnings, warning => warning.Contains("line 1 exceeds", StringComparison.Ordinal));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal("ruby", map[".ok"]);
+        Assert.Contains(warnings, warning => warning.Contains("line 1 exceeds", StringComparison.Ordinal));
     }
 
     [Fact]
     public void LanguageMapOverrides_WarningsSanitizeConfigPath_Issue3819()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_sanitize");
-        try
-        {
-            var configPath = Path.Combine(tempDir, "secret-langmap.yaml");
-            File.WriteAllText(configPath, new string('x', 16 * 1024 + 1));
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_langmap_sanitize");
+        var tempDir = project.Root;
+        var configPath = Path.Combine(tempDir, "secret-langmap.yaml");
+        File.WriteAllText(configPath, new string('x', 16 * 1024 + 1));
 
-            var warnings = new List<string>();
-            _ = LanguageMapOverrides.LoadEffectiveMapFromPathsForTesting([configPath], warnings.Add);
+        var warnings = new List<string>();
+        _ = LanguageMapOverrides.LoadEffectiveMapFromPathsForTesting([configPath], warnings.Add);
 
-            var warning = Assert.Single(warnings);
-            Assert.Contains("secret-langmap.yaml", warning, StringComparison.Ordinal);
-            Assert.DoesNotContain(tempDir, warning, StringComparison.Ordinal);
-            Assert.DoesNotContain(tempDir.Replace('\\', '/'), warning, StringComparison.Ordinal);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        var warning = Assert.Single(warnings);
+        Assert.Contains("secret-langmap.yaml", warning, StringComparison.Ordinal);
+        Assert.DoesNotContain(tempDir, warning, StringComparison.Ordinal);
+        Assert.DoesNotContain(tempDir.Replace('\\', '/'), warning, StringComparison.Ordinal);
     }
 
     [Fact]
     public void LanguageMapOverrides_EntryCountCapTruncatesRemainingOverridesWithWarning()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_entries");
-        try
-        {
-            var configPath = Path.Combine(tempDir, "langmap.yaml");
-            var builder = new StringBuilder("entries:\n");
-            for (var i = 0; i <= 4096; i++)
-                builder.Append("- extension:x").Append(i).Append('\n').Append("language:l\n");
-            File.WriteAllText(configPath, builder.ToString());
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_langmap_entries");
+        var tempDir = project.Root;
+        var configPath = Path.Combine(tempDir, "langmap.yaml");
+        var builder = new StringBuilder("entries:\n");
+        for (var i = 0; i <= 4096; i++)
+            builder.Append("- extension:x").Append(i).Append('\n').Append("language:l\n");
+        File.WriteAllText(configPath, builder.ToString());
 
-            var warnings = new List<string>();
-            var map = LanguageMapOverrides.LoadEffectiveMapFromPathsForTesting(
-                new[] { configPath },
-                warnings.Add);
+        var warnings = new List<string>();
+        var map = LanguageMapOverrides.LoadEffectiveMapFromPathsForTesting(
+            new[] { configPath },
+            warnings.Add);
 
-            Assert.Equal("l", map[".x0"]);
-            Assert.Equal("l", map[".x4095"]);
-            Assert.False(map.ContainsKey(".x4096"));
-            Assert.Contains(warnings, warning => warning.Contains("4096", StringComparison.Ordinal));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal("l", map[".x0"]);
+        Assert.Equal("l", map[".x4095"]);
+        Assert.False(map.ContainsKey(".x4096"));
+        Assert.Contains(warnings, warning => warning.Contains("4096", StringComparison.Ordinal));
     }
 
     [Fact]
     public void LanguageMapOverrides_PatternCountCapTruncatesRemainingOverridesWithWarning_Issue3764()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_patterns");
-        try
-        {
-            const int maxPatterns = 8192;
-            var configPath = Path.Combine(tempDir, "langmap.yaml");
-            var builder = new StringBuilder("entries:\n");
-            for (var i = 0; i <= maxPatterns; i++)
-                builder.Append("extension:x").Append(i).Append('\n');
-            File.WriteAllText(configPath, builder.ToString());
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_langmap_patterns");
+        var tempDir = project.Root;
+        const int maxPatterns = 8192;
+        var configPath = Path.Combine(tempDir, "langmap.yaml");
+        var builder = new StringBuilder("entries:\n");
+        for (var i = 0; i <= maxPatterns; i++)
+            builder.Append("extension:x").Append(i).Append('\n');
+        File.WriteAllText(configPath, builder.ToString());
 
-            var warnings = new List<string>();
-            var map = LanguageMapOverrides.LoadEffectiveMapFromPathsForTesting(
-                new[] { configPath },
-                warnings.Add);
+        var warnings = new List<string>();
+        var map = LanguageMapOverrides.LoadEffectiveMapFromPathsForTesting(
+            new[] { configPath },
+            warnings.Add);
 
-            Assert.Empty(map);
-            Assert.Contains(warnings, warning => warning.Contains("pattern count exceeds 8192", StringComparison.Ordinal));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Empty(map);
+        Assert.Contains(warnings, warning => warning.Contains("pattern count exceeds 8192", StringComparison.Ordinal));
     }
 
     [Fact]
     public void LanguageMapOverrides_EntryCountCapIsPerFileSoWorkspaceOverridesStillLoad()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_per_file_entries");
-        try
-        {
-            var userConfigPath = Path.Combine(tempDir, "user-langmap.yaml");
-            var workspaceConfigPath = Path.Combine(tempDir, LanguageMapOverrides.WorkspaceFileName);
-            var builder = new StringBuilder("entries:\n");
-            for (var i = 0; i <= 4096; i++)
-                builder.Append("- extension:x").Append(i).Append('\n').Append("language:u\n");
-            File.WriteAllText(userConfigPath, builder.ToString());
-            File.WriteAllText(
-                workspaceConfigPath,
-                "entries:\n- extension:x0\n  language:workspace\n- extension:workspace\n  language:ruby\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_langmap_per_file_entries");
+        var tempDir = project.Root;
+        var userConfigPath = Path.Combine(tempDir, "user-langmap.yaml");
+        var workspaceConfigPath = Path.Combine(tempDir, LanguageMapOverrides.WorkspaceFileName);
+        var builder = new StringBuilder("entries:\n");
+        for (var i = 0; i <= 4096; i++)
+            builder.Append("- extension:x").Append(i).Append('\n').Append("language:u\n");
+        File.WriteAllText(userConfigPath, builder.ToString());
+        File.WriteAllText(
+            workspaceConfigPath,
+            "entries:\n- extension:x0\n  language:workspace\n- extension:workspace\n  language:ruby\n");
 
-            var warnings = new List<string>();
-            var map = LanguageMapOverrides.LoadEffectiveMapFromPathsForTesting(
-                new[] { userConfigPath, workspaceConfigPath },
-                warnings.Add);
+        var warnings = new List<string>();
+        var map = LanguageMapOverrides.LoadEffectiveMapFromPathsForTesting(
+            new[] { userConfigPath, workspaceConfigPath },
+            warnings.Add);
 
-            Assert.Equal("workspace", map[".x0"]);
-            Assert.Equal("ruby", map[".workspace"]);
-            Assert.False(map.ContainsKey(".x4096"));
-            Assert.Contains(warnings, warning => warning.Contains("4096", StringComparison.Ordinal));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal("workspace", map[".x0"]);
+        Assert.Equal("ruby", map[".workspace"]);
+        Assert.False(map.ContainsKey(".x4096"));
+        Assert.Contains(warnings, warning => warning.Contains("4096", StringComparison.Ordinal));
     }
 
     [Fact]
     public void LanguageMapOverrides_BomPrefixedFileLoadsOverrides()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_bom");
-        try
-        {
-            var configPath = Path.Combine(tempDir, LanguageMapOverrides.WorkspaceFileName);
-            File.WriteAllText(configPath, "\uFEFFentries:\n- extension:bom\n  language:ruby\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_langmap_bom");
+        var tempDir = project.Root;
+        var configPath = Path.Combine(tempDir, LanguageMapOverrides.WorkspaceFileName);
+        File.WriteAllText(configPath, "\uFEFFentries:\n- extension:bom\n  language:ruby\n");
 
-            var map = LanguageMapOverrides.LoadEffectiveMapFromPathsForTesting(new[] { configPath });
+        var map = LanguageMapOverrides.LoadEffectiveMapFromPathsForTesting(new[] { configPath });
 
-            Assert.Equal("ruby", map[".bom"]);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal("ruby", map[".bom"]);
     }
 
     [Theory]
