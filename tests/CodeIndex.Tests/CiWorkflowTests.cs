@@ -136,18 +136,18 @@ public class CiWorkflowTests
             "        shell: pwsh\n" +
             "        run: ./.github/scripts/configure-windows-test-host.ps1 -Workspace \"${{ github.workspace }}\"";
 
-        Assert.Contains(expectedStep, dotnetWorkflow);
-        Assert.Contains(expectedStep, releaseWorkflow);
-        Assert.DoesNotContain("Add-MpPreference", dotnetWorkflow);
-        Assert.DoesNotContain("Get-MpPreference", dotnetWorkflow);
-        Assert.DoesNotContain("Add-MpPreference", releaseWorkflow);
-        Assert.DoesNotContain("Get-MpPreference", releaseWorkflow);
-        Assert.Contains("\"TMP=$tempRoot\"", setupScript);
-        Assert.Contains("\"TEMP=$tempRoot\"", setupScript);
-        Assert.Contains("Add-MpPreference -ExclusionPath $entry.Path -ErrorAction Stop", setupScript);
-        Assert.Contains("Get-MpPreference", setupScript);
-        Assert.Contains("Windows Defender exclusion audit:", setupScript);
-        Assert.Contains("GitHub-hosted runner temp root used by actions and pinned TMP/TEMP.", setupScript);
+        AssertContainsAll(dotnetWorkflow, expectedStep);
+        AssertContainsAll(releaseWorkflow, expectedStep);
+        AssertDoesNotContainAny(dotnetWorkflow, "Add-MpPreference", "Get-MpPreference");
+        AssertDoesNotContainAny(releaseWorkflow, "Add-MpPreference", "Get-MpPreference");
+        AssertContainsAll(
+            setupScript,
+            "\"TMP=$tempRoot\"",
+            "\"TEMP=$tempRoot\"",
+            "Add-MpPreference -ExclusionPath $entry.Path -ErrorAction Stop",
+            "Get-MpPreference",
+            "Windows Defender exclusion audit:",
+            "GitHub-hosted runner temp root used by actions and pinned TMP/TEMP.");
     }
 
     [Fact]
@@ -236,17 +236,17 @@ public class CiWorkflowTests
         })
         {
             var workflow = RepositoryTestPaths.ReadWorkflow(workflowName);
-            Assert.Contains("8.0.413", workflow);
-            Assert.Contains("9.0.301", workflow);
-            Assert.DoesNotContain("8.0.x", workflow);
-            Assert.DoesNotContain("9.0.x", workflow);
+            AssertContainsAll(workflow, "8.0.413", "9.0.301");
+            AssertDoesNotContainAny(workflow, "8.0.x", "9.0.x");
         }
 
         var mutationWorkflow = RepositoryTestPaths.ReadWorkflow("mutation-testing.yml");
-        Assert.Contains("dotnet tool update --global dotnet-stryker --version 4.14.0", mutationWorkflow);
-        Assert.Contains("if: steps.mutation-cache.outputs.cache-hit != 'true'", mutationWorkflow);
-        Assert.Contains("mutation-stryker-4.14.0", mutationWorkflow);
-        Assert.DoesNotContain("dotnet tool install --global dotnet-stryker", mutationWorkflow);
+        AssertContainsAll(
+            mutationWorkflow,
+            "dotnet tool update --global dotnet-stryker --version 4.14.0",
+            "if: steps.mutation-cache.outputs.cache-hit != 'true'",
+            "mutation-stryker-4.14.0");
+        AssertDoesNotContainAny(mutationWorkflow, "dotnet tool install --global dotnet-stryker");
     }
 
     [Fact]
@@ -254,12 +254,12 @@ public class CiWorkflowTests
     {
         var workflow = RepositoryTestPaths.ReadWorkflow("dotnet.yml");
 
-        Assert.Contains(
-            "dotnet list src/CodeIndex/CodeIndex.csproj package --vulnerable --include-transitive 2>&1",
-            workflow);
-        Assert.DoesNotContain(
-            "dotnet list src/CodeIndex/CodeIndex.csproj package --vulnerable --include-transitive --no-restore",
-            workflow);
+        AssertContainsAll(
+            workflow,
+            "dotnet list src/CodeIndex/CodeIndex.csproj package --vulnerable --include-transitive 2>&1");
+        AssertDoesNotContainAny(
+            workflow,
+            "dotnet list src/CodeIndex/CodeIndex.csproj package --vulnerable --include-transitive --no-restore");
     }
 
     [Fact]
@@ -267,14 +267,16 @@ public class CiWorkflowTests
     {
         var guide = RepositoryTestPaths.ReadText("TESTING_GUIDE.md");
 
-        Assert.Contains("Shared state and parallelism audit", guide);
-        Assert.Contains("SQLite pool sensitive", guide);
-        Assert.Contains("EnvironmentVariableScope.Capture", guide);
-        Assert.Contains("TestConsoleLock.Gate", guide);
-        Assert.Contains("TestProjectHelper", guide);
-        Assert.Contains(".github/scripts/run-dotnet-tests.ps1", guide);
-        Assert.Contains(".github/scripts/configure-windows-test-host.ps1", guide);
-        Assert.Contains("共有状態と並列実行の監査", guide);
+        AssertContainsAll(
+            guide,
+            "Shared state and parallelism audit",
+            "SQLite pool sensitive",
+            "EnvironmentVariableScope.Capture",
+            "TestConsoleLock.Gate",
+            "TestProjectHelper",
+            ".github/scripts/run-dotnet-tests.ps1",
+            ".github/scripts/configure-windows-test-host.ps1",
+            "共有状態と並列実行の監査");
     }
 
     private static void AssertContainsAll(string text, params string[] expectedValues)

@@ -66,7 +66,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   `RunBuiltCli` / `RunCliInSubprocess` subprocess coverage, including timeout-guarded subprocess probes, uses `ProductionRuntimeFactAttribute` / `ProductionRuntimeTheoryAttribute` and runs only on the `net8.0` test target when the subprocess resolves to the production `net8.0` CLI; keep direct in-process command-runner tests cross-target.
   `InstallScriptTests.RunInstallerSnippet` enforces a bounded timeout and kills the snippet process tree on timeout, so installer regressions fail with captured output instead of hanging the suite.
 - `CiWorkflowTests.cs`, `ReleaseWorkflowTests.cs`, `ReleaseWorkflowTests.PackageHelpers.cs`
-  CI and release workflow contract tests. Keep repeated related workflow/script string contract assertions, including test-result artifact and retry-output contracts, in small grouped helpers so the tests emphasize the contract being checked. Release workflow package-normalization ZIP fixture helpers live in `ReleaseWorkflowTests.PackageHelpers.cs` so workflow assertions stay near the workflow contracts.
+  CI and release workflow contract tests. Keep repeated related workflow/script string contract assertions, including test-result artifact, retry-output, SDK pin, and tool pin contracts, in small grouped helpers so the tests emphasize the contract being checked. Release workflow package-normalization ZIP fixture helpers live in `ReleaseWorkflowTests.PackageHelpers.cs` so workflow assertions stay near the workflow contracts.
 - `PackageNormalizeDiagnosticsTests.cs`
   Package normalizer diagnostic redaction coverage. Keep timeout-budget assertions aligned with the shared diagnostic redaction policy so high-load full-suite runs do not treat expected path/secret placeholders as flaky.
 - `DocumentationStatusContractTests.cs`, `DocumentationDriftTests.cs`
@@ -348,7 +348,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   `RunBuiltCli` / `RunCliInSubprocess` subprocess coverage は、timeout guard 付きの subprocess probe も含め、subprocess が production `net8.0` CLI に解決される場合は `ProductionRuntimeFactAttribute` / `ProductionRuntimeTheoryAttribute` を使って `net8.0` test target でのみ実行し、direct in-process command-runner test は cross-target のままにします。
   `InstallScriptTests.RunInstallerSnippet` は bounded timeout を強制し、timeout 時は snippet の process tree を kill するため、installer 回帰は suite を hang させずに captured output 付きで失敗します。
 - `CiWorkflowTests.cs`、`ReleaseWorkflowTests.cs`、`ReleaseWorkflowTests.PackageHelpers.cs`
-  CI と release workflow の契約テスト。test-result artifact や retry-output の契約も含め、繰り返しの関連する workflow/script string contract assertion は小さな grouped helper に寄せ、テスト本文が確認している契約を読み取りやすくしてください。Release workflow の package-normalization ZIP fixture helper は `ReleaseWorkflowTests.PackageHelpers.cs` に置き、workflow assertion が workflow 契約の近くに残るようにします。
+  CI と release workflow の契約テスト。test-result artifact、retry-output、SDK pin、tool pin の契約も含め、繰り返しの関連する workflow/script string contract assertion は小さな grouped helper に寄せ、テスト本文が確認している契約を読み取りやすくしてください。Release workflow の package-normalization ZIP fixture helper は `ReleaseWorkflowTests.PackageHelpers.cs` に置き、workflow assertion が workflow 契約の近くに残るようにします。
 - `PackageNormalizeDiagnosticsTests.cs`
   package normalizer の diagnostic redaction カバレッジです。高負荷の full-suite 実行で、期待される path / secret placeholder が flaky に見えないよう、timeout budget の assertion は共有 diagnostic redaction policy と同期させてください。
 - `DocumentationStatusContractTests.cs`、`DocumentationDriftTests.cs`
