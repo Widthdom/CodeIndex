@@ -3378,180 +3378,169 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFilesDetailed_SeparatesUnknownExtensionsFromOtherNonIndexableFiles()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "ignored.mystery\n");
-            var appPath = Path.Combine(tempDir, "app.cs");
-            var scriptPath = Path.Combine(tempDir, "script");
-            var toolPath = Path.Combine(tempDir, "tool");
-            var dataPath = Path.Combine(tempDir, "data.mystery");
-            var ignoredPath = Path.Combine(tempDir, "ignored.mystery");
-            File.WriteAllText(appPath, "class App { }\n");
-            File.WriteAllText(Path.Combine(tempDir, "Dockerfile.dev"), "FROM scratch\n");
-            File.WriteAllText(scriptPath, "#!/usr/bin/env python\nprint('hello')\n");
-            File.WriteAllText(toolPath, "plain text without a shebang\n");
-            File.WriteAllText(dataPath, "unknown extension\n");
-            File.WriteAllText(ignoredPath, "ignored unknown extension\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [".gitignore"] = "ignored.mystery\n",
+                ["app.cs"] = "class App { }\n",
+                ["Dockerfile.dev"] = "FROM scratch\n",
+                ["script"] = "#!/usr/bin/env python\nprint('hello')\n",
+                ["tool"] = "plain text without a shebang\n",
+                ["data.mystery"] = "unknown extension\n",
+                ["ignored.mystery"] = "ignored unknown extension\n",
+            });
+        var appPath = TestProjectHelper.ProjectPath(tempDir, "app.cs");
+        var scriptPath = TestProjectHelper.ProjectPath(tempDir, "script");
+        var toolPath = TestProjectHelper.ProjectPath(tempDir, "tool");
+        var dataPath = TestProjectHelper.ProjectPath(tempDir, "data.mystery");
+        var ignoredPath = TestProjectHelper.ProjectPath(tempDir, "ignored.mystery");
 
-            var indexer = new FileIndexer(tempDir);
-            var scanResult = indexer.ScanFilesDetailed();
+        var indexer = new FileIndexer(tempDir);
+        var scanResult = indexer.ScanFilesDetailed();
 
-            Assert.Equal(["data.mystery"], scanResult.UnknownExtensionFiles);
-            Assert.Equal("csharp", scanResult.FileLanguages[appPath]);
-            Assert.Equal("python", scanResult.FileLanguages[scriptPath]);
-            Assert.DoesNotContain(toolPath, scanResult.FileLanguages.Keys);
-            Assert.DoesNotContain(dataPath, scanResult.FileLanguages.Keys);
-            Assert.DoesNotContain(ignoredPath, scanResult.FileLanguages.Keys);
-            Assert.Contains("data.mystery", scanResult.NonIndexablePaths);
-            Assert.Contains("tool", scanResult.NonIndexablePaths);
-            Assert.DoesNotContain("tool", scanResult.UnknownExtensionFiles);
-            Assert.DoesNotContain("ignored.mystery", scanResult.UnknownExtensionFiles);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(["data.mystery"], scanResult.UnknownExtensionFiles);
+        Assert.Equal("csharp", scanResult.FileLanguages[appPath]);
+        Assert.Equal("python", scanResult.FileLanguages[scriptPath]);
+        Assert.DoesNotContain(toolPath, scanResult.FileLanguages.Keys);
+        Assert.DoesNotContain(dataPath, scanResult.FileLanguages.Keys);
+        Assert.DoesNotContain(ignoredPath, scanResult.FileLanguages.Keys);
+        Assert.Contains("data.mystery", scanResult.NonIndexablePaths);
+        Assert.Contains("tool", scanResult.NonIndexablePaths);
+        Assert.DoesNotContain("tool", scanResult.UnknownExtensionFiles);
+        Assert.DoesNotContain("ignored.mystery", scanResult.UnknownExtensionFiles);
     }
 
     [Fact]
     public void ScanFilesDetailed_TreatsSolutionAndManifestAsKnownStructuralFiles_Issue3662()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, "App.sln"), """
-                Microsoft Visual Studio Solution File, Format Version 12.00
-                Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
-                EndProject
-                """);
-            File.WriteAllText(Path.Combine(tempDir, "app.manifest"), """
-                <?xml version="1.0" encoding="utf-8"?>
-                <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
-                  <assemblyIdentity version="1.0.0.0" name="App" type="win32" />
-                </assembly>
-                """);
-            File.WriteAllText(Path.Combine(tempDir, "data.mystery"), "unknown extension\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFile(
+            tempDir,
+            "App.sln",
+            """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            """);
+        TestProjectHelper.WriteTextFile(
+            tempDir,
+            "app.manifest",
+            """
+            <?xml version="1.0" encoding="utf-8"?>
+            <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+              <assemblyIdentity version="1.0.0.0" name="App" type="win32" />
+            </assembly>
+            """);
+        TestProjectHelper.WriteTextFile(tempDir, "data.mystery", "unknown extension\n");
 
-            var indexer = new FileIndexer(tempDir);
-            var scanResult = indexer.ScanFilesDetailed();
-            var files = scanResult.Files
-                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .ToArray();
+        var indexer = new FileIndexer(tempDir);
+        var scanResult = indexer.ScanFilesDetailed();
+        var files = scanResult.Files
+            .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
 
-            Assert.Equal(["App.sln", "app.manifest"], files);
-            Assert.Equal(["data.mystery"], scanResult.UnknownExtensionFiles);
-            Assert.DoesNotContain("App.sln", scanResult.UnknownExtensionFiles);
-            Assert.DoesNotContain("app.manifest", scanResult.UnknownExtensionFiles);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(["App.sln", "app.manifest"], files);
+        Assert.Equal(["data.mystery"], scanResult.UnknownExtensionFiles);
+        Assert.DoesNotContain("App.sln", scanResult.UnknownExtensionFiles);
+        Assert.DoesNotContain("app.manifest", scanResult.UnknownExtensionFiles);
     }
 
     [Fact]
     public void DetectLanguage_ExtensionlessShebangs_HonorsUnicodeBomEncodings()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var files = new Dictionary<string, Encoding>
         {
+            ["utf8"] = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            ["utf8-bom"] = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true),
+            ["utf16-le"] = new UnicodeEncoding(bigEndian: false, byteOrderMark: true),
+            ["utf16-be"] = new UnicodeEncoding(bigEndian: true, byteOrderMark: true),
+        };
 
-            var files = new Dictionary<string, Encoding>
-            {
-                ["utf8"] = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-                ["utf8-bom"] = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true),
-                ["utf16-le"] = new UnicodeEncoding(bigEndian: false, byteOrderMark: true),
-                ["utf16-be"] = new UnicodeEncoding(bigEndian: true, byteOrderMark: true),
-            };
-
-            foreach (var (name, encoding) in files)
-            {
-                var path = Path.Combine(tempDir, name);
-                File.WriteAllText(path, "#!/usr/bin/env bash\nprintf 'ok'\n", encoding);
-            }
-
-            var detected = files.Keys
-                .ToDictionary(name => name, name => FileIndexer.DetectLanguage(Path.Combine(tempDir, name)));
-
-            Assert.All(detected, pair => Assert.Equal("shell", pair.Value));
-        }
-        finally
+        foreach (var (name, encoding) in files)
         {
-            TestProjectHelper.DeleteDirectory(tempDir);
+            var path = TestProjectHelper.ProjectPath(tempDir, name);
+            File.WriteAllText(path, "#!/usr/bin/env bash\nprintf 'ok'\n", encoding);
         }
+
+        var detected = files.Keys
+            .ToDictionary(name => name, name => FileIndexer.DetectLanguage(Path.Combine(tempDir, name)));
+
+        Assert.All(detected, pair => Assert.Equal("shell", pair.Value));
     }
 
     [Fact]
     public void ScanFiles_IncludesModernNodeModuleExtensions()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, "index.mjs"), "export const run = () => {};");
-            File.WriteAllText(Path.Combine(tempDir, "cli.cjs"), "module.exports = {};");
-            File.WriteAllText(Path.Combine(tempDir, "types.cts"), "export type Config = {};");
-            File.WriteAllText(Path.Combine(tempDir, "types.d.mts"), "export interface Config {}");
-            File.WriteAllText(Path.Combine(tempDir, "notes.txt"), "ignored");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["index.mjs"] = "export const run = () => {};",
+                ["cli.cjs"] = "module.exports = {};",
+                ["types.cts"] = "export type Config = {};",
+                ["types.d.mts"] = "export interface Config {}",
+                ["notes.txt"] = "ignored",
+            });
 
-            var indexer = new FileIndexer(tempDir);
-            var files = indexer.ScanFiles().Select(Path.GetFileName).OrderBy(name => name).ToList();
+        var indexer = new FileIndexer(tempDir);
+        var files = indexer.ScanFiles().Select(Path.GetFileName).OrderBy(name => name).ToList();
 
-            Assert.Equal(["cli.cjs", "index.mjs", "types.cts", "types.d.mts"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(["cli.cjs", "index.mjs", "types.cts", "types.d.mts"], files);
     }
 
     [Fact]
     public void ScanFiles_IncludesExtensionlessShebangScripts()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, "rbenv-init"), "#!/usr/bin/env bash\necho init\n");
-            File.WriteAllText(Path.Combine(tempDir, "python-tool"), "#!/usr/bin/python3\nprint('hi')\n");
-            File.WriteAllText(Path.Combine(tempDir, "plain-text"), "Hello world\n");
-            File.WriteAllText(Path.Combine(tempDir, "known.rb"), "puts 'known'\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["rbenv-init"] = "#!/usr/bin/env bash\necho init\n",
+                ["python-tool"] = "#!/usr/bin/python3\nprint('hi')\n",
+                ["plain-text"] = "Hello world\n",
+                ["known.rb"] = "puts 'known'\n",
+            });
 
-            var indexer = new FileIndexer(tempDir);
-            var files = indexer.ScanFiles()
-                .Select(Path.GetFileName)
-                .OrderBy(name => name, StringComparer.Ordinal)
-                .ToList();
+        var indexer = new FileIndexer(tempDir);
+        var files = indexer.ScanFiles()
+            .Select(Path.GetFileName)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToList();
 
-            Assert.Equal(["known.rb", "python-tool", "rbenv-init"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(["known.rb", "python-tool", "rbenv-init"], files);
     }
 
     [Fact]
     public void ScanFiles_ExcludesUnknownExtensionEvenWhenShebangLooksSupported()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, "notes.txt"), "#!/usr/bin/env bash\necho hi\n");
-            File.WriteAllText(Path.Combine(tempDir, "script"), "#!/usr/bin/env bash\necho hi\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["notes.txt"] = "#!/usr/bin/env bash\necho hi\n",
+                ["script"] = "#!/usr/bin/env bash\necho hi\n",
+            });
 
-            var indexer = new FileIndexer(tempDir);
-            var files = indexer.ScanFiles()
-                .Select(Path.GetFileName)
-                .OrderBy(name => name, StringComparer.Ordinal)
-                .ToList();
+        var indexer = new FileIndexer(tempDir);
+        var files = indexer.ScanFiles()
+            .Select(Path.GetFileName)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToList();
 
-            Assert.Equal(["script"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(["script"], files);
     }
 
     [Fact]
