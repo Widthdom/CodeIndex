@@ -3082,82 +3082,74 @@ public partial class QueryCommandRunnerTests
     [InlineData("excerpt", "-1", "--after", "--after requires an integer between 0 and 1000")]
     public void QueryEntrypoints_OutOfRangeNumericOptionsFailClosed_Issue161(string command, string value, string option, string expectedErrorFragment)
     {
-        var projectRoot = TestProjectHelper.CreateTempProject(
+        using var project = TestProjectHelper.CreateTempProjectScope(
             $"cdidx_issue161_{command}_{option.Trim('-')}_{value.Replace('-', 'n')}");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            // Seed indexed content so `search "Issue161"`, `symbols "Issue161"`, and
-            // `impact "Issue161Callee"` would all return real matches if ParseArgs regressed.
-            // Issue161Caller.Run calls Issue161Target.Issue161Callee, giving `impact` a live edge.
-            // `search "Issue161"` / `symbols "Issue161"` が本物の結果を返せるよう、index 済み内容をシードする。
-            // Issue161Caller.Run が Issue161Target.Issue161Callee を呼ぶことで `impact` のエッジも張る。
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/Issue161Target.cs",
-                "csharp",
-                """"
-                namespace Issue161;
-                public class Issue161Target
-                {
-                    public void Issue161Callee() { }
-                }
-                public class Issue161Caller
-                {
-                    public void Run()
-                    {
-                        var target = new Issue161Target();
-                        target.Issue161Callee();
-                    }
-                }
-                """");
-            MarkGraphAndFoldReady(dbPath);
-
-            // Real file on disk so `excerpt` would actually read and print content
-            // if any of its numeric options regressed to their defaults.
-            // `excerpt` が既定値退行時に本当にファイル内容を読んで出力できるよう、実在ファイルも用意する。
-            var excerptDir = Path.Combine(projectRoot, "src");
-            Directory.CreateDirectory(excerptDir);
-            var excerptFilePath = Path.Combine(excerptDir, "Issue161Excerpt.cs");
-            File.WriteAllText(
-                excerptFilePath,
-                "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\n");
-
-            string[] args = command switch
+        var projectRoot = project.Root;
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        // Seed indexed content so `search "Issue161"`, `symbols "Issue161"`, and
+        // `impact "Issue161Callee"` would all return real matches if ParseArgs regressed.
+        // Issue161Caller.Run calls Issue161Target.Issue161Callee, giving `impact` a live edge.
+        // `search "Issue161"` / `symbols "Issue161"` が本物の結果を返せるよう、index 済み内容をシードする。
+        // Issue161Caller.Run が Issue161Target.Issue161Callee を呼ぶことで `impact` のエッジも張る。
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/Issue161Target.cs",
+            "csharp",
+            """"
+            namespace Issue161;
+            public class Issue161Target
             {
-                "symbols" => ["Issue161", "--db", dbPath, "--json", option, value],
-                "search" => ["Issue161", "--db", dbPath, "--json", option, value],
-                "impact" => ["Issue161Callee", "--db", dbPath, "--json", option, value],
-                "excerpt" when option == "--start" => [excerptFilePath, "--json", option, value],
-                "excerpt" => [excerptFilePath, "--json", "--start", "1", option, value],
-                _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
-            };
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => command switch
+                public void Issue161Callee() { }
+            }
+            public class Issue161Caller
             {
-                "symbols" => QueryCommandRunner.RunSymbols(args, _jsonOptions),
-                "search" => QueryCommandRunner.RunSearch(args, _jsonOptions),
-                "impact" => QueryCommandRunner.RunImpact(args, _jsonOptions),
-                "excerpt" => QueryCommandRunner.RunExcerpt(args, _jsonOptions),
-                _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
-            });
+                public void Run()
+                {
+                    var target = new Issue161Target();
+                    target.Issue161Callee();
+                }
+            }
+            """");
+        MarkGraphAndFoldReady(dbPath);
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            // The #161 bug was exactly this: real results on stdout alongside the stderr Error.
-            // stdout must stay empty so callers that branch on exit code alone cannot consume
-            // silently-defaulted output as if it were valid data.
-            // #161 の本質はここ。exit code だけを見る呼び出し元がデフォルト差し替えの出力を
-            // 正当な結果として消費しないよう、stdout は空でなければならない。
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains(expectedErrorFragment, stderr);
-            Assert.Contains($"got '{value}'", stderr);
-            Assert.Contains("Hint: fix the invalid or missing option value", stderr);
-            Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
-        }
-        finally
+        // Real file on disk so `excerpt` would actually read and print content
+        // if any of its numeric options regressed to their defaults.
+        // `excerpt` が既定値退行時に本当にファイル内容を読んで出力できるよう、実在ファイルも用意する。
+        var excerptFilePath = TestProjectHelper.WriteTextFile(
+            projectRoot,
+            "src/Issue161Excerpt.cs",
+            "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\n");
+
+        string[] args = command switch
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+            "symbols" => ["Issue161", "--db", dbPath, "--json", option, value],
+            "search" => ["Issue161", "--db", dbPath, "--json", option, value],
+            "impact" => ["Issue161Callee", "--db", dbPath, "--json", option, value],
+            "excerpt" when option == "--start" => [excerptFilePath, "--json", option, value],
+            "excerpt" => [excerptFilePath, "--json", "--start", "1", option, value],
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        };
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => command switch
+        {
+            "symbols" => QueryCommandRunner.RunSymbols(args, _jsonOptions),
+            "search" => QueryCommandRunner.RunSearch(args, _jsonOptions),
+            "impact" => QueryCommandRunner.RunImpact(args, _jsonOptions),
+            "excerpt" => QueryCommandRunner.RunExcerpt(args, _jsonOptions),
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        });
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        // The #161 bug was exactly this: real results on stdout alongside the stderr Error.
+        // stdout must stay empty so callers that branch on exit code alone cannot consume
+        // silently-defaulted output as if it were valid data.
+        // #161 の本質はここ。exit code だけを見る呼び出し元がデフォルト差し替えの出力を
+        // 正当な結果として消費しないよう、stdout は空でなければならない。
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains(expectedErrorFragment, stderr);
+        Assert.Contains($"got '{value}'", stderr);
+        Assert.Contains("Hint: fix the invalid or missing option value", stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
     }
 
     [Fact]
