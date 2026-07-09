@@ -4587,27 +4587,20 @@ public partial class FileIndexerTests
         // UTF-16 LE BOM (FF FE) 付きで書かれたソースは UTF-8 fallback ではなく UTF-16 で
         // デコードしなければならない。UTF-8 経路では 1 バイトおきに U+FFFD / NUL に
         // 化けてシンボル抽出が壊れる。Closes #1540.
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var filePath = Path.Combine(tempDir, "utf16le.cs");
-            var payload = "using System;\nnamespace Utf16Le;\n";
-            var rawBytes = new byte[] { 0xFF, 0xFE }
-                .Concat(System.Text.Encoding.Unicode.GetBytes(payload))
-                .ToArray();
-            File.WriteAllBytes(filePath, rawBytes);
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var payload = "using System;\nnamespace Utf16Le;\n";
+        var rawBytes = new byte[] { 0xFF, 0xFE }
+            .Concat(Encoding.Unicode.GetBytes(payload))
+            .ToArray();
+        var filePath = TestProjectHelper.WriteBinaryFile(tempDir, "utf16le.cs", rawBytes);
 
-            var indexer = new FileIndexer(tempDir);
-            var (_, content, _, warning) = indexer.BuildRecordWithRawBytes(filePath);
+        var indexer = new FileIndexer(tempDir);
+        var (_, content, _, warning) = indexer.BuildRecordWithRawBytes(filePath);
 
-            Assert.Null(warning);
-            Assert.Contains("namespace Utf16Le;", content);
-            Assert.DoesNotContain('�', content);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Null(warning);
+        Assert.Contains("namespace Utf16Le;", content);
+        Assert.DoesNotContain('�', content);
     }
 
     [Fact]
@@ -4617,27 +4610,20 @@ public partial class FileIndexerTests
         // big-endian Windows or by legacy tooling keep their symbols intact. Closes #1540.
         // UTF-16 BE BOM (FE FF) も UTF-16 BE でデコードし、ビッグエンディアン Windows
         // やレガシツール由来のソースが壊れないようにする。Closes #1540.
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var filePath = Path.Combine(tempDir, "utf16be.cs");
-            var payload = "using System;\nnamespace Utf16Be;\n";
-            var rawBytes = new byte[] { 0xFE, 0xFF }
-                .Concat(System.Text.Encoding.BigEndianUnicode.GetBytes(payload))
-                .ToArray();
-            File.WriteAllBytes(filePath, rawBytes);
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var payload = "using System;\nnamespace Utf16Be;\n";
+        var rawBytes = new byte[] { 0xFE, 0xFF }
+            .Concat(Encoding.BigEndianUnicode.GetBytes(payload))
+            .ToArray();
+        var filePath = TestProjectHelper.WriteBinaryFile(tempDir, "utf16be.cs", rawBytes);
 
-            var indexer = new FileIndexer(tempDir);
-            var (_, content, _, warning) = indexer.BuildRecordWithRawBytes(filePath);
+        var indexer = new FileIndexer(tempDir);
+        var (_, content, _, warning) = indexer.BuildRecordWithRawBytes(filePath);
 
-            Assert.Null(warning);
-            Assert.Contains("namespace Utf16Be;", content);
-            Assert.DoesNotContain('�', content);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Null(warning);
+        Assert.Contains("namespace Utf16Be;", content);
+        Assert.DoesNotContain('�', content);
     }
 
     [Fact]
@@ -4649,26 +4635,20 @@ public partial class FileIndexerTests
         // 古い Windows ツールは BOM なし UTF-16 LE でソースを保存することがある。
         // 1 バイトおきの NUL パターンはバイナリ混入ではなくエンコーディングのシグナルとして扱う。
         // Closes #1829.
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var filePath = Path.Combine(tempDir, "utf16le-nobom.cs");
-            var payload = "using System;\nnamespace Utf16LeNoBom;\n";
-            File.WriteAllBytes(filePath, System.Text.Encoding.Unicode.GetBytes(payload));
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var payload = "using System;\nnamespace Utf16LeNoBom;\n";
+        var rawBytes = Encoding.Unicode.GetBytes(payload);
+        var filePath = TestProjectHelper.WriteBinaryFile(tempDir, "utf16le-nobom.cs", rawBytes);
 
-            var indexer = new FileIndexer(tempDir);
-            var (_, content, _, warning) = indexer.BuildRecordWithRawBytes(filePath);
+        var indexer = new FileIndexer(tempDir);
+        var (_, content, _, warning) = indexer.BuildRecordWithRawBytes(filePath);
 
-            Assert.NotNull(warning);
-            Assert.Contains("UTF-16LE without BOM", warning, StringComparison.Ordinal);
-            Assert.Contains("NUL-byte heuristic", warning, StringComparison.Ordinal);
-            Assert.Contains("namespace Utf16LeNoBom;", content);
-            Assert.False(FileIndexer.ContainsIndexBlockingNullByte(System.Text.Encoding.Unicode.GetBytes(payload)));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.NotNull(warning);
+        Assert.Contains("UTF-16LE without BOM", warning, StringComparison.Ordinal);
+        Assert.Contains("NUL-byte heuristic", warning, StringComparison.Ordinal);
+        Assert.Contains("namespace Utf16LeNoBom;", content);
+        Assert.False(FileIndexer.ContainsIndexBlockingNullByte(rawBytes));
     }
 
     [Fact]
@@ -4678,26 +4658,20 @@ public partial class FileIndexerTests
         // to little-endian Windows output only. Closes #1829.
         // BOM なし UTF-16 BE テキストも扱い、little-endian Windows 出力だけに限定しない。
         // Closes #1829.
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var filePath = Path.Combine(tempDir, "utf16be-nobom.cs");
-            var payload = "using System;\nnamespace Utf16BeNoBom;\n";
-            File.WriteAllBytes(filePath, System.Text.Encoding.BigEndianUnicode.GetBytes(payload));
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var payload = "using System;\nnamespace Utf16BeNoBom;\n";
+        var rawBytes = Encoding.BigEndianUnicode.GetBytes(payload);
+        var filePath = TestProjectHelper.WriteBinaryFile(tempDir, "utf16be-nobom.cs", rawBytes);
 
-            var indexer = new FileIndexer(tempDir);
-            var (_, content, _, warning) = indexer.BuildRecordWithRawBytes(filePath);
+        var indexer = new FileIndexer(tempDir);
+        var (_, content, _, warning) = indexer.BuildRecordWithRawBytes(filePath);
 
-            Assert.NotNull(warning);
-            Assert.Contains("UTF-16BE without BOM", warning, StringComparison.Ordinal);
-            Assert.Contains("NUL-byte heuristic", warning, StringComparison.Ordinal);
-            Assert.Contains("namespace Utf16BeNoBom;", content);
-            Assert.False(FileIndexer.ContainsIndexBlockingNullByte(System.Text.Encoding.BigEndianUnicode.GetBytes(payload)));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.NotNull(warning);
+        Assert.Contains("UTF-16BE without BOM", warning, StringComparison.Ordinal);
+        Assert.Contains("NUL-byte heuristic", warning, StringComparison.Ordinal);
+        Assert.Contains("namespace Utf16BeNoBom;", content);
+        Assert.False(FileIndexer.ContainsIndexBlockingNullByte(rawBytes));
     }
 
     [Fact]
@@ -4747,23 +4721,16 @@ public partial class FileIndexerTests
     [Fact]
     public void BuildRecord_NonUtf16NullByte_ThrowsOffsetDiagnostic()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var filePath = Path.Combine(tempDir, "binary.cs");
-            File.WriteAllBytes(filePath, [(byte)'c', (byte)'l', (byte)'a', (byte)'s', (byte)'s', (byte)' ', 0x00]);
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var filePath = TestProjectHelper.WriteBinaryFile(tempDir, "binary.cs", [(byte)'c', (byte)'l', (byte)'a', (byte)'s', (byte)'s', (byte)' ', 0x00]);
 
-            var indexer = new FileIndexer(tempDir);
-            var ex = Assert.Throws<FileIndexer.BinaryFileSkippedException>(() => indexer.BuildRecordWithRawBytes(filePath));
+        var indexer = new FileIndexer(tempDir);
+        var ex = Assert.Throws<FileIndexer.BinaryFileSkippedException>(() => indexer.BuildRecordWithRawBytes(filePath));
 
-            Assert.Contains("NULL byte at byte offset 6", ex.Message, StringComparison.Ordinal);
-            Assert.Equal("binary.cs", ex.RelativePath);
-            Assert.Equal(6, ex.NullByteOffset);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Contains("NULL byte at byte offset 6", ex.Message, StringComparison.Ordinal);
+        Assert.Equal("binary.cs", ex.RelativePath);
+        Assert.Equal(6, ex.NullByteOffset);
     }
 
     [Fact]
