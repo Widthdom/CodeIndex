@@ -1964,55 +1964,41 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void WithDb_InvalidSqliteFileSurfacesSqliteCategory_Issue2072()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2072_invalid_sqlite");
-        try
-        {
-            var dbPath = Path.Combine(projectRoot, "not-a-codeindex.db");
-            File.WriteAllText(dbPath, "this is not a sqlite database");
-            var dbUri = new Uri(dbPath).AbsoluteUri + "?mode=ro&immutable=1;Pooling=False";
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_issue2072_invalid_sqlite");
+        var dbPath = Path.Combine(project.Root, "not-a-codeindex.db");
+        File.WriteAllText(dbPath, "this is not a sqlite database");
+        var dbUri = new Uri(dbPath).AbsoluteUri + "?mode=ro&immutable=1;Pooling=False";
 
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
-                ["--db", dbUri],
-                _jsonOptions));
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--db", dbUri],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            Assert.Contains($"Error [{CommandErrorCodes.DbError}]: SQLite database error", stderr);
-            Assert.Contains("Hint: check `--db`, verify the index was written by a compatible cdidx version", stderr);
-            Assert.DoesNotContain("database error:", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Contains($"Error [{CommandErrorCodes.DbError}]: SQLite database error", stderr);
+        Assert.Contains("Hint: check `--db`, verify the index was written by a compatible cdidx version", stderr);
+        Assert.DoesNotContain("database error:", stderr);
     }
 
     [Fact]
     public void RunStatus_CorruptDbJsonReturnsStructuredError_Issue4338()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue4338_corrupt_status");
-        try
-        {
-            var dbPath = Path.Combine(projectRoot, "corrupt.db");
-            File.WriteAllText(dbPath, "this is not a sqlite database");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_issue4338_corrupt_status");
+        var dbPath = Path.Combine(project.Root, "corrupt.db");
+        File.WriteAllText(dbPath, "this is not a sqlite database");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
-                ["--db", dbPath, "--json"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--db", dbPath, "--json"],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            using var document = ParseJsonOutput(stdout);
-            var root = document.RootElement;
-            Assert.Equal("error", root.GetProperty("status").GetString());
-            Assert.Equal(CommandErrorCodes.DbError, root.GetProperty("error_code").GetString());
-            Assert.Equal("sqlite_error", root.GetProperty("category").GetString());
-            Assert.Contains("SQLite", root.GetProperty("message").GetString(), StringComparison.Ordinal);
-            Assert.Contains("rebuild", root.GetProperty("hint").GetString(), StringComparison.Ordinal);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var root = document.RootElement;
+        Assert.Equal("error", root.GetProperty("status").GetString());
+        Assert.Equal(CommandErrorCodes.DbError, root.GetProperty("error_code").GetString());
+        Assert.Equal("sqlite_error", root.GetProperty("category").GetString());
+        Assert.Contains("SQLite", root.GetProperty("message").GetString(), StringComparison.Ordinal);
+        Assert.Contains("rebuild", root.GetProperty("hint").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2051,28 +2037,21 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void WithDb_EmptySqliteFileRejectedBeforeQuery_Issue2037()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2037_empty_sqlite");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_issue2037_empty_sqlite");
+        var dbPath = Path.Combine(project.Root, "empty.db");
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
         {
-            var dbPath = Path.Combine(projectRoot, "empty.db");
-            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
-            {
-                connection.Open();
-            }
-
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
-                ["--db", dbPath],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            Assert.Contains("does not appear to be a valid CodeIndex database", stderr);
-            Assert.Contains("missing required table `files`", stderr);
-            Assert.Contains("Hint: rebuild with `cdidx index <projectPath> --db <path>`", stderr);
+            connection.Open();
         }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--db", dbPath],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Contains("does not appear to be a valid CodeIndex database", stderr);
+        Assert.Contains("missing required table `files`", stderr);
+        Assert.Contains("Hint: rebuild with `cdidx index <projectPath> --db <path>`", stderr);
     }
 
     [Fact]
@@ -2154,58 +2133,44 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void WithDb_MissingOversizedPathReturnsBoundedDiagnostics_Issue3093()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue3093_missing_db");
-        try
-        {
-            var missingDbPath = Path.Combine(
-                projectRoot,
-                Path.Combine(Enumerable.Repeat("segment", 40).ToArray()),
-                "codeindex.db");
-            var resolvedPath = Path.GetFullPath(missingDbPath);
-            Assert.True(resolvedPath.Length > SqliteFileUri.MaxDiagnosticValueLength);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_issue3093_missing_db");
+        var missingDbPath = Path.Combine(
+            project.Root,
+            Path.Combine(Enumerable.Repeat("segment", 40).ToArray()),
+            "codeindex.db");
+        var resolvedPath = Path.GetFullPath(missingDbPath);
+        Assert.True(resolvedPath.Length > SqliteFileUri.MaxDiagnosticValueLength);
 
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
-                ["--db", missingDbPath],
-                _jsonOptions));
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--db", missingDbPath],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains($"Error [{CommandErrorCodes.DbNotFound}]: --db '", stderr);
-            Assert.Contains("does not point to an existing database file", stderr);
-            Assert.Contains("...(truncated,", stderr);
-            Assert.DoesNotContain(resolvedPath, stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains($"Error [{CommandErrorCodes.DbNotFound}]: --db '", stderr);
+        Assert.Contains("does not point to an existing database file", stderr);
+        Assert.Contains("...(truncated,", stderr);
+        Assert.DoesNotContain(resolvedPath, stderr);
     }
 
     [Fact]
     public void RunBatch_MissingOversizedDbPathReturnsBoundedDiagnostics_Issue3093()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue3093_batch_db");
-        try
-        {
-            var missingDbPath = Path.Combine(
-                projectRoot,
-                Path.Combine(Enumerable.Repeat("segment", 40).ToArray()),
-                "codeindex.db");
-            var resolvedPath = Path.GetFullPath(missingDbPath);
-            Assert.True(resolvedPath.Length > SqliteFileUri.MaxDiagnosticValueLength);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_issue3093_batch_db");
+        var missingDbPath = Path.Combine(
+            project.Root,
+            Path.Combine(Enumerable.Repeat("segment", 40).ToArray()),
+            "codeindex.db");
+        var resolvedPath = Path.GetFullPath(missingDbPath);
+        Assert.True(resolvedPath.Length > SqliteFileUri.MaxDiagnosticValueLength);
 
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunBatch(
-                ["--db", missingDbPath],
-                _jsonOptions));
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunBatch(
+            ["--db", missingDbPath],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            Assert.Contains($"Error [{CommandErrorCodes.DbNotFound}]: database not found at ", stderr);
-            Assert.Contains("...(truncated,", stderr);
-            Assert.DoesNotContain(resolvedPath, stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Contains($"Error [{CommandErrorCodes.DbNotFound}]: database not found at ", stderr);
+        Assert.Contains("...(truncated,", stderr);
+        Assert.DoesNotContain(resolvedPath, stderr);
     }
 
     [Fact]
