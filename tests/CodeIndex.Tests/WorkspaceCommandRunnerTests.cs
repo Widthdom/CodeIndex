@@ -93,204 +93,157 @@ public class WorkspaceCommandRunnerTests
     [Fact]
     public void WorkspaceManifestLoader_Load_RejectsOversizedManifest()
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_oversized");
-        try
-        {
-            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
-            File.WriteAllText(manifestPath, new string('x', WorkspaceManifestLoader.MaxManifestBytes + 1));
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_manifest_oversized");
+        var root = project.Root;
+        var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+        File.WriteAllText(manifestPath, new string('x', WorkspaceManifestLoader.MaxManifestBytes + 1));
 
-            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+        var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
 
-            Assert.Contains($"{WorkspaceManifestLoader.MaxManifestBytes} byte limit", ex.Message);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(root);
-        }
+        Assert.Contains($"{WorkspaceManifestLoader.MaxManifestBytes} byte limit", ex.Message);
     }
 
     [Fact]
     public void WorkspaceManifestLoader_Load_RejectsDeeplyNestedManifest()
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_depth");
-        try
-        {
-            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
-            var nestedPrefix = string.Concat(Enumerable.Repeat("{\"nested\":", WorkspaceManifestLoader.MaxManifestDepth + 1));
-            File.WriteAllText(manifestPath, nestedPrefix + "0" + new string('}', WorkspaceManifestLoader.MaxManifestDepth + 1));
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_manifest_depth");
+        var root = project.Root;
+        var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+        var nestedPrefix = string.Concat(Enumerable.Repeat("{\"nested\":", WorkspaceManifestLoader.MaxManifestDepth + 1));
+        File.WriteAllText(manifestPath, nestedPrefix + "0" + new string('}', WorkspaceManifestLoader.MaxManifestDepth + 1));
 
-            Assert.ThrowsAny<JsonException>(() => WorkspaceManifestLoader.Load(manifestPath));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(root);
-        }
+        Assert.ThrowsAny<JsonException>(() => WorkspaceManifestLoader.Load(manifestPath));
     }
 
     [Fact]
     public void WorkspaceManifestLoader_Load_RejectsTooManyMembers()
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_members");
-        try
-        {
-            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
-            var members = string.Join(",", Enumerable.Range(0, WorkspaceManifestLoader.MaxManifestMembers + 1).Select(i => $"\"src{i}\""));
-            File.WriteAllText(manifestPath, $$"""
-                {
-                  "members": [{{members}}]
-                }
-                """);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_manifest_members");
+        var root = project.Root;
+        var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+        var members = string.Join(",", Enumerable.Range(0, WorkspaceManifestLoader.MaxManifestMembers + 1).Select(i => $"\"src{i}\""));
+        File.WriteAllText(manifestPath, $$"""
+            {
+              "members": [{{members}}]
+            }
+            """);
 
-            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+        var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
 
-            Assert.Contains($"{WorkspaceManifestLoader.MaxManifestMembers} member limit", ex.Message);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(root);
-        }
+        Assert.Contains($"{WorkspaceManifestLoader.MaxManifestMembers} member limit", ex.Message);
     }
 
     [Fact]
     public void WorkspaceManifestLoader_Load_RejectsOverlongMemberPath()
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_member_length");
-        try
-        {
-            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
-            var member = new string('a', WorkspaceManifestLoader.MaxManifestMemberPathChars + 1);
-            File.WriteAllText(manifestPath, $$"""
-                {
-                  "members": [{{JsonSerializer.Serialize(member)}}]
-                }
-                """);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_manifest_member_length");
+        var root = project.Root;
+        var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+        var member = new string('a', WorkspaceManifestLoader.MaxManifestMemberPathChars + 1);
+        File.WriteAllText(manifestPath, $$"""
+            {
+              "members": [{{JsonSerializer.Serialize(member)}}]
+            }
+            """);
 
-            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+        var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
 
-            Assert.Contains($"{WorkspaceManifestLoader.MaxManifestMemberPathChars} character limit", ex.Message);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(root);
-        }
+        Assert.Contains($"{WorkspaceManifestLoader.MaxManifestMemberPathChars} character limit", ex.Message);
     }
 
     [Fact]
     public void WorkspaceManifestLoader_Load_RejectsInvalidMemberEntriesWithBoundedDiagnostics_Issue3429()
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_invalid_members");
-        try
-        {
-            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
-            var longMember = new string('a', WorkspaceManifestLoader.MaxManifestMemberPathChars + 1);
-            File.WriteAllText(manifestPath, $$"""
-                {
-                  "members": [
-                    "src/A",
-                    "",
-                    42,
-                    true,
-                    "   ",
-                    {{JsonSerializer.Serialize(longMember)}}
-                  ]
-                }
-                """);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_manifest_invalid_members");
+        var root = project.Root;
+        var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+        var longMember = new string('a', WorkspaceManifestLoader.MaxManifestMemberPathChars + 1);
+        File.WriteAllText(manifestPath, $$"""
+            {
+              "members": [
+                "src/A",
+                "",
+                42,
+                true,
+                "   ",
+                {{JsonSerializer.Serialize(longMember)}}
+              ]
+            }
+            """);
 
-            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+        var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
 
-            Assert.Contains("members contain invalid entries", ex.Message);
-            Assert.Contains("members[1]", ex.Message);
-            Assert.Contains("members[2]", ex.Message);
-            Assert.Contains("members[3]", ex.Message);
-            Assert.Contains("members[4]", ex.Message);
-            Assert.Contains("members[5]", ex.Message);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(root);
-        }
+        Assert.Contains("members contain invalid entries", ex.Message);
+        Assert.Contains("members[1]", ex.Message);
+        Assert.Contains("members[2]", ex.Message);
+        Assert.Contains("members[3]", ex.Message);
+        Assert.Contains("members[4]", ex.Message);
+        Assert.Contains("members[5]", ex.Message);
     }
 
     [Fact]
     public void WorkspaceManifestLoader_Load_NormalizesAndDedupesMembers_Issue3429()
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_dedupe");
-        try
-        {
-            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
-            File.WriteAllText(manifestPath, """
-                {
-                  "members": [
-                    "src/A",
-                    "src/./A/",
-                    "src/B/"
-                  ]
-                }
-                """);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_manifest_dedupe");
+        var root = project.Root;
+        var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+        File.WriteAllText(manifestPath, """
+            {
+              "members": [
+                "src/A",
+                "src/./A/",
+                "src/B/"
+              ]
+            }
+            """);
 
-            var manifest = WorkspaceManifestLoader.Load(manifestPath);
+        var manifest = WorkspaceManifestLoader.Load(manifestPath);
 
-            Assert.Equal(2, manifest.Members.Count);
-            Assert.Equal(Path.GetFullPath(Path.Combine(root, "src", "A")), manifest.Members[0].Path);
-            Assert.Equal(Path.GetFullPath(Path.Combine(root, "src", "B")), manifest.Members[1].Path);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(root);
-        }
+        Assert.Equal(2, manifest.Members.Count);
+        Assert.Equal(Path.GetFullPath(Path.Combine(root, "src", "A")), manifest.Members[0].Path);
+        Assert.Equal(Path.GetFullPath(Path.Combine(root, "src", "B")), manifest.Members[1].Path);
     }
 
     [Fact]
     public void WorkspaceManifestLoader_Load_RejectsRootedMemberPath()
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_rooted_member");
-        try
-        {
-            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
-            var absoluteMember = Path.Combine(root, "src", "A");
-            File.WriteAllText(manifestPath, $$"""
-                {
-                  "members": [{{JsonSerializer.Serialize(absoluteMember)}}]
-                }
-                """);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_manifest_rooted_member");
+        var root = project.Root;
+        var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+        var absoluteMember = Path.Combine(root, "src", "A");
+        File.WriteAllText(manifestPath, $$"""
+            {
+              "members": [{{JsonSerializer.Serialize(absoluteMember)}}]
+            }
+            """);
 
-            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+        var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
 
-            Assert.Contains("member path must be relative", ex.Message);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(root);
-        }
+        Assert.Contains("member path must be relative", ex.Message);
     }
 
     [Fact]
     public void WorkspaceManifestLoader_Load_RejectsEscapingMemberPath()
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_escaping_member");
-        try
-        {
-            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
-            File.WriteAllText(manifestPath, """
-                {
-                  "members": ["../outside"]
-                }
-                """);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_manifest_escaping_member");
+        var root = project.Root;
+        var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+        File.WriteAllText(manifestPath, """
+            {
+              "members": ["../outside"]
+            }
+            """);
 
-            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+        var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
 
-            Assert.Contains("member path escapes the manifest root", ex.Message);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(root);
-        }
+        Assert.Contains("member path escapes the manifest root", ex.Message);
     }
 
     [Fact]
     public void WorkspaceManifestLoader_Load_UsesPathCasingForContainment_Issue3429()
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_case");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_manifest_case");
+        var root = project.Root;
         try
         {
             var manifestPath = Path.Combine(root, "cdidx.workspace.json");
@@ -317,56 +270,43 @@ public class WorkspaceCommandRunnerTests
         {
             lock (PathCasingTestLock.Gate)
                 PathCasing.ResetCacheForTests();
-            TestProjectHelper.DeleteDirectory(root);
         }
     }
 
     [Fact]
     public void WorkspaceManifestLoader_Load_RejectsOverlongDefaultDbName()
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_db_name_length");
-        try
-        {
-            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
-            var dbName = new string('a', WorkspaceManifestLoader.MaxDefaultDbNameChars + 1);
-            File.WriteAllText(manifestPath, $$"""
-                {
-                  "default_db_name": {{JsonSerializer.Serialize(dbName)}}
-                }
-                """);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_manifest_db_name_length");
+        var root = project.Root;
+        var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+        var dbName = new string('a', WorkspaceManifestLoader.MaxDefaultDbNameChars + 1);
+        File.WriteAllText(manifestPath, $$"""
+            {
+              "default_db_name": {{JsonSerializer.Serialize(dbName)}}
+            }
+            """);
 
-            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+        var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
 
-            Assert.Contains($"{WorkspaceManifestLoader.MaxDefaultDbNameChars} character limit", ex.Message);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(root);
-        }
+        Assert.Contains($"{WorkspaceManifestLoader.MaxDefaultDbNameChars} character limit", ex.Message);
     }
 
     [Fact]
     public void WorkspaceManifestLoader_Load_RejectsAbsoluteDefaultDbName()
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_absolute_db");
-        try
-        {
-            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
-            var dbName = Path.Combine(root, "outside.db");
-            File.WriteAllText(manifestPath, $$"""
-                {
-                  "default_db_name": {{JsonSerializer.Serialize(dbName)}}
-                }
-                """);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_manifest_absolute_db");
+        var root = project.Root;
+        var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+        var dbName = Path.Combine(root, "outside.db");
+        File.WriteAllText(manifestPath, $$"""
+            {
+              "default_db_name": {{JsonSerializer.Serialize(dbName)}}
+            }
+            """);
 
-            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+        var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
 
-            Assert.Contains("default_db_name must be a plain file name", ex.Message);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(root);
-        }
+        Assert.Contains("default_db_name must be a plain file name", ex.Message);
     }
 
     [Theory]
@@ -375,75 +315,57 @@ public class WorkspaceCommandRunnerTests
     [InlineData("nested/index.db")]
     public void WorkspaceManifestLoader_Load_RejectsUnsafeDefaultDbName(string dbName)
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_unsafe_db");
-        try
-        {
-            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
-            File.WriteAllText(manifestPath, $$"""
-                {
-                  "default_db_name": {{JsonSerializer.Serialize(dbName)}}
-                }
-                """);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_manifest_unsafe_db");
+        var root = project.Root;
+        var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+        File.WriteAllText(manifestPath, $$"""
+            {
+              "default_db_name": {{JsonSerializer.Serialize(dbName)}}
+            }
+            """);
 
-            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+        var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
 
-            Assert.Contains("default_db_name must be a plain file name", ex.Message);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(root);
-        }
+        Assert.Contains("default_db_name must be a plain file name", ex.Message);
     }
 
     [Fact]
     public void WorkspaceManifestLoader_Load_AcceptsUtf8BomManifest()
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_bom");
-        try
-        {
-            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
-            var json = """
-                {
-                  "members": ["src/A"],
-                  "index_strategy": "per_member",
-                  "default_db_name": "index.db"
-                }
-                """;
-            File.WriteAllBytes(manifestPath, [0xEF, 0xBB, 0xBF, .. Encoding.UTF8.GetBytes(json)]);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_manifest_bom");
+        var root = project.Root;
+        var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+        var json = """
+            {
+              "members": ["src/A"],
+              "index_strategy": "per_member",
+              "default_db_name": "index.db"
+            }
+            """;
+        File.WriteAllBytes(manifestPath, [0xEF, 0xBB, 0xBF, .. Encoding.UTF8.GetBytes(json)]);
 
-            var manifest = WorkspaceManifestLoader.Load(manifestPath);
+        var manifest = WorkspaceManifestLoader.Load(manifestPath);
 
-            Assert.Equal("index.db", manifest.DefaultDbName);
-            Assert.Single(manifest.Members);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(root);
-        }
+        Assert.Equal("index.db", manifest.DefaultDbName);
+        Assert.Single(manifest.Members);
     }
 
     [Fact]
     public void WorkspaceManifestLoader_Load_RejectsUnknownIndexStrategy()
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_index_strategy");
-        try
-        {
-            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
-            File.WriteAllText(manifestPath, """
-                {
-                  "members": ["src/A"],
-                  "index_strategy": "singel"
-                }
-                """);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_manifest_index_strategy");
+        var root = project.Root;
+        var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+        File.WriteAllText(manifestPath, """
+            {
+              "members": ["src/A"],
+              "index_strategy": "singel"
+            }
+            """);
 
-            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+        var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
 
-            Assert.Contains("index_strategy must be 'per_member' or 'single'", ex.Message);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(root);
-        }
+        Assert.Contains("index_strategy must be 'per_member' or 'single'", ex.Message);
     }
 
     [Fact]
