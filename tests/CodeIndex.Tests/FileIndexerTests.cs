@@ -711,7 +711,8 @@ public partial class FileIndexerTests
     [Fact]
     public void DetectLanguage_ExtensionlessFile_DoesNotLoadLanguageMapOverrides()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_extensionless");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_langmap_extensionless");
+        var tempDir = project.Root;
         LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
         var openCount = 0;
         try
@@ -734,14 +735,14 @@ public partial class FileIndexerTests
         {
             LanguageMapOverrides.OpenOverrideFileForTesting = null;
             LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
-            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void GetReusableDetectedLanguage_ExtensionFile_DoesNotReloadLanguageMapOverrides()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_reusable");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_langmap_reusable");
+        var tempDir = project.Root;
         LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
         var openCount = 0;
         try
@@ -767,14 +768,14 @@ public partial class FileIndexerTests
         {
             LanguageMapOverrides.OpenOverrideFileForTesting = null;
             LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
-            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void TryDetectLanguageForIndexing_CachesLanguageMapOverridesPerDirectory()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_indexer_cache");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_langmap_indexer_cache");
+        var tempDir = project.Root;
         LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
         var stampProbeCount = 0;
         try
@@ -801,14 +802,14 @@ public partial class FileIndexerTests
         {
             LanguageMapOverrides.ConfigPathStampProbeForTesting = null;
             LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
-            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void TryDetectLanguageForIndexing_ReusesParentLanguageMapOverridesWhenChildHasNoConfig()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_parent_cache");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_langmap_parent_cache");
+        var tempDir = project.Root;
         LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
         var stampProbeCount = 0;
         try
@@ -837,14 +838,14 @@ public partial class FileIndexerTests
         {
             LanguageMapOverrides.ConfigPathStampProbeForTesting = null;
             LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
-            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void TryDetectLanguageForIndexing_DoesNotReuseParentLanguageMapOverridesWhenChildHasConfig()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_child_cache");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_langmap_child_cache");
+        var tempDir = project.Root;
         LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
         var stampProbeCount = 0;
         try
@@ -876,14 +877,14 @@ public partial class FileIndexerTests
         {
             LanguageMapOverrides.ConfigPathStampProbeForTesting = null;
             LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
-            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
     [Fact]
     public void LanguageMapOverrides_LoadEffectiveMapReloadsWhenWorkspaceConfigChanges()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap_cache");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_langmap_cache");
+        var tempDir = project.Root;
         LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
         try
         {
@@ -902,7 +903,6 @@ public partial class FileIndexerTests
         finally
         {
             LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
-            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
