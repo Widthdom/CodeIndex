@@ -4120,143 +4120,118 @@ public partial class FileIndexerTests
         // SkipDirs 名のディレクトリ配下に .gitmodules で宣言された submodule（例: vendor/foo）は
         // 可視化される必要がある。SkipDirs は submodule までの経路でのみ上書きされ、SkipDirs
         // 祖先自身の無関係なファイルは引き続き除外される。Closes #1511.
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('hello')");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>
+            {
+                ["app.py"] = "print('hello')",
+                // .gitmodules at project root declaring submodule path "vendor/foo"
+                [".gitmodules"] = "[submodule \"foo\"]\n\tpath = vendor/foo\n\turl = https://example.invalid/foo.git\n",
+                // File sitting directly in the SkipDir ancestor — must NOT be indexed
+                // SkipDirs 祖先直下のファイル — 索引されてはいけない
+                ["vendor/vendor_dep.py"] = "x = 1",
+                ["vendor/foo/.git"] = "gitdir: ../../.git/modules/foo\n",
+                ["vendor/foo/lib.py"] = "def f(): pass",
+                ["vendor/foo/src/nested.py"] = "def g(): pass",
+            });
 
-            // .gitmodules at project root declaring submodule path "vendor/foo"
-            File.WriteAllText(
-                Path.Combine(tempDir, ".gitmodules"),
-                "[submodule \"foo\"]\n\tpath = vendor/foo\n\turl = https://example.invalid/foo.git\n");
+        var indexer = new FileIndexer(tempDir);
+        var files = indexer.ScanFiles();
 
-            var vendorDir = Path.Combine(tempDir, "vendor");
-            Directory.CreateDirectory(vendorDir);
-            // File sitting directly in the SkipDir ancestor — must NOT be indexed
-            // SkipDirs 祖先直下のファイル — 索引されてはいけない
-            File.WriteAllText(Path.Combine(vendorDir, "vendor_dep.py"), "x = 1");
-
-            var submoduleDir = Path.Combine(vendorDir, "foo");
-            Directory.CreateDirectory(submoduleDir);
-            File.WriteAllText(Path.Combine(submoduleDir, ".git"), "gitdir: ../../.git/modules/foo\n");
-            File.WriteAllText(Path.Combine(submoduleDir, "lib.py"), "def f(): pass");
-            Directory.CreateDirectory(Path.Combine(submoduleDir, "src"));
-            File.WriteAllText(Path.Combine(submoduleDir, "src", "nested.py"), "def g(): pass");
-
-            var indexer = new FileIndexer(tempDir);
-            var files = indexer.ScanFiles();
-
-            var rel = files.Select(f => Path.GetRelativePath(tempDir, f).Replace('\\', '/')).ToHashSet();
-            Assert.Contains("app.py", rel);
-            Assert.Contains("vendor/foo/lib.py", rel);
-            Assert.Contains("vendor/foo/src/nested.py", rel);
-            Assert.DoesNotContain("vendor/vendor_dep.py", rel);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        var rel = files.Select(f => Path.GetRelativePath(tempDir, f).Replace('\\', '/')).ToHashSet();
+        Assert.Contains("app.py", rel);
+        Assert.Contains("vendor/foo/lib.py", rel);
+        Assert.Contains("vendor/foo/src/nested.py", rel);
+        Assert.DoesNotContain("vendor/vendor_dep.py", rel);
     }
 
     [Fact]
     public void ScanFilesDetailed_OversizedGitmodulesSkipsSubmodulePassthroughWithWarning()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('hello')");
-            File.WriteAllText(Path.Combine(tempDir, ".gitmodules"), new string('x', 300 * 1024));
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>
+            {
+                ["app.py"] = "print('hello')",
+                [".gitmodules"] = new string('x', 300 * 1024),
+                ["vendor/foo/.git"] = "gitdir: ../../.git/modules/foo\n",
+                ["vendor/foo/lib.py"] = "def f(): pass",
+            });
 
-            var submoduleDir = Path.Combine(tempDir, "vendor", "foo");
-            Directory.CreateDirectory(submoduleDir);
-            File.WriteAllText(Path.Combine(submoduleDir, ".git"), "gitdir: ../../.git/modules/foo\n");
-            File.WriteAllText(Path.Combine(submoduleDir, "lib.py"), "def f(): pass");
+        var result = new FileIndexer(tempDir).ScanFilesDetailed();
+        var rel = result.Files.Select(f => Path.GetRelativePath(tempDir, f).Replace('\\', '/')).ToHashSet();
 
-            var result = new FileIndexer(tempDir).ScanFilesDetailed();
-            var rel = result.Files.Select(f => Path.GetRelativePath(tempDir, f).Replace('\\', '/')).ToHashSet();
-
-            Assert.Contains("app.py", rel);
-            Assert.DoesNotContain("vendor/foo/lib.py", rel);
-            Assert.Contains(
-                result.Errors,
-                error => error.Path == ".gitmodules"
-                    && error.Severity == FileIndexer.ScanIssueSeverity.Warning
-                    && error.Message.Contains("exceeds", StringComparison.OrdinalIgnoreCase));
-            Assert.False(result.HadErrors);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Contains("app.py", rel);
+        Assert.DoesNotContain("vendor/foo/lib.py", rel);
+        Assert.Contains(
+            result.Errors,
+            error => error.Path == ".gitmodules"
+                && error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                && error.Message.Contains("exceeds", StringComparison.OrdinalIgnoreCase));
+        Assert.False(result.HadErrors);
     }
 
     [Fact]
     public void ScanFiles_GitmodulesQuotedPathPreservesCommentCharacters_Issue3819()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(
-                Path.Combine(tempDir, ".gitmodules"),
-                """
-                [submodule "quoted"]
-                    path = "vendor/hash#semi;module" # trailing comment
-                """);
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>
+            {
+                [".gitmodules"] = """
+                              [submodule "quoted"]
+                                  path = "vendor/hash#semi;module" # trailing comment
+                              """,
+                ["vendor/hash#semi;module/.git"] = "gitdir: ../../.git/modules/quoted\n",
+                ["vendor/hash#semi;module/lib.py"] = "def quoted(): pass",
+            });
 
-            var submoduleDir = Path.Combine(tempDir, "vendor", "hash#semi;module");
-            Directory.CreateDirectory(submoduleDir);
-            File.WriteAllText(Path.Combine(submoduleDir, ".git"), "gitdir: ../../.git/modules/quoted\n");
-            File.WriteAllText(Path.Combine(submoduleDir, "lib.py"), "def quoted(): pass");
+        var rel = ToRelativePathSet(tempDir, new FileIndexer(tempDir).ScanFiles());
 
-            var rel = ToRelativePathSet(tempDir, new FileIndexer(tempDir).ScanFiles());
-
-            Assert.Contains("vendor/hash#semi;module/lib.py", rel);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Contains("vendor/hash#semi;module/lib.py", rel);
     }
 
     [Fact]
     public void ScanFilesDetailed_GitmodulesSubmodulePathCapWarns_Issue3819()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('hello')");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFile(tempDir, "app.py", "print('hello')");
 
-            var maxPaths = FileIndexer.MaxGitmodulesSubmodulePaths;
-            var gitmodules = new StringBuilder();
-            for (var i = 0; i <= maxPaths; i++)
+        var maxPaths = FileIndexer.MaxGitmodulesSubmodulePaths;
+        var gitmodules = new StringBuilder();
+        for (var i = 0; i <= maxPaths; i++)
+        {
+            gitmodules.AppendLine($"[submodule \"m{i}\"]");
+            gitmodules.AppendLine($"    path = vendor/m{i}");
+        }
+
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>
             {
-                gitmodules.AppendLine($"[submodule \"m{i}\"]");
-                gitmodules.AppendLine($"    path = vendor/m{i}");
-            }
+                [".gitmodules"] = gitmodules.ToString(),
+                [$"vendor/m{maxPaths}/.git"] = $"gitdir: ../../.git/modules/m{maxPaths}\n",
+                [$"vendor/m{maxPaths}/lib.py"] = "def over_cap(): pass",
+            });
 
-            File.WriteAllText(Path.Combine(tempDir, ".gitmodules"), gitmodules.ToString());
+        var result = new FileIndexer(tempDir).ScanFilesDetailed();
+        var rel = ToRelativePathSet(tempDir, result.Files);
 
-            var overflowDir = Path.Combine(tempDir, "vendor", $"m{maxPaths}");
-            Directory.CreateDirectory(overflowDir);
-            File.WriteAllText(Path.Combine(overflowDir, ".git"), $"gitdir: ../../.git/modules/m{maxPaths}\n");
-            File.WriteAllText(Path.Combine(overflowDir, "lib.py"), "def over_cap(): pass");
-
-            var result = new FileIndexer(tempDir).ScanFilesDetailed();
-            var rel = ToRelativePathSet(tempDir, result.Files);
-
-            Assert.Contains("app.py", rel);
-            Assert.DoesNotContain($"vendor/m{maxPaths}/lib.py", rel);
-            Assert.Contains(
-                result.Errors,
-                error => error.Path == ".gitmodules"
-                    && error.Severity == FileIndexer.ScanIssueSeverity.Warning
-                    && error.Message.Contains($"after {maxPaths}", StringComparison.Ordinal));
-            Assert.False(result.HadErrors);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Contains("app.py", rel);
+        Assert.DoesNotContain($"vendor/m{maxPaths}/lib.py", rel);
+        Assert.Contains(
+            result.Errors,
+            error => error.Path == ".gitmodules"
+                && error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                && error.Message.Contains($"after {maxPaths}", StringComparison.Ordinal));
+        Assert.False(result.HadErrors);
     }
 
     [Fact]
@@ -4357,27 +4332,21 @@ public partial class FileIndexerTests
         // build artifacts inside the submodule remain excluded.
         // 可視化された submodule も自身の .gitignore を尊重し、submodule 配下のビルド成果物などは
         // 引き続き除外されること。
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(
-                Path.Combine(tempDir, ".gitmodules"),
-                "[submodule \"foo\"]\n\tpath = vendor/foo\n\turl = https://example.invalid/foo.git\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>
+            {
+                [".gitmodules"] = "[submodule \"foo\"]\n\tpath = vendor/foo\n\turl = https://example.invalid/foo.git\n",
+                ["vendor/foo/lib.py"] = "def f(): pass",
+                ["vendor/foo/.gitignore"] = "generated.py\n",
+                ["vendor/foo/generated.py"] = "# generated",
+            });
 
-            var submoduleDir = Path.Combine(tempDir, "vendor", "foo");
-            Directory.CreateDirectory(submoduleDir);
-            File.WriteAllText(Path.Combine(submoduleDir, "lib.py"), "def f(): pass");
-            File.WriteAllText(Path.Combine(submoduleDir, ".gitignore"), "generated.py\n");
-            File.WriteAllText(Path.Combine(submoduleDir, "generated.py"), "# generated");
-
-            var rel = ToRelativePathSet(tempDir, new FileIndexer(tempDir).ScanFiles());
-            Assert.Contains("vendor/foo/lib.py", rel);
-            Assert.DoesNotContain("vendor/foo/generated.py", rel);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        var rel = ToRelativePathSet(tempDir, new FileIndexer(tempDir).ScanFiles());
+        Assert.Contains("vendor/foo/lib.py", rel);
+        Assert.DoesNotContain("vendor/foo/generated.py", rel);
     }
 
     [Fact]
@@ -4387,40 +4356,33 @@ public partial class FileIndexerTests
         // SkipDir-named directories. vendor/ without a declared submodule stays skipped.
         // .gitmodules が別の場所の submodule を宣言していても、無関係な SkipDirs 名ディレクトリ
         // (submodule が宣言されていない vendor/ 等) は引き続きスキップされること。
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(
-                Path.Combine(tempDir, ".gitmodules"),
-                "[submodule \"foo\"]\n\tpath = third_party/foo\n\turl = https://example.invalid/foo.git\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>
+            {
+                [".gitmodules"] = "[submodule \"foo\"]\n\tpath = third_party/foo\n\turl = https://example.invalid/foo.git\n",
+                ["third_party/foo/lib.py"] = "def f(): pass",
+                ["vendor/dep.py"] = "x = 1",
+            });
 
-            var submoduleDir = Path.Combine(tempDir, "third_party", "foo");
-            Directory.CreateDirectory(submoduleDir);
-            File.WriteAllText(Path.Combine(submoduleDir, "lib.py"), "def f(): pass");
-
-            var vendorDir = Path.Combine(tempDir, "vendor");
-            Directory.CreateDirectory(vendorDir);
-            File.WriteAllText(Path.Combine(vendorDir, "dep.py"), "x = 1");
-
-            var rel = ToRelativePathSet(tempDir, new FileIndexer(tempDir).ScanFiles());
-            Assert.Contains("third_party/foo/lib.py", rel);
-            Assert.DoesNotContain("vendor/dep.py", rel);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        var rel = ToRelativePathSet(tempDir, new FileIndexer(tempDir).ScanFiles());
+        Assert.Contains("third_party/foo/lib.py", rel);
+        Assert.DoesNotContain("vendor/dep.py", rel);
     }
 
     [Fact]
     public void ScanFilesDetailed_GitmodulesReadFailureReportsWarning_Issue3473()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
         var previousReader = FileIndexer.ReadGitmodulesLinesForTesting;
         try
         {
-            File.WriteAllText(
-                Path.Combine(tempDir, ".gitmodules"),
+            TestProjectHelper.WriteTextFile(
+                tempDir,
+                ".gitmodules",
                 "[submodule \"foo\"]\n\tpath = vendor/foo\n\turl = https://example.invalid/foo.git\n");
             FileIndexer.ReadGitmodulesLinesForTesting = _ => throw new IOException("blocked");
 
@@ -4434,7 +4396,6 @@ public partial class FileIndexerTests
         finally
         {
             FileIndexer.ReadGitmodulesLinesForTesting = previousReader;
-            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4449,29 +4410,15 @@ public partial class FileIndexerTests
         // 配下のファイルは、祖先が SkipDirs に該当しても ExcludedByDefaultDirectory に
         // 分類されない。これにより --files / --commits のような更新モードでも
         // フルスキャンと挙動が一致する。
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(
-                Path.Combine(tempDir, ".gitmodules"),
-                "[submodule \"foo\"]\n\tpath = vendor/foo\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFile(tempDir, ".gitmodules", "[submodule \"foo\"]\n\tpath = vendor/foo\n");
+        var libPath = TestProjectHelper.WriteTextFile(tempDir, "vendor/foo/lib.py", "def f(): pass");
+        var unrelatedPath = TestProjectHelper.WriteTextFile(tempDir, "vendor/dep.py", "x = 1");
 
-            var submoduleDir = Path.Combine(tempDir, "vendor", "foo");
-            Directory.CreateDirectory(submoduleDir);
-            var libPath = Path.Combine(submoduleDir, "lib.py");
-            File.WriteAllText(libPath, "def f(): pass");
-
-            var unrelatedPath = Path.Combine(tempDir, "vendor", "dep.py");
-            File.WriteAllText(unrelatedPath, "x = 1");
-
-            var indexer = new FileIndexer(tempDir);
-            Assert.Equal(FileIndexer.PathFilterKind.None, indexer.EvaluatePathFilter(libPath).FilterKind);
-            Assert.Equal(FileIndexer.PathFilterKind.ExcludedByDefaultDirectory, indexer.EvaluatePathFilter(unrelatedPath).FilterKind);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        var indexer = new FileIndexer(tempDir);
+        Assert.Equal(FileIndexer.PathFilterKind.None, indexer.EvaluatePathFilter(libPath).FilterKind);
+        Assert.Equal(FileIndexer.PathFilterKind.ExcludedByDefaultDirectory, indexer.EvaluatePathFilter(unrelatedPath).FilterKind);
     }
 
     [Theory]
