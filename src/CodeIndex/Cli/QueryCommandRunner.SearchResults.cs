@@ -972,9 +972,35 @@ public static partial class QueryCommandRunner
     {
         var results = ReadSearchResults(reader, options, exact, int.MaxValue);
         var rows = BuildSearchDisplayRows(results, options, exact);
+        if (options.GuardFilters.Count > 0 && !options.TokenBoundary)
+            return CountFilteredSearchResultUnits(rows);
+
         return new QueryCountResult(
             rows.Count,
             rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count());
+    }
+
+    private static QueryCountResult CountFilteredSearchResultUnits(IReadOnlyList<SearchDisplayRow> rows)
+    {
+        var units = new HashSet<SearchDisplayResultUnitKey>();
+        var files = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var row in rows)
+        {
+            if (!units.Add(SearchDisplayResultUnitKey.Create(row.Result)))
+                continue;
+
+            files.Add(row.Result.Path);
+        }
+
+        return new QueryCountResult(units.Count, files.Count);
+    }
+
+    private readonly record struct SearchDisplayResultUnitKey(string Path, long ChunkId, int StartLine, int EndLine)
+    {
+        public static SearchDisplayResultUnitKey Create(SearchResult result)
+            => result.ChunkId != 0
+                ? new SearchDisplayResultUnitKey(result.Path, result.ChunkId, 0, 0)
+                : new SearchDisplayResultUnitKey(result.Path, 0, result.StartLine, result.EndLine);
     }
 
     private static bool ApplySearchOriginFilters(CompactSearchResult compact, SearchDisplayFacetFilters filters)
