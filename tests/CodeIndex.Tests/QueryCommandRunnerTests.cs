@@ -1076,187 +1076,138 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunBatch_EmptySqliteFileRejectedBeforeQuery_Issue2037()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2037_batch_empty_sqlite");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_issue2037_batch_empty_sqlite");
+        var dbPath = Path.Combine(project.Root, "empty.db");
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
         {
-            var dbPath = Path.Combine(projectRoot, "empty.db");
-            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
-            {
-                connection.Open();
-            }
-
-            var (exitCode, _, stderr) = CaptureConsoleWithInput(
-                "[\"status\",\"--json\"]\n",
-                () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            Assert.Contains("does not appear to be a valid CodeIndex database", stderr);
-            Assert.Contains("missing required table `files`", stderr);
-            Assert.Contains("Hint: rebuild with `cdidx index <projectPath> --db <path>`", stderr);
+            connection.Open();
         }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+
+        var (exitCode, _, stderr) = CaptureConsoleWithInput(
+            "[\"status\",\"--json\"]\n",
+            () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Contains("does not appear to be a valid CodeIndex database", stderr);
+        Assert.Contains("missing required table `files`", stderr);
+        Assert.Contains("Hint: rebuild with `cdidx index <projectPath> --db <path>`", stderr);
     }
 
     [Fact]
     public void RunBatch_LineExceedsLimit_SkipsParsingAndContinues_Issue2891()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_long_line");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var input = new string('x', QueryCommandRunner.BatchMaxLineChars + 1)
-                + "\n[\"status\",\"--json\"]\n";
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_long_line");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var input = new string('x', QueryCommandRunner.BatchMaxLineChars + 1)
+            + "\n[\"status\",\"--json\"]\n";
 
-            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
-                input,
-                () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+            input,
+            () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains($"exceeds the {QueryCommandRunner.BatchMaxLineChars} character limit", stderr);
-            var lines = ParseJsonLines(stdout);
-            Assert.Single(lines);
-            using var statusDocument = lines[0];
-            Assert.True(statusDocument.RootElement.TryGetProperty("files", out _));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains($"exceeds the {QueryCommandRunner.BatchMaxLineChars} character limit", stderr);
+        var lines = ParseJsonLines(stdout);
+        Assert.Single(lines);
+        using var statusDocument = lines[0];
+        Assert.True(statusDocument.RootElement.TryGetProperty("files", out _));
     }
 
     [Fact]
     public void RunBatch_InvalidJsonDoesNotEchoParserMessage_Issue3425()
     {
         const string secret = "SECRET_BATCH_JSON_3425";
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_invalid_json");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var input = "[\"status\", " + secret + "\n";
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_invalid_json");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var input = "[\"status\", " + secret + "\n";
 
-            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
-                input,
-                () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+            input,
+            () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            using var document = ParseJsonOutput(stdout);
-            Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
-            Assert.Contains("invalid_batch_json: JsonException", document.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
-            Assert.DoesNotContain(secret, stdout, StringComparison.Ordinal);
-            Assert.DoesNotContain("not valid JSON", stdout, StringComparison.OrdinalIgnoreCase);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+        Assert.Contains("invalid_batch_json: JsonException", document.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("not valid JSON", stdout, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
     public void RunBatch_ArgumentCountExceedsLimit_ReturnsUsageError_Issue2891()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_too_many_args");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var values = Enumerable
-                .Range(0, QueryCommandRunner.BatchMaxArgumentCount + 2)
-                .Select(i => i == 0 ? "search" : $"arg{i}")
-                .ToArray();
-            var input = JsonSerializer.Serialize(values) + "\n";
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_too_many_args");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var values = Enumerable
+            .Range(0, QueryCommandRunner.BatchMaxArgumentCount + 2)
+            .Select(i => i == 0 ? "search" : $"arg{i}")
+            .ToArray();
+        var input = JsonSerializer.Serialize(values) + "\n";
 
-            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
-                input,
-                () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+            input,
+            () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains($"at most {QueryCommandRunner.BatchMaxArgumentCount} command arguments", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains($"at most {QueryCommandRunner.BatchMaxArgumentCount} command arguments", stderr);
     }
 
     [Fact]
     public void RunBatch_ArgumentAtLimitParsesBeforeDispatch_Issue3231()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_arg_at_limit");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var commandName = new string('x', QueryCommandRunner.BatchMaxArgumentChars);
-            var input = JsonSerializer.Serialize(new[] { commandName }) + "\n";
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_arg_at_limit");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var commandName = new string('x', QueryCommandRunner.BatchMaxArgumentChars);
+        var input = JsonSerializer.Serialize(new[] { commandName }) + "\n";
 
-            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
-                input,
-                () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+            input,
+            () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains("batch only supports query and read-only discovery commands", stderr);
-            Assert.DoesNotContain("character limit", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("batch only supports query and read-only discovery commands", stderr);
+        Assert.DoesNotContain("character limit", stderr);
     }
 
     [Fact]
     public void RunBatch_ArgumentExceedsLimitReturnsUsageError_Issue3231()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_arg_too_long");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var commandName = new string('x', QueryCommandRunner.BatchMaxArgumentChars + 1);
-            var input = JsonSerializer.Serialize(new[] { commandName }) + "\n";
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_arg_too_long");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var commandName = new string('x', QueryCommandRunner.BatchMaxArgumentChars + 1);
+        var input = JsonSerializer.Serialize(new[] { commandName }) + "\n";
 
-            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
-                input,
-                () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+            input,
+            () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains($"argument 1 exceeds the {QueryCommandRunner.BatchMaxArgumentChars} character limit", stderr);
-            Assert.DoesNotContain("batch only supports query and read-only discovery commands", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains($"argument 1 exceeds the {QueryCommandRunner.BatchMaxArgumentChars} character limit", stderr);
+        Assert.DoesNotContain("batch only supports query and read-only discovery commands", stderr);
     }
 
     [Fact]
     public void RunBatch_TooDeepJsonLine_ReturnsUsageError_Issue3022()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_json_depth");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var nestedPrefix = string.Concat(Enumerable.Repeat("""{"next":""", QueryCommandRunner.BatchMaxJsonDepth + 1));
-            var nested = nestedPrefix + "0" + new string('}', QueryCommandRunner.BatchMaxJsonDepth + 1);
-            var input = $$"""["status",{{nested}}]""" + "\n";
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_json_depth");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var nestedPrefix = string.Concat(Enumerable.Repeat("""{"next":""", QueryCommandRunner.BatchMaxJsonDepth + 1));
+        var nested = nestedPrefix + "0" + new string('}', QueryCommandRunner.BatchMaxJsonDepth + 1);
+        var input = $$"""["status",{{nested}}]""" + "\n";
 
-            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
-                input,
-                () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+            input,
+            () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            using var document = ParseJsonOutput(stdout);
-            Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
-            Assert.Contains("invalid_batch_json: JsonException", document.RootElement.GetProperty("message").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+        Assert.Contains("invalid_batch_json: JsonException", document.RootElement.GetProperty("message").GetString());
     }
 
     [Fact]
