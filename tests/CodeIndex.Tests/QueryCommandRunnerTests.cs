@@ -3284,31 +3284,24 @@ public partial class QueryCommandRunnerTests
     [InlineData("--exclude-path")]
     public void QueryEntrypoints_DashedLiteralOptionsKeepHint_Issue184(string optionName)
     {
-        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_issue184_dashed_literal_{optionName.TrimStart('-')}");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/Issue184.cs",
-                "csharp",
-                "namespace Issue184; public class T { public void M() { } }");
+        using var project = TestProjectHelper.CreateTempProjectScope($"cdidx_issue184_dashed_literal_{optionName.TrimStart('-')}");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/Issue184.cs",
+            "csharp",
+            "namespace Issue184; public class T { public void M() { } }");
 
-            string[] args = optionName == "--db"
-                ? ["Issue184", optionName, "--json"]
-                : ["Issue184", "--db", dbPath, optionName, "--json"];
+        string[] args = optionName == "--db"
+            ? ["Issue184", optionName, "--json"]
+            : ["Issue184", "--db", dbPath, optionName, "--json"];
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(args, _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(args, _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains($"{optionName} requires a value", stderr);
-            Assert.Contains($"pass it as `{optionName}=<value>`", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains($"{optionName} requires a value", stderr);
+        Assert.Contains($"pass it as `{optionName}=<value>`", stderr);
     }
 
 
