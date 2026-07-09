@@ -2921,7 +2921,7 @@ public partial class FileIndexerTests
         var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "  # comment\n  *.tmp\n\\ leading.py\n\\#literal.py\n", Encoding.UTF8);
+            TestProjectHelper.WriteTextFile(tempDir, ".gitignore", "  # comment\n  *.tmp\n\\ leading.py\n\\#literal.py\n", Encoding.UTF8);
             File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('keep')");
             File.WriteAllText(Path.Combine(tempDir, "ignored.tmp"), "ignored");
             File.WriteAllText(Path.Combine(tempDir, " leading.py"), "print('literal leading space')");
@@ -2943,7 +2943,7 @@ public partial class FileIndexerTests
         var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), $"{new string('a', 513)}\n*.tmp\n", Encoding.UTF8);
+            TestProjectHelper.WriteTextFile(tempDir, ".gitignore", $"{new string('a', 513)}\n*.tmp\n", Encoding.UTF8);
             File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('keep')");
             File.WriteAllText(Path.Combine(tempDir, "ignored.tmp"), "ignored");
 
@@ -2999,8 +2999,8 @@ public partial class FileIndexerTests
         {
             Directory.CreateDirectory(Path.Combine(tempDir, "資料"));
             Directory.CreateDirectory(Path.Combine(tempDir, "cafe"));
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "資料/\n", Encoding.UTF8);
-            File.WriteAllText(Path.Combine(tempDir, ".cdidxignore"), "cafe/éclair.py\n", Encoding.UTF8);
+            TestProjectHelper.WriteTextFile(tempDir, ".gitignore", "資料/\n", Encoding.UTF8);
+            TestProjectHelper.WriteTextFile(tempDir, ".cdidxignore", "cafe/éclair.py\n", Encoding.UTF8);
             File.WriteAllText(Path.Combine(tempDir, "資料", "ignored.py"), "print('ignored')");
             File.WriteAllText(Path.Combine(tempDir, "cafe", "éclair.py"), "print('ignored')");
             File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('kept')");

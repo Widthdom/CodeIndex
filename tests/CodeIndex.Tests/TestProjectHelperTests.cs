@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace CodeIndex.Tests;
 
 public class TestProjectHelperTests
@@ -11,6 +13,7 @@ public class TestProjectHelperTests
             var directoryPath = TestProjectHelper.CreateDirectory(projectRoot, "generated", "nested");
             var filePath = TestProjectHelper.WriteTextFile(projectRoot, Path.Combine("src", "App.cs"), "class App {}\n");
             TestProjectHelper.AppendTextFile(projectRoot, Path.Combine("src", "App.cs"), "// appended\n");
+            var encodedPath = TestProjectHelper.WriteTextFile(projectRoot, Path.Combine("encoded", "unicode.txt"), "雪\n", Encoding.Unicode);
             TestProjectHelper.WriteTextFiles(
                 projectRoot,
                 new Dictionary<string, string>(StringComparer.Ordinal)
@@ -23,6 +26,9 @@ public class TestProjectHelperTests
             Assert.Equal(Path.Combine(projectRoot, "src", "App.cs"), filePath);
             Assert.True(Directory.Exists(TestProjectHelper.ProjectPath(projectRoot, "src")));
             Assert.Equal("class App {}\n// appended\n", TestProjectHelper.ReadTextFile(projectRoot, Path.Combine("src", "App.cs")));
+            Assert.Equal(
+                Encoding.Unicode.GetPreamble().Concat(Encoding.Unicode.GetBytes("雪\n")).ToArray(),
+                File.ReadAllBytes(encodedPath));
             Assert.Equal("one\n", TestProjectHelper.ReadTextFile(projectRoot, Path.Combine("fixtures", "one.txt")));
             Assert.Equal("two\n", TestProjectHelper.ReadTextFile(projectRoot, Path.Combine("fixtures", "nested", "two.txt")));
         }

@@ -61,6 +61,14 @@ internal static class TestProjectHelper
         return path;
     }
 
+    internal static string WriteTextFile(string projectRoot, string relativePath, string content, Encoding encoding)
+    {
+        var path = ProjectPath(projectRoot, relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, content, encoding);
+        return path;
+    }
+
     internal static void WriteTextFiles(string projectRoot, IReadOnlyDictionary<string, string> files)
     {
         foreach (var (relativePath, content) in files)
