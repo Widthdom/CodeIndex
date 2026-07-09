@@ -3863,9 +3863,14 @@ public partial class FileIndexerTests
         var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[[:punct:]].cs\n");
-            File.WriteAllText(Path.Combine(tempDir, "!.cs"), "class Ignored { }");
-            File.WriteAllText(Path.Combine(tempDir, "a.cs"), "class Kept { }");
+            TestProjectHelper.WriteTextFiles(
+                tempDir,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    [".gitignore"] = "[[:punct:]].cs\n",
+                    ["!.cs"] = "class Ignored { }",
+                    ["a.cs"] = "class Kept { }",
+                });
 
             var indexer = new FileIndexer(tempDir);
             var files = indexer.ScanFiles()
@@ -3887,9 +3892,14 @@ public partial class FileIndexerTests
         var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[!]].cs\n");
-            File.WriteAllText(Path.Combine(tempDir, "].cs"), "class Kept { }");
-            File.WriteAllText(Path.Combine(tempDir, "a.cs"), "class Ignored { }");
+            TestProjectHelper.WriteTextFiles(
+                tempDir,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    [".gitignore"] = "[!]].cs\n",
+                    ["].cs"] = "class Kept { }",
+                    ["a.cs"] = "class Ignored { }",
+                });
 
             var indexer = new FileIndexer(tempDir);
             var files = indexer.ScanFiles()
@@ -3911,17 +3921,22 @@ public partial class FileIndexerTests
         var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[!a].js\n[^a].py\n[a^b].cs\n[\\^a].rb\n");
-            File.WriteAllText(Path.Combine(tempDir, "a.js"), "export const kept = true;");
-            File.WriteAllText(Path.Combine(tempDir, "b.js"), "export const ignored = true;");
-            File.WriteAllText(Path.Combine(tempDir, "a.py"), "print('kept')");
-            File.WriteAllText(Path.Combine(tempDir, "b.py"), "print('ignored')");
-            File.WriteAllText(Path.Combine(tempDir, "a.cs"), "class IgnoredA { }");
-            File.WriteAllText(Path.Combine(tempDir, "^.cs"), "class IgnoredCaret { }");
-            File.WriteAllText(Path.Combine(tempDir, "c.cs"), "class Kept { }");
-            File.WriteAllText(Path.Combine(tempDir, "a.rb"), "puts 'ignored'");
-            File.WriteAllText(Path.Combine(tempDir, "^.rb"), "puts 'ignored'");
-            File.WriteAllText(Path.Combine(tempDir, "b.rb"), "puts 'kept'");
+            TestProjectHelper.WriteTextFiles(
+                tempDir,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    [".gitignore"] = "[!a].js\n[^a].py\n[a^b].cs\n[\\^a].rb\n",
+                    ["a.js"] = "export const kept = true;",
+                    ["b.js"] = "export const ignored = true;",
+                    ["a.py"] = "print('kept')",
+                    ["b.py"] = "print('ignored')",
+                    ["a.cs"] = "class IgnoredA { }",
+                    ["^.cs"] = "class IgnoredCaret { }",
+                    ["c.cs"] = "class Kept { }",
+                    ["a.rb"] = "puts 'ignored'",
+                    ["^.rb"] = "puts 'ignored'",
+                    ["b.rb"] = "puts 'kept'",
+                });
 
             var indexer = new FileIndexer(tempDir);
             var files = indexer.ScanFiles()
@@ -3943,12 +3958,17 @@ public partial class FileIndexerTests
         var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "foo\\ bar.py\nliteral\\[name\\].js\n\\#literal.txt\n\\!important.cs\n");
-            File.WriteAllText(Path.Combine(tempDir, "foo bar.py"), "print('ignored')");
-            File.WriteAllText(Path.Combine(tempDir, "literal[name].js"), "export const ignored = true;");
-            File.WriteAllText(Path.Combine(tempDir, "#literal.txt"), "ignored");
-            File.WriteAllText(Path.Combine(tempDir, "!important.cs"), "class Ignored { }");
-            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('kept')");
+            TestProjectHelper.WriteTextFiles(
+                tempDir,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    [".gitignore"] = "foo\\ bar.py\nliteral\\[name\\].js\n\\#literal.txt\n\\!important.cs\n",
+                    ["foo bar.py"] = "print('ignored')",
+                    ["literal[name].js"] = "export const ignored = true;",
+                    ["#literal.txt"] = "ignored",
+                    ["!important.cs"] = "class Ignored { }",
+                    ["keep.py"] = "print('kept')",
+                });
 
             var indexer = new FileIndexer(tempDir);
             var files = indexer.ScanFiles()
@@ -3970,10 +3990,15 @@ public partial class FileIndexerTests
         var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[z-a].py\n[!].cs\n[a.py\n[!a\n[^\n[\n[]\nignored.py\n");
-            File.WriteAllText(Path.Combine(tempDir, "[a.py"), "print('kept malformed literal')");
-            File.WriteAllText(Path.Combine(tempDir, "ignored.py"), "print('ignored')");
-            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('kept')");
+            TestProjectHelper.WriteTextFiles(
+                tempDir,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    [".gitignore"] = "[z-a].py\n[!].cs\n[a.py\n[!a\n[^\n[\n[]\nignored.py\n",
+                    ["[a.py"] = "print('kept malformed literal')",
+                    ["ignored.py"] = "print('ignored')",
+                    ["keep.py"] = "print('kept')",
+                });
 
             var indexer = new FileIndexer(tempDir);
             var scanResult = indexer.ScanFilesDetailed();
