@@ -3581,27 +3581,20 @@ public partial class FileIndexerTests
     {
         // Files with Unicode/CJK characters in content should be indexed correctly
         // Unicode/CJK文字を含むファイルが正しくインデックスされること
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var content = "// コメント: 日本語テスト\npublic class 日本語クラス\n{\n    public string 名前 { get; set; }\n    // 中文注释\n    // 한국어 주석\n}\n";
-            var filePath = Path.Combine(tempDir, "unicode.cs");
-            File.WriteAllText(filePath, content);
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var content = "// コメント: 日本語テスト\npublic class 日本語クラス\n{\n    public string 名前 { get; set; }\n    // 中文注释\n    // 한국어 주석\n}\n";
+        var filePath = TestProjectHelper.WriteTextFile(tempDir, "unicode.cs", content);
 
-            var indexer = new FileIndexer(tempDir);
-            var (record, fileContent, warning) = indexer.BuildRecord(filePath);
+        var indexer = new FileIndexer(tempDir);
+        var (record, fileContent, warning) = indexer.BuildRecord(filePath);
 
-            Assert.Equal("unicode.cs", record.Path);
-            Assert.Equal("csharp", record.Lang);
-            Assert.Null(warning); // Valid UTF-8, no warning / 有効なUTF-8なので警告なし
-            Assert.Contains("日本語クラス", fileContent);
-            Assert.Contains("中文注释", fileContent);
-            Assert.Contains("한국어", fileContent);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal("unicode.cs", record.Path);
+        Assert.Equal("csharp", record.Lang);
+        Assert.Null(warning); // Valid UTF-8, no warning / 有効なUTF-8なので警告なし
+        Assert.Contains("日本語クラス", fileContent);
+        Assert.Contains("中文注释", fileContent);
+        Assert.Contains("한국어", fileContent);
     }
 
     [Theory]
@@ -3611,21 +3604,14 @@ public partial class FileIndexerTests
     [InlineData("\uFEFF", 0)]
     public void BuildRecord_CountsPhysicalLinesAfterLineLeadingInvisibleStripping(string content, int expectedLines)
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var filePath = Path.Combine(tempDir, "physical.cs");
-            File.WriteAllText(filePath, content);
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var filePath = TestProjectHelper.WriteTextFile(tempDir, "physical.cs", content);
 
-            var indexer = new FileIndexer(tempDir);
-            var (record, _, _) = indexer.BuildRecord(filePath);
+        var indexer = new FileIndexer(tempDir);
+        var (record, _, _) = indexer.BuildRecord(filePath);
 
-            Assert.Equal(expectedLines, record.Lines);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(expectedLines, record.Lines);
     }
 
     [Fact]
@@ -3666,27 +3652,18 @@ public partial class FileIndexerTests
     {
         // Ensure Windows-style backslashes are converted to forward slashes
         // Windows形式のバックスラッシュがフォワードスラッシュに変換されることを確認
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var subDir = Path.Combine(tempDir, "src", "models");
-            Directory.CreateDirectory(subDir);
-            var filePath = Path.Combine(subDir, "user.py");
-            File.WriteAllText(filePath, "class User: pass\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var filePath = TestProjectHelper.WriteTextFile(tempDir, "src/models/user.py", "class User: pass\n");
 
-            var indexer = new FileIndexer(tempDir);
-            var (record, _, _) = indexer.BuildRecord(filePath);
+        var indexer = new FileIndexer(tempDir);
+        var (record, _, _) = indexer.BuildRecord(filePath);
 
-            // Path should use forward slashes regardless of OS
-            // OSに関わらずフォワードスラッシュを使うべき
-            Assert.DoesNotContain("\\", record.Path);
-            Assert.Contains("/", record.Path);
-            Assert.Equal("src/models/user.py", record.Path);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        // Path should use forward slashes regardless of OS
+        // OSに関わらずフォワードスラッシュを使うべき
+        Assert.DoesNotContain("\\", record.Path);
+        Assert.Contains("/", record.Path);
+        Assert.Equal("src/models/user.py", record.Path);
     }
 
     [Fact]
@@ -3699,21 +3676,14 @@ public partial class FileIndexerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var filePath = Path.Combine(tempDir, "back\\slash.py");
-            File.WriteAllText(filePath, "def hu(): pass\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var filePath = TestProjectHelper.WriteTextFile(tempDir, "back\\slash.py", "def hu(): pass\n");
 
-            var indexer = new FileIndexer(tempDir);
-            var (record, _, _) = indexer.BuildRecord(filePath);
+        var indexer = new FileIndexer(tempDir);
+        var (record, _, _) = indexer.BuildRecord(filePath);
 
-            Assert.Equal("back\\slash.py", record.Path);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal("back\\slash.py", record.Path);
     }
 
     [Fact]
@@ -3738,24 +3708,23 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFiles_IncludesFileNameBasedLanguages()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, "Dockerfile"), "FROM alpine");
-            File.WriteAllText(Path.Combine(tempDir, "Makefile"), "all: build");
-            File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('hello')");
-            File.WriteAllText(Path.Combine(tempDir, "unknown.xyz"), "nothing");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Dockerfile"] = "FROM alpine",
+                ["Makefile"] = "all: build",
+                ["app.py"] = "print('hello')",
+                ["unknown.xyz"] = "nothing",
+            });
 
-            var indexer = new FileIndexer(tempDir);
-            var files = indexer.ScanFiles();
+        var indexer = new FileIndexer(tempDir);
+        var files = indexer.ScanFiles();
 
-            // Dockerfile, Makefile, and app.py should be found; unknown.xyz should not
-            Assert.Equal(3, files.Count);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        // Dockerfile, Makefile, and app.py should be found; unknown.xyz should not
+        Assert.Equal(3, files.Count);
     }
 
     [Fact]
