@@ -1927,25 +1927,19 @@ public partial class FileIndexerTests
     {
         // Create a temp directory structure to test scanning
         // テスト用の一時ディレクトリ構造を作成
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('hello')");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('hello')");
 
-            var nodeModules = Path.Combine(tempDir, "node_modules");
-            Directory.CreateDirectory(nodeModules);
-            File.WriteAllText(Path.Combine(nodeModules, "dep.js"), "module.exports = {}");
+        var nodeModules = Path.Combine(tempDir, "node_modules");
+        Directory.CreateDirectory(nodeModules);
+        File.WriteAllText(Path.Combine(nodeModules, "dep.js"), "module.exports = {}");
 
-            var indexer = new FileIndexer(tempDir);
-            var files = indexer.ScanFiles();
+        var indexer = new FileIndexer(tempDir);
+        var files = indexer.ScanFiles();
 
-            Assert.Single(files);
-            Assert.Contains("app.py", files[0]);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Single(files);
+        Assert.Contains("app.py", files[0]);
     }
 
     [Theory]
@@ -1955,93 +1949,80 @@ public partial class FileIndexerTests
     [InlineData("bin", "app.cs")]
     public void ScanFiles_IndexesExplicitRootEvenWhenRootNameIsSkipped(string rootDirName, string fileName)
     {
-        var tempParentDir = TestProjectHelper.CreateTempProject("codeindex_test");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempParentDir = project.Root;
         var rootDir = Path.Combine(tempParentDir, rootDirName);
-        try
-        {
-            Directory.CreateDirectory(rootDir);
-            File.WriteAllText(Path.Combine(rootDir, fileName), "content");
+        Directory.CreateDirectory(rootDir);
+        File.WriteAllText(Path.Combine(rootDir, fileName), "content");
 
-            var nestedNodeModules = Path.Combine(rootDir, "node_modules");
-            Directory.CreateDirectory(nestedNodeModules);
-            File.WriteAllText(Path.Combine(nestedNodeModules, "nested.js"), "module.exports = {}");
+        var nestedNodeModules = Path.Combine(rootDir, "node_modules");
+        Directory.CreateDirectory(nestedNodeModules);
+        File.WriteAllText(Path.Combine(nestedNodeModules, "nested.js"), "module.exports = {}");
 
-            var indexer = new FileIndexer(rootDir);
-            var files = indexer.ScanFiles();
+        var indexer = new FileIndexer(rootDir);
+        var files = indexer.ScanFiles();
 
-            Assert.Single(files);
-            Assert.Contains(fileName, files[0]);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempParentDir);
-        }
+        Assert.Single(files);
+        Assert.Contains(fileName, files[0]);
     }
 
     [Fact]
     public void ScanFiles_SkipsExcludedFiles()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, "app.js"), "console.log('hello')");
-            File.WriteAllText(Path.Combine(tempDir, ".DS_Store"), "metadata");
-            File.WriteAllText(Path.Combine(tempDir, "Thumbs.db"), "metadata");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        File.WriteAllText(Path.Combine(tempDir, "app.js"), "console.log('hello')");
+        File.WriteAllText(Path.Combine(tempDir, ".DS_Store"), "metadata");
+        File.WriteAllText(Path.Combine(tempDir, "Thumbs.db"), "metadata");
 
-            var indexer = new FileIndexer(tempDir);
-            var files = indexer.ScanFiles();
+        var indexer = new FileIndexer(tempDir);
+        var files = indexer.ScanFiles();
 
-            // Only app.js should be found, not platform metadata files.
-            // app.jsのみ検出され、platform metadata fileは除外される。
-            Assert.Single(files);
-            Assert.Contains("app.js", files[0]);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        // Only app.js should be found, not platform metadata files.
+        // app.jsのみ検出され、platform metadata fileは除外される。
+        Assert.Single(files);
+        Assert.Contains("app.js", files[0]);
     }
 
     [Fact]
     public void ScanFiles_IndexesDependencyLockfiles()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, "package-lock.json"), "{}");
-            File.WriteAllText(Path.Combine(tempDir, "npm-shrinkwrap.json"), "{}");
-            File.WriteAllText(Path.Combine(tempDir, "yarn.lock"), "# yarn");
-            File.WriteAllText(Path.Combine(tempDir, "pnpm-lock.yaml"), "lockfileVersion: 9\n");
-            File.WriteAllText(Path.Combine(tempDir, "Gemfile.lock"), "GEM");
-            File.WriteAllText(Path.Combine(tempDir, "Cargo.lock"), "# lock");
-            File.WriteAllText(Path.Combine(tempDir, "go.sum"), "module v1.0.0 h1:hash\n");
-            File.WriteAllText(Path.Combine(tempDir, "Pipfile.lock"), "{}");
-            File.WriteAllText(Path.Combine(tempDir, "uv.lock"), "version = 1\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["package-lock.json"] = "{}",
+                ["npm-shrinkwrap.json"] = "{}",
+                ["yarn.lock"] = "# yarn",
+                ["pnpm-lock.yaml"] = "lockfileVersion: 9\n",
+                ["Gemfile.lock"] = "GEM",
+                ["Cargo.lock"] = "# lock",
+                ["go.sum"] = "module v1.0.0 h1:hash\n",
+                ["Pipfile.lock"] = "{}",
+                ["uv.lock"] = "version = 1\n",
+            });
 
-            var files = new FileIndexer(tempDir).ScanFiles()
-                .Select(path => Path.GetFileName(path))
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .ToList();
+        var files = new FileIndexer(tempDir).ScanFiles()
+            .Select(path => Path.GetFileName(path))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
 
-            Assert.Equal(
-                [
-                    "Cargo.lock",
-                    "Gemfile.lock",
-                    "Pipfile.lock",
-                    "go.sum",
-                    "npm-shrinkwrap.json",
-                    "package-lock.json",
-                    "pnpm-lock.yaml",
-                    "uv.lock",
-                    "yarn.lock",
-                ],
-                files);
-            Assert.All(files, file => Assert.Equal("dependency_lock", FileIndexer.DetectLanguage(file)));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(
+            [
+                "Cargo.lock",
+                "Gemfile.lock",
+                "Pipfile.lock",
+                "go.sum",
+                "npm-shrinkwrap.json",
+                "package-lock.json",
+                "pnpm-lock.yaml",
+                "uv.lock",
+                "yarn.lock",
+            ],
+            files);
+        Assert.All(files, file => Assert.Equal("dependency_lock", FileIndexer.DetectLanguage(file)));
     }
 
     [Fact]
