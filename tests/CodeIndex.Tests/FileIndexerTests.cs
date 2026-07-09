@@ -1798,8 +1798,7 @@ public partial class FileIndexerTests
                 ["page.htm"] = "<html><body>old-school</body></html>\n",
                 ["Makefile.am"] = "SUBDIRS = lib\n",
             };
-            foreach (var (name, content) in files)
-                File.WriteAllText(Path.Combine(tempDir, name), content);
+            TestProjectHelper.WriteTextFiles(tempDir, files);
 
             var scanned = new FileIndexer(tempDir).ScanFiles()
                 .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
@@ -1861,12 +1860,17 @@ public partial class FileIndexerTests
         var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
         try
         {
-            File.WriteAllText(Path.Combine(tempDir, "package.json"), "{\"dependencies\":{}}\n");
-            File.WriteAllText(Path.Combine(tempDir, "pyproject.toml"), "[project]\nname = 'sample'\n");
-            File.WriteAllText(Path.Combine(tempDir, "requirements.txt"), "pytest\n");
-            File.WriteAllText(Path.Combine(tempDir, "Cargo.toml"), "[package]\nname = 'sample'\n");
-            File.WriteAllText(Path.Combine(tempDir, "composer.json"), "{}\n");
-            File.WriteAllText(Path.Combine(tempDir, "unknown.txt"), "ignored\n");
+            TestProjectHelper.WriteTextFiles(
+                tempDir,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["package.json"] = "{\"dependencies\":{}}\n",
+                    ["pyproject.toml"] = "[project]\nname = 'sample'\n",
+                    ["requirements.txt"] = "pytest\n",
+                    ["Cargo.toml"] = "[package]\nname = 'sample'\n",
+                    ["composer.json"] = "{}\n",
+                    ["unknown.txt"] = "ignored\n",
+                });
 
             var files = new FileIndexer(tempDir).ScanFiles()
                 .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
@@ -2043,8 +2047,7 @@ public partial class FileIndexerTests
                 ["legacy.cob"] = "       PROCEDURE DIVISION.\n",
                 ["modern.cobol"] = "       STOP RUN.\n",
             };
-            foreach (var (name, content) in files)
-                File.WriteAllText(Path.Combine(tempDir, name), content);
+            TestProjectHelper.WriteTextFiles(tempDir, files);
 
             var scanned = new FileIndexer(tempDir).ScanFiles()
                 .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
@@ -2092,8 +2095,7 @@ public partial class FileIndexerTests
                 ["test.t"] = "use Test::More;\n",
             };
 
-            foreach (var (name, content) in files)
-                File.WriteAllText(Path.Combine(tempDir, name), content);
+            TestProjectHelper.WriteTextFiles(tempDir, files);
 
             var scanned = new FileIndexer(tempDir).ScanFiles()
                 .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))

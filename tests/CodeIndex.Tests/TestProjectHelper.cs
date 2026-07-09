@@ -61,6 +61,12 @@ internal static class TestProjectHelper
         return path;
     }
 
+    internal static void WriteTextFiles(string projectRoot, IReadOnlyDictionary<string, string> files)
+    {
+        foreach (var (relativePath, content) in files)
+            WriteTextFile(projectRoot, relativePath, content);
+    }
+
     internal static string AppendTextFile(string projectRoot, string relativePath, string content)
     {
         var path = ProjectPath(projectRoot, relativePath);

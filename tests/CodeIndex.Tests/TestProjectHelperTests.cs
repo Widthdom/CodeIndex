@@ -11,11 +11,20 @@ public class TestProjectHelperTests
             var directoryPath = TestProjectHelper.CreateDirectory(projectRoot, "generated", "nested");
             var filePath = TestProjectHelper.WriteTextFile(projectRoot, Path.Combine("src", "App.cs"), "class App {}\n");
             TestProjectHelper.AppendTextFile(projectRoot, Path.Combine("src", "App.cs"), "// appended\n");
+            TestProjectHelper.WriteTextFiles(
+                projectRoot,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    [Path.Combine("fixtures", "one.txt")] = "one\n",
+                    [Path.Combine("fixtures", "nested", "two.txt")] = "two\n",
+                });
 
             Assert.True(Directory.Exists(directoryPath));
             Assert.Equal(Path.Combine(projectRoot, "src", "App.cs"), filePath);
             Assert.True(Directory.Exists(TestProjectHelper.ProjectPath(projectRoot, "src")));
             Assert.Equal("class App {}\n// appended\n", TestProjectHelper.ReadTextFile(projectRoot, Path.Combine("src", "App.cs")));
+            Assert.Equal("one\n", TestProjectHelper.ReadTextFile(projectRoot, Path.Combine("fixtures", "one.txt")));
+            Assert.Equal("two\n", TestProjectHelper.ReadTextFile(projectRoot, Path.Combine("fixtures", "nested", "two.txt")));
         }
         finally
         {
