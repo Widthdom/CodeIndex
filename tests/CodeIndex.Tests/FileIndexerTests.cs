@@ -1802,44 +1802,38 @@ public partial class FileIndexerTests
         // Issue #205 で黙って落ちていた拡張子を固定する。
         // Groovy / assembly / CUDA / GPU shaders / HDL / Common Lisp / Racket / Pascal / Ada /
         // Fortran / Raku / Perl test scripts が scan 時のフィルタを通過することを確認する。
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var files = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            var files = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["build.groovy"] = "println 'hello'\n",
-                ["kernel.cu"] = "__global__ void add() {}\n",
-                ["shader.glsl"] = "void main() {}\n",
-                ["shader.hlsl"] = "float4 main() : SV_Target { return 0; }\n",
-                ["shader.wgsl"] = "@vertex fn main() -> @builtin(position) vec4<f32> { return vec4<f32>(); }\n",
-                ["shader.metal"] = "kernel void main() {}\n",
-                ["boot.s"] = "mov %eax, %eax\n",
-                ["cpu.v"] = "module cpu(); endmodule\n",
-                ["cpu.sv"] = "module cpu(); endmodule\n",
-                ["cpu.vhd"] = "entity cpu is end entity;\n",
-                ["demo.lisp"] = "(defun hello ())\n",
-                ["demo.rkt"] = "#lang racket\n(displayln \"hi\")\n",
-                ["demo.pas"] = "program demo;\nbegin\nend.\n",
-                ["demo.ada"] = "procedure Demo is begin null; end Demo;\n",
-                ["demo.f90"] = "program demo\nend program demo\n",
-                ["demo.raku"] = "say \"hi\";\n",
-                ["test.t"] = "use Test::More;\n",
-            };
+            ["build.groovy"] = "println 'hello'\n",
+            ["kernel.cu"] = "__global__ void add() {}\n",
+            ["shader.glsl"] = "void main() {}\n",
+            ["shader.hlsl"] = "float4 main() : SV_Target { return 0; }\n",
+            ["shader.wgsl"] = "@vertex fn main() -> @builtin(position) vec4<f32> { return vec4<f32>(); }\n",
+            ["shader.metal"] = "kernel void main() {}\n",
+            ["boot.s"] = "mov %eax, %eax\n",
+            ["cpu.v"] = "module cpu(); endmodule\n",
+            ["cpu.sv"] = "module cpu(); endmodule\n",
+            ["cpu.vhd"] = "entity cpu is end entity;\n",
+            ["demo.lisp"] = "(defun hello ())\n",
+            ["demo.rkt"] = "#lang racket\n(displayln \"hi\")\n",
+            ["demo.pas"] = "program demo;\nbegin\nend.\n",
+            ["demo.ada"] = "procedure Demo is begin null; end Demo;\n",
+            ["demo.f90"] = "program demo\nend program demo\n",
+            ["demo.raku"] = "say \"hi\";\n",
+            ["test.t"] = "use Test::More;\n",
+        };
 
-            TestProjectHelper.WriteTextFiles(tempDir, files);
+        TestProjectHelper.WriteTextFiles(tempDir, files);
 
-            var scanned = new FileIndexer(tempDir).ScanFiles()
-                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .ToList();
+        var scanned = new FileIndexer(tempDir).ScanFiles()
+            .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
 
-            var expected = files.Keys.OrderBy(name => name, StringComparer.Ordinal).ToList();
-            Assert.Equal(expected, scanned);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        var expected = files.Keys.OrderBy(name => name, StringComparer.Ordinal).ToList();
+        Assert.Equal(expected, scanned);
     }
 
     [Fact]
@@ -1847,103 +1841,85 @@ public partial class FileIndexerTests
     {
         // Gradle Kotlin DSL files must be indexed as Kotlin, not silently skipped.
         // Gradle Kotlin DSL ファイルは Kotlin として index され、黙って落ちてはいけない。
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var path = Path.Combine(tempDir, "build.gradle.kts");
-            var content = """
-                plugins {
-                    kotlin("jvm") version "1.9.23"
-                }
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var path = Path.Combine(tempDir, "build.gradle.kts");
+        var content = """
+            plugins {
+                kotlin("jvm") version "1.9.23"
+            }
 
-                val answer = 42
-                """;
-            File.WriteAllText(path, content);
+            val answer = 42
+            """;
+        File.WriteAllText(path, content);
 
-            var scanned = new FileIndexer(tempDir).ScanFiles().ToList();
+        var scanned = new FileIndexer(tempDir).ScanFiles().ToList();
 
-            Assert.Single(scanned);
-            Assert.Equal(path, scanned[0]);
-            Assert.Equal("kotlin", FileIndexer.DetectLanguage(path));
+        Assert.Single(scanned);
+        Assert.Equal(path, scanned[0]);
+        Assert.Equal("kotlin", FileIndexer.DetectLanguage(path));
 
-            var symbols = SymbolExtractor.Extract(1, "kotlin", content).ToList();
-            Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "answer");
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content).ToList();
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "answer");
     }
 
     [Fact]
     public void BuildRecordWithRawBytes_CppStyleHeaderContentIsDetectedAsCpp()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var path = Path.Combine(tempDir, "widget.h");
-            var content = """
-                #pragma once
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var path = Path.Combine(tempDir, "widget.h");
+        var content = """
+            #pragma once
 
-                namespace demo {
-                template <typename T>
-                class Widget {
-                public:
-                    constexpr Widget() = default;
-                };
-                }
-                """;
-            File.WriteAllText(path, content);
+            namespace demo {
+            template <typename T>
+            class Widget {
+            public:
+                constexpr Widget() = default;
+            };
+            }
+            """;
+        File.WriteAllText(path, content);
 
-            var indexer = new FileIndexer(tempDir);
-            var (record, decodedContent, _, _) = indexer.BuildRecordWithRawBytes(path);
+        var indexer = new FileIndexer(tempDir);
+        var (record, decodedContent, _, _) = indexer.BuildRecordWithRawBytes(path);
 
-            Assert.Equal("cpp", record.Lang);
-            Assert.Equal(content.Replace("\r\n", "\n"), decodedContent);
+        Assert.Equal("cpp", record.Lang);
+        Assert.Equal(content.Replace("\r\n", "\n"), decodedContent);
 
-            var symbols = SymbolExtractor.Extract(1, record.Lang!, decodedContent).ToList();
-            Assert.Contains(symbols, symbol => symbol.Kind == "namespace" && symbol.Name == "demo");
-            Assert.Contains(symbols, symbol => symbol.Kind == "class" && symbol.Name == "Widget");
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        var symbols = SymbolExtractor.Extract(1, record.Lang!, decodedContent).ToList();
+        Assert.Contains(symbols, symbol => symbol.Kind == "namespace" && symbol.Name == "demo");
+        Assert.Contains(symbols, symbol => symbol.Kind == "class" && symbol.Name == "Widget");
     }
 
     [Fact]
     public void BuildRecordWithRawBytes_CStyleHeaderContentStaysC()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var path = Path.Combine(tempDir, "legacy.h");
-            var content = """
-                #ifndef LEGACY_H
-                #define LEGACY_H
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var path = Path.Combine(tempDir, "legacy.h");
+        var content = """
+            #ifndef LEGACY_H
+            #define LEGACY_H
 
-                struct legacy_point {
-                    int x;
-                    int y;
-                };
+            struct legacy_point {
+                int x;
+                int y;
+            };
 
-                #endif
-                """;
-            File.WriteAllText(path, content);
+            #endif
+            """;
+        File.WriteAllText(path, content);
 
-            var indexer = new FileIndexer(tempDir);
-            var (record, decodedContent, _, _) = indexer.BuildRecordWithRawBytes(path);
+        var indexer = new FileIndexer(tempDir);
+        var (record, decodedContent, _, _) = indexer.BuildRecordWithRawBytes(path);
 
-            Assert.Equal("c", record.Lang);
-            Assert.Equal(content.Replace("\r\n", "\n"), decodedContent);
+        Assert.Equal("c", record.Lang);
+        Assert.Equal(content.Replace("\r\n", "\n"), decodedContent);
 
-            var symbols = SymbolExtractor.Extract(1, record.Lang!, decodedContent).ToList();
-            Assert.DoesNotContain(symbols, symbol => symbol.Kind == "class");
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        var symbols = SymbolExtractor.Extract(1, record.Lang!, decodedContent).ToList();
+        Assert.DoesNotContain(symbols, symbol => symbol.Kind == "class");
     }
 
     [Fact]
