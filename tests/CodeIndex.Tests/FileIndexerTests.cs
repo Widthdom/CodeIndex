@@ -4914,118 +4914,90 @@ public partial class FileIndexerTests
     [Fact]
     public void BuildRecord_ChecksumUsesCanonicalContentAfterLineLeadingBomStrip()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var plainPath = Path.Combine(tempDir, "plain.cs");
-            var bomPath = Path.Combine(tempDir, "bom.cs");
-            File.WriteAllText(plainPath, "class Plain\n{\n}\n");
-            File.WriteAllText(bomPath, "\uFEFFclass Plain\n\uFEFF{\n}\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var plainPath = TestProjectHelper.WriteTextFile(tempDir, "plain.cs", "class Plain\n{\n}\n");
+        var bomPath = TestProjectHelper.WriteTextFile(tempDir, "bom.cs", "\uFEFFclass Plain\n\uFEFF{\n}\n");
 
-            var indexer = new FileIndexer(tempDir);
-            var (plainRecord, plainContent, _) = indexer.BuildRecord(plainPath);
-            var (bomRecord, bomContent, _) = indexer.BuildRecord(bomPath);
+        var indexer = new FileIndexer(tempDir);
+        var (plainRecord, plainContent, _) = indexer.BuildRecord(plainPath);
+        var (bomRecord, bomContent, _) = indexer.BuildRecord(bomPath);
 
-            Assert.Equal(plainContent, bomContent);
-            Assert.Equal(plainRecord.Checksum, bomRecord.Checksum);
-            Assert.Equal(plainRecord.Lines, bomRecord.Lines);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(plainContent, bomContent);
+        Assert.Equal(plainRecord.Checksum, bomRecord.Checksum);
+        Assert.Equal(plainRecord.Lines, bomRecord.Lines);
     }
 
     [Fact]
     public void BuildRecord_GitLfsPointerIndexesEmptyBodyAndValidationIssue()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var filePath = Path.Combine(tempDir, "asset.cs");
-            var pointer = """
-                version https://git-lfs.github.com/spec/v1
-                oid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-                size 12345
-                """;
-            File.WriteAllText(filePath, pointer);
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var pointer = """
+            version https://git-lfs.github.com/spec/v1
+            oid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+            size 12345
+            """;
+        var filePath = TestProjectHelper.WriteTextFile(tempDir, "asset.cs", pointer);
 
-            var indexer = new FileIndexer(tempDir);
-            var (record, content, rawBytes, _) = indexer.BuildRecordWithRawBytes(filePath);
-            var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
+        var indexer = new FileIndexer(tempDir);
+        var (record, content, rawBytes, _) = indexer.BuildRecordWithRawBytes(filePath);
+        var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
 
-            Assert.Equal(string.Empty, content);
-            Assert.Equal(0, record.Lines);
-            Assert.Equal(FileIndexer.ComputeChecksum(rawBytes), record.Checksum);
-            Assert.NotEqual(FileIndexer.ComputeChecksum(System.Text.Encoding.UTF8.GetBytes(string.Empty)), record.Checksum);
-            var issue = Assert.Single(issues, i => i.Kind == "lfs_pointer_skipped");
-            Assert.Equal("asset.cs", issue.Path);
-            Assert.Equal(1, issue.Line);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(string.Empty, content);
+        Assert.Equal(0, record.Lines);
+        Assert.Equal(FileIndexer.ComputeChecksum(rawBytes), record.Checksum);
+        Assert.NotEqual(FileIndexer.ComputeChecksum(Encoding.UTF8.GetBytes(string.Empty)), record.Checksum);
+        var issue = Assert.Single(issues, i => i.Kind == "lfs_pointer_skipped");
+        Assert.Equal("asset.cs", issue.Path);
+        Assert.Equal(1, issue.Line);
     }
 
     [Fact]
     public void BuildRecord_ConfiguredGeneratedPatternBuildsExtractionIssueWithoutGeneratedFlag()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var generatedDir = Path.Combine(tempDir, "src", "generated");
-            Directory.CreateDirectory(generatedDir);
-            var filePath = Path.Combine(generatedDir, "Client.cs");
-            File.WriteAllText(filePath, "public class Client { public string Lookup() => \"ok\"; }\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var filePath = TestProjectHelper.WriteTextFile(
+            tempDir,
+            "src/generated/Client.cs",
+            "public class Client { public string Lookup() => \"ok\"; }\n");
 
-            var indexer = new FileIndexer(
-                tempDir,
-                ignoreCase: false,
-                ignoreRuleRoot: null,
-                generatedCodePatterns: ["src/generated/**"]);
-            var (record, content, rawBytes, _) = indexer.BuildRecordWithRawBytes(filePath);
-            var issue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
+        var indexer = new FileIndexer(
+            tempDir,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            generatedCodePatterns: ["src/generated/**"]);
+        var (record, content, rawBytes, _) = indexer.BuildRecordWithRawBytes(filePath);
+        var issue = indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
 
-            Assert.False(record.Generated);
-            Assert.Equal("src/generated/Client.cs", record.Path);
-            Assert.Contains("public class Client", content, StringComparison.Ordinal);
-            Assert.True(rawBytes.Length > 0);
-            Assert.NotNull(issue);
-            Assert.Equal(FileIndexer.GeneratedCodeExtractionSkippedIssueKind, issue.Kind);
-            Assert.Equal("src/generated/Client.cs", issue.Path);
-            Assert.Contains("symbols and references were skipped", issue.Message, StringComparison.Ordinal);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.False(record.Generated);
+        Assert.Equal("src/generated/Client.cs", record.Path);
+        Assert.Contains("public class Client", content, StringComparison.Ordinal);
+        Assert.True(rawBytes.Length > 0);
+        Assert.NotNull(issue);
+        Assert.Equal(FileIndexer.GeneratedCodeExtractionSkippedIssueKind, issue.Kind);
+        Assert.Equal("src/generated/Client.cs", issue.Path);
+        Assert.Contains("symbols and references were skipped", issue.Message, StringComparison.Ordinal);
     }
 
     [Fact]
     public void BuildRecord_GitLfsVersionLineWithoutPointerShapePreservesContent()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var filePath = Path.Combine(tempDir, "example.txt");
-            var text = """
-                version https://git-lfs.github.com/spec/v1
-                This is documentation text, not a Git LFS pointer.
-                """;
-            File.WriteAllText(filePath, text);
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var text = """
+            version https://git-lfs.github.com/spec/v1
+            This is documentation text, not a Git LFS pointer.
+            """;
+        var filePath = TestProjectHelper.WriteTextFile(tempDir, "example.txt", text);
 
-            var indexer = new FileIndexer(tempDir);
-            var (record, content, rawBytes, _) = indexer.BuildRecordWithRawBytes(filePath);
-            var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
+        var indexer = new FileIndexer(tempDir);
+        var (record, content, rawBytes, _) = indexer.BuildRecordWithRawBytes(filePath);
+        var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
 
-            Assert.Equal(text.Replace("\r\n", "\n", StringComparison.Ordinal), content);
-            Assert.DoesNotContain(issues, issue => issue.Kind == "lfs_pointer_skipped");
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(text.Replace("\r\n", "\n", StringComparison.Ordinal), content);
+        Assert.DoesNotContain(issues, issue => issue.Kind == "lfs_pointer_skipped");
     }
 
     [Fact]
