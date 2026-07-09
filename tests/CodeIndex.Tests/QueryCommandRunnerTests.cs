@@ -4408,95 +4408,71 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunDeps_ZeroJson_StaleSqlGraphContractIncludesDegradedStateWhenSqlScopeIsEmpty()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_zero_sql_graph_contract");
-        try
-        {
-            var dbPath = CreateSqlGraphContractZeroResultFixtureDb(projectRoot);
-            DowngradeSqlGraphContractVersion(dbPath);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_zero_sql_graph_contract");
+        var projectRoot = project.Root;
+        var dbPath = CreateSqlGraphContractZeroResultFixtureDb(projectRoot);
+        DowngradeSqlGraphContractVersion(dbPath);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", dbPath, "--json"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--json"],
+            _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
-            Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("sql_graph_contract_degraded_reason").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(0, json.GetProperty("count").GetInt32());
+        Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
+        Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("sql_graph_contract_degraded_reason").GetString());
     }
-
-
-
-
-
-
 
     [Fact]
     public void RunDeps_Json_StaleSqlGraphContractIncludesDegradedState()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_sql_graph_contract");
-        try
-        {
-            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
-            DowngradeSqlGraphContractRows(dbPath);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_sql_graph_contract");
+        var projectRoot = project.Root;
+        var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
+        DowngradeSqlGraphContractRows(dbPath);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", dbPath, "--json", "--lang", "sql"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--json", "--lang", "sql"],
+            _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
-            Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("sql_graph_contract_degraded_reason").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
+        Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("sql_graph_contract_degraded_reason").GetString());
     }
 
     [Fact]
     public void RunDeps_JsonGraph_WritesValidGraphPayload()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_json_graph");
-        try
-        {
-            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_json_graph");
+        var projectRoot = project.Root;
+        var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", dbPath, "--format", "json-graph", "--lang", "sql"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--format", "json-graph", "--lang", "sql"],
+            _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("1", json.GetProperty("api_version").GetString());
-            Assert.Equal("sql", json.GetProperty("query_context").GetProperty("lang").GetString());
-            Assert.True(json.TryGetProperty("indexed_file_count", out _));
-            Assert.True(json.TryGetProperty("freshness_available", out _));
-            Assert.True(json.GetProperty("nodes").GetArrayLength() >= 2);
-            Assert.True(json.GetProperty("edges").GetArrayLength() >= 1);
-            Assert.True(json.GetProperty("edges")[0].TryGetProperty("reference_count", out _));
-            Assert.True(json.GetProperty("edges")[0].TryGetProperty("ranking_score", out _));
-            Assert.True(json.GetProperty("edges")[0].TryGetProperty("symbols", out _));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal("1", json.GetProperty("api_version").GetString());
+        Assert.Equal("sql", json.GetProperty("query_context").GetProperty("lang").GetString());
+        Assert.True(json.TryGetProperty("indexed_file_count", out _));
+        Assert.True(json.TryGetProperty("freshness_available", out _));
+        Assert.True(json.GetProperty("nodes").GetArrayLength() >= 2);
+        Assert.True(json.GetProperty("edges").GetArrayLength() >= 1);
+        Assert.True(json.GetProperty("edges")[0].TryGetProperty("reference_count", out _));
+        Assert.True(json.GetProperty("edges")[0].TryGetProperty("ranking_score", out _));
+        Assert.True(json.GetProperty("edges")[0].TryGetProperty("symbols", out _));
     }
 
     [Fact]
