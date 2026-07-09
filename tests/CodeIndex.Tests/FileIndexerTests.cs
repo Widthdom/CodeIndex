@@ -1513,37 +1513,25 @@ public partial class FileIndexerTests
     [InlineData("script", "#!/usr/bin/env pwsh\nWrite-Host hi\n", "powershell")]
     public void DetectLanguage_ExtensionlessShebangScripts_ReturnCorrectLang(string fileName, string content, string expected)
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var path = Path.Combine(tempDir, fileName);
-            File.WriteAllText(path, content);
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var path = Path.Combine(tempDir, fileName);
+        File.WriteAllText(path, content);
 
-            Assert.Equal(expected, FileIndexer.DetectLanguage(path));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(expected, FileIndexer.DetectLanguage(path));
     }
 
     [Fact]
     public void DetectLanguage_ExtensionlessUtf16ShebangScript_ReturnsLanguage()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var path = Path.Combine(tempDir, "utf16-script");
-            File.WriteAllBytes(path, Encoding.Unicode.GetPreamble()
-                .Concat(Encoding.Unicode.GetBytes("#!/usr/bin/env python\nprint('hi')\n"))
-                .ToArray());
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var path = Path.Combine(tempDir, "utf16-script");
+        File.WriteAllBytes(path, Encoding.Unicode.GetPreamble()
+            .Concat(Encoding.Unicode.GetBytes("#!/usr/bin/env python\nprint('hi')\n"))
+            .ToArray());
 
-            Assert.Equal("python", FileIndexer.DetectLanguage(path));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal("python", FileIndexer.DetectLanguage(path));
     }
 
     [Theory]
@@ -1553,86 +1541,56 @@ public partial class FileIndexerTests
     [InlineData("data", new byte[] { (byte)'#', (byte)'!', (byte)'/', (byte)'b', (byte)'i', (byte)'n', (byte)'/', (byte)'s', (byte)'h', 0x00 })]
     public void DetectLanguage_ExtensionlessBinaryLikeFiles_ReturnsNull(string fileName, byte[] bytes)
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var path = Path.Combine(tempDir, fileName);
-            File.WriteAllBytes(path, bytes);
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var path = Path.Combine(tempDir, fileName);
+        File.WriteAllBytes(path, bytes);
 
-            Assert.Null(FileIndexer.DetectLanguage(path));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Null(FileIndexer.DetectLanguage(path));
     }
 
     [Fact]
     public void DetectLanguage_ExtensionlessOverCapShebangLine_ReturnsNull()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var path = Path.Combine(tempDir, "tool");
-            File.WriteAllText(path, "#!/usr/bin/env " + new string('x', 256));
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var path = Path.Combine(tempDir, "tool");
+        File.WriteAllText(path, "#!/usr/bin/env " + new string('x', 256));
 
-            Assert.Null(FileIndexer.DetectLanguage(path));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Null(FileIndexer.DetectLanguage(path));
     }
 
     [Fact]
     public void DetectLanguage_ExtensionlessNonScript_ReturnsNull()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var path = Path.Combine(tempDir, "README");
-            File.WriteAllText(path, "Hello world\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var path = Path.Combine(tempDir, "README");
+        File.WriteAllText(path, "Hello world\n");
 
-            Assert.Null(FileIndexer.DetectLanguage(path));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Null(FileIndexer.DetectLanguage(path));
     }
 
     [Fact]
     public void DetectLanguage_UnknownExtensionWithShebang_ReturnsNull()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var path = Path.Combine(tempDir, "notes.txt");
-            File.WriteAllText(path, "#!/usr/bin/env bash\necho hi\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var path = Path.Combine(tempDir, "notes.txt");
+        File.WriteAllText(path, "#!/usr/bin/env bash\necho hi\n");
 
-            Assert.Null(FileIndexer.DetectLanguage(path));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Null(FileIndexer.DetectLanguage(path));
     }
 
     [Fact]
     public void DetectLanguage_LeadingWhitespacePseudoShebang_ReturnsNull()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var path = Path.Combine(tempDir, "tool");
-            File.WriteAllText(path, "  #!/usr/bin/env bash\necho hi\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var path = Path.Combine(tempDir, "tool");
+        File.WriteAllText(path, "  #!/usr/bin/env bash\necho hi\n");
 
-            Assert.Null(FileIndexer.DetectLanguage(path));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Null(FileIndexer.DetectLanguage(path));
     }
 
     [Fact]
@@ -1642,40 +1600,36 @@ public partial class FileIndexerTests
         // .htm and Dockerfile.* / Makefile.* prefix variants are all indexed (not silently dropped).
         // Issue #189 のリプロを網羅。Ruby / Docker / Makefile / .pyi / .less / .mk / .htm と
         // Dockerfile.* / Makefile.* のプレフィックス変種が黙って落ちないことをロックする。
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var files = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            var files = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["Gemfile"] = "source 'https://rubygems.org'\ngem 'rails', '~> 7.0'\n",
-                ["Rakefile"] = "task :default => [:test]\n",
-                ["Containerfile"] = "FROM alpine\nRUN echo hi\n",
-                ["Dockerfile.dev"] = "FROM alpine AS builder\nRUN echo dev\n",
-                ["GNUmakefile"] = "all:\n\techo hi\n",
-                ["common.mk"] = "OBJ = foo.o bar.o\n",
-                ["stub.pyi"] = "def foo() -> int: ...\n",
-                ["style.less"] = ".foo { color: red; }\n",
-                ["page.htm"] = "<html><body>old-school</body></html>\n",
-                ["Makefile.am"] = "SUBDIRS = lib\n",
-            };
-            TestProjectHelper.WriteTextFiles(tempDir, files);
+            ["Gemfile"] = "source 'https://rubygems.org'\ngem 'rails', '~> 7.0'\n",
+            ["Rakefile"] = "task :default => [:test]\n",
+            ["Containerfile"] = "FROM alpine\nRUN echo hi\n",
+            ["Dockerfile.dev"] = "FROM alpine AS builder\nRUN echo dev\n",
+            ["GNUmakefile"] = "all:\n\techo hi\n",
+            ["common.mk"] = "OBJ = foo.o bar.o\n",
+            ["stub.pyi"] = "def foo() -> int: ...\n",
+            ["style.less"] = ".foo { color: red; }\n",
+            ["page.htm"] = "<html><body>old-school</body></html>\n",
+            ["Makefile.am"] = "SUBDIRS = lib\n",
+        };
+        TestProjectHelper.WriteTextFiles(tempDir, files);
 
-            var scanned = ScanRelativeFiles(tempDir);
+        var scanned = ScanRelativeFiles(tempDir);
 
-            var expected = files.Keys.OrderBy(n => n, StringComparer.Ordinal).ToList();
-            Assert.Equal(expected, scanned);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        var expected = files.Keys.OrderBy(n => n, StringComparer.Ordinal).ToList();
+        Assert.Equal(expected, scanned);
     }
 
     [Fact]
     public void ScanFiles_LoadsProjectRootPatternConfigsBeforeLanguageDetection_3190()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx-pattern-scan-project");
-        var cwdRoot = TestProjectHelper.CreateTempProject("cdidx-pattern-scan-cwd");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-pattern-scan-project");
+        using var cwd = TestProjectHelper.CreateTempProjectScope("cdidx-pattern-scan-cwd");
+        var projectRoot = project.Root;
+        var cwdRoot = cwd.Root;
         lock (TestConsoleLock.Gate)
         {
             var originalDirectory = Environment.CurrentDirectory;
@@ -1702,8 +1656,6 @@ public partial class FileIndexerTests
             {
                 Environment.CurrentDirectory = originalDirectory;
                 ExtractorPluginRegistry.ResetForTests();
-                TestProjectHelper.DeleteDirectory(projectRoot);
-                TestProjectHelper.DeleteDirectory(cwdRoot);
             }
         }
     }
@@ -1711,29 +1663,23 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFiles_IndexesDependencyManifests()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            TestProjectHelper.WriteTextFiles(
-                tempDir,
-                new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    ["package.json"] = "{\"dependencies\":{}}\n",
-                    ["pyproject.toml"] = "[project]\nname = 'sample'\n",
-                    ["requirements.txt"] = "pytest\n",
-                    ["Cargo.toml"] = "[package]\nname = 'sample'\n",
-                    ["composer.json"] = "{}\n",
-                    ["unknown.txt"] = "ignored\n",
-                });
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["package.json"] = "{\"dependencies\":{}}\n",
+                ["pyproject.toml"] = "[project]\nname = 'sample'\n",
+                ["requirements.txt"] = "pytest\n",
+                ["Cargo.toml"] = "[package]\nname = 'sample'\n",
+                ["composer.json"] = "{}\n",
+                ["unknown.txt"] = "ignored\n",
+            });
 
-            var files = ScanRelativeFiles(tempDir);
+        var files = ScanRelativeFiles(tempDir);
 
-            Assert.Equal(["Cargo.toml", "composer.json", "package.json", "pyproject.toml", "requirements.txt"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(["Cargo.toml", "composer.json", "package.json", "pyproject.toml", "requirements.txt"], files);
     }
 
     private static readonly (string Entry, string Language)[] ExactLanguageMapEntries =
