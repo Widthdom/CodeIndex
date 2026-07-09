@@ -283,70 +283,60 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFilesDetailed_CaseInsensitiveChildDirectory_SkipsCaseOnlyDuplicatePathWithWarning()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx-case-dedupe");
-        try
-        {
-            var childDir = Path.Combine(tempDir, "LinkedVolume");
-            Directory.CreateDirectory(childDir);
-            var sourceFile = Path.Combine(childDir, "File.cs");
-            File.WriteAllText(sourceFile, "class CaseDuplicateFixture { }\n");
-            var duplicateCasePath = Path.Combine(childDir, "file.cs");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-case-dedupe");
+        var tempDir = project.Root;
+        var childDir = TestProjectHelper.ProjectPath(tempDir, "LinkedVolume");
+        var sourceFile = TestProjectHelper.WriteTextFile(tempDir, "LinkedVolume/File.cs", "class CaseDuplicateFixture { }\n");
+        var duplicateCasePath = TestProjectHelper.ProjectPath(tempDir, "LinkedVolume", "file.cs");
 
-            var indexer = new FileIndexer(
-                tempDir,
-                ignoreCase: false,
-                ignoreRuleRoot: null,
-                maxFileSizeBytes: null,
-                directoryIgnoreCaseProbe: dir => Path.GetFullPath(dir) == Path.GetFullPath(childDir),
-                enumerateFiles: dir => Path.GetFullPath(dir) == Path.GetFullPath(childDir)
-                    ? [sourceFile, duplicateCasePath]
-                    : Directory.EnumerateFiles(dir));
+        var indexer = new FileIndexer(
+            tempDir,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: dir => Path.GetFullPath(dir) == Path.GetFullPath(childDir),
+            enumerateFiles: dir => Path.GetFullPath(dir) == Path.GetFullPath(childDir)
+                ? [sourceFile, duplicateCasePath]
+                : Directory.EnumerateFiles(dir));
 
-            var result = indexer.ScanFilesDetailed();
+        var result = indexer.ScanFilesDetailed();
 
-            var file = Assert.Single(result.Files);
-            Assert.Equal(sourceFile, file);
-            Assert.Contains("LinkedVolume/file.cs", result.NonIndexablePaths);
-            Assert.Contains(
-                result.Errors,
-                error => error.Severity == FileIndexer.ScanIssueSeverity.Warning
-                    && error.Message.Contains("case-sensitivity differs", StringComparison.OrdinalIgnoreCase)
-                    && error.Path == "LinkedVolume");
-            Assert.Contains(
-                result.Errors,
-                error => error.Severity == FileIndexer.ScanIssueSeverity.Warning
-                    && error.Message.Contains("differs only by case", StringComparison.OrdinalIgnoreCase)
-                    && error.Path == "LinkedVolume/file.cs");
-            Assert.False(result.HadErrors);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        var file = Assert.Single(result.Files);
+        Assert.Equal(sourceFile, file);
+        Assert.Contains("LinkedVolume/file.cs", result.NonIndexablePaths);
+        Assert.Contains(
+            result.Errors,
+            error => error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                && error.Message.Contains("case-sensitivity differs", StringComparison.OrdinalIgnoreCase)
+                && error.Path == "LinkedVolume");
+        Assert.Contains(
+            result.Errors,
+            error => error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                && error.Message.Contains("differs only by case", StringComparison.OrdinalIgnoreCase)
+                && error.Path == "LinkedVolume/file.cs");
+        Assert.False(result.HadErrors);
     }
 
     [Fact]
     public void ScanFiles_SkipsBuiltInDirectoriesWithCaseInsensitiveNames()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx-skipdir-case");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(tempDir, "Node_Modules"));
-            File.WriteAllText(Path.Combine(tempDir, "Node_Modules", "ignored.js"), "export const ignored = true;");
-            File.WriteAllText(Path.Combine(tempDir, "app.js"), "export const app = true;");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx-skipdir-case");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>
+            {
+                ["Node_Modules/ignored.js"] = "export const ignored = true;",
+                ["app.js"] = "export const app = true;",
+            });
 
-            var indexer = new FileIndexer(tempDir, ignoreCase: true);
-            var files = indexer.ScanFiles()
-                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .ToList();
+        var indexer = new FileIndexer(tempDir, ignoreCase: true);
+        var files = indexer.ScanFiles()
+            .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
 
-            Assert.Equal(["app.js"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(["app.js"], files);
     }
 
     [Fact]
@@ -661,15 +651,16 @@ public partial class FileIndexerTests
     {
         lock (TestConsoleLock.Gate)
         {
-            var tempDir = TestProjectHelper.CreateTempProject("cdidx_langmap");
+            using var project = TestProjectHelper.CreateTempProjectScope("cdidx_langmap");
+            var tempDir = project.Root;
             var originalDirectory = Environment.CurrentDirectory;
             try
             {
-                File.WriteAllText(
-                    Path.Combine(tempDir, LanguageMapOverrides.WorkspaceFileName),
+                TestProjectHelper.WriteTextFile(
+                    tempDir,
+                    LanguageMapOverrides.WorkspaceFileName,
                     "entries:\n  - extension: \".in\"\n    language: \"text\"\n  - extension: \".kts.in\"\n    language: \"kotlin\"\n");
-                var outsideDir = Path.Combine(tempDir, "outside");
-                Directory.CreateDirectory(outsideDir);
+                var outsideDir = TestProjectHelper.CreateDirectory(tempDir, "outside");
                 Environment.CurrentDirectory = outsideDir;
 
                 Assert.Equal("kotlin", FileIndexer.DetectLanguage(Path.Combine(tempDir, "build.kts.in")));
@@ -679,7 +670,6 @@ public partial class FileIndexerTests
             finally
             {
                 Environment.CurrentDirectory = originalDirectory;
-                TestProjectHelper.DeleteDirectory(tempDir);
             }
         }
     }
@@ -1762,29 +1752,23 @@ public partial class FileIndexerTests
     [Fact]
     public void ScanFiles_IndexesCobolExtensions()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var files = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            var files = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["hello.cbl"] = "       IDENTIFICATION DIVISION.\n       PROGRAM-ID. HELLO.\n",
-                ["copy.cpy"] = "       01  COPY-NAME PIC X(10).\n",
-                ["legacy.cob"] = "       PROCEDURE DIVISION.\n",
-                ["modern.cobol"] = "       STOP RUN.\n",
-            };
-            TestProjectHelper.WriteTextFiles(tempDir, files);
+            ["hello.cbl"] = "       IDENTIFICATION DIVISION.\n       PROGRAM-ID. HELLO.\n",
+            ["copy.cpy"] = "       01  COPY-NAME PIC X(10).\n",
+            ["legacy.cob"] = "       PROCEDURE DIVISION.\n",
+            ["modern.cobol"] = "       STOP RUN.\n",
+        };
+        TestProjectHelper.WriteTextFiles(tempDir, files);
 
-            var scanned = new FileIndexer(tempDir).ScanFiles()
-                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .ToList();
+        var scanned = new FileIndexer(tempDir).ScanFiles()
+            .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
 
-            Assert.Equal(files.Keys.OrderBy(n => n, StringComparer.Ordinal).ToList(), scanned);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(files.Keys.OrderBy(n => n, StringComparer.Ordinal).ToList(), scanned);
     }
 
     [Fact]
@@ -2418,37 +2402,27 @@ public partial class FileIndexerTests
         if (!OperatingSystem.IsWindows())
             return;
 
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            File.WriteAllText(Path.Combine(tempDir, "visible.py"), "print('visible')\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFile(tempDir, "visible.py", "print('visible')\n");
 
-            var hiddenFile = Path.Combine(tempDir, "hidden.py");
-            File.WriteAllText(hiddenFile, "print('hidden')\n");
-            File.SetAttributes(hiddenFile, File.GetAttributes(hiddenFile) | FileAttributes.Hidden);
+        var hiddenFile = TestProjectHelper.WriteTextFile(tempDir, "hidden.py", "print('hidden')\n");
+        File.SetAttributes(hiddenFile, File.GetAttributes(hiddenFile) | FileAttributes.Hidden);
 
-            var systemFile = Path.Combine(tempDir, "system.py");
-            File.WriteAllText(systemFile, "print('system')\n");
-            File.SetAttributes(systemFile, File.GetAttributes(systemFile) | FileAttributes.System);
+        var systemFile = TestProjectHelper.WriteTextFile(tempDir, "system.py", "print('system')\n");
+        File.SetAttributes(systemFile, File.GetAttributes(systemFile) | FileAttributes.System);
 
-            var hiddenDir = Path.Combine(tempDir, "hidden_dir");
-            Directory.CreateDirectory(hiddenDir);
-            File.WriteAllText(Path.Combine(hiddenDir, "nested.py"), "print('hidden nested')\n");
-            File.SetAttributes(hiddenDir, File.GetAttributes(hiddenDir) | FileAttributes.Hidden);
+        var hiddenDir = TestProjectHelper.CreateDirectory(tempDir, "hidden_dir");
+        TestProjectHelper.WriteTextFile(tempDir, "hidden_dir/nested.py", "print('hidden nested')\n");
+        File.SetAttributes(hiddenDir, File.GetAttributes(hiddenDir) | FileAttributes.Hidden);
 
-            var systemDir = Path.Combine(tempDir, "system_dir");
-            Directory.CreateDirectory(systemDir);
-            File.WriteAllText(Path.Combine(systemDir, "nested.py"), "print('system nested')\n");
-            File.SetAttributes(systemDir, File.GetAttributes(systemDir) | FileAttributes.System);
+        var systemDir = TestProjectHelper.CreateDirectory(tempDir, "system_dir");
+        TestProjectHelper.WriteTextFile(tempDir, "system_dir/nested.py", "print('system nested')\n");
+        File.SetAttributes(systemDir, File.GetAttributes(systemDir) | FileAttributes.System);
 
-            var files = ScanRelativeFiles(tempDir);
+        var files = ScanRelativeFiles(tempDir);
 
-            Assert.Equal(["visible.py"], files);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(["visible.py"], files);
     }
 
     [Fact]
