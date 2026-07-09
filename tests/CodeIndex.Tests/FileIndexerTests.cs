@@ -5005,25 +5005,19 @@ public partial class FileIndexerTests
     {
         // Files exceeding the default cap should carry structured skip metadata.
         // 既定上限を超えるファイルは structured skip metadata を持つ例外を投げる。
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var filePath = Path.Combine(tempDir, "large.py");
-            // Create a sparse file just over the default cap without allocating a matching test buffer.
-            // 既定上限を少し超える sparse file を作り、同サイズのテスト用 buffer 確保を避ける。
-            using (var stream = File.Create(filePath))
-                stream.SetLength(FileIndexer.DefaultMaxFileSizeBytes + 1);
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var filePath = TestProjectHelper.ProjectPath(tempDir, "large.py");
+        // Create a sparse file just over the default cap without allocating a matching test buffer.
+        // 既定上限を少し超える sparse file を作り、同サイズのテスト用 buffer 確保を避ける。
+        using (var stream = File.Create(filePath))
+            stream.SetLength(FileIndexer.DefaultMaxFileSizeBytes + 1);
 
-            var indexer = new FileIndexer(tempDir);
-            var ex = Assert.Throws<FileIndexer.FileTooLargeSkippedException>(() => indexer.BuildRecord(filePath));
-            Assert.Equal("large.py", ex.RelativePath);
-            Assert.Equal(FileIndexer.DefaultMaxFileSizeBytes + 1, ex.ActualBytes);
-            Assert.Equal(FileIndexer.DefaultMaxFileSizeBytes, ex.LimitBytes);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        var indexer = new FileIndexer(tempDir);
+        var ex = Assert.Throws<FileIndexer.FileTooLargeSkippedException>(() => indexer.BuildRecord(filePath));
+        Assert.Equal("large.py", ex.RelativePath);
+        Assert.Equal(FileIndexer.DefaultMaxFileSizeBytes + 1, ex.ActualBytes);
+        Assert.Equal(FileIndexer.DefaultMaxFileSizeBytes, ex.LimitBytes);
     }
 
     [Fact]
@@ -5034,26 +5028,20 @@ public partial class FileIndexerTests
         // 10 MiB byte array on the LOH.
         // #1695 の回帰: 10 MiB の source file は stream length の確認時点で拒否し、
         // インデクサが LOH 上に連続した 10 MiB byte 配列を累積しないことを固定する。
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var filePath = Path.Combine(tempDir, "large.py");
-            using (var stream = File.Create(filePath))
-                stream.SetLength(10 * 1024 * 1024);
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var filePath = TestProjectHelper.ProjectPath(tempDir, "large.py");
+        using (var stream = File.Create(filePath))
+            stream.SetLength(10 * 1024 * 1024);
 
-            var indexer = new FileIndexer(tempDir);
-            var before = GC.GetAllocatedBytesForCurrentThread();
+        var indexer = new FileIndexer(tempDir);
+        var before = GC.GetAllocatedBytesForCurrentThread();
 
-            var ex = Assert.Throws<FileIndexer.FileTooLargeSkippedException>(() => indexer.BuildRecord(filePath));
+        var ex = Assert.Throws<FileIndexer.FileTooLargeSkippedException>(() => indexer.BuildRecord(filePath));
 
-            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-            Assert.Contains("File too large", ex.Message);
-            Assert.True(allocated < 1024 * 1024, $"Expected rejection before a 10 MiB payload allocation, saw {allocated} bytes allocated.");
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Contains("File too large", ex.Message);
+        Assert.True(allocated < 1024 * 1024, $"Expected rejection before a 10 MiB payload allocation, saw {allocated} bytes allocated.");
     }
 
     [Fact]
@@ -5066,27 +5054,20 @@ public partial class FileIndexerTests
         // #1529 のリグレッション: TOCTOU 修正で 1 本の FileStream を通して MaxFileSize で
         // 累積バッファを打ち切る実装にした際、ちょうど既定上限のファイルは引き続き受け
         // 入れる必要がある (>上限 が throw / ==上限 が成功という対称契約を維持)。
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var filePath = Path.Combine(tempDir, "boundary.py");
-            // Exactly MaxFileSize bytes — ASCII so UTF-8 decode succeeds without warning.
-            // ちょうど MaxFileSize バイト — ASCII なら UTF-8 デコードで警告無く成功する。
-            var data = new byte[(int)FileIndexer.DefaultMaxFileSizeBytes];
-            for (int i = 0; i < data.Length; i++)
-                data[i] = (byte)'a';
-            File.WriteAllBytes(filePath, data);
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        // Exactly MaxFileSize bytes — ASCII so UTF-8 decode succeeds without warning.
+        // ちょうど MaxFileSize バイト — ASCII なら UTF-8 デコードで警告無く成功する。
+        var data = new byte[(int)FileIndexer.DefaultMaxFileSizeBytes];
+        for (int i = 0; i < data.Length; i++)
+            data[i] = (byte)'a';
 
-            var indexer = new FileIndexer(tempDir);
-            var (record, content, _) = indexer.BuildRecord(filePath);
+        var filePath = TestProjectHelper.WriteBinaryFile(tempDir, "boundary.py", data);
+        var indexer = new FileIndexer(tempDir);
+        var (record, content, _) = indexer.BuildRecord(filePath);
 
-            Assert.Equal(data.Length, record.Size);
-            Assert.Equal(data.Length, content.Length);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(data.Length, record.Size);
+        Assert.Equal(data.Length, content.Length);
     }
 
     [Fact]
@@ -5102,43 +5083,29 @@ public partial class FileIndexerTests
         // 込んだバイト数を反映しなければならない。`record.Size` をバイト数と突き合わ
         // せることで、status や freshness check の下流が実際に取り込まれた値と一致
         // することを契約として固定する。
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var filePath = Path.Combine(tempDir, "sized.py");
-            var payload = "print('hello world')\n"u8.ToArray();
-            File.WriteAllBytes(filePath, payload);
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var payload = "print('hello world')\n"u8.ToArray();
+        var filePath = TestProjectHelper.WriteBinaryFile(tempDir, "sized.py", payload);
 
-            var indexer = new FileIndexer(tempDir);
-            var (record, _, _) = indexer.BuildRecord(filePath);
+        var indexer = new FileIndexer(tempDir);
+        var (record, _, _) = indexer.BuildRecord(filePath);
 
-            Assert.Equal(payload.Length, record.Size);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(payload.Length, record.Size);
     }
 
     [Fact]
     public void BuildRecord_ExtensionlessShebangScriptUsesDetectedLanguage()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var filePath = Path.Combine(tempDir, "rbenv-hooks");
-            File.WriteAllText(filePath, "#!/usr/bin/env bash\necho hooks\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var filePath = TestProjectHelper.WriteTextFile(tempDir, "rbenv-hooks", "#!/usr/bin/env bash\necho hooks\n");
 
-            var indexer = new FileIndexer(tempDir);
-            var (record, _, warning) = indexer.BuildRecord(filePath);
+        var indexer = new FileIndexer(tempDir);
+        var (record, _, warning) = indexer.BuildRecord(filePath);
 
-            Assert.Equal("shell", record.Lang);
-            Assert.Null(warning);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal("shell", record.Lang);
+        Assert.Null(warning);
     }
 
     private static string CreateWindowsLongPathFixture(string projectRoot)
