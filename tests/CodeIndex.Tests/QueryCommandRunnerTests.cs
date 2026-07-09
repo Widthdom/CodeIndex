@@ -1536,77 +1536,63 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunSearchAndSymbols_ExactQueriesSeePythonInitAllExports()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_python_init_all_exports");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "package/__init__.py",
-                "python",
-                """
-                __all__ = [
-                    "public_api",
-                ]
-                """);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_python_init_all_exports");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "package/__init__.py",
+            "python",
+            """
+            __all__ = [
+                "public_api",
+            ]
+            """);
 
-            var (searchExitCode, searchStdout, searchStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["public_api", "--db", dbPath, "--exact", "--count"],
-                _jsonOptions));
-            var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["public_api", "--db", dbPath, "--lang", "python", "--exact-name", "--count"],
-                _jsonOptions));
+        var (searchExitCode, searchStdout, searchStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["public_api", "--db", dbPath, "--exact", "--count"],
+            _jsonOptions));
+        var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+            ["public_api", "--db", dbPath, "--lang", "python", "--exact-name", "--count"],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, searchExitCode);
-            Assert.Equal("1", searchStdout.Trim());
-            Assert.Equal(string.Empty, searchStderr);
+        Assert.Equal(CommandExitCodes.Success, searchExitCode);
+        Assert.Equal("1", searchStdout.Trim());
+        Assert.Equal(string.Empty, searchStderr);
 
-            Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
-            Assert.Equal("1", symbolsStdout.Trim());
-            Assert.Equal(string.Empty, symbolsStderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+        Assert.Equal("1", symbolsStdout.Trim());
+        Assert.Equal(string.Empty, symbolsStderr);
     }
 
     [Fact]
     public void RunSearchAndSymbols_AcceptPythonPyLangAlias()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_python_py_lang_alias");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "package/__init__.py",
-                "python",
-                """
-                __all__ = [
-                    "public_api",
-                ]
-                """);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_python_py_lang_alias");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "package/__init__.py",
+            "python",
+            """
+            __all__ = [
+                "public_api",
+            ]
+            """);
 
-            var (searchExitCode, searchStdout, searchStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["public_api", "--db", dbPath, "--lang", "py", "--exact", "--count"],
-                _jsonOptions));
-            var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["public_api", "--db", dbPath, "--lang", "py", "--exact-name", "--count"],
-                _jsonOptions));
+        var (searchExitCode, searchStdout, searchStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["public_api", "--db", dbPath, "--lang", "py", "--exact", "--count"],
+            _jsonOptions));
+        var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+            ["public_api", "--db", dbPath, "--lang", "py", "--exact-name", "--count"],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, searchExitCode);
-            Assert.Equal("1", searchStdout.Trim());
-            Assert.Equal(string.Empty, searchStderr);
+        Assert.Equal(CommandExitCodes.Success, searchExitCode);
+        Assert.Equal("1", searchStdout.Trim());
+        Assert.Equal(string.Empty, searchStderr);
 
-            Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
-            Assert.Equal("1", symbolsStdout.Trim());
-            Assert.Equal(string.Empty, symbolsStderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+        Assert.Equal("1", symbolsStdout.Trim());
+        Assert.Equal(string.Empty, symbolsStderr);
     }
 
 
@@ -1620,7 +1606,8 @@ public partial class QueryCommandRunnerTests
     [PublishedTrimmedCliFact]
     public void RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_trimmed_publish");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_query_trimmed_publish");
+        var projectRoot = project.Root;
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
@@ -1700,7 +1687,6 @@ public partial class QueryCommandRunnerTests
         finally
         {
             SqliteConnection.ClearAllPools();
-            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 
