@@ -3778,133 +3778,90 @@ public partial class FileIndexerTests
     [Fact]
     public void GetFamilyScopeKey_MarkerlessRootUsesTopLevelSubtreeScope()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(tempDir, "src"));
-            Directory.CreateDirectory(Path.Combine(tempDir, "generated"));
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var srcFile = TestProjectHelper.WriteTextFile(tempDir, "src/Api.Part1.cs", "public partial class Api {}");
+        var generatedFile = TestProjectHelper.WriteTextFile(tempDir, "generated/Api.Part2.cs", "public partial class Api {}");
 
-            var srcFile = Path.Combine(tempDir, "src", "Api.Part1.cs");
-            var generatedFile = Path.Combine(tempDir, "generated", "Api.Part2.cs");
-            File.WriteAllText(srcFile, "public partial class Api {}");
-            File.WriteAllText(generatedFile, "public partial class Api {}");
+        var indexer = new FileIndexer(tempDir);
 
-            var indexer = new FileIndexer(tempDir);
-
-            Assert.Equal("src", indexer.GetFamilyScopeKey(srcFile, "csharp"));
-            Assert.Equal("generated", indexer.GetFamilyScopeKey(generatedFile, "csharp"));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal("src", indexer.GetFamilyScopeKey(srcFile, "csharp"));
+        Assert.Equal("generated", indexer.GetFamilyScopeKey(generatedFile, "csharp"));
     }
 
     [Fact]
     public void GetFamilyScopeKey_MarkerlessRootLevelFilesShareRootScope()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var firstFile = TestProjectHelper.WriteTextFile(tempDir, "Api.Part1.cs", "public partial class Api {}");
+        var secondFile = TestProjectHelper.WriteTextFile(tempDir, "Api.Part2.cs", "public partial class Api {}");
 
-            var firstFile = Path.Combine(tempDir, "Api.Part1.cs");
-            var secondFile = Path.Combine(tempDir, "Api.Part2.cs");
-            File.WriteAllText(firstFile, "public partial class Api {}");
-            File.WriteAllText(secondFile, "public partial class Api {}");
+        var indexer = new FileIndexer(tempDir);
 
-            var indexer = new FileIndexer(tempDir);
-
-            Assert.Equal(".", indexer.GetFamilyScopeKey(firstFile, "csharp"));
-            Assert.Equal(".", indexer.GetFamilyScopeKey(secondFile, "csharp"));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(".", indexer.GetFamilyScopeKey(firstFile, "csharp"));
+        Assert.Equal(".", indexer.GetFamilyScopeKey(secondFile, "csharp"));
     }
 
     [Fact]
     public void GetFamilyScopeKey_IgnoresIgnoredProjectMarkers()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var libDir = Path.Combine(tempDir, "src", "Lib");
-            var featureDir = Path.Combine(libDir, "Feature");
-            Directory.CreateDirectory(featureDir);
-            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "src/Lib/Lib.csproj\n");
-            var projectPath = Path.Combine(libDir, "Lib.csproj");
-            File.WriteAllText(projectPath, "<Project />");
-            var sourcePath = Path.Combine(featureDir, "Api.Part1.cs");
-            File.WriteAllText(sourcePath, "public partial class Api {}");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFile(tempDir, ".gitignore", "src/Lib/Lib.csproj\n");
+        var projectPath = TestProjectHelper.WriteTextFile(tempDir, "src/Lib/Lib.csproj", "<Project />");
+        var sourcePath = TestProjectHelper.WriteTextFile(tempDir, "src/Lib/Feature/Api.Part1.cs", "public partial class Api {}");
 
-            var indexer = new FileIndexer(tempDir);
-            var familyScopeKey = indexer.GetFamilyScopeKey(sourcePath, "csharp");
-            var ignoredMarkerFingerprint = indexer.GetProjectMarkerFingerprint("csharp");
-            File.Delete(projectPath);
-            var markerlessFingerprint = new FileIndexer(tempDir).GetProjectMarkerFingerprint("csharp");
+        var indexer = new FileIndexer(tempDir);
+        var familyScopeKey = indexer.GetFamilyScopeKey(sourcePath, "csharp");
+        var ignoredMarkerFingerprint = indexer.GetProjectMarkerFingerprint("csharp");
+        File.Delete(projectPath);
+        var markerlessFingerprint = new FileIndexer(tempDir).GetProjectMarkerFingerprint("csharp");
 
-            Assert.Equal("src", familyScopeKey);
-            Assert.Equal(markerlessFingerprint, ignoredMarkerFingerprint);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal("src", familyScopeKey);
+        Assert.Equal(markerlessFingerprint, ignoredMarkerFingerprint);
     }
 
     [Fact]
     public void GetFamilyScopeKey_MultipleProjectMarkersInOneDirectoryUseNarrowerSubtreeScope()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var srcDir = Path.Combine(tempDir, "src");
-            Directory.CreateDirectory(Path.Combine(srcDir, "ProjA"));
-            Directory.CreateDirectory(Path.Combine(srcDir, "ProjB"));
-            File.WriteAllText(Path.Combine(srcDir, "ProjectA.csproj"), "<Project />");
-            File.WriteAllText(Path.Combine(srcDir, "ProjectB.csproj"), "<Project />");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["src/ProjectA.csproj"] = "<Project />",
+                ["src/ProjectB.csproj"] = "<Project />",
+                ["src/ProjA/Api.Part1.cs"] = "public partial class Api {}",
+                ["src/ProjB/Api.Part1.cs"] = "public partial class Api {}",
+                ["src/Api.Part1.cs"] = "public partial class Api {}",
+            });
+        var projAFile = TestProjectHelper.ProjectPath(tempDir, "src/ProjA/Api.Part1.cs");
+        var projBFile = TestProjectHelper.ProjectPath(tempDir, "src/ProjB/Api.Part1.cs");
+        var ambiguousFile = TestProjectHelper.ProjectPath(tempDir, "src/Api.Part1.cs");
 
-            var projAFile = Path.Combine(srcDir, "ProjA", "Api.Part1.cs");
-            var projBFile = Path.Combine(srcDir, "ProjB", "Api.Part1.cs");
-            var ambiguousFile = Path.Combine(srcDir, "Api.Part1.cs");
-            File.WriteAllText(projAFile, "public partial class Api {}");
-            File.WriteAllText(projBFile, "public partial class Api {}");
-            File.WriteAllText(ambiguousFile, "public partial class Api {}");
+        var indexer = new FileIndexer(tempDir);
 
-            var indexer = new FileIndexer(tempDir);
-
-            Assert.Equal("src/ProjA", indexer.GetFamilyScopeKey(projAFile, "csharp"));
-            Assert.Equal("src/ProjB", indexer.GetFamilyScopeKey(projBFile, "csharp"));
-            Assert.Equal("src/__file__/Api.Part1.cs", indexer.GetFamilyScopeKey(ambiguousFile, "csharp"));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal("src/ProjA", indexer.GetFamilyScopeKey(projAFile, "csharp"));
+        Assert.Equal("src/ProjB", indexer.GetFamilyScopeKey(projBFile, "csharp"));
+        Assert.Equal("src/__file__/Api.Part1.cs", indexer.GetFamilyScopeKey(ambiguousFile, "csharp"));
     }
 
     [Fact]
     public void BuildRecord_CreatesCorrectRecord()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("codeindex_test");
-        try
-        {
-            var filePath = Path.Combine(tempDir, "main.py");
-            File.WriteAllText(filePath, "def main():\n    print('hello')\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var filePath = TestProjectHelper.WriteTextFile(tempDir, "main.py", "def main():\n    print('hello')\n");
 
-            var indexer = new FileIndexer(tempDir);
-            var (record, content, _) = indexer.BuildRecord(filePath);
+        var indexer = new FileIndexer(tempDir);
+        var (record, content, _) = indexer.BuildRecord(filePath);
 
-            Assert.Equal("main.py", record.Path);
-            Assert.Equal("python", record.Lang);
-            Assert.Equal(2, record.Lines); // "def main():\n    print('hello')\n" = 2 lines (trailing newline ignored)
-            Assert.NotNull(record.Checksum);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal("main.py", record.Path);
+        Assert.Equal("python", record.Lang);
+        Assert.Equal(2, record.Lines); // "def main():\n    print('hello')\n" = 2 lines (trailing newline ignored)
+        Assert.NotNull(record.Checksum);
     }
 
     [Fact]
