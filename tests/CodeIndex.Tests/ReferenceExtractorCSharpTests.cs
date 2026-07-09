@@ -21,8 +21,7 @@ public partial class ReferenceExtractorTests
             }
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("csharp", content);
 
         var selfCall = Assert.Single(references, reference =>
             reference.SymbolName == "Recurse"
@@ -43,8 +42,7 @@ public partial class ReferenceExtractorTests
             }
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("csharp", content);
 
         Assert.Contains(references, reference =>
             reference.SymbolName == "IFoo"
@@ -72,8 +70,7 @@ public partial class ReferenceExtractorTests
             }
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("csharp", content);
 
         var getInt32Calls = references
             .Where(reference => reference.SymbolName == "GetInt32" && reference.ReferenceKind == "call")
@@ -104,8 +101,7 @@ public partial class ReferenceExtractorTests
             }
             """"""";
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("csharp", content);
 
         Assert.Contains(references, reference => reference.SymbolName == "ActualCall");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "PhantomCall");
@@ -126,8 +122,7 @@ public partial class ReferenceExtractorTests
         builder.AppendLine("}");
 
         var content = builder.ToString();
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("csharp", content);
 
         Assert.Contains(references, reference => reference.SymbolName == "ActualCall");
     }
@@ -158,8 +153,7 @@ public partial class ReferenceExtractorTests
             }
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var (symbols, references) = ExtractSymbolsAndReferences("csharp", content);
 
         Assert.Contains(symbols, symbol =>
             symbol.Kind == "function"
@@ -259,8 +253,7 @@ public partial class ReferenceExtractorTests
             }
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var (symbols, references) = ExtractSymbolsAndReferences("csharp", content);
 
         Assert.Contains(symbols, symbol =>
             symbol.Kind == "function"
