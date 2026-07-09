@@ -478,153 +478,123 @@ public partial class ReleaseWorkflowTests
     [Fact]
     public void PackageNormalizeCli_JsonReportsBoundedFriendlyFailure()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizeCli_JsonReportsBoundedFriendlyFailure));
-        try
-        {
-            var missingPackagePath = Path.Combine(projectRoot, "missing.nupkg");
+        using var project = TestProjectHelper.CreateTempProjectScope(nameof(PackageNormalizeCli_JsonReportsBoundedFriendlyFailure));
+        var projectRoot = project.Root;
+        var missingPackagePath = Path.Combine(projectRoot, "missing.nupkg");
 
-            var (exitCode, stdout, stderr) = RunPackageNormalizeCli(["--json", missingPackagePath]);
+        var (exitCode, stdout, stderr) = RunPackageNormalizeCli(["--json", missingPackagePath]);
 
-            Assert.Equal(1, exitCode);
-            Assert.Empty(stderr);
-            using var doc = JsonDocument.Parse(stdout);
-            var package = doc.RootElement.GetProperty("packages").EnumerateArray().Single();
-            var error = package.GetProperty("error").GetString();
-            Assert.Contains("missing.nupkg", error);
-            Assert.DoesNotContain(projectRoot, error);
-            Assert.True(error!.Length <= 512);
-            Assert.Empty(package.GetProperty("warnings").EnumerateArray());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(1, exitCode);
+        Assert.Empty(stderr);
+        using var doc = JsonDocument.Parse(stdout);
+        var package = doc.RootElement.GetProperty("packages").EnumerateArray().Single();
+        var error = package.GetProperty("error").GetString();
+        Assert.Contains("missing.nupkg", error);
+        Assert.DoesNotContain(projectRoot, error);
+        Assert.True(error!.Length <= 512);
+        Assert.Empty(package.GetProperty("warnings").EnumerateArray());
     }
 
     [Fact]
     public void PackageNormalizeCli_JsonBoundsZipEntryDiagnostics()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizeCli_JsonBoundsZipEntryDiagnostics));
-        try
-        {
-            var packagePath = Path.Combine(projectRoot, "unsafe-entry.nupkg");
-            var longEntryName = new string('a', 260) + "\\payload.txt";
-            CreatePackageWithEntries(
-                packagePath,
-                ("package/services/metadata/core-properties/random.psmdcp", ""),
-                (longEntryName, "payload"));
+        using var project = TestProjectHelper.CreateTempProjectScope(nameof(PackageNormalizeCli_JsonBoundsZipEntryDiagnostics));
+        var projectRoot = project.Root;
+        var packagePath = Path.Combine(projectRoot, "unsafe-entry.nupkg");
+        var longEntryName = new string('a', 260) + "\\payload.txt";
+        CreatePackageWithEntries(
+            packagePath,
+            ("package/services/metadata/core-properties/random.psmdcp", ""),
+            (longEntryName, "payload"));
 
-            var (exitCode, stdout, stderr) = RunPackageNormalizeCli(["--json", packagePath]);
+        var (exitCode, stdout, stderr) = RunPackageNormalizeCli(["--json", packagePath]);
 
-            Assert.Equal(1, exitCode);
-            Assert.Empty(stderr);
-            using var doc = JsonDocument.Parse(stdout);
-            var error = doc.RootElement.GetProperty("packages").EnumerateArray().Single().GetProperty("error").GetString();
-            Assert.Contains("aaa", error);
-            Assert.Contains("...", error);
-            Assert.DoesNotContain(longEntryName, error);
-            Assert.True(error!.Length <= 512);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(1, exitCode);
+        Assert.Empty(stderr);
+        using var doc = JsonDocument.Parse(stdout);
+        var error = doc.RootElement.GetProperty("packages").EnumerateArray().Single().GetProperty("error").GetString();
+        Assert.Contains("aaa", error);
+        Assert.Contains("...", error);
+        Assert.DoesNotContain(longEntryName, error);
+        Assert.True(error!.Length <= 512);
     }
 
     [Fact]
     public void PackageNormalizer_ReportsCleanupWarningsWhenTempDeleteFails()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_ReportsCleanupWarningsWhenTempDeleteFails));
-        try
-        {
-            var packagePath = Path.Combine(projectRoot, "cleanup-warning.nupkg");
-            CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
-            var limits = PackageNormalizeLimits.Default with { MaxXmlTextChars = 5 };
-            var warnings = new List<string>();
+        using var project = TestProjectHelper.CreateTempProjectScope(nameof(PackageNormalizer_ReportsCleanupWarningsWhenTempDeleteFails));
+        var projectRoot = project.Root;
+        var packagePath = Path.Combine(projectRoot, "cleanup-warning.nupkg");
+        CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
+        var limits = PackageNormalizeLimits.Default with { MaxXmlTextChars = 5 };
+        var warnings = new List<string>();
 
-            var exception = Assert.Throws<InvalidOperationException>(() =>
-                PackageCorePropertiesNormalizer.NormalizePackage(
-                    packagePath,
-                    limits,
-                    warnings,
-                    _ => throw new IOException("delete failed at /private/path")));
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            PackageCorePropertiesNormalizer.NormalizePackage(
+                packagePath,
+                limits,
+                warnings,
+                _ => throw new IOException("delete failed at /private/path")));
 
-            Assert.Contains("[Content_Types].xml", exception.Message);
-            var warning = Assert.Single(warnings);
-            Assert.Contains("Could not delete temporary normalized package", warning);
-            Assert.Contains(".cdidx-normalize-cleanup-warning.", warning);
-            Assert.DoesNotContain(projectRoot, warning);
-            Assert.DoesNotContain("/private/path", warning);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Contains("[Content_Types].xml", exception.Message);
+        var warning = Assert.Single(warnings);
+        Assert.Contains("Could not delete temporary normalized package", warning);
+        Assert.Contains(".cdidx-normalize-cleanup-warning.", warning);
+        Assert.DoesNotContain(projectRoot, warning);
+        Assert.DoesNotContain("/private/path", warning);
     }
 
     [Fact]
     public void PackageNormalizer_RemovesPreexistingLegacyTempFileBeforeRewrite()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RemovesPreexistingLegacyTempFileBeforeRewrite));
-        try
-        {
-            var packagePath = Path.Combine(projectRoot, "legacy-temp.nupkg");
-            var legacyTempPath = packagePath + ".normalize-tmp";
-            CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
-            File.WriteAllText(legacyTempPath, "stale temp");
+        using var project = TestProjectHelper.CreateTempProjectScope(nameof(PackageNormalizer_RemovesPreexistingLegacyTempFileBeforeRewrite));
+        var projectRoot = project.Root;
+        var packagePath = Path.Combine(projectRoot, "legacy-temp.nupkg");
+        var legacyTempPath = packagePath + ".normalize-tmp";
+        CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
+        File.WriteAllText(legacyTempPath, "stale temp");
 
-            PackageCorePropertiesNormalizer.NormalizePackage(packagePath);
+        PackageCorePropertiesNormalizer.NormalizePackage(packagePath);
 
-            Assert.False(File.Exists(legacyTempPath));
-            Assert.Empty(Directory.EnumerateFiles(projectRoot, "*.normalize-tmp.*"));
+        Assert.False(File.Exists(legacyTempPath));
+        Assert.Empty(Directory.EnumerateFiles(projectRoot, "*.normalize-tmp.*"));
 
-            using var archive = ZipFile.OpenRead(packagePath);
-            Assert.Contains(archive.Entries, entry => entry.FullName == PackageCorePropertiesNormalizer.CanonicalCorePropertiesPath);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        using var archive = ZipFile.OpenRead(packagePath);
+        Assert.Contains(archive.Entries, entry => entry.FullName == PackageCorePropertiesNormalizer.CanonicalCorePropertiesPath);
     }
 
     [Fact]
     public void PackageNormalizer_RejectsLockedLegacyTempFileBeforeRewrite()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RejectsLockedLegacyTempFileBeforeRewrite));
-        try
-        {
-            var packagePath = Path.Combine(projectRoot, "locked-legacy.nupkg");
-            var legacyTempPath = packagePath + ".normalize-tmp";
-            CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
-            File.WriteAllText(legacyTempPath, "active legacy temp");
+        using var project = TestProjectHelper.CreateTempProjectScope(nameof(PackageNormalizer_RejectsLockedLegacyTempFileBeforeRewrite));
+        var projectRoot = project.Root;
+        var packagePath = Path.Combine(projectRoot, "locked-legacy.nupkg");
+        var legacyTempPath = packagePath + ".normalize-tmp";
+        CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
+        File.WriteAllText(legacyTempPath, "active legacy temp");
 
-            using var lockedLegacyTemp = new FileStream(
-                legacyTempPath,
-                new FileStreamOptions
-                {
-                    Mode = FileMode.Open,
-                    Access = FileAccess.ReadWrite,
-                    Share = FileShare.None,
-                });
+        using var lockedLegacyTemp = new FileStream(
+            legacyTempPath,
+            new FileStreamOptions
+            {
+                Mode = FileMode.Open,
+                Access = FileAccess.ReadWrite,
+                Share = FileShare.None,
+            });
 
-            var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
+        var exception = Assert.Throws<InvalidOperationException>(() => PackageCorePropertiesNormalizer.NormalizePackage(packagePath));
 
-            Assert.Contains("could not be locked and removed", exception.Message);
-            Assert.Contains("locked-legacy.nupkg.normalize-tmp", exception.Message);
-            Assert.DoesNotContain(projectRoot, exception.Message);
-            Assert.True(File.Exists(legacyTempPath));
-            Assert.Empty(Directory
-                .EnumerateFiles(projectRoot)
-                .Where(path => Path.GetFileName(path).Contains(".normalize-tmp.", StringComparison.Ordinal)));
+        Assert.Contains("could not be locked and removed", exception.Message);
+        Assert.Contains("locked-legacy.nupkg.normalize-tmp", exception.Message);
+        Assert.DoesNotContain(projectRoot, exception.Message);
+        Assert.True(File.Exists(legacyTempPath));
+        Assert.Empty(Directory
+            .EnumerateFiles(projectRoot)
+            .Where(path => Path.GetFileName(path).Contains(".normalize-tmp.", StringComparison.Ordinal)));
 
-            using var archive = ZipFile.OpenRead(packagePath);
-            Assert.Contains(archive.Entries, entry => entry.FullName == "package/services/metadata/core-properties/random.psmdcp");
-            Assert.DoesNotContain(archive.Entries, entry => entry.FullName == PackageCorePropertiesNormalizer.CanonicalCorePropertiesPath);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        using var archive = ZipFile.OpenRead(packagePath);
+        Assert.Contains(archive.Entries, entry => entry.FullName == "package/services/metadata/core-properties/random.psmdcp");
+        Assert.DoesNotContain(archive.Entries, entry => entry.FullName == PackageCorePropertiesNormalizer.CanonicalCorePropertiesPath);
     }
 
     [Fact]
@@ -633,27 +603,21 @@ public partial class ReleaseWorkflowTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RemovesReadOnlyLegacyTempFileOnUnixBeforeRewrite));
-        try
-        {
-            var packagePath = Path.Combine(projectRoot, "readonly-legacy.nupkg");
-            var legacyTempPath = packagePath + ".normalize-tmp";
-            CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
-            File.WriteAllText(legacyTempPath, "read-only stale temp");
-            File.SetUnixFileMode(legacyTempPath, UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+        using var project = TestProjectHelper.CreateTempProjectScope(nameof(PackageNormalizer_RemovesReadOnlyLegacyTempFileOnUnixBeforeRewrite));
+        var projectRoot = project.Root;
+        var packagePath = Path.Combine(projectRoot, "readonly-legacy.nupkg");
+        var legacyTempPath = packagePath + ".normalize-tmp";
+        CreateMinimalNuGetPackage(packagePath, "random.psmdcp");
+        File.WriteAllText(legacyTempPath, "read-only stale temp");
+        File.SetUnixFileMode(legacyTempPath, UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
 
-            PackageCorePropertiesNormalizer.NormalizePackage(packagePath);
+        PackageCorePropertiesNormalizer.NormalizePackage(packagePath);
 
-            Assert.False(File.Exists(legacyTempPath));
-            Assert.Empty(Directory.EnumerateFiles(projectRoot, "*.normalize-tmp.*"));
+        Assert.False(File.Exists(legacyTempPath));
+        Assert.Empty(Directory.EnumerateFiles(projectRoot, "*.normalize-tmp.*"));
 
-            using var archive = ZipFile.OpenRead(packagePath);
-            Assert.Contains(archive.Entries, entry => entry.FullName == PackageCorePropertiesNormalizer.CanonicalCorePropertiesPath);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        using var archive = ZipFile.OpenRead(packagePath);
+        Assert.Contains(archive.Entries, entry => entry.FullName == PackageCorePropertiesNormalizer.CanonicalCorePropertiesPath);
     }
 
     [Fact]
