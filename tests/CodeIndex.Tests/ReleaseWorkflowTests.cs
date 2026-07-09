@@ -955,64 +955,11 @@ public partial class ReleaseWorkflowTests
         var entrypoint = RepositoryTestPaths.ReadText("scripts", "docker-entrypoint.sh");
         var project = RepositoryTestPaths.ReadText("src", "CodeIndex", "CodeIndex.csproj");
 
-        Assert.Contains("publish-container:", workflow);
-        Assert.Contains("needs: [preflight, verify-release-install]", workflow);
-        Assert.Contains("packages: write", workflow);
-        Assert.Contains("docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4", workflow);
-        Assert.Contains("docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3", workflow);
-        Assert.Contains("docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6", workflow);
-        Assert.Contains("platforms: linux/amd64,linux/arm64", workflow);
-        Assert.Contains("ghcr.io/widthdom/codeindex:${version}", workflow);
-        Assert.Contains("ghcr.io/widthdom/codeindex:latest", workflow);
-        Assert.Contains("tags: ${{ steps.image-tags.outputs.tags }}", workflow);
-        Assert.Contains("Extract container build metadata", workflow);
-        Assert.Contains("git rev-parse --short=7 HEAD", workflow);
-        Assert.Contains("git show -s --format=%cd --date=format:%Y-%m-%d HEAD", workflow);
-        Assert.Contains("CDIDX_BUILD_COMMIT=${{ steps.container-metadata.outputs.commit }}", workflow);
-        Assert.Contains("CDIDX_BUILD_DATE=${{ steps.container-metadata.outputs.date }}", workflow);
-        Assert.Contains("CDIDX_BUILD_DIRTY=${{ steps.container-metadata.outputs.dirty }}", workflow);
-        Assert.Contains("*-*) ;;", workflow);
-        Assert.Contains("docker buildx imagetools inspect mcr.microsoft.com/dotnet/<image>:9.0.301-alpine3.22", dockerfile);
-        Assert.Contains("FROM mcr.microsoft.com/dotnet/sdk:9.0.301-alpine3.22@sha256:bdd1c9e2215a71e43d2f0c6978ace0a0652d7ecc21bf6f659d42d840500e1c44 AS build", dockerfile);
-        Assert.Contains("FROM mcr.microsoft.com/dotnet/runtime-deps:8.0-alpine@sha256:7ec14bf41e70f3ca60f7b369b077636f642a0e6867caf28677d970e0abd9c6e6 AS runtime", dockerfile);
-        Assert.DoesNotContain("FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine AS build", dockerfile);
-        Assert.DoesNotContain("FROM mcr.microsoft.com/dotnet/runtime-deps:8.0-alpine AS runtime", dockerfile);
-        Assert.Contains("COPY scripts/docker-entrypoint.sh /usr/local/bin/cdidx-entrypoint", dockerfile);
-        Assert.Contains("apk add --no-cache ca-certificates su-exec", dockerfile);
-        Assert.Contains("addgroup -S -g 10001 cdidx", dockerfile);
-        Assert.Contains("adduser -S -D -H -u 10001 -G cdidx -h /repo cdidx", dockerfile);
-        Assert.Contains("chown cdidx:cdidx /repo", dockerfile);
-        Assert.DoesNotContain("USER cdidx:cdidx", dockerfile);
-        Assert.Contains("stat -c '%u' /repo", entrypoint);
-        Assert.Contains("stat -c '%g' /repo", entrypoint);
-        Assert.Contains("su-exec \"${target_uid}:${target_gid}\" cdidx \"$@\"", entrypoint);
-        Assert.DoesNotContain("COPY . .", dockerfile);
-        Assert.Contains("COPY Directory.Build.props nuget.config version.json ./", dockerfile);
-        Assert.Contains("COPY src/CodeIndex/CodeIndex.csproj src/CodeIndex/packages.lock.json src/CodeIndex/", dockerfile);
-        Assert.Contains("COPY src/CodeIndex/ src/CodeIndex/", dockerfile);
-        Assert.Contains("ARG CDIDX_BUILD_COMMIT=unknown", dockerfile);
-        Assert.Contains("-p:CdidxBuildCommitOverride=\"$CDIDX_BUILD_COMMIT\"", dockerfile);
-        Assert.Contains("-p:CdidxBuildDateOverride=\"$build_date\"", dockerfile);
-        Assert.Contains("-p:CdidxBuildDirtyOverride=\"$CDIDX_BUILD_DIRTY\"", dockerfile);
-        Assert.Contains(".git/", dockerignore);
-        Assert.Contains("tests/", dockerignore);
-        Assert.Contains("tools/", dockerignore);
-        Assert.Contains("docs/", dockerignore);
-        Assert.Contains("changelog.d/", dockerignore);
-        Assert.Contains("*.md", dockerignore);
-        Assert.Contains("!COMMERCIAL_LICENSE.md", dockerignore);
-        Assert.Contains("ARG TARGETARCH=amd64", dockerfile);
-        Assert.Contains("linux-musl-x64", dockerfile);
-        Assert.Contains("linux-musl-arm64", dockerfile);
-        Assert.Contains("dotnet restore src/CodeIndex/CodeIndex.csproj", dockerfile);
-        Assert.Contains("--locked-mode", dockerfile);
-        Assert.Contains("--no-restore", dockerfile);
-        Assert.Contains("ENTRYPOINT [\"/usr/local/bin/cdidx-entrypoint\"]", dockerfile);
-        Assert.Contains("CdidxBuildCommitOverride", project);
-        Assert.Contains("CdidxBuildDateOverride", project);
-        Assert.Contains("CdidxBuildDirtyOverride", project);
-        Assert.Contains("Microsoft.NET.ILLink.Tasks\" Version=\"8.", project);
-        Assert.DoesNotContain("Microsoft.NET.ILLink.Tasks\" Version=\"10.", project);
+        AssertOfficialContainerWorkflowContract(workflow);
+        AssertOfficialContainerBaseImageContract(dockerfile);
+        AssertOfficialContainerRuntimeUserContract(dockerfile, entrypoint);
+        AssertOfficialContainerBuildContextContract(dockerfile, dockerignore);
+        AssertOfficialContainerProjectMetadataContract(project);
     }
 
     [Fact]
@@ -1138,6 +1085,100 @@ public partial class ReleaseWorkflowTests
             releaseJob,
             "name: Warn when Windows Authenticode signing is not configured",
             "\n    env:\n      WIN_SIGNING_CERT_BASE64: ${{ secrets.WIN_SIGNING_CERT_BASE64 }}\n      WIN_SIGNING_CERT_PASSWORD: ${{ secrets.WIN_SIGNING_CERT_PASSWORD }}");
+    }
+
+    private static void AssertOfficialContainerWorkflowContract(string workflow)
+    {
+        AssertContainsAll(
+            workflow,
+            "publish-container:",
+            "needs: [preflight, verify-release-install]",
+            "packages: write",
+            "docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4",
+            "docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3",
+            "docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6",
+            "platforms: linux/amd64,linux/arm64",
+            "ghcr.io/widthdom/codeindex:${version}",
+            "ghcr.io/widthdom/codeindex:latest",
+            "tags: ${{ steps.image-tags.outputs.tags }}",
+            "Extract container build metadata",
+            "git rev-parse --short=7 HEAD",
+            "git show -s --format=%cd --date=format:%Y-%m-%d HEAD",
+            "CDIDX_BUILD_COMMIT=${{ steps.container-metadata.outputs.commit }}",
+            "CDIDX_BUILD_DATE=${{ steps.container-metadata.outputs.date }}",
+            "CDIDX_BUILD_DIRTY=${{ steps.container-metadata.outputs.dirty }}",
+            "*-*) ;;");
+    }
+
+    private static void AssertOfficialContainerBaseImageContract(string dockerfile)
+    {
+        AssertContainsAll(
+            dockerfile,
+            "docker buildx imagetools inspect mcr.microsoft.com/dotnet/<image>:9.0.301-alpine3.22",
+            "FROM mcr.microsoft.com/dotnet/sdk:9.0.301-alpine3.22@sha256:bdd1c9e2215a71e43d2f0c6978ace0a0652d7ecc21bf6f659d42d840500e1c44 AS build",
+            "FROM mcr.microsoft.com/dotnet/runtime-deps:8.0-alpine@sha256:7ec14bf41e70f3ca60f7b369b077636f642a0e6867caf28677d970e0abd9c6e6 AS runtime");
+        AssertDoesNotContainAny(
+            dockerfile,
+            "FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine AS build",
+            "FROM mcr.microsoft.com/dotnet/runtime-deps:8.0-alpine AS runtime");
+    }
+
+    private static void AssertOfficialContainerRuntimeUserContract(string dockerfile, string entrypoint)
+    {
+        AssertContainsAll(
+            dockerfile,
+            "COPY scripts/docker-entrypoint.sh /usr/local/bin/cdidx-entrypoint",
+            "apk add --no-cache ca-certificates su-exec",
+            "addgroup -S -g 10001 cdidx",
+            "adduser -S -D -H -u 10001 -G cdidx -h /repo cdidx",
+            "chown cdidx:cdidx /repo");
+        AssertDoesNotContainAny(dockerfile, "USER cdidx:cdidx");
+        AssertContainsAll(
+            entrypoint,
+            "stat -c '%u' /repo",
+            "stat -c '%g' /repo",
+            "su-exec \"${target_uid}:${target_gid}\" cdidx \"$@\"");
+    }
+
+    private static void AssertOfficialContainerBuildContextContract(string dockerfile, string dockerignore)
+    {
+        AssertDoesNotContainAny(dockerfile, "COPY . .");
+        AssertContainsAll(
+            dockerfile,
+            "COPY Directory.Build.props nuget.config version.json ./",
+            "COPY src/CodeIndex/CodeIndex.csproj src/CodeIndex/packages.lock.json src/CodeIndex/",
+            "COPY src/CodeIndex/ src/CodeIndex/",
+            "ARG CDIDX_BUILD_COMMIT=unknown",
+            "-p:CdidxBuildCommitOverride=\"$CDIDX_BUILD_COMMIT\"",
+            "-p:CdidxBuildDateOverride=\"$build_date\"",
+            "-p:CdidxBuildDirtyOverride=\"$CDIDX_BUILD_DIRTY\"",
+            "ARG TARGETARCH=amd64",
+            "linux-musl-x64",
+            "linux-musl-arm64",
+            "dotnet restore src/CodeIndex/CodeIndex.csproj",
+            "--locked-mode",
+            "--no-restore",
+            "ENTRYPOINT [\"/usr/local/bin/cdidx-entrypoint\"]");
+        AssertContainsAll(
+            dockerignore,
+            ".git/",
+            "tests/",
+            "tools/",
+            "docs/",
+            "changelog.d/",
+            "*.md",
+            "!COMMERCIAL_LICENSE.md");
+    }
+
+    private static void AssertOfficialContainerProjectMetadataContract(string project)
+    {
+        AssertContainsAll(
+            project,
+            "CdidxBuildCommitOverride",
+            "CdidxBuildDateOverride",
+            "CdidxBuildDirtyOverride",
+            "Microsoft.NET.ILLink.Tasks\" Version=\"8.");
+        AssertDoesNotContainAny(project, "Microsoft.NET.ILLink.Tasks\" Version=\"10.");
     }
 
     private static string ReadReleaseWorkflow() => RepositoryTestPaths.ReadWorkflow("release.yml");
