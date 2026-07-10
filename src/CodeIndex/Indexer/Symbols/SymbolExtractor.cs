@@ -4614,13 +4614,13 @@ public static partial class SymbolExtractor
         if (lang == "sql")
         {
             var sqlSyntheticSymbolLines = MaskSqlSyntheticSymbolLines(lines);
-            ExtractSqlCteSymbols(fileId, lines, symbols, extractionState);
+            ExtractSqlCteSymbols(fileId, content, lines, symbols, extractionState);
             ExtractSqlDefinerSymbols(fileId, lines, sqlSyntheticSymbolLines, symbols, extractionState);
             ExtractSqlRoutineResultColumnSymbols(fileId, lines, sqlSyntheticSymbolLines, symbols, extractionState);
             ExtractSqlGeneratedColumnSymbols(fileId, lines, sqlSyntheticSymbolLines, symbols, extractionState);
         }
         if (lang == "graphql")
-            ExtractGraphQLMemberSymbols(fileId, lines, symbols);
+            ExtractGraphQLMemberSymbols(fileId, content, lines, symbols);
         if (lang is "csharp" or "python" or "javascript" or "typescript")
             ExtractSectionHeadingSymbols(fileId, lang, lines, symbols);
         if (IsRazorLanguage(originalLang) || IsRazorFilePath(filePath))
@@ -4886,6 +4886,7 @@ public static partial class SymbolExtractor
 
     private static void ExtractSqlCteSymbols(
         long fileId,
+        string content,
         string[] lines,
         List<SymbolRecord> symbols,
         SymbolExtractionState extractionState)
@@ -4895,7 +4896,6 @@ public static partial class SymbolExtractor
         if (!LinesContain(lines, "AS", StringComparison.OrdinalIgnoreCase))
             return;
 
-        var content = string.Join('\n', lines);
         List<int>? lineStarts = null;
         foreach (Match match in SqlCteDefinitionRegex.Matches(content))
         {
