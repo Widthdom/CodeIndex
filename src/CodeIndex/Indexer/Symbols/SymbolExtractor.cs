@@ -2631,7 +2631,8 @@ public static partial class SymbolExtractor
 
         if (lang == "xml")
         {
-            return ExtractXmlSymbols(fileId, SplitContentLines(content));
+            var xmlLines = SplitContentLines(content);
+            return ExtractXmlSymbols(fileId, content, xmlLines);
         }
 
         if (lang == "json")
@@ -2714,7 +2715,7 @@ public static partial class SymbolExtractor
         // 文字列から phantom な import / class / property が漏れる。#215 の codex
         // レビュー blocker 対応としてここで専用抽出に分岐する。
         if (lang == "html")
-            return ExtractHtmlSymbols(fileId, lines);
+            return ExtractHtmlSymbols(fileId, content, lines);
 
         if (lang == "assembly")
             return ExtractAssemblySymbols(fileId, lines);

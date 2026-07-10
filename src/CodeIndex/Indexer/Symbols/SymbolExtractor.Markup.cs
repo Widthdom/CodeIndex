@@ -12,7 +12,7 @@ public static partial class SymbolExtractor
     private static readonly IReadOnlyDictionary<string, string> EmptyMarkdownReferenceDefinitionTargets =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-    private static List<SymbolRecord> ExtractHtmlSymbols(long fileId, string[] lines)
+    private static List<SymbolRecord> ExtractHtmlSymbols(long fileId, string rawText, string[] lines)
     {
         const string defaultSlotSymbolName = "(default)";
 
@@ -31,7 +31,6 @@ public static partial class SymbolExtractor
         // regex だけでは、タグ内のある属性を mask で落とした瞬間に外側タグのコンテキスト
         // を失うため不可能。マスク済みテキストを文字単位の state machine で走査し、タグ
         // ごとに属性を列挙していく。
-        var rawText = string.Join('\n', lines);
         var maskedText = MayNeedHtmlRawTextMask(rawText)
             ? MaskHtmlRawTextRegions(rawText)
             : rawText;
@@ -749,14 +748,13 @@ public static partial class SymbolExtractor
             : normalized;
     }
 
-    private static List<SymbolRecord> ExtractXmlSymbols(long fileId, string[] lines)
+    private static List<SymbolRecord> ExtractXmlSymbols(long fileId, string rawText, string[] lines)
     {
         if (!XamlReferenceExtractor.IsXaml(lines))
             return [];
         if (!MayContainXamlSymbolMarkers(lines))
             return [];
 
-        var rawText = string.Join('\n', lines);
         if (TryGetXmlStructureIssue(rawText, out _))
             return [];
 
