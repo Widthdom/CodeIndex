@@ -5245,7 +5245,7 @@ public static partial class SymbolExtractor
                 return false;
 
             var rawEndColumn = Math.Min(probe, rawLine.Length);
-            var rawKey = rawLine[keyStartColumn..rawEndColumn].Trim();
+            var rawKey = rawLine.AsSpan(keyStartColumn, rawEndColumn - keyStartColumn).Trim();
             if (rawKey.Length < 2
                 || rawKey[0] != rawKey[^1]
                 || rawKey[0] is not ('\'' or '"'))
@@ -5253,7 +5253,7 @@ public static partial class SymbolExtractor
                 return false;
             }
 
-            propertyName = rawKey[1..^1];
+            propertyName = rawKey[1..^1].ToString();
         }
         else if (char.IsDigit(sanitizedLine[startColumn]))
         {
@@ -5261,7 +5261,7 @@ public static partial class SymbolExtractor
                 return false;
 
             var rawEndColumn = Math.Min(probe, rawLine.Length);
-            propertyName = rawLine[keyStartColumn..rawEndColumn].Trim();
+            propertyName = rawLine.AsSpan(keyStartColumn, rawEndColumn - keyStartColumn).Trim().ToString();
         }
         else
         {
@@ -5316,7 +5316,7 @@ public static partial class SymbolExtractor
                 return false;
 
             var rawEndColumn = Math.Min(probe, rawLine.Length);
-            var rawKey = rawLine[keyStartColumn..rawEndColumn].Trim();
+            var rawKey = rawLine.AsSpan(keyStartColumn, rawEndColumn - keyStartColumn).Trim();
             if (rawKey.Length < 2
                 || rawKey[0] != rawKey[^1]
                 || rawKey[0] is not ('\'' or '"'))
@@ -5324,7 +5324,7 @@ public static partial class SymbolExtractor
                 return false;
             }
 
-            propertyName = rawKey[1..^1];
+            propertyName = rawKey[1..^1].ToString();
         }
         else if (char.IsDigit(sanitizedLine[probe]))
         {
@@ -5333,7 +5333,7 @@ public static partial class SymbolExtractor
                 return false;
 
             var rawEndColumn = Math.Min(probe, rawLine.Length);
-            propertyName = rawLine[keyStartColumn..rawEndColumn].Trim();
+            propertyName = rawLine.AsSpan(keyStartColumn, rawEndColumn - keyStartColumn).Trim().ToString();
         }
         else
         {
