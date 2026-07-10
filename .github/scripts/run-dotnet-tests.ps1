@@ -10,6 +10,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+$resultsDirectory = "./TestResults"
+
 $testArgs = @(
   "test",
   "tests/CodeIndex.Tests/CodeIndex.Tests.csproj",
@@ -68,7 +70,7 @@ function Invoke-TestRun {
   return [int]$exitCode
 }
 
-$firstLogPath = Join-Path "./TestResults" "test-output-first.txt"
+$firstLogPath = Join-Path $resultsDirectory "test-output-first.txt"
 $firstExitCode = Invoke-TestRun -LogPath $firstLogPath
 if ($firstExitCode -eq 0) {
   exit 0
@@ -82,11 +84,11 @@ if (Select-String -Path $firstLogPath -SimpleMatch "test run timeout" -Quiet) {
 }
 
 Write-Warning "Initial test run failed with exit code $firstExitCode. Rerunning once to classify possible flakiness."
-$retryLogPath = Join-Path "./TestResults" "test-output-retry.txt"
+$retryLogPath = Join-Path $resultsDirectory "test-output-retry.txt"
 $retryExitCode = Invoke-TestRun -LogPath $retryLogPath
 if ($retryExitCode -eq 0) {
   "Initial test run failed, but the single retry passed. Treat this run as flaky and inspect TRX/blame artifacts." |
-    Set-Content -Encoding UTF8 -Path (Join-Path "./TestResults" "flaky-retry.txt")
+    Set-Content -Encoding UTF8 -Path (Join-Path $resultsDirectory "flaky-retry.txt")
   Write-Warning "Tests passed on retry; uploaded TestResults include flaky-retry.txt."
   exit 0
 }

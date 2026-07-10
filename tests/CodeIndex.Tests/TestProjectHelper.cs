@@ -16,6 +16,9 @@ internal static class TestProjectHelper
         return projectRoot;
     }
 
+    internal static TempProjectScope CreateTempProjectScope(string prefix)
+        => new(CreateTempProject(prefix));
+
     internal static string CreateTempDbPath(string prefix)
         => Path.Combine(Path.GetTempPath(), $"{prefix}_{Guid.NewGuid():N}.db");
 
@@ -58,6 +61,28 @@ internal static class TestProjectHelper
         var path = ProjectPath(projectRoot, relativePath);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, content);
+        return path;
+    }
+
+    internal static string WriteTextFile(string projectRoot, string relativePath, string content, Encoding encoding)
+    {
+        var path = ProjectPath(projectRoot, relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, content, encoding);
+        return path;
+    }
+
+    internal static void WriteTextFiles(string projectRoot, IReadOnlyDictionary<string, string> files)
+    {
+        foreach (var (relativePath, content) in files)
+            WriteTextFile(projectRoot, relativePath, content);
+    }
+
+    internal static string WriteBinaryFile(string projectRoot, string relativePath, byte[] content)
+    {
+        var path = ProjectPath(projectRoot, relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllBytes(path, content);
         return path;
     }
 
@@ -206,6 +231,21 @@ internal static class TestProjectHelper
                 WaitForFileSystemReleaseRetry();
                 ClearAttributes(path);
             }
+        }
+    }
+
+    internal sealed class TempProjectScope : IDisposable
+    {
+        internal TempProjectScope(string root)
+        {
+            Root = root;
+        }
+
+        internal string Root { get; }
+
+        public void Dispose()
+        {
+            DeleteDirectory(Root);
         }
     }
 

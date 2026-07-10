@@ -18,118 +18,109 @@ public class CiWorkflowTests
         var testScript = RepositoryTestPaths.ReadText(".github", "scripts", "run-dotnet-tests.ps1");
         var normalizedTestScript = testScript.ReplaceLineEndings("\n");
 
-        Assert.Contains("--settings\", \"tests/CodeIndex.Tests/CodeIndex.Tests.runsettings", testScript);
-        Assert.DoesNotContain("--results-directory\", \"./TestResults", testScript);
-        Assert.Contains(
-            "- name: Select CI lane\n        id: lane",
-            normalizedWorkflow);
-        Assert.Contains(
-            "\"primary_lane=$primaryLaneText\" | Out-File -FilePath $env:GITHUB_OUTPUT",
-            workflow);
+        AssertContainsAll(
+            testScript,
+            "--settings\", \"tests/CodeIndex.Tests/CodeIndex.Tests.runsettings");
+        AssertDoesNotContainAny(
+            testScript,
+            "--results-directory\", \"./TestResults");
+        AssertContainsAll(
+            normalizedWorkflow,
+            "- name: Select CI lane\n        id: lane");
+        AssertContainsAll(
+            workflow,
+            "\"primary_lane=$primaryLaneText\" | Out-File -FilePath $env:GITHUB_OUTPUT");
         Assert.True(
             normalizedWorkflow.IndexOf("- name: Select CI lane\n        id: lane", StringComparison.Ordinal)
             < normalizedWorkflow.IndexOf("- name: Set up .NET SDKs", StringComparison.Ordinal));
-        Assert.Contains(
+        AssertContainsAll(
+            normalizedWorkflow,
             "- name: Set up .NET SDKs\n        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0\n        with:\n          dotnet-version: |\n            8.0.413\n            9.0.301",
-            normalizedWorkflow);
-        Assert.Contains(
             "- name: Restore dependencies\n        if: steps.lane.outputs.primary_lane == 'true'\n        run: dotnet restore CodeIndex.sln --locked-mode",
-            normalizedWorkflow);
-        Assert.Contains(
-            "- name: Restore test dependencies\n        if: steps.lane.outputs.primary_lane != 'true'\n        run: dotnet restore tests/CodeIndex.Tests/CodeIndex.Tests.csproj -p:RestoreTargetFrameworks=${{ matrix.test-framework }} --locked-mode",
-            normalizedWorkflow);
+            "- name: Restore test dependencies\n        if: steps.lane.outputs.primary_lane != 'true'\n        run: dotnet restore tests/CodeIndex.Tests/CodeIndex.Tests.csproj -p:RestoreTargetFrameworks=${{ matrix.test-framework }} --locked-mode");
         Assert.True(
             normalizedWorkflow.IndexOf("- name: Select CI lane\n        id: lane", StringComparison.Ordinal)
             < normalizedWorkflow.IndexOf("- name: Restore dependencies", StringComparison.Ordinal));
-        Assert.DoesNotContain("collect_coverage", workflow);
-        Assert.Contains("key: ${{ runner.os }}-dotnet-nuget-${{ hashFiles('**/packages.lock.json', 'global.json') }}", workflow, StringComparison.Ordinal);
-        Assert.DoesNotContain("restore-keys:", workflow, StringComparison.Ordinal);
-        Assert.DoesNotContain("'**/*.csproj'", workflow, StringComparison.Ordinal);
-        Assert.Contains(
+        AssertDoesNotContainAny(
+            workflow,
+            "collect_coverage",
+            "restore-keys:",
+            "'**/*.csproj'",
+            "function Invoke-TestRun");
+        AssertContainsAll(
+            workflow,
+            "key: ${{ runner.os }}-dotnet-nuget-${{ hashFiles('**/packages.lock.json', 'global.json') }}",
+            "\"${{ matrix.os }}\" -eq \"ubuntu-24.04\" -and \"${{ matrix.test-framework }}\" -eq \"net8.0\"");
+        AssertContainsAll(
+            normalizedWorkflow,
             "exclude:\n          - os: windows-2022\n            test-framework: net9.0\n          - os: macos-14\n            test-framework: net9.0",
-            normalizedWorkflow);
-        Assert.Contains(
             "- name: Audit NuGet package vulnerabilities\n        if: steps.lane.outputs.primary_lane == 'true'",
-            normalizedWorkflow);
-        Assert.Contains(
             "- name: Verify Release test build\n        if: steps.lane.outputs.primary_lane == 'true'\n        run: dotnet build tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework ${{ matrix.test-framework }} --no-restore -p:UseSharedCompilation=false",
-            normalizedWorkflow);
-        Assert.DoesNotContain("- name: Verify Release solution build", normalizedWorkflow);
-        Assert.DoesNotContain("dotnet build CodeIndex.sln --configuration Release --no-restore", normalizedWorkflow);
-        Assert.Contains(
             "- name: Verify developer task wrapper\n        if: steps.lane.outputs.primary_lane == 'true'\n        run: make lint",
-            normalizedWorkflow);
-        Assert.DoesNotContain("- name: Verify formatting", normalizedWorkflow);
-        Assert.Contains("\"${{ matrix.os }}\" -eq \"ubuntu-24.04\" -and \"${{ matrix.test-framework }}\" -eq \"net8.0\"", workflow);
-        Assert.Contains(
             "- name: Build\n        if: steps.lane.outputs.primary_lane != 'true'",
-            normalizedWorkflow);
-        Assert.Contains(
-            "run: |\n          ./.github/scripts/run-dotnet-tests.ps1 `\n            -Framework \"${{ matrix.test-framework }}\" `\n            -CollectCoverage \"${{ steps.lane.outputs.primary_lane }}\"",
-            normalizedWorkflow);
-        Assert.DoesNotContain("function Invoke-TestRun", workflow);
-        Assert.Contains(
+            "run: |\n          ./.github/scripts/run-dotnet-tests.ps1 `\n            -Framework \"${{ matrix.test-framework }}\" `\n            -CollectCoverage \"${{ steps.lane.outputs.primary_lane }}\"");
+        AssertDoesNotContainAny(
+            normalizedWorkflow,
+            "- name: Verify Release solution build",
+            "dotnet build CodeIndex.sln --configuration Release --no-restore",
+            "- name: Verify formatting");
+        AssertContainsAll(
+            testScript,
             "$collectCoverage = $CollectCoverage -eq \"true\"",
-            testScript);
-        Assert.Contains(
             "[ValidateSet(\"true\", \"false\")]",
-            testScript);
-        Assert.Contains(
+            "Skipping XPlat Code Coverage outside ubuntu-24.04/net8.0",
+            "--blame-crash",
+            "--blame-hang",
+            "--blame-hang-timeout\", \"5m",
+            "test-output-first.txt",
+            "$resultsDirectory = \"./TestResults\"",
+            "Join-Path $resultsDirectory \"test-output-first.txt\"",
+            "Join-Path $resultsDirectory \"test-output-retry.txt\"",
+            "[System.Collections.Generic.List[string]]::new()",
+            "if ($exitCode -ne 0)",
+            "$logDirectory = Split-Path -Parent $LogPath",
+            "New-Item -ItemType Directory -Force -Path $logDirectory",
+            "[System.IO.File]::WriteAllLines($LogPath, [string[]]$capturedOutput)",
+            "Write-StepOutput -Name \"summarize\" -Value \"true\"",
+            "$env:GITHUB_OUTPUT",
+            "Initial test run hit TestSessionTimeout; skipping flaky retry",
+            "Rerunning once to classify possible flakiness.",
+            "flaky-retry.txt");
+        AssertDoesNotContainAny(
+            testScript,
+            "\"--no-restore\"",
+            "New-Item -ItemType Directory -Force -Path ./TestResults",
+            "Tee-Object",
+            "steps.lane.outputs.primary_lane",
+            "matrix.test-framework");
+        AssertContainsAll(
+            workflow,
             "-Framework \"${{ matrix.test-framework }}\"",
-            workflow);
-        Assert.Contains("Skipping XPlat Code Coverage outside ubuntu-24.04/net8.0", testScript);
-        Assert.DoesNotContain("\"--no-restore\"", testScript);
-        Assert.Contains("--blame-crash", testScript);
-        Assert.Contains("--blame-hang", testScript);
-        Assert.Contains("--blame-hang-timeout\", \"5m", testScript);
-        Assert.Contains("test-output-first.txt", testScript);
-        Assert.Contains("[System.Collections.Generic.List[string]]::new()", testScript);
-        Assert.Contains("if ($exitCode -ne 0)", testScript);
-        Assert.Contains("$logDirectory = Split-Path -Parent $LogPath", testScript);
-        Assert.Contains("New-Item -ItemType Directory -Force -Path $logDirectory", testScript);
-        Assert.Contains("[System.IO.File]::WriteAllLines($LogPath, [string[]]$capturedOutput)", testScript);
-        Assert.DoesNotContain("New-Item -ItemType Directory -Force -Path ./TestResults", testScript);
-        Assert.DoesNotContain("Tee-Object", testScript);
-        Assert.Contains("id: test", workflow);
-        Assert.Contains("Write-StepOutput -Name \"summarize\" -Value \"true\"", testScript);
-        Assert.Contains("$env:GITHUB_OUTPUT", testScript);
-        Assert.Contains("steps.test.outputs.summarize == 'true' || failure()", workflow);
-        Assert.Contains(
-            "- name: Upload test results\n        if: always() && (steps.test.outputs.summarize == 'true' || failure())",
-            normalizedWorkflow);
-        Assert.Contains(
+            "id: test",
+            "steps.test.outputs.summarize == 'true' || failure()",
             "run: dotnet run --project tools/CodeIndex.TestTelemetry --configuration Release -- summarize",
-            workflow);
-        Assert.DoesNotContain(
-            "tools/CodeIndex.TestTelemetry --configuration Release --no-build",
-            workflow);
-        Assert.DoesNotContain(
-            "if: always()\n        run: dotnet run --project tools/CodeIndex.TestTelemetry",
-            normalizedWorkflow);
-        Assert.DoesNotContain(
-            "- name: Upload test results\n        if: always()\n",
-            normalizedWorkflow);
-        Assert.Contains("Initial test run hit TestSessionTimeout; skipping flaky retry", testScript);
-        Assert.Contains("Rerunning once to classify possible flakiness.", testScript);
-        Assert.Contains("flaky-retry.txt", testScript);
-        Assert.Contains("TestResults/**/*.trx", workflow);
-        Assert.Contains("TestResults/**/*.txt", workflow);
-        Assert.Contains("TestResults/**/*.xml", workflow);
-        Assert.DoesNotContain("TestResults/**/*Sequence*.xml", workflow);
-        Assert.Contains("TestResults/**/*.dmp", workflow);
-        Assert.Contains("TestResults/**/*.dump", workflow);
-        Assert.Contains("if: always() && steps.lane.outputs.primary_lane == 'true'", workflow);
-        Assert.Contains(
+            "TestResults/**/*.trx",
+            "TestResults/**/*.txt",
+            "TestResults/**/*.xml",
+            "TestResults/**/*.dmp",
+            "TestResults/**/*.dump",
+            "if: always() && steps.lane.outputs.primary_lane == 'true'");
+        AssertContainsAll(
+            normalizedWorkflow,
+            "- name: Upload test results\n        if: always() && (steps.test.outputs.summarize == 'true' || failure())",
             "- name: Publish\n        if: steps.lane.outputs.primary_lane == 'true'",
-            normalizedWorkflow);
-        Assert.Contains(
-            "- name: Upload build artifact\n        if: steps.lane.outputs.primary_lane == 'true'",
-            normalizedWorkflow);
-        Assert.DoesNotContain("if: matrix.os == 'ubuntu-24.04' && matrix.test-framework == 'net8.0'", workflow);
-        Assert.DoesNotContain("always() && matrix.os == 'ubuntu-24.04' && matrix.test-framework == 'net8.0'", workflow);
-        Assert.DoesNotContain("always() && !(matrix.os == 'windows-2022' && matrix.test-framework == 'net9.0')", workflow);
-        Assert.DoesNotContain("steps.lane.outputs.primary_lane", testScript);
-        Assert.DoesNotContain("matrix.test-framework", testScript);
+            "- name: Upload build artifact\n        if: steps.lane.outputs.primary_lane == 'true'");
+        AssertDoesNotContainAny(
+            workflow,
+            "tools/CodeIndex.TestTelemetry --configuration Release --no-build",
+            "TestResults/**/*Sequence*.xml",
+            "if: matrix.os == 'ubuntu-24.04' && matrix.test-framework == 'net8.0'",
+            "always() && matrix.os == 'ubuntu-24.04' && matrix.test-framework == 'net8.0'",
+            "always() && !(matrix.os == 'windows-2022' && matrix.test-framework == 'net9.0')");
+        AssertDoesNotContainAny(
+            normalizedWorkflow,
+            "if: always()\n        run: dotnet run --project tools/CodeIndex.TestTelemetry",
+            "- name: Upload test results\n        if: always()\n");
         Assert.Contains("function Invoke-TestRun", normalizedTestScript);
     }
 
@@ -145,18 +136,18 @@ public class CiWorkflowTests
             "        shell: pwsh\n" +
             "        run: ./.github/scripts/configure-windows-test-host.ps1 -Workspace \"${{ github.workspace }}\"";
 
-        Assert.Contains(expectedStep, dotnetWorkflow);
-        Assert.Contains(expectedStep, releaseWorkflow);
-        Assert.DoesNotContain("Add-MpPreference", dotnetWorkflow);
-        Assert.DoesNotContain("Get-MpPreference", dotnetWorkflow);
-        Assert.DoesNotContain("Add-MpPreference", releaseWorkflow);
-        Assert.DoesNotContain("Get-MpPreference", releaseWorkflow);
-        Assert.Contains("\"TMP=$tempRoot\"", setupScript);
-        Assert.Contains("\"TEMP=$tempRoot\"", setupScript);
-        Assert.Contains("Add-MpPreference -ExclusionPath $entry.Path -ErrorAction Stop", setupScript);
-        Assert.Contains("Get-MpPreference", setupScript);
-        Assert.Contains("Windows Defender exclusion audit:", setupScript);
-        Assert.Contains("GitHub-hosted runner temp root used by actions and pinned TMP/TEMP.", setupScript);
+        AssertContainsAll(dotnetWorkflow, expectedStep);
+        AssertContainsAll(releaseWorkflow, expectedStep);
+        AssertDoesNotContainAny(dotnetWorkflow, "Add-MpPreference", "Get-MpPreference");
+        AssertDoesNotContainAny(releaseWorkflow, "Add-MpPreference", "Get-MpPreference");
+        AssertContainsAll(
+            setupScript,
+            "\"TMP=$tempRoot\"",
+            "\"TEMP=$tempRoot\"",
+            "Add-MpPreference -ExclusionPath $entry.Path -ErrorAction Stop",
+            "Get-MpPreference",
+            "Windows Defender exclusion audit:",
+            "GitHub-hosted runner temp root used by actions and pinned TMP/TEMP.");
     }
 
     [Fact]
@@ -165,46 +156,60 @@ public class CiWorkflowTests
         var workflows = ReadWorkflowFiles();
         var allWorkflows = string.Join("\n", workflows.Select(static workflow => workflow.Content));
 
-        Assert.Contains("ubuntu-24.04", allWorkflows);
-        Assert.Contains("windows-2022", allWorkflows);
-        Assert.Contains("macos-14", allWorkflows);
+        AssertContainsAll(allWorkflows, "ubuntu-24.04", "windows-2022", "macos-14");
 
         foreach (var workflow in workflows)
         {
             AssertTopLevelContentsPermissionStaysReadOnly(workflow.FileName, workflow.Content);
-            Assert.DoesNotContain("ubuntu-latest", workflow.Content, StringComparison.Ordinal);
-            Assert.DoesNotContain("windows-latest", workflow.Content, StringComparison.Ordinal);
-            Assert.DoesNotContain("macos-latest", workflow.Content, StringComparison.Ordinal);
+            AssertDoesNotContainAny(
+                workflow.Content,
+                StringComparison.Ordinal,
+                "ubuntu-latest",
+                "windows-latest",
+                "macos-latest");
         }
 
         var continueOnErrorBlocks = FindStepBlocks(workflows, "continue-on-error: true").ToArray();
         var continueOnErrorBlock = Assert.Single(continueOnErrorBlocks);
         Assert.Equal("dotnet.yml", continueOnErrorBlock.FileName);
-        Assert.Contains("- name: Upload diagnostic dumps", continueOnErrorBlock.Text, StringComparison.Ordinal);
-        Assert.Contains("if: failure()", continueOnErrorBlock.Text, StringComparison.Ordinal);
-        Assert.Contains("actions/upload-artifact@", continueOnErrorBlock.Text, StringComparison.Ordinal);
+        AssertContainsAll(
+            continueOnErrorBlock.Text,
+            StringComparison.Ordinal,
+            "- name: Upload diagnostic dumps",
+            "if: failure()",
+            "actions/upload-artifact@");
 
         foreach (var uploadBlock in FindStepBlocks(workflows, "actions/upload-artifact@"))
         {
-            Assert.Contains("retention-days:", uploadBlock.Text, StringComparison.Ordinal);
+            AssertContainsAll(uploadBlock.Text, StringComparison.Ordinal, "retention-days:");
         }
 
         foreach (var downloadBlock in FindStepBlocks(workflows, "actions/download-artifact@"))
         {
-            Assert.Contains("pattern:", downloadBlock.Text, StringComparison.Ordinal);
-            Assert.Contains("path:", downloadBlock.Text, StringComparison.Ordinal);
+            AssertContainsAll(downloadBlock.Text, StringComparison.Ordinal, "pattern:", "path:");
         }
 
         foreach (var cacheBlock in FindStepBlocks(workflows, "actions/cache@"))
         {
-            Assert.Contains("hashFiles('**/packages.lock.json', 'global.json')", cacheBlock.Text, StringComparison.Ordinal);
-            Assert.DoesNotContain("restore-keys:", cacheBlock.Text, StringComparison.Ordinal);
-            Assert.DoesNotContain("'**/*.csproj'", cacheBlock.Text, StringComparison.Ordinal);
+            AssertContainsAll(
+                cacheBlock.Text,
+                StringComparison.Ordinal,
+                "hashFiles('**/packages.lock.json', 'global.json')");
+            AssertDoesNotContainAny(cacheBlock.Text, StringComparison.Ordinal, "restore-keys:", "'**/*.csproj'");
         }
 
-        Assert.Contains("key: ${{ runner.os }}-dotnet-nuget-", GetWorkflow(workflows, "dotnet.yml"), StringComparison.Ordinal);
-        Assert.Contains("key: ${{ runner.os }}-release-nuget-", GetWorkflow(workflows, "release.yml"), StringComparison.Ordinal);
-        Assert.Contains("key: ${{ runner.os }}-mutation-stryker-4.14.0-", GetWorkflow(workflows, "mutation-testing.yml"), StringComparison.Ordinal);
+        AssertContainsAll(
+            GetWorkflow(workflows, "dotnet.yml"),
+            StringComparison.Ordinal,
+            "key: ${{ runner.os }}-dotnet-nuget-");
+        AssertContainsAll(
+            GetWorkflow(workflows, "release.yml"),
+            StringComparison.Ordinal,
+            "key: ${{ runner.os }}-release-nuget-");
+        AssertContainsAll(
+            GetWorkflow(workflows, "mutation-testing.yml"),
+            StringComparison.Ordinal,
+            "key: ${{ runner.os }}-mutation-stryker-4.14.0-");
     }
 
     [Fact]
@@ -245,17 +250,17 @@ public class CiWorkflowTests
         })
         {
             var workflow = RepositoryTestPaths.ReadWorkflow(workflowName);
-            Assert.Contains("8.0.413", workflow);
-            Assert.Contains("9.0.301", workflow);
-            Assert.DoesNotContain("8.0.x", workflow);
-            Assert.DoesNotContain("9.0.x", workflow);
+            AssertContainsAll(workflow, "8.0.413", "9.0.301");
+            AssertDoesNotContainAny(workflow, "8.0.x", "9.0.x");
         }
 
         var mutationWorkflow = RepositoryTestPaths.ReadWorkflow("mutation-testing.yml");
-        Assert.Contains("dotnet tool update --global dotnet-stryker --version 4.14.0", mutationWorkflow);
-        Assert.Contains("if: steps.mutation-cache.outputs.cache-hit != 'true'", mutationWorkflow);
-        Assert.Contains("mutation-stryker-4.14.0", mutationWorkflow);
-        Assert.DoesNotContain("dotnet tool install --global dotnet-stryker", mutationWorkflow);
+        AssertContainsAll(
+            mutationWorkflow,
+            "dotnet tool update --global dotnet-stryker --version 4.14.0",
+            "if: steps.mutation-cache.outputs.cache-hit != 'true'",
+            "mutation-stryker-4.14.0");
+        AssertDoesNotContainAny(mutationWorkflow, "dotnet tool install --global dotnet-stryker");
     }
 
     [Fact]
@@ -263,12 +268,12 @@ public class CiWorkflowTests
     {
         var workflow = RepositoryTestPaths.ReadWorkflow("dotnet.yml");
 
-        Assert.Contains(
-            "dotnet list src/CodeIndex/CodeIndex.csproj package --vulnerable --include-transitive 2>&1",
-            workflow);
-        Assert.DoesNotContain(
-            "dotnet list src/CodeIndex/CodeIndex.csproj package --vulnerable --include-transitive --no-restore",
-            workflow);
+        AssertContainsAll(
+            workflow,
+            "dotnet list src/CodeIndex/CodeIndex.csproj package --vulnerable --include-transitive 2>&1");
+        AssertDoesNotContainAny(
+            workflow,
+            "dotnet list src/CodeIndex/CodeIndex.csproj package --vulnerable --include-transitive --no-restore");
     }
 
     [Fact]
@@ -276,14 +281,43 @@ public class CiWorkflowTests
     {
         var guide = RepositoryTestPaths.ReadText("TESTING_GUIDE.md");
 
-        Assert.Contains("Shared state and parallelism audit", guide);
-        Assert.Contains("SQLite pool sensitive", guide);
-        Assert.Contains("EnvironmentVariableScope.Capture", guide);
-        Assert.Contains("TestConsoleLock.Gate", guide);
-        Assert.Contains("TestProjectHelper", guide);
-        Assert.Contains(".github/scripts/run-dotnet-tests.ps1", guide);
-        Assert.Contains(".github/scripts/configure-windows-test-host.ps1", guide);
-        Assert.Contains("共有状態と並列実行の監査", guide);
+        AssertContainsAll(
+            guide,
+            "Shared state and parallelism audit",
+            "SQLite pool sensitive",
+            "EnvironmentVariableScope.Capture",
+            "TestConsoleLock.Gate",
+            "TestProjectHelper",
+            ".github/scripts/run-dotnet-tests.ps1",
+            ".github/scripts/configure-windows-test-host.ps1",
+            "共有状態と並列実行の監査");
+    }
+
+    private static void AssertContainsAll(string text, params string[] expectedValues)
+    {
+        foreach (var expected in expectedValues)
+            Assert.Contains(expected, text);
+    }
+
+    private static void AssertContainsAll(string text, StringComparison comparisonType, params string[] expectedValues)
+    {
+        foreach (var expected in expectedValues)
+            Assert.Contains(expected, text, comparisonType);
+    }
+
+    private static void AssertDoesNotContainAny(string text, params string[] excludedValues)
+    {
+        foreach (var excluded in excludedValues)
+            Assert.DoesNotContain(excluded, text);
+    }
+
+    private static void AssertDoesNotContainAny(
+        string text,
+        StringComparison comparisonType,
+        params string[] excludedValues)
+    {
+        foreach (var excluded in excludedValues)
+            Assert.DoesNotContain(excluded, text, comparisonType);
     }
 
     private static IReadOnlyList<(string FileName, string Content)> ReadWorkflowFiles()

@@ -40,7 +40,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - `SymbolExtractor*Tests.cs` and `ReferenceExtractor*Tests.cs`
   Extractor coverage is split by language or feature area with partial test classes, while shared helpers remain on the root `SymbolExtractorTests` / `ReferenceExtractorTests` parts.
   When moving repeated extractor scenarios out of a giant suite, keep the new partial file grouped by a readable domain such as language, build-file format, or protocol surface, and prefer small semantic assertion helpers over repeated raw substring or predicate assertions.
-  `ReferenceExtractorTests.ExtractSymbolsAndReferences(...)` owns the common symbol-then-reference extraction setup for tests that need both lists; use it instead of repeating the two extractor calls when the fixture does not need a specialized path or workspace symbol setup.
+  `ReferenceExtractorTests.ExtractSymbolsAndReferences(...)` owns the common symbol-then-reference extraction setup for tests that need both lists; use it instead of repeating the two extractor calls when the fixture does not need a specialized path or workspace symbol setup, and discard the symbol tuple element with `_` instead of keeping an unused `symbols` local when the test only asserts references.
 - `FileIndexerTests.cs`, `FileIndexerContentLoadingTests.cs`, `FileIndexerTestSupport.cs`
   File scanning, language detection, scan-result language reuse, content-sensitive header safeguards, content loading/canonicalization, checksum, Git LFS pointer detection, and record-building behavior, including extensionless shebang detection's 256-byte first-line cap, binary/NUL-byte rejection, and Windows-only >=260-character path walker/purge coverage. Shared `FileIndexerTests` helpers live in `FileIndexerTestSupport.cs`.
 - `PathCompatibilityMatrixTests.cs`
@@ -66,7 +66,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   `RunBuiltCli` / `RunCliInSubprocess` subprocess coverage, including timeout-guarded subprocess probes, uses `ProductionRuntimeFactAttribute` / `ProductionRuntimeTheoryAttribute` and runs only on the `net8.0` test target when the subprocess resolves to the production `net8.0` CLI; keep direct in-process command-runner tests cross-target.
   `InstallScriptTests.RunInstallerSnippet` enforces a bounded timeout and kills the snippet process tree on timeout, so installer regressions fail with captured output instead of hanging the suite.
 - `CiWorkflowTests.cs`, `ReleaseWorkflowTests.cs`, `ReleaseWorkflowTests.PackageHelpers.cs`
-  CI and release workflow contract tests. Release workflow package-normalization ZIP fixture helpers live in `ReleaseWorkflowTests.PackageHelpers.cs` so workflow assertions stay near the workflow contracts.
+  CI and release workflow contract tests. Keep repeated related workflow/script string contract assertions, including test-result artifact, retry-output, install, Homebrew, changelog, release-payload job splits, container image, SBOM, NuGet publish, secret scope, SDK pin, tool/action pin, and runner/cache policy contracts, in small grouped helpers so the tests emphasize the contract being checked; use the comparison-aware helpers when the contract intentionally requires ordinal matching. Release workflow package-normalization ZIP fixture helpers live in `ReleaseWorkflowTests.PackageHelpers.cs` so workflow assertions stay near the workflow contracts.
 - `PackageNormalizeDiagnosticsTests.cs`
   Package normalizer diagnostic redaction coverage. Keep timeout-budget assertions aligned with the shared diagnostic redaction policy so high-load full-suite runs do not treat expected path/secret placeholders as flaky.
 - `DocumentationStatusContractTests.cs`, `DocumentationDriftTests.cs`
@@ -107,6 +107,10 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Local suggestion JSON storage: dedup hashing, persistence, corruption recovery, atomic writes.
 - `SourceCodeDetectorTests.cs`
   Source code leak prevention: allowed natural-language inputs vs rejected code blocks (fenced, indented, import runs, etc.).
+- `ConsoleUiTests.cs`
+  Completion flag parity tests should route shared bash/zsh/fish flag extraction through one helper and keep individual tests focused on command-specific required flags or shell-specific aliases.
+- `ReportCommandRunnerTests.cs`
+  Report log-tail fixtures should use the local log-directory and log-file helpers instead of repeating `Path.Combine(workDir, "logs")`, `Directory.CreateDirectory`, and ad hoc `File.WriteAllText` setup.
 - `PostExtractionHookTests.cs`
   Post-extraction hook discovery, mutation, diagnostics, callback budgets, and collectible hook assembly cleanup. Heavy hook worker and collectible assembly-load integration tests use `ProductionRuntimeFactAttribute` and run only on the `net8.0` production target, while direct worker protocol and metadata tests remain cross-target. Timed-out and canceled callback tests use a hook delay shorter than their leak-observation window, not a full one-second absence check, so worker-kill regressions still write the completion marker before the assertion exits. These tests mutate hook-related environment variables and test-only callback budget state, so the class belongs to the `SQLite pool sensitive` non-parallel collection.
 - `GitHubIssueReporterTests.cs`
@@ -118,7 +122,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - `PerformanceTests.cs`
   Bounded CI smoke coverage plus large-scale data benchmarks. `CiPerformanceSmoke_IndexAndSearchSmallFixture_StaysWithinBudget` and the allocation budget guards run in the default `net8.0` suite, so they are blocking PR/CI checks on the production target, but their broad budgets are intended to catch only severe indexing/search or allocation regressions rather than act as benchmarks. The 10K+ large-scale tests remain skip-by-default; run them manually with `--filter`.
 - `.github/scripts/run-dotnet-tests.ps1`
-  The `dotnet.yml` matrix test step delegates test argument construction, coverage gating, failure-log capture, TestSessionTimeout handling, and single flaky retry classification to this script. Keep workflow YAML limited to matrix/lane parameter wiring, and update `CiWorkflowTests` when changing either the script contract or artifact/summarize gating.
+  The `dotnet.yml` matrix test step delegates test argument construction, coverage gating, `TestResults` path ownership for failure-log capture, TestSessionTimeout handling, and single flaky retry classification to this script. Keep workflow YAML limited to matrix/lane parameter wiring, and update `CiWorkflowTests` when changing either the script contract or artifact/summarize gating.
 - `.github/scripts/configure-windows-test-host.ps1`
   The `dotnet.yml` and `release.yml` Windows lanes share TMP/TEMP pinning and Defender exclusion setup here so both workflows keep the same test-host performance assumptions. Update `CiWorkflowTests` when changing this script or its workflow call contract.
 - `DbRecoveryTests.cs`
@@ -128,7 +132,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - `PropertyBasedParserTests.cs`
   FsCheck-driven property tests for parser-heavy paths called out in issue #1572: `ArgHelper.WantsHelp` and `ProgramRunner.IsProjectPathArg` never throw on arbitrary inputs; `FileIndexer.NormalizePathSeparators` is idempotent under double application; the literal-safe FTS5 sanitizer (`DbReader.SanitizeFtsQuery`) always emits a query that a real in-memory FTS5 virtual table can parse. They complement, not replace, the example-based tests in `ArgHelperTests.cs` / `QueryCommandRunnerTests.cs`.
 - `TestProjectHelper.cs`, `TestDeterminism.cs`, `RepositoryTestPaths.cs`, `TestConsoleLock.cs`
-  Shared test helpers. Use `TestProjectHelper.DeleteDirectory` / `DeleteFile` for ordinary temp cleanup and `DeleteSqliteDatabaseFiles` when SQLite `-wal` / `-shm` sidecars must be removed with the database. Use `TestProjectHelper.WaitForFileSystemReleaseRetry` only inside bounded cleanup retry loops that are reacting to a failed filesystem delete. Use `TestDeterminism` for bounded polling, eventual assertions, blocked-task observation, same-start concurrent workers, and seeded random inputs. MCP indexing tests should route temporary codeindex DB cleanup through this helper as well. Do not copy local retry loops unless the test needs a genuinely specialized path shape such as Windows long-path fixtures.
+  Shared test helpers. Prefer `TestProjectHelper.CreateTempProjectScope` when a test owns a temporary project directory, including package-normalizer CLI, diagnostic, legacy-temp, size-limit, entry-name, external-attribute, path-casing, filesystem-traversal, workspace-manifest, active-workspace, workspace-use, config-show, DB path resolver, and file-indexer scan/probe fixtures; use `TestProjectHelper.DeleteDirectory` / `DeleteFile` for ordinary temp cleanup and `DeleteSqliteDatabaseFiles` when SQLite `-wal` / `-shm` sidecars must be removed with the database. Use `TestProjectHelper.WaitForFileSystemReleaseRetry` only inside bounded cleanup retry loops that are reacting to a failed filesystem delete. Use `TestDeterminism` for bounded polling, eventual assertions, blocked-task observation, same-start concurrent workers, and seeded random inputs. MCP indexing tests should route temporary codeindex DB cleanup through this helper as well. Do not copy local retry loops unless the test needs a genuinely specialized path shape such as Windows long-path fixtures.
 
 ## Conventions
 
@@ -137,6 +141,8 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - Prefer `ManualTimeProvider` for fake clocks and `TestDeterminism.CreateRandom` for randomized fixture input so repeated test runs replay the same timeline and data. Use `TestDeterminism.WaitUntilAsync` or the synchronous `WaitUntil` for bounded polling/eventual assertions instead of local `Task.Delay` loops or fixed sleeps. Use `AssertConditionRemainsTrue` for short absence/stability observations, and `TestDeterminism.RunConcurrentlyAsync` when a test needs workers to start from the same gate.
 - Prefer small fixtures and explicit assertions over broad snapshot-style checks. The one narrow exception is the `--json` output contract harness (`JsonOutputSnapshotTests`), which pins the full field shape on purpose — see "JSON `--json` output snapshots" below.
 - When repeated expected-value construction obscures a boundary contract such as raw bytes vs canonical content, use a narrowly named local helper instead of duplicating the low-level expression at each assertion.
+- When a test locks a long table of equivalent key/value expectations, keep the table as data and route the repeated lookup/assertion shape through one helper so duplicate rows are visible.
+- When extractor tests repeat the same `SymbolName` / `ReferenceKind` predicate shape across positive and negative reference assertions, use a semantic assertion helper so each call site names only the behavioral differences such as container name/kind, context, line, column, or the excluded symbol set.
 - When a production comment or error string is bilingual, preserve that expectation in tests where it matters.
 - If a behavior change is user-visible, update tests, `CHANGELOG.md`, and any affected docs together.
 
@@ -159,7 +165,9 @@ Prefer the existing helper before writing new setup code.
 - `CreateTempProject(prefix)` creates a unique temp workspace.
 - Use `CreateTempProject(prefix)` instead of adding local `Path.GetTempPath()` / `Guid.NewGuid()` directory helpers; keep any local wrapper as a thin prefix-specific delegate only when it preserves existing call-site readability.
 - `ProjectPath(projectRoot, ...)` resolves fixture paths relative to the temp project and rejects absolute paths or `..` escapes outside that root.
-- `CreateDirectory(projectRoot, ...)`, `WriteTextFile(...)`, `AppendTextFile(...)`, and `ReadTextFile(...)` centralize fixture directory creation and text-file setup. Prefer them over local `Path.Combine` + `Directory.CreateDirectory` + `File.*Text` chains when the path belongs to a temp project.
+- `CreateDirectory(projectRoot, ...)`, `WriteTextFile(...)`, `WriteTextFiles(...)`, `WriteBinaryFile(...)`, `AppendTextFile(...)`, and `ReadTextFile(...)` centralize fixture directory creation and file setup. Prefer them over local `Path.Combine` + `Directory.CreateDirectory` + `File.*` chains when the path belongs to a temp project.
+- Use the `WriteTextFile(..., Encoding)` overload when fixture encoding is part of the behavior under test; do not drop back to `File.WriteAllText(Path.Combine(...), ..., encoding)` for temp-project files.
+- In `FileIndexerTests`, use the local relative-path helpers for scan result assertions instead of repeating `Path.GetRelativePath(...)`, separator normalization, sorting, or set creation at each call site.
 - `InitializeGitRepo(projectRoot)` initializes git and sets repo-local `user.name` and `user.email`.
 - `CreateProjectDb(projectRoot)` creates `<projectRoot>/.cdidx/codeindex.db`, initializes schema, and seeds `codeindex_meta.indexed_project_root` to match the project root.
 - `InsertIndexedFile(...)` inserts a realistic indexed file with content-derived checksum, chunks, symbols, and references, and now passes the file path into Python symbol extraction so `__init__.py`-based re-export tests can exercise qualified package names.
@@ -315,6 +323,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `SymbolExtractor*Tests.cs` と `ReferenceExtractor*Tests.cs`
   extractor のカバレッジは言語または機能領域ごとの partial test class に分割し、共有 helper は root 側の `SymbolExtractorTests` / `ReferenceExtractorTests` に残します。
   巨大 suite から繰り返しの extractor シナリオを切り出す場合は、言語、build-file 形式、protocol surface など読みやすい領域ごとの partial file にまとめ、raw substring や predicate assertion の繰り返しより小さな semantic assertion helper を優先してください。
+  `ReferenceExtractorTests.ExtractSymbolsAndReferences(...)` は symbol 抽出から reference 抽出までの共通 setup を所有します。fixture が特殊な path や workspace symbol setup を必要としない場合は 2 つの extractor 呼び出しを繰り返さずこの helper を使い、reference だけを検証するテストでは未使用の `symbols` local を残さず symbol 側を `_` で捨ててください。
 - `FileIndexerTests.cs`、`FileIndexerContentLoadingTests.cs`、`FileIndexerTestSupport.cs`
   ファイル走査、言語判定、scan result 言語の再利用、content loading / canonicalization、checksum、レコード構築のテスト。拡張子なし shebang 判定の「先頭物理行 256 byte 上限」、binary/NUL byte 除外、Windows 専用の 260 文字以上 path walker/purge カバレッジも含みます。共有 `FileIndexerTests` helper は `FileIndexerTestSupport.cs` に置きます。
 - `PathCompatibilityMatrixTests.cs`
@@ -339,7 +348,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   `RunBuiltCli` / `RunCliInSubprocess` subprocess coverage は、timeout guard 付きの subprocess probe も含め、subprocess が production `net8.0` CLI に解決される場合は `ProductionRuntimeFactAttribute` / `ProductionRuntimeTheoryAttribute` を使って `net8.0` test target でのみ実行し、direct in-process command-runner test は cross-target のままにします。
   `InstallScriptTests.RunInstallerSnippet` は bounded timeout を強制し、timeout 時は snippet の process tree を kill するため、installer 回帰は suite を hang させずに captured output 付きで失敗します。
 - `CiWorkflowTests.cs`、`ReleaseWorkflowTests.cs`、`ReleaseWorkflowTests.PackageHelpers.cs`
-  CI と release workflow の契約テスト。Release workflow の package-normalization ZIP fixture helper は `ReleaseWorkflowTests.PackageHelpers.cs` に置き、workflow assertion が workflow 契約の近くに残るようにします。
+  CI と release workflow の契約テスト。test-result artifact、retry-output、install、Homebrew、changelog、release-payload job split、container image、SBOM、NuGet publish、secret scope、SDK pin、tool/action pin、runner/cache policy の契約も含め、繰り返しの関連する workflow/script string contract assertion は小さな grouped helper に寄せ、テスト本文が確認している契約を読み取りやすくしてください。contract が ordinal matching を明示的に必要とする場合は comparison-aware helper を使います。Release workflow の package-normalization ZIP fixture helper は `ReleaseWorkflowTests.PackageHelpers.cs` に置き、workflow assertion が workflow 契約の近くに残るようにします。
 - `PackageNormalizeDiagnosticsTests.cs`
   package normalizer の diagnostic redaction カバレッジです。高負荷の full-suite 実行で、期待される path / secret placeholder が flaky に見えないよう、timeout budget の assertion は共有 diagnostic redaction policy と同期させてください。
 - `DocumentationStatusContractTests.cs`、`DocumentationDriftTests.cs`
@@ -378,6 +387,10 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   ローカル提案JSON蓄積: ハッシュ重複排除、永続化、破損復旧、アトミック書き込み。
 - `SourceCodeDetectorTests.cs`
   ソースコード漏洩防止: 許容される自然言語入力 vs 拒否されるコードブロック（フェンス、インデント、import連打等）。
+- `ConsoleUiTests.cs`
+  completion flag parity のテストでは、bash / zsh / fish の共有 flag extraction を 1 つの helper に通し、個別テストは command 固有の必須 flag や shell 固有 alias の確認に集中させてください。
+- `ReportCommandRunnerTests.cs`
+  report log-tail fixture では、`Path.Combine(workDir, "logs")`、`Directory.CreateDirectory`、ad hoc な `File.WriteAllText` setup を繰り返さず、ローカルの log directory / log file helper を使ってください。
 - `PostExtractionHookTests.cs`
   post-extraction hook の discovery、mutation、diagnostics、callback budget、collectible hook assembly cleanup のテスト。重い hook worker と collectible assembly-load の integration test は `ProductionRuntimeFactAttribute` を使って `net8.0` production target でのみ実行し、direct worker protocol と metadata test は cross-target のままにします。timeout / cancel された callback のテストは、hook delay を leak-observation window より短くし、1 秒丸ごとの absence check には戻しません。worker kill の回帰がある場合は assertion が終わる前に completion marker が書かれるようにします。hook 関連の環境変数と test-only callback budget 状態を変更するため、このクラスは non-parallel な `SQLite pool sensitive` collection に入れます。
 - `GitHubIssueReporterTests.cs`
@@ -389,7 +402,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `PerformanceTests.cs`
   bounded な CI smoke と大規模データベンチマークを扱います。`CiPerformanceSmoke_IndexAndSearchSmallFixture_StaysWithinBudget` と allocation budget guard は通常の `net8.0` suite で実行されるため production target 上の PR / CI blocking check ですが、benchmark ではなく重大な indexing/search または allocation 退行だけを拾う広めの budget を使います。10K+ の大規模テストは引き続きデフォルト Skip で、`--filter` で手動実行します。
 - `.github/scripts/run-dotnet-tests.ps1`
-  `dotnet.yml` の matrix test step は、test 引数構築、coverage gating、failure log capture、TestSessionTimeout handling、1 回だけの flaky retry classification をこのスクリプトに委譲します。workflow YAML は matrix/lane parameter wiring に限定し、script contract や artifact/summarize gating を変更するときは `CiWorkflowTests` も更新してください。
+  `dotnet.yml` の matrix test step は、test 引数構築、coverage gating、failure log capture 用の `TestResults` path ownership、TestSessionTimeout handling、1 回だけの flaky retry classification をこのスクリプトに委譲します。workflow YAML は matrix/lane parameter wiring に限定し、script contract や artifact/summarize gating を変更するときは `CiWorkflowTests` も更新してください。
 - `.github/scripts/configure-windows-test-host.ps1`
   `dotnet.yml` と `release.yml` の Windows lane は、TMP/TEMP 固定と Defender 除外 setup をこのスクリプトで共有します。両 workflow の test-host performance 前提を揃えるため、スクリプトまたは workflow からの呼び出し contract を変更するときは `CiWorkflowTests` も更新してください。
 - `DbRecoveryTests.cs`
@@ -399,7 +412,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `PropertyBasedParserTests.cs`
   issue #1572 で挙げられたパーサー系経路に対する FsCheck 駆動の property テスト: `ArgHelper.WantsHelp` と `ProgramRunner.IsProjectPathArg` が任意入力で例外を投げないこと、`FileIndexer.NormalizePathSeparators` が二重適用で idempotent であること、literal-safe な FTS5 サニタイザ (`DbReader.SanitizeFtsQuery`) が常にインメモリ FTS5 仮想テーブルで parse 可能なクエリを出力すること。`ArgHelperTests.cs` / `QueryCommandRunnerTests.cs` の例ベーステストを置き換えるものではなく補完します。
 - `TestProjectHelper.cs`、`TestDeterminism.cs`、`RepositoryTestPaths.cs`、`TestConsoleLock.cs`
-  共有テストヘルパー。通常の temp cleanup は `TestProjectHelper.DeleteDirectory` / `DeleteFile` を使い、SQLite の `-wal` / `-shm` sidecar を DB と一緒に消す必要がある場合は `DeleteSqliteDatabaseFiles` を使ってください。失敗した filesystem delete に反応する bounded cleanup retry loop の中だけ、`TestProjectHelper.WaitForFileSystemReleaseRetry` を使ってください。境界付きポーリング、最終的な条件成立のアサーション、ブロック中タスクの観測、同時開始するワーカー、固定シード乱数入力には `TestDeterminism` を使ってください。MCP indexing test の一時 codeindex DB cleanup もこの helper に寄せてください。Windows long-path fixture のように特殊な path shape が必要な場合を除き、ローカルの retry loop をコピーしないでください。
+  共有テストヘルパー。package-normalizer CLI / diagnostic / legacy-temp / size-limit / entry-name / external-attribute / path-casing / filesystem-traversal / workspace-manifest / active-workspace / workspace-use / config-show / DB path resolver / file-indexer scan/probe fixture も含め、テストが一時 project directory を所有する場合は `TestProjectHelper.CreateTempProjectScope` を優先し、通常の temp cleanup は `TestProjectHelper.DeleteDirectory` / `DeleteFile`、SQLite の `-wal` / `-shm` sidecar を DB と一緒に消す必要がある場合は `DeleteSqliteDatabaseFiles` を使ってください。失敗した filesystem delete に反応する bounded cleanup retry loop の中だけ、`TestProjectHelper.WaitForFileSystemReleaseRetry` を使ってください。境界付きポーリング、最終的な条件成立のアサーション、ブロック中タスクの観測、同時開始するワーカー、固定シード乱数入力には `TestDeterminism` を使ってください。MCP indexing test の一時 codeindex DB cleanup もこの helper に寄せてください。Windows long-path fixture のように特殊な path shape が必要な場合を除き、ローカルの retry loop をコピーしないでください。
 
 ## 規約
 
@@ -408,6 +421,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - 本番コードが `TimeProvider` を受け取れる場合は `ManualTimeProvider` を使い、fixture data の時刻は wall clock ではなく明示的に進めてください。ランダム入力は `TestDeterminism.CreateRandom` を使い、同じ timeline とデータを再実行できるようにします。境界付きポーリング / 最終的な条件成立のアサーションには、ローカルの `Task.Delay` loop や固定 sleep ではなく `TestDeterminism.WaitUntilAsync` または同期版の `WaitUntil` を使い、短い不在・安定性の観測には `AssertConditionRemainsTrue` を使ってください。ワーカーを同じ gate から開始したい場合は `TestDeterminism.RunConcurrentlyAsync` を使ってください。
 - 広いスナップショット風の検証より、小さなフィクスチャと明示的な assertion を優先する。例外は `--json` 出力契約の harness (`JsonOutputSnapshotTests`) で、こちらは意図的にフィールド形状全体を固定します（下記「JSON `--json` 出力 snapshot」参照）。
 - raw bytes と canonical content のような境界契約で期待値生成が重複して読みづらくなる場合は、各 assertion に低レベル式を複製せず、契約名が分かる小さな local helper に寄せてください。
+- 同種の key/value 期待値を長い表で固定するテストでは、期待値をデータとして残し、繰り返しの lookup/assertion 形は helper に通してください。重複行を見つけやすくするためです。
+- extractor テストで `SymbolName` / `ReferenceKind` の同じ predicate 形を positive / negative reference assertion の両方に繰り返す場合は、semantic assertion helper を使い、各 call site には container name/kind、context、line、column、除外 symbol set など挙動差分だけを残してください。
 - 境界を証明するテストでは、その境界をまたぐ最小の fixture を使う。1 ページ、1 chunk、1 cache、1 offset overflow で十分なら、それ以上に synthetic data を増やさない。ただし、より大きいサイズ自体が契約の一部なら例外です。
 - 本番コードのコメントやエラー文字列が英日併記前提なら、重要な箇所ではその期待もテストに反映する。
 - ユーザーに見える挙動を変えたら、テストに加えて `CHANGELOG.md` と関連ドキュメントも同じ変更に含める。
@@ -431,7 +446,9 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `CreateTempProject(prefix)` は一意な一時ワークスペースを作成します。
 - 独自に `Path.GetTempPath()` / `Guid.NewGuid()` を組み合わせた directory helper を増やさず、`CreateTempProject(prefix)` を使ってください。既存呼び出し側の読みやすさを保つ場合だけ、local wrapper は prefix 固有の薄い委譲に留めます。
 - `ProjectPath(projectRoot, ...)` は temp project からの相対 fixture path を解決し、その root の外へ出る絶対 path や `..` escape を拒否します。
-- `CreateDirectory(projectRoot, ...)`、`WriteTextFile(...)`、`AppendTextFile(...)`、`ReadTextFile(...)` は fixture directory 作成と text file setup を集約します。path が temp project に属する場合は、ローカルな `Path.Combine` + `Directory.CreateDirectory` + `File.*Text` の連鎖より優先してください。
+- `CreateDirectory(projectRoot, ...)`、`WriteTextFile(...)`、`WriteTextFiles(...)`、`WriteBinaryFile(...)`、`AppendTextFile(...)`、`ReadTextFile(...)` は fixture directory 作成と file setup を集約します。path が temp project に属する場合は、ローカルな `Path.Combine` + `Directory.CreateDirectory` + `File.*` の連鎖より優先してください。
+- fixture encoding がテスト対象の挙動に含まれる場合は `WriteTextFile(..., Encoding)` overload を使い、temp project 配下の file に対して `File.WriteAllText(Path.Combine(...), ..., encoding)` へ戻さないでください。
+- `FileIndexerTests` では、scan result assertion ごとに `Path.GetRelativePath(...)`、separator normalization、sorting、set creation を繰り返さず、ローカルの relative-path helper を使ってください。
 - `InitializeGitRepo(projectRoot)` は git を初期化し、repo-local の `user.name` と `user.email` を設定します。
 - `CreateProjectDb(projectRoot)` は `<projectRoot>/.cdidx/codeindex.db` を作成し、スキーマを初期化したうえで `codeindex_meta.indexed_project_root` に project root を書き込みます。
 - `InsertIndexedFile(...)` は内容由来の checksum、chunks、symbols、references を含む現実的なインデックス済みファイルを挿入し、Python の symbol extraction には file path も渡すため、`__init__.py` ベースの再エクスポートテストで package 修飾名を扱えます。

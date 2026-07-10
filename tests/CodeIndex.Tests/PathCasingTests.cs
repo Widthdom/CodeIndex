@@ -17,16 +17,11 @@ public class PathCasingTests
         => RunWithPathCasingLock(() =>
     {
         PathCasing.ResetCacheForTests();
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_pathcasing");
-        try
-        {
-            var expected = ProbeDirectoryIgnoreCaseLikeProduction(tempDir);
-            Assert.Equal(expected, PathCasing.IsIgnoreCase(tempDir));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_pathcasing");
+        var tempDir = project.Root;
+
+        var expected = ProbeDirectoryIgnoreCaseLikeProduction(tempDir);
+        Assert.Equal(expected, PathCasing.IsIgnoreCase(tempDir));
     });
 
     [Fact]
@@ -34,21 +29,16 @@ public class PathCasingTests
         => RunWithPathCasingLock(() =>
     {
         PathCasing.ResetCacheForTests();
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_pathcasing_cache");
-        try
-        {
-            var initial = PathCasing.IsIgnoreCase(tempDir);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_pathcasing_cache");
+        var tempDir = project.Root;
 
-            // Removing the directory after the cache is populated must not flip the
-            // answer — probes happen at most once per anchor.
-            TestProjectHelper.DeleteDirectory(tempDir);
+        var initial = PathCasing.IsIgnoreCase(tempDir);
 
-            Assert.Equal(initial, PathCasing.IsIgnoreCase(tempDir));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        // Removing the directory after the cache is populated must not flip the
+        // answer — probes happen at most once per anchor.
+        TestProjectHelper.DeleteDirectory(tempDir);
+
+        Assert.Equal(initial, PathCasing.IsIgnoreCase(tempDir));
     });
 
     [Fact]
@@ -56,20 +46,15 @@ public class PathCasingTests
         => RunWithPathCasingLock(() =>
     {
         PathCasing.ResetCacheForTests();
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_pathcasing_seed");
-        try
-        {
-            PathCasing.SeedFromWorkspace(tempDir, ignoreCase: true);
-            Assert.True(PathCasing.IsIgnoreCase(tempDir));
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_pathcasing_seed");
+        var tempDir = project.Root;
 
-            PathCasing.ResetCacheForTests();
-            PathCasing.SeedFromWorkspace(tempDir, ignoreCase: false);
-            Assert.False(PathCasing.IsIgnoreCase(tempDir));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        PathCasing.SeedFromWorkspace(tempDir, ignoreCase: true);
+        Assert.True(PathCasing.IsIgnoreCase(tempDir));
+
+        PathCasing.ResetCacheForTests();
+        PathCasing.SeedFromWorkspace(tempDir, ignoreCase: false);
+        Assert.False(PathCasing.IsIgnoreCase(tempDir));
     });
 
     [Fact]
@@ -77,7 +62,8 @@ public class PathCasingTests
         => RunWithPathCasingLock(() =>
     {
         PathCasing.ResetCacheForTests();
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_pathcasing_probe_failure");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_pathcasing_probe_failure");
+        var tempDir = project.Root;
         var previousProbe = PathCasing.IgnoreCaseProbeForTesting;
         PathCasing.IgnoreCaseProbeForTesting = _ => throw new IOException("probe blocked");
         try
@@ -93,7 +79,6 @@ public class PathCasingTests
         {
             PathCasing.IgnoreCaseProbeForTesting = previousProbe;
             PathCasing.ResetCacheForTests();
-            TestProjectHelper.DeleteDirectory(tempDir);
         }
     });
 
@@ -102,23 +87,18 @@ public class PathCasingTests
         => RunWithPathCasingLock(() =>
     {
         PathCasing.ResetCacheForTests();
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_pathcasing_equal");
-        try
-        {
-            var mixed = Path.Combine(tempDir, "Foo");
-            var lowered = Path.Combine(tempDir, "foo");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_pathcasing_equal");
+        var tempDir = project.Root;
 
-            PathCasing.SeedFromWorkspace(tempDir, ignoreCase: true);
-            Assert.True(PathCasing.PathsEqual(mixed, lowered));
+        var mixed = Path.Combine(tempDir, "Foo");
+        var lowered = Path.Combine(tempDir, "foo");
 
-            PathCasing.ResetCacheForTests();
-            PathCasing.SeedFromWorkspace(tempDir, ignoreCase: false);
-            Assert.False(PathCasing.PathsEqual(mixed, lowered));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        PathCasing.SeedFromWorkspace(tempDir, ignoreCase: true);
+        Assert.True(PathCasing.PathsEqual(mixed, lowered));
+
+        PathCasing.ResetCacheForTests();
+        PathCasing.SeedFromWorkspace(tempDir, ignoreCase: false);
+        Assert.False(PathCasing.PathsEqual(mixed, lowered));
     });
 
     [Fact]
@@ -126,23 +106,18 @@ public class PathCasingTests
         => RunWithPathCasingLock(() =>
     {
         PathCasing.ResetCacheForTests();
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_pathcasing_parent");
-        try
-        {
-            var parent = Path.Combine(tempDir, "Project");
-            var child = Path.Combine(tempDir, "project", "src", "App.cs");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_pathcasing_parent");
+        var tempDir = project.Root;
 
-            PathCasing.SeedFromWorkspace(tempDir, ignoreCase: false);
-            Assert.False(PathCasing.IsPathEqualOrParent(parent, child));
+        var parent = Path.Combine(tempDir, "Project");
+        var child = Path.Combine(tempDir, "project", "src", "App.cs");
 
-            PathCasing.ResetCacheForTests();
-            PathCasing.SeedFromWorkspace(tempDir, ignoreCase: true);
-            Assert.True(PathCasing.IsPathEqualOrParent(parent, child));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        PathCasing.SeedFromWorkspace(tempDir, ignoreCase: false);
+        Assert.False(PathCasing.IsPathEqualOrParent(parent, child));
+
+        PathCasing.ResetCacheForTests();
+        PathCasing.SeedFromWorkspace(tempDir, ignoreCase: true);
+        Assert.True(PathCasing.IsPathEqualOrParent(parent, child));
     });
 
     [Fact]
@@ -150,39 +125,29 @@ public class PathCasingTests
         => RunWithPathCasingLock(() =>
     {
         PathCasing.ResetCacheForTests();
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_pathcasing_prefix");
-        try
-        {
-            PathCasing.SeedFromWorkspace(tempDir, ignoreCase: false);
-            var parent = Path.Combine(tempDir, "Project");
-            var sibling = Path.Combine(tempDir, "ProjectExtras", "App.cs");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_pathcasing_prefix");
+        var tempDir = project.Root;
 
-            Assert.False(PathCasing.IsPathEqualOrParent(parent, sibling));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        PathCasing.SeedFromWorkspace(tempDir, ignoreCase: false);
+        var parent = Path.Combine(tempDir, "Project");
+        var sibling = Path.Combine(tempDir, "ProjectExtras", "App.cs");
+
+        Assert.False(PathCasing.IsPathEqualOrParent(parent, sibling));
     });
 
     [Fact]
     public void NormalizeBoundaryPath_TrimsTrailingSeparatorsButKeepsRoot_Issue3682()
     {
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_pathcasing_normalize");
-        try
-        {
-            var withSeparator = tempDir + Path.DirectorySeparatorChar;
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_pathcasing_normalize");
+        var tempDir = project.Root;
 
-            Assert.Equal(Path.GetFullPath(tempDir), PathCasing.NormalizeBoundaryPath(withSeparator));
+        var withSeparator = tempDir + Path.DirectorySeparatorChar;
 
-            var root = Path.GetPathRoot(Path.GetFullPath(tempDir));
-            Assert.False(string.IsNullOrEmpty(root));
-            Assert.Equal(root, PathCasing.NormalizeBoundaryPath(root!));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(tempDir);
-        }
+        Assert.Equal(Path.GetFullPath(tempDir), PathCasing.NormalizeBoundaryPath(withSeparator));
+
+        var root = Path.GetPathRoot(Path.GetFullPath(tempDir));
+        Assert.False(string.IsNullOrEmpty(root));
+        Assert.Equal(root, PathCasing.NormalizeBoundaryPath(root!));
     }
 
     [Fact]
@@ -190,7 +155,8 @@ public class PathCasingTests
         => RunWithPathCasingLock(() =>
     {
         PathCasing.ResetCacheForTests();
-        var tempDir = TestProjectHelper.CreateTempProject("cdidx_pathcasing_full_parent");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_pathcasing_full_parent");
+        var tempDir = project.Root;
         try
         {
             var parent = Path.Combine(tempDir, "Project") + Path.DirectorySeparatorChar;
@@ -206,7 +172,6 @@ public class PathCasingTests
         finally
         {
             PathCasing.ResetCacheForTests();
-            TestProjectHelper.DeleteDirectory(tempDir);
         }
     });
 

@@ -1204,49 +1204,53 @@ public class ConsoleUiTests
     [Fact]
     public void CompletionRenderer_ExcerptFlagSetsMatchAcrossShells()
     {
-        var bashExcerpt = ExtractBashSubcommandFlags(ConsoleCompletionRenderer.GetCompletionScript("bash"), "excerpt", "references");
-        var zshExcerpt = ExtractZshSubcommandFlags(ConsoleCompletionRenderer.GetCompletionScript("zsh"), "excerpt", "references");
-        var fishExcerpt = ExtractFishSubcommandFlags(ConsoleCompletionRenderer.GetCompletionScript("fish"), "excerpt");
+        var flagSets = ExtractComparableSubcommandFlagSets("excerpt", "references");
 
-        // --help is universal in bash but is not enumerated by the zsh/fish scripts;
-        // exclude it from the parity comparison so the flag sets line up cleanly.
-        bashExcerpt.Remove("help");
-
-        Assert.Equal(bashExcerpt, zshExcerpt);
-        Assert.Equal(bashExcerpt, fishExcerpt);
+        Assert.Equal(flagSets.Bash, flagSets.Zsh);
+        Assert.Equal(flagSets.Bash, flagSets.Fish);
         // Sanity check: required excerpt flags are present in every shell.
         foreach (var flag in new[] { "db", "json", "start", "end", "before", "after", "max-line-width", "focus-line", "focus-column", "focus-length" })
         {
-            Assert.Contains(flag, bashExcerpt);
-            Assert.Contains(flag, zshExcerpt);
-            Assert.Contains(flag, fishExcerpt);
+            Assert.Contains(flag, flagSets.Bash);
+            Assert.Contains(flag, flagSets.Zsh);
+            Assert.Contains(flag, flagSets.Fish);
         }
     }
 
     [Fact]
     public void CompletionRenderer_ReportFlagSetsMatchAcrossShells()
     {
-        var bashScript = ConsoleCompletionRenderer.GetCompletionScript("bash");
-        var zshScript = ConsoleCompletionRenderer.GetCompletionScript("zsh");
-        var fishScript = ConsoleCompletionRenderer.GetCompletionScript("fish");
-        var bashReport = ExtractBashSubcommandFlags(bashScript, "report", "suggestions");
-        var zshReport = ExtractZshSubcommandFlags(zshScript, "report", "suggestions");
-        var fishReport = ExtractFishSubcommandFlags(fishScript, "report");
-
-        // --help is universal in bash but is not enumerated by the zsh/fish scripts.
-        bashReport.Remove("help");
+        var flagSets = ExtractComparableSubcommandFlagSets("report", "suggestions");
 
         var expected = new SortedSet<string>(StringComparer.Ordinal)
         {
             "db", "json", "pretty", "quiet", "silent", "no-progress", "output", "redact-paths", "log-lines", "no-log", "include-args",
         };
-        Assert.Equal(expected, bashReport);
-        Assert.Equal(expected, zshReport);
-        Assert.Equal(expected, fishReport);
+        Assert.Equal(expected, flagSets.Bash);
+        Assert.Equal(expected, flagSets.Zsh);
+        Assert.Equal(expected, flagSets.Fish);
 
-        Assert.Contains("-o", ExtractBetween(bashScript, "[ \"$cmd\" = \"report\" ]; then", "[ \"$cmd\" = \"suggestions\" ]; then"));
-        Assert.Contains("'-o[Output bundle path]:file:_files'", ExtractBetween(zshScript, "[[ $subcmd == report ]]; then", "[[ $subcmd == suggestions ]]; then"));
-        Assert.Contains("-l output -s o -r", fishScript);
+        Assert.Contains("-o", ExtractBetween(flagSets.BashScript, "[ \"$cmd\" = \"report\" ]; then", "[ \"$cmd\" = \"suggestions\" ]; then"));
+        Assert.Contains("'-o[Output bundle path]:file:_files'", ExtractBetween(flagSets.ZshScript, "[[ $subcmd == report ]]; then", "[[ $subcmd == suggestions ]]; then"));
+        Assert.Contains("-l output -s o -r", flagSets.FishScript);
+    }
+
+    private static (SortedSet<string> Bash, SortedSet<string> Zsh, SortedSet<string> Fish, string BashScript, string ZshScript, string FishScript)
+        ExtractComparableSubcommandFlagSets(string subcommand, string nextSubcommand)
+    {
+        var bashScript = ConsoleCompletionRenderer.GetCompletionScript("bash");
+        var zshScript = ConsoleCompletionRenderer.GetCompletionScript("zsh");
+        var fishScript = ConsoleCompletionRenderer.GetCompletionScript("fish");
+        var bashFlags = ExtractBashSubcommandFlags(bashScript, subcommand, nextSubcommand);
+        var zshFlags = ExtractZshSubcommandFlags(zshScript, subcommand, nextSubcommand);
+        var fishFlags = ExtractFishSubcommandFlags(fishScript, subcommand);
+
+        // --help is universal in bash but is not enumerated by the zsh/fish scripts;
+        // exclude it from parity comparisons so shell-specific implementation details
+        // do not leak into individual assertions.
+        bashFlags.Remove("help");
+
+        return (bashFlags, zshFlags, fishFlags, bashScript, zshScript, fishScript);
     }
 
     private static SortedSet<string> ExtractBashSubcommandFlags(string script, string subcommand, string nextSubcommand)

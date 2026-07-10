@@ -11,294 +11,257 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunValidate_ReplacementCharJson_IncludesOriginAndSeverity()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_validate_replacement_origin");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "literal.cs"),
-                "class Literal { const char Value = '\uFFFD'; }\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_validate_replacement_origin");
+        var projectRoot = project.Root;
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        TestProjectHelper.WriteTextFile(
+            projectRoot,
+            "src/literal.cs",
+            "class Literal { const char Value = '\uFFFD'; }\n");
 
-            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--db", dbPath, "--json", "--quiet"],
-                _jsonOptions));
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
+        var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+            [projectRoot, "--db", dbPath, "--json", "--quiet"],
+            _jsonOptions));
+        Assert.Equal(CommandExitCodes.Success, indexExitCode);
+        Assert.Equal(string.Empty, indexStderr);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
-                ["--db", dbPath, "--json", "--kind", "replacement_char"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+            ["--db", dbPath, "--json", "--kind", "replacement_char"],
+            _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-            var issue = json.GetProperty("issues")[0];
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
+        var issue = json.GetProperty("issues")[0];
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(1, json.GetProperty("count").GetInt32());
-            Assert.Equal("replacement_char", issue.GetProperty("kind").GetString());
-            Assert.Equal(FileIssue.OriginSourceLiteral, issue.GetProperty("origin").GetString());
-            Assert.Equal(FileIssue.SeverityInfo, issue.GetProperty("severity").GetString());
-            Assert.Equal(FileIssue.CategoryIntentionalSourceLiteral, issue.GetProperty("category").GetString());
-            Assert.False(issue.GetProperty("actionable").GetBoolean());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(1, json.GetProperty("count").GetInt32());
+        Assert.Equal("replacement_char", issue.GetProperty("kind").GetString());
+        Assert.Equal(FileIssue.OriginSourceLiteral, issue.GetProperty("origin").GetString());
+        Assert.Equal(FileIssue.SeverityInfo, issue.GetProperty("severity").GetString());
+        Assert.Equal(FileIssue.CategoryIntentionalSourceLiteral, issue.GetProperty("category").GetString());
+        Assert.False(issue.GetProperty("actionable").GetBoolean());
     }
 
     [Fact]
     public void RunValidate_HumanOutputLabelsSourceLiteralTestFixtures_Issue4068()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_validate_fixture_label_4068");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            Directory.CreateDirectory(Path.Combine(projectRoot, "tests", "fixtures"));
-            Directory.CreateDirectory(Path.Combine(projectRoot, "tests_utils"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "tests", "fixtures", "literal.cs"),
-                "class Literal { const char Value = '\uFFFD'; }\n");
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "foo.test.cs"),
-                "class FooTest { const char Value = '\uFFFD'; }\n");
-            File.WriteAllText(
-                Path.Combine(projectRoot, "tests_utils", "helper.cs"),
-                "class Helper { const char Value = '\uFFFD'; }\n");
-            File.WriteAllText(
-                Path.Combine(projectRoot, "conftest.py"),
-                "VALUE = '\uFFFD'\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_validate_fixture_label_4068");
+        var projectRoot = project.Root;
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        TestProjectHelper.WriteTextFiles(
+            projectRoot,
+            new Dictionary<string, string>
+            {
+                ["tests/fixtures/literal.cs"] = "class Literal { const char Value = '\uFFFD'; }\n",
+                ["src/foo.test.cs"] = "class FooTest { const char Value = '\uFFFD'; }\n",
+                ["tests_utils/helper.cs"] = "class Helper { const char Value = '\uFFFD'; }\n",
+                ["conftest.py"] = "VALUE = '\uFFFD'\n",
+            });
 
-            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--db", dbPath, "--json", "--quiet"],
-                _jsonOptions));
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
+        var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+            [projectRoot, "--db", dbPath, "--json", "--quiet"],
+            _jsonOptions));
+        Assert.Equal(CommandExitCodes.Success, indexExitCode);
+        Assert.Equal(string.Empty, indexStderr);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
-                ["--db", dbPath, "--kind", "replacement_char"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+            ["--db", dbPath, "--kind", "replacement_char"],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Contains("replacement_char", stdout);
-            Assert.Contains("conftest.py", stdout);
-            Assert.Contains("src/foo.test.cs", stdout);
-            Assert.Contains("tests/fixtures/literal.cs", stdout);
-            Assert.Contains("tests_utils/helper.cs", stdout);
-            Assert.Contains("[info, source_literal, test_fixture]", stdout);
-            Assert.Contains("U+FFFD source literal", stdout);
-            Assert.Contains("(4 issues: replacement_char: 4)", stderr);
-            Assert.Contains("Summary: actionable: 0", stderr);
-            Assert.Contains("category: expected_fixture_literal: 4", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Contains("replacement_char", stdout);
+        Assert.Contains("conftest.py", stdout);
+        Assert.Contains("src/foo.test.cs", stdout);
+        Assert.Contains("tests/fixtures/literal.cs", stdout);
+        Assert.Contains("tests_utils/helper.cs", stdout);
+        Assert.Contains("[info, source_literal, test_fixture]", stdout);
+        Assert.Contains("U+FFFD source literal", stdout);
+        Assert.Contains("(4 issues: replacement_char: 4)", stderr);
+        Assert.Contains("Summary: actionable: 0", stderr);
+        Assert.Contains("category: expected_fixture_literal: 4", stderr);
     }
 
     [Fact]
     public void RunValidate_JsonSummaryClassifiesExpectedFixtureAndDecodingRisk_Issue4138()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_validate_summary_4138");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_validate_summary_4138");
+        var projectRoot = project.Root;
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        TestProjectHelper.WriteTextFile(
+            projectRoot,
+            "tests/fixtures/literal.cs",
+            "class Literal { const char Value = '\uFFFD'; }\n");
+
+        var decodeBytes = new List<byte>();
+        decodeBytes.AddRange(System.Text.Encoding.UTF8.GetBytes("class Decode { const string Value = \""));
+        decodeBytes.Add(0xFF);
+        decodeBytes.AddRange(System.Text.Encoding.UTF8.GetBytes("\"; }\n"));
+        TestProjectHelper.WriteBinaryFile(projectRoot, "src/decode.cs", decodeBytes.ToArray());
+
+        var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+            [projectRoot, "--db", dbPath, "--json", "--quiet"],
+            _jsonOptions));
+        Assert.Equal(CommandExitCodes.Success, indexExitCode);
+        Assert.Equal(string.Empty, indexStderr);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+            ["--db", dbPath, "--json", "--kind", "replacement_char"],
+            _jsonOptions));
+        var (arrayExitCode, arrayStdout, arrayStderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+            ["--db", dbPath, "--json=array", "--kind", "replacement_char"],
+            _jsonOptions));
+        var (compactExitCode, compactStdout, compactStderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+            ["--db", dbPath, "--format", "compact", "--kind", "replacement_char"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(CommandExitCodes.Success, arrayExitCode);
+        Assert.Equal(CommandExitCodes.Success, compactExitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(string.Empty, arrayStderr);
+        Assert.Equal(string.Empty, compactStderr);
+
+        using var document = ParseJsonOutput(stdout);
+        var root = document.RootElement;
+        var summary = root.GetProperty("summary");
+        Assert.Equal(2, summary.GetProperty("total").GetInt32());
+        Assert.Equal(1, summary.GetProperty("actionable").GetInt32());
+        Assert.Equal(1, summary.GetProperty("informational").GetInt32());
+        Assert.Equal("mixed", summary.GetProperty("actionability").GetString());
+        Assert.Equal(1, summary.GetProperty("by_category").GetProperty(FileIssue.CategoryExpectedFixtureLiteral).GetInt32());
+        Assert.Equal(1, summary.GetProperty("by_category").GetProperty(FileIssue.CategoryDecodingRisk).GetInt32());
+
+        var issues = root.GetProperty("issues").EnumerateArray().ToList();
+        Assert.Contains(issues, issue =>
+            issue.GetProperty("category").GetString() == FileIssue.CategoryExpectedFixtureLiteral
+            && !issue.GetProperty("actionable").GetBoolean());
+        Assert.Contains(issues, issue =>
+            issue.GetProperty("category").GetString() == FileIssue.CategoryDecodingRisk
+            && issue.GetProperty("actionable").GetBoolean());
+
+        using var arrayDocument = JsonDocument.Parse(arrayStdout);
+        Assert.All(arrayDocument.RootElement.EnumerateArray(), issue =>
         {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            Directory.CreateDirectory(Path.Combine(projectRoot, "tests", "fixtures"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "tests", "fixtures", "literal.cs"),
-                "class Literal { const char Value = '\uFFFD'; }\n");
+            Assert.True(issue.TryGetProperty("category", out _));
+            Assert.True(issue.TryGetProperty("actionable", out _));
+        });
 
-            var decodeBytes = new List<byte>();
-            decodeBytes.AddRange(System.Text.Encoding.UTF8.GetBytes("class Decode { const string Value = \""));
-            decodeBytes.Add(0xFF);
-            decodeBytes.AddRange(System.Text.Encoding.UTF8.GetBytes("\"; }\n"));
-            File.WriteAllBytes(Path.Combine(projectRoot, "src", "decode.cs"), decodeBytes.ToArray());
-
-            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--db", dbPath, "--json", "--quiet"],
-                _jsonOptions));
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
-                ["--db", dbPath, "--json", "--kind", "replacement_char"],
-                _jsonOptions));
-            var (arrayExitCode, arrayStdout, arrayStderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
-                ["--db", dbPath, "--json=array", "--kind", "replacement_char"],
-                _jsonOptions));
-            var (compactExitCode, compactStdout, compactStderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
-                ["--db", dbPath, "--format", "compact", "--kind", "replacement_char"],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(CommandExitCodes.Success, arrayExitCode);
-            Assert.Equal(CommandExitCodes.Success, compactExitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(string.Empty, arrayStderr);
-            Assert.Equal(string.Empty, compactStderr);
-
-            using var document = ParseJsonOutput(stdout);
-            var root = document.RootElement;
-            var summary = root.GetProperty("summary");
-            Assert.Equal(2, summary.GetProperty("total").GetInt32());
-            Assert.Equal(1, summary.GetProperty("actionable").GetInt32());
-            Assert.Equal(1, summary.GetProperty("informational").GetInt32());
-            Assert.Equal("mixed", summary.GetProperty("actionability").GetString());
-            Assert.Equal(1, summary.GetProperty("by_category").GetProperty(FileIssue.CategoryExpectedFixtureLiteral).GetInt32());
-            Assert.Equal(1, summary.GetProperty("by_category").GetProperty(FileIssue.CategoryDecodingRisk).GetInt32());
-
-            var issues = root.GetProperty("issues").EnumerateArray().ToList();
-            Assert.Contains(issues, issue =>
-                issue.GetProperty("category").GetString() == FileIssue.CategoryExpectedFixtureLiteral
-                && !issue.GetProperty("actionable").GetBoolean());
-            Assert.Contains(issues, issue =>
-                issue.GetProperty("category").GetString() == FileIssue.CategoryDecodingRisk
-                && issue.GetProperty("actionable").GetBoolean());
-
-            using var arrayDocument = JsonDocument.Parse(arrayStdout);
-            Assert.All(arrayDocument.RootElement.EnumerateArray(), issue =>
-            {
-                Assert.True(issue.TryGetProperty("category", out _));
-                Assert.True(issue.TryGetProperty("actionable", out _));
-            });
-
-            using var compactDocument = ParseJsonOutput(compactStdout);
-            Assert.Equal("compact", compactDocument.RootElement.GetProperty("format").GetString());
-            Assert.Equal("mixed", compactDocument.RootElement.GetProperty("summary").GetProperty("actionability").GetString());
-            Assert.Equal(2, compactDocument.RootElement.GetProperty("issues").GetArrayLength());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        using var compactDocument = ParseJsonOutput(compactStdout);
+        Assert.Equal("compact", compactDocument.RootElement.GetProperty("format").GetString());
+        Assert.Equal("mixed", compactDocument.RootElement.GetProperty("summary").GetProperty("actionability").GetString());
+        Assert.Equal(2, compactDocument.RootElement.GetProperty("issues").GetArrayLength());
     }
 
     [Fact]
     public void RunValidate_FormatLspIncludesRangeAndDiagnosticMetadata_Issue3949()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_validate_lsp_metadata_3949");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_validate_lsp_metadata_3949");
+        var projectRoot = project.Root;
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "CodeIndex.sln",
+            "solution",
+            "Microsoft Visual Studio Solution File\n");
+
+        using (var db = new DbContext(dbPath))
         {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "CodeIndex.sln",
-                "solution",
-                "Microsoft Visual Studio Solution File\n");
-
-            using (var db = new DbContext(dbPath))
-            {
-                db.InitializeSchema();
-                var writer = new DbWriter(db.Connection);
-                using var fileCmd = db.Connection.CreateCommand();
-                fileCmd.CommandText = "SELECT id FROM files WHERE path = $path";
-                fileCmd.Parameters.AddWithValue("$path", "CodeIndex.sln");
-                var fileId = (long)fileCmd.ExecuteScalar()!;
-                writer.InsertIssues(fileId,
-                [
-                    new FileIssue
-                    {
-                        Path = "CodeIndex.sln",
-                        Kind = "solution_header",
-                        Line = 0,
-                        Message = "Solution header is invalid.",
-                        Severity = FileIssue.SeverityWarning,
-                    }
-                ]);
-                writer.MarkIssuesReady();
-            }
-
-            SqlitePoolCleanup.ClearPoolsForWindowsFileRelease();
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
-                ["--db", dbPath, "--format", "lsp", "--limit", "1"],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            using var document = ParseJsonOutput(stdout);
-            var location = Assert.Single(document.RootElement.EnumerateArray());
-            var range = location.GetProperty("range");
-            Assert.Equal(0, range.GetProperty("start").GetProperty("line").GetInt32());
-            Assert.Equal(0, range.GetProperty("start").GetProperty("character").GetInt32());
-            Assert.Equal(0, range.GetProperty("end").GetProperty("line").GetInt32());
-            Assert.Equal(1, range.GetProperty("end").GetProperty("character").GetInt32());
-            Assert.Equal("solution_header", location.GetProperty("kind").GetString());
-            Assert.Equal("Solution header is invalid.", location.GetProperty("message").GetString());
-            Assert.Equal(FileIssue.SeverityWarning, location.GetProperty("severity").GetString());
-            Assert.Equal("cdidx validate", location.GetProperty("source").GetString());
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+            using var fileCmd = db.Connection.CreateCommand();
+            fileCmd.CommandText = "SELECT id FROM files WHERE path = $path";
+            fileCmd.Parameters.AddWithValue("$path", "CodeIndex.sln");
+            var fileId = (long)fileCmd.ExecuteScalar()!;
+            writer.InsertIssues(fileId,
+            [
+                new FileIssue
+                {
+                    Path = "CodeIndex.sln",
+                    Kind = "solution_header",
+                    Line = 0,
+                    Message = "Solution header is invalid.",
+                    Severity = FileIssue.SeverityWarning,
+                }
+            ]);
+            writer.MarkIssuesReady();
         }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+
+        SqlitePoolCleanup.ClearPoolsForWindowsFileRelease();
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+            ["--db", dbPath, "--format", "lsp", "--limit", "1"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var location = Assert.Single(document.RootElement.EnumerateArray());
+        var range = location.GetProperty("range");
+        Assert.Equal(0, range.GetProperty("start").GetProperty("line").GetInt32());
+        Assert.Equal(0, range.GetProperty("start").GetProperty("character").GetInt32());
+        Assert.Equal(0, range.GetProperty("end").GetProperty("line").GetInt32());
+        Assert.Equal(1, range.GetProperty("end").GetProperty("character").GetInt32());
+        Assert.Equal("solution_header", location.GetProperty("kind").GetString());
+        Assert.Equal("Solution header is invalid.", location.GetProperty("message").GetString());
+        Assert.Equal(FileIssue.SeverityWarning, location.GetProperty("severity").GetString());
+        Assert.Equal("cdidx validate", location.GetProperty("source").GetString());
     }
 
     [Fact]
     public void RunValidate_SeverityFilterNarrowsIssues_Issue3008()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_validate_severity_filter");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_validate_severity_filter");
+        var projectRoot = project.Root;
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        TestProjectHelper.WriteTextFile(
+            projectRoot,
+            "src/literal.cs",
+            "class Literal { const char Value = '\uFFFD'; }\n");
+
+        var bytes = new List<byte>();
+        void AddUtf8(string text) => bytes.AddRange(System.Text.Encoding.UTF8.GetBytes(text));
+        AddUtf8("line1 clean\n");
+        AddUtf8("line2 has ");
+        bytes.Add(0xFF);
+        AddUtf8(" here\n");
+        for (var i = 0; i < 200; i++)
+            AddUtf8("filler ascii ascii ascii\n");
+        TestProjectHelper.WriteBinaryFile(projectRoot, "src/decode.cs", bytes.ToArray());
+
+        var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+            [projectRoot, "--db", dbPath, "--json", "--quiet"],
+            _jsonOptions));
+        Assert.Equal(CommandExitCodes.Success, indexExitCode);
+        Assert.Equal(string.Empty, indexStderr);
+
+        var (warningExitCode, warningStdout, warningStderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+            ["--db", dbPath, "--json", "--kind", "replacement_char", "--severity", "warning"],
+            _jsonOptions));
+        var (infoExitCode, infoStdout, infoStderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+            ["--db", dbPath, "--json", "--kind", "replacement_char", "--severity", "info"],
+            _jsonOptions));
+
+        using var warningDocument = ParseJsonOutput(warningStdout);
+        using var infoDocument = ParseJsonOutput(infoStdout);
+        var warningIssues = warningDocument.RootElement.GetProperty("issues");
+        var infoIssues = infoDocument.RootElement.GetProperty("issues");
+
+        Assert.Equal(CommandExitCodes.Success, warningExitCode);
+        Assert.Equal(CommandExitCodes.Success, infoExitCode);
+        Assert.Equal(string.Empty, warningStderr);
+        Assert.Equal(string.Empty, infoStderr);
+        Assert.True(warningIssues.GetArrayLength() > 0);
+        Assert.Equal(warningIssues.GetArrayLength(), warningDocument.RootElement.GetProperty("count").GetInt32());
+        Assert.All(warningIssues.EnumerateArray(), issue =>
         {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "literal.cs"),
-                "class Literal { const char Value = '\uFFFD'; }\n");
-
-            var bytes = new List<byte>();
-            void AddUtf8(string text) => bytes.AddRange(System.Text.Encoding.UTF8.GetBytes(text));
-            AddUtf8("line1 clean\n");
-            AddUtf8("line2 has ");
-            bytes.Add(0xFF);
-            AddUtf8(" here\n");
-            for (var i = 0; i < 200; i++)
-                AddUtf8("filler ascii ascii ascii\n");
-            File.WriteAllBytes(Path.Combine(projectRoot, "src", "decode.cs"), bytes.ToArray());
-
-            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--db", dbPath, "--json", "--quiet"],
-                _jsonOptions));
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-
-            var (warningExitCode, warningStdout, warningStderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
-                ["--db", dbPath, "--json", "--kind", "replacement_char", "--severity", "warning"],
-                _jsonOptions));
-            var (infoExitCode, infoStdout, infoStderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
-                ["--db", dbPath, "--json", "--kind", "replacement_char", "--severity", "info"],
-                _jsonOptions));
-
-            using var warningDocument = ParseJsonOutput(warningStdout);
-            using var infoDocument = ParseJsonOutput(infoStdout);
-            var warningIssues = warningDocument.RootElement.GetProperty("issues");
-            var infoIssues = infoDocument.RootElement.GetProperty("issues");
-
-            Assert.Equal(CommandExitCodes.Success, warningExitCode);
-            Assert.Equal(CommandExitCodes.Success, infoExitCode);
-            Assert.Equal(string.Empty, warningStderr);
-            Assert.Equal(string.Empty, infoStderr);
-            Assert.True(warningIssues.GetArrayLength() > 0);
-            Assert.Equal(warningIssues.GetArrayLength(), warningDocument.RootElement.GetProperty("count").GetInt32());
-            Assert.All(warningIssues.EnumerateArray(), issue =>
-            {
-                Assert.Equal("replacement_char", issue.GetProperty("kind").GetString());
-                Assert.Equal(FileIssue.SeverityWarning, issue.GetProperty("severity").GetString());
-                Assert.Equal(FileIssue.OriginDecodeReplacement, issue.GetProperty("origin").GetString());
-            });
-            Assert.Equal(1, infoDocument.RootElement.GetProperty("count").GetInt32());
-            Assert.Equal(1, infoIssues.GetArrayLength());
-            Assert.Equal(FileIssue.SeverityInfo, infoIssues[0].GetProperty("severity").GetString());
-            Assert.Equal(FileIssue.OriginSourceLiteral, infoIssues[0].GetProperty("origin").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+            Assert.Equal("replacement_char", issue.GetProperty("kind").GetString());
+            Assert.Equal(FileIssue.SeverityWarning, issue.GetProperty("severity").GetString());
+            Assert.Equal(FileIssue.OriginDecodeReplacement, issue.GetProperty("origin").GetString());
+        });
+        Assert.Equal(1, infoDocument.RootElement.GetProperty("count").GetInt32());
+        Assert.Equal(1, infoIssues.GetArrayLength());
+        Assert.Equal(FileIssue.SeverityInfo, infoIssues[0].GetProperty("severity").GetString());
+        Assert.Equal(FileIssue.OriginSourceLiteral, infoIssues[0].GetProperty("origin").GetString());
     }
 }

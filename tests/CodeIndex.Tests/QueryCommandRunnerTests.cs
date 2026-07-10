@@ -304,17 +304,22 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void ParseArgs_ProjectFilterExpandsSolutionProjectToPathGlob_Issue1707()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_filter");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_solution_filter");
+        var projectRoot = project.Root;
         var originalCurrentDirectory = Environment.CurrentDirectory;
         try
         {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "App"));
-            File.WriteAllText(Path.Combine(projectRoot, "CodeIndex.sln"), """
-            Microsoft Visual Studio Solution File, Format Version 12.00
-            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
-            EndProject
-            """);
-            File.WriteAllText(Path.Combine(projectRoot, "src", "App", "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            TestProjectHelper.WriteTextFiles(
+                projectRoot,
+                new Dictionary<string, string>
+                {
+                    ["CodeIndex.sln"] = """
+                                        Microsoft Visual Studio Solution File, Format Version 12.00
+                                        Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
+                                        EndProject
+                                        """,
+                    ["src/App/App.csproj"] = "<Project Sdk=\"Microsoft.NET.Sdk\" />",
+                });
 
             Environment.CurrentDirectory = projectRoot;
             var options = QueryCommandRunner.ParseArgs(["Auth", "--project", "App"], jsonDefault: false, allowNamedQuery: true);
@@ -327,25 +332,30 @@ public partial class QueryCommandRunnerTests
         finally
         {
             Environment.CurrentDirectory = originalCurrentDirectory;
-            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 
     [Fact]
     public void ParseArgs_ProjectFilterUsesIndexedProjectRootForExplicitDb_Issue3189()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_filter_explicit_db");
-        var otherRoot = TestProjectHelper.CreateTempProject("cdidx_solution_filter_other_cwd");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_solution_filter_explicit_db");
+        using var otherProject = TestProjectHelper.CreateTempProjectScope("cdidx_solution_filter_other_cwd");
+        var projectRoot = project.Root;
+        var otherRoot = otherProject.Root;
         var originalCurrentDirectory = Environment.CurrentDirectory;
         try
         {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "App"));
-            File.WriteAllText(Path.Combine(projectRoot, "CodeIndex.sln"), """
-            Microsoft Visual Studio Solution File, Format Version 12.00
-            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
-            EndProject
-            """);
-            File.WriteAllText(Path.Combine(projectRoot, "src", "App", "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            TestProjectHelper.WriteTextFiles(
+                projectRoot,
+                new Dictionary<string, string>
+                {
+                    ["CodeIndex.sln"] = """
+                                        Microsoft Visual Studio Solution File, Format Version 12.00
+                                        Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
+                                        EndProject
+                                        """,
+                    ["src/App/App.csproj"] = "<Project Sdk=\"Microsoft.NET.Sdk\" />",
+                });
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
 
             Environment.CurrentDirectory = otherRoot;
@@ -362,26 +372,29 @@ public partial class QueryCommandRunnerTests
         finally
         {
             Environment.CurrentDirectory = originalCurrentDirectory;
-            TestProjectHelper.DeleteDirectory(otherRoot);
-            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 
     [Fact]
     public void ParseArgs_ProjectFilterFallbackReportsEffectiveRoot_Issue3461()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_filter_fallback");
-        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_solution_filter_fallback_{Guid.NewGuid():N}.db");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_solution_filter_fallback");
+        var projectRoot = project.Root;
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_solution_filter_fallback");
         var originalCurrentDirectory = Environment.CurrentDirectory;
         try
         {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "App"));
-            File.WriteAllText(Path.Combine(projectRoot, "CodeIndex.sln"), """
-            Microsoft Visual Studio Solution File, Format Version 12.00
-            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
-            EndProject
-            """);
-            File.WriteAllText(Path.Combine(projectRoot, "src", "App", "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            TestProjectHelper.WriteTextFiles(
+                projectRoot,
+                new Dictionary<string, string>
+                {
+                    ["CodeIndex.sln"] = """
+                                        Microsoft Visual Studio Solution File, Format Version 12.00
+                                        Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
+                                        EndProject
+                                        """,
+                    ["src/App/App.csproj"] = "<Project Sdk=\"Microsoft.NET.Sdk\" />",
+                });
 
             Environment.CurrentDirectory = projectRoot;
             var expectedProjectRoot = Path.GetFullPath(Environment.CurrentDirectory);
@@ -401,15 +414,16 @@ public partial class QueryCommandRunnerTests
         {
             Environment.CurrentDirectory = originalCurrentDirectory;
             TestProjectHelper.DeleteFile(dbPath);
-            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 
     [Fact]
     public void RunDefinition_LspFormatUsesIndexedProjectRootForExplicitDb_Issue3151()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_explicit_db_root");
-        var otherRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_other_cwd");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_lsp_explicit_db_root");
+        using var otherProject = TestProjectHelper.CreateTempProjectScope("cdidx_lsp_other_cwd");
+        var projectRoot = project.Root;
+        var otherRoot = otherProject.Root;
         var originalCurrentDirectory = Environment.CurrentDirectory;
         try
         {
@@ -440,8 +454,6 @@ public partial class QueryCommandRunnerTests
         finally
         {
             Environment.CurrentDirectory = originalCurrentDirectory;
-            TestProjectHelper.DeleteDirectory(otherRoot);
-            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 
@@ -528,7 +540,8 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunStatusConfig_ReportsConfigFileSourceForSearchDefaults()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_config_source");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_status_config_source");
+        var projectRoot = project.Root;
         using var env = EnvironmentVariableScope.Capture(
             QueryCommandRunner.DefaultLimitEnvironmentVariable,
             QueryCommandRunner.StaleAfterEnvironmentVariable,
@@ -536,315 +549,252 @@ public partial class QueryCommandRunnerTests
             CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + QueryCommandRunner.DefaultLimitEnvironmentVariable,
             CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + QueryCommandRunner.StaleAfterEnvironmentVariable,
             CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + "CDIDX_GLOBAL_TOOL_LOG_DIR");
-        try
-        {
-            var configDir = Path.Combine(projectRoot, ".cdidx");
-            Directory.CreateDirectory(configDir);
-            var configPath = Path.Combine(configDir, "config.json");
-            var logDir = Path.Combine(projectRoot, "logs");
-            File.WriteAllText(configPath, $$"""
-                {
-                  "search": { "limit": 44 },
-                  "stale_after": "2h",
-                  "global_tool_log_dir": {{JsonSerializer.Serialize(logDir)}}
-                }
-                """);
+        var configDir = Path.Combine(projectRoot, ".cdidx");
+        Directory.CreateDirectory(configDir);
+        var configPath = Path.Combine(configDir, "config.json");
+        var logDir = Path.Combine(projectRoot, "logs");
+        File.WriteAllText(configPath, $$"""
+            {
+              "search": { "limit": 44 },
+              "stale_after": "2h",
+              "global_tool_log_dir": {{JsonSerializer.Serialize(logDir)}}
+            }
+            """);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
-                ["status", "--config", "--json"],
-                appVersion: "test-version",
-                configStartDirectory: projectRoot));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["status", "--config", "--json"],
+            appVersion: "test-version",
+            configStartDirectory: projectRoot));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            using var document = ParseJsonOutput(stdout);
-            Assert.DoesNotContain(configPath, stdout, StringComparison.Ordinal);
-            var limit = document.RootElement.GetProperty("effective_config").GetProperty("limit");
-            Assert.Equal(44, limit.GetProperty("value").GetInt32());
-            Assert.Equal("config:config.json", limit.GetProperty("source").GetString());
-            Assert.Equal("config_file", limit.GetProperty("source_kind").GetString());
-            Assert.Equal("config.json", limit.GetProperty("source_detail").GetString());
-            var staleAfter = document.RootElement.GetProperty("effective_config").GetProperty("stale_after");
-            Assert.Equal("2h", staleAfter.GetProperty("value").GetString());
-            Assert.Equal("config:config.json", staleAfter.GetProperty("source").GetString());
-            Assert.Equal("config_file", staleAfter.GetProperty("source_kind").GetString());
-            Assert.Equal("config.json", staleAfter.GetProperty("source_detail").GetString());
-            var logPath = document.RootElement.GetProperty("effective_config").GetProperty("global_tool_log_dir");
-            Assert.Equal(logDir, logPath.GetProperty("value").GetString());
-            Assert.Equal("config:config.json", logPath.GetProperty("source").GetString());
-            Assert.Equal("config_file", logPath.GetProperty("source_kind").GetString());
-            Assert.Equal("config.json", logPath.GetProperty("source_detail").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        Assert.DoesNotContain(configPath, stdout, StringComparison.Ordinal);
+        var limit = document.RootElement.GetProperty("effective_config").GetProperty("limit");
+        Assert.Equal(44, limit.GetProperty("value").GetInt32());
+        Assert.Equal("config:config.json", limit.GetProperty("source").GetString());
+        Assert.Equal("config_file", limit.GetProperty("source_kind").GetString());
+        Assert.Equal("config.json", limit.GetProperty("source_detail").GetString());
+        var staleAfter = document.RootElement.GetProperty("effective_config").GetProperty("stale_after");
+        Assert.Equal("2h", staleAfter.GetProperty("value").GetString());
+        Assert.Equal("config:config.json", staleAfter.GetProperty("source").GetString());
+        Assert.Equal("config_file", staleAfter.GetProperty("source_kind").GetString());
+        Assert.Equal("config.json", staleAfter.GetProperty("source_detail").GetString());
+        var logPath = document.RootElement.GetProperty("effective_config").GetProperty("global_tool_log_dir");
+        Assert.Equal(logDir, logPath.GetProperty("value").GetString());
+        Assert.Equal("config:config.json", logPath.GetProperty("source").GetString());
+        Assert.Equal("config_file", logPath.GetProperty("source_kind").GetString());
+        Assert.Equal("config.json", logPath.GetProperty("source_detail").GetString());
     }
 
     [Fact]
     public void RunStatusJson_ReportsSqlitePageMetrics_Issue1631()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_page_metrics");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/app.cs",
-                "csharp",
-                "public class App { }");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_status_page_metrics");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/app.cs",
+            "csharp",
+            "public class App { }");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
-                ["--db", dbPath, "--json"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--db", dbPath, "--json"],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            using var document = ParseJsonOutput(stdout);
-            var settings = document.RootElement.GetProperty("db_pragma_settings");
-            Assert.True(settings.GetProperty("page_count").GetInt64() > 0);
-            Assert.True(settings.GetProperty("page_size").GetInt64() > 0);
-            Assert.True(settings.GetProperty("freelist_count").GetInt64() >= 0);
-            Assert.Equal(DbPragmaPolicy.DefaultBusyTimeoutMs, settings.GetProperty("busy_timeout_ms").GetInt64());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var settings = document.RootElement.GetProperty("db_pragma_settings");
+        Assert.True(settings.GetProperty("page_count").GetInt64() > 0);
+        Assert.True(settings.GetProperty("page_size").GetInt64() > 0);
+        Assert.True(settings.GetProperty("freelist_count").GetInt64() >= 0);
+        Assert.Equal(DbPragmaPolicy.DefaultBusyTimeoutMs, settings.GetProperty("busy_timeout_ms").GetInt64());
     }
 
     [Fact]
     public void RunStatusJson_ReportsConfiguredBusyTimeout_Issue3767()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_busy_timeout_3767");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_status_busy_timeout_3767");
         using var env = EnvironmentVariableScope.Capture(
             DbContext.BusyTimeoutEnvironmentVariable);
         env.Set(DbContext.BusyTimeoutEnvironmentVariable, "12345");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/app.cs",
-                "csharp",
-                "public class App { }");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/app.cs",
+            "csharp",
+            "public class App { }");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
-                ["--db", dbPath, "--json"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--db", dbPath, "--json"],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            using var document = ParseJsonOutput(stdout);
-            var settings = document.RootElement.GetProperty("db_pragma_settings");
-            Assert.Equal(12345, settings.GetProperty("busy_timeout_ms").GetInt64());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var settings = document.RootElement.GetProperty("db_pragma_settings");
+        Assert.Equal(12345, settings.GetProperty("busy_timeout_ms").GetInt64());
     }
 
     [Fact]
     public void RunVacuum_RejectsMissingDatabase_Issue1631()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_vacuum_missing_db");
-        try
-        {
-            var dbPath = Path.Combine(projectRoot, "missing.db");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_missing_db");
+        var dbPath = Path.Combine(project.Root, "missing.db");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
-                ["--db", dbPath],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+            ["--db", dbPath],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains(CommandErrorCodes.DbNotFound, stderr);
-            Assert.False(File.Exists(dbPath));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.NotFound, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains(CommandErrorCodes.DbNotFound, stderr);
+        Assert.False(File.Exists(dbPath));
     }
 
     [Fact]
     public void RunVacuum_RejectsNonCodeIndexDatabase_Issue1631()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_vacuum_foreign_db");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_foreign_db");
+        var dbPath = Path.Combine(project.Root, "foreign.db");
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
         {
-            var dbPath = Path.Combine(projectRoot, "foreign.db");
-            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
-            {
-                connection.Open();
-                using var command = connection.CreateCommand();
-                command.CommandText = "CREATE TABLE user_data(id INTEGER PRIMARY KEY, value TEXT);";
-                command.ExecuteNonQuery();
-            }
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
-                ["--db", dbPath],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains(CommandErrorCodes.DbError, stderr);
-            Assert.Contains("not an existing CodeIndex DB", stderr);
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "CREATE TABLE user_data(id INTEGER PRIMARY KEY, value TEXT);";
+            command.ExecuteNonQuery();
         }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+            ["--db", dbPath],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains(CommandErrorCodes.DbError, stderr);
+        Assert.Contains("not an existing CodeIndex DB", stderr);
     }
 
     [Fact]
     public void RunVacuum_RejectsLookalikeNonCodeIndexDatabase_Issue1631()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_vacuum_lookalike_db");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_lookalike_db");
+        var dbPath = Path.Combine(project.Root, "lookalike.db");
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
         {
-            var dbPath = Path.Combine(projectRoot, "lookalike.db");
-            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
-            {
-                connection.Open();
-                using var command = connection.CreateCommand();
-                command.CommandText = @"
-                    CREATE TABLE files (id INTEGER PRIMARY KEY);
-                    CREATE TABLE chunks (id INTEGER PRIMARY KEY);
-                    CREATE TABLE symbols (id INTEGER PRIMARY KEY);";
-                command.ExecuteNonQuery();
-            }
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
-                ["--db", dbPath],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains(CommandErrorCodes.DbError, stderr);
-            Assert.Contains("not an existing CodeIndex DB", stderr);
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = @"
+                CREATE TABLE files (id INTEGER PRIMARY KEY);
+                CREATE TABLE chunks (id INTEGER PRIMARY KEY);
+                CREATE TABLE symbols (id INTEGER PRIMARY KEY);";
+            command.ExecuteNonQuery();
         }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+            ["--db", dbPath],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains(CommandErrorCodes.DbError, stderr);
+        Assert.Contains("not an existing CodeIndex DB", stderr);
     }
 
     [Fact]
     public void RunVacuum_RejectsReadOnlyUriWithNeutralWritableMessage_Issue1631()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_vacuum_readonly_uri");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var dbUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_readonly_uri");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var dbUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
-                ["--db", dbUri],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+            ["--db", dbUri],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains(CommandErrorCodes.DbError, stderr);
-            Assert.Contains("database must be writable", stderr);
-            Assert.DoesNotContain("backfill-fold", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains(CommandErrorCodes.DbError, stderr);
+        Assert.Contains("database must be writable", stderr);
+        Assert.DoesNotContain("backfill-fold", stderr);
     }
 
     [Fact]
     public void RunVacuum_DryRunJsonReportsMaintenanceEstimate_Issue3564()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_vacuum_dry_run");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_dry_run");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        using (var db = new DbContext(dbPath))
         {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using (var db = new DbContext(dbPath))
-            {
-                using var command = db.Connection.CreateCommand();
-                command.CommandText = @"
-                    CREATE TABLE vacuum_payload (id INTEGER PRIMARY KEY, payload BLOB);
-                    WITH RECURSIVE n(value) AS (
-                        SELECT 1
-                        UNION ALL
-                        SELECT value + 1 FROM n WHERE value < 128
-                    )
-                    INSERT INTO vacuum_payload (payload)
-                    SELECT randomblob(4096) FROM n;
-                    DELETE FROM vacuum_payload;";
-                command.ExecuteNonQuery();
-            }
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
-                ["--db", dbPath, "--dry-run", "--json"],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            using var document = ParseJsonOutput(stdout);
-            var root = document.RootElement;
-            Assert.Equal("dry_run", root.GetProperty("status").GetString());
-            Assert.True(root.GetProperty("dry_run").GetBoolean());
-            Assert.True(root.GetProperty("estimated_pages_reclaimable").GetInt64() > 0);
-            Assert.True(root.GetProperty("estimated_bytes_reclaimable").GetInt64() > 0);
-            Assert.Equal(0, root.GetProperty("pages_reclaimed").GetInt64());
-            Assert.Equal(root.GetProperty("page_count_before").GetInt64(), root.GetProperty("page_count_after").GetInt64());
-            Assert.Equal("incremental", root.GetProperty("auto_vacuum_mode_after_name").GetString());
-            var guidance = root.GetProperty("maintenance_guidance");
-            Assert.Equal("vacuum_recommended", guidance.GetProperty("freelist_state").GetString());
-            Assert.Equal("cdidx vacuum --db <db>", guidance.GetProperty("recommended_command").GetString());
+            using var command = db.Connection.CreateCommand();
+            command.CommandText = @"
+                CREATE TABLE vacuum_payload (id INTEGER PRIMARY KEY, payload BLOB);
+                WITH RECURSIVE n(value) AS (
+                    SELECT 1
+                    UNION ALL
+                    SELECT value + 1 FROM n WHERE value < 128
+                )
+                INSERT INTO vacuum_payload (payload)
+                SELECT randomblob(4096) FROM n;
+                DELETE FROM vacuum_payload;";
+            command.ExecuteNonQuery();
         }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+            ["--db", dbPath, "--dry-run", "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var root = document.RootElement;
+        Assert.Equal("dry_run", root.GetProperty("status").GetString());
+        Assert.True(root.GetProperty("dry_run").GetBoolean());
+        Assert.True(root.GetProperty("estimated_pages_reclaimable").GetInt64() > 0);
+        Assert.True(root.GetProperty("estimated_bytes_reclaimable").GetInt64() > 0);
+        Assert.Equal(0, root.GetProperty("pages_reclaimed").GetInt64());
+        Assert.Equal(root.GetProperty("page_count_before").GetInt64(), root.GetProperty("page_count_after").GetInt64());
+        Assert.Equal("incremental", root.GetProperty("auto_vacuum_mode_after_name").GetString());
+        var guidance = root.GetProperty("maintenance_guidance");
+        Assert.Equal("vacuum_recommended", guidance.GetProperty("freelist_state").GetString());
+        Assert.Equal("cdidx vacuum --db <db>", guidance.GetProperty("recommended_command").GetString());
     }
 
     [Fact]
     public void RunVacuum_JsonExplainsWalCheckpointTiming_Issue4338()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_vacuum_wal_timing");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_wal_timing");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        using (var db = new DbContext(dbPath))
         {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            using (var db = new DbContext(dbPath))
-            {
-                using var command = db.Connection.CreateCommand();
-                command.CommandText = @"
-                    CREATE TABLE vacuum_payload (id INTEGER PRIMARY KEY, payload BLOB);
-                    WITH RECURSIVE n(value) AS (
-                        SELECT 1
-                        UNION ALL
-                        SELECT value + 1 FROM n WHERE value < 128
-                    )
-                    INSERT INTO vacuum_payload (payload)
-                    SELECT randomblob(4096) FROM n;
-                    DELETE FROM vacuum_payload;";
-                command.ExecuteNonQuery();
-            }
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
-                ["--db", dbPath, "--json"],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            using var document = ParseJsonOutput(stdout);
-            var root = document.RootElement;
-            Assert.Equal("ok", root.GetProperty("status").GetString());
-            Assert.False(root.GetProperty("dry_run").GetBoolean());
-            var timingNote = root.GetProperty("wal_checkpoint_timing_note").GetString();
-            Assert.Contains("wal_size_bytes_after", timingNote, StringComparison.Ordinal);
-            Assert.Contains("checkpoint", timingNote, StringComparison.Ordinal);
+            using var command = db.Connection.CreateCommand();
+            command.CommandText = @"
+                CREATE TABLE vacuum_payload (id INTEGER PRIMARY KEY, payload BLOB);
+                WITH RECURSIVE n(value) AS (
+                    SELECT 1
+                    UNION ALL
+                    SELECT value + 1 FROM n WHERE value < 128
+                )
+                INSERT INTO vacuum_payload (payload)
+                SELECT randomblob(4096) FROM n;
+                DELETE FROM vacuum_payload;";
+            command.ExecuteNonQuery();
         }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+            ["--db", dbPath, "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var root = document.RootElement;
+        Assert.Equal("ok", root.GetProperty("status").GetString());
+        Assert.False(root.GetProperty("dry_run").GetBoolean());
+        var timingNote = root.GetProperty("wal_checkpoint_timing_note").GetString();
+        Assert.Contains("wal_size_bytes_after", timingNote, StringComparison.Ordinal);
+        Assert.Contains("checkpoint", timingNote, StringComparison.Ordinal);
     }
 
 
@@ -859,496 +809,405 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunBatch_ReusesDatabaseForJsonLineQueryCommands_Issue2119()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_query_reuse");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/auth.cs",
-                "csharp",
-                """
-                public class AuthFixture
-                {
-                    public void Authenticate() { }
-                }
-                """);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_query_reuse");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/auth.cs",
+            "csharp",
+            """
+            public class AuthFixture
+            {
+                public void Authenticate() { }
+            }
+            """);
 
-            var input = """
-            ["search","Authenticate","--json","--exact"]
-            ["symbols","AuthFixture","--json","--exact-name"]
+        var input = """
+        ["search","Authenticate","--json","--exact"]
+        ["symbols","AuthFixture","--json","--exact-name"]
 
-            """;
-            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
-                input,
-                () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
-            var lines = ParseJsonLines(stdout);
+        """;
+        var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+            input,
+            () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
+        var lines = ParseJsonLines(stdout);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(2, lines.Count);
-            using var searchDocument = lines[0];
-            using var symbolDocument = lines[1];
-            Assert.Equal("src/auth.cs", searchDocument.RootElement.GetProperty("path").GetString());
-            Assert.Equal("AuthFixture", symbolDocument.RootElement.GetProperty("name").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(2, lines.Count);
+        using var searchDocument = lines[0];
+        using var symbolDocument = lines[1];
+        Assert.Equal("src/auth.cs", searchDocument.RootElement.GetProperty("path").GetString());
+        Assert.Equal("AuthFixture", symbolDocument.RootElement.GetProperty("name").GetString());
     }
 
     [Fact]
     public void RunBatch_JsonSummaryReportsEmptyInput_Issue3906()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_empty_summary");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_empty_summary");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
 
-            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
-                string.Empty,
-                () => QueryCommandRunner.RunBatch(["--db", dbPath, "--json-summary"], _jsonOptions));
-            var lines = ParseJsonLines(stdout);
+        var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+            string.Empty,
+            () => QueryCommandRunner.RunBatch(["--db", dbPath, "--json-summary"], _jsonOptions));
+        var lines = ParseJsonLines(stdout);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Single(lines);
-            using var summaryDocument = lines[0];
-            var summary = summaryDocument.RootElement;
-            Assert.Equal("1", summary.GetProperty("api_version").GetString());
-            Assert.Equal("batch_summary", summary.GetProperty("record").GetString());
-            Assert.Equal("batch", summary.GetProperty("command").GetString());
-            Assert.Equal(0, summary.GetProperty("input_lines_read").GetInt32());
-            Assert.Equal(0, summary.GetProperty("commands_processed").GetInt32());
-            Assert.Equal(0, summary.GetProperty("line_errors").GetInt32());
-            Assert.Equal(0, summary.GetProperty("command_failures").GetInt32());
-            Assert.Equal(CommandExitCodes.Success, summary.GetProperty("exit_code").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Single(lines);
+        using var summaryDocument = lines[0];
+        var summary = summaryDocument.RootElement;
+        Assert.Equal("1", summary.GetProperty("api_version").GetString());
+        Assert.Equal("batch_summary", summary.GetProperty("record").GetString());
+        Assert.Equal("batch", summary.GetProperty("command").GetString());
+        Assert.Equal(0, summary.GetProperty("input_lines_read").GetInt32());
+        Assert.Equal(0, summary.GetProperty("commands_processed").GetInt32());
+        Assert.Equal(0, summary.GetProperty("line_errors").GetInt32());
+        Assert.Equal(0, summary.GetProperty("command_failures").GetInt32());
+        Assert.Equal(CommandExitCodes.Success, summary.GetProperty("exit_code").GetInt32());
     }
 
     [Fact]
     public void RunBatch_JsonSummaryReportsProcessedCommandsAndFailures_Issue3906_Issue4142()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_summary_counts");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_summary_counts");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var input = """
+        ["status","--json"]
+        []
+        ["unknown"]
+
+        """;
+
+        var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+            input,
+            () => QueryCommandRunner.RunBatch(["--db", dbPath, "--json-summary"], _jsonOptions));
+        var lines = ParseJsonLines(stdout);
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(4, lines.Count);
+        using var statusRecordDocument = lines[0];
+        using var lineErrorDocument = lines[1];
+        using var unsupportedRecordDocument = lines[2];
+        using var summaryDocument = lines[3];
+
+        var statusRecord = statusRecordDocument.RootElement;
+        Assert.Equal("batch_result", statusRecord.GetProperty("record").GetString());
+        Assert.Equal("ok", statusRecord.GetProperty("status").GetString());
+        Assert.Equal(1, statusRecord.GetProperty("line").GetInt32());
+        Assert.Equal("status", statusRecord.GetProperty("command").GetString());
+        Assert.Equal(CommandExitCodes.Success, statusRecord.GetProperty("exit_code").GetInt32());
+        Assert.Equal(string.Empty, statusRecord.GetProperty("stderr").GetString());
+        using (var statusOutputDocument = ParseJsonOutput(statusRecord.GetProperty("stdout").GetString()!))
         {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var input = """
-            ["status","--json"]
-            []
-            ["unknown"]
-
-            """;
-
-            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
-                input,
-                () => QueryCommandRunner.RunBatch(["--db", dbPath, "--json-summary"], _jsonOptions));
-            var lines = ParseJsonLines(stdout);
-
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(4, lines.Count);
-            using var statusRecordDocument = lines[0];
-            using var lineErrorDocument = lines[1];
-            using var unsupportedRecordDocument = lines[2];
-            using var summaryDocument = lines[3];
-
-            var statusRecord = statusRecordDocument.RootElement;
-            Assert.Equal("batch_result", statusRecord.GetProperty("record").GetString());
-            Assert.Equal("ok", statusRecord.GetProperty("status").GetString());
-            Assert.Equal(1, statusRecord.GetProperty("line").GetInt32());
-            Assert.Equal("status", statusRecord.GetProperty("command").GetString());
-            Assert.Equal(CommandExitCodes.Success, statusRecord.GetProperty("exit_code").GetInt32());
-            Assert.Equal(string.Empty, statusRecord.GetProperty("stderr").GetString());
-            using (var statusOutputDocument = ParseJsonOutput(statusRecord.GetProperty("stdout").GetString()!))
-            {
-                Assert.True(statusOutputDocument.RootElement.TryGetProperty("files", out _));
-            }
-
-            var lineError = lineErrorDocument.RootElement;
-            Assert.Equal("batch_error", lineError.GetProperty("record").GetString());
-            Assert.Equal("error", lineError.GetProperty("status").GetString());
-            Assert.Equal(2, lineError.GetProperty("line").GetInt32());
-            Assert.Equal(CommandExitCodes.UsageError, lineError.GetProperty("exit_code").GetInt32());
-            Assert.Equal(string.Empty, lineError.GetProperty("stdout").GetString());
-            Assert.Equal(string.Empty, lineError.GetProperty("stderr").GetString());
-            Assert.Contains("batch line 2 must be a non-empty JSON string array", lineError.GetProperty("error").GetProperty("message").GetString());
-
-            var unsupportedRecord = unsupportedRecordDocument.RootElement;
-            Assert.Equal("batch_result", unsupportedRecord.GetProperty("record").GetString());
-            Assert.Equal("error", unsupportedRecord.GetProperty("status").GetString());
-            Assert.Equal(3, unsupportedRecord.GetProperty("line").GetInt32());
-            Assert.Equal("unknown", unsupportedRecord.GetProperty("command").GetString());
-            Assert.Equal(CommandExitCodes.UsageError, unsupportedRecord.GetProperty("exit_code").GetInt32());
-            Assert.Equal(string.Empty, unsupportedRecord.GetProperty("stdout").GetString());
-            Assert.Contains("batch only supports query and read-only discovery commands", unsupportedRecord.GetProperty("stderr").GetString());
-
-            var summary = summaryDocument.RootElement;
-            Assert.Equal("batch_summary", summary.GetProperty("record").GetString());
-            Assert.Equal(3, summary.GetProperty("input_lines_read").GetInt32());
-            Assert.Equal(2, summary.GetProperty("commands_processed").GetInt32());
-            Assert.Equal(1, summary.GetProperty("line_errors").GetInt32());
-            Assert.Equal(1, summary.GetProperty("command_failures").GetInt32());
-            Assert.Equal(CommandExitCodes.UsageError, summary.GetProperty("exit_code").GetInt32());
+            Assert.True(statusOutputDocument.RootElement.TryGetProperty("files", out _));
         }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+
+        var lineError = lineErrorDocument.RootElement;
+        Assert.Equal("batch_error", lineError.GetProperty("record").GetString());
+        Assert.Equal("error", lineError.GetProperty("status").GetString());
+        Assert.Equal(2, lineError.GetProperty("line").GetInt32());
+        Assert.Equal(CommandExitCodes.UsageError, lineError.GetProperty("exit_code").GetInt32());
+        Assert.Equal(string.Empty, lineError.GetProperty("stdout").GetString());
+        Assert.Equal(string.Empty, lineError.GetProperty("stderr").GetString());
+        Assert.Contains("batch line 2 must be a non-empty JSON string array", lineError.GetProperty("error").GetProperty("message").GetString());
+
+        var unsupportedRecord = unsupportedRecordDocument.RootElement;
+        Assert.Equal("batch_result", unsupportedRecord.GetProperty("record").GetString());
+        Assert.Equal("error", unsupportedRecord.GetProperty("status").GetString());
+        Assert.Equal(3, unsupportedRecord.GetProperty("line").GetInt32());
+        Assert.Equal("unknown", unsupportedRecord.GetProperty("command").GetString());
+        Assert.Equal(CommandExitCodes.UsageError, unsupportedRecord.GetProperty("exit_code").GetInt32());
+        Assert.Equal(string.Empty, unsupportedRecord.GetProperty("stdout").GetString());
+        Assert.Contains("batch only supports query and read-only discovery commands", unsupportedRecord.GetProperty("stderr").GetString());
+
+        var summary = summaryDocument.RootElement;
+        Assert.Equal("batch_summary", summary.GetProperty("record").GetString());
+        Assert.Equal(3, summary.GetProperty("input_lines_read").GetInt32());
+        Assert.Equal(2, summary.GetProperty("commands_processed").GetInt32());
+        Assert.Equal(1, summary.GetProperty("line_errors").GetInt32());
+        Assert.Equal(1, summary.GetProperty("command_failures").GetInt32());
+        Assert.Equal(CommandExitCodes.UsageError, summary.GetProperty("exit_code").GetInt32());
     }
 
     [Fact]
     public void RunBatch_JsonSummaryCapturesChildTextOutput_Issue4142()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_summary_envelope");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/auth.cs",
-                "csharp",
-                """
-                public class AuthFixture
-                {
-                    public void Authenticate() { }
-                }
-                """);
-            var input = """
-            ["search","Authenticate","--exact"]
-            ["unknown"]
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_summary_envelope");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/auth.cs",
+            "csharp",
+            """
+            public class AuthFixture
+            {
+                public void Authenticate() { }
+            }
+            """);
+        var input = """
+        ["search","Authenticate","--exact"]
+        ["unknown"]
 
-            """;
+        """;
 
-            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
-                input,
-                () => QueryCommandRunner.RunBatch(["--db", dbPath, "--json-summary"], _jsonOptions));
-            var lines = ParseJsonLines(stdout);
+        var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+            input,
+            () => QueryCommandRunner.RunBatch(["--db", dbPath, "--json-summary"], _jsonOptions));
+        var lines = ParseJsonLines(stdout);
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(3, lines.Count);
-            using var searchRecordDocument = lines[0];
-            using var unsupportedRecordDocument = lines[1];
-            using var summaryDocument = lines[2];
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(3, lines.Count);
+        using var searchRecordDocument = lines[0];
+        using var unsupportedRecordDocument = lines[1];
+        using var summaryDocument = lines[2];
 
-            var searchRecord = searchRecordDocument.RootElement;
-            Assert.Equal("batch_result", searchRecord.GetProperty("record").GetString());
-            Assert.Equal("ok", searchRecord.GetProperty("status").GetString());
-            Assert.Equal("search", searchRecord.GetProperty("command").GetString());
-            Assert.Contains("Authenticate", searchRecord.GetProperty("stdout").GetString());
-            Assert.Contains("results in", searchRecord.GetProperty("stderr").GetString());
+        var searchRecord = searchRecordDocument.RootElement;
+        Assert.Equal("batch_result", searchRecord.GetProperty("record").GetString());
+        Assert.Equal("ok", searchRecord.GetProperty("status").GetString());
+        Assert.Equal("search", searchRecord.GetProperty("command").GetString());
+        Assert.Contains("Authenticate", searchRecord.GetProperty("stdout").GetString());
+        Assert.Contains("results in", searchRecord.GetProperty("stderr").GetString());
 
-            var unsupportedRecord = unsupportedRecordDocument.RootElement;
-            Assert.Equal("batch_result", unsupportedRecord.GetProperty("record").GetString());
-            Assert.Equal("error", unsupportedRecord.GetProperty("status").GetString());
-            Assert.Equal("unknown", unsupportedRecord.GetProperty("command").GetString());
-            Assert.Equal(string.Empty, unsupportedRecord.GetProperty("stdout").GetString());
-            Assert.Contains("batch only supports query and read-only discovery commands", unsupportedRecord.GetProperty("stderr").GetString());
+        var unsupportedRecord = unsupportedRecordDocument.RootElement;
+        Assert.Equal("batch_result", unsupportedRecord.GetProperty("record").GetString());
+        Assert.Equal("error", unsupportedRecord.GetProperty("status").GetString());
+        Assert.Equal("unknown", unsupportedRecord.GetProperty("command").GetString());
+        Assert.Equal(string.Empty, unsupportedRecord.GetProperty("stdout").GetString());
+        Assert.Contains("batch only supports query and read-only discovery commands", unsupportedRecord.GetProperty("stderr").GetString());
 
-            var summary = summaryDocument.RootElement;
-            Assert.Equal("batch_summary", summary.GetProperty("record").GetString());
-            Assert.Equal(2, summary.GetProperty("commands_processed").GetInt32());
-            Assert.Equal(0, summary.GetProperty("line_errors").GetInt32());
-            Assert.Equal(1, summary.GetProperty("command_failures").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        var summary = summaryDocument.RootElement;
+        Assert.Equal("batch_summary", summary.GetProperty("record").GetString());
+        Assert.Equal(2, summary.GetProperty("commands_processed").GetInt32());
+        Assert.Equal(0, summary.GetProperty("line_errors").GetInt32());
+        Assert.Equal(1, summary.GetProperty("command_failures").GetInt32());
     }
 
     [Fact]
     public void RunBatch_JsonSummaryAllowsReadOnlyDiscoveryCommands_Issue4317()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_discovery_commands");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_discovery_commands");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "public class App { }\n");
+        var input = """
+        ["languages","--format","count"]
+        ["recipes","--names"]
+
+        """;
+
+        var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+            input,
+            () => QueryCommandRunner.RunBatch(["--db", dbPath, "--json-summary"], _jsonOptions));
+        var lines = ParseJsonLines(stdout);
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(3, lines.Count);
+        using var languagesRecordDocument = lines[0];
+        using var recipesRecordDocument = lines[1];
+        using var summaryDocument = lines[2];
+
+        var languagesRecord = languagesRecordDocument.RootElement;
+        Assert.Equal("batch_result", languagesRecord.GetProperty("record").GetString());
+        Assert.Equal("ok", languagesRecord.GetProperty("status").GetString());
+        Assert.Equal("languages", languagesRecord.GetProperty("command").GetString());
+        using (var languagesOutput = ParseJsonOutput(languagesRecord.GetProperty("stdout").GetString()!))
         {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "public class App { }\n");
-            var input = """
-            ["languages","--format","count"]
-            ["recipes","--names"]
-
-            """;
-
-            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
-                input,
-                () => QueryCommandRunner.RunBatch(["--db", dbPath, "--json-summary"], _jsonOptions));
-            var lines = ParseJsonLines(stdout);
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(3, lines.Count);
-            using var languagesRecordDocument = lines[0];
-            using var recipesRecordDocument = lines[1];
-            using var summaryDocument = lines[2];
-
-            var languagesRecord = languagesRecordDocument.RootElement;
-            Assert.Equal("batch_result", languagesRecord.GetProperty("record").GetString());
-            Assert.Equal("ok", languagesRecord.GetProperty("status").GetString());
-            Assert.Equal("languages", languagesRecord.GetProperty("command").GetString());
-            using (var languagesOutput = ParseJsonOutput(languagesRecord.GetProperty("stdout").GetString()!))
-            {
-                Assert.Equal("count", languagesOutput.RootElement.GetProperty("format").GetString());
-                Assert.True(languagesOutput.RootElement.GetProperty("language_count").GetInt32() > 0);
-            }
-
-            var recipesRecord = recipesRecordDocument.RootElement;
-            Assert.Equal("batch_result", recipesRecord.GetProperty("record").GetString());
-            Assert.Equal("ok", recipesRecord.GetProperty("status").GetString());
-            Assert.Equal("recipes", recipesRecord.GetProperty("command").GetString());
-            Assert.NotEqual(string.Empty, recipesRecord.GetProperty("stdout").GetString());
-
-            var summary = summaryDocument.RootElement;
-            Assert.Equal("batch_summary", summary.GetProperty("record").GetString());
-            Assert.Equal(2, summary.GetProperty("commands_processed").GetInt32());
-            Assert.Equal(0, summary.GetProperty("command_failures").GetInt32());
+            Assert.Equal("count", languagesOutput.RootElement.GetProperty("format").GetString());
+            Assert.True(languagesOutput.RootElement.GetProperty("language_count").GetInt32() > 0);
         }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+
+        var recipesRecord = recipesRecordDocument.RootElement;
+        Assert.Equal("batch_result", recipesRecord.GetProperty("record").GetString());
+        Assert.Equal("ok", recipesRecord.GetProperty("status").GetString());
+        Assert.Equal("recipes", recipesRecord.GetProperty("command").GetString());
+        Assert.NotEqual(string.Empty, recipesRecord.GetProperty("stdout").GetString());
+
+        var summary = summaryDocument.RootElement;
+        Assert.Equal("batch_summary", summary.GetProperty("record").GetString());
+        Assert.Equal(2, summary.GetProperty("commands_processed").GetInt32());
+        Assert.Equal(0, summary.GetProperty("command_failures").GetInt32());
     }
 
     [Fact]
     public void RunBatch_JsonSummaryReportsCaptureLimitFromWithDb_Issue4142()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_summary_capture_limit");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var overLimitLine = new string('x', JsonEnvelopeWrapper.MaxCapturedOutputChars + 1024);
-            TestProjectHelper.InsertIndexedFile(dbPath, "docs/huge.txt", "text", overLimitLine);
-            var input = """
-            ["excerpt","docs/huge.txt","--start","1","--max-line-width","0"]
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_summary_capture_limit");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var overLimitLine = new string('x', JsonEnvelopeWrapper.MaxCapturedOutputChars + 1024);
+        TestProjectHelper.InsertIndexedFile(dbPath, "docs/huge.txt", "text", overLimitLine);
+        var input = """
+        ["excerpt","docs/huge.txt","--start","1","--max-line-width","0"]
 
-            """;
+        """;
 
-            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
-                input,
-                () => QueryCommandRunner.RunBatch(["--db", dbPath, "--json-summary"], _jsonOptions));
-            var lines = ParseJsonLines(stdout);
+        var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+            input,
+            () => QueryCommandRunner.RunBatch(["--db", dbPath, "--json-summary"], _jsonOptions));
+        var lines = ParseJsonLines(stdout);
 
-            Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(2, lines.Count);
-            using var excerptRecordDocument = lines[0];
-            using var summaryDocument = lines[1];
+        Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(2, lines.Count);
+        using var excerptRecordDocument = lines[0];
+        using var summaryDocument = lines[1];
 
-            var excerptRecord = excerptRecordDocument.RootElement;
-            Assert.Equal("batch_result", excerptRecord.GetProperty("record").GetString());
-            Assert.Equal("error", excerptRecord.GetProperty("status").GetString());
-            Assert.Equal("excerpt", excerptRecord.GetProperty("command").GetString());
-            Assert.Equal(CommandExitCodes.InvalidArgument, excerptRecord.GetProperty("exit_code").GetInt32());
-            Assert.DoesNotContain("database", excerptRecord.GetProperty("stderr").GetString()!, StringComparison.OrdinalIgnoreCase);
-            var error = excerptRecord.GetProperty("error");
-            Assert.Contains("stdout exceeded", error.GetProperty("message").GetString());
-            Assert.Equal(CommandErrorCodes.UsageError, error.GetProperty("error_code").GetString());
-            Assert.Equal(JsonEnvelopeWrapper.MaxCapturedOutputChars, error.GetProperty("max_chars").GetInt32());
-            Assert.Equal("stdout", error.GetProperty("stream").GetString());
+        var excerptRecord = excerptRecordDocument.RootElement;
+        Assert.Equal("batch_result", excerptRecord.GetProperty("record").GetString());
+        Assert.Equal("error", excerptRecord.GetProperty("status").GetString());
+        Assert.Equal("excerpt", excerptRecord.GetProperty("command").GetString());
+        Assert.Equal(CommandExitCodes.InvalidArgument, excerptRecord.GetProperty("exit_code").GetInt32());
+        Assert.DoesNotContain("database", excerptRecord.GetProperty("stderr").GetString()!, StringComparison.OrdinalIgnoreCase);
+        var error = excerptRecord.GetProperty("error");
+        Assert.Contains("stdout exceeded", error.GetProperty("message").GetString());
+        Assert.Equal(CommandErrorCodes.UsageError, error.GetProperty("error_code").GetString());
+        Assert.Equal(JsonEnvelopeWrapper.MaxCapturedOutputChars, error.GetProperty("max_chars").GetInt32());
+        Assert.Equal("stdout", error.GetProperty("stream").GetString());
 
-            var summary = summaryDocument.RootElement;
-            Assert.Equal("batch_summary", summary.GetProperty("record").GetString());
-            Assert.Equal(1, summary.GetProperty("commands_processed").GetInt32());
-            Assert.Equal(1, summary.GetProperty("command_failures").GetInt32());
-            Assert.Equal(CommandExitCodes.InvalidArgument, summary.GetProperty("exit_code").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        var summary = summaryDocument.RootElement;
+        Assert.Equal("batch_summary", summary.GetProperty("record").GetString());
+        Assert.Equal(1, summary.GetProperty("commands_processed").GetInt32());
+        Assert.Equal(1, summary.GetProperty("command_failures").GetInt32());
+        Assert.Equal(CommandExitCodes.InvalidArgument, summary.GetProperty("exit_code").GetInt32());
     }
 
     [Fact]
     public void RunBatch_EmptySqliteFileRejectedBeforeQuery_Issue2037()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2037_batch_empty_sqlite");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_issue2037_batch_empty_sqlite");
+        var dbPath = Path.Combine(project.Root, "empty.db");
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
         {
-            var dbPath = Path.Combine(projectRoot, "empty.db");
-            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
-            {
-                connection.Open();
-            }
-
-            var (exitCode, _, stderr) = CaptureConsoleWithInput(
-                "[\"status\",\"--json\"]\n",
-                () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            Assert.Contains("does not appear to be a valid CodeIndex database", stderr);
-            Assert.Contains("missing required table `files`", stderr);
-            Assert.Contains("Hint: rebuild with `cdidx index <projectPath> --db <path>`", stderr);
+            connection.Open();
         }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+
+        var (exitCode, _, stderr) = CaptureConsoleWithInput(
+            "[\"status\",\"--json\"]\n",
+            () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Contains("does not appear to be a valid CodeIndex database", stderr);
+        Assert.Contains("missing required table `files`", stderr);
+        Assert.Contains("Hint: rebuild with `cdidx index <projectPath> --db <path>`", stderr);
     }
 
     [Fact]
     public void RunBatch_LineExceedsLimit_SkipsParsingAndContinues_Issue2891()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_long_line");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var input = new string('x', QueryCommandRunner.BatchMaxLineChars + 1)
-                + "\n[\"status\",\"--json\"]\n";
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_long_line");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var input = new string('x', QueryCommandRunner.BatchMaxLineChars + 1)
+            + "\n[\"status\",\"--json\"]\n";
 
-            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
-                input,
-                () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+            input,
+            () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains($"exceeds the {QueryCommandRunner.BatchMaxLineChars} character limit", stderr);
-            var lines = ParseJsonLines(stdout);
-            Assert.Single(lines);
-            using var statusDocument = lines[0];
-            Assert.True(statusDocument.RootElement.TryGetProperty("files", out _));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains($"exceeds the {QueryCommandRunner.BatchMaxLineChars} character limit", stderr);
+        var lines = ParseJsonLines(stdout);
+        Assert.Single(lines);
+        using var statusDocument = lines[0];
+        Assert.True(statusDocument.RootElement.TryGetProperty("files", out _));
     }
 
     [Fact]
     public void RunBatch_InvalidJsonDoesNotEchoParserMessage_Issue3425()
     {
         const string secret = "SECRET_BATCH_JSON_3425";
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_invalid_json");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var input = "[\"status\", " + secret + "\n";
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_invalid_json");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var input = "[\"status\", " + secret + "\n";
 
-            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
-                input,
-                () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+            input,
+            () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            using var document = ParseJsonOutput(stdout);
-            Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
-            Assert.Contains("invalid_batch_json: JsonException", document.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
-            Assert.DoesNotContain(secret, stdout, StringComparison.Ordinal);
-            Assert.DoesNotContain("not valid JSON", stdout, StringComparison.OrdinalIgnoreCase);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+        Assert.Contains("invalid_batch_json: JsonException", document.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("not valid JSON", stdout, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
     public void RunBatch_ArgumentCountExceedsLimit_ReturnsUsageError_Issue2891()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_too_many_args");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var values = Enumerable
-                .Range(0, QueryCommandRunner.BatchMaxArgumentCount + 2)
-                .Select(i => i == 0 ? "search" : $"arg{i}")
-                .ToArray();
-            var input = JsonSerializer.Serialize(values) + "\n";
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_too_many_args");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var values = Enumerable
+            .Range(0, QueryCommandRunner.BatchMaxArgumentCount + 2)
+            .Select(i => i == 0 ? "search" : $"arg{i}")
+            .ToArray();
+        var input = JsonSerializer.Serialize(values) + "\n";
 
-            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
-                input,
-                () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+            input,
+            () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains($"at most {QueryCommandRunner.BatchMaxArgumentCount} command arguments", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains($"at most {QueryCommandRunner.BatchMaxArgumentCount} command arguments", stderr);
     }
 
     [Fact]
     public void RunBatch_ArgumentAtLimitParsesBeforeDispatch_Issue3231()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_arg_at_limit");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var commandName = new string('x', QueryCommandRunner.BatchMaxArgumentChars);
-            var input = JsonSerializer.Serialize(new[] { commandName }) + "\n";
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_arg_at_limit");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var commandName = new string('x', QueryCommandRunner.BatchMaxArgumentChars);
+        var input = JsonSerializer.Serialize(new[] { commandName }) + "\n";
 
-            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
-                input,
-                () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+            input,
+            () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains("batch only supports query and read-only discovery commands", stderr);
-            Assert.DoesNotContain("character limit", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("batch only supports query and read-only discovery commands", stderr);
+        Assert.DoesNotContain("character limit", stderr);
     }
 
     [Fact]
     public void RunBatch_ArgumentExceedsLimitReturnsUsageError_Issue3231()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_arg_too_long");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var commandName = new string('x', QueryCommandRunner.BatchMaxArgumentChars + 1);
-            var input = JsonSerializer.Serialize(new[] { commandName }) + "\n";
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_arg_too_long");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var commandName = new string('x', QueryCommandRunner.BatchMaxArgumentChars + 1);
+        var input = JsonSerializer.Serialize(new[] { commandName }) + "\n";
 
-            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
-                input,
-                () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+            input,
+            () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains($"argument 1 exceeds the {QueryCommandRunner.BatchMaxArgumentChars} character limit", stderr);
-            Assert.DoesNotContain("batch only supports query and read-only discovery commands", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains($"argument 1 exceeds the {QueryCommandRunner.BatchMaxArgumentChars} character limit", stderr);
+        Assert.DoesNotContain("batch only supports query and read-only discovery commands", stderr);
     }
 
     [Fact]
     public void RunBatch_TooDeepJsonLine_ReturnsUsageError_Issue3022()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_json_depth");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var nestedPrefix = string.Concat(Enumerable.Repeat("""{"next":""", QueryCommandRunner.BatchMaxJsonDepth + 1));
-            var nested = nestedPrefix + "0" + new string('}', QueryCommandRunner.BatchMaxJsonDepth + 1);
-            var input = $$"""["status",{{nested}}]""" + "\n";
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_json_depth");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var nestedPrefix = string.Concat(Enumerable.Repeat("""{"next":""", QueryCommandRunner.BatchMaxJsonDepth + 1));
+        var nested = nestedPrefix + "0" + new string('}', QueryCommandRunner.BatchMaxJsonDepth + 1);
+        var input = $$"""["status",{{nested}}]""" + "\n";
 
-            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
-                input,
-                () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+            input,
+            () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            using var document = ParseJsonOutput(stdout);
-            Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
-            Assert.Contains("invalid_batch_json: JsonException", document.RootElement.GetProperty("message").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+        Assert.Contains("invalid_batch_json: JsonException", document.RootElement.GetProperty("message").GetString());
     }
 
     [Fact]
@@ -1677,77 +1536,63 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunSearchAndSymbols_ExactQueriesSeePythonInitAllExports()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_python_init_all_exports");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "package/__init__.py",
-                "python",
-                """
-                __all__ = [
-                    "public_api",
-                ]
-                """);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_python_init_all_exports");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "package/__init__.py",
+            "python",
+            """
+            __all__ = [
+                "public_api",
+            ]
+            """);
 
-            var (searchExitCode, searchStdout, searchStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["public_api", "--db", dbPath, "--exact", "--count"],
-                _jsonOptions));
-            var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["public_api", "--db", dbPath, "--lang", "python", "--exact-name", "--count"],
-                _jsonOptions));
+        var (searchExitCode, searchStdout, searchStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["public_api", "--db", dbPath, "--exact", "--count"],
+            _jsonOptions));
+        var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+            ["public_api", "--db", dbPath, "--lang", "python", "--exact-name", "--count"],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, searchExitCode);
-            Assert.Equal("1", searchStdout.Trim());
-            Assert.Equal(string.Empty, searchStderr);
+        Assert.Equal(CommandExitCodes.Success, searchExitCode);
+        Assert.Equal("1", searchStdout.Trim());
+        Assert.Equal(string.Empty, searchStderr);
 
-            Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
-            Assert.Equal("1", symbolsStdout.Trim());
-            Assert.Equal(string.Empty, symbolsStderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+        Assert.Equal("1", symbolsStdout.Trim());
+        Assert.Equal(string.Empty, symbolsStderr);
     }
 
     [Fact]
     public void RunSearchAndSymbols_AcceptPythonPyLangAlias()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_python_py_lang_alias");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "package/__init__.py",
-                "python",
-                """
-                __all__ = [
-                    "public_api",
-                ]
-                """);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_python_py_lang_alias");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "package/__init__.py",
+            "python",
+            """
+            __all__ = [
+                "public_api",
+            ]
+            """);
 
-            var (searchExitCode, searchStdout, searchStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["public_api", "--db", dbPath, "--lang", "py", "--exact", "--count"],
-                _jsonOptions));
-            var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["public_api", "--db", dbPath, "--lang", "py", "--exact-name", "--count"],
-                _jsonOptions));
+        var (searchExitCode, searchStdout, searchStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["public_api", "--db", dbPath, "--lang", "py", "--exact", "--count"],
+            _jsonOptions));
+        var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+            ["public_api", "--db", dbPath, "--lang", "py", "--exact-name", "--count"],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, searchExitCode);
-            Assert.Equal("1", searchStdout.Trim());
-            Assert.Equal(string.Empty, searchStderr);
+        Assert.Equal(CommandExitCodes.Success, searchExitCode);
+        Assert.Equal("1", searchStdout.Trim());
+        Assert.Equal(string.Empty, searchStderr);
 
-            Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
-            Assert.Equal("1", symbolsStdout.Trim());
-            Assert.Equal(string.Empty, symbolsStderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+        Assert.Equal("1", symbolsStdout.Trim());
+        Assert.Equal(string.Empty, symbolsStderr);
     }
 
 
@@ -1761,7 +1606,8 @@ public partial class QueryCommandRunnerTests
     [PublishedTrimmedCliFact]
     public void RunPublishedTrimmedCli_SerializesQueryJsonAndSupportsRazorAliases()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_trimmed_publish");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_query_trimmed_publish");
+        var projectRoot = project.Root;
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
@@ -1841,7 +1687,6 @@ public partial class QueryCommandRunnerTests
         finally
         {
             SqliteConnection.ClearAllPools();
-            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 
@@ -1852,35 +1697,28 @@ public partial class QueryCommandRunnerTests
     [InlineData("symbols", "--max-line-width", "10")]
     public void QueryCommands_RejectPreviewOptionsWhenUnsupported(string command, string option, string value)
     {
-        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_preview_reject_{command}");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope($"cdidx_preview_reject_{command}");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var args = new List<string>();
+        switch (command)
         {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var args = new List<string>();
-            switch (command)
-            {
-                case "definition":
-                case "search":
-                case "symbols":
-                    args.AddRange(["QueryCommandRunner", "--db", dbPath, option, value, "--count"]);
-                    break;
-            }
-
-            var (exitCode, _, stderr) = command switch
-            {
-                "definition" => CaptureConsole(() => QueryCommandRunner.RunDefinition([.. args], _jsonOptions)),
-                "search" => CaptureConsole(() => QueryCommandRunner.RunSearch([.. args], _jsonOptions)),
-                "symbols" => CaptureConsole(() => QueryCommandRunner.RunSymbols([.. args], _jsonOptions)),
-                _ => throw new InvalidOperationException($"Unexpected command: {command}")
-            };
-
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains($"{option} is not supported for {command}", stderr);
+            case "definition":
+            case "search":
+            case "symbols":
+                args.AddRange(["QueryCommandRunner", "--db", dbPath, option, value, "--count"]);
+                break;
         }
-        finally
+
+        var (exitCode, _, stderr) = command switch
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+            "definition" => CaptureConsole(() => QueryCommandRunner.RunDefinition([.. args], _jsonOptions)),
+            "search" => CaptureConsole(() => QueryCommandRunner.RunSearch([.. args], _jsonOptions)),
+            "symbols" => CaptureConsole(() => QueryCommandRunner.RunSymbols([.. args], _jsonOptions)),
+            _ => throw new InvalidOperationException($"Unexpected command: {command}")
+        };
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains($"{option} is not supported for {command}", stderr);
     }
 
 
@@ -2126,55 +1964,41 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void WithDb_InvalidSqliteFileSurfacesSqliteCategory_Issue2072()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2072_invalid_sqlite");
-        try
-        {
-            var dbPath = Path.Combine(projectRoot, "not-a-codeindex.db");
-            File.WriteAllText(dbPath, "this is not a sqlite database");
-            var dbUri = new Uri(dbPath).AbsoluteUri + "?mode=ro&immutable=1;Pooling=False";
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_issue2072_invalid_sqlite");
+        var dbPath = Path.Combine(project.Root, "not-a-codeindex.db");
+        File.WriteAllText(dbPath, "this is not a sqlite database");
+        var dbUri = new Uri(dbPath).AbsoluteUri + "?mode=ro&immutable=1;Pooling=False";
 
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
-                ["--db", dbUri],
-                _jsonOptions));
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--db", dbUri],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            Assert.Contains($"Error [{CommandErrorCodes.DbError}]: SQLite database error", stderr);
-            Assert.Contains("Hint: check `--db`, verify the index was written by a compatible cdidx version", stderr);
-            Assert.DoesNotContain("database error:", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Contains($"Error [{CommandErrorCodes.DbError}]: SQLite database error", stderr);
+        Assert.Contains("Hint: check `--db`, verify the index was written by a compatible cdidx version", stderr);
+        Assert.DoesNotContain("database error:", stderr);
     }
 
     [Fact]
     public void RunStatus_CorruptDbJsonReturnsStructuredError_Issue4338()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue4338_corrupt_status");
-        try
-        {
-            var dbPath = Path.Combine(projectRoot, "corrupt.db");
-            File.WriteAllText(dbPath, "this is not a sqlite database");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_issue4338_corrupt_status");
+        var dbPath = Path.Combine(project.Root, "corrupt.db");
+        File.WriteAllText(dbPath, "this is not a sqlite database");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
-                ["--db", dbPath, "--json"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--db", dbPath, "--json"],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            using var document = ParseJsonOutput(stdout);
-            var root = document.RootElement;
-            Assert.Equal("error", root.GetProperty("status").GetString());
-            Assert.Equal(CommandErrorCodes.DbError, root.GetProperty("error_code").GetString());
-            Assert.Equal("sqlite_error", root.GetProperty("category").GetString());
-            Assert.Contains("SQLite", root.GetProperty("message").GetString(), StringComparison.Ordinal);
-            Assert.Contains("rebuild", root.GetProperty("hint").GetString(), StringComparison.Ordinal);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var root = document.RootElement;
+        Assert.Equal("error", root.GetProperty("status").GetString());
+        Assert.Equal(CommandErrorCodes.DbError, root.GetProperty("error_code").GetString());
+        Assert.Equal("sqlite_error", root.GetProperty("category").GetString());
+        Assert.Contains("SQLite", root.GetProperty("message").GetString(), StringComparison.Ordinal);
+        Assert.Contains("rebuild", root.GetProperty("hint").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2213,28 +2037,21 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void WithDb_EmptySqliteFileRejectedBeforeQuery_Issue2037()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2037_empty_sqlite");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_issue2037_empty_sqlite");
+        var dbPath = Path.Combine(project.Root, "empty.db");
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
         {
-            var dbPath = Path.Combine(projectRoot, "empty.db");
-            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
-            {
-                connection.Open();
-            }
-
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
-                ["--db", dbPath],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            Assert.Contains("does not appear to be a valid CodeIndex database", stderr);
-            Assert.Contains("missing required table `files`", stderr);
-            Assert.Contains("Hint: rebuild with `cdidx index <projectPath> --db <path>`", stderr);
+            connection.Open();
         }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--db", dbPath],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Contains("does not appear to be a valid CodeIndex database", stderr);
+        Assert.Contains("missing required table `files`", stderr);
+        Assert.Contains("Hint: rebuild with `cdidx index <projectPath> --db <path>`", stderr);
     }
 
     [Fact]
@@ -2316,82 +2133,61 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void WithDb_MissingOversizedPathReturnsBoundedDiagnostics_Issue3093()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue3093_missing_db");
-        try
-        {
-            var missingDbPath = Path.Combine(
-                projectRoot,
-                Path.Combine(Enumerable.Repeat("segment", 40).ToArray()),
-                "codeindex.db");
-            var resolvedPath = Path.GetFullPath(missingDbPath);
-            Assert.True(resolvedPath.Length > SqliteFileUri.MaxDiagnosticValueLength);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_issue3093_missing_db");
+        var missingDbPath = Path.Combine(
+            project.Root,
+            Path.Combine(Enumerable.Repeat("segment", 40).ToArray()),
+            "codeindex.db");
+        var resolvedPath = Path.GetFullPath(missingDbPath);
+        Assert.True(resolvedPath.Length > SqliteFileUri.MaxDiagnosticValueLength);
 
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
-                ["--db", missingDbPath],
-                _jsonOptions));
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--db", missingDbPath],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains($"Error [{CommandErrorCodes.DbNotFound}]: --db '", stderr);
-            Assert.Contains("does not point to an existing database file", stderr);
-            Assert.Contains("...(truncated,", stderr);
-            Assert.DoesNotContain(resolvedPath, stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains($"Error [{CommandErrorCodes.DbNotFound}]: --db '", stderr);
+        Assert.Contains("does not point to an existing database file", stderr);
+        Assert.Contains("...(truncated,", stderr);
+        Assert.DoesNotContain(resolvedPath, stderr);
     }
 
     [Fact]
     public void RunBatch_MissingOversizedDbPathReturnsBoundedDiagnostics_Issue3093()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue3093_batch_db");
-        try
-        {
-            var missingDbPath = Path.Combine(
-                projectRoot,
-                Path.Combine(Enumerable.Repeat("segment", 40).ToArray()),
-                "codeindex.db");
-            var resolvedPath = Path.GetFullPath(missingDbPath);
-            Assert.True(resolvedPath.Length > SqliteFileUri.MaxDiagnosticValueLength);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_issue3093_batch_db");
+        var missingDbPath = Path.Combine(
+            project.Root,
+            Path.Combine(Enumerable.Repeat("segment", 40).ToArray()),
+            "codeindex.db");
+        var resolvedPath = Path.GetFullPath(missingDbPath);
+        Assert.True(resolvedPath.Length > SqliteFileUri.MaxDiagnosticValueLength);
 
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunBatch(
-                ["--db", missingDbPath],
-                _jsonOptions));
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunBatch(
+            ["--db", missingDbPath],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            Assert.Contains($"Error [{CommandErrorCodes.DbNotFound}]: database not found at ", stderr);
-            Assert.Contains("...(truncated,", stderr);
-            Assert.DoesNotContain(resolvedPath, stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Contains($"Error [{CommandErrorCodes.DbNotFound}]: database not found at ", stderr);
+        Assert.Contains("...(truncated,", stderr);
+        Assert.DoesNotContain(resolvedPath, stderr);
     }
 
     [Fact]
     public void WithDb_SqliteCantOpenSurfacesAccessOpenCategory_Issue2072()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2072_cantopen");
-        try
-        {
-            var missingParent = Path.Combine(projectRoot, "missing-parent");
-            var dbUri = new Uri(Path.Combine(missingParent, "codeindex.db")).AbsoluteUri + "?mode=ro";
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_issue2072_cantopen");
+        var missingParent = Path.Combine(project.Root, "missing-parent");
+        var dbUri = new Uri(Path.Combine(missingParent, "codeindex.db")).AbsoluteUri + "?mode=ro";
 
-            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
-                ["--db", dbUri],
-                _jsonOptions));
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--db", dbUri],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            Assert.Contains($"Error [{CommandErrorCodes.DbNotFound}]: database not found at {Path.GetFullPath(Path.Combine(missingParent, "codeindex.db"))}", stderr);
-            Assert.Contains("Hint: the --db path resolved to:", stderr);
-            Assert.DoesNotContain("database access/open denied", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Contains($"Error [{CommandErrorCodes.DbNotFound}]: database not found at {Path.GetFullPath(Path.Combine(missingParent, "codeindex.db"))}", stderr);
+        Assert.Contains("Hint: the --db path resolved to:", stderr);
+        Assert.DoesNotContain("database access/open denied", stderr);
     }
 
     [Theory]
@@ -2437,34 +2233,27 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunLanguages_JsonIndexedOnlyListsLanguagesPresentInDatabase()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_languages_indexed_only");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App { }\n");
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/Worker.cs", "csharp", "class Worker { }\n");
-            TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "# App\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_languages_indexed_only");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App { }\n");
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/Worker.cs", "csharp", "class Worker { }\n");
+        TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "# App\n");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() =>
-                QueryCommandRunner.RunLanguages(["--json", "--indexed-only", "--db", dbPath], _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(["--json", "--indexed-only", "--db", dbPath], _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
 
-            using var document = ParseJsonOutput(stdout);
-            var names = document.RootElement.GetProperty("languages").EnumerateArray()
-                .Select(lang => lang.GetProperty("lang").GetString())
-                .ToList();
+        using var document = ParseJsonOutput(stdout);
+        var names = document.RootElement.GetProperty("languages").EnumerateArray()
+            .Select(lang => lang.GetProperty("lang").GetString())
+            .ToList();
 
-            Assert.Equal(["csharp", "markdown"], names);
-            var csharp = document.RootElement.GetProperty("languages").EnumerateArray()
-                .Single(lang => lang.GetProperty("lang").GetString() == "csharp");
-            Assert.Equal(2, csharp.GetProperty("indexed_file_count").GetInt64());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(["csharp", "markdown"], names);
+        var csharp = document.RootElement.GetProperty("languages").EnumerateArray()
+            .Single(lang => lang.GetProperty("lang").GetString() == "csharp");
+        Assert.Equal(2, csharp.GetProperty("indexed_file_count").GetInt64());
     }
 
     [Theory]
@@ -2478,32 +2267,25 @@ public partial class QueryCommandRunnerTests
         string expectedLanguage,
         long expectedIndexedFileCount)
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_languages_lookup");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App { }\n");
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/Worker.cs", "csharp", "class Worker { }\n");
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.csproj", "msbuild", "<Project />\n");
-            TestProjectHelper.InsertIndexedFile(dbPath, "config/app.yml", "yaml", "name: app\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_languages_lookup");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App { }\n");
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/Worker.cs", "csharp", "class Worker { }\n");
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/App.csproj", "msbuild", "<Project />\n");
+        TestProjectHelper.InsertIndexedFile(dbPath, "config/app.yml", "yaml", "name: app\n");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() =>
-                QueryCommandRunner.RunLanguages(["--json", flag, value, "--db", dbPath], _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(["--json", flag, value, "--db", dbPath], _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
 
-            using var document = ParseJsonOutput(stdout);
-            var languages = document.RootElement.GetProperty("languages").EnumerateArray().ToList();
-            var language = Assert.Single(languages);
+        using var document = ParseJsonOutput(stdout);
+        var languages = document.RootElement.GetProperty("languages").EnumerateArray().ToList();
+        var language = Assert.Single(languages);
 
-            Assert.Equal(expectedLanguage, language.GetProperty("lang").GetString());
-            Assert.Equal(expectedIndexedFileCount, language.GetProperty("indexed_file_count").GetInt64());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(expectedLanguage, language.GetProperty("lang").GetString());
+        Assert.Equal(expectedIndexedFileCount, language.GetProperty("indexed_file_count").GetInt64());
     }
 
     [Theory]
@@ -2523,30 +2305,23 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunLanguages_JsonIndexedOnlyCombinesWithCapabilityFilter()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_languages_indexed_capability");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App { }\n");
-            TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "# App\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_languages_indexed_capability");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App { }\n");
+        TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "# App\n");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() =>
-                QueryCommandRunner.RunLanguages(["--json", "--indexed-only", "--capability", "graph", "--db", dbPath], _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(["--json", "--indexed-only", "--capability", "graph", "--db", dbPath], _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
 
-            using var document = ParseJsonOutput(stdout);
-            var names = document.RootElement.GetProperty("languages").EnumerateArray()
-                .Select(lang => lang.GetProperty("lang").GetString())
-                .ToList();
+        using var document = ParseJsonOutput(stdout);
+        var names = document.RootElement.GetProperty("languages").EnumerateArray()
+            .Select(lang => lang.GetProperty("lang").GetString())
+            .ToList();
 
-            Assert.Equal(["csharp", "markdown"], names);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(["csharp", "markdown"], names);
     }
 
     [Theory]
@@ -2612,35 +2387,28 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunLanguages_FormatCountReturnsCapabilitySummary_Issue4316()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_languages_format_count_issue4316");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App { }\n");
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/main.adb", "ada", "procedure Main is begin null; end Main;\n");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_languages_format_count_issue4316");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App { }\n");
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/main.adb", "ada", "procedure Main is begin null; end Main;\n");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() =>
-                QueryCommandRunner.RunLanguages(["--db", dbPath, "--indexed-only", "--capability", "missing-any", "--format", "count"], _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(["--db", dbPath, "--indexed-only", "--capability", "missing-any", "--format", "count"], _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
 
-            using var document = ParseJsonOutput(stdout);
-            var root = document.RootElement;
+        using var document = ParseJsonOutput(stdout);
+        var root = document.RootElement;
 
-            Assert.Equal("count", root.GetProperty("format").GetString());
-            Assert.True(root.GetProperty("count").GetInt32() > 0);
-            Assert.Equal(root.GetProperty("count").GetInt32(), root.GetProperty("language_count").GetInt32());
-            Assert.Equal(root.GetProperty("count").GetInt32(), root.GetProperty("indexed_language_count").GetInt32());
-            Assert.True(root.GetProperty("indexed_file_count").GetInt64() > 0);
-            Assert.Equal("missing-any", Assert.Single(root.GetProperty("capability_filters").EnumerateArray().ToList()).GetString());
-            Assert.Equal(root.GetProperty("count").GetInt32(), root.GetProperty("capability_counts").GetProperty("missing_any").GetInt32());
-            Assert.False(root.TryGetProperty("languages", out _));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal("count", root.GetProperty("format").GetString());
+        Assert.True(root.GetProperty("count").GetInt32() > 0);
+        Assert.Equal(root.GetProperty("count").GetInt32(), root.GetProperty("language_count").GetInt32());
+        Assert.Equal(root.GetProperty("count").GetInt32(), root.GetProperty("indexed_language_count").GetInt32());
+        Assert.True(root.GetProperty("indexed_file_count").GetInt64() > 0);
+        Assert.Equal("missing-any", Assert.Single(root.GetProperty("capability_filters").EnumerateArray().ToList()).GetString());
+        Assert.Equal(root.GetProperty("count").GetInt32(), root.GetProperty("capability_counts").GetProperty("missing_any").GetInt32());
+        Assert.False(root.TryGetProperty("languages", out _));
     }
 
     [Fact]
@@ -2854,48 +2622,41 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunSymbolsAndReferences_AcceptDependencyPackageKinds_Issue3899()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_dependency_package_kinds");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_dependency_package_kinds");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "Directory.Packages.props",
+            "dependency_manifest",
+            """
+            <Project>
+              <ItemGroup>
+                <PackageVersion Include="Serilog" Version="3.1.1" />
+              </ItemGroup>
+            </Project>
+            """);
+
+        using (var db = new DbContext(dbPath))
+        using (var cmd = db.Connection.CreateCommand())
         {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "Directory.Packages.props",
-                "dependency_manifest",
-                """
-                <Project>
-                  <ItemGroup>
-                    <PackageVersion Include="Serilog" Version="3.1.1" />
-                  </ItemGroup>
-                </Project>
-                """);
-
-            using (var db = new DbContext(dbPath))
-            using (var cmd = db.Connection.CreateCommand())
-            {
-                new DbWriter(db.Connection).MarkGraphReady();
-                cmd.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE symbol_name = 'Serilog' AND reference_kind = 'dependency'";
-                Assert.Equal(1L, (long)cmd.ExecuteScalar()!);
-            }
-
-            var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--lang", "dependency_manifest", "--kind", "package", "--count"],
-                _jsonOptions));
-            var (referencesExitCode, referencesStdout, referencesStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Serilog", "--db", dbPath, "--lang", "dependency_manifest", "--kind", "dependency", "--count"],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
-            Assert.Equal("1", symbolsStdout.Trim());
-            Assert.Equal(string.Empty, symbolsStderr);
-            Assert.Equal(CommandExitCodes.Success, referencesExitCode);
-            Assert.Equal("1", referencesStdout.Trim());
-            Assert.Equal(string.Empty, referencesStderr);
+            new DbWriter(db.Connection).MarkGraphReady();
+            cmd.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE symbol_name = 'Serilog' AND reference_kind = 'dependency'";
+            Assert.Equal(1L, (long)cmd.ExecuteScalar()!);
         }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+
+        var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+            ["--db", dbPath, "--lang", "dependency_manifest", "--kind", "package", "--count"],
+            _jsonOptions));
+        var (referencesExitCode, referencesStdout, referencesStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+            ["Serilog", "--db", dbPath, "--lang", "dependency_manifest", "--kind", "dependency", "--count"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+        Assert.Equal("1", symbolsStdout.Trim());
+        Assert.Equal(string.Empty, symbolsStderr);
+        Assert.Equal(CommandExitCodes.Success, referencesExitCode);
+        Assert.Equal("1", referencesStdout.Trim());
+        Assert.Equal(string.Empty, referencesStderr);
     }
 
     [Fact]
@@ -3321,82 +3082,74 @@ public partial class QueryCommandRunnerTests
     [InlineData("excerpt", "-1", "--after", "--after requires an integer between 0 and 1000")]
     public void QueryEntrypoints_OutOfRangeNumericOptionsFailClosed_Issue161(string command, string value, string option, string expectedErrorFragment)
     {
-        var projectRoot = TestProjectHelper.CreateTempProject(
+        using var project = TestProjectHelper.CreateTempProjectScope(
             $"cdidx_issue161_{command}_{option.Trim('-')}_{value.Replace('-', 'n')}");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            // Seed indexed content so `search "Issue161"`, `symbols "Issue161"`, and
-            // `impact "Issue161Callee"` would all return real matches if ParseArgs regressed.
-            // Issue161Caller.Run calls Issue161Target.Issue161Callee, giving `impact` a live edge.
-            // `search "Issue161"` / `symbols "Issue161"` が本物の結果を返せるよう、index 済み内容をシードする。
-            // Issue161Caller.Run が Issue161Target.Issue161Callee を呼ぶことで `impact` のエッジも張る。
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/Issue161Target.cs",
-                "csharp",
-                """"
-                namespace Issue161;
-                public class Issue161Target
-                {
-                    public void Issue161Callee() { }
-                }
-                public class Issue161Caller
-                {
-                    public void Run()
-                    {
-                        var target = new Issue161Target();
-                        target.Issue161Callee();
-                    }
-                }
-                """");
-            MarkGraphAndFoldReady(dbPath);
-
-            // Real file on disk so `excerpt` would actually read and print content
-            // if any of its numeric options regressed to their defaults.
-            // `excerpt` が既定値退行時に本当にファイル内容を読んで出力できるよう、実在ファイルも用意する。
-            var excerptDir = Path.Combine(projectRoot, "src");
-            Directory.CreateDirectory(excerptDir);
-            var excerptFilePath = Path.Combine(excerptDir, "Issue161Excerpt.cs");
-            File.WriteAllText(
-                excerptFilePath,
-                "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\n");
-
-            string[] args = command switch
+        var projectRoot = project.Root;
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        // Seed indexed content so `search "Issue161"`, `symbols "Issue161"`, and
+        // `impact "Issue161Callee"` would all return real matches if ParseArgs regressed.
+        // Issue161Caller.Run calls Issue161Target.Issue161Callee, giving `impact` a live edge.
+        // `search "Issue161"` / `symbols "Issue161"` が本物の結果を返せるよう、index 済み内容をシードする。
+        // Issue161Caller.Run が Issue161Target.Issue161Callee を呼ぶことで `impact` のエッジも張る。
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/Issue161Target.cs",
+            "csharp",
+            """"
+            namespace Issue161;
+            public class Issue161Target
             {
-                "symbols" => ["Issue161", "--db", dbPath, "--json", option, value],
-                "search" => ["Issue161", "--db", dbPath, "--json", option, value],
-                "impact" => ["Issue161Callee", "--db", dbPath, "--json", option, value],
-                "excerpt" when option == "--start" => [excerptFilePath, "--json", option, value],
-                "excerpt" => [excerptFilePath, "--json", "--start", "1", option, value],
-                _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
-            };
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => command switch
+                public void Issue161Callee() { }
+            }
+            public class Issue161Caller
             {
-                "symbols" => QueryCommandRunner.RunSymbols(args, _jsonOptions),
-                "search" => QueryCommandRunner.RunSearch(args, _jsonOptions),
-                "impact" => QueryCommandRunner.RunImpact(args, _jsonOptions),
-                "excerpt" => QueryCommandRunner.RunExcerpt(args, _jsonOptions),
-                _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
-            });
+                public void Run()
+                {
+                    var target = new Issue161Target();
+                    target.Issue161Callee();
+                }
+            }
+            """");
+        MarkGraphAndFoldReady(dbPath);
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            // The #161 bug was exactly this: real results on stdout alongside the stderr Error.
-            // stdout must stay empty so callers that branch on exit code alone cannot consume
-            // silently-defaulted output as if it were valid data.
-            // #161 の本質はここ。exit code だけを見る呼び出し元がデフォルト差し替えの出力を
-            // 正当な結果として消費しないよう、stdout は空でなければならない。
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains(expectedErrorFragment, stderr);
-            Assert.Contains($"got '{value}'", stderr);
-            Assert.Contains("Hint: fix the invalid or missing option value", stderr);
-            Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
-        }
-        finally
+        // Real file on disk so `excerpt` would actually read and print content
+        // if any of its numeric options regressed to their defaults.
+        // `excerpt` が既定値退行時に本当にファイル内容を読んで出力できるよう、実在ファイルも用意する。
+        var excerptFilePath = TestProjectHelper.WriteTextFile(
+            projectRoot,
+            "src/Issue161Excerpt.cs",
+            "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\n");
+
+        string[] args = command switch
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+            "symbols" => ["Issue161", "--db", dbPath, "--json", option, value],
+            "search" => ["Issue161", "--db", dbPath, "--json", option, value],
+            "impact" => ["Issue161Callee", "--db", dbPath, "--json", option, value],
+            "excerpt" when option == "--start" => [excerptFilePath, "--json", option, value],
+            "excerpt" => [excerptFilePath, "--json", "--start", "1", option, value],
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        };
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => command switch
+        {
+            "symbols" => QueryCommandRunner.RunSymbols(args, _jsonOptions),
+            "search" => QueryCommandRunner.RunSearch(args, _jsonOptions),
+            "impact" => QueryCommandRunner.RunImpact(args, _jsonOptions),
+            "excerpt" => QueryCommandRunner.RunExcerpt(args, _jsonOptions),
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        });
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        // The #161 bug was exactly this: real results on stdout alongside the stderr Error.
+        // stdout must stay empty so callers that branch on exit code alone cannot consume
+        // silently-defaulted output as if it were valid data.
+        // #161 の本質はここ。exit code だけを見る呼び出し元がデフォルト差し替えの出力を
+        // 正当な結果として消費しないよう、stdout は空でなければならない。
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains(expectedErrorFragment, stderr);
+        Assert.Contains($"got '{value}'", stderr);
+        Assert.Contains("Hint: fix the invalid or missing option value", stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
     }
 
     [Fact]
@@ -3437,35 +3190,28 @@ public partial class QueryCommandRunnerTests
     public void QueryEntrypoints_RecognizedOptionAsValueFailsClosed_Issue184(string[] commandAndArgs, string expectedFragment)
     {
         var command = commandAndArgs[0];
-        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_issue184_{command}_{expectedFragment.GetHashCode():x}");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/Issue184.cs",
-                "csharp",
-                "namespace Issue184; public class T { public void M() { } }");
-            MarkGraphAndFoldReady(dbPath);
+        using var project = TestProjectHelper.CreateTempProjectScope($"cdidx_issue184_{command}_{expectedFragment.GetHashCode():x}");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/Issue184.cs",
+            "csharp",
+            "namespace Issue184; public class T { public void M() { } }");
+        MarkGraphAndFoldReady(dbPath);
 
-            var args = commandAndArgs.Skip(1).Concat(new[] { "--db", dbPath, "--json" }).ToArray();
-            var (exitCode, stdout, stderr) = CaptureConsole(() => command switch
-            {
-                "search" => QueryCommandRunner.RunSearch(args, _jsonOptions),
-                "symbols" => QueryCommandRunner.RunSymbols(args, _jsonOptions),
-                "impact" => QueryCommandRunner.RunImpact(args, _jsonOptions),
-                _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
-            });
-
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains(expectedFragment, stderr);
-            Assert.Contains("Hint: fix the invalid or missing option value", stderr);
-        }
-        finally
+        var args = commandAndArgs.Skip(1).Concat(new[] { "--db", dbPath, "--json" }).ToArray();
+        var (exitCode, stdout, stderr) = CaptureConsole(() => command switch
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+            "search" => QueryCommandRunner.RunSearch(args, _jsonOptions),
+            "symbols" => QueryCommandRunner.RunSymbols(args, _jsonOptions),
+            "impact" => QueryCommandRunner.RunImpact(args, _jsonOptions),
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        });
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains(expectedFragment, stderr);
+        Assert.Contains("Hint: fix the invalid or missing option value", stderr);
     }
 
     // Regression lock for #184: non-repeatable value-taking options specified more than once
@@ -3482,49 +3228,42 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void QueryEntrypoints_DuplicateSingleValueOptionsWarn_Issue184()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue184_dup_single_value");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/Issue184.cs",
-                "csharp",
-                "namespace Issue184; public class T { public void M() { } }");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_issue184_dup_single_value");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/Issue184.cs",
+            "csharp",
+            "namespace Issue184; public class T { public void M() { } }");
 
-            // Warnings must fire even when the command itself returns zero results (NotFound);
-            // the duplicate flag warning is an argv-parsing concern, not a result-set concern.
-            // NotFound 等のゼロ件応答でも warn は出るべき。重複フラグは argv 解析段階の関心事で、
-            // 検索結果の有無とは独立している。
+        // Warnings must fire even when the command itself returns zero results (NotFound);
+        // the duplicate flag warning is an argv-parsing concern, not a result-set concern.
+        // NotFound 等のゼロ件応答でも warn は出るべき。重複フラグは argv 解析段階の関心事で、
+        // 検索結果の有無とは独立している。
 
-            // --limit appears twice with different values: rightmost CLI value wins, warning emitted.
-            var (exitLimit, _, stderrLimit) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["Issue184", "--db", dbPath, "--json", "--limit", "5", "--limit", "10"], _jsonOptions));
-            Assert.NotEqual(CommandExitCodes.UsageError, exitLimit);
-            Assert.Contains("Warning: --limit specified more than once; the rightmost CLI value '10' takes precedence over earlier CLI values and any environment/config default.", stderrLimit);
+        // --limit appears twice with different values: rightmost CLI value wins, warning emitted.
+        var (exitLimit, _, stderrLimit) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["Issue184", "--db", dbPath, "--json", "--limit", "5", "--limit", "10"], _jsonOptions));
+        Assert.NotEqual(CommandExitCodes.UsageError, exitLimit);
+        Assert.Contains("Warning: --limit specified more than once; the rightmost CLI value '10' takes precedence over earlier CLI values and any environment/config default.", stderrLimit);
 
-            // --top is canonicalized to --limit, so `--limit 5 --top 10` also warns.
-            var (exitTop, _, stderrTop) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["Issue184", "--db", dbPath, "--json", "--limit", "5", "--top", "10"], _jsonOptions));
-            Assert.NotEqual(CommandExitCodes.UsageError, exitTop);
-            Assert.Contains("Warning: --limit specified more than once; the rightmost CLI value '10' takes precedence over earlier CLI values and any environment/config default.", stderrTop);
+        // --top is canonicalized to --limit, so `--limit 5 --top 10` also warns.
+        var (exitTop, _, stderrTop) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["Issue184", "--db", dbPath, "--json", "--limit", "5", "--top", "10"], _jsonOptions));
+        Assert.NotEqual(CommandExitCodes.UsageError, exitTop);
+        Assert.Contains("Warning: --limit specified more than once; the rightmost CLI value '10' takes precedence over earlier CLI values and any environment/config default.", stderrTop);
 
-            // Single --limit must NOT warn.
-            var (exitSingle, _, stderrSingle) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["Issue184", "--db", dbPath, "--json", "--limit", "10"], _jsonOptions));
-            Assert.NotEqual(CommandExitCodes.UsageError, exitSingle);
-            Assert.DoesNotContain("specified more than once", stderrSingle);
+        // Single --limit must NOT warn.
+        var (exitSingle, _, stderrSingle) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["Issue184", "--db", dbPath, "--json", "--limit", "10"], _jsonOptions));
+        Assert.NotEqual(CommandExitCodes.UsageError, exitSingle);
+        Assert.DoesNotContain("specified more than once", stderrSingle);
 
-            // Repeatable --path must NOT warn on repetition.
-            var (exitPath, _, stderrPath) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["Issue184", "--db", dbPath, "--json", "--path", "src/**", "--path", "tests/**"], _jsonOptions));
-            Assert.NotEqual(CommandExitCodes.UsageError, exitPath);
-            Assert.DoesNotContain("specified more than once", stderrPath);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        // Repeatable --path must NOT warn on repetition.
+        var (exitPath, _, stderrPath) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["Issue184", "--db", dbPath, "--json", "--path", "src/**", "--path", "tests/**"], _jsonOptions));
+        Assert.NotEqual(CommandExitCodes.UsageError, exitPath);
+        Assert.DoesNotContain("specified more than once", stderrPath);
     }
 
     // Regression lock for #184 follow-up: options that legitimately accept separated
@@ -3545,31 +3284,24 @@ public partial class QueryCommandRunnerTests
     [InlineData("--exclude-path")]
     public void QueryEntrypoints_DashedLiteralOptionsKeepHint_Issue184(string optionName)
     {
-        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_issue184_dashed_literal_{optionName.TrimStart('-')}");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/Issue184.cs",
-                "csharp",
-                "namespace Issue184; public class T { public void M() { } }");
+        using var project = TestProjectHelper.CreateTempProjectScope($"cdidx_issue184_dashed_literal_{optionName.TrimStart('-')}");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/Issue184.cs",
+            "csharp",
+            "namespace Issue184; public class T { public void M() { } }");
 
-            string[] args = optionName == "--db"
-                ? ["Issue184", optionName, "--json"]
-                : ["Issue184", "--db", dbPath, optionName, "--json"];
+        string[] args = optionName == "--db"
+            ? ["Issue184", optionName, "--json"]
+            : ["Issue184", "--db", dbPath, optionName, "--json"];
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(args, _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(args, _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains($"{optionName} requires a value", stderr);
-            Assert.Contains($"pass it as `{optionName}=<value>`", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains($"{optionName} requires a value", stderr);
+        Assert.Contains($"pass it as `{optionName}=<value>`", stderr);
     }
 
 
@@ -3607,72 +3339,64 @@ public partial class QueryCommandRunnerTests
     [InlineData("excerpt", "4097", true)]
     public void QueryEntrypoints_MaxLineWidthAboveCeilingFailClosed_Issue196(string command, string value, bool useInlineEquals)
     {
-        var projectRoot = TestProjectHelper.CreateTempProject(
+        using var project = TestProjectHelper.CreateTempProjectScope(
             $"cdidx_issue196_maxlinewidth_{command}_{value}_{(useInlineEquals ? "inline" : "space")}");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/Issue196Target.cs",
-                "csharp",
-                """"
-                namespace Issue196;
-                public class Issue196Target
-                {
-                    public void Issue196Callee() { }
-                }
-                public class Issue196Caller
-                {
-                    public void Run()
-                    {
-                        var target = new Issue196Target();
-                        target.Issue196Callee();
-                    }
-                }
-                """");
-            MarkGraphAndFoldReady(dbPath);
-
-            var excerptDir = Path.Combine(projectRoot, "src");
-            Directory.CreateDirectory(excerptDir);
-            var excerptFilePath = Path.Combine(excerptDir, "Issue196Excerpt.cs");
-            File.WriteAllText(
-                excerptFilePath,
-                "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\n");
-
-            string[] maxLineWidthArgs = useInlineEquals
-                ? [$"--max-line-width={value}"]
-                : ["--max-line-width", value];
-            string[] args = command switch
+        var projectRoot = project.Root;
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/Issue196Target.cs",
+            "csharp",
+            """"
+            namespace Issue196;
+            public class Issue196Target
             {
-                "search" => ["Issue196", "--db", dbPath, "--json", .. maxLineWidthArgs],
-                "references" => ["Issue196Callee", "--db", dbPath, "--json", .. maxLineWidthArgs],
-                "inspect" => ["Issue196Target", "--db", dbPath, "--json", .. maxLineWidthArgs],
-                "find" => ["Issue196", "--path", excerptFilePath, "--db", dbPath, "--json", .. maxLineWidthArgs],
-                "excerpt" => [excerptFilePath, "--db", dbPath, "--start", "1", "--end", "1", "--json", .. maxLineWidthArgs],
-                _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
-            };
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => command switch
+                public void Issue196Callee() { }
+            }
+            public class Issue196Caller
             {
-                "search" => QueryCommandRunner.RunSearch(args, _jsonOptions),
-                "references" => QueryCommandRunner.RunReferences(args, _jsonOptions),
-                "inspect" => QueryCommandRunner.RunInspect(args, _jsonOptions),
-                "find" => QueryCommandRunner.RunFind(args, _jsonOptions),
-                "excerpt" => QueryCommandRunner.RunExcerpt(args, _jsonOptions),
-                _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
-            });
+                public void Run()
+                {
+                    var target = new Issue196Target();
+                    target.Issue196Callee();
+                }
+            }
+            """");
+        MarkGraphAndFoldReady(dbPath);
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains($"--max-line-width must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth}", stderr);
-            Assert.Contains($"got '{value}'", stderr);
-            Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
-        }
-        finally
+        var excerptFilePath = TestProjectHelper.WriteTextFile(
+            projectRoot,
+            "src/Issue196Excerpt.cs",
+            "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\n");
+
+        string[] maxLineWidthArgs = useInlineEquals
+            ? [$"--max-line-width={value}"]
+            : ["--max-line-width", value];
+        string[] args = command switch
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+            "search" => ["Issue196", "--db", dbPath, "--json", .. maxLineWidthArgs],
+            "references" => ["Issue196Callee", "--db", dbPath, "--json", .. maxLineWidthArgs],
+            "inspect" => ["Issue196Target", "--db", dbPath, "--json", .. maxLineWidthArgs],
+            "find" => ["Issue196", "--path", excerptFilePath, "--db", dbPath, "--json", .. maxLineWidthArgs],
+            "excerpt" => [excerptFilePath, "--db", dbPath, "--start", "1", "--end", "1", "--json", .. maxLineWidthArgs],
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        };
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => command switch
+        {
+            "search" => QueryCommandRunner.RunSearch(args, _jsonOptions),
+            "references" => QueryCommandRunner.RunReferences(args, _jsonOptions),
+            "inspect" => QueryCommandRunner.RunInspect(args, _jsonOptions),
+            "find" => QueryCommandRunner.RunFind(args, _jsonOptions),
+            "excerpt" => QueryCommandRunner.RunExcerpt(args, _jsonOptions),
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        });
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains($"--max-line-width must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth}", stderr);
+        Assert.Contains($"got '{value}'", stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
     }
 
 
@@ -3722,40 +3446,33 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunFindThenExcerpt_JsonKeepsMatchedTokenVisible()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_excerpt_flow");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var longLine = new string('a', 320) + "TARGET" + new string('b', 320);
-            TestProjectHelper.InsertIndexedFile(dbPath, "dist/data.txt", "text", longLine);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_find_excerpt_flow");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var longLine = new string('a', 320) + "TARGET" + new string('b', 320);
+        TestProjectHelper.InsertIndexedFile(dbPath, "dist/data.txt", "text", longLine);
 
-            var (findExitCode, findStdout, findStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
-                ["TARGET", "--db", dbPath, "--path", "dist/data.txt", "--json", "--exact", "--max-line-width", "96"],
-                _jsonOptions));
+        var (findExitCode, findStdout, findStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+            ["TARGET", "--db", dbPath, "--path", "dist/data.txt", "--json", "--exact", "--max-line-width", "96"],
+            _jsonOptions));
 
-            using var findDocument = ParseJsonOutput(findStdout);
-            var findJson = findDocument.RootElement;
-            var line = findJson.GetProperty("line").GetInt32();
-            var column = findJson.GetProperty("column").GetInt32();
+        using var findDocument = ParseJsonOutput(findStdout);
+        var findJson = findDocument.RootElement;
+        var line = findJson.GetProperty("line").GetInt32();
+        var column = findJson.GetProperty("column").GetInt32();
 
-            var (excerptExitCode, excerptStdout, excerptStderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
-                ["dist/data.txt", "--db", dbPath, "--start", line.ToString(), "--end", line.ToString(), "--json", "--max-line-width", "96", "--focus-column", column.ToString(), "--focus-length", "6"],
-                _jsonOptions));
+        var (excerptExitCode, excerptStdout, excerptStderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+            ["dist/data.txt", "--db", dbPath, "--start", line.ToString(), "--end", line.ToString(), "--json", "--max-line-width", "96", "--focus-column", column.ToString(), "--focus-length", "6"],
+            _jsonOptions));
 
-            using var excerptDocument = ParseJsonOutput(excerptStdout);
-            var excerptJson = excerptDocument.RootElement;
+        using var excerptDocument = ParseJsonOutput(excerptStdout);
+        var excerptJson = excerptDocument.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, findExitCode);
-            Assert.Equal(string.Empty, findStderr);
-            Assert.Equal(CommandExitCodes.Success, excerptExitCode);
-            Assert.Equal(string.Empty, excerptStderr);
-            Assert.Contains("TARGET", excerptJson.GetProperty("content").GetString());
-            Assert.True(excerptJson.GetProperty("content_truncated").GetBoolean());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, findExitCode);
+        Assert.Equal(string.Empty, findStderr);
+        Assert.Equal(CommandExitCodes.Success, excerptExitCode);
+        Assert.Equal(string.Empty, excerptStderr);
+        Assert.Contains("TARGET", excerptJson.GetProperty("content").GetString());
+        Assert.True(excerptJson.GetProperty("content_truncated").GetBoolean());
     }
 
 
@@ -3809,29 +3526,22 @@ public partial class QueryCommandRunnerTests
         // caller edge として誤って返す。`import` 行は runtime call ではなく構造的な dependency
         // edge なので callers/callees では graph edge として答えられない。正しい経路は
         // `references <name> --kind attribute|annotation|type_reference|import`。
-        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_{command}_reject_kind_{kind}");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var args = new[] { "Symbol", "--db", dbPath, "--kind", kind };
+        using var project = TestProjectHelper.CreateTempProjectScope($"cdidx_{command}_reject_kind_{kind}");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var args = new[] { "Symbol", "--db", dbPath, "--kind", kind };
 
-            var (exitCode, _, stderr) = command switch
-            {
-                "callers" => CaptureConsole(() => QueryCommandRunner.RunCallers(args, _jsonOptions)),
-                "callees" => CaptureConsole(() => QueryCommandRunner.RunCallees(args, _jsonOptions)),
-                _ => throw new InvalidOperationException($"Unexpected command: {command}")
-            };
-
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains($"'--kind {kind}' is not supported on '{command}'", stderr);
-            Assert.Contains($"references <name> --kind {kind}", stderr);
-            if (kind == "import")
-                Assert.Contains("Import references are structural dependency edges, not runtime calls", stderr);
-        }
-        finally
+        var (exitCode, _, stderr) = command switch
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+            "callers" => CaptureConsole(() => QueryCommandRunner.RunCallers(args, _jsonOptions)),
+            "callees" => CaptureConsole(() => QueryCommandRunner.RunCallees(args, _jsonOptions)),
+            _ => throw new InvalidOperationException($"Unexpected command: {command}")
+        };
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains($"'--kind {kind}' is not supported on '{command}'", stderr);
+        Assert.Contains($"references <name> --kind {kind}", stderr);
+        if (kind == "import")
+            Assert.Contains("Import references are structural dependency edges, not runtime calls", stderr);
     }
 
 
@@ -3903,115 +3613,108 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunExactNameQueries_StaleCSharpVerbatimCanonicalNamesReportDegradedState_Issue628()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_verbatim_stale_issue628");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/Verbatim.cs",
-                "csharp",
-                """
-                using Outer.@class;
-                using System.Collections.Generic;
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_symbols_csharp_verbatim_stale_issue628");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/Verbatim.cs",
+            "csharp",
+            """
+            using Outer.@class;
+            using System.Collections.Generic;
 
-                namespace Outer.@class;
+            namespace Outer.@class;
 
-                public class Target
-                {
-                }
-
-                public class C
-                {
-                    public static implicit operator List<@class>(C value) => new();
-                }
-                """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/GlobalType.cs",
-                "csharp",
-                """
-                public class @class
-                {
-                }
-                """);
-
-            using (var db = new DbContext(dbPath))
+            public class Target
             {
-                using var cmd = db.Connection.CreateCommand();
-                cmd.CommandText = """
-                    UPDATE symbols
-                    SET name = 'Outer.@class',
-                        name_folded = 'outer.@class'
-                    WHERE kind = 'namespace' AND name = 'Outer.class';
-                    UPDATE symbols
-                    SET name = 'Outer.@class',
-                        name_folded = 'outer.@class'
-                    WHERE kind = 'import' AND name = 'Outer.class';
-                    UPDATE symbols
-                    SET name = '@class',
-                        name_folded = '@class'
-                    WHERE kind = 'class' AND name = 'class';
-                    UPDATE symbols
-                    SET container_name = 'Outer.@class'
-                    WHERE container_name = 'Outer.class';
-                    UPDATE symbols
-                    SET name = 'implicit operator List<@class>',
-                        name_folded = 'implicit operator list<@class>'
-                    WHERE kind = 'operator' AND name = 'implicit operator List<class>';
-                    DELETE FROM codeindex_meta WHERE key = 'csharp_symbol_name_contract_version';
-                    """;
-                cmd.ExecuteNonQuery();
             }
 
-            var degradedReasonToken = "verbatim identifier";
+            public class C
+            {
+                public static implicit operator List<@class>(C value) => new();
+            }
+            """);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/GlobalType.cs",
+            "csharp",
+            """
+            public class @class
+            {
+            }
+            """);
 
-            var (classExitCode, classStdout, classStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "class", "--name", "class", "--exact-name", "--count"],
-                _jsonOptions));
-
-            using var classDocument = ParseJsonOutput(classStdout);
-            var classJson = classDocument.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, classExitCode);
-            Assert.Equal(string.Empty, classStderr);
-            Assert.Equal(0, classJson.GetProperty("count").GetInt32());
-            Assert.False(classJson.GetProperty("exact_index_available").GetBoolean());
-            Assert.Contains("csharp_symbol_name_ready=false", classJson.GetProperty("degraded_reason").GetString());
-            Assert.Contains(degradedReasonToken, classJson.GetProperty("degraded_reason").GetString());
-
-            var (namespaceExitCode, namespaceStdout, namespaceStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
-                ["Outer.class", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp", "--kind", "namespace", "--count"],
-                _jsonOptions));
-
-            using var namespaceDocument = ParseJsonOutput(namespaceStdout);
-            var namespaceJson = namespaceDocument.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, namespaceExitCode);
-            Assert.Equal(string.Empty, namespaceStderr);
-            Assert.Equal(0, namespaceJson.GetProperty("count").GetInt32());
-            Assert.False(namespaceJson.GetProperty("exact_index_available").GetBoolean());
-            Assert.Contains("csharp_symbol_name_ready=false", namespaceJson.GetProperty("degraded_reason").GetString());
-            Assert.Contains(degradedReasonToken, namespaceJson.GetProperty("degraded_reason").GetString());
-
-            var (operatorExitCode, operatorStdout, operatorStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "operator", "--name", "implicit operator List<class>", "--exact-name", "--count"],
-                _jsonOptions));
-
-            using var operatorDocument = ParseJsonOutput(operatorStdout);
-            var operatorJson = operatorDocument.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, operatorExitCode);
-            Assert.Equal(string.Empty, operatorStderr);
-            Assert.Equal(0, operatorJson.GetProperty("count").GetInt32());
-            Assert.False(operatorJson.GetProperty("exact_index_available").GetBoolean());
-            Assert.Contains("csharp_symbol_name_ready=false", operatorJson.GetProperty("degraded_reason").GetString());
-            Assert.Contains(degradedReasonToken, operatorJson.GetProperty("degraded_reason").GetString());
-        }
-        finally
+        using (var db = new DbContext(dbPath))
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
+            using var cmd = db.Connection.CreateCommand();
+            cmd.CommandText = """
+                UPDATE symbols
+                SET name = 'Outer.@class',
+                    name_folded = 'outer.@class'
+                WHERE kind = 'namespace' AND name = 'Outer.class';
+                UPDATE symbols
+                SET name = 'Outer.@class',
+                    name_folded = 'outer.@class'
+                WHERE kind = 'import' AND name = 'Outer.class';
+                UPDATE symbols
+                SET name = '@class',
+                    name_folded = '@class'
+                WHERE kind = 'class' AND name = 'class';
+                UPDATE symbols
+                SET container_name = 'Outer.@class'
+                WHERE container_name = 'Outer.class';
+                UPDATE symbols
+                SET name = 'implicit operator List<@class>',
+                    name_folded = 'implicit operator list<@class>'
+                WHERE kind = 'operator' AND name = 'implicit operator List<class>';
+                DELETE FROM codeindex_meta WHERE key = 'csharp_symbol_name_contract_version';
+                """;
+            cmd.ExecuteNonQuery();
         }
+
+        var degradedReasonToken = "verbatim identifier";
+
+        var (classExitCode, classStdout, classStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+            ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "class", "--name", "class", "--exact-name", "--count"],
+            _jsonOptions));
+
+        using var classDocument = ParseJsonOutput(classStdout);
+        var classJson = classDocument.RootElement;
+
+        Assert.Equal(CommandExitCodes.Success, classExitCode);
+        Assert.Equal(string.Empty, classStderr);
+        Assert.Equal(0, classJson.GetProperty("count").GetInt32());
+        Assert.False(classJson.GetProperty("exact_index_available").GetBoolean());
+        Assert.Contains("csharp_symbol_name_ready=false", classJson.GetProperty("degraded_reason").GetString());
+        Assert.Contains(degradedReasonToken, classJson.GetProperty("degraded_reason").GetString());
+
+        var (namespaceExitCode, namespaceStdout, namespaceStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+            ["Outer.class", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp", "--kind", "namespace", "--count"],
+            _jsonOptions));
+
+        using var namespaceDocument = ParseJsonOutput(namespaceStdout);
+        var namespaceJson = namespaceDocument.RootElement;
+
+        Assert.Equal(CommandExitCodes.Success, namespaceExitCode);
+        Assert.Equal(string.Empty, namespaceStderr);
+        Assert.Equal(0, namespaceJson.GetProperty("count").GetInt32());
+        Assert.False(namespaceJson.GetProperty("exact_index_available").GetBoolean());
+        Assert.Contains("csharp_symbol_name_ready=false", namespaceJson.GetProperty("degraded_reason").GetString());
+        Assert.Contains(degradedReasonToken, namespaceJson.GetProperty("degraded_reason").GetString());
+
+        var (operatorExitCode, operatorStdout, operatorStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+            ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "operator", "--name", "implicit operator List<class>", "--exact-name", "--count"],
+            _jsonOptions));
+
+        using var operatorDocument = ParseJsonOutput(operatorStdout);
+        var operatorJson = operatorDocument.RootElement;
+
+        Assert.Equal(CommandExitCodes.Success, operatorExitCode);
+        Assert.Equal(string.Empty, operatorStderr);
+        Assert.Equal(0, operatorJson.GetProperty("count").GetInt32());
+        Assert.False(operatorJson.GetProperty("exact_index_available").GetBoolean());
+        Assert.Contains("csharp_symbol_name_ready=false", operatorJson.GetProperty("degraded_reason").GetString());
+        Assert.Contains(degradedReasonToken, operatorJson.GetProperty("degraded_reason").GetString());
     }
 
 
@@ -4020,121 +3723,115 @@ public partial class QueryCommandRunnerTests
     [ProductionRuntimeFact]
     public void RunSymbolsOutlineAndInspect_CSharpInterfaceAndStructContainerMetadataRoundTrips()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_container_metadata_roundtrip_issue474");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "fixture.cs"),
-                """
-                namespace EventMods
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_query_runner_container_metadata_roundtrip_issue474");
+        var projectRoot = project.Root;
+        TestProjectHelper.WriteTextFile(
+            projectRoot,
+            "src/fixture.cs",
+            """
+            namespace EventMods
+            {
+                using System;
+
+                public interface IBus
                 {
-                    using System;
-
-                    public interface IBus
-                    {
-                        event EventHandler Regular;
-                        static abstract event EventHandler StaticAbs;
-                        static virtual event EventHandler StaticVirt { add { } remove { } }
-                    }
+                    event EventHandler Regular;
+                    static abstract event EventHandler StaticAbs;
+                    static virtual event EventHandler StaticVirt { add { } remove { } }
                 }
+            }
 
-                namespace Demo
+            namespace Demo
+            {
+                public struct S
                 {
-                    public struct S
-                    {
-                        public int P { get; set; }
-                        public event System.EventHandler E;
-                    }
+                    public int P { get; set; }
+                    public event System.EventHandler E;
                 }
-                """);
+            }
+            """);
 
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (interfaceExitCode, interfaceStdout, interfaceStderr) = RunBuiltCli(
-                ["symbols", "StaticVirt", "--db", dbPath, "--json", "--kind", "event", "--exact-name", "--lang", "csharp"]);
-            var (structPropertyExitCode, structPropertyStdout, structPropertyStderr) = RunBuiltCli(
-                ["symbols", "P", "--db", dbPath, "--json", "--kind", "property", "--exact-name", "--lang", "csharp"]);
-            var (structEventExitCode, structEventStdout, structEventStderr) = RunBuiltCli(
-                ["symbols", "E", "--db", dbPath, "--json", "--kind", "event", "--exact-name", "--lang", "csharp"]);
-            var (outlineExitCode, outlineStdout, outlineStderr) = RunBuiltCli(
-                ["outline", "src/fixture.cs", "--db", dbPath, "--json"]);
-            var (inspectExitCode, inspectStdout, inspectStderr) = RunBuiltCli(
-                ["inspect", "StaticVirt", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"]);
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
+        var (interfaceExitCode, interfaceStdout, interfaceStderr) = RunBuiltCli(
+            ["symbols", "StaticVirt", "--db", dbPath, "--json", "--kind", "event", "--exact-name", "--lang", "csharp"]);
+        var (structPropertyExitCode, structPropertyStdout, structPropertyStderr) = RunBuiltCli(
+            ["symbols", "P", "--db", dbPath, "--json", "--kind", "property", "--exact-name", "--lang", "csharp"]);
+        var (structEventExitCode, structEventStdout, structEventStderr) = RunBuiltCli(
+            ["symbols", "E", "--db", dbPath, "--json", "--kind", "event", "--exact-name", "--lang", "csharp"]);
+        var (outlineExitCode, outlineStdout, outlineStderr) = RunBuiltCli(
+            ["outline", "src/fixture.cs", "--db", dbPath, "--json"]);
+        var (inspectExitCode, inspectStdout, inspectStderr) = RunBuiltCli(
+            ["inspect", "StaticVirt", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"]);
 
-            var interfaceRow = Assert.Single(ParseJsonLines(interfaceStdout)).RootElement;
-            var structPropertyRow = Assert.Single(ParseJsonLines(structPropertyStdout)).RootElement;
-            var structEventRow = Assert.Single(ParseJsonLines(structEventStdout)).RootElement;
-            using var outlineDocument = ParseJsonOutput(outlineStdout);
-            using var inspectDocument = ParseJsonOutput(inspectStdout);
-            var outlineJson = outlineDocument.RootElement;
-            var inspectJson = inspectDocument.RootElement;
-            var outlineSymbols = outlineJson.GetProperty("symbols").EnumerateArray().ToArray();
-            var inspectDefinition = Assert.Single(inspectJson.GetProperty("definitions").EnumerateArray());
+        var interfaceRow = Assert.Single(ParseJsonLines(interfaceStdout)).RootElement;
+        var structPropertyRow = Assert.Single(ParseJsonLines(structPropertyStdout)).RootElement;
+        var structEventRow = Assert.Single(ParseJsonLines(structEventStdout)).RootElement;
+        using var outlineDocument = ParseJsonOutput(outlineStdout);
+        using var inspectDocument = ParseJsonOutput(inspectStdout);
+        var outlineJson = outlineDocument.RootElement;
+        var inspectJson = inspectDocument.RootElement;
+        var outlineSymbols = outlineJson.GetProperty("symbols").EnumerateArray().ToArray();
+        var inspectDefinition = Assert.Single(inspectJson.GetProperty("definitions").EnumerateArray());
 
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, interfaceExitCode);
-            Assert.Equal(string.Empty, interfaceStderr);
-            Assert.Equal(CommandExitCodes.Success, structPropertyExitCode);
-            Assert.Equal(string.Empty, structPropertyStderr);
-            Assert.Equal(CommandExitCodes.Success, structEventExitCode);
-            Assert.Equal(string.Empty, structEventStderr);
-            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
-            Assert.Equal(string.Empty, outlineStderr);
-            Assert.Equal(CommandExitCodes.Success, inspectExitCode);
-            Assert.Equal(string.Empty, inspectStderr);
+        Assert.Equal(CommandExitCodes.Success, indexExitCode);
+        Assert.Equal(string.Empty, indexStderr);
+        Assert.Equal(CommandExitCodes.Success, interfaceExitCode);
+        Assert.Equal(string.Empty, interfaceStderr);
+        Assert.Equal(CommandExitCodes.Success, structPropertyExitCode);
+        Assert.Equal(string.Empty, structPropertyStderr);
+        Assert.Equal(CommandExitCodes.Success, structEventExitCode);
+        Assert.Equal(string.Empty, structEventStderr);
+        Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+        Assert.Equal(string.Empty, outlineStderr);
+        Assert.Equal(CommandExitCodes.Success, inspectExitCode);
+        Assert.Equal(string.Empty, inspectStderr);
 
-            Assert.Equal("StaticVirt", interfaceRow.GetProperty("name").GetString());
-            Assert.Equal("event", interfaceRow.GetProperty("kind").GetString());
-            Assert.Equal("interface", interfaceRow.GetProperty("container_kind").GetString());
-            Assert.Equal("IBus", interfaceRow.GetProperty("container_name").GetString());
+        Assert.Equal("StaticVirt", interfaceRow.GetProperty("name").GetString());
+        Assert.Equal("event", interfaceRow.GetProperty("kind").GetString());
+        Assert.Equal("interface", interfaceRow.GetProperty("container_kind").GetString());
+        Assert.Equal("IBus", interfaceRow.GetProperty("container_name").GetString());
 
-            Assert.Equal("P", structPropertyRow.GetProperty("name").GetString());
-            Assert.Equal("property", structPropertyRow.GetProperty("kind").GetString());
-            Assert.Equal("struct", structPropertyRow.GetProperty("container_kind").GetString());
-            Assert.Equal("S", structPropertyRow.GetProperty("container_name").GetString());
+        Assert.Equal("P", structPropertyRow.GetProperty("name").GetString());
+        Assert.Equal("property", structPropertyRow.GetProperty("kind").GetString());
+        Assert.Equal("struct", structPropertyRow.GetProperty("container_kind").GetString());
+        Assert.Equal("S", structPropertyRow.GetProperty("container_name").GetString());
 
-            Assert.Equal("E", structEventRow.GetProperty("name").GetString());
-            Assert.Equal("event", structEventRow.GetProperty("kind").GetString());
-            Assert.Equal("struct", structEventRow.GetProperty("container_kind").GetString());
-            Assert.Equal("S", structEventRow.GetProperty("container_name").GetString());
+        Assert.Equal("E", structEventRow.GetProperty("name").GetString());
+        Assert.Equal("event", structEventRow.GetProperty("kind").GetString());
+        Assert.Equal("struct", structEventRow.GetProperty("container_kind").GetString());
+        Assert.Equal("S", structEventRow.GetProperty("container_name").GetString());
 
-            Assert.Contains(
-                outlineSymbols,
-                symbol => symbol.TryGetProperty("name", out var name)
-                    && symbol.TryGetProperty("kind", out var kind)
-                    && symbol.TryGetProperty("container_kind", out var containerKind)
-                    && symbol.TryGetProperty("container_name", out var containerName)
-                    && name.GetString() == "StaticVirt"
-                    && kind.GetString() == "event"
-                    && containerKind.GetString() == "interface"
-                    && containerName.GetString() == "IBus");
-            Assert.Contains(
-                outlineSymbols,
-                symbol => symbol.TryGetProperty("name", out var name)
-                    && symbol.TryGetProperty("kind", out var kind)
-                    && symbol.TryGetProperty("container_kind", out var containerKind)
-                    && symbol.TryGetProperty("container_name", out var containerName)
-                    && name.GetString() == "P"
-                    && kind.GetString() == "property"
-                    && containerKind.GetString() == "struct"
-                    && containerName.GetString() == "S");
+        Assert.Contains(
+            outlineSymbols,
+            symbol => symbol.TryGetProperty("name", out var name)
+                && symbol.TryGetProperty("kind", out var kind)
+                && symbol.TryGetProperty("container_kind", out var containerKind)
+                && symbol.TryGetProperty("container_name", out var containerName)
+                && name.GetString() == "StaticVirt"
+                && kind.GetString() == "event"
+                && containerKind.GetString() == "interface"
+                && containerName.GetString() == "IBus");
+        Assert.Contains(
+            outlineSymbols,
+            symbol => symbol.TryGetProperty("name", out var name)
+                && symbol.TryGetProperty("kind", out var kind)
+                && symbol.TryGetProperty("container_kind", out var containerKind)
+                && symbol.TryGetProperty("container_name", out var containerName)
+                && name.GetString() == "P"
+                && kind.GetString() == "property"
+                && containerKind.GetString() == "struct"
+                && containerName.GetString() == "S");
 
-            Assert.Equal("StaticVirt", inspectDefinition.GetProperty("name").GetString());
-            Assert.Equal("interface", inspectDefinition.GetProperty("container_kind").GetString());
-            Assert.Equal("IBus", inspectDefinition.GetProperty("container_name").GetString());
-            Assert.Contains(
-                inspectJson.GetProperty("nearby_symbols").EnumerateArray(),
-                symbol => symbol.TryGetProperty("container_kind", out var containerKind)
-                    && symbol.TryGetProperty("container_name", out var containerName)
-                    && containerKind.GetString() == "interface"
-                    && containerName.GetString() == "IBus");
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal("StaticVirt", inspectDefinition.GetProperty("name").GetString());
+        Assert.Equal("interface", inspectDefinition.GetProperty("container_kind").GetString());
+        Assert.Equal("IBus", inspectDefinition.GetProperty("container_name").GetString());
+        Assert.Contains(
+            inspectJson.GetProperty("nearby_symbols").EnumerateArray(),
+            symbol => symbol.TryGetProperty("container_kind", out var containerKind)
+                && symbol.TryGetProperty("container_name", out var containerName)
+                && containerKind.GetString() == "interface"
+                && containerName.GetString() == "IBus");
     }
 
     [Fact]
@@ -4471,23 +4168,7 @@ public partial class QueryCommandRunnerTests
     [InlineData("files", "files")]
     public void ZeroResultJson_SymbolAndTextCommands_EmitEnvelopeAndFreshness(string command, string resultsKey)
     {
-        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_zero_json_{command}");
-        try
-        {
-            var dbPath = CreateIndexedDbWithSingleFile(projectRoot);
-            var (exitCode, stdout, stderr) = CaptureConsole(() => RunZeroResultCommand(command, dbPath));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            AssertZeroResultPayload(json, resultsKey);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        AssertZeroResultCommandEnvelope(command, resultsKey);
     }
 
     [Theory]
@@ -4496,24 +4177,11 @@ public partial class QueryCommandRunnerTests
     [InlineData("callees")]
     public void ZeroResultJson_GraphCommands_EmitEnvelopeAndFreshness(string command)
     {
-        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_zero_json_{command}");
-        try
-        {
-            var dbPath = CreateIndexedDbWithSingleFile(projectRoot, markGraphReady: true);
-            var (exitCode, stdout, stderr) = CaptureConsole(() => RunZeroResultCommand(command, dbPath));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            AssertZeroResultPayload(json, command);
-            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        AssertZeroResultCommandEnvelope(
+            command,
+            command,
+            markGraphReady: true,
+            AssertGraphTableAvailable);
     }
 
     [Theory]
@@ -4521,24 +4189,11 @@ public partial class QueryCommandRunnerTests
     [InlineData("hotspots", "hotspots")]
     public void ZeroResultJson_AggregateCommands_EmitEnvelopeAndFreshness(string command, string resultsKey)
     {
-        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_zero_json_{command}");
-        try
-        {
-            var dbPath = CreateIndexedDbWithSingleFile(projectRoot, markGraphReady: true);
-            var (exitCode, stdout, stderr) = CaptureConsole(() => RunZeroResultCommand(command, dbPath));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            AssertZeroResultPayload(json, resultsKey);
-            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        AssertZeroResultCommandEnvelope(
+            command,
+            resultsKey,
+            markGraphReady: true,
+            AssertGraphTableAvailable);
     }
 
 
@@ -4631,462 +4286,386 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunDeps_CyclesJsonReportsCandidateLimitTruncation_Issue4065()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_cycle_candidate_limit");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_cycle_candidate_limit");
+        var projectRoot = project.Root;
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        for (var i = 0; i < 60; i++)
         {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            for (var i = 0; i < 60; i++)
-            {
-                var symbolName = $"Target{i}";
-                InsertFileWithSymbol(dbPath, $"src/Target{i}.cs", symbolName);
-                InsertFileWithReferences(dbPath, $"src/Source{i}.cs", [symbolName]);
-            }
-            MarkDependencyGraphReady(dbPath);
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", dbPath, "--json", "--cycles", "--limit", "1", "--lang", "csharp"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.Empty(json.GetProperty("cycles").EnumerateArray());
-            Assert.True(json.GetProperty("truncated").GetBoolean());
-            Assert.Equal("candidate_limit_reached", json.GetProperty("termination_reason").GetString());
-            Assert.Equal("candidate_edge_limit", json.GetProperty("truncated_reason").GetString());
-            Assert.Equal(QueryCommandRunner.DefaultDependencyCycleGraphLimit, json.GetProperty("candidate_edge_count").GetInt32());
-            Assert.Equal(QueryCommandRunner.DefaultDependencyCycleGraphLimit, json.GetProperty("candidate_edge_limit").GetInt32());
-            Assert.Equal("bounded_approximate_candidate_edges", json.GetProperty("cycle_detection_mode").GetString());
-            Assert.Equal("partial_candidate_edge_sample", json.GetProperty("cycle_result_scope").GetString());
-            Assert.Contains("not a complete or ranked cycle set", json.GetProperty("cycle_result_note").GetString(), StringComparison.Ordinal);
-            var nextStepFlags = json.GetProperty("next_step_flags").EnumerateArray().Select(flag => flag.GetString()).ToArray();
-            Assert.Contains("--limit 100", nextStepFlags);
-            Assert.Contains("--suppress-noise", nextStepFlags);
-            Assert.Contains("--symbol <name>", nextStepFlags);
-            Assert.Contains("--symbol-family <prefix>", nextStepFlags);
-            Assert.Contains("--path <narrower-glob>", nextStepFlags);
-
-            var (textExitCode, textStdout, textStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", dbPath, "--cycles", "--limit", "1", "--lang", "csharp"],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.Success, textExitCode);
-            Assert.Equal(string.Empty, textStdout);
-            Assert.Contains("No dependency cycles found", textStderr, StringComparison.Ordinal);
-            Assert.Contains("Warning: dependency cycle detection returned partial results", textStderr, StringComparison.Ordinal);
-            Assert.Contains("not a complete or ranked cycle set", textStderr, StringComparison.Ordinal);
-            Assert.Contains("Next steps: --limit 100, --suppress-noise", textStderr, StringComparison.Ordinal);
+            var symbolName = $"Target{i}";
+            InsertFileWithSymbol(dbPath, $"src/Target{i}.cs", symbolName);
+            InsertFileWithReferences(dbPath, $"src/Source{i}.cs", [symbolName]);
         }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        MarkDependencyGraphReady(dbPath);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--json", "--cycles", "--limit", "1", "--lang", "csharp"],
+            _jsonOptions));
+
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(0, json.GetProperty("count").GetInt32());
+        Assert.Empty(json.GetProperty("cycles").EnumerateArray());
+        Assert.True(json.GetProperty("truncated").GetBoolean());
+        Assert.Equal("candidate_limit_reached", json.GetProperty("termination_reason").GetString());
+        Assert.Equal("candidate_edge_limit", json.GetProperty("truncated_reason").GetString());
+        Assert.Equal(QueryCommandRunner.DefaultDependencyCycleGraphLimit, json.GetProperty("candidate_edge_count").GetInt32());
+        Assert.Equal(QueryCommandRunner.DefaultDependencyCycleGraphLimit, json.GetProperty("candidate_edge_limit").GetInt32());
+        Assert.Equal("bounded_approximate_candidate_edges", json.GetProperty("cycle_detection_mode").GetString());
+        Assert.Equal("partial_candidate_edge_sample", json.GetProperty("cycle_result_scope").GetString());
+        Assert.Contains("not a complete or ranked cycle set", json.GetProperty("cycle_result_note").GetString(), StringComparison.Ordinal);
+        var nextStepFlags = json.GetProperty("next_step_flags").EnumerateArray().Select(flag => flag.GetString()).ToArray();
+        Assert.Contains("--limit 100", nextStepFlags);
+        Assert.Contains("--suppress-noise", nextStepFlags);
+        Assert.Contains("--symbol <name>", nextStepFlags);
+        Assert.Contains("--symbol-family <prefix>", nextStepFlags);
+        Assert.Contains("--path <narrower-glob>", nextStepFlags);
+
+        var (textExitCode, textStdout, textStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--cycles", "--limit", "1", "--lang", "csharp"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, textExitCode);
+        Assert.Equal(string.Empty, textStdout);
+        Assert.Contains("No dependency cycles found", textStderr, StringComparison.Ordinal);
+        Assert.Contains("Warning: dependency cycle detection returned partial results", textStderr, StringComparison.Ordinal);
+        Assert.Contains("not a complete or ranked cycle set", textStderr, StringComparison.Ordinal);
+        Assert.Contains("Next steps: --limit 100, --suppress-noise", textStderr, StringComparison.Ordinal);
     }
 
     [Fact]
     public void RunDeps_CyclesCandidateBudgetCountsDistinctEdges_Issue4065()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_cycle_candidate_edges");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var noiseSymbols = Enumerable.Range(0, 80)
-                .Select(index => $"Noise{index:D2}")
-                .ToArray();
-            InsertFileWithSymbols(dbPath, "src/NoiseTarget.cs", noiseSymbols);
-            InsertFileWithReferences(dbPath, "src/NoiseCaller.cs", noiseSymbols);
-            InsertFileWithSymbolsAndReferences(dbPath, "src/CycleA.cs", ["CycleA"], ["CycleB"]);
-            InsertFileWithSymbolsAndReferences(dbPath, "src/CycleB.cs", ["CycleB"], ["CycleA"]);
-            MarkDependencyGraphReady(dbPath);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_cycle_candidate_edges");
+        var projectRoot = project.Root;
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        var noiseSymbols = Enumerable.Range(0, 80)
+            .Select(index => $"Noise{index:D2}")
+            .ToArray();
+        InsertFileWithSymbols(dbPath, "src/NoiseTarget.cs", noiseSymbols);
+        InsertFileWithReferences(dbPath, "src/NoiseCaller.cs", noiseSymbols);
+        InsertFileWithSymbolsAndReferences(dbPath, "src/CycleA.cs", ["CycleA"], ["CycleB"]);
+        InsertFileWithSymbolsAndReferences(dbPath, "src/CycleB.cs", ["CycleB"], ["CycleA"]);
+        MarkDependencyGraphReady(dbPath);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", dbPath, "--json", "--cycles", "--limit", "1", "--lang", "csharp"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--json", "--cycles", "--limit", "1", "--lang", "csharp"],
+            _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-            var cycle = Assert.Single(json.GetProperty("cycles").EnumerateArray());
-            var nodes = cycle.GetProperty("nodes").EnumerateArray().Select(node => node.GetString()).ToArray();
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
+        var cycle = Assert.Single(json.GetProperty("cycles").EnumerateArray());
+        var nodes = cycle.GetProperty("nodes").EnumerateArray().Select(node => node.GetString()).ToArray();
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(1, json.GetProperty("count").GetInt32());
-            Assert.False(json.GetProperty("truncated").GetBoolean());
-            Assert.Equal("completed", json.GetProperty("termination_reason").GetString());
-            Assert.Equal(3, json.GetProperty("candidate_edge_count").GetInt32());
-            Assert.Contains("src/CycleA.cs", nodes);
-            Assert.Contains("src/CycleB.cs", nodes);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(1, json.GetProperty("count").GetInt32());
+        Assert.False(json.GetProperty("truncated").GetBoolean());
+        Assert.Equal("completed", json.GetProperty("termination_reason").GetString());
+        Assert.Equal(3, json.GetProperty("candidate_edge_count").GetInt32());
+        Assert.Contains("src/CycleA.cs", nodes);
+        Assert.Contains("src/CycleB.cs", nodes);
     }
 
     [Fact]
     public void RunDeps_ExcludeTestsFiltersSourceAndTargetEdges_Issue3895()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_exclude_tests_targets");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            InsertFileWithReferences(dbPath, "src/Caller.cs", ["ProductionTarget", "TestTarget", "ToolTestTarget"]);
-            InsertFileWithReference(dbPath, "tests/TestCaller.cs", "ProductionTarget");
-            InsertFileWithReference(dbPath, "tools/CodeIndex.TestTelemetry/ToolCaller.cs", "ProductionTarget");
-            InsertFileWithSymbol(dbPath, "src/ProductionTarget.cs", "ProductionTarget");
-            InsertFileWithSymbol(dbPath, "tests/TestTarget.cs", "TestTarget");
-            InsertFileWithSymbol(dbPath, "tools/CodeIndex.TestTelemetry/Program.cs", "ToolTestTarget");
-            MarkDependencyGraphReady(dbPath);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_exclude_tests_targets");
+        var projectRoot = project.Root;
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        InsertFileWithReferences(dbPath, "src/Caller.cs", ["ProductionTarget", "TestTarget", "ToolTestTarget"]);
+        InsertFileWithReference(dbPath, "tests/TestCaller.cs", "ProductionTarget");
+        InsertFileWithReference(dbPath, "tools/CodeIndex.TestTelemetry/ToolCaller.cs", "ProductionTarget");
+        InsertFileWithSymbol(dbPath, "src/ProductionTarget.cs", "ProductionTarget");
+        InsertFileWithSymbol(dbPath, "tests/TestTarget.cs", "TestTarget");
+        InsertFileWithSymbol(dbPath, "tools/CodeIndex.TestTelemetry/Program.cs", "ToolTestTarget");
+        MarkDependencyGraphReady(dbPath);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", dbPath, "--json", "--exclude-tests", "--limit", "10", "--lang", "csharp"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--json", "--exclude-tests", "--limit", "10", "--lang", "csharp"],
+            _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var edge = Assert.Single(document.RootElement.GetProperty("edges").EnumerateArray());
+        using var document = ParseJsonOutput(stdout);
+        var edge = Assert.Single(document.RootElement.GetProperty("edges").EnumerateArray());
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(1, document.RootElement.GetProperty("count").GetInt32());
-            Assert.Equal("src/Caller.cs", edge.GetProperty("source_path").GetString());
-            Assert.Equal("src/ProductionTarget.cs", edge.GetProperty("target_path").GetString());
-            Assert.DoesNotContain("tests/", stdout);
-            Assert.DoesNotContain("CodeIndex.TestTelemetry", stdout);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(1, document.RootElement.GetProperty("count").GetInt32());
+        Assert.Equal("src/Caller.cs", edge.GetProperty("source_path").GetString());
+        Assert.Equal("src/ProductionTarget.cs", edge.GetProperty("target_path").GetString());
+        Assert.DoesNotContain("tests/", stdout);
+        Assert.DoesNotContain("CodeIndex.TestTelemetry", stdout);
     }
 
     [Fact]
     public void RunDeps_ZeroJson_StaleSqlGraphContractIncludesDegradedStateWhenSqlScopeIsEmpty()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_zero_sql_graph_contract");
-        try
-        {
-            var dbPath = CreateSqlGraphContractZeroResultFixtureDb(projectRoot);
-            DowngradeSqlGraphContractVersion(dbPath);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_zero_sql_graph_contract");
+        var projectRoot = project.Root;
+        var dbPath = CreateSqlGraphContractZeroResultFixtureDb(projectRoot);
+        DowngradeSqlGraphContractVersion(dbPath);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", dbPath, "--json"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--json"],
+            _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
-            Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("sql_graph_contract_degraded_reason").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(0, json.GetProperty("count").GetInt32());
+        Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
+        Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("sql_graph_contract_degraded_reason").GetString());
     }
-
-
-
-
-
-
 
     [Fact]
     public void RunDeps_Json_StaleSqlGraphContractIncludesDegradedState()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_sql_graph_contract");
-        try
-        {
-            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
-            DowngradeSqlGraphContractRows(dbPath);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_sql_graph_contract");
+        var projectRoot = project.Root;
+        var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
+        DowngradeSqlGraphContractRows(dbPath);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", dbPath, "--json", "--lang", "sql"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--json", "--lang", "sql"],
+            _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
-            Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("sql_graph_contract_degraded_reason").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
+        Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("sql_graph_contract_degraded_reason").GetString());
     }
 
     [Fact]
     public void RunDeps_JsonGraph_WritesValidGraphPayload()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_json_graph");
-        try
-        {
-            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_json_graph");
+        var projectRoot = project.Root;
+        var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", dbPath, "--format", "json-graph", "--lang", "sql"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--format", "json-graph", "--lang", "sql"],
+            _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("1", json.GetProperty("api_version").GetString());
-            Assert.Equal("sql", json.GetProperty("query_context").GetProperty("lang").GetString());
-            Assert.True(json.TryGetProperty("indexed_file_count", out _));
-            Assert.True(json.TryGetProperty("freshness_available", out _));
-            Assert.True(json.GetProperty("nodes").GetArrayLength() >= 2);
-            Assert.True(json.GetProperty("edges").GetArrayLength() >= 1);
-            Assert.True(json.GetProperty("edges")[0].TryGetProperty("reference_count", out _));
-            Assert.True(json.GetProperty("edges")[0].TryGetProperty("ranking_score", out _));
-            Assert.True(json.GetProperty("edges")[0].TryGetProperty("symbols", out _));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal("1", json.GetProperty("api_version").GetString());
+        Assert.Equal("sql", json.GetProperty("query_context").GetProperty("lang").GetString());
+        Assert.True(json.TryGetProperty("indexed_file_count", out _));
+        Assert.True(json.TryGetProperty("freshness_available", out _));
+        Assert.True(json.GetProperty("nodes").GetArrayLength() >= 2);
+        Assert.True(json.GetProperty("edges").GetArrayLength() >= 1);
+        Assert.True(json.GetProperty("edges")[0].TryGetProperty("reference_count", out _));
+        Assert.True(json.GetProperty("edges")[0].TryGetProperty("ranking_score", out _));
+        Assert.True(json.GetProperty("edges")[0].TryGetProperty("symbols", out _));
     }
 
     [Fact]
     public void RunDeps_JsonFiltersNoiseSymbolsAndAddsMetadata_Issue3943()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_symbol_filter");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            InsertFileWithReferences(dbPath, "src/Caller.cs", ["Append", "AppendLine", "Encoding", "Regex", "Path", "ToString", "Write", "Domain.Alpha"]);
-            InsertFileWithReference(dbPath, "src/NoiseCaller.cs", "Regex");
-            InsertFileWithSymbols(dbPath, "src/Targets.cs", ["Append", "AppendLine", "Encoding", "Regex", "Path", "ToString", "Write", "Domain.Alpha"]);
-            MarkDependencyGraphReady(dbPath);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_symbol_filter");
+        var projectRoot = project.Root;
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        InsertFileWithReferences(dbPath, "src/Caller.cs", ["Append", "AppendLine", "Encoding", "Regex", "Path", "ToString", "Write", "Domain.Alpha"]);
+        InsertFileWithReference(dbPath, "src/NoiseCaller.cs", "Regex");
+        InsertFileWithSymbols(dbPath, "src/Targets.cs", ["Append", "AppendLine", "Encoding", "Regex", "Path", "ToString", "Write", "Domain.Alpha"]);
+        MarkDependencyGraphReady(dbPath);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                [
-                    "--db", dbPath,
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            [
+                "--db", dbPath,
                     "--json",
                     "--limit", "10",
                     "--lang", "csharp",
                     "--suppress-noise",
                     "--symbol", "Domain.Alpha",
                     "--symbol-family", "Domain."
-                ],
-                _jsonOptions));
+            ],
+            _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-            var edge = Assert.Single(json.GetProperty("edges").EnumerateArray());
-            var queryContext = json.GetProperty("query_context");
-            var symbolFilter = json.GetProperty("symbol_filter");
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
+        var edge = Assert.Single(json.GetProperty("edges").EnumerateArray());
+        var queryContext = json.GetProperty("query_context");
+        var symbolFilter = json.GetProperty("symbol_filter");
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("1", json.GetProperty("api_version").GetString());
-            Assert.Equal(1, json.GetProperty("count").GetInt32());
-            Assert.Equal("src/Caller.cs", edge.GetProperty("source_path").GetString());
-            Assert.Equal("src/Targets.cs", edge.GetProperty("target_path").GetString());
-            Assert.Equal(8, edge.GetProperty("reference_count").GetInt32());
-            Assert.True(edge.GetProperty("ranking_score").GetDouble() > 0.0);
-            Assert.Equal("Domain.Alpha", edge.GetProperty("symbols").GetString());
-            Assert.True(queryContext.GetProperty("suppress_noise").GetBoolean());
-            Assert.Equal("Domain.Alpha", queryContext.GetProperty("symbol")[0].GetString());
-            Assert.Equal("Domain.", queryContext.GetProperty("symbol_family")[0].GetString());
-            Assert.True(symbolFilter.GetProperty("suppress_noise").GetBoolean());
-            Assert.Equal(2, symbolFilter.GetProperty("edges_before").GetInt32());
-            Assert.Equal(1, symbolFilter.GetProperty("edges_after").GetInt32());
-            Assert.Equal(1, symbolFilter.GetProperty("edges_removed").GetInt32());
-            Assert.Equal(9, symbolFilter.GetProperty("symbols_before").GetInt32());
-            Assert.Equal(1, symbolFilter.GetProperty("symbols_after").GetInt32());
-            Assert.Equal(8, symbolFilter.GetProperty("symbols_removed").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal("1", json.GetProperty("api_version").GetString());
+        Assert.Equal(1, json.GetProperty("count").GetInt32());
+        Assert.Equal("src/Caller.cs", edge.GetProperty("source_path").GetString());
+        Assert.Equal("src/Targets.cs", edge.GetProperty("target_path").GetString());
+        Assert.Equal(8, edge.GetProperty("reference_count").GetInt32());
+        Assert.True(edge.GetProperty("ranking_score").GetDouble() > 0.0);
+        Assert.Equal("Domain.Alpha", edge.GetProperty("symbols").GetString());
+        Assert.True(queryContext.GetProperty("suppress_noise").GetBoolean());
+        Assert.Equal("Domain.Alpha", queryContext.GetProperty("symbol")[0].GetString());
+        Assert.Equal("Domain.", queryContext.GetProperty("symbol_family")[0].GetString());
+        Assert.True(symbolFilter.GetProperty("suppress_noise").GetBoolean());
+        Assert.Equal(2, symbolFilter.GetProperty("edges_before").GetInt32());
+        Assert.Equal(1, symbolFilter.GetProperty("edges_after").GetInt32());
+        Assert.Equal(1, symbolFilter.GetProperty("edges_removed").GetInt32());
+        Assert.Equal(9, symbolFilter.GetProperty("symbols_before").GetInt32());
+        Assert.Equal(1, symbolFilter.GetProperty("symbols_after").GetInt32());
+        Assert.Equal(8, symbolFilter.GetProperty("symbols_removed").GetInt32());
     }
 
     [Fact]
     public void RunDeps_CyclesSuppressNoiseRemovesGenericAppendCycle_Issue4114()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_append_noise_cycle");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            InsertFileWithSymbolsAndReferences(dbPath, "src/BoundedLineReader.cs", ["Append"], ["Append"]);
-            InsertFileWithSymbolsAndReferences(dbPath, "src/BoundedTextWriter.cs", ["Append"], ["Append"]);
-            MarkDependencyGraphReady(dbPath);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_append_noise_cycle");
+        var projectRoot = project.Root;
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        InsertFileWithSymbolsAndReferences(dbPath, "src/BoundedLineReader.cs", ["Append"], ["Append"]);
+        InsertFileWithSymbolsAndReferences(dbPath, "src/BoundedTextWriter.cs", ["Append"], ["Append"]);
+        MarkDependencyGraphReady(dbPath);
 
-            var (defaultExitCode, defaultStdout, defaultStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", dbPath, "--json", "--cycles", "--limit", "10", "--lang", "csharp"],
-                _jsonOptions));
+        var (defaultExitCode, defaultStdout, defaultStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--json", "--cycles", "--limit", "10", "--lang", "csharp"],
+            _jsonOptions));
 
-            using var defaultDocument = ParseJsonOutput(defaultStdout);
+        using var defaultDocument = ParseJsonOutput(defaultStdout);
 
-            Assert.Equal(CommandExitCodes.Success, defaultExitCode);
-            Assert.Equal(string.Empty, defaultStderr);
-            Assert.True(defaultDocument.RootElement.GetProperty("count").GetInt32() >= 1);
+        Assert.Equal(CommandExitCodes.Success, defaultExitCode);
+        Assert.Equal(string.Empty, defaultStderr);
+        Assert.True(defaultDocument.RootElement.GetProperty("count").GetInt32() >= 1);
 
-            var (filteredExitCode, filteredStdout, filteredStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", dbPath, "--json", "--cycles", "--limit", "10", "--lang", "csharp", "--suppress-noise"],
-                _jsonOptions));
+        var (filteredExitCode, filteredStdout, filteredStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--json", "--cycles", "--limit", "10", "--lang", "csharp", "--suppress-noise"],
+            _jsonOptions));
 
-            using var filteredDocument = ParseJsonOutput(filteredStdout);
-            var json = filteredDocument.RootElement;
-            var symbolFilter = json.GetProperty("symbol_filter");
+        using var filteredDocument = ParseJsonOutput(filteredStdout);
+        var json = filteredDocument.RootElement;
+        var symbolFilter = json.GetProperty("symbol_filter");
 
-            Assert.Equal(CommandExitCodes.Success, filteredExitCode);
-            Assert.Equal(string.Empty, filteredStderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.Empty(json.GetProperty("cycles").EnumerateArray());
-            Assert.True(symbolFilter.GetProperty("suppress_noise").GetBoolean());
-            Assert.Equal(0, symbolFilter.GetProperty("edges_after").GetInt32());
-            Assert.True(symbolFilter.GetProperty("symbols_removed").GetInt32() > 0);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, filteredExitCode);
+        Assert.Equal(string.Empty, filteredStderr);
+        Assert.Equal(0, json.GetProperty("count").GetInt32());
+        Assert.Empty(json.GetProperty("cycles").EnumerateArray());
+        Assert.True(symbolFilter.GetProperty("suppress_noise").GetBoolean());
+        Assert.Equal(0, symbolFilter.GetProperty("edges_after").GetInt32());
+        Assert.True(symbolFilter.GetProperty("symbols_removed").GetInt32() > 0);
     }
 
     [Fact]
     public void RunDeps_CyclesApplySymbolFilters_Issue3943()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_cycles_symbol_filter");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            InsertFileWithSymbolsAndReferences(dbPath, "src/A.cs", ["A"], ["B"]);
-            InsertFileWithSymbolsAndReferences(dbPath, "src/B.cs", ["B"], ["A"]);
-            MarkDependencyGraphReady(dbPath);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_cycles_symbol_filter");
+        var projectRoot = project.Root;
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        InsertFileWithSymbolsAndReferences(dbPath, "src/A.cs", ["A"], ["B"]);
+        InsertFileWithSymbolsAndReferences(dbPath, "src/B.cs", ["B"], ["A"]);
+        MarkDependencyGraphReady(dbPath);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", dbPath, "--json", "--cycles", "--symbol", "NoSuchSymbol", "--lang", "csharp"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--json", "--cycles", "--symbol", "NoSuchSymbol", "--lang", "csharp"],
+            _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-            var symbolFilter = json.GetProperty("symbol_filter");
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
+        var symbolFilter = json.GetProperty("symbol_filter");
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.Empty(json.GetProperty("cycles").EnumerateArray());
-            Assert.Equal("NoSuchSymbol", json.GetProperty("query_context").GetProperty("symbol")[0].GetString());
-            Assert.Equal(2, symbolFilter.GetProperty("edges_before").GetInt32());
-            Assert.Equal(0, symbolFilter.GetProperty("edges_after").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(0, json.GetProperty("count").GetInt32());
+        Assert.Empty(json.GetProperty("cycles").EnumerateArray());
+        Assert.Equal("NoSuchSymbol", json.GetProperty("query_context").GetProperty("symbol")[0].GetString());
+        Assert.Equal(2, symbolFilter.GetProperty("edges_before").GetInt32());
+        Assert.Equal(0, symbolFilter.GetProperty("edges_after").GetInt32());
     }
 
     [Fact]
     public void RunDeps_WorkspaceDbJson_AggregatesAndTagsMemberDatabaseEdges()
     {
-        var primaryRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_primary");
-        var memberRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_member");
-        try
-        {
-            var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
-            var memberDb = TestProjectHelper.CreateProjectDb(memberRoot);
-            InsertFileWithReference(primaryDb, "src/PrimaryCaller.cs", "SharedTarget");
-            InsertFileWithSymbol(memberDb, "src/SharedTarget.cs", "SharedTarget");
+        using var primaryProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_primary");
+        using var memberProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_member");
+        var primaryRoot = primaryProject.Root;
+        var memberRoot = memberProject.Root;
+        var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
+        var memberDb = TestProjectHelper.CreateProjectDb(memberRoot);
+        InsertFileWithReference(primaryDb, "src/PrimaryCaller.cs", "SharedTarget");
+        InsertFileWithSymbol(memberDb, "src/SharedTarget.cs", "SharedTarget");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10", "--lang", "csharp"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10", "--lang", "csharp"],
+            _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-            var edges = json.GetProperty("edges").EnumerateArray().ToArray();
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
+        var edges = json.GetProperty("edges").EnumerateArray().ToArray();
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.NotNull(stderr);
-            Assert.Equal(1, json.GetProperty("count").GetInt32());
-            var edge = Assert.Single(edges);
-            Assert.Equal("src/PrimaryCaller.cs", edge.GetProperty("source_path").GetString());
-            Assert.Equal("src/SharedTarget.cs", edge.GetProperty("target_path").GetString());
-            Assert.Equal(Path.GetFullPath(primaryDb), edge.GetProperty("source_db").GetString());
-            Assert.Equal(Path.GetFullPath(memberDb), edge.GetProperty("target_db").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(primaryRoot);
-            TestProjectHelper.DeleteDirectory(memberRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.NotNull(stderr);
+        Assert.Equal(1, json.GetProperty("count").GetInt32());
+        var edge = Assert.Single(edges);
+        Assert.Equal("src/PrimaryCaller.cs", edge.GetProperty("source_path").GetString());
+        Assert.Equal("src/SharedTarget.cs", edge.GetProperty("target_path").GetString());
+        Assert.Equal(Path.GetFullPath(primaryDb), edge.GetProperty("source_db").GetString());
+        Assert.Equal(Path.GetFullPath(memberDb), edge.GetProperty("target_db").GetString());
     }
 
     [Fact]
     public void RunDeps_WorkspaceDbRejectsNonCodeIndexDatabase_Issue3737()
     {
-        var primaryRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_non_codeindex_primary");
-        var memberRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_non_codeindex_member");
-        try
-        {
-            var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
-            var memberDb = Path.Combine(memberRoot, "plain.sqlite");
-            CreatePlainSqliteDatabase(memberDb);
+        using var primaryProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_non_codeindex_primary");
+        using var memberProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_non_codeindex_member");
+        var primaryRoot = primaryProject.Root;
+        var memberRoot = memberProject.Root;
+        var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
+        var memberDb = Path.Combine(memberRoot, "plain.sqlite");
+        CreatePlainSqliteDatabase(memberDb);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10"],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains(CommandErrorCodes.DbError, stderr);
-            Assert.Contains("attached workspace database cannot be used for cross-database dependency query", stderr);
-            Assert.Contains("database is not an existing CodeIndex DB", stderr);
-            Assert.DoesNotContain("no such table", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(primaryRoot);
-            TestProjectHelper.DeleteDirectory(memberRoot);
-        }
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains(CommandErrorCodes.DbError, stderr);
+        Assert.Contains("attached workspace database cannot be used for cross-database dependency query", stderr);
+        Assert.Contains("database is not an existing CodeIndex DB", stderr);
+        Assert.DoesNotContain("no such table", stderr);
     }
 
     [Fact]
     public void RunDeps_WorkspaceDbRejectsNewerSchemaStamp_Issue3737()
     {
-        var primaryRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_new_schema_primary");
-        var memberRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_new_schema_member");
-        try
-        {
-            var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
-            var memberDb = TestProjectHelper.CreateProjectDb(memberRoot);
-            var unsupportedUserVersion = DbContext.CurrentSchemaVersion | (DbContext.CurrentSchemaVersion + 1);
-            SetDatabaseUserVersion(memberDb, unsupportedUserVersion);
+        using var primaryProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_new_schema_primary");
+        using var memberProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_new_schema_member");
+        var primaryRoot = primaryProject.Root;
+        var memberRoot = memberProject.Root;
+        var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
+        var memberDb = TestProjectHelper.CreateProjectDb(memberRoot);
+        var unsupportedUserVersion = DbContext.CurrentSchemaVersion | (DbContext.CurrentSchemaVersion + 1);
+        SetDatabaseUserVersion(memberDb, unsupportedUserVersion);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10"],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains(CommandErrorCodes.SchemaTooNew, stderr);
-            Assert.Contains($"user_version {unsupportedUserVersion}", stderr);
-            Assert.Contains("run the query with a current cdidx binary", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(primaryRoot);
-            TestProjectHelper.DeleteDirectory(memberRoot);
-        }
+        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains(CommandErrorCodes.SchemaTooNew, stderr);
+        Assert.Contains($"user_version {unsupportedUserVersion}", stderr);
+        Assert.Contains("run the query with a current cdidx binary", stderr);
     }
 
     [Fact]
     public void RunDeps_WorkspaceDbValidationUsesReadOnlyFallbackPath_Issue3737()
     {
-        var primaryRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_ro_validate_primary");
-        var memberRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_ro_validate_member");
+        using var primaryProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_ro_validate_primary");
+        using var memberProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_ro_validate_member");
+        var primaryRoot = primaryProject.Root;
+        var memberRoot = memberProject.Root;
         var originalOpenReadOnly = DbConnectionFactory.OpenReadOnlyForTesting;
         var validatedMemberThroughReadOnlyFactory = false;
         try
@@ -5124,78 +4703,64 @@ public partial class QueryCommandRunnerTests
         finally
         {
             DbConnectionFactory.OpenReadOnlyForTesting = originalOpenReadOnly;
-            TestProjectHelper.DeleteDirectory(primaryRoot);
-            TestProjectHelper.DeleteDirectory(memberRoot);
         }
     }
 
     [Fact]
     public void RunDeps_WorkspaceDbJson_CapsCrossDatabaseSymbolSample_Issue3155()
     {
-        var primaryRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_symbols_primary");
-        var memberRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_symbols_member");
-        try
-        {
-            var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
-            var memberDb = TestProjectHelper.CreateProjectDb(memberRoot);
-            var symbolNames = Enumerable
-                .Range(0, DbReader.DependencySymbolSampleLimit + 5)
-                .Select(index => $"SharedTarget{index:D2}")
-                .ToArray();
-            InsertFileWithReferences(primaryDb, "src/PrimaryCaller.cs", symbolNames);
-            InsertFileWithSymbols(memberDb, "src/SharedTargets.cs", symbolNames);
+        using var primaryProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_symbols_primary");
+        using var memberProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_symbols_member");
+        var primaryRoot = primaryProject.Root;
+        var memberRoot = memberProject.Root;
+        var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
+        var memberDb = TestProjectHelper.CreateProjectDb(memberRoot);
+        var symbolNames = Enumerable
+            .Range(0, DbReader.DependencySymbolSampleLimit + 5)
+            .Select(index => $"SharedTarget{index:D2}")
+            .ToArray();
+        InsertFileWithReferences(primaryDb, "src/PrimaryCaller.cs", symbolNames);
+        InsertFileWithSymbols(memberDb, "src/SharedTargets.cs", symbolNames);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10", "--lang", "csharp"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10", "--lang", "csharp"],
+            _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var edge = Assert.Single(document.RootElement.GetProperty("edges").EnumerateArray());
-            var sampledSymbols = edge.GetProperty("symbols").GetString()!.Split(',');
+        using var document = ParseJsonOutput(stdout);
+        var edge = Assert.Single(document.RootElement.GetProperty("edges").EnumerateArray());
+        var sampledSymbols = edge.GetProperty("symbols").GetString()!.Split(',');
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.NotNull(stderr);
-            Assert.Equal(symbolNames.Length, edge.GetProperty("reference_count").GetInt32());
-            Assert.Equal(DbReader.DependencySymbolSampleLimit, sampledSymbols.Length);
-            Assert.DoesNotContain(symbolNames[^1], sampledSymbols);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(primaryRoot);
-            TestProjectHelper.DeleteDirectory(memberRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.NotNull(stderr);
+        Assert.Equal(symbolNames.Length, edge.GetProperty("reference_count").GetInt32());
+        Assert.Equal(DbReader.DependencySymbolSampleLimit, sampledSymbols.Length);
+        Assert.DoesNotContain(symbolNames[^1], sampledSymbols);
     }
 
     [Fact]
     public void RunDeps_WorkspaceDbExcludeTestsKeepsNonTestPathSegments_Issue3834()
     {
-        var primaryRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_exclude_tests_primary");
-        var memberRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_exclude_tests_member");
-        try
-        {
-            var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
-            var memberDb = TestProjectHelper.CreateProjectDb(memberRoot);
-            InsertFileWithReference(primaryDb, "contest/PrimaryCaller.cs", "SharedTarget");
-            InsertFileWithSymbol(memberDb, "src/SharedTarget.cs", "SharedTarget");
+        using var primaryProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_exclude_tests_primary");
+        using var memberProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_exclude_tests_member");
+        var primaryRoot = primaryProject.Root;
+        var memberRoot = memberProject.Root;
+        var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
+        var memberDb = TestProjectHelper.CreateProjectDb(memberRoot);
+        InsertFileWithReference(primaryDb, "contest/PrimaryCaller.cs", "SharedTarget");
+        InsertFileWithSymbol(memberDb, "src/SharedTarget.cs", "SharedTarget");
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10", "--lang", "csharp", "--exclude-tests"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10", "--lang", "csharp", "--exclude-tests"],
+            _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var edge = Assert.Single(document.RootElement.GetProperty("edges").EnumerateArray());
+        using var document = ParseJsonOutput(stdout);
+        var edge = Assert.Single(document.RootElement.GetProperty("edges").EnumerateArray());
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.NotNull(stderr);
-            Assert.Equal("contest/PrimaryCaller.cs", edge.GetProperty("source_path").GetString());
-            Assert.Equal("src/SharedTarget.cs", edge.GetProperty("target_path").GetString());
-            Assert.DoesNotContain("LIKE '%test%'", QueryCommandRunner.BuildCrossDatabaseTestPathConditionForTesting("src"));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(primaryRoot);
-            TestProjectHelper.DeleteDirectory(memberRoot);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.NotNull(stderr);
+        Assert.Equal("contest/PrimaryCaller.cs", edge.GetProperty("source_path").GetString());
+        Assert.Equal("src/SharedTarget.cs", edge.GetProperty("target_path").GetString());
+        Assert.DoesNotContain("LIKE '%test%'", QueryCommandRunner.BuildCrossDatabaseTestPathConditionForTesting("src"));
     }
 
     [Fact]
@@ -5236,27 +4801,21 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunDeps_WorkspaceDbTooManyDistinctDatabases_ReturnsUsageError_Issue3154()
     {
-        var primaryRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_fanout_primary");
-        try
-        {
-            var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
-            var args = new List<string> { "--db", primaryDb, "--json" };
-            for (var i = 0; i < QueryCommandRunner.MaxWorkspaceDependencyDatabaseCount; i++)
-                args.AddRange(["--workspace-db", Path.Combine(Path.GetTempPath(), $"cdidx_member_{Guid.NewGuid():N}.db")]);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_workspace_fanout_primary");
+        var primaryRoot = project.Root;
+        var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
+        var args = new List<string> { "--db", primaryDb, "--json" };
+        for (var i = 0; i < QueryCommandRunner.MaxWorkspaceDependencyDatabaseCount; i++)
+            args.AddRange(["--workspace-db", Path.Combine(Path.GetTempPath(), $"cdidx_member_{Guid.NewGuid():N}.db")]);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
-                args.ToArray(),
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            args.ToArray(),
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains("deps --workspace-db accepts at most", stderr);
-            Assert.Contains("ordered cross-database pairs", stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(primaryRoot);
-        }
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("deps --workspace-db accepts at most", stderr);
+        Assert.Contains("ordered cross-database pairs", stderr);
     }
 
     private static void InsertFileWithSymbol(string dbPath, string path, string symbolName)
@@ -7684,6 +7243,25 @@ public partial class QueryCommandRunnerTests
         return dbPath;
     }
 
+    private void AssertZeroResultCommandEnvelope(
+        string command,
+        string resultsKey,
+        bool markGraphReady = false,
+        Action<JsonElement>? assertAdditionalPayload = null)
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope($"cdidx_zero_json_{command}");
+        var dbPath = CreateIndexedDbWithSingleFile(project.Root, markGraphReady: markGraphReady);
+        var (exitCode, stdout, stderr) = CaptureConsole(() => RunZeroResultCommand(command, dbPath));
+
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        AssertZeroResultPayload(json, resultsKey);
+        assertAdditionalPayload?.Invoke(json);
+    }
+
     private int RunZeroResultCommand(string command, string dbPath)
     {
         return command switch
@@ -7714,6 +7292,11 @@ public partial class QueryCommandRunnerTests
         Assert.True(json.TryGetProperty("indexed_at", out var indexedAt));
         Assert.Equal(JsonValueKind.String, indexedAt.ValueKind);
         Assert.False(string.IsNullOrWhiteSpace(indexedAt.GetString()));
+    }
+
+    private static void AssertGraphTableAvailable(JsonElement json)
+    {
+        Assert.True(json.GetProperty("graph_table_available").GetBoolean());
     }
 
     private static void DropGraphExactFallbackIndexes(string dbPath)

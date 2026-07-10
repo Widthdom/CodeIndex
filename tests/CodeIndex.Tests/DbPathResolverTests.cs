@@ -94,122 +94,98 @@ public class DbPathResolverTests
     [Fact]
     public void ResolveDataDirForQuery_WithXdgPrefersAncestorWorkspaceDataDir()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_xdg_root_db");
-        var configHome = TestProjectHelper.CreateTempProject("cdidx_query_xdg_config");
-        var xdgDir = TestProjectHelper.CreateTempProject("cdidx_xdg_dir");
-        try
-        {
-            using var env = IsolateActiveWorkspace(configHome);
-            var child = Path.Combine(projectRoot, "src", "App");
-            Directory.CreateDirectory(child);
-            var indexedRootResolution = DbPathResolver.ResolveDataDir(projectRoot, explicitDataDir: null, environmentDataDir: null, xdgDataHome: xdgDir);
-            Directory.CreateDirectory(indexedRootResolution.DataDir!);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_query_xdg_root_db");
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_query_xdg_config");
+        using var xdg = TestProjectHelper.CreateTempProjectScope("cdidx_xdg_dir");
+        var projectRoot = project.Root;
+        var configHome = config.Root;
+        var xdgDir = xdg.Root;
+        using var env = IsolateActiveWorkspace(configHome);
+        var child = Path.Combine(projectRoot, "src", "App");
+        Directory.CreateDirectory(child);
+        var indexedRootResolution = DbPathResolver.ResolveDataDir(projectRoot, explicitDataDir: null, environmentDataDir: null, xdgDataHome: xdgDir);
+        Directory.CreateDirectory(indexedRootResolution.DataDir!);
 
-            var resolved = DbPathResolver.ResolveDataDirForQuery(
-                child,
-                explicitDataDir: null,
-                environmentDataDir: null,
-                xdgDataHome: xdgDir,
-                activeWorkspaceLoader: () => null);
+        var resolved = DbPathResolver.ResolveDataDirForQuery(
+            child,
+            explicitDataDir: null,
+            environmentDataDir: null,
+            xdgDataHome: xdgDir,
+            activeWorkspaceLoader: () => null);
 
-            Assert.Equal(indexedRootResolution.DbPath, resolved.DbPath);
-            Assert.Equal(indexedRootResolution.DataDir, resolved.DataDir);
-            Assert.Equal(DbPathResolver.DataDirSourceXdg, resolved.DataDirSource);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-            TestProjectHelper.DeleteDirectory(configHome);
-            TestProjectHelper.DeleteDirectory(xdgDir);
-        }
+        Assert.Equal(indexedRootResolution.DbPath, resolved.DbPath);
+        Assert.Equal(indexedRootResolution.DataDir, resolved.DataDir);
+        Assert.Equal(DbPathResolver.DataDirSourceXdg, resolved.DataDirSource);
     }
 
     [Fact]
     public void ResolveDataDirForQuery_PrefersOutermostAncestorCdidx()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_root_db");
-        var configHome = TestProjectHelper.CreateTempProject("cdidx_query_root_config");
-        try
-        {
-            using var env = IsolateActiveWorkspace(configHome);
-            var child = Path.Combine(projectRoot, "src", "App");
-            Directory.CreateDirectory(child);
-            Directory.CreateDirectory(Path.Combine(projectRoot, ".cdidx"));
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src", ".cdidx"));
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_query_root_db");
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_query_root_config");
+        var projectRoot = project.Root;
+        var configHome = config.Root;
+        using var env = IsolateActiveWorkspace(configHome);
+        var child = Path.Combine(projectRoot, "src", "App");
+        Directory.CreateDirectory(child);
+        Directory.CreateDirectory(Path.Combine(projectRoot, ".cdidx"));
+        Directory.CreateDirectory(Path.Combine(projectRoot, "src", ".cdidx"));
 
-            var resolved = DbPathResolver.ResolveDataDirForQuery(
-                child,
-                explicitDataDir: null,
-                environmentDataDir: null,
-                xdgDataHome: null,
-                activeWorkspaceLoader: () => null);
+        var resolved = DbPathResolver.ResolveDataDirForQuery(
+            child,
+            explicitDataDir: null,
+            environmentDataDir: null,
+            xdgDataHome: null,
+            activeWorkspaceLoader: () => null);
 
-            Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), resolved.DbPath);
-            Assert.Equal(DbPathResolver.DataDirSourceWorkspace, resolved.DataDirSource);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-            TestProjectHelper.DeleteDirectory(configHome);
-        }
+        Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), resolved.DbPath);
+        Assert.Equal(DbPathResolver.DataDirSourceWorkspace, resolved.DataDirSource);
     }
 
     [Fact]
     public void ResolveDataDirForQuery_UsesInjectedActiveWorkspaceBeforeAncestorCdidx()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_active_workspace_project");
-        var activeRoot = TestProjectHelper.CreateTempProject("cdidx_query_active_workspace_state");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_query_active_workspace_project");
+        using var active = TestProjectHelper.CreateTempProjectScope("cdidx_query_active_workspace_state");
+        var projectRoot = project.Root;
+        var activeRoot = active.Root;
         var activeDb = Path.Combine(activeRoot, ".cdidx", "codeindex.db");
-        try
-        {
-            var child = Path.Combine(projectRoot, "src", "App");
-            Directory.CreateDirectory(child);
-            Directory.CreateDirectory(Path.Combine(projectRoot, ".cdidx"));
+        var child = Path.Combine(projectRoot, "src", "App");
+        Directory.CreateDirectory(child);
+        Directory.CreateDirectory(Path.Combine(projectRoot, ".cdidx"));
 
-            var resolved = DbPathResolver.ResolveDataDirForQuery(
-                child,
-                explicitDataDir: null,
-                environmentDataDir: null,
-                xdgDataHome: null,
-                activeWorkspaceLoader: () => new ActiveWorkspaceState("test", activeRoot, activeDb));
+        var resolved = DbPathResolver.ResolveDataDirForQuery(
+            child,
+            explicitDataDir: null,
+            environmentDataDir: null,
+            xdgDataHome: null,
+            activeWorkspaceLoader: () => new ActiveWorkspaceState("test", activeRoot, activeDb));
 
-            Assert.Equal(Path.GetFullPath(activeDb), resolved.DbPath);
-            Assert.Equal(Path.GetDirectoryName(Path.GetFullPath(activeDb)), resolved.DataDir);
-            Assert.Equal(DbPathResolver.DataDirSourceActiveWorkspace, resolved.DataDirSource);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-            TestProjectHelper.DeleteDirectory(activeRoot);
-        }
+        Assert.Equal(Path.GetFullPath(activeDb), resolved.DbPath);
+        Assert.Equal(Path.GetDirectoryName(Path.GetFullPath(activeDb)), resolved.DataDir);
+        Assert.Equal(DbPathResolver.DataDirSourceActiveWorkspace, resolved.DataDirSource);
     }
 
     [Fact]
     public void ResolveDataDirForQuery_FallsBackToCurrentDirectoryWhenNoAncestorCdidxExists()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_no_root_db");
-        var configHome = TestProjectHelper.CreateTempProject("cdidx_query_no_root_config");
-        try
-        {
-            using var env = IsolateActiveWorkspace(configHome);
-            var child = Path.Combine(projectRoot, "src", "App");
-            Directory.CreateDirectory(child);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_query_no_root_db");
+        using var config = TestProjectHelper.CreateTempProjectScope("cdidx_query_no_root_config");
+        var projectRoot = project.Root;
+        var configHome = config.Root;
+        using var env = IsolateActiveWorkspace(configHome);
+        var child = Path.Combine(projectRoot, "src", "App");
+        Directory.CreateDirectory(child);
 
-            var resolved = DbPathResolver.ResolveDataDirForQuery(
-                child,
-                explicitDataDir: null,
-                environmentDataDir: null,
-                xdgDataHome: null,
-                activeWorkspaceLoader: () => null);
+        var resolved = DbPathResolver.ResolveDataDirForQuery(
+            child,
+            explicitDataDir: null,
+            environmentDataDir: null,
+            xdgDataHome: null,
+            activeWorkspaceLoader: () => null);
 
-            Assert.Equal(Path.Combine(child, ".cdidx", "codeindex.db"), resolved.DbPath);
-            Assert.Equal(DbPathResolver.DataDirSourceWorkspace, resolved.DataDirSource);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-            TestProjectHelper.DeleteDirectory(configHome);
-        }
+        Assert.Equal(Path.Combine(child, ".cdidx", "codeindex.db"), resolved.DbPath);
+        Assert.Equal(DbPathResolver.DataDirSourceWorkspace, resolved.DataDirSource);
     }
 
     [Fact]
@@ -406,7 +382,8 @@ public class DbPathResolverTests
     [Fact]
     public void ResolveProjectRootForQuery_PrefersStoredIndexedProjectRootMetadata()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_meta_root");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_db_path_resolver_meta_root");
+        var projectRoot = project.Root;
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_path_resolver_{Guid.NewGuid():N}.db");
         try
         {
@@ -423,7 +400,6 @@ public class DbPathResolverTests
         }
         finally
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
             TestProjectHelper.DeleteFile(dbPath);
         }
     }
@@ -447,7 +423,8 @@ public class DbPathResolverTests
     [Fact]
     public void ResolveProjectRootForQuery_MetadataSampleProbeFilesystemErrorReturnsNull_Issue3175()
     {
-        var dbContainerRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_probe_failure");
+        using var container = TestProjectHelper.CreateTempProjectScope("cdidx_db_path_resolver_probe_failure");
+        var dbContainerRoot = container.Root;
         var dbPath = Path.Combine(dbContainerRoot, ".cdidx", "codeindex.db");
         try
         {
@@ -461,14 +438,14 @@ public class DbPathResolverTests
         finally
         {
             DbPathResolver.OpenMetadataConnectionForTesting = null;
-            TestProjectHelper.DeleteDirectory(dbContainerRoot);
         }
     }
 
     [Fact]
     public void ResolveProjectRootForQuery_ReadOnlyUri_PrefersStoredIndexedProjectRootMetadata()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_meta_uri");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_db_path_resolver_meta_uri");
+        var projectRoot = project.Root;
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_path_resolver_{Guid.NewGuid():N}.db");
         try
         {
@@ -486,7 +463,6 @@ public class DbPathResolverTests
         }
         finally
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
             TestProjectHelper.DeleteFile(dbPath);
         }
     }
@@ -494,180 +470,150 @@ public class DbPathResolverTests
     [Fact]
     public void ResolveProjectRootForQuery_StampedProjectLocalReadOnlyUriAvoidsPathCasingProbe_Issue3828()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_case_stamp");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_db_path_resolver_case_stamp");
+        var projectRoot = project.Root;
         var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-        try
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        using (var db = new DbContext(dbPath))
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-            using (var db = new DbContext(dbPath))
-            {
-                db.InitializeSchema();
-                var writer = new DbWriter(db.Connection);
-                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
-                writer.SetMeta(DbContext.WorkspacePathCaseSensitiveMetaKey, "true");
-            }
-
-            lock (PathCasingTestLock.Gate)
-            {
-                var previousProbe = PathCasing.IgnoreCaseProbeForTesting;
-                try
-                {
-                    PathCasing.ResetCacheForTests();
-                    PathCasing.IgnoreCaseProbeForTesting = _ => throw new IOException("path casing probe should not run");
-
-                    var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
-                    var resolved = DbPathResolver.ResolveProjectRootForQuery(readOnlyUri, dbPathExplicit: true);
-
-                    Assert.Equal(projectRoot, resolved);
-                }
-                finally
-                {
-                    PathCasing.IgnoreCaseProbeForTesting = previousProbe;
-                    PathCasing.ResetCacheForTests();
-                }
-            }
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
+            writer.SetMeta(DbContext.WorkspacePathCaseSensitiveMetaKey, "true");
         }
-        finally
+
+        lock (PathCasingTestLock.Gate)
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
+            var previousProbe = PathCasing.IgnoreCaseProbeForTesting;
+            try
+            {
+                PathCasing.ResetCacheForTests();
+                PathCasing.IgnoreCaseProbeForTesting = _ => throw new IOException("path casing probe should not run");
+
+                var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+                var resolved = DbPathResolver.ResolveProjectRootForQuery(readOnlyUri, dbPathExplicit: true);
+
+                Assert.Equal(projectRoot, resolved);
+            }
+            finally
+            {
+                PathCasing.IgnoreCaseProbeForTesting = previousProbe;
+                PathCasing.ResetCacheForTests();
+            }
         }
     }
 
     [Fact]
     public void ResolveProjectRootForQuery_ProjectLocalDbPrefersCdidxSiblingOverStoredMetadata()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_local");
-        var staleRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_stale");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_db_path_resolver_local");
+        using var stale = TestProjectHelper.CreateTempProjectScope("cdidx_db_path_resolver_stale");
+        var projectRoot = project.Root;
+        var staleRoot = stale.Root;
         var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-        try
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        using (var db = new DbContext(dbPath))
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-            using (var db = new DbContext(dbPath))
-            {
-                db.InitializeSchema();
-                var writer = new DbWriter(db.Connection);
-                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, staleRoot);
-            }
-
-            var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath);
-
-            Assert.Equal(projectRoot, resolved);
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, staleRoot);
         }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-            TestProjectHelper.DeleteDirectory(staleRoot);
-        }
+
+        var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath);
+
+        Assert.Equal(projectRoot, resolved);
     }
 
     [Fact]
     public void ResolveProjectRootForQuery_ExplicitProjectLocalDbPrefersCdidxSiblingOverStoredMetadata()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_local_explicit");
-        var staleRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_stale_explicit");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_db_path_resolver_local_explicit");
+        using var stale = TestProjectHelper.CreateTempProjectScope("cdidx_db_path_resolver_stale_explicit");
+        var projectRoot = project.Root;
+        var staleRoot = stale.Root;
         var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-        try
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        using (var db = new DbContext(dbPath))
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-            using (var db = new DbContext(dbPath))
-            {
-                db.InitializeSchema();
-                var writer = new DbWriter(db.Connection);
-                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, staleRoot);
-            }
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App {}\n");
-
-            var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit: true);
-
-            Assert.Equal(projectRoot, resolved);
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, staleRoot);
         }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-            TestProjectHelper.DeleteDirectory(staleRoot);
-        }
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+        Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+        File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), "class App {}\n");
+
+        var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit: true);
+
+        Assert.Equal(projectRoot, resolved);
     }
 
     [Fact]
     public void ResolveProjectRootForQuery_ExplicitProjectLocalDbDoesNotCaseFoldPersistedChecksums()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_upper_checksum");
-        var staleRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_upper_checksum_stale");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_db_path_resolver_upper_checksum");
+        using var stale = TestProjectHelper.CreateTempProjectScope("cdidx_db_path_resolver_upper_checksum_stale");
+        var projectRoot = project.Root;
+        var staleRoot = stale.Root;
         var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-        try
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+        Directory.CreateDirectory(Path.Combine(staleRoot, "src"));
+
+        const string indexedContent = "class App {}\n";
+        const string staleContent = "class App { void Different() {} }\n";
+        File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), indexedContent);
+        File.WriteAllText(Path.Combine(staleRoot, "src", "app.cs"), staleContent);
+
+        using (var db = new DbContext(dbPath))
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            Directory.CreateDirectory(Path.Combine(staleRoot, "src"));
-
-            const string indexedContent = "class App {}\n";
-            const string staleContent = "class App { void Different() {} }\n";
-            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), indexedContent);
-            File.WriteAllText(Path.Combine(staleRoot, "src", "app.cs"), staleContent);
-
-            using (var db = new DbContext(dbPath))
-            {
-                db.InitializeSchema();
-                var writer = new DbWriter(db.Connection);
-                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, staleRoot);
-            }
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", indexedContent);
-            using (var db = new DbContext(dbPath))
-            {
-                using var cmd = db.Connection.CreateCommand();
-                cmd.CommandText = "UPDATE files SET checksum = upper(checksum) WHERE path = @path";
-                cmd.Parameters.AddWithValue("@path", "src/app.cs");
-                cmd.ExecuteNonQuery();
-            }
-
-            var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit: true);
-
-            Assert.Equal(staleRoot, resolved);
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, staleRoot);
         }
-        finally
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", indexedContent);
+        using (var db = new DbContext(dbPath))
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-            TestProjectHelper.DeleteDirectory(staleRoot);
+            using var cmd = db.Connection.CreateCommand();
+            cmd.CommandText = "UPDATE files SET checksum = upper(checksum) WHERE path = @path";
+            cmd.Parameters.AddWithValue("@path", "src/app.cs");
+            cmd.ExecuteNonQuery();
         }
+
+        var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit: true);
+
+        Assert.Equal(staleRoot, resolved);
     }
 
     [Fact]
     public void ResolveProjectRootForQuery_ExplicitProjectLocalDbIgnoresEscapingSampleMatches()
     {
-        var projectParent = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_escape_parent");
-        var staleParent = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_escape_stale_parent");
+        using var projectParentScope = TestProjectHelper.CreateTempProjectScope("cdidx_db_path_resolver_escape_parent");
+        using var staleParentScope = TestProjectHelper.CreateTempProjectScope("cdidx_db_path_resolver_escape_stale_parent");
+        var projectParent = projectParentScope.Root;
+        var staleParent = staleParentScope.Root;
         var projectRoot = Path.Combine(projectParent, "project");
         var staleRoot = Path.Combine(staleParent, "stale");
         var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-        try
+        Directory.CreateDirectory(projectRoot);
+        Directory.CreateDirectory(staleRoot);
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        Directory.CreateDirectory(Path.Combine(projectParent, "outside"));
+
+        const string outsideContent = "class Outside {}\n";
+        File.WriteAllText(Path.Combine(projectParent, "outside", "outside.cs"), outsideContent);
+
+        using (var db = new DbContext(dbPath))
         {
-            Directory.CreateDirectory(projectRoot);
-            Directory.CreateDirectory(staleRoot);
-            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-            Directory.CreateDirectory(Path.Combine(projectParent, "outside"));
-
-            const string outsideContent = "class Outside {}\n";
-            File.WriteAllText(Path.Combine(projectParent, "outside", "outside.cs"), outsideContent);
-
-            using (var db = new DbContext(dbPath))
-            {
-                db.InitializeSchema();
-                var writer = new DbWriter(db.Connection);
-                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, staleRoot);
-            }
-            TestProjectHelper.InsertIndexedFile(dbPath, "../outside/outside.cs", "csharp", outsideContent);
-
-            var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit: true);
-
-            Assert.Equal(staleRoot, resolved);
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, staleRoot);
         }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectParent);
-            TestProjectHelper.DeleteDirectory(staleParent);
-        }
+        TestProjectHelper.InsertIndexedFile(dbPath, "../outside/outside.cs", "csharp", outsideContent);
+
+        var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit: true);
+
+        Assert.Equal(staleRoot, resolved);
     }
 
     [Theory]
@@ -675,36 +621,24 @@ public class DbPathResolverTests
     [InlineData("src/../../outside.cs")]
     public void TryResolveIndexedFileSampleIoPath_RejectsEscapingRelativeSamples(string samplePath)
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_escape_sample");
-        try
-        {
-            var resolved = DbPathResolver.TryResolveIndexedFileSampleIoPath(projectRoot, samplePath, out var ioPath);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_db_path_resolver_escape_sample");
+        var projectRoot = project.Root;
+        var resolved = DbPathResolver.TryResolveIndexedFileSampleIoPath(projectRoot, samplePath, out var ioPath);
 
-            Assert.False(resolved);
-            Assert.Equal(string.Empty, ioPath);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.False(resolved);
+        Assert.Equal(string.Empty, ioPath);
     }
 
     [Theory]
     [InlineData("/outside.cs")]
     public void TryResolveIndexedFileSampleIoPath_RejectsRootedSamples(string samplePath)
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_rooted_sample");
-        try
-        {
-            var resolved = DbPathResolver.TryResolveIndexedFileSampleIoPath(projectRoot, samplePath, out var ioPath);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_db_path_resolver_rooted_sample");
+        var projectRoot = project.Root;
+        var resolved = DbPathResolver.TryResolveIndexedFileSampleIoPath(projectRoot, samplePath, out var ioPath);
 
-            Assert.False(resolved);
-            Assert.Equal(string.Empty, ioPath);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.False(resolved);
+        Assert.Equal(string.Empty, ioPath);
     }
 
     [Fact]
@@ -713,20 +647,14 @@ public class DbPathResolverTests
         if (!OperatingSystem.IsWindows())
             return;
 
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_windows_absolute_sample");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_db_path_resolver_windows_absolute_sample");
+        var projectRoot = project.Root;
+        foreach (var samplePath in new[] { "\\outside.cs", "C:/outside.cs", @"C:\outside.cs", @"\\server\share\outside.cs" })
         {
-            foreach (var samplePath in new[] { "\\outside.cs", "C:/outside.cs", @"C:\outside.cs", @"\\server\share\outside.cs" })
-            {
-                var resolved = DbPathResolver.TryResolveIndexedFileSampleIoPath(projectRoot, samplePath, out var ioPath);
+            var resolved = DbPathResolver.TryResolveIndexedFileSampleIoPath(projectRoot, samplePath, out var ioPath);
 
-                Assert.False(resolved);
-                Assert.Equal(string.Empty, ioPath);
-            }
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
+            Assert.False(resolved);
+            Assert.Equal(string.Empty, ioPath);
         }
     }
 
@@ -736,25 +664,20 @@ public class DbPathResolverTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_posix_backslash_sample");
-        try
-        {
-            const string samplePath = "back\\slash.py";
-            var resolved = DbPathResolver.TryResolveIndexedFileSampleIoPath(projectRoot, samplePath, out var ioPath);
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_db_path_resolver_posix_backslash_sample");
+        var projectRoot = project.Root;
+        const string samplePath = "back\\slash.py";
+        var resolved = DbPathResolver.TryResolveIndexedFileSampleIoPath(projectRoot, samplePath, out var ioPath);
 
-            Assert.True(resolved);
-            Assert.Equal(Path.GetFullPath(Path.Combine(projectRoot, samplePath)), ioPath);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
+        Assert.True(resolved);
+        Assert.Equal(Path.GetFullPath(Path.Combine(projectRoot, samplePath)), ioPath);
     }
 
     [Fact]
     public void ResolveProjectRootForQuery_ExplicitProjectLocalReadOnlyUriWithoutMetadataReturnsNull()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_local_uri");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_db_path_resolver_local_uri");
+        var projectRoot = project.Root;
         var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
         try
         {
@@ -783,7 +706,6 @@ public class DbPathResolverTests
         }
         finally
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
         }
     }
@@ -791,167 +713,137 @@ public class DbPathResolverTests
     [Fact]
     public void ResolveProjectRootForQuery_CustomDbUnderCdidxPrefersStoredIndexedProjectRootMetadata()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_custom_root");
-        var dbContainerRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_custom_container");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_db_path_resolver_custom_root");
+        using var container = TestProjectHelper.CreateTempProjectScope("cdidx_db_path_resolver_custom_container");
+        var projectRoot = project.Root;
+        var dbContainerRoot = container.Root;
         var dbPath = Path.Combine(dbContainerRoot, ".cdidx", "shared.db");
-        try
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        using (var db = new DbContext(dbPath))
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-            using (var db = new DbContext(dbPath))
-            {
-                db.InitializeSchema();
-                var writer = new DbWriter(db.Connection);
-                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
-            }
-
-            var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit: true);
-
-            Assert.Equal(projectRoot, resolved);
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
         }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-            TestProjectHelper.DeleteDirectory(dbContainerRoot);
-        }
+
+        var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit: true);
+
+        Assert.Equal(projectRoot, resolved);
     }
 
     [Fact]
     public void ResolveProjectRootForQuery_ExplicitExternalCodeIndexDbPrefersStoredIndexedProjectRootMetadata()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_explicit_codeindex_root");
-        var dbContainerRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_explicit_codeindex_container");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_db_path_resolver_explicit_codeindex_root");
+        using var container = TestProjectHelper.CreateTempProjectScope("cdidx_db_path_resolver_explicit_codeindex_container");
+        var projectRoot = project.Root;
+        var dbContainerRoot = container.Root;
         var dbPath = Path.Combine(dbContainerRoot, ".cdidx", "codeindex.db");
-        try
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        using (var db = new DbContext(dbPath))
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-            using (var db = new DbContext(dbPath))
-            {
-                db.InitializeSchema();
-                var writer = new DbWriter(db.Connection);
-                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
-            }
-
-            var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit: true);
-
-            Assert.Equal(projectRoot, resolved);
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
         }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-            TestProjectHelper.DeleteDirectory(dbContainerRoot);
-        }
+
+        var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit: true);
+
+        Assert.Equal(projectRoot, resolved);
     }
 
     [Fact]
     public void ResolveProjectRootForQuery_ExplicitExternalCodeIndexDbIgnoresSingleSiblingPathCollision()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_collision_root");
-        var dbContainerRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_collision_container");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_db_path_resolver_collision_root");
+        using var container = TestProjectHelper.CreateTempProjectScope("cdidx_db_path_resolver_collision_container");
+        var projectRoot = project.Root;
+        var dbContainerRoot = container.Root;
         var dbPath = Path.Combine(dbContainerRoot, ".cdidx", "codeindex.db");
-        try
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+        Directory.CreateDirectory(Path.Combine(dbContainerRoot, "src"));
+
+        const string content = "class App {}\n";
+        File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), content);
+        File.WriteAllText(Path.Combine(dbContainerRoot, "src", "app.cs"), content);
+
+        using (var db = new DbContext(dbPath))
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            Directory.CreateDirectory(Path.Combine(dbContainerRoot, "src"));
-
-            const string content = "class App {}\n";
-            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), content);
-            File.WriteAllText(Path.Combine(dbContainerRoot, "src", "app.cs"), content);
-
-            using (var db = new DbContext(dbPath))
-            {
-                db.InitializeSchema();
-                var writer = new DbWriter(db.Connection);
-                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
-            }
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", content);
-
-            var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit: true);
-
-            Assert.Equal(projectRoot, resolved);
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
         }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-            TestProjectHelper.DeleteDirectory(dbContainerRoot);
-        }
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", content);
+
+        var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit: true);
+
+        Assert.Equal(projectRoot, resolved);
     }
 
     [Fact]
     public void ResolveProjectRootForQuery_ExplicitExternalCodeIndexDbWithoutMetadataReturnsNullEvenWhenSiblingPathExists()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_collision_missing_meta_root");
-        var dbContainerRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_collision_missing_meta_container");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_db_path_resolver_collision_missing_meta_root");
+        using var container = TestProjectHelper.CreateTempProjectScope("cdidx_db_path_resolver_collision_missing_meta_container");
+        var projectRoot = project.Root;
+        var dbContainerRoot = container.Root;
         var dbPath = Path.Combine(dbContainerRoot, ".cdidx", "codeindex.db");
-        try
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+        Directory.CreateDirectory(Path.Combine(dbContainerRoot, "src"));
+
+        const string indexedContent = "class App {}\n";
+        const string siblingContent = "class App { void Different() {} }\n";
+        File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), indexedContent);
+        File.WriteAllText(Path.Combine(dbContainerRoot, "src", "app.cs"), siblingContent);
+
+        using (var db = new DbContext(dbPath))
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            Directory.CreateDirectory(Path.Combine(dbContainerRoot, "src"));
-
-            const string indexedContent = "class App {}\n";
-            const string siblingContent = "class App { void Different() {} }\n";
-            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), indexedContent);
-            File.WriteAllText(Path.Combine(dbContainerRoot, "src", "app.cs"), siblingContent);
-
-            using (var db = new DbContext(dbPath))
-            {
-                db.InitializeSchema();
-            }
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", indexedContent);
-            using (var db = new DbContext(dbPath))
-            {
-                using var cmd = db.Connection.CreateCommand();
-                cmd.CommandText = "DELETE FROM codeindex_meta WHERE key = @key";
-                cmd.Parameters.AddWithValue("@key", DbContext.IndexedProjectRootMetaKey);
-                cmd.ExecuteNonQuery();
-            }
-
-            var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit: true);
-
-            Assert.Null(resolved);
+            db.InitializeSchema();
         }
-        finally
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", indexedContent);
+        using (var db = new DbContext(dbPath))
         {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-            TestProjectHelper.DeleteDirectory(dbContainerRoot);
+            using var cmd = db.Connection.CreateCommand();
+            cmd.CommandText = "DELETE FROM codeindex_meta WHERE key = @key";
+            cmd.Parameters.AddWithValue("@key", DbContext.IndexedProjectRootMetaKey);
+            cmd.ExecuteNonQuery();
         }
+
+        var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit: true);
+
+        Assert.Null(resolved);
     }
 
     [Fact]
     public void ResolveProjectRootForQuery_ExplicitExternalCodeIndexDbSkipsOversizedSiblingChecksumSample()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_oversized_root");
-        var dbContainerRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_oversized_container");
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_db_path_resolver_oversized_root");
+        using var container = TestProjectHelper.CreateTempProjectScope("cdidx_db_path_resolver_oversized_container");
+        var projectRoot = project.Root;
+        var dbContainerRoot = container.Root;
         var dbPath = Path.Combine(dbContainerRoot, ".cdidx", "codeindex.db");
-        try
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+        Directory.CreateDirectory(Path.Combine(dbContainerRoot, "src"));
+
+        const string indexedContent = "class App {}\n";
+        File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), indexedContent);
+        using (var stream = File.Create(Path.Combine(dbContainerRoot, "src", "app.cs")))
+            stream.SetLength(FileIndexer.DefaultMaxFileSizeBytes + 1);
+
+        using (var db = new DbContext(dbPath))
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            Directory.CreateDirectory(Path.Combine(dbContainerRoot, "src"));
-
-            const string indexedContent = "class App {}\n";
-            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), indexedContent);
-            using (var stream = File.Create(Path.Combine(dbContainerRoot, "src", "app.cs")))
-                stream.SetLength(FileIndexer.DefaultMaxFileSizeBytes + 1);
-
-            using (var db = new DbContext(dbPath))
-            {
-                db.InitializeSchema();
-                var writer = new DbWriter(db.Connection);
-                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
-            }
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", indexedContent);
-
-            var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit: true);
-
-            Assert.Equal(projectRoot, resolved);
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+            writer.SetMeta(DbContext.IndexedProjectRootMetaKey, projectRoot);
         }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-            TestProjectHelper.DeleteDirectory(dbContainerRoot);
-        }
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", indexedContent);
+
+        var resolved = DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit: true);
+
+        Assert.Equal(projectRoot, resolved);
     }
 
     [Fact]
