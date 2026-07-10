@@ -3343,7 +3343,8 @@ internal static class StructuralLineMasker
             if (line.Length == 0)
                 continue;
 
-            var masked = line.ToCharArray();
+            char[]? masked = null;
+            char[] GetMaskedLine() => masked ??= line.ToCharArray();
             var pos = 0;
 
             while (pos < line.Length)
@@ -3352,19 +3353,19 @@ internal static class StructuralLineMasker
                 {
                     if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '*')
                     {
-                        ReplaceWithSpaces(masked, pos, 2);
+                        ReplaceWithSpaces(GetMaskedLine(), pos, 2);
                         blockCommentDepth++;
                         pos += 2;
                         continue;
                     }
                     if (pos + 1 < line.Length && line[pos] == '*' && line[pos + 1] == '/')
                     {
-                        ReplaceWithSpaces(masked, pos, 2);
+                        ReplaceWithSpaces(GetMaskedLine(), pos, 2);
                         blockCommentDepth--;
                         pos += 2;
                         continue;
                     }
-                    masked[pos] = ' ';
+                    GetMaskedLine()[pos] = ' ';
                     pos++;
                     continue;
                 }
@@ -3407,7 +3408,7 @@ internal static class StructuralLineMasker
                                         if (closeHashCount > 0
                                             && !LooksLikeDeepTripleOpenerContext(lines, i, pos, 3 + closeHashCount))
                                         {
-                                            ReplaceWithSpaces(masked, pos, 3 + closeHashCount);
+                                            ReplaceWithSpaces(GetMaskedLine(), pos, 3 + closeHashCount);
                                             pos += 3 + closeHashCount;
                                             deepNestedTripleDepth--;
                                             if (deepNestedTripleHashCounts.Count > 0)
@@ -3421,7 +3422,7 @@ internal static class StructuralLineMasker
                                             && currentDeepHashCount == 0
                                             && !LooksLikeDeepTripleOpenerContext(lines, i, pos, 3))
                                         {
-                                            ReplaceWithSpaces(masked, pos, 3);
+                                            ReplaceWithSpaces(GetMaskedLine(), pos, 3);
                                             pos += 3;
                                             deepNestedTripleDepth--;
                                             if (deepNestedTripleHashCounts.Count > 0)
@@ -3435,7 +3436,7 @@ internal static class StructuralLineMasker
                                         && line[pos + 2] == '"'
                                         && LooksLikeDeepTripleOpenerContext(lines, i, pos, 3))
                                     {
-                                        ReplaceWithSpaces(masked, pos, 3);
+                                        ReplaceWithSpaces(GetMaskedLine(), pos, 3);
                                         pos += 3;
                                         deepNestedTripleDepth++;
                                         deepNestedTripleHashCounts.Push(0);
@@ -3450,7 +3451,7 @@ internal static class StructuralLineMasker
                                         var looksLikeNestedOpen = LooksLikeDeepTripleOpenerContext(lines, i, pos, deepBodyHashes + 3);
                                         if (looksLikeNestedOpen)
                                         {
-                                            ReplaceWithSpaces(masked, pos, deepBodyHashes + 3);
+                                            ReplaceWithSpaces(GetMaskedLine(), pos, deepBodyHashes + 3);
                                             pos += deepBodyHashes + 3;
                                             deepNestedTripleDepth++;
                                             deepNestedTripleHashCounts.Push(deepBodyHashes);
@@ -3459,19 +3460,19 @@ internal static class StructuralLineMasker
 
                                     }
 
-                                    masked[pos] = ' ';
+                                    GetMaskedLine()[pos] = ' ';
                                     pos++;
                                     continue;
                                 }
                                 if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '/')
                                 {
-                                    ReplaceWithSpaces(masked, pos, line.Length - pos);
+                                    ReplaceWithSpaces(GetMaskedLine(), pos, line.Length - pos);
                                     pos = line.Length;
                                     continue;
                                 }
                                 if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '*')
                                 {
-                                    ReplaceWithSpaces(masked, pos, 2);
+                                    ReplaceWithSpaces(GetMaskedLine(), pos, 2);
                                     blockCommentDepth = 1;
                                     pos += 2;
                                     continue;
@@ -3489,7 +3490,7 @@ internal static class StructuralLineMasker
                                     && line[pos + deepHashes + 1] == '"'
                                     && line[pos + deepHashes + 2] == '"')
                                 {
-                                    ReplaceWithSpaces(masked, pos, deepHashes + 3);
+                                    ReplaceWithSpaces(GetMaskedLine(), pos, deepHashes + 3);
                                     pos += deepHashes + 3;
                                     deepNestedTripleDepth = 1;
                                     deepNestedTripleHashCounts.Push(deepHashes);
@@ -3505,7 +3506,7 @@ internal static class StructuralLineMasker
                                     && pos + deepHashes < line.Length
                                     && line[pos + deepHashes] == '"')
                                 {
-                                    pos = MaskSwiftSingleLineRawString(line, pos, deepHashes, masked);
+                                    pos = MaskSwiftSingleLineRawString(line, pos, deepHashes, GetMaskedLine());
                                     continue;
                                 }
                                 if (line[pos] == '"' || line[pos] == '\'')
@@ -3523,7 +3524,7 @@ internal static class StructuralLineMasker
                                 {
                                     if (nestedHoleParenDepth == 0)
                                     {
-                                        masked[pos] = ' ';
+                                        GetMaskedLine()[pos] = ' ';
                                         nestedHoleParenDepth = -1;
                                         pos++;
                                         continue;
@@ -3548,7 +3549,7 @@ internal static class StructuralLineMasker
                                 && line[pos] == '"' && line[pos + 1] == '"' && line[pos + 2] == '"'
                                 && HasHashRun(line, pos + 3, nestedTripleHashCount))
                             {
-                                ReplaceWithSpaces(masked, pos, 3 + nestedTripleHashCount);
+                                ReplaceWithSpaces(GetMaskedLine(), pos, 3 + nestedTripleHashCount);
                                 pos += 3 + nestedTripleHashCount;
                                 nestedTripleHashCount = -1;
                                 nestedHoleParenDepth = -1;
@@ -3561,7 +3562,7 @@ internal static class StructuralLineMasker
                                 && pos + 1 + nestedTripleHashCount < line.Length
                                 && line[pos + 1 + nestedTripleHashCount] == '(')
                             {
-                                ReplaceWithSpaces(masked, pos, 2 + nestedTripleHashCount);
+                                ReplaceWithSpaces(GetMaskedLine(), pos, 2 + nestedTripleHashCount);
                                 pos += 2 + nestedTripleHashCount;
                                 nestedHoleParenDepth = 0;
                                 continue;
@@ -3570,25 +3571,25 @@ internal static class StructuralLineMasker
                             // 通常 nested triple 内: `\\` は literal backslash。
                             if (nestedTripleHashCount == 0 && line[pos] == '\\' && pos + 1 < line.Length)
                             {
-                                ReplaceWithSpaces(masked, pos, 2);
+                                ReplaceWithSpaces(GetMaskedLine(), pos, 2);
                                 pos += 2;
                                 continue;
                             }
-                            masked[pos] = ' ';
+                            GetMaskedLine()[pos] = ' ';
                             pos++;
                             continue;
                         }
 
                         if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '/')
                         {
-                            ReplaceWithSpaces(masked, pos, line.Length - pos);
+                            ReplaceWithSpaces(GetMaskedLine(), pos, line.Length - pos);
                             pos = line.Length;
                             continue;
                         }
 
                         if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '*')
                         {
-                            ReplaceWithSpaces(masked, pos, 2);
+                            ReplaceWithSpaces(GetMaskedLine(), pos, 2);
                             blockCommentDepth = 1;
                             pos += 2;
                             continue;
@@ -3605,7 +3606,7 @@ internal static class StructuralLineMasker
                             && line[pos + holeNestedHashes + 1] == '"'
                             && line[pos + holeNestedHashes + 2] == '"')
                         {
-                            ReplaceWithSpaces(masked, pos, holeNestedHashes + 3);
+                            ReplaceWithSpaces(GetMaskedLine(), pos, holeNestedHashes + 3);
                             pos += holeNestedHashes + 3;
                             nestedTripleHashCount = holeNestedHashes;
                             continue;
@@ -3625,7 +3626,7 @@ internal static class StructuralLineMasker
                             && pos + holeNestedHashes < line.Length
                             && line[pos + holeNestedHashes] == '"')
                         {
-                            pos = MaskSwiftSingleLineRawString(line, pos, holeNestedHashes, masked);
+                            pos = MaskSwiftSingleLineRawString(line, pos, holeNestedHashes, GetMaskedLine());
                             continue;
                         }
 
@@ -3646,7 +3647,7 @@ internal static class StructuralLineMasker
                         {
                             if (holeParenDepth == 0)
                             {
-                                masked[pos] = ' ';
+                                GetMaskedLine()[pos] = ' ';
                                 holeParenDepth = -1;
                                 pos++;
                                 continue;
@@ -3667,7 +3668,7 @@ internal static class StructuralLineMasker
                         && line[pos] == '"' && line[pos + 1] == '"' && line[pos + 2] == '"'
                         && HasHashRun(line, pos + 3, tripleHashCount))
                     {
-                        ReplaceWithSpaces(masked, pos, 3 + tripleHashCount);
+                        ReplaceWithSpaces(GetMaskedLine(), pos, 3 + tripleHashCount);
                         pos += 3 + tripleHashCount;
                         insideTriple = false;
                         tripleHashCount = 0;
@@ -3690,7 +3691,7 @@ internal static class StructuralLineMasker
                             && pos + 1 + tripleHashCount < line.Length
                             && line[pos + 1 + tripleHashCount] == '(')
                         {
-                            ReplaceWithSpaces(masked, pos, 2 + tripleHashCount);
+                            ReplaceWithSpaces(GetMaskedLine(), pos, 2 + tripleHashCount);
                             pos += 2 + tripleHashCount;
                             holeParenDepth = 0;
                             continue;
@@ -3703,7 +3704,7 @@ internal static class StructuralLineMasker
                         // 消費し、2 文字目が triple close の一部と誤検出されないようにする。
                         if (tripleHashCount == 0 && pos + 1 < line.Length)
                         {
-                            ReplaceWithSpaces(masked, pos, 2);
+                            ReplaceWithSpaces(GetMaskedLine(), pos, 2);
                             pos += 2;
                             continue;
                         }
@@ -3711,12 +3712,12 @@ internal static class StructuralLineMasker
                         // Extended form `#"""..."""#` (or more hashes): without a
                         // matching `\#` run the backslash is literal; advance one char.
                         // 拡張形 `#"""..."""#` など: hash 数が一致しない `\` は literal。
-                        masked[pos] = ' ';
+                        GetMaskedLine()[pos] = ' ';
                         pos++;
                         continue;
                     }
 
-                    masked[pos] = ' ';
+                    GetMaskedLine()[pos] = ' ';
                     pos++;
                     continue;
                 }
@@ -3726,7 +3727,7 @@ internal static class StructuralLineMasker
 
                 if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '*')
                 {
-                    ReplaceWithSpaces(masked, pos, 2);
+                    ReplaceWithSpaces(GetMaskedLine(), pos, 2);
                     blockCommentDepth = 1;
                     pos += 2;
                     continue;
@@ -3740,7 +3741,7 @@ internal static class StructuralLineMasker
                     && line[pos + leadingHashes + 1] == '"'
                     && line[pos + leadingHashes + 2] == '"')
                 {
-                    ReplaceWithSpaces(masked, pos, leadingHashes + 3);
+                    ReplaceWithSpaces(GetMaskedLine(), pos, leadingHashes + 3);
                     pos += leadingHashes + 3;
                     insideTriple = true;
                     tripleHashCount = leadingHashes;
@@ -3758,7 +3759,7 @@ internal static class StructuralLineMasker
                     && pos + leadingHashes < line.Length
                     && line[pos + leadingHashes] == '"')
                 {
-                    pos = MaskSwiftSingleLineRawString(line, pos, leadingHashes, masked);
+                    pos = MaskSwiftSingleLineRawString(line, pos, leadingHashes, GetMaskedLine());
                     continue;
                 }
 
@@ -3771,7 +3772,8 @@ internal static class StructuralLineMasker
                 pos++;
             }
 
-            lines[i] = new string(masked);
+            if (masked is not null)
+                lines[i] = new string(masked);
         }
     }
 
