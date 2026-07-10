@@ -5,6 +5,36 @@ namespace CodeIndex.Tests;
 public class ReferenceExtractorLuaTests
 {
     [Fact]
+    public void MaskLongCommentAndStringLines_ReturnsOriginalArrayWithoutLongText()
+    {
+        var lines = new[]
+        {
+            "local value = table[index]",
+            "return module:run(value)",
+        };
+
+        var masked = LuaReferenceExtractor.MaskLongCommentAndStringLines(lines);
+
+        Assert.Same(lines, masked);
+    }
+
+    [Fact]
+    public void MaskLongCommentAndStringLines_ClonesWhenLongTextIsMasked()
+    {
+        var lines = new[]
+        {
+            "local value = [[",
+            "Phantom.call()",
+            "]]",
+        };
+
+        var masked = LuaReferenceExtractor.MaskLongCommentAndStringLines(lines);
+
+        Assert.NotSame(lines, masked);
+        Assert.DoesNotContain("Phantom", masked[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Extract_Lua_EmitsColonCallsAndTableFieldReferences()
     {
         const string content = """

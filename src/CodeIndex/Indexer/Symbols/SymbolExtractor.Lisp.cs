@@ -123,7 +123,7 @@ public static partial class SymbolExtractor
     {
         var maskedLines = MaskLispCodeLines(lines);
         var maskedLinesShareSource = ReferenceEquals(maskedLines, lines);
-        var symbols = new List<SymbolRecord>();
+        var symbols = CreateSymbolListForLines(lines.Length);
 
         void EnsureMutableMaskedLines()
         {

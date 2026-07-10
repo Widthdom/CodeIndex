@@ -81,7 +81,7 @@ internal static class TypeScriptReferenceExtractor
                     null,
                     braceDepths ??= BuildBraceDepthsBeforeLine(preparedLines),
                     localDeclarationLinesByName ??= BuildLocalDeclarationLinesByName(preparedLines),
-                    parameterShadowRangesByAlias ??= new Dictionary<string, IReadOnlyList<LineRange>>(StringComparer.Ordinal));
+                    parameterShadowRangesByAlias ??= new Dictionary<string, IReadOnlyList<LineRange>>(4, StringComparer.Ordinal));
                 continue;
             }
 
@@ -99,7 +99,7 @@ internal static class TypeScriptReferenceExtractor
                     FindDynamicImportAliasEndLine(preparedLines, sharedBraceDepths, index),
                     sharedBraceDepths,
                     localDeclarationLinesByName ??= BuildLocalDeclarationLinesByName(preparedLines),
-                    parameterShadowRangesByAlias ??= new Dictionary<string, IReadOnlyList<LineRange>>(StringComparer.Ordinal));
+                    parameterShadowRangesByAlias ??= new Dictionary<string, IReadOnlyList<LineRange>>(4, StringComparer.Ordinal));
                 continue;
             }
 
@@ -108,7 +108,7 @@ internal static class TypeScriptReferenceExtractor
                 continue;
 
             AddNamedImportExportAliasBindings(
-                bindings ??= [],
+                bindings ??= new List<NamespaceAliasBinding>(4),
                 preparedLines,
                 match.Groups["body"].Value,
                 match.Groups["module"].Value,
@@ -178,7 +178,7 @@ internal static class TypeScriptReferenceExtractor
                     null,
                     braceDepths ??= BuildBraceDepthsBeforeLine(preparedLines),
                     localDeclarationLinesByName ??= BuildLocalDeclarationLinesByName(preparedLines),
-                    parameterShadowRangesByAlias ??= new Dictionary<string, IReadOnlyList<LineRange>>(StringComparer.Ordinal));
+                    parameterShadowRangesByAlias ??= new Dictionary<string, IReadOnlyList<LineRange>>(4, StringComparer.Ordinal));
             }
 
             if (commaIndex < 0)
@@ -311,7 +311,7 @@ internal static class TypeScriptReferenceExtractor
             if (target.Length > 0)
             {
                 var sharedBraceDepths = braceDepths ??= BuildBraceDepthsBeforeLine(preparedLines);
-                (aliases ??= []).Add(new TypeAliasBinding(
+                (aliases ??= new List<TypeAliasBinding>(4)).Add(new TypeAliasBinding(
                     match.Groups["alias"].Value,
                     target,
                     index + 1,
@@ -455,12 +455,12 @@ internal static class TypeScriptReferenceExtractor
             var typeDeclaration = TypeDeclarationShadowRegex.Match(line);
             if (typeDeclaration.Success && string.Equals(typeDeclaration.Groups["name"].Value, alias, StringComparison.Ordinal))
             {
-                (ranges ??= []).Add(new LineRange(index + 1, FindScopedAliasEndLine(preparedLines, braceDepths, index) ?? preparedLines.Count));
+                (ranges ??= new List<LineRange>(2)).Add(new LineRange(index + 1, FindScopedAliasEndLine(preparedLines, braceDepths, index) ?? preparedLines.Count));
                 continue;
             }
 
             if (DeclaresGenericTypeParameter(line, alias))
-                (ranges ??= []).Add(new LineRange(index + 1, FindScopedAliasEndLine(preparedLines, braceDepths, index) ?? index + 1));
+                (ranges ??= new List<LineRange>(2)).Add(new LineRange(index + 1, FindScopedAliasEndLine(preparedLines, braceDepths, index) ?? index + 1));
         }
 
         return ranges is null ? Array.Empty<LineRange>() : ranges;
@@ -1339,10 +1339,10 @@ internal static class TypeScriptReferenceExtractor
                 continue;
 
             var name = match.Groups["name"].Value;
-            linesByName ??= new Dictionary<string, List<int>>(StringComparer.Ordinal);
+            linesByName ??= new Dictionary<string, List<int>>(16, StringComparer.Ordinal);
             if (!linesByName.TryGetValue(name, out var lines))
             {
-                lines = [];
+                lines = new List<int>(1);
                 linesByName[name] = lines;
             }
 
@@ -1422,7 +1422,7 @@ internal static class TypeScriptReferenceExtractor
 
             var endLine = FindBlockEndLine(preparedLines, braceDepths, index);
             if (endLine >= index + 1)
-                (ranges ??= []).Add(new LineRange(index + 1, endLine));
+                (ranges ??= new List<LineRange>(2)).Add(new LineRange(index + 1, endLine));
         }
 
         return ranges is null ? Array.Empty<LineRange>() : ranges;
@@ -1641,10 +1641,10 @@ internal static class TypeScriptReferenceExtractor
                 continue;
 
             var clauseStart = index + 1;
-            var clause = preparedLine.Substring(clauseStart, closeIndex - clauseStart);
+            var clause = preparedLine.AsSpan(clauseStart, closeIndex - clauseStart);
             foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(clause))
             {
-                var fragment = clause.Substring(segmentStart, segmentLength);
+                var fragment = clause.Slice(segmentStart, segmentLength).ToString();
                 foreach (var extendsIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(fragment, "extends"))
                 {
                     var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(fragment, extendsIndex + "extends".Length);
@@ -1795,10 +1795,10 @@ internal static class TypeScriptReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        var parameterList = line.Substring(listStart, listEnd - listStart);
+        var parameterList = line.AsSpan(listStart, listEnd - listStart);
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(parameterList))
         {
-            var fragment = parameterList.Substring(segmentStart, segmentLength);
+            var fragment = parameterList.Slice(segmentStart, segmentLength).ToString();
             var equalsIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(fragment, '=');
             if (equalsIndex < 0)
                 continue;

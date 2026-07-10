@@ -50,12 +50,57 @@ public partial class ReferenceExtractorTests
         Assert.Same(lines, masked);
     }
 
+    [Theory]
+    [InlineData("csharp", "var value = total / count;")]
+    [InlineData("csharp", "char value = 'x';")]
+    [InlineData("python", "value = 'literal'")]
+    [InlineData("python", "value = \"literal\"")]
+    [InlineData("rust", "let value = \"literal\";")]
+    [InlineData("rust", "let value = &'a input;")]
+    [InlineData("kotlin", "val value = \"literal\"")]
+    [InlineData("swift", "let value = \"literal\"")]
+    [InlineData("scala", "val value = \"literal\"")]
+    public void StructuralLineMasker_MaskLines_ReturnsOriginalArrayForMaskedLanguageWithoutStructuralDelimiter(
+        string language,
+        string line)
+    {
+        var lines = new[] { line };
+
+        var masked = StructuralLineMasker.MaskLines(language, lines);
+
+        Assert.Same(lines, masked);
+    }
+
     [Fact]
     public void StructuralLineMasker_MaskLines_ClonesForMaskedLanguage()
     {
         var lines = new[] { "var value = \"literal\";" };
 
         var masked = StructuralLineMasker.MaskLines("csharp", lines);
+
+        Assert.NotSame(lines, masked);
+    }
+
+    [Theory]
+    [InlineData("csharp", "/* comment */")]
+    [InlineData("python", "value = \"\"\"literal\"\"\"")]
+    [InlineData("python", "value = '''literal'''")]
+    [InlineData("rust", "let value = r#\"literal\"#;")]
+    [InlineData("rust", "/* comment */")]
+    [InlineData("javascript", "const value = `literal`;")]
+    [InlineData("kotlin", "val value = \"\"\"literal\"\"\"")]
+    [InlineData("kotlin", "/* comment */")]
+    [InlineData("swift", "let value = #\"literal\"#")]
+    [InlineData("swift", "let value = \"\"\"literal\"\"\"")]
+    [InlineData("swift", "/* comment */")]
+    [InlineData("scala", "val value = \"\"\"literal\"\"\"")]
+    [InlineData("scala", "/* comment */")]
+    [InlineData("perl", "=pod")]
+    public void StructuralLineMasker_MaskLines_ClonesForStructuralDelimiter(string language, string line)
+    {
+        var lines = new[] { line };
+
+        var masked = StructuralLineMasker.MaskLines(language, lines);
 
         Assert.NotSame(lines, masked);
     }
@@ -79,6 +124,138 @@ public partial class ReferenceExtractorTests
         Assert.Same(lines[2], masked[2]);
         Assert.Same(lines[3], masked[3]);
         Assert.DoesNotContain("literal", masked[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StructuralLineMasker_MaskLines_RustReusesUnchangedLinesUntilMaskNeeded()
+    {
+        var lines = new[]
+        {
+            "fn main() {",
+            "    let value = r#\"literal\"#;",
+            "    call_real();",
+            "}",
+        };
+
+        var masked = StructuralLineMasker.MaskLines("rust", lines);
+
+        Assert.NotSame(lines, masked);
+        Assert.Same(lines[0], masked[0]);
+        Assert.NotSame(lines[1], masked[1]);
+        Assert.Same(lines[2], masked[2]);
+        Assert.Same(lines[3], masked[3]);
+        Assert.DoesNotContain("literal", masked[1], StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("kotlin", "    val value = \"\"\"literal\"\"\"")]
+    [InlineData("scala", "    val value = \"\"\"literal\"\"\"")]
+    public void StructuralLineMasker_MaskLines_JvmTripleStringsReuseUnchangedLinesUntilMaskNeeded(
+        string language,
+        string literalLine)
+    {
+        var lines = new[]
+        {
+            "class App {",
+            literalLine,
+            "    callReal()",
+            "}",
+        };
+
+        var masked = StructuralLineMasker.MaskLines(language, lines);
+
+        Assert.NotSame(lines, masked);
+        Assert.Same(lines[0], masked[0]);
+        Assert.NotSame(lines[1], masked[1]);
+        Assert.Same(lines[2], masked[2]);
+        Assert.Same(lines[3], masked[3]);
+        Assert.DoesNotContain("literal", masked[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StructuralLineMasker_MaskLines_SwiftReusesUnchangedLinesUntilMaskNeeded()
+    {
+        var lines = new[]
+        {
+            "struct App {",
+            "    let value = \"\"\"literal\"\"\"",
+            "    callReal()",
+            "}",
+        };
+
+        var masked = StructuralLineMasker.MaskLines("swift", lines);
+
+        Assert.NotSame(lines, masked);
+        Assert.Same(lines[0], masked[0]);
+        Assert.NotSame(lines[1], masked[1]);
+        Assert.Same(lines[2], masked[2]);
+        Assert.Same(lines[3], masked[3]);
+        Assert.DoesNotContain("literal", masked[1], StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void StructuralLineMasker_MaskLines_JsTsTemplateLiteralsReuseUnchangedLinesUntilMaskNeeded(string language)
+    {
+        var lines = new[]
+        {
+            "function run() {",
+            "    const value = `literal`;",
+            "    callReal();",
+            "}",
+        };
+
+        var masked = StructuralLineMasker.MaskLines(language, lines);
+
+        Assert.NotSame(lines, masked);
+        Assert.Same(lines[0], masked[0]);
+        Assert.NotSame(lines[1], masked[1]);
+        Assert.Same(lines[2], masked[2]);
+        Assert.Same(lines[3], masked[3]);
+        Assert.DoesNotContain("literal", masked[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StructuralLineMasker_MaskLines_PythonTripleStringsReuseUnchangedLinesUntilMaskNeeded()
+    {
+        var lines = new[]
+        {
+            "def run():",
+            "    value = \"\"\"literal\"\"\"",
+            "    call_real()",
+        };
+
+        var masked = StructuralLineMasker.MaskLines("python", lines);
+
+        Assert.NotSame(lines, masked);
+        Assert.Same(lines[0], masked[0]);
+        Assert.NotSame(lines[1], masked[1]);
+        Assert.Same(lines[2], masked[2]);
+        Assert.DoesNotContain("literal", masked[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StructuralLineMasker_MaskLines_PerlPodReusesNonPodLines()
+    {
+        var lines = new[]
+        {
+            "call_real();",
+            "  =pod",
+            "  Phantom::call();",
+            "  =cut",
+            "call_after();",
+        };
+
+        var masked = StructuralLineMasker.MaskLines("perl", lines);
+
+        Assert.NotSame(lines, masked);
+        Assert.Same(lines[0], masked[0]);
+        Assert.NotSame(lines[1], masked[1]);
+        Assert.NotSame(lines[2], masked[2]);
+        Assert.NotSame(lines[3], masked[3]);
+        Assert.Same(lines[4], masked[4]);
+        Assert.DoesNotContain("Phantom", masked[2], StringComparison.Ordinal);
     }
 
     [Fact]
@@ -5644,6 +5821,33 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "VisiblePanel0" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "VisiblePanel249" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName.StartsWith("HiddenPanel", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void MaskRazorCommentLines_ReusesPlainMarkupLineArrays()
+    {
+        string[] lines =
+        [
+            "<div>",
+            "  <span>Visible</span>",
+            "</div>",
+        ];
+
+        var masked = LanguageReferenceExtractionSupport.MaskRazorCommentLines(lines);
+
+        Assert.Same(lines, masked);
+    }
+
+    [Fact]
+    public void MaskRazorCommentLines_MasksHtmlCommentsWhenPresent()
+    {
+        string[] lines = ["<div><!-- hidden --><span>Visible</span></div>"];
+
+        var masked = LanguageReferenceExtractionSupport.MaskRazorCommentLines(lines);
+
+        Assert.NotSame(lines, masked);
+        Assert.DoesNotContain("hidden", masked[0], StringComparison.Ordinal);
+        Assert.Contains("<span>Visible</span>", masked[0], StringComparison.Ordinal);
     }
 
     [Fact]

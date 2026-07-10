@@ -24,6 +24,8 @@ public static partial class ReferenceExtractor
     internal const int MaxReferenceLookupNamesPerLine = 512;
     internal const int MaxReferenceContainerCandidates = 20_000;
     internal const int MaxSwiftPropertyDefinitionsPerLine = 256;
+    private const int ReferenceListInitialCapacityLineThreshold = 128;
+    private const int ReferenceListInitialCapacityMax = 1024;
     private static readonly IReadOnlySet<string> EmptyDefinitionNameSet = new HashSet<string>(StringComparer.Ordinal);
     private static readonly IReadOnlyDictionary<int, HashSet<string>> EmptyDefinitionNamesByLine =
         new Dictionary<int, HashSet<string>>();
@@ -35,6 +37,9 @@ public static partial class ReferenceExtractor
         "blazor",
         "cshtml",
     ];
+
+    private static string[] SplitContentLines(string content) =>
+        content.IndexOf('\n', StringComparison.Ordinal) < 0 ? [content] : content.Split('\n');
 
     // THREAD-SAFETY: Reference extraction is stateless per call. Shared Regex instances and
     // lookup tables are initialized once and then read concurrently; language-specific state
@@ -1146,15 +1151,41 @@ public static partial class ReferenceExtractor
         return copiedReferences;
     }
 
-    private sealed class BoundedReferenceList(int maxReferenceCount) : List<ReferenceRecord>
+    private sealed class BoundedReferenceList : List<ReferenceRecord>
     {
-        internal int MaxReferenceCount { get; } = maxReferenceCount;
+        internal BoundedReferenceList(int maxReferenceCount, int initialCapacity)
+            : base(initialCapacity)
+        {
+            MaxReferenceCount = maxReferenceCount;
+        }
+
+        internal int MaxReferenceCount { get; }
     }
 
-    internal static List<ReferenceRecord> CreateReferenceList(int? maxReferenceCount)
-        => maxReferenceCount is > 0
-            ? new BoundedReferenceList(maxReferenceCount.Value)
-            : [];
+    internal static List<ReferenceRecord> CreateReferenceList(int? maxReferenceCount, int initialCapacity = 0)
+    {
+        var capacity = Math.Max(0, initialCapacity);
+        if (maxReferenceCount is > 0)
+            return new BoundedReferenceList(maxReferenceCount.Value, Math.Min(maxReferenceCount.Value, capacity));
+
+        return capacity > 0 ? new List<ReferenceRecord>(capacity) : [];
+    }
+
+    private static int EstimateReferenceListInitialCapacity(int lineCount)
+    {
+        if (lineCount < ReferenceListInitialCapacityLineThreshold)
+            return 0;
+
+        return Math.Min(ReferenceListInitialCapacityMax, Math.Max(16, lineCount / 4));
+    }
+
+    private static HashSet<string> CreateReferenceSeenSet(int lineCount)
+    {
+        var capacity = EstimateReferenceListInitialCapacity(lineCount);
+        return capacity > 0
+            ? new HashSet<string>(capacity, StringComparer.Ordinal)
+            : new HashSet<string>(StringComparer.Ordinal);
+    }
 
     internal static bool ReferenceLimitReached(List<ReferenceRecord> references)
         => references is BoundedReferenceList bounded

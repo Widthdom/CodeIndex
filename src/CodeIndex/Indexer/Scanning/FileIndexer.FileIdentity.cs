@@ -11,15 +11,19 @@ public partial class FileIndexer
     private static readonly bool FileIdentitySupportedPlatform = IsLinuxPlatform || IsMacOSPlatform || IsFileIdentityWindowsPlatform;
 
     internal static bool TryGetFileIdentity(string path, out FileIdentity identity)
+        => TryGetFileIdentity(path, out identity, out _);
+
+    internal static bool TryGetFileIdentity(string path, out FileIdentity identity, out ulong linkCount)
     {
         identity = default;
+        linkCount = 0;
         if (!FileIdentitySupportedPlatform)
             return false;
 
         try
         {
             if (IsFileIdentityWindowsPlatform)
-                return TryGetWindowsFileIdentity(path, out identity);
+                return TryGetWindowsFileIdentity(path, out identity, out linkCount);
 
             if (IsMacOSPlatform)
             {
@@ -27,6 +31,7 @@ public partial class FileIndexer
                     return false;
 
                 identity = new FileIdentity((uint)stat.DeviceId, stat.Inode);
+                linkCount = stat.LinkCount;
                 return true;
             }
 
@@ -34,6 +39,7 @@ public partial class FileIndexer
                 return false;
 
             identity = new FileIdentity(linuxStat.DeviceId, linuxStat.Inode);
+            linkCount = linuxStat.LinkCount;
             return true;
         }
         catch (DllNotFoundException)
@@ -46,9 +52,10 @@ public partial class FileIndexer
         }
     }
 
-    private static bool TryGetWindowsFileIdentity(string path, out FileIdentity identity)
+    private static bool TryGetWindowsFileIdentity(string path, out FileIdentity identity, out ulong linkCount)
     {
         identity = default;
+        linkCount = 0;
         using var handle = CreateFile(
             path,
             desiredAccess: 0,
@@ -65,6 +72,7 @@ public partial class FileIndexer
 
         var fileIndex = ((ulong)info.FileIndexHigh << 32) | info.FileIndexLow;
         identity = new FileIdentity(info.VolumeSerialNumber, fileIndex);
+        linkCount = info.NumberOfLinks;
         return true;
     }
 

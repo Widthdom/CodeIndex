@@ -726,7 +726,7 @@ internal static partial class LanguageReferenceExtractionSupport
             if (!match.Success || !line.TrimStart().StartsWith("@implements", StringComparison.Ordinal))
                 continue;
 
-            result ??= new List<string>();
+            result ??= new List<string>(2);
             result.Add(match.Groups["type"].Value);
         }
 
@@ -746,6 +746,9 @@ internal static partial class LanguageReferenceExtractionSupport
 
     public static string[] MaskRazorCommentLines(IReadOnlyList<string> originalLines)
     {
+        if (!MayContainRazorMaskingConstruct(originalLines))
+            return ReuseOrCopyRazorLines(originalLines);
+
         var result = new string[originalLines.Count];
         var inRazorComment = false;
         var inHtmlComment = false;
@@ -846,6 +849,32 @@ internal static partial class LanguageReferenceExtractionSupport
 
             result[lineIndex] = new string(chars);
         }
+
+        return result;
+    }
+
+    private static bool MayContainRazorMaskingConstruct(IReadOnlyList<string> originalLines)
+    {
+        foreach (var line in originalLines)
+        {
+            if (line.Contains('@') || line.Contains("<!--", StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static string[] ReuseOrCopyRazorLines(IReadOnlyList<string> originalLines)
+    {
+        if (originalLines is string[] lineArray)
+            return lineArray;
+
+        if (originalLines.Count == 0)
+            return [];
+
+        var result = new string[originalLines.Count];
+        for (var i = 0; i < originalLines.Count; i++)
+            result[i] = originalLines[i];
 
         return result;
     }
@@ -1963,7 +1992,7 @@ internal static partial class LanguageReferenceExtractionSupport
 
     private static List<(int Start, int Length)> SplitTopLevelCArgumentSpans(string text)
     {
-        var spans = new List<(int Start, int Length)>();
+        var spans = new List<(int Start, int Length)>(4);
         int parenDepth = 0;
         int squareDepth = 0;
         int braceDepth = 0;

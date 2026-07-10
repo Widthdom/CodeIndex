@@ -285,7 +285,7 @@ public static partial class SymbolExtractor
 
     private static string ResolveCssSymbolName(string matchLine, string name, string[] lines, int startIndex, int endLine)
     {
-        if (!matchLine.TrimStart().StartsWith("@font-face", StringComparison.OrdinalIgnoreCase))
+        if (!matchLine.AsSpan().TrimStart().StartsWith("@font-face", StringComparison.OrdinalIgnoreCase))
             return name;
 
         return TryGetCssFontFaceFamilyName(lines, startIndex, endLine, out var fontFamily)
@@ -301,7 +301,7 @@ public static partial class SymbolExtractor
         List<SymbolRecord> symbols,
         HashSet<string>? cssSeenSymbols)
     {
-        var trimmedMaskedLine = maskedLine.TrimStart();
+        var trimmedMaskedLine = maskedLine.AsSpan().TrimStart();
         if (!trimmedMaskedLine.StartsWith("@media", StringComparison.OrdinalIgnoreCase))
             return;
 
@@ -497,7 +497,8 @@ public static partial class SymbolExtractor
         int lineIndex) =>
         lang == "css"
         && pattern.Kind == "class"
-        && !matchLine.TrimStart().StartsWith('@')
+        && matchLine.AsSpan().TrimStart() is var trimmedLine
+        && (trimmedLine.IsEmpty || trimmedLine[0] != '@')
         && getCssQualifiedRuleAncestors?.Invoke() is { } cssQualifiedRuleAncestors
         && cssQualifiedRuleAncestors[lineIndex];
 

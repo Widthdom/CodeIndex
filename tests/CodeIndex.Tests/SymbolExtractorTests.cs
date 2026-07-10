@@ -232,6 +232,27 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void CSharpCrossLineScanDelimiterBlanking_ReusesLinesWithoutDelimiters()
+    {
+        const string line = "public void Run() { return; }";
+
+        var sanitized = SymbolExtractor.BlankCSharpStringDelimitersForCrossLineScan(line);
+
+        Assert.Same(line, sanitized);
+    }
+
+    [Fact]
+    public void CSharpCrossLineScanDelimiterBlanking_BlanksOnlyDelimitersAndEscapes()
+    {
+        const string line = "abc\"\\'def";
+
+        var sanitized = SymbolExtractor.BlankCSharpStringDelimitersForCrossLineScan(line);
+
+        Assert.NotSame(line, sanitized);
+        Assert.Equal("abc   def", sanitized);
+    }
+
+    [Fact]
     public void Extract_BuiltInSymbolRegexes_AdversarialLongLinesDoNotThrow()
     {
         var typeScriptLine = "export const Component = React.memo<" + new string('A', 20000) + new string('<', 2000) + new string('>', 2000) + ">(value);";
@@ -3757,8 +3778,26 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "typed_value");
     }
 
+    [Fact]
+    public void FortranStringLiteralMasking_ReusesLinesWithoutStringQuotes()
+    {
+        const string line = "subroutine run(value)";
 
+        var masked = SymbolExtractor.MaskFortranStringLiterals(line);
 
+        Assert.Same(line, masked);
+    }
+
+    [Fact]
+    public void FortranStringLiteralMasking_BlanksQuotedLiteralContent()
+    {
+        const string line = "'can''t'";
+
+        var masked = SymbolExtractor.MaskFortranStringLiterals(line);
+
+        Assert.NotSame(line, masked);
+        Assert.Equal(new string(' ', line.Length), masked);
+    }
 
     [Fact]
     public void Extract_Shell_DetectsFunctionsAndAliases()
@@ -12678,6 +12717,28 @@ public partial class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "bg-tag");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "bg");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "visible");
+    }
+
+    [Fact]
+    public void MaskHtmlRawTextRegions_ReusesPlainMarkup()
+    {
+        const string content = "<main><custom-card id=\"real\"></custom-card></main>";
+
+        var masked = SymbolExtractor.MaskHtmlRawTextRegions(content);
+
+        Assert.Same(content, masked);
+    }
+
+    [Fact]
+    public void MaskHtmlRawTextRegions_MasksRawTextWhenPresent()
+    {
+        const string content = "<script><custom-card id=\"fake\"></custom-card></script><section id=\"real\"></section>";
+
+        var masked = SymbolExtractor.MaskHtmlRawTextRegions(content);
+
+        Assert.NotSame(content, masked);
+        Assert.DoesNotContain("custom-card", masked, StringComparison.Ordinal);
+        Assert.Contains("<section id=\"real\"></section>", masked, StringComparison.Ordinal);
     }
 
     [Fact]

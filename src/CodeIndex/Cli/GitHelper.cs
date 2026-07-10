@@ -383,24 +383,7 @@ public static class GitHelper
             throw new InvalidOperationException($"git diff-tree failed for commit {commitId}: {error.Trim()}");
 
         var paths = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var rawLine in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
-        {
-            var line = rawLine.TrimEnd('\r');
-            var parts = line.Split('\t', StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length == 0)
-                continue;
-
-            var status = parts[0];
-            if ((status.StartsWith('R') || status.StartsWith('C')) && parts.Length >= 3)
-            {
-                paths.Add(FileIndexer.NormalizePathSeparators(parts[1]));
-                paths.Add(FileIndexer.NormalizePathSeparators(parts[2]));
-            }
-            else if (parts.Length >= 2)
-            {
-                paths.Add(FileIndexer.NormalizePathSeparators(parts[1]));
-            }
-        }
+        AddNameStatusPaths(output, paths);
 
         return paths.ToList();
     }
@@ -475,26 +458,78 @@ public static class GitHelper
             throw new InvalidOperationException($"git diff failed between {oldRef} and {newRef}: {error.Trim()}");
 
         var paths = new List<string>();
-        foreach (var rawLine in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
-        {
-            var line = rawLine.TrimEnd('\r');
-            var parts = line.Split('\t', StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length == 0)
-                continue;
-
-            var status = parts[0];
-            if ((status.StartsWith('R') || status.StartsWith('C')) && parts.Length >= 3)
-            {
-                paths.Add(FileIndexer.NormalizePathSeparators(parts[1]));
-                paths.Add(FileIndexer.NormalizePathSeparators(parts[2]));
-            }
-            else if (parts.Length >= 2)
-            {
-                paths.Add(FileIndexer.NormalizePathSeparators(parts[1]));
-            }
-        }
+        AddNameStatusPaths(output, paths);
 
         return paths;
+    }
+
+    private static void AddNameStatusPaths(string output, ICollection<string> paths)
+    {
+        var lineStart = 0;
+        while (lineStart < output.Length)
+        {
+            var newlineIndex = output.IndexOf('\n', lineStart);
+            var lineEnd = newlineIndex < 0 ? output.Length : newlineIndex;
+            var line = output.AsSpan(lineStart, lineEnd - lineStart).TrimEnd('\r');
+            if (!line.IsEmpty)
+                AddNameStatusLinePaths(line, paths);
+
+            if (newlineIndex < 0)
+                break;
+
+            lineStart = newlineIndex + 1;
+        }
+    }
+
+    private static void AddNameStatusLinePaths(ReadOnlySpan<char> line, ICollection<string> paths)
+    {
+        ReadOnlySpan<char> status = default;
+        ReadOnlySpan<char> firstPath = default;
+        ReadOnlySpan<char> secondPath = default;
+        var fieldIndex = 0;
+        var fieldStart = 0;
+        while (fieldStart <= line.Length && fieldIndex < 3)
+        {
+            var nextTab = line[fieldStart..].IndexOf('\t');
+            var field = nextTab < 0
+                ? line[fieldStart..]
+                : line.Slice(fieldStart, nextTab);
+            if (!field.IsEmpty)
+            {
+                switch (fieldIndex)
+                {
+                    case 0:
+                        status = field;
+                        break;
+                    case 1:
+                        firstPath = field;
+                        break;
+                    case 2:
+                        secondPath = field;
+                        break;
+                }
+
+                fieldIndex++;
+            }
+
+            if (nextTab < 0)
+                break;
+
+            fieldStart += nextTab + 1;
+        }
+
+        if (status.IsEmpty)
+            return;
+
+        if ((status[0] is 'R' or 'C') && !firstPath.IsEmpty && !secondPath.IsEmpty)
+        {
+            paths.Add(FileIndexer.NormalizePathSeparators(firstPath.ToString()));
+            paths.Add(FileIndexer.NormalizePathSeparators(secondPath.ToString()));
+        }
+        else if (!firstPath.IsEmpty)
+        {
+            paths.Add(FileIndexer.NormalizePathSeparators(firstPath.ToString()));
+        }
     }
 
     private static void ValidateGitRef(string value, string parameterName)

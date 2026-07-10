@@ -66,14 +66,14 @@ public static partial class ReferenceExtractor
         }
 
         normalizedContent = content;
-        lines = content.Split('\n');
+        lines = SplitContentLines(content);
         return true;
     }
 
     private static List<ReferenceRecord> ExtractSolutionReferences(long fileId, string[] lines, int? maxReferenceCount)
     {
-        var references = CreateReferenceList(maxReferenceCount);
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var references = CreateReferenceList(maxReferenceCount, EstimateReferenceListInitialCapacity(lines.Length));
+        var seen = CreateReferenceSeenSet(lines.Length);
         foreach (var project in SolutionFileParser.ExtractProjects(lines))
         {
             AddReference(

@@ -247,17 +247,35 @@ public static partial class SymbolExtractor
         for (var i = 0; i < lines.Length; i++)
         {
             var lexed = LexCSharpLine(lines[i], state);
-            var chars = lexed.SanitizedLine.ToCharArray();
-            for (var k = 0; k < chars.Length; k++)
-            {
-                var ch = chars[k];
-                if (ch == '"' || ch == '\'' || ch == '\\')
-                    chars[k] = ' ';
-            }
-            result[i] = new string(chars);
+            result[i] = BlankCSharpStringDelimitersForCrossLineScan(lexed.SanitizedLine);
             state = lexed.EndState;
         }
         return result;
+    }
+
+    internal static string BlankCSharpStringDelimitersForCrossLineScan(string line)
+    {
+        for (var i = 0; i < line.Length; i++)
+        {
+            var ch = line[i];
+            if (ch == '"' || ch == '\'' || ch == '\\')
+                return BlankCSharpStringDelimitersForCrossLineScan(line, i);
+        }
+
+        return line;
+    }
+
+    private static string BlankCSharpStringDelimitersForCrossLineScan(string line, int firstDelimiterIndex)
+    {
+        var chars = line.ToCharArray();
+        for (var i = firstDelimiterIndex; i < chars.Length; i++)
+        {
+            var ch = chars[i];
+            if (ch == '"' || ch == '\'' || ch == '\\')
+                chars[i] = ' ';
+        }
+
+        return new string(chars);
     }
 
     private static CSharpLexedLine LexCSharpLine(string line, CSharpLexState state)

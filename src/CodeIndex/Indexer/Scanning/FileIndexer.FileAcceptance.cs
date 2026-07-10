@@ -90,12 +90,12 @@ public partial class FileIndexer
             return false;
         }
 
-        var relativeFile = ToRelativePath(file);
         // Include files with a known extension/filename or an extensionless recognized shebang
         // 既知の拡張子・既知ファイル名、または拡張子なしで shebang を認識できるファイルを含める
         var language = TryDetectLanguageForIndexing(file, knownIndexability: indexability);
         if (language.Status == FileProbeStatus.Missing)
         {
+            var relativeFile = ToRelativePath(file);
             scanState.Errors.Add(new ScanError(
                 relativeFile,
                 "Skipped file because it was deleted during scanning.",
@@ -106,6 +106,7 @@ public partial class FileIndexer
 
         if (language.Status == FileProbeStatus.ProbeFailed)
         {
+            var relativeFile = ToRelativePath(file);
             scanState.Errors.Add(new ScanError(relativeFile, "Could not probe file for indexability/language."));
             scanState.RecordProbeFailedFilePath(relativeFile);
             return false;
@@ -113,14 +114,18 @@ public partial class FileIndexer
 
         if (language.Status != FileProbeStatus.Supported)
         {
+            var relativeFile = ToRelativePath(file);
             scanState.RecordNonIndexablePath(relativeFile);
             if (HasUnknownExtension(file) && !IsInternalIndexArtifactPath(relativeFile))
                 scanState.RecordUnknownExtensionFile(relativeFile);
             return false;
         }
 
-        if (TryGetFileIdentity(file, out var identity) && !scanState.VisitedFileIdentities.Add(identity))
+        if (TryGetFileIdentity(file, out var identity, out var linkCount)
+            && linkCount > 1
+            && !scanState.VisitedFileIdentities.Add(identity))
         {
+            var relativeFile = ToRelativePath(file);
             scanState.Errors.Add(new ScanError(
                 relativeFile,
                 "Skipped hardlinked file because the same file content was already indexed from another path.",

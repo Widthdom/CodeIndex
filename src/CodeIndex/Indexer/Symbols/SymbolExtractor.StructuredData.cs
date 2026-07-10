@@ -62,7 +62,7 @@ public static partial class SymbolExtractor
             if (!rootProperties.MoveNext())
                 return [];
 
-            var symbols = new List<SymbolRecord>();
+            var symbols = CreateSymbolListForLines(lines.Length);
             int[]? lineStarts = null;
             var searchOffset = 0;
             var traversalNodes = 0;
@@ -208,7 +208,16 @@ public static partial class SymbolExtractor
             if (name.Length > StructuredDataMaxPathLength)
                 continue;
 
-            if (!TryAddStructuredDataSymbol(fileId, "property", name, i + 1, lines, parentPath: null, symbols ??= [], "structured_data_symbol_budget_exceeded", ref truncated))
+            if (!TryAddStructuredDataSymbol(
+                fileId,
+                "property",
+                name,
+                i + 1,
+                lines,
+                parentPath: null,
+                symbols ??= CreateSymbolListForLines(lines.Length),
+                "structured_data_symbol_budget_exceeded",
+                ref truncated))
                 break;
         }
 
@@ -279,7 +288,16 @@ public static partial class SymbolExtractor
             var kind = isContainer ? "namespace" : "property";
 
             traversalNodes++;
-            if (!TryAddStructuredDataSymbol(fileId, kind, path, i + 1, lines, parentPath, symbols ??= [], "structured_data_symbol_budget_exceeded", ref truncated))
+            if (!TryAddStructuredDataSymbol(
+                fileId,
+                kind,
+                path,
+                i + 1,
+                lines,
+                parentPath,
+                symbols ??= CreateSymbolListForLines(lines.Length),
+                "structured_data_symbol_budget_exceeded",
+                ref truncated))
                 break;
 
             if (isContainer)

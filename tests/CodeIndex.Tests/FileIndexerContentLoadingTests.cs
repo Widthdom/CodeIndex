@@ -31,6 +31,7 @@ public partial class FileIndexerTests
     [InlineData("a\n", 1, false)]
     [InlineData("a\nb", 2, false)]
     [InlineData("\n\n", 2, false)]
+    [InlineData("public sealed class Box<T> { }\npublic bool IsGreater(int x) => x > 0;", 2, false)]
     [InlineData(null, 1, true)]
     public void FileContentLoader_NormalizeForIndexing_LfOnlyFastPathPreservesLineSemantics(
         string? contentTemplate,
@@ -44,6 +45,19 @@ public partial class FileIndexerTests
         Assert.Equal(expectedLineCount, normalized.LineCount);
         Assert.Equal(expectedOversizeLine, normalized.HasOversizeLine);
         Assert.Equal(0, normalized.ConflictMarkerLine);
+    }
+
+    [Fact]
+    public void FileContentLoader_NormalizeForIndexing_LfOnlyAngleContentDetectsConflictMarkerWithoutRewritingContent()
+    {
+        var content = "public sealed class Box<T> { }\n<<<<<<< HEAD\npublic sealed class Other<T> { }\n";
+
+        var normalized = FileContentLoader.NormalizeForIndexing(content);
+
+        Assert.Same(content, normalized.Content);
+        Assert.Equal(3, normalized.LineCount);
+        Assert.False(normalized.HasOversizeLine);
+        Assert.Equal(2, normalized.ConflictMarkerLine);
     }
 
     [Fact]

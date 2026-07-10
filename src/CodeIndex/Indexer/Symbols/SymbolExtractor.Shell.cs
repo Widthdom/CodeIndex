@@ -17,7 +17,7 @@ public static partial class SymbolExtractor
         if (!LinesContain(lines, "alias", StringComparison.Ordinal))
             return;
 
-        var symbolLineIdentities = BuildSymbolLineIdentities(symbols);
+        var symbolLineIdentities = BuildSymbolLineIdentities(symbols, lines.Length);
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i];

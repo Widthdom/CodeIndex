@@ -102,8 +102,9 @@ internal static class SolutionProjectResolver
         if (requestedProjects.Count == 0)
             return [];
 
+        var root = Path.GetFullPath(workspaceRoot);
         var traversalDiagnostics = new List<string>();
-        var projects = ResolveProjects(workspaceRoot, solutionPath, SolutionProjectResolverLimits.Default, traversalDiagnostics);
+        var projects = ResolveProjects(root, solutionPath, SolutionProjectResolverLimits.Default, traversalDiagnostics);
         var globs = new List<string>();
         foreach (var requested in requestedProjects)
         {
@@ -115,9 +116,7 @@ internal static class SolutionProjectResolver
                     traversalDiagnostics));
             }
 
-            var relativeDir = Path.GetRelativePath(Path.GetFullPath(workspaceRoot), match.DirectoryPath)
-                .Replace(Path.DirectorySeparatorChar, '/')
-                .Replace(Path.AltDirectorySeparatorChar, '/');
+            var relativeDir = FormatWorkspaceRelativePath(root, match.DirectoryPath);
             globs.Add(relativeDir == "." ? "*" : $"{relativeDir.TrimEnd('/')}/*");
         }
 
@@ -159,9 +158,8 @@ internal static class SolutionProjectResolver
             var projectExpandedFiles = 0;
             foreach (var file in EnumerateFilesUsingIndexerPolicy(root, match.DirectoryPath, indexer, limits, budget: null, traversalDiagnostics))
             {
-                var relative = Path.GetRelativePath(root, file)
-                    .Replace(Path.DirectorySeparatorChar, '/')
-                    .Replace(Path.AltDirectorySeparatorChar, '/');
+                var relative = FileIndexer.NormalizePathSeparators(
+                    FileIndexer.GetRelativePathFromDirectory(root, file));
                 projectExpandedFiles++;
                 if (projectExpandedFiles > limits.MaxProjectExpansionFilesPerProject)
                     ThrowProjectExpansionPerProjectLimitExceeded(limits, requested, match);
@@ -362,10 +360,8 @@ internal static class SolutionProjectResolver
         var name = !string.IsNullOrWhiteSpace(solutionName)
             ? solutionName
             : Path.GetFileNameWithoutExtension(fullProjectPath);
-        var relativeProject = Path.GetRelativePath(Path.GetFullPath(workspaceRoot), fullProjectPath)
-            .Replace(Path.DirectorySeparatorChar, '/')
-            .Replace(Path.AltDirectorySeparatorChar, '/');
-        return new DotNetProjectInfo(name, relativeProject, Path.GetDirectoryName(fullProjectPath) ?? Path.GetFullPath(workspaceRoot));
+        var relativeProject = FormatWorkspaceRelativePath(workspaceRoot, fullProjectPath);
+        return new DotNetProjectInfo(name, relativeProject, Path.GetDirectoryName(fullProjectPath) ?? workspaceRoot);
     }
 
     private static DotNetProjectInfo? MatchProject(IReadOnlyList<DotNetProjectInfo> projects, string requested)
@@ -641,11 +637,12 @@ internal static class SolutionProjectResolver
 
     private static string FormatRelativePathForDiagnostic(string workspaceRoot, string path)
     {
-        var relative = Path.GetRelativePath(Path.GetFullPath(workspaceRoot), Path.GetFullPath(path))
-            .Replace(Path.DirectorySeparatorChar, '/')
-            .Replace(Path.AltDirectorySeparatorChar, '/');
+        var relative = FormatWorkspaceRelativePath(Path.GetFullPath(workspaceRoot), Path.GetFullPath(path));
         return relative == "." ? "." : relative;
     }
+
+    private static string FormatWorkspaceRelativePath(string workspaceRoot, string path)
+        => FileIndexer.NormalizePathSeparators(FileIndexer.GetRelativePathFromDirectory(workspaceRoot, path));
 
     private static bool IsPathEqualOrParent(string parentPath, string childPath)
     {

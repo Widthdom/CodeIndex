@@ -27,7 +27,7 @@ public static partial class SymbolExtractor
         List<(string Name, int StartColumn, string? ReturnType)>? results = null;
         foreach (var (segmentStart, segmentLength) in SplitSwiftEnumCaseSegments(list))
         {
-            var segment = list.Substring(segmentStart, segmentLength);
+            var segment = list.AsSpan(segmentStart, segmentLength);
             var leading = 0;
             while (leading < segment.Length && char.IsWhiteSpace(segment[leading]))
                 leading++;
@@ -43,13 +43,13 @@ public static partial class SymbolExtractor
                 index++;
 
             var name = segment[nameStart..index];
-            if (name.Length == 0)
+            if (name.IsEmpty)
                 return null;
 
             if (!TryReadSwiftEnumCaseRawValue(segment, index, out var rawValue))
                 return null;
 
-            var result = (name, listStart + segmentStart + nameStart, rawValue);
+            var result = (name.ToString(), listStart + segmentStart + nameStart, rawValue);
             if (firstResult is null)
             {
                 firstResult = result;
@@ -144,31 +144,56 @@ public static partial class SymbolExtractor
         return spans;
     }
 
-    private static bool TryReadSwiftEnumCaseRawValue(string segment, int afterName, out string? rawValue)
+    private static bool TryReadSwiftEnumCaseRawValue(ReadOnlySpan<char> segment, int afterName, out string? rawValue)
     {
         rawValue = null;
 
-        var index = SkipWhitespace(segment, afterName);
+        var index = SkipSwiftEnumCaseWhitespace(segment, afterName);
         if (index < segment.Length && segment[index] == '(')
         {
-            var closeParen = ReferenceExtractor.FindMatchingChar(segment, index, '(', ')');
+            var closeParen = FindMatchingSwiftEnumCaseDelimiter(segment, index, '(', ')');
             if (closeParen < 0)
                 return false;
             index = closeParen + 1;
         }
 
-        index = SkipWhitespace(segment, index);
+        index = SkipSwiftEnumCaseWhitespace(segment, index);
         if (index >= segment.Length)
             return true;
         if (segment[index] != '=')
             return false;
 
-        var valueStart = SkipWhitespace(segment, index + 1);
+        var valueStart = SkipSwiftEnumCaseWhitespace(segment, index + 1);
         var valueEnd = segment.Length;
         while (valueEnd > valueStart && char.IsWhiteSpace(segment[valueEnd - 1]))
             valueEnd--;
 
-        rawValue = valueEnd > valueStart ? segment[valueStart..valueEnd] : null;
+        rawValue = valueEnd > valueStart ? segment[valueStart..valueEnd].ToString() : null;
         return true;
+    }
+
+    private static int SkipSwiftEnumCaseWhitespace(ReadOnlySpan<char> text, int cursor)
+    {
+        while (cursor < text.Length && char.IsWhiteSpace(text[cursor]))
+            cursor++;
+        return cursor;
+    }
+
+    private static int FindMatchingSwiftEnumCaseDelimiter(ReadOnlySpan<char> text, int openIndex, char open, char close)
+    {
+        var depth = 0;
+        for (var index = openIndex; index < text.Length; index++)
+        {
+            if (text[index] == open)
+                depth++;
+            else if (text[index] == close)
+            {
+                depth--;
+                if (depth == 0)
+                    return index;
+            }
+        }
+
+        return -1;
     }
 }

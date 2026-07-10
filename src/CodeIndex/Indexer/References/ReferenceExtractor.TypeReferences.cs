@@ -173,7 +173,7 @@ public static partial class ReferenceExtractor
                 && !string.IsNullOrWhiteSpace(symbol.Name)
                 && !string.IsNullOrWhiteSpace(symbol.Signature))
             {
-                (interfaceGenericParameterCandidates ??= []).Add((symbol.Name, symbol.Signature!));
+                (interfaceGenericParameterCandidates ??= new List<(string Name, string Signature)>(4)).Add((symbol.Name, symbol.Signature!));
             }
 
             if (!IsCSharpStaticInterfaceMemberContract(symbol))
@@ -182,7 +182,7 @@ public static partial class ReferenceExtractor
             var containerName = symbol.ContainerName!;
             if (!contractsByType.TryGetValue(containerName, out var contracts))
             {
-                contracts = new List<CSharpStaticInterfaceMemberContract>();
+                contracts = new List<CSharpStaticInterfaceMemberContract>(1);
                 contractsByType.Add(containerName, contracts);
             }
 
@@ -238,7 +238,7 @@ public static partial class ReferenceExtractor
                 && symbol.BodyStartLine != null
                 && symbol.BodyEndLine != null)
             {
-                (typeSymbols ??= []).Add(symbol);
+                (typeSymbols ??= new List<SymbolRecord>(16)).Add(symbol);
             }
 
             if (symbol.Kind is not ("function" or "operator" or "property")
@@ -250,10 +250,10 @@ public static partial class ReferenceExtractor
             }
 
             var containerName = symbol.ContainerName!;
-            staticMembersByContainer ??= new Dictionary<string, List<SymbolRecord>>(StringComparer.Ordinal);
+            staticMembersByContainer ??= new Dictionary<string, List<SymbolRecord>>(16, StringComparer.Ordinal);
             if (!staticMembersByContainer.TryGetValue(containerName, out var staticMembers))
             {
-                staticMembers = new List<SymbolRecord>();
+                staticMembers = new List<SymbolRecord>(1);
                 staticMembersByContainer.Add(containerName, staticMembers);
             }
 
@@ -347,14 +347,14 @@ public static partial class ReferenceExtractor
         if (parameterEnd == parameterStart)
             return string.Empty;
 
-        var parameterList = signature!.Substring(parameterStart, parameterEnd - parameterStart);
+        var parameterList = signature.AsSpan(parameterStart, parameterEnd - parameterStart);
         var parameterShape = new StringBuilder(parameterList.Length);
         foreach (var span in SplitTopLevelCommaSpans(parameterList))
         {
             if (parameterShape.Length > 0)
                 parameterShape.Append(',');
 
-            parameterShape.Append(NormalizeCSharpParameterTypeShape(parameterList.Substring(span.Start, span.Length)));
+            parameterShape.Append(NormalizeCSharpParameterTypeShape(parameterList.Slice(span.Start, span.Length).ToString()));
         }
 
         return parameterShape.ToString();
@@ -516,7 +516,7 @@ public static partial class ReferenceExtractor
             baseList = baseList.Substring(0, whereMatch.Index);
         baseList = TrimTrailingTypeListTerminator(baseList);
 
-        var interfaces = new List<CSharpImplementedInterface>();
+        var interfaces = new List<CSharpImplementedInterface>(4);
         foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(baseList))
         {
             var rawSegment = baseList.Substring(segmentStart, segmentLength).Trim();
@@ -565,11 +565,11 @@ public static partial class ReferenceExtractor
         if (genericEnd <= genericStart)
             return [];
 
-        var list = text.Substring(genericStart + 1, genericEnd - genericStart - 1);
+        var list = text.AsSpan(genericStart + 1, genericEnd - genericStart - 1);
         var arguments = new List<string>();
         foreach (var span in SplitTopLevelCommaSpans(list))
         {
-            var item = list.Substring(span.Start, span.Length).Trim();
+            var item = list.Slice(span.Start, span.Length).Trim().ToString();
             if (item.Length > 0)
                 arguments.Add(item);
         }
@@ -1943,10 +1943,10 @@ public static partial class ReferenceExtractor
         IReadOnlyList<SymbolRecord> symbols,
         string[] structuralLines)
     {
-        var ranges = new List<(int, int, int, int, SymbolRecord)>();
         if (language != "csharp")
-            return ranges;
+            return [];
 
+        var ranges = new List<(int, int, int, int, SymbolRecord)>(4);
         foreach (var symbol in symbols)
         {
             // SymbolExtractor stores C# records as Kind=class and C# 12 structs as Kind=struct.
@@ -2544,15 +2544,19 @@ public static partial class ReferenceExtractor
     internal static bool IsJavaIdentifierPart(char c) =>
         char.IsLetterOrDigit(c) || c == '_' || c == '$';
 
-    private static bool IsJavaBaseListTerminatorKeyword(string signature, int i, int start, string keyword)
+    private static bool IsJavaBaseListTerminatorKeyword(string signature, int i, int start, string keyword) =>
+        IsJavaBaseListTerminatorKeyword(signature.AsSpan(), i, start, keyword);
+
+    private static bool IsJavaBaseListTerminatorKeyword(ReadOnlySpan<char> signature, int i, int start, string keyword)
     {
-        if (i + keyword.Length > signature.Length)
+        var keywordSpan = keyword.AsSpan();
+        if (i + keywordSpan.Length > signature.Length)
             return false;
         if (i != start && IsJavaIdentifierPart(signature[i - 1]))
             return false;
-        if (string.CompareOrdinal(signature, i, keyword, 0, keyword.Length) != 0)
+        if (!signature.Slice(i, keywordSpan.Length).SequenceEqual(keywordSpan))
             return false;
-        if (i + keyword.Length < signature.Length && IsJavaIdentifierPart(signature[i + keyword.Length]))
+        if (i + keywordSpan.Length < signature.Length && IsJavaIdentifierPart(signature[i + keywordSpan.Length]))
             return false;
         return true;
     }
@@ -3852,12 +3856,13 @@ public static partial class ReferenceExtractor
         var ignoredSegments = language == "kotlin"
             ? KotlinTypeProjectionModifierNames
             : null;
+        var argumentsExpression = preparedLine.Substring(argumentsStart, argumentsLength);
 
         AddTypeExpressionSegments(
             references,
             seen,
             fileId,
-            preparedLine.Substring(argumentsStart, argumentsLength),
+            argumentsExpression,
             argumentsStart,
             context,
             lineNumber,
@@ -3868,7 +3873,7 @@ public static partial class ReferenceExtractor
             references,
             seen,
             fileId,
-            preparedLine.Substring(argumentsStart, argumentsLength),
+            argumentsExpression,
             argumentsStart,
             context,
             lineNumber,
@@ -3903,9 +3908,11 @@ public static partial class ReferenceExtractor
             while (i < expression.Length && IsTypeExpressionIdentifierPart(language, expression[i]))
                 i++;
 
-            var rawSegment = expression.Substring(segmentStart, i - segmentStart);
-            var isEscapedCSharpIdentifier = rawSegment.Length > 0 && rawSegment[0] == '@';
-            var segment = NormalizeCSharpIdentifier(rawSegment);
+            var segmentLength = i - segmentStart;
+            var isEscapedCSharpIdentifier = segmentLength > 0 && expression[segmentStart] == '@';
+            var segment = isEscapedCSharpIdentifier
+                ? expression.Substring(segmentStart + 1, segmentLength - 1)
+                : expression.Substring(segmentStart, segmentLength);
             if (i + 1 < expression.Length && expression[i] == ':' && expression[i + 1] == ':')
             {
                 i++;

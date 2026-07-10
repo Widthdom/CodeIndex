@@ -786,7 +786,7 @@ internal static class IndexWatchRunner
         {
             var sample = path;
             if (Path.IsPathRooted(path))
-                sample = Path.GetRelativePath(projectRoot, path);
+                sample = FileIndexer.GetRelativePathFromDirectory(projectRoot, path);
             sample = FileIndexer.NormalizePathSeparators(sample);
             var sanitized = DiagnosticRedactor.RedactSensitiveText(sample, "[redacted]", redactPaths: false);
             var bounded = BoundWatchDisplayText(sanitized, BatchPathSampleMaxChars, out var sampleTruncated);

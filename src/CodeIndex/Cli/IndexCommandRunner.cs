@@ -759,7 +759,7 @@ public static partial class IndexCommandRunner
 
         try
         {
-            var relative = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, path));
+            var relative = FileIndexer.NormalizePathSeparators(FileIndexer.GetRelativePathFromDirectory(projectRoot, path));
             return IsOutsideProjectRoot(relative) ? path : relative;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
@@ -1196,7 +1196,7 @@ public static partial class IndexCommandRunner
             var dbDirAbsolute = Path.GetDirectoryName(dbAbsolutePath);
             if (string.IsNullOrEmpty(dbDirAbsolute)) return;
 
-            var dbDirRelative = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, dbDirAbsolute));
+            var dbDirRelative = FileIndexer.NormalizePathSeparators(FileIndexer.GetRelativePathFromDirectory(projectRoot, dbDirAbsolute));
             if (IsOutsideProjectRoot(dbDirRelative)) return;
 
             string[] patterns;
@@ -1322,7 +1322,31 @@ public static partial class IndexCommandRunner
         }
     }
 
+    private readonly record struct UpdateFileTarget(
+        string FilePath,
+        string RelativePath,
+        string DisplayRelativePath,
+        string IndexPath)
+    {
+        public static UpdateFileTarget Create(string projectRoot, string path)
+        {
+            var isRooted = Path.IsPathRooted(path);
+            var filePath = isRooted
+                ? path
+                : Path.Combine(projectRoot, path.Replace('/', Path.DirectorySeparatorChar));
+            var relativePath = isRooted
+                ? FileIndexer.GetRelativePathFromProjectRoot(projectRoot, path)
+                : path;
+            return new UpdateFileTarget(
+                filePath,
+                relativePath,
+                FileIndexer.NormalizePathSeparators(relativePath),
+                FileIndexer.NormalizeIndexPath(relativePath));
+        }
+    }
+
     private sealed record FullScanFileWorkItem(
+        int FileIndex,
         string FilePath,
         string RelativePath,
         FileRecord? Record,
@@ -1339,6 +1363,7 @@ public static partial class IndexCommandRunner
         Exception? Exception)
     {
         public static FullScanFileWorkItem Success(
+            int fileIndex,
             string filePath,
             string relativePath,
             FileRecord record,
@@ -1354,6 +1379,7 @@ public static partial class IndexCommandRunner
             bool generatedSuppressionChecked)
         {
             return new FullScanFileWorkItem(
+                fileIndex,
                 filePath,
                 relativePath,
                 record,
@@ -1371,6 +1397,7 @@ public static partial class IndexCommandRunner
         }
 
         public static FullScanFileWorkItem Precomputed(
+            int fileIndex,
             string filePath,
             string relativePath,
             FileRecord record,
@@ -1383,6 +1410,7 @@ public static partial class IndexCommandRunner
             bool generatedSuppressionChecked = false)
         {
             return new FullScanFileWorkItem(
+                fileIndex,
                 filePath,
                 relativePath,
                 record,
@@ -1400,10 +1428,10 @@ public static partial class IndexCommandRunner
         }
 
         public static FullScanFileWorkItem Failure(string filePath, string relativePath, Exception exception)
-            => new(filePath, relativePath, null, null, null, null, null, null, null, null, null, null, false, exception);
+            => new(-1, filePath, relativePath, null, null, null, null, null, null, null, null, null, null, false, exception);
 
         public static FullScanFileWorkItem Skipped(string filePath, string relativePath, string warning)
-            => new(filePath, relativePath, null, null, null, null, warning, null, null, null, null, null, false, null);
+            => new(-1, filePath, relativePath, null, null, null, null, warning, null, null, null, null, null, false, null);
     }
 
     private sealed record FoldOnlyRemediation(

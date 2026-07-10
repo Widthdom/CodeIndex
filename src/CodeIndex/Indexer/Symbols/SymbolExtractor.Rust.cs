@@ -17,7 +17,7 @@ public static partial class SymbolExtractor
         if (!LinesContain(lines, "use", StringComparison.Ordinal))
             return;
 
-        var symbolLineIdentities = BuildSymbolLineIdentities(symbols);
+        var symbolLineIdentities = BuildSymbolLineIdentities(symbols, lines.Length);
         for (var i = 0; i < lines.Length; i++)
         {
             if (lines[i].IndexOf("use", StringComparison.Ordinal) < 0)
@@ -117,7 +117,7 @@ public static partial class SymbolExtractor
         if (!LinesContain(lines, "impl", StringComparison.Ordinal))
             return;
 
-        var symbolLineIdentities = BuildSymbolLineIdentities(symbols);
+        var symbolLineIdentities = BuildSymbolLineIdentities(symbols, lines.Length);
         for (var i = 0; i < lines.Length; i++)
         {
             if (lines[i].IndexOf("impl", StringComparison.Ordinal) < 0)

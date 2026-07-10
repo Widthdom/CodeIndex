@@ -241,17 +241,18 @@ public static partial class SymbolExtractor
 
     private static bool TryAddFSharpUnionCasesFromTypeRemainder(List<SymbolRecord> symbols, long fileId, string remainder, int lineNumber)
     {
-        var trimmed = remainder.TrimStart();
-        if (trimmed.Length == 0)
+        var trimmed = remainder.AsSpan().TrimStart();
+        if (trimmed.IsEmpty)
             return false;
 
-        if (trimmed.Contains('|', StringComparison.Ordinal))
-            return TryAddFSharpUnionCases(symbols, fileId, trimmed, lineNumber);
+        if (trimmed.Contains('|'))
+            return TryAddFSharpUnionCases(symbols, fileId, trimmed.ToString(), lineNumber);
 
-        if (!FSharpUnionCaseRegex.IsMatch(trimmed))
+        var trimmedText = trimmed.ToString();
+        if (!FSharpUnionCaseRegex.IsMatch(trimmedText))
             return false;
 
-        return TryAddFSharpUnionCases(symbols, fileId, trimmed, lineNumber);
+        return TryAddFSharpUnionCases(symbols, fileId, trimmedText, lineNumber);
     }
 
     private static bool TryAddFSharpActivePatternSymbols(List<SymbolRecord> symbols, long fileId, string line, int lineNumber)

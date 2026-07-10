@@ -32,6 +32,9 @@ public partial class FileIndexer
     private const int MaxProjectMarkerFingerprintDirectories = 8192;
     private const int MaxProjectMarkerFingerprintFiles = 4096;
     private const int MaxIgnorePatternLength = 512;
+    private const int InitialScanFileCapacity = 256;
+    private const int InitialScanDirectoryCapacity = 64;
+    private const int InitialScanLanguageCapacity = 32;
     public const string MaxFileSizeEnvironmentVariable = "CDIDX_MAX_FILE_BYTES";
     // Default maximum file size to index (4 MiB). Larger generated/vendor payloads
     // can still be opted in with --max-file-bytes, but the default path should not

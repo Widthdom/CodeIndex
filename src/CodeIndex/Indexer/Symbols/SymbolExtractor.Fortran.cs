@@ -314,10 +314,21 @@ public static partial class SymbolExtractor
         line.Contains("subroutine", StringComparison.OrdinalIgnoreCase)
         || line.Contains("function", StringComparison.OrdinalIgnoreCase);
 
-    private static string MaskFortranStringLiterals(string line)
+    internal static string MaskFortranStringLiterals(string line)
+    {
+        for (var i = 0; i < line.Length; i++)
+        {
+            if (line[i] is '\'' or '"')
+                return MaskFortranStringLiterals(line, i);
+        }
+
+        return line;
+    }
+
+    private static string MaskFortranStringLiterals(string line, int firstQuoteIndex)
     {
         var chars = line.ToCharArray();
-        for (var i = 0; i < chars.Length; i++)
+        for (var i = firstQuoteIndex; i < chars.Length; i++)
         {
             if (chars[i] is not ('\'' or '"'))
                 continue;

@@ -17,17 +17,20 @@ public partial class FileIndexer
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var files = new List<string>();
-        var fileLanguages = new Dictionary<string, string>(StringComparer.Ordinal);
-        var languageCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var files = new List<string>(InitialScanFileCapacity);
+        var fileLanguages = new Dictionary<string, string>(InitialScanFileCapacity, StringComparer.Ordinal);
+        var languageCounts = new Dictionary<string, int>(InitialScanLanguageCapacity, StringComparer.Ordinal);
         var errors = new List<ScanError>(_submoduleLoadWarnings.Count);
-        var listedDirectories = new HashSet<string>(StringComparer.Ordinal);
-        var fullyScannedDirectories = new HashSet<string>(StringComparer.Ordinal);
+        var listedDirectories = new HashSet<string>(InitialScanDirectoryCapacity, StringComparer.Ordinal);
+        var fullyScannedDirectories = new HashSet<string>(InitialScanDirectoryCapacity, StringComparer.Ordinal);
         IReadOnlySet<string> activeCheckpointedDirectories = checkpointedDirectories is { Count: > 0 }
             ? new HashSet<string>(checkpointedDirectories, StringComparer.Ordinal)
             : EmptyCheckpointedDirectorySet;
         var visitedFileIdentities = new HashSet<FileIdentity>();
-        var visitedDirectories = new HashSet<string>(StringComparer.Ordinal) { NormalizePathForComparison(_projectRoot) };
+        var visitedDirectories = new HashSet<string>(InitialScanDirectoryCapacity, StringComparer.Ordinal)
+        {
+            NormalizePathForComparison(_projectRoot),
+        };
         var scanState = new DirectoryScanState(
             files,
             fileLanguages,

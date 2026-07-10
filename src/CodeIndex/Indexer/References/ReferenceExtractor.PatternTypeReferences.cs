@@ -450,7 +450,7 @@ public static partial class ReferenceExtractor
             if (rawSegmentLength == 0)
                 continue;
 
-            var rawSegment = baseList.Substring(segmentStart + segmentLeading, rawSegmentLength);
+            var rawSegment = baseList.AsSpan(segmentStart + segmentLeading, rawSegmentLength);
             if (rawSegment.Contains('('))
                 continue;
 
@@ -459,7 +459,7 @@ public static partial class ReferenceExtractor
                 references,
                 seen,
                 fileId,
-                rawSegment,
+                rawSegment.ToString(),
                 absoluteStart,
                 context,
                 lineNumber,
@@ -511,10 +511,10 @@ public static partial class ReferenceExtractor
         if (genericClose <= genericOpen)
             return names;
 
-        var clause = line.Substring(genericOpen + 1, genericClose - genericOpen - 1);
+        var clause = line.AsSpan(genericOpen + 1, genericClose - genericOpen - 1);
         foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(clause))
         {
-            var fragment = clause.Substring(segmentStart, segmentLength);
+            var fragment = clause.Slice(segmentStart, segmentLength);
             if (TryReadCSharpGenericParameterName(fragment, out var name))
                 names.Add(name);
         }
@@ -522,7 +522,7 @@ public static partial class ReferenceExtractor
         return names;
     }
 
-    private static bool TryReadCSharpGenericParameterName(string fragment, out string name)
+    private static bool TryReadCSharpGenericParameterName(ReadOnlySpan<char> fragment, out string name)
     {
         name = string.Empty;
         var index = 0;
@@ -551,7 +551,7 @@ public static partial class ReferenceExtractor
             while (index < fragment.Length && IsTypeExpressionIdentifierPart("csharp", fragment[index]))
                 index++;
 
-            var token = NormalizeCSharpIdentifier(fragment.Substring(tokenStart, index - tokenStart));
+            var token = NormalizeCSharpIdentifier(fragment.Slice(tokenStart, index - tokenStart).ToString());
             if (token is "in" or "out")
                 continue;
 
@@ -638,10 +638,11 @@ public static partial class ReferenceExtractor
             if (match.Index < searchStart)
                 continue;
             int listStart = match.Index + match.Length;
-            var remaining = line.Substring(listStart);
-            var nextWhereMatch = CSharpWhereClauseRegex.Match(remaining);
-            int nextWhere = nextWhereMatch.Success ? nextWhereMatch.Index : -1;
-            int end = FindTypeListTerminator(remaining, allowArrow: true);
+            var remaining = line.AsSpan(listStart);
+            var nextWhereMatch = CSharpWhereClauseRegex.Match(line, listStart);
+            int nextWhere = nextWhereMatch.Success ? nextWhereMatch.Index - listStart : -1;
+            int terminator = FindTypeListTerminator(remaining, allowArrow: true);
+            int end = terminator;
             if (nextWhere >= 0 && (end < 0 || nextWhere < end))
                 end = nextWhere;
             if (end < 0)
@@ -658,7 +659,7 @@ public static partial class ReferenceExtractor
                 resolveContainerForColumn,
                 lineWhereNames);
 
-            if (listStart + end >= line.Length && nextWhere < 0 && FindTypeListTerminator(remaining, allowArrow: true) < 0)
+            if (listStart + end >= line.Length && nextWhere < 0 && terminator < 0)
             {
                 pendingWhereConstraint.Active = true;
                 pendingWhereConstraint.IgnoredSegments.Clear();
@@ -780,7 +781,7 @@ public static partial class ReferenceExtractor
         if (listLength <= 0)
             return;
 
-        var constraintList = line.Substring(listStart, listLength);
+        var constraintList = line.AsSpan(listStart, listLength);
         foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(constraintList))
         {
             var segmentLeading = CountLeadingWhitespace(constraintList, segmentStart, segmentLength);
@@ -790,7 +791,7 @@ public static partial class ReferenceExtractor
             if (rawSegmentLength == 0)
                 continue;
 
-            var rawSegment = constraintList.Substring(segmentStart + segmentLeading, rawSegmentLength);
+            var rawSegment = constraintList.Slice(segmentStart + segmentLeading, rawSegmentLength);
             if (rawSegment.Contains('('))
                 continue;
 
@@ -799,7 +800,7 @@ public static partial class ReferenceExtractor
                 references,
                 seen,
                 fileId,
-                rawSegment,
+                rawSegment.ToString(),
                 absoluteStart,
                 context,
                 lineNumber,
@@ -1115,10 +1116,10 @@ public static partial class ReferenceExtractor
         if (paramEnd <= paramStart)
             return;
 
-        var parameterList = line.Substring(paramStart, paramEnd - paramStart);
+        var parameterList = line.AsSpan(paramStart, paramEnd - paramStart);
         foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(parameterList))
         {
-            var fragment = parameterList.Substring(segmentStart, segmentLength);
+            var fragment = parameterList.Slice(segmentStart, segmentLength).ToString();
             if (!TryGetParameterTypeRelativeSpan(fragment, language, out var typeRelativeStart, out var typeRelativeLength))
                 continue;
 
@@ -1340,6 +1341,37 @@ public static partial class ReferenceExtractor
         return text.Length - 1;
     }
 
+    private static int SkipTypeScriptTemplateLiteralForMatching(string text, int start)
+    {
+        int i = start + 1;
+        while (i < text.Length)
+        {
+            char c = text[i];
+            if (c == '\\' && i + 1 < text.Length)
+            {
+                i += 2;
+                continue;
+            }
+
+            if (c == '`')
+                return i;
+
+            if (c == '$' && i + 1 < text.Length && text[i + 1] == '{')
+            {
+                int holeEnd = FindMatchingTypeScriptTemplateHoleEnd(text, i + 2);
+                if (holeEnd < 0)
+                    return text.Length - 1;
+
+                i = holeEnd + 1;
+                continue;
+            }
+
+            i++;
+        }
+
+        return text.Length - 1;
+    }
+
     private static int FindMatchingTypeScriptTemplateHoleEnd(string text, int start)
     {
         int braceDepth = 1;
@@ -1355,7 +1387,7 @@ public static partial class ReferenceExtractor
 
             if (c == '`')
             {
-                i = SkipTypeScriptTemplateLiteral(text, i, new List<ReferenceRecord>(), new HashSet<string>(), 0, 0, string.Empty, 0, null);
+                i = SkipTypeScriptTemplateLiteralForMatching(text, i);
                 continue;
             }
 
@@ -1649,7 +1681,7 @@ public static partial class ReferenceExtractor
         if (typeEnd <= start)
             return;
 
-        var typeExpression = clause.Substring(start, typeEnd - start);
+        var typeExpression = clause.AsSpan(start, typeEnd - start);
         foreach (var (segmentStart, segmentLength) in SplitTopLevelPipeSpans(typeExpression))
         {
             var leading = CountLeadingWhitespace(typeExpression, segmentStart, segmentLength);
@@ -1664,7 +1696,7 @@ public static partial class ReferenceExtractor
                 references,
                 seen,
                 fileId,
-                typeExpression.Substring(segmentStart + leading, trimmedLength),
+                typeExpression.Slice(segmentStart + leading, trimmedLength).ToString(),
                 absoluteStart,
                 context,
                 lineNumber,
@@ -1745,9 +1777,14 @@ public static partial class ReferenceExtractor
         return identifierStart < identifierEnd;
     }
 
-    private static List<(int Start, int Length)> SplitTopLevelPipeSpans(string text)
+    private static List<(int Start, int Length)> SplitTopLevelPipeSpans(string text) => SplitTopLevelPipeSpans(text.AsSpan());
+
+    private static List<(int Start, int Length)> SplitTopLevelPipeSpans(ReadOnlySpan<char> text)
     {
-        var spans = new List<(int Start, int Length)>();
+        if (text.IndexOf('|') < 0)
+            return [(0, text.Length)];
+
+        var spans = new List<(int Start, int Length)>(4);
         var angleDepth = 0;
         var parenDepth = 0;
         var squareDepth = 0;
@@ -2314,7 +2351,9 @@ public static partial class ReferenceExtractor
         return i;
     }
 
-    internal static int SkipJavaAnnotation(string text, int start)
+    internal static int SkipJavaAnnotation(string text, int start) => SkipJavaAnnotation(text.AsSpan(), start);
+
+    internal static int SkipJavaAnnotation(ReadOnlySpan<char> text, int start)
     {
         int i = start + 1;
         var annotationStart = i;
@@ -2333,9 +2372,10 @@ public static partial class ReferenceExtractor
 
         if (i < text.Length && text[i] == '`')
         {
-            var closeIndex = text.IndexOf('`', i + 1);
-            if (closeIndex < 0)
+            var closeOffset = text[(i + 1)..].IndexOf('`');
+            if (closeOffset < 0)
                 return start;
+            var closeIndex = i + 1 + closeOffset;
             i = closeIndex + 1;
         }
         else
@@ -2354,7 +2394,9 @@ public static partial class ReferenceExtractor
         return i - 1;
     }
 
-    internal static int FindMatchingChar(string text, int openIndex, char open, char close)
+    internal static int FindMatchingChar(string text, int openIndex, char open, char close) => FindMatchingChar(text.AsSpan(), openIndex, open, close);
+
+    internal static int FindMatchingChar(ReadOnlySpan<char> text, int openIndex, char open, char close)
     {
         int depth = 0;
         for (int i = openIndex; i < text.Length; i++)
@@ -2372,7 +2414,9 @@ public static partial class ReferenceExtractor
         return -1;
     }
 
-    private static int FindFirstTopLevelChar(string text, char target)
+    private static int FindFirstTopLevelChar(string text, char target) => FindFirstTopLevelChar(text.AsSpan(), target);
+
+    private static int FindFirstTopLevelChar(ReadOnlySpan<char> text, char target)
     {
         int angleDepth = 0;
         int parenDepth = 0;
@@ -2519,12 +2563,14 @@ public static partial class ReferenceExtractor
         return tokens;
     }
 
-    internal static List<(int Start, int Length)> SplitTopLevelCommaSpans(string text)
+    internal static List<(int Start, int Length)> SplitTopLevelCommaSpans(string text) => SplitTopLevelCommaSpans(text.AsSpan());
+
+    internal static List<(int Start, int Length)> SplitTopLevelCommaSpans(ReadOnlySpan<char> text)
     {
         if (text.IndexOf(',') < 0)
             return [(0, text.Length)];
 
-        var spans = new List<(int Start, int Length)>();
+        var spans = new List<(int Start, int Length)>(4);
         int angleDepth = 0;
         int parenDepth = 0;
         int squareDepth = 0;
@@ -2616,12 +2662,14 @@ public static partial class ReferenceExtractor
         return (0, text.Length);
     }
 
-    internal static List<(int Start, int Length)> SplitTopLevelAmpersandSpans(string text)
+    internal static List<(int Start, int Length)> SplitTopLevelAmpersandSpans(string text) => SplitTopLevelAmpersandSpans(text.AsSpan());
+
+    internal static List<(int Start, int Length)> SplitTopLevelAmpersandSpans(ReadOnlySpan<char> text)
     {
         if (text.IndexOf('&') < 0)
             return [(0, text.Length)];
 
-        var spans = new List<(int Start, int Length)>();
+        var spans = new List<(int Start, int Length)>(4);
         int angleDepth = 0;
         int parenDepth = 0;
         int squareDepth = 0;
@@ -2667,7 +2715,9 @@ public static partial class ReferenceExtractor
         return spans;
     }
 
-    internal static int CountLeadingWhitespace(string text, int start, int length)
+    internal static int CountLeadingWhitespace(string text, int start, int length) => CountLeadingWhitespace(text.AsSpan(), start, length);
+
+    internal static int CountLeadingWhitespace(ReadOnlySpan<char> text, int start, int length)
     {
         int count = 0;
         while (count < length && char.IsWhiteSpace(text[start + count]))
@@ -2675,7 +2725,9 @@ public static partial class ReferenceExtractor
         return count;
     }
 
-    internal static int FindTypeListTerminator(string text, bool allowArrow)
+    internal static int FindTypeListTerminator(string text, bool allowArrow) => FindTypeListTerminator(text.AsSpan(), allowArrow);
+
+    internal static int FindTypeListTerminator(ReadOnlySpan<char> text, bool allowArrow)
     {
         int brace = FindFirstTopLevelChar(text, '{');
         int semi = FindFirstTopLevelChar(text, ';');
@@ -2699,9 +2751,15 @@ public static partial class ReferenceExtractor
 
     internal static int FindJavaTypeListTerminator(string text, int start)
     {
+        int terminator = FindJavaTypeListTerminator(text.AsSpan(start));
+        return terminator >= 0 ? start + terminator : -1;
+    }
+
+    internal static int FindJavaTypeListTerminator(ReadOnlySpan<char> text)
+    {
         int angleDepth = 0;
         int parenDepth = 0;
-        for (int i = start; i < text.Length; i++)
+        for (int i = 0; i < text.Length; i++)
         {
             char c = text[i];
             if (c == '<')
@@ -2720,9 +2778,9 @@ public static partial class ReferenceExtractor
             {
                 if (c == '{' || c == ';')
                     return i;
-                if (IsJavaBaseListTerminatorKeyword(text, i, start, "implements")
-                    || IsJavaBaseListTerminatorKeyword(text, i, start, "permits")
-                    || IsJavaBaseListTerminatorKeyword(text, i, start, "throws"))
+                if (IsJavaBaseListTerminatorKeyword(text, i, 0, "implements")
+                    || IsJavaBaseListTerminatorKeyword(text, i, 0, "permits")
+                    || IsJavaBaseListTerminatorKeyword(text, i, 0, "throws"))
                 {
                     return i;
                 }
@@ -2732,8 +2790,11 @@ public static partial class ReferenceExtractor
         return -1;
     }
 
-    internal static int FindTopLevelKeyword(string text, string keyword)
+    internal static int FindTopLevelKeyword(string text, string keyword) => FindTopLevelKeyword(text.AsSpan(), keyword);
+
+    internal static int FindTopLevelKeyword(ReadOnlySpan<char> text, string keyword)
     {
+        var keywordSpan = keyword.AsSpan();
         int angleDepth = 0;
         int parenDepth = 0;
         int squareDepth = 0;
@@ -2773,9 +2834,9 @@ public static partial class ReferenceExtractor
                 continue;
             if (i > 0 && IsJavaIdentifierPart(text[i - 1]))
                 continue;
-            if (i + keyword.Length > text.Length || string.CompareOrdinal(text, i, keyword, 0, keyword.Length) != 0)
+            if (i + keywordSpan.Length > text.Length || !text.Slice(i, keywordSpan.Length).SequenceEqual(keywordSpan))
                 continue;
-            int after = i + keyword.Length;
+            int after = i + keywordSpan.Length;
             if (after < text.Length && IsJavaIdentifierPart(text[after]))
                 continue;
             return i;
@@ -2831,16 +2892,16 @@ public static partial class ReferenceExtractor
 
     private static string NormalizeCSharpDocCref(string cref)
     {
-        var text = cref.Trim();
+        var text = cref.AsSpan().Trim();
         if (text.Length >= 2 && char.IsLetter(text[0]) && text[1] == ':')
-            text = text.Substring(2);
+            text = text[2..];
         int paren = text.IndexOf('(');
         if (paren >= 0)
-            text = text.Substring(0, paren);
+            text = text[..paren];
         int brace = text.IndexOf('{');
         if (brace >= 0)
-            text = text.Substring(0, brace);
-        return text.Trim();
+            text = text[..brace];
+        return text.Trim().ToString();
     }
 
     private static bool IsCSharpIdentifierStart(char c) =>

@@ -80,22 +80,24 @@ public static partial class SymbolExtractor
             // the comma is at an unexpected position — bail out.
             // returnType は末尾が `,` なので最後のセグメントは空のはず。そうで
             // なければ想定外の位置にある `,` なので展開を諦める。
-            if (segments[^1].Trim().Length != 0)
+            if (!string.IsNullOrWhiteSpace(segments[^1]))
                 return null;
             segments.RemoveAt(segments.Count - 1);
             if (segments.Count < 1)
                 return null;
 
-            var firstSegment = segments[0].Trim();
-            if (!TrySplitCSharpFieldTypeAndName(firstSegment, out actualType, out var firstDeclaratorName))
+            if (!TrySplitCSharpFieldTypeAndName(segments[0].AsSpan(), out actualType, out var firstDeclaratorName))
                 return null;
             results.Add((firstDeclaratorName, actualType));
 
             for (int i = 1; i < segments.Count; i++)
             {
-                var segment = segments[i].Trim();
-                var declaratorName = StripCSharpDeclaratorInitializer(segment);
-                if (string.IsNullOrEmpty(declaratorName) || !IsCSharpIdentifier(declaratorName))
+                var declaratorNameSpan = StripCSharpDeclaratorInitializer(segments[i].AsSpan().Trim());
+                if (declaratorNameSpan.IsEmpty)
+                    return null;
+
+                var declaratorName = declaratorNameSpan.ToString();
+                if (!IsCSharpIdentifier(declaratorName))
                     return null;
                 results.Add((declaratorName, actualType));
             }
@@ -294,7 +296,7 @@ public static partial class SymbolExtractor
 
     private static List<string> SplitCSharpTopLevelComma(string text)
     {
-        var result = new List<string>(2);
+        var result = new List<string>(Math.Max(2, Math.Min(32, text.Length / 16 + 1)));
         var segment = new StringBuilder(text.Length);
         int angle = 0, paren = 0, bracket = 0, brace = 0;
         foreach (var ch in text)
@@ -324,16 +326,17 @@ public static partial class SymbolExtractor
         return result;
     }
 
-    private static bool TrySplitCSharpFieldTypeAndName(string segment, out string type, out string name)
+    private static bool TrySplitCSharpFieldTypeAndName(ReadOnlySpan<char> segment, out string type, out string name)
     {
         type = string.Empty;
         name = string.Empty;
-        if (string.IsNullOrEmpty(segment))
+        segment = segment.Trim();
+        if (segment.IsEmpty)
             return false;
 
         // Strip initializer portion if any (e.g. `int _x = 5` -> `int _x`).
         segment = StripCSharpDeclaratorInitializer(segment);
-        if (string.IsNullOrEmpty(segment))
+        if (segment.IsEmpty)
             return false;
 
         int angle = 0, paren = 0, bracket = 0;
@@ -358,12 +361,19 @@ public static partial class SymbolExtractor
         if (lastWhitespaceIndex <= 0)
             return false;
 
-        type = SliceCSharpTrimEnd(segment, lastWhitespaceIndex);
-        name = SliceCSharpTrim(segment, lastWhitespaceIndex + 1, segment.Length);
-        return !string.IsNullOrEmpty(type) && IsCSharpIdentifier(name);
+        var typeSpan = SliceCSharpTrimEnd(segment, lastWhitespaceIndex);
+        if (typeSpan.IsEmpty)
+            return false;
+
+        name = SliceCSharpTrim(segment, lastWhitespaceIndex + 1, segment.Length).ToString();
+        if (!IsCSharpIdentifier(name))
+            return false;
+
+        type = typeSpan.ToString();
+        return true;
     }
 
-    private static string StripCSharpDeclaratorInitializer(string segment)
+    private static ReadOnlySpan<char> StripCSharpDeclaratorInitializer(ReadOnlySpan<char> segment)
     {
         int angle = 0, paren = 0, bracket = 0, brace = 0;
         for (int i = 0; i < segment.Length; i++)
@@ -392,16 +402,22 @@ public static partial class SymbolExtractor
         return SliceCSharpTrimEnd(segment, segment.Length);
     }
 
-    private static string SliceCSharpTrimEnd(string text, int endExclusive)
+    private static ReadOnlySpan<char> SliceCSharpTrimEnd(ReadOnlySpan<char> text, int endExclusive)
     {
         endExclusive = Math.Clamp(endExclusive, 0, text.Length);
         while (endExclusive > 0 && char.IsWhiteSpace(text[endExclusive - 1]))
             endExclusive--;
 
-        return endExclusive == text.Length ? text : text[..endExclusive];
+        return text[..endExclusive];
     }
 
-    private static string SliceCSharpTrim(string text, int start, int endExclusive)
+    private static string SliceCSharpTrimEnd(string text, int endExclusive)
+    {
+        var span = SliceCSharpTrimEnd(text.AsSpan(), endExclusive);
+        return span.Length == text.Length ? text : span.ToString();
+    }
+
+    private static ReadOnlySpan<char> SliceCSharpTrim(ReadOnlySpan<char> text, int start, int endExclusive)
     {
         start = Math.Clamp(start, 0, text.Length);
         endExclusive = Math.Clamp(endExclusive, start, text.Length);
@@ -412,7 +428,13 @@ public static partial class SymbolExtractor
         while (endExclusive > start && char.IsWhiteSpace(text[endExclusive - 1]))
             endExclusive--;
 
-        return start == 0 && endExclusive == text.Length ? text : text[start..endExclusive];
+        return text[start..endExclusive];
+    }
+
+    private static string SliceCSharpTrim(string text, int start, int endExclusive)
+    {
+        var span = SliceCSharpTrim(text.AsSpan(), start, endExclusive);
+        return span.Length == text.Length ? text : span.ToString();
     }
 
     private static bool IsCSharpIdentifier(string text)

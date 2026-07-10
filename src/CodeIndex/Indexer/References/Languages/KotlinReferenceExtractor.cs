@@ -847,10 +847,10 @@ internal static class KotlinReferenceExtractor
             return EmptyGenericParameterNames;
 
         HashSet<string>? names = null;
-        var clause = preparedLine.Substring(genericOpenIndex + 1, genericCloseIndex - genericOpenIndex - 1);
+        var clause = preparedLine.AsSpan(genericOpenIndex + 1, genericCloseIndex - genericOpenIndex - 1);
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(clause))
         {
-            var fragment = clause.Substring(segmentStart, segmentLength);
+            var fragment = clause.Slice(segmentStart, segmentLength).ToString();
             if (TryReadGenericParameterName(fragment, out var name))
                 (names ??= new HashSet<string>(StringComparer.Ordinal)).Add(name);
         }
@@ -979,19 +979,20 @@ internal static class KotlinReferenceExtractor
         if (listEnd <= listStart)
             return null;
 
-        var typeList = signature.Substring(listStart, listEnd - listStart);
+        var typeList = signature.AsSpan(listStart, listEnd - listStart);
         string? fallback = null;
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(typeList))
         {
-            var segment = typeList.Substring(segmentStart, segmentLength).Trim();
-            if (segment.Length == 0)
+            var segment = typeList.Slice(segmentStart, segmentLength).Trim();
+            if (segment.IsEmpty)
                 continue;
 
-            var typeName = ExtractKotlinBareTypeName(segment);
+            var segmentText = segment.ToString();
+            var typeName = ExtractKotlinBareTypeName(segmentText);
             if (string.IsNullOrWhiteSpace(typeName))
                 continue;
 
-            if (TypedLanguageReferenceExtractor.FindTopLevelChar(segment, '(') >= 0)
+            if (TypedLanguageReferenceExtractor.FindTopLevelChar(segmentText, '(') >= 0)
                 return typeName;
 
             fallback ??= typeName;

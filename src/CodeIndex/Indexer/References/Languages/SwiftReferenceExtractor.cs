@@ -1054,7 +1054,7 @@ internal static class SwiftReferenceExtractor
     {
         if (index < 0 || index + word.Length > text.Length)
             return false;
-        if (!string.Equals(text.Substring(index, word.Length), word, StringComparison.Ordinal))
+        if (!text.AsSpan(index, word.Length).SequenceEqual(word.AsSpan()))
             return false;
 
         var beforeOk = index == 0 || !IsSwiftIdentifierPart(text[index - 1]);

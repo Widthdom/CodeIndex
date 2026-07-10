@@ -22,9 +22,9 @@ public static partial class SymbolExtractor
         for (int i = startIndex; i < lines.Length; i++)
         {
             var trimmed = i == startIndex
-                ? maskedFirstLine.Trim()
-                : MaskRubyLineForBodyScan(lines[i], scanState).Trim();
-            if (trimmed.Length == 0)
+                ? maskedFirstLine.AsSpan().Trim()
+                : MaskRubyLineForBodyScan(lines[i], scanState).AsSpan().Trim();
+            if (trimmed.IsEmpty)
                 continue;
 
             if (i > startIndex && bodyStartLine == null)
@@ -33,7 +33,8 @@ public static partial class SymbolExtractor
             if (!MayContainRubyBlockToken(trimmed))
                 continue;
 
-            foreach (Match token in RubyBlockTokenRegex.Matches(trimmed))
+            var trimmedText = trimmed.ToString();
+            foreach (Match token in RubyBlockTokenRegex.Matches(trimmedText))
             {
                 if (token.Value == "end")
                     depth--;
@@ -55,7 +56,7 @@ public static partial class SymbolExtractor
             : (lines.Length, bodyStartLine, lines.Length);
     }
 
-    private static bool MayContainRubyBlockToken(string text) =>
+    private static bool MayContainRubyBlockToken(ReadOnlySpan<char> text) =>
         text.Contains("class", StringComparison.Ordinal)
         || text.Contains("module", StringComparison.Ordinal)
         || text.Contains("def", StringComparison.Ordinal)

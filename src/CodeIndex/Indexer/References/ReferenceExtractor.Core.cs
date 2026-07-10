@@ -1006,8 +1006,8 @@ public static partial class ReferenceExtractor
             return normalized;
         }
 
-        var references = CreateReferenceList(request.MaxReferenceCount);
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var references = CreateReferenceList(request.MaxReferenceCount, EstimateReferenceListInitialCapacity(lines.Length));
+        var seen = CreateReferenceSeenSet(lines.Length);
         if (language == "csharp")
         {
             EmitCSharpAsyncIteratorReferences(fileId, lines, structuralLines, symbols, references, seen);

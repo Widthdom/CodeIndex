@@ -474,10 +474,10 @@ internal static class RustReferenceExtractor
         long fileId,
         Func<int, int, SymbolRecord?> resolveContainer)
     {
-        var types = attribute.Substring(typesStart, typesEnd - typesStart);
+        var types = attribute.AsSpan(typesStart, typesEnd - typesStart);
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(types))
         {
-            var fragment = types.Substring(segmentStart, segmentLength);
+            var fragment = types.Slice(segmentStart, segmentLength).ToString();
             var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(fragment, 0);
             var typeEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(fragment, typeStart);
             if (typeEnd <= typeStart)
@@ -792,11 +792,11 @@ internal static class RustReferenceExtractor
             if (closeBrace > openBrace)
             {
                 var groupedPrefix = CombineUsePath(prefix, text[..openBrace].Trim());
-                var inner = text.Substring(openBrace + 1, closeBrace - openBrace - 1);
+                var inner = text.AsSpan(openBrace + 1, closeBrace - openBrace - 1);
                 foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(inner))
                 {
                     EmitUseBodyReferences(
-                        inner.Substring(segmentStart, segmentLength),
+                        inner.Slice(segmentStart, segmentLength).ToString(),
                         textStart + openBrace + 1 + segmentStart,
                         references,
                         seen,
@@ -1357,10 +1357,10 @@ internal static class RustReferenceExtractor
         if (closeParen <= openParen)
             return;
 
-        var fieldList = preparedLine.Substring(openParen + 1, closeParen - openParen - 1);
+        var fieldList = preparedLine.AsSpan(openParen + 1, closeParen - openParen - 1);
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(fieldList))
         {
-            var fragment = fieldList.Substring(segmentStart, segmentLength);
+            var fragment = fieldList.Slice(segmentStart, segmentLength).ToString();
             var typeStart = SkipRustTupleFieldPrefix(fragment);
             if (typeStart >= fragment.Length)
                 continue;
@@ -1529,10 +1529,10 @@ internal static class RustReferenceExtractor
         if (closeParen <= openParen)
             return;
 
-        var fieldList = preparedLine.Substring(openParen + 1, closeParen - openParen - 1);
+        var fieldList = preparedLine.AsSpan(openParen + 1, closeParen - openParen - 1);
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(fieldList))
         {
-            var fragment = fieldList.Substring(segmentStart, segmentLength);
+            var fragment = fieldList.Slice(segmentStart, segmentLength).ToString();
             var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(fragment, 0);
             var typeEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(fragment, typeStart);
             if (typeEnd <= typeStart)

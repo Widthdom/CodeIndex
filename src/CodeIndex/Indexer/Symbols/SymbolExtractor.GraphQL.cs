@@ -25,14 +25,13 @@ public static partial class SymbolExtractor
         @"^\s*(?:extend\s+)?(?:type|interface|input|enum|union|scalar|schema|query|mutation|subscription|fragment|directive)\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    private static void ExtractGraphQLMemberSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    private static void ExtractGraphQLMemberSymbols(long fileId, string content, string[] lines, List<SymbolRecord> symbols)
     {
         if (!TryGetGraphQLMemberMarkers(lines, out var hasInputBlocks, out var hasUnions))
             return;
 
-        if (hasInputBlocks && LinesContain(lines, "{", StringComparison.Ordinal))
+        if (hasInputBlocks && LinesContain(lines, '{'))
         {
-            var content = string.Join('\n', lines);
             List<int>? lineStarts = null;
             foreach (Match inputMatch in GraphQLInputBlockRegex.Matches(content))
             {

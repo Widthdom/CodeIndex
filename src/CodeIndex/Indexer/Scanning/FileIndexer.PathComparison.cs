@@ -21,12 +21,11 @@ public partial class FileIndexer
         if (string.IsNullOrEmpty(root))
             return Path.TrimEndingDirectorySeparator(fullPath);
 
-        var remainingPath = Path.GetRelativePath(root, fullPath);
-        if (remainingPath == "." || remainingPath.Length == 0)
+        if (fullPath.Length <= root.Length)
             return Path.TrimEndingDirectorySeparator(fullPath);
 
         var current = root;
-        var remaining = remainingPath.AsSpan();
+        var remaining = fullPath.AsSpan(root.Length);
         while (!remaining.IsEmpty)
         {
             var separatorIndex = remaining.IndexOfAny(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
