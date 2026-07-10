@@ -42,6 +42,9 @@ public static partial class SymbolExtractor
         "dependency_lock",
     ];
 
+    private static string[] SplitContentLines(string content) =>
+        content.IndexOf('\n', StringComparison.Ordinal) < 0 ? [content] : content.Split('\n');
+
     public static int GetContractVersion(string? lang)
     {
         return lang switch
@@ -2609,42 +2612,42 @@ public static partial class SymbolExtractor
 
         if (lang == "xml")
         {
-            return ExtractXmlSymbols(fileId, content.Split('\n'));
+            return ExtractXmlSymbols(fileId, SplitContentLines(content));
         }
 
         if (lang == "json")
         {
-            return ExtractJsonSymbols(fileId, content, content.Split('\n'));
+            return ExtractJsonSymbols(fileId, content, SplitContentLines(content));
         }
 
         if (lang == "yaml")
         {
-            return ExtractYamlSymbols(fileId, content.Split('\n'));
+            return ExtractYamlSymbols(fileId, SplitContentLines(content));
         }
 
         if (lang == "msbuild")
         {
-            return ExtractMsBuildSymbols(fileId, content, content.Split('\n'));
+            return ExtractMsBuildSymbols(fileId, content, SplitContentLines(content));
         }
 
         if (lang == "solution")
         {
-            return ExtractSolutionSymbols(fileId, content.Split('\n'));
+            return ExtractSolutionSymbols(fileId, SplitContentLines(content));
         }
 
         if (lang == "app_manifest")
         {
-            return ExtractAppManifestSymbols(fileId, content, content.Split('\n'));
+            return ExtractAppManifestSymbols(fileId, content, SplitContentLines(content));
         }
 
         if (lang is "dependency_manifest" or "dependency_lock")
         {
-            return DependencyPackageExtractor.ExtractSymbols(fileId, content, content.Split('\n'), filePath, lang);
+            return DependencyPackageExtractor.ExtractSymbols(fileId, content, SplitContentLines(content), filePath, lang);
         }
 
         if (lang == "markdown")
         {
-            var markdownLines = content.Split('\n');
+            var markdownLines = SplitContentLines(content);
             var markdownSymbols = ExtractMarkdownSymbols(fileId, markdownLines);
             AssignContainers(markdownSymbols, markdownLines, null);
             PopulateDeclaredContainerQualifiedNames(markdownSymbols);
@@ -2671,7 +2674,7 @@ public static partial class SymbolExtractor
         if (!usesLineBasedExtractor)
             return [];
 
-        var lines = content.Split('\n');
+        var lines = SplitContentLines(content);
         cancellationToken.ThrowIfCancellationRequested();
         if (lang is "commonlisp" or "racket")
             return ExtractLispSymbols(fileId, lang, lines);

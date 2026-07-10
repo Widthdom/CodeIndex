@@ -66,7 +66,7 @@ public static partial class ReferenceExtractor
         }
 
         normalizedContent = content;
-        lines = content.Split('\n');
+        lines = SplitContentLines(content);
         return true;
     }
 

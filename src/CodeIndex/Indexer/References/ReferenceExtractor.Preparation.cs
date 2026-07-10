@@ -78,7 +78,7 @@ public static partial class ReferenceExtractor
         var maskedContent = string.Equals(language, "java", StringComparison.OrdinalIgnoreCase)
             ? MaskJavaTextBlocks(content)
             : content;
-        var lines = maskedContent.Split('\n');
+        var lines = SplitContentLines(maskedContent);
         var structuralLines = StructuralLineMasker.MaskLines(language, lines, out var jsTaggedTemplateHits);
         var csharpLineState = language == "csharp" && MightContainCSharpXmlDocComment(content)
             ? BuildCSharpLineStateMasks(lines)

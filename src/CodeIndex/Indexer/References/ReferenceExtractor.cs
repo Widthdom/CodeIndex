@@ -36,6 +36,9 @@ public static partial class ReferenceExtractor
         "cshtml",
     ];
 
+    private static string[] SplitContentLines(string content) =>
+        content.IndexOf('\n', StringComparison.Ordinal) < 0 ? [content] : content.Split('\n');
+
     // THREAD-SAFETY: Reference extraction is stateless per call. Shared Regex instances and
     // lookup tables are initialized once and then read concurrently; language-specific state
     // must be created per extraction call (for example via CreateState helpers) rather than
