@@ -173,7 +173,7 @@ public static partial class ReferenceExtractor
                 && !string.IsNullOrWhiteSpace(symbol.Name)
                 && !string.IsNullOrWhiteSpace(symbol.Signature))
             {
-                (interfaceGenericParameterCandidates ??= []).Add((symbol.Name, symbol.Signature!));
+                (interfaceGenericParameterCandidates ??= new List<(string Name, string Signature)>(4)).Add((symbol.Name, symbol.Signature!));
             }
 
             if (!IsCSharpStaticInterfaceMemberContract(symbol))
@@ -182,7 +182,7 @@ public static partial class ReferenceExtractor
             var containerName = symbol.ContainerName!;
             if (!contractsByType.TryGetValue(containerName, out var contracts))
             {
-                contracts = new List<CSharpStaticInterfaceMemberContract>();
+                contracts = new List<CSharpStaticInterfaceMemberContract>(1);
                 contractsByType.Add(containerName, contracts);
             }
 
@@ -238,7 +238,7 @@ public static partial class ReferenceExtractor
                 && symbol.BodyStartLine != null
                 && symbol.BodyEndLine != null)
             {
-                (typeSymbols ??= []).Add(symbol);
+                (typeSymbols ??= new List<SymbolRecord>(16)).Add(symbol);
             }
 
             if (symbol.Kind is not ("function" or "operator" or "property")
@@ -250,10 +250,10 @@ public static partial class ReferenceExtractor
             }
 
             var containerName = symbol.ContainerName!;
-            staticMembersByContainer ??= new Dictionary<string, List<SymbolRecord>>(StringComparer.Ordinal);
+            staticMembersByContainer ??= new Dictionary<string, List<SymbolRecord>>(16, StringComparer.Ordinal);
             if (!staticMembersByContainer.TryGetValue(containerName, out var staticMembers))
             {
-                staticMembers = new List<SymbolRecord>();
+                staticMembers = new List<SymbolRecord>(1);
                 staticMembersByContainer.Add(containerName, staticMembers);
             }
 
@@ -516,7 +516,7 @@ public static partial class ReferenceExtractor
             baseList = baseList.Substring(0, whereMatch.Index);
         baseList = TrimTrailingTypeListTerminator(baseList);
 
-        var interfaces = new List<CSharpImplementedInterface>();
+        var interfaces = new List<CSharpImplementedInterface>(4);
         foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(baseList))
         {
             var rawSegment = baseList.Substring(segmentStart, segmentLength).Trim();
@@ -1943,10 +1943,10 @@ public static partial class ReferenceExtractor
         IReadOnlyList<SymbolRecord> symbols,
         string[] structuralLines)
     {
-        var ranges = new List<(int, int, int, int, SymbolRecord)>();
         if (language != "csharp")
-            return ranges;
+            return [];
 
+        var ranges = new List<(int, int, int, int, SymbolRecord)>(4);
         foreach (var symbol in symbols)
         {
             // SymbolExtractor stores C# records as Kind=class and C# 12 structs as Kind=struct.
