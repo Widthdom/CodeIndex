@@ -762,7 +762,7 @@ public static partial class SymbolExtractor
 
         int[]? lineStarts = null;
 
-        var symbols = new List<SymbolRecord>();
+        var symbols = CreateSymbolListForLines(lines.Length);
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i];

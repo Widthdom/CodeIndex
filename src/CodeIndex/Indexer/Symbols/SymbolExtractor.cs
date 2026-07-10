@@ -42,8 +42,27 @@ public static partial class SymbolExtractor
         "dependency_lock",
     ];
 
+    private const int SymbolListInitialCapacityLineThreshold = 128;
+    private const int SymbolListInitialCapacityMax = 1024;
+
     private static string[] SplitContentLines(string content) =>
         content.IndexOf('\n', StringComparison.Ordinal) < 0 ? [content] : content.Split('\n');
+
+    private static List<SymbolRecord> CreateSymbolListForLines(int lineCount)
+    {
+        var initialCapacity = EstimateSymbolListInitialCapacity(lineCount);
+        return initialCapacity == 0
+            ? []
+            : new List<SymbolRecord>(initialCapacity);
+    }
+
+    private static int EstimateSymbolListInitialCapacity(int lineCount)
+    {
+        if (lineCount < SymbolListInitialCapacityLineThreshold)
+            return 0;
+
+        return Math.Min(SymbolListInitialCapacityMax, Math.Max(16, lineCount / 8));
+    }
 
     public static int GetContractVersion(string? lang)
     {
