@@ -1681,7 +1681,7 @@ public static partial class ReferenceExtractor
         if (typeEnd <= start)
             return;
 
-        var typeExpression = clause.Substring(start, typeEnd - start);
+        var typeExpression = clause.AsSpan(start, typeEnd - start);
         foreach (var (segmentStart, segmentLength) in SplitTopLevelPipeSpans(typeExpression))
         {
             var leading = CountLeadingWhitespace(typeExpression, segmentStart, segmentLength);
@@ -1696,7 +1696,7 @@ public static partial class ReferenceExtractor
                 references,
                 seen,
                 fileId,
-                typeExpression.Substring(segmentStart + leading, trimmedLength),
+                typeExpression.Slice(segmentStart + leading, trimmedLength).ToString(),
                 absoluteStart,
                 context,
                 lineNumber,
@@ -1777,7 +1777,9 @@ public static partial class ReferenceExtractor
         return identifierStart < identifierEnd;
     }
 
-    private static List<(int Start, int Length)> SplitTopLevelPipeSpans(string text)
+    private static List<(int Start, int Length)> SplitTopLevelPipeSpans(string text) => SplitTopLevelPipeSpans(text.AsSpan());
+
+    private static List<(int Start, int Length)> SplitTopLevelPipeSpans(ReadOnlySpan<char> text)
     {
         var spans = new List<(int Start, int Length)>();
         var angleDepth = 0;
