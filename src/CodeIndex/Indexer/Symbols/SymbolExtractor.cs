@@ -4967,6 +4967,48 @@ public static partial class SymbolExtractor
         return false;
     }
 
+    private static bool LinesContainAny(
+        IReadOnlyList<string> lines,
+        string value1,
+        string value2,
+        string value3,
+        string value4,
+        StringComparison comparison)
+    {
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var line = lines[i];
+            if (line.IndexOf(value1, comparison) >= 0
+                || line.IndexOf(value2, comparison) >= 0
+                || line.IndexOf(value3, comparison) >= 0
+                || line.IndexOf(value4, comparison) >= 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool LinesContainAny(
+        IReadOnlyList<string> lines,
+        char value1,
+        string value2,
+        StringComparison comparison)
+    {
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var line = lines[i];
+            if (line.IndexOf(value1) >= 0
+                || line.IndexOf(value2, comparison) >= 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static List<int> BuildLineStartList(IReadOnlyList<string> lines)
     {
         if (lines.Count <= 1)

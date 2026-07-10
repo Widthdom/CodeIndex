@@ -57,8 +57,7 @@ public static partial class SymbolExtractor
     {
         if (!LinesContain(structuralLines, '{'))
             return CSharpTypeBodyScope.Empty;
-        if (!LinesContainAny(structuralLines, "class", "struct", "interface", StringComparison.Ordinal)
-            && !LinesContain(structuralLines, "record", StringComparison.Ordinal))
+        if (!LinesContainAny(structuralLines, "class", "struct", "interface", "record", StringComparison.Ordinal))
         {
             return CSharpTypeBodyScope.Empty;
         }

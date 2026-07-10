@@ -6935,8 +6935,7 @@ public static partial class SymbolExtractor
 
     private static JavaScriptScopePrivacyFlags[][] BuildJavaScriptTypeScriptPrivateScopeColumns(string[] lines, string lang)
     {
-        if (!LinesContain(lines, '{')
-            && !LinesContain(lines, "=>", StringComparison.Ordinal))
+        if (!LinesContainAny(lines, '{', "=>", StringComparison.Ordinal))
         {
             return BuildEmptyJavaScriptTypeScriptPrivateScopeColumns(lines.Length);
         }
