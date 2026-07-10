@@ -2889,16 +2889,16 @@ public static partial class ReferenceExtractor
 
     private static string NormalizeCSharpDocCref(string cref)
     {
-        var text = cref.Trim();
+        var text = cref.AsSpan().Trim();
         if (text.Length >= 2 && char.IsLetter(text[0]) && text[1] == ':')
-            text = text.Substring(2);
+            text = text[2..];
         int paren = text.IndexOf('(');
         if (paren >= 0)
-            text = text.Substring(0, paren);
+            text = text[..paren];
         int brace = text.IndexOf('{');
         if (brace >= 0)
-            text = text.Substring(0, brace);
-        return text.Trim();
+            text = text[..brace];
+        return text.Trim().ToString();
     }
 
     private static bool IsCSharpIdentifierStart(char c) =>
