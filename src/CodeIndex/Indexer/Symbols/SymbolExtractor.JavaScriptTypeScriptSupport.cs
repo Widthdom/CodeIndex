@@ -5323,26 +5323,7 @@ public static partial class SymbolExtractor
     }
 
     private static bool StartsJavaScriptTypeScriptFunctionAssignmentValue(string rhs)
-    {
-        rhs = rhs.TrimStart();
-        while (rhs.Length > 0)
-        {
-            if (IsJavaScriptTypeScriptKeywordAt(rhs, 0, "function")
-                || StartsJavaScriptTypeScriptAsyncFunctionAssignmentValue(rhs)
-                || StartsJavaScriptTypeScriptGenericArrowAssignmentValue(rhs)
-                || JavaScriptTypeScriptArrowAssignmentValueRegex.IsMatch(rhs))
-            {
-                return true;
-            }
-
-            if (rhs[0] != '(')
-                return false;
-
-            rhs = rhs[1..].TrimStart();
-        }
-
-        return false;
-    }
+        => StartsJavaScriptTypeScriptFunctionAssignmentValue(rhs, 0);
 
     private static bool StartsJavaScriptTypeScriptFunctionAssignmentValue(string rhs, int startColumn)
     {
