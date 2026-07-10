@@ -11,8 +11,16 @@ internal sealed class BoundedRegex : BclRegex
 {
     // Keep regex matches bounded, but leave enough scheduler headroom for full-suite CI contention.
     internal static readonly TimeSpan DefaultMatchTimeout = TimeSpan.FromSeconds(2);
+    internal const int MinimumStaticPatternCacheSize = 1024;
     private const int MaxCapturedTimeoutDiagnostics = 8;
     private static readonly AsyncLocal<RegexTimeoutCaptureScope?> TimeoutCaptureScope = new();
+
+    static BoundedRegex()
+    {
+        // Extraction has hundreds of shared static patterns across supported languages. The
+        // runtime default of 15 entries repeatedly rebuilds patterns as files alternate languages.
+        BclRegex.CacheSize = Math.Max(BclRegex.CacheSize, MinimumStaticPatternCacheSize);
+    }
 
     internal readonly record struct RegexTimeoutDiagnostic(
         string Operation,

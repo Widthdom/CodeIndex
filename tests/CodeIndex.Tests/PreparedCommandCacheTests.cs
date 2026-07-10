@@ -42,6 +42,73 @@ public class PreparedCommandCacheTests : IDisposable
     }
 
     [Fact]
+    public void DbWriter_WithCache_BulkInsertShapesReusePreparedCommands()
+    {
+        var writer = new DbWriter(_db);
+        var firstFileId = writer.InsertNewFile(CreateBatchFile("src/batch-a.cs", "batch-a"));
+        var secondFileId = writer.InsertNewFile(CreateBatchFile("src/batch-b.py", "batch-b"));
+
+        InsertBatchRows(writer, firstFileId, "First");
+        var hitsBefore = _db.PreparedCommands.HitCount;
+
+        InsertBatchRows(writer, secondFileId, "Second");
+
+        Assert.True(_db.PreparedCommands.HitCount >= hitsBefore + 4);
+        Assert.Equal(2, writer.CountSymbolsForFile(secondFileId));
+        Assert.Equal(2, writer.CountReferencesForFile(secondFileId));
+    }
+
+    [Fact]
+    public void DbWriter_WithCache_ReferenceLineUpsertShapesReusePreparedCommands()
+    {
+        var writer = new DbWriter(_db);
+        var firstFileId = writer.InsertNewFile(CreateBatchFile("src/upsert-a.cs", "upsert-a"));
+        var secondFileId = writer.InsertNewFile(CreateBatchFile("src/upsert-b.py", "upsert-b"));
+
+        writer.InsertReferences(CreateReferences(firstFileId, "First"), refreshMutualRecursionFlags: false);
+        var hitsBefore = _db.PreparedCommands.HitCount;
+
+        writer.InsertReferences(CreateReferences(secondFileId, "Second"), refreshMutualRecursionFlags: false);
+
+        Assert.True(_db.PreparedCommands.HitCount >= hitsBefore + 3);
+        Assert.Equal(2, writer.CountReferencesForFile(secondFileId));
+    }
+
+    private static FileRecord CreateBatchFile(string path, string checksum) => new()
+    {
+        Path = path,
+        Lang = Path.GetExtension(path) == ".cs" ? "csharp" : "python",
+        Size = 80,
+        Lines = 4,
+        Checksum = checksum,
+        Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+    };
+
+    private static void InsertBatchRows(DbWriter writer, long fileId, string prefix)
+    {
+        writer.InsertChunks(
+        [
+            new ChunkRecord { FileId = fileId, ChunkIndex = 0, StartLine = 1, EndLine = 2, Content = $"{prefix} chunk one" },
+            new ChunkRecord { FileId = fileId, ChunkIndex = 1, StartLine = 3, EndLine = 4, Content = $"{prefix} chunk two" },
+        ]);
+        writer.InsertSymbols(
+        [
+            new SymbolRecord { FileId = fileId, Kind = "class", Name = $"{prefix}Type", Line = 1, StartLine = 1, EndLine = 4 },
+            new SymbolRecord { FileId = fileId, Kind = "function", Name = $"{prefix}Run", Line = 2, StartLine = 2, EndLine = 3 },
+        ]);
+        writer.InsertReferencesForNewFiles(
+            CreateReferences(fileId, prefix),
+            refreshMutualRecursionFlags: false,
+            CancellationToken.None);
+    }
+
+    private static ReferenceRecord[] CreateReferences(long fileId, string prefix) =>
+        [
+            new ReferenceRecord { FileId = fileId, SymbolName = $"{prefix}Type", ReferenceKind = "type_reference", Line = 2, Column = 1, Context = $"{prefix}Type value" },
+            new ReferenceRecord { FileId = fileId, SymbolName = $"{prefix}Run", ReferenceKind = "call", Line = 3, Column = 1, Context = $"{prefix}Run()" },
+        ];
+
+    [Fact]
     public void GetOrAdd_DistinctSqlAddsDistinctCommands()
     {
         using var cache = new PreparedCommandCache(_db.Connection);

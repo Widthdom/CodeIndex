@@ -161,10 +161,16 @@ public static partial class SymbolExtractor
     /// 使っても後者では単に外側の `*/` で depth が 0 に戻って閉じるだけなので、厳密に safer。
     /// issue #429 追補参照。
     /// </summary>
-    private static string MaskSqlLineForBodyScan(string line, ref int blockCommentDepth)
+    internal static string MaskSqlLineForBodyScan(string line, ref int blockCommentDepth)
     {
         if (string.IsNullOrEmpty(line))
             return line;
+        if (blockCommentDepth == 0
+            && line.AsSpan().IndexOfAny('-', '/', '\'') < 0
+            && line.IndexOf('"') < 0)
+        {
+            return line;
+        }
 
         var sb = new StringBuilder(line.Length);
         bool inSingle = false;

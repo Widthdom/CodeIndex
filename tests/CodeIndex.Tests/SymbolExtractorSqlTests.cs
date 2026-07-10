@@ -15,6 +15,18 @@ namespace CodeIndex.Tests;
 public partial class SymbolExtractorTests
 {
     [Fact]
+    public void MaskSqlLineForBodyScan_PlainLineReusesSourceText()
+    {
+        var line = new string("SELECT account_id FROM accounts;".ToCharArray());
+        var blockCommentDepth = 0;
+
+        var masked = SymbolExtractor.MaskSqlLineForBodyScan(line, ref blockCommentDepth);
+
+        Assert.Same(line, masked);
+        Assert.Equal(0, blockCommentDepth);
+    }
+
+    [Fact]
     public void Extract_SQL_DetectsCreateStatements()
     {
         var content = "CREATE TEMP TABLE users (\n  id INT PRIMARY KEY\n);\n\nCREATE OR REPLACE FUNCTION get_user(id INT) RETURNS void;\n\nCREATE MATERIALIZED VIEW active_users AS SELECT * FROM users;\n\nCREATE TYPE color AS ENUM ('red', 'green');\nCREATE TYPE inventory_item AS (name text);\nCREATE SCHEMA analytics;\nCREATE SCHEMA AUTHORIZATION analytics_owner;\nCREATE SEQUENCE order_seq;\nCREATE EXTENSION IF NOT EXISTS pgcrypto;\nCREATE DOMAIN positive_int AS integer CHECK (VALUE > 0);\nCREATE UNIQUE INDEX users_email_idx ON users (id);\n\nALTER TABLE users ADD COLUMN email TEXT;";
