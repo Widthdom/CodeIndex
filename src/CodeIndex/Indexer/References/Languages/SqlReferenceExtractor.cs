@@ -29,14 +29,14 @@ internal static partial class SqlReferenceExtractor
         {
             if (symbol.Line < 1 || symbol.Line > lines.Length)
                 continue;
-            patternCache ??= new Dictionary<string, DefinitionLeafPattern>(StringComparer.Ordinal);
+            patternCache ??= new Dictionary<string, DefinitionLeafPattern>(Math.Min(symbols.Count, 64), StringComparer.Ordinal);
             if (!TryFindDefinitionLeafSpan(lines[symbol.Line - 1], symbol.Name, patternCache, out var span))
                 continue;
 
-            spansByLine ??= new Dictionary<int, List<DefinitionLeafSpan>>();
+            spansByLine ??= new Dictionary<int, List<DefinitionLeafSpan>>(Math.Min(symbols.Count, 64));
             if (!spansByLine.TryGetValue(symbol.Line, out var spans))
             {
-                spans = [];
+                spans = new List<DefinitionLeafSpan>(1);
                 spansByLine[symbol.Line] = spans;
             }
 
