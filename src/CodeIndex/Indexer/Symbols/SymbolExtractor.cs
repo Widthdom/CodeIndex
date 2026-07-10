@@ -5265,11 +5265,25 @@ public static partial class SymbolExtractor
 
     private static string[] MaskSqlSyntheticSymbolLines(string[] lines)
     {
-        var masked = new string[lines.Length];
+        string[]? masked = null;
         var inBlockComment = false;
         for (var i = 0; i < lines.Length; i++)
-            masked[i] = MaskSqlSyntheticSymbolLine(lines[i], ref inBlockComment);
-        return masked;
+        {
+            var maskedLine = MaskSqlSyntheticSymbolLine(lines[i], ref inBlockComment);
+            if (masked != null)
+            {
+                masked[i] = maskedLine;
+                continue;
+            }
+
+            if (ReferenceEquals(maskedLine, lines[i]))
+                continue;
+
+            masked = (string[])lines.Clone();
+            masked[i] = maskedLine;
+        }
+
+        return masked ?? lines;
     }
 
     private static string MaskSqlSyntheticSymbolLine(string line, ref bool inBlockComment)
