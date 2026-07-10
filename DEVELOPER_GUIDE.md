@@ -223,6 +223,12 @@ Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdid
   → Populate FTS5 index
 ```
 
+The single writer reuses multi-row chunk, symbol, reference, and reference-line
+commands by row-count shape through the bounded `PreparedCommandCache`. SQL text
+and typed parameter schemas are created only on a cache miss; each execution
+reassigns parameter values by ordinal. Keep new bulk-write paths on this bounded
+cache so large indexes do not rebuild equivalent SQLite commands per file.
+
 `FileIssue` rows may include nullable `origin` and `severity` metadata.
 For `replacement_char`, `origin: source_literal` means the file contains a
 valid encoded U+FFFD literal, while `origin: decode_replacement` means the
@@ -2617,6 +2623,12 @@ query コマンドも JSON profile block 用の `--profile` と command-scoped p
   → チャンク＋シンボル＋参照をバッチ挿入（1トランザクション500件）
   → FTS5インデックス反映
 ```
+
+single writer は、複数行の chunk、symbol、reference、reference-line command を
+row-count shape ごとに bounded な `PreparedCommandCache` で再利用します。SQL text と
+型付き parameter schema は cache miss 時だけ構築し、各実行では ordinal 順に parameter
+value を再設定します。大規模 index で同じ SQLite command を file ごとに再構築しないよう、
+新しい bulk-write 経路もこの bounded cache に載せてください。
 
 `FileIssue` rows には nullable な `origin` / `severity` metadata が入ることがある。
 `replacement_char` では `origin: source_literal` が正規にエンコードされた U+FFFD

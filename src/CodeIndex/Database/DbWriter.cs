@@ -3,6 +3,7 @@ using CodeIndex.Cli;
 using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -107,6 +108,12 @@ public class DbWriter
     private const int SqliteConstraintErrorCode = 19;
     private const int TypeScriptModuleSyntaxFallbackMaxBytes = (int)FileIndexer.DefaultMaxFileSizeBytes;
     private const int TypeScriptModuleSyntaxFallbackMaxLines = 16384;
+    private static readonly ConcurrentDictionary<int, string> ChunkInsertSqlCache = new();
+    private static readonly ConcurrentDictionary<int, string> SymbolInsertSqlCache = new();
+    private static readonly ConcurrentDictionary<int, string> ReferenceInsertSqlCache = new();
+    private static readonly ConcurrentDictionary<int, string> ReferenceLineUpsertSqlCache = new();
+    private static readonly ConcurrentDictionary<int, string> ReferenceLineLookupSqlCache = new();
+    private static readonly ConcurrentDictionary<int, string> ReferenceLineInsertSqlCache = new();
     private static readonly BoundedRegex CSharpExternAliasSignatureRegex = new(
         @"^\s*extern\s+alias\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -1841,31 +1848,104 @@ public class DbWriter
 
     private void InsertChunkBatch(IReadOnlyList<ChunkRecord> chunks, int start, int end)
     {
-        using var cmd = _conn.CreateCommand();
-        var sql = CreateBatchSqlBuilder(end - start, estimatedCharsPerRow: 64);
-        sql.Append("INSERT INTO chunks (file_id, chunk_index, start_line, end_line, content) VALUES ");
-        for (int j = start; j < end; j++)
+        var batchCount = end - start;
+        var sql = ChunkInsertSqlCache.GetOrAdd(batchCount, static count => BuildChunkInsertSql(count));
+        var cmd = RentCommand(sql, c => AddChunkInsertParameters(c, batchCount));
+        try
         {
-            var chunk = chunks[j];
-            if (j > start)
-                sql.Append(", ");
-            var suffix = j - start;
-            sql.Append($"(@fid{suffix}, @idx{suffix}, @start{suffix}, @end{suffix}, @content{suffix})");
-            cmd.Parameters.Add($"@fid{suffix}", SqliteType.Integer).Value = chunk.FileId;
-            cmd.Parameters.Add($"@idx{suffix}", SqliteType.Integer).Value = chunk.ChunkIndex;
-            cmd.Parameters.Add($"@start{suffix}", SqliteType.Integer).Value = chunk.StartLine;
-            cmd.Parameters.Add($"@end{suffix}", SqliteType.Integer).Value = chunk.EndLine;
-            cmd.Parameters.Add($"@content{suffix}", SqliteType.Text).Value = chunk.Content;
-        }
+            var parameterIndex = 0;
+            for (int j = start; j < end; j++)
+            {
+                var chunk = chunks[j];
+                cmd.Parameters[parameterIndex++].Value = chunk.FileId;
+                cmd.Parameters[parameterIndex++].Value = chunk.ChunkIndex;
+                cmd.Parameters[parameterIndex++].Value = chunk.StartLine;
+                cmd.Parameters[parameterIndex++].Value = chunk.EndLine;
+                cmd.Parameters[parameterIndex++].Value = chunk.Content;
+            }
 
-        cmd.CommandText = sql.ToString();
-        cmd.ExecuteNonQuery();
+            cmd.ExecuteNonQuery();
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     private void InsertSymbolBatch(IReadOnlyList<SymbolRecord> symbols, int start, int end, Dictionary<string, string?> foldedNameCache)
     {
-        using var cmd = _conn.CreateCommand();
-        var sql = CreateBatchSqlBuilder(end - start, estimatedCharsPerRow: 320);
+        var batchCount = end - start;
+        var sql = SymbolInsertSqlCache.GetOrAdd(batchCount, static count => BuildSymbolInsertSql(count));
+        var cmd = RentCommand(sql, c => AddSymbolInsertParameters(c, batchCount));
+        try
+        {
+            var parameterIndex = 0;
+            for (int j = start; j < end; j++)
+            {
+                var symbol = symbols[j];
+                ValidateSymbolKinds(symbol);
+                var startLine = symbol.StartLine > 0 ? symbol.StartLine : symbol.Line;
+                var endLine = symbol.EndLine > 0 ? symbol.EndLine : startLine;
+                cmd.Parameters[parameterIndex++].Value = symbol.FileId;
+                cmd.Parameters[parameterIndex++].Value = symbol.Kind;
+                cmd.Parameters[parameterIndex++].Value = (object?)symbol.SubKind ?? DBNull.Value;
+                cmd.Parameters[parameterIndex++].Value = symbol.Name;
+                cmd.Parameters[parameterIndex++].Value = symbol.Line;
+                cmd.Parameters[parameterIndex++].Value = startLine;
+                cmd.Parameters[parameterIndex++].Value = (object?)symbol.StartColumn ?? DBNull.Value;
+                cmd.Parameters[parameterIndex++].Value = endLine;
+                cmd.Parameters[parameterIndex++].Value = (object?)symbol.BodyStartLine ?? DBNull.Value;
+                cmd.Parameters[parameterIndex++].Value = (object?)symbol.BodyEndLine ?? DBNull.Value;
+                cmd.Parameters[parameterIndex++].Value = (object?)symbol.Signature ?? DBNull.Value;
+                cmd.Parameters[parameterIndex++].Value = (object?)symbol.ContainerKind ?? DBNull.Value;
+                cmd.Parameters[parameterIndex++].Value = (object?)symbol.ContainerName ?? DBNull.Value;
+                cmd.Parameters[parameterIndex++].Value = (object?)symbol.ContainerQualifiedName ?? DBNull.Value;
+                cmd.Parameters[parameterIndex++].Value = (object?)symbol.FamilyKey ?? DBNull.Value;
+                cmd.Parameters[parameterIndex++].Value = (object?)symbol.Visibility ?? DBNull.Value;
+                cmd.Parameters[parameterIndex++].Value = (object?)symbol.ReturnType ?? DBNull.Value;
+                cmd.Parameters[parameterIndex++].Value = symbol.IsMetadataTarget.HasValue
+                    ? (symbol.IsMetadataTarget.Value ? 1 : 0)
+                    : (object)DBNull.Value;
+                cmd.Parameters[parameterIndex++].Value = (object?)symbol.MetadataTargetSource ?? DBNull.Value;
+                cmd.Parameters[parameterIndex++].Value = FoldedNameDbValue(symbol.Name, foldedNameCache);
+            }
+
+            cmd.ExecuteNonQuery();
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
+    }
+
+    private static string BuildChunkInsertSql(int rowCount)
+    {
+        var sql = CreateBatchSqlBuilder(rowCount, estimatedCharsPerRow: 64);
+        sql.Append("INSERT INTO chunks (file_id, chunk_index, start_line, end_line, content) VALUES ");
+        for (var row = 0; row < rowCount; row++)
+        {
+            if (row > 0)
+                sql.Append(", ");
+            sql.Append($"(@fid{row}, @idx{row}, @start{row}, @end{row}, @content{row})");
+        }
+        return sql.ToString();
+    }
+
+    private static void AddChunkInsertParameters(SqliteCommand cmd, int rowCount)
+    {
+        for (var row = 0; row < rowCount; row++)
+        {
+            cmd.Parameters.Add($"@fid{row}", SqliteType.Integer);
+            cmd.Parameters.Add($"@idx{row}", SqliteType.Integer);
+            cmd.Parameters.Add($"@start{row}", SqliteType.Integer);
+            cmd.Parameters.Add($"@end{row}", SqliteType.Integer);
+            cmd.Parameters.Add($"@content{row}", SqliteType.Text);
+        }
+    }
+
+    private static string BuildSymbolInsertSql(int rowCount)
+    {
+        var sql = CreateBatchSqlBuilder(rowCount, estimatedCharsPerRow: 320);
         sql.Append(@"
                 INSERT INTO symbols (
                     file_id, kind, sub_kind, name, line, start_line, start_column, end_line,
@@ -1876,50 +1956,163 @@ public class DbWriter
                     name_folded
                 )
                 VALUES ");
-
-        for (int j = start; j < end; j++)
+        for (var row = 0; row < rowCount; row++)
         {
-            var symbol = symbols[j];
-            ValidateSymbolKinds(symbol);
-            var startLine = symbol.StartLine > 0 ? symbol.StartLine : symbol.Line;
-            var endLine = symbol.EndLine > 0 ? symbol.EndLine : startLine;
-            if (j > start)
+            if (row > 0)
                 sql.Append(", ");
-            var suffix = j - start;
             sql.Append($@"(
-                    @fid{suffix}, @kind{suffix}, @subKind{suffix}, @name{suffix}, @line{suffix}, @startLine{suffix}, @startColumn{suffix}, @endLine{suffix},
-                    @bodyStartLine{suffix}, @bodyEndLine{suffix}, @signature{suffix},
-                    @containerKind{suffix}, @containerName{suffix}, @containerQualifiedName{suffix}, @familyKey{suffix},
-                    @visibility{suffix}, @returnType{suffix},
-                    @isMetadataTarget{suffix}, @metadataTargetSource{suffix},
-                    @nameFolded{suffix}
+                    @fid{row}, @kind{row}, @subKind{row}, @name{row}, @line{row}, @startLine{row}, @startColumn{row}, @endLine{row},
+                    @bodyStartLine{row}, @bodyEndLine{row}, @signature{row},
+                    @containerKind{row}, @containerName{row}, @containerQualifiedName{row}, @familyKey{row},
+                    @visibility{row}, @returnType{row},
+                    @isMetadataTarget{row}, @metadataTargetSource{row},
+                    @nameFolded{row}
                 )");
-            cmd.Parameters.Add($"@fid{suffix}", SqliteType.Integer).Value = symbol.FileId;
-            cmd.Parameters.Add($"@kind{suffix}", SqliteType.Text).Value = symbol.Kind;
-            cmd.Parameters.Add($"@subKind{suffix}", SqliteType.Text).Value = (object?)symbol.SubKind ?? DBNull.Value;
-            cmd.Parameters.Add($"@name{suffix}", SqliteType.Text).Value = symbol.Name;
-            cmd.Parameters.Add($"@line{suffix}", SqliteType.Integer).Value = symbol.Line;
-            cmd.Parameters.Add($"@startLine{suffix}", SqliteType.Integer).Value = startLine;
-            cmd.Parameters.Add($"@startColumn{suffix}", SqliteType.Integer).Value = (object?)symbol.StartColumn ?? DBNull.Value;
-            cmd.Parameters.Add($"@endLine{suffix}", SqliteType.Integer).Value = endLine;
-            cmd.Parameters.Add($"@bodyStartLine{suffix}", SqliteType.Integer).Value = (object?)symbol.BodyStartLine ?? DBNull.Value;
-            cmd.Parameters.Add($"@bodyEndLine{suffix}", SqliteType.Integer).Value = (object?)symbol.BodyEndLine ?? DBNull.Value;
-            cmd.Parameters.Add($"@signature{suffix}", SqliteType.Text).Value = (object?)symbol.Signature ?? DBNull.Value;
-            cmd.Parameters.Add($"@containerKind{suffix}", SqliteType.Text).Value = (object?)symbol.ContainerKind ?? DBNull.Value;
-            cmd.Parameters.Add($"@containerName{suffix}", SqliteType.Text).Value = (object?)symbol.ContainerName ?? DBNull.Value;
-            cmd.Parameters.Add($"@containerQualifiedName{suffix}", SqliteType.Text).Value = (object?)symbol.ContainerQualifiedName ?? DBNull.Value;
-            cmd.Parameters.Add($"@familyKey{suffix}", SqliteType.Text).Value = (object?)symbol.FamilyKey ?? DBNull.Value;
-            cmd.Parameters.Add($"@visibility{suffix}", SqliteType.Text).Value = (object?)symbol.Visibility ?? DBNull.Value;
-            cmd.Parameters.Add($"@returnType{suffix}", SqliteType.Text).Value = (object?)symbol.ReturnType ?? DBNull.Value;
-            cmd.Parameters.Add($"@isMetadataTarget{suffix}", SqliteType.Integer).Value = symbol.IsMetadataTarget.HasValue
-                ? (symbol.IsMetadataTarget.Value ? 1 : 0)
-                : (object)DBNull.Value;
-            cmd.Parameters.Add($"@metadataTargetSource{suffix}", SqliteType.Text).Value = (object?)symbol.MetadataTargetSource ?? DBNull.Value;
-            cmd.Parameters.Add($"@nameFolded{suffix}", SqliteType.Text).Value = FoldedNameDbValue(symbol.Name, foldedNameCache);
         }
+        return sql.ToString();
+    }
 
-        cmd.CommandText = sql.ToString();
-        cmd.ExecuteNonQuery();
+    private static void AddSymbolInsertParameters(SqliteCommand cmd, int rowCount)
+    {
+        for (var row = 0; row < rowCount; row++)
+        {
+            cmd.Parameters.Add($"@fid{row}", SqliteType.Integer);
+            cmd.Parameters.Add($"@kind{row}", SqliteType.Text);
+            cmd.Parameters.Add($"@subKind{row}", SqliteType.Text);
+            cmd.Parameters.Add($"@name{row}", SqliteType.Text);
+            cmd.Parameters.Add($"@line{row}", SqliteType.Integer);
+            cmd.Parameters.Add($"@startLine{row}", SqliteType.Integer);
+            cmd.Parameters.Add($"@startColumn{row}", SqliteType.Integer);
+            cmd.Parameters.Add($"@endLine{row}", SqliteType.Integer);
+            cmd.Parameters.Add($"@bodyStartLine{row}", SqliteType.Integer);
+            cmd.Parameters.Add($"@bodyEndLine{row}", SqliteType.Integer);
+            cmd.Parameters.Add($"@signature{row}", SqliteType.Text);
+            cmd.Parameters.Add($"@containerKind{row}", SqliteType.Text);
+            cmd.Parameters.Add($"@containerName{row}", SqliteType.Text);
+            cmd.Parameters.Add($"@containerQualifiedName{row}", SqliteType.Text);
+            cmd.Parameters.Add($"@familyKey{row}", SqliteType.Text);
+            cmd.Parameters.Add($"@visibility{row}", SqliteType.Text);
+            cmd.Parameters.Add($"@returnType{row}", SqliteType.Text);
+            cmd.Parameters.Add($"@isMetadataTarget{row}", SqliteType.Integer);
+            cmd.Parameters.Add($"@metadataTargetSource{row}", SqliteType.Text);
+            cmd.Parameters.Add($"@nameFolded{row}", SqliteType.Text);
+        }
+    }
+
+    private static string BuildReferenceInsertSql(int rowCount)
+    {
+        var sql = CreateBatchSqlBuilder(rowCount, estimatedCharsPerRow: 256);
+        sql.Append(@"
+                INSERT INTO symbol_references (
+                    file_id, symbol_name, reference_kind, line, column_number,
+                    context, reference_line_id, container_kind, container_name,
+                    symbol_name_folded, container_name_folded, is_self_reference,
+                    is_mutual_recursion
+                )
+                VALUES ");
+        for (var row = 0; row < rowCount; row++)
+        {
+            if (row > 0)
+                sql.Append(", ");
+            sql.Append($@"(
+                    @fid{row}, @symbolName{row}, @referenceKind{row}, @line{row}, @columnNumber{row},
+                    @context{row}, @referenceLineId{row}, @containerKind{row}, @containerName{row},
+                    @symbolNameFolded{row}, @containerNameFolded{row}, @isSelfReference{row},
+                    @isMutualRecursion{row}
+                )");
+        }
+        return sql.ToString();
+    }
+
+    private static void AddReferenceInsertParameters(SqliteCommand cmd, int rowCount)
+    {
+        for (var row = 0; row < rowCount; row++)
+        {
+            cmd.Parameters.Add($"@fid{row}", SqliteType.Integer);
+            cmd.Parameters.Add($"@symbolName{row}", SqliteType.Text);
+            cmd.Parameters.Add($"@referenceKind{row}", SqliteType.Text);
+            cmd.Parameters.Add($"@line{row}", SqliteType.Integer);
+            cmd.Parameters.Add($"@columnNumber{row}", SqliteType.Integer);
+            cmd.Parameters.Add($"@context{row}", SqliteType.Text);
+            cmd.Parameters.Add($"@referenceLineId{row}", SqliteType.Integer);
+            cmd.Parameters.Add($"@containerKind{row}", SqliteType.Text);
+            cmd.Parameters.Add($"@containerName{row}", SqliteType.Text);
+            cmd.Parameters.Add($"@symbolNameFolded{row}", SqliteType.Text);
+            cmd.Parameters.Add($"@containerNameFolded{row}", SqliteType.Text);
+            cmd.Parameters.Add($"@isSelfReference{row}", SqliteType.Integer);
+            cmd.Parameters.Add($"@isMutualRecursion{row}", SqliteType.Integer);
+        }
+    }
+
+    private static string BuildReferenceLineUpsertSql(int rowCount)
+        => BuildReferenceLineWriteSql(rowCount, " ON CONFLICT(file_id, line, context) DO NOTHING");
+
+    private static string BuildReferenceLineInsertSql(int rowCount)
+        => BuildReferenceLineWriteSql(rowCount, " RETURNING id, file_id, line, context");
+
+    private static string BuildReferenceLineWriteSql(int rowCount, string suffix)
+    {
+        var sql = CreateBatchSqlBuilder(rowCount, estimatedCharsPerRow: 64);
+        sql.Append("INSERT INTO reference_lines (file_id, line, context) VALUES ");
+        for (var row = 0; row < rowCount; row++)
+        {
+            if (row > 0)
+                sql.Append(", ");
+            sql.Append($"(@fid{row}, @line{row}, @context{row})");
+        }
+        return sql.Append(suffix).ToString();
+    }
+
+    private static string BuildReferenceLineLookupSql(int rowCount)
+    {
+        var rows = CreateBatchSqlBuilder(rowCount, estimatedCharsPerRow: 48);
+        for (var row = 0; row < rowCount; row++)
+        {
+            if (row > 0)
+                rows.Append(", ");
+            rows.Append($"(@lookupFid{row}, @lookupLine{row}, @lookupContext{row})");
+        }
+        return $@"
+                WITH lookup(file_id, line, context) AS (
+                    VALUES {rows}
+                )
+                SELECT rl.id, rl.file_id, rl.line, rl.context
+                FROM reference_lines rl
+                JOIN lookup l
+                  ON l.file_id = rl.file_id
+                 AND l.line = rl.line
+                 AND l.context = rl.context";
+    }
+
+    private static void AddReferenceLineParameters(
+        SqliteCommand cmd,
+        int rowCount,
+        string fileIdPrefix,
+        string linePrefix,
+        string contextPrefix)
+    {
+        for (var row = 0; row < rowCount; row++)
+        {
+            cmd.Parameters.Add($"{fileIdPrefix}{row}", SqliteType.Integer);
+            cmd.Parameters.Add($"{linePrefix}{row}", SqliteType.Integer);
+            cmd.Parameters.Add($"{contextPrefix}{row}", SqliteType.Text);
+        }
+    }
+
+    private static void AssignReferenceLineParameterValues(
+        SqliteCommand cmd,
+        IReadOnlyList<(long FileId, int Line, string Context)> rows,
+        int start,
+        int end)
+    {
+        var parameterIndex = 0;
+        for (var row = start; row < end; row++)
+        {
+            var (fileId, line, context) = rows[row];
+            cmd.Parameters[parameterIndex++].Value = fileId;
+            cmd.Parameters[parameterIndex++].Value = line;
+            cmd.Parameters[parameterIndex++].Value = context;
+        }
     }
 
     public List<SymbolRecord> LoadCSharpStaticInterfaceContractSymbols(IReadOnlySet<string>? excludedPaths = null)
@@ -2064,49 +2257,38 @@ public class DbWriter
                 ? InsertNewReferenceLines(references, i, end, newReferenceLineIds!, cancellationToken)
                 : UpsertReferenceLines(references, i, end, cancellationToken);
 
-            using var cmd = _conn.CreateCommand();
-            var sql = CreateBatchSqlBuilder(end - i, estimatedCharsPerRow: 256);
-            sql.Append(@"
-                INSERT INTO symbol_references (
-                    file_id, symbol_name, reference_kind, line, column_number,
-                    context, reference_line_id, container_kind, container_name,
-                    symbol_name_folded, container_name_folded, is_self_reference,
-                    is_mutual_recursion
-                )
-                VALUES ");
-
-            for (int j = i; j < end; j++)
+            var batchCount = end - i;
+            var sql = ReferenceInsertSqlCache.GetOrAdd(batchCount, static count => BuildReferenceInsertSql(count));
+            var cmd = RentCommand(sql, c => AddReferenceInsertParameters(c, batchCount));
+            try
             {
-                var reference = references[j];
-                ValidateReferenceKinds(reference);
-                var referenceLineId = referenceLineIds[(reference.FileId, reference.Line, reference.Context)];
+                var parameterIndex = 0;
+                for (int j = i; j < end; j++)
+                {
+                    var reference = references[j];
+                    ValidateReferenceKinds(reference);
+                    var referenceLineId = referenceLineIds[(reference.FileId, reference.Line, reference.Context)];
+                    cmd.Parameters[parameterIndex++].Value = reference.FileId;
+                    cmd.Parameters[parameterIndex++].Value = reference.SymbolName;
+                    cmd.Parameters[parameterIndex++].Value = reference.ReferenceKind;
+                    cmd.Parameters[parameterIndex++].Value = reference.Line;
+                    cmd.Parameters[parameterIndex++].Value = reference.Column;
+                    cmd.Parameters[parameterIndex++].Value = DBNull.Value;
+                    cmd.Parameters[parameterIndex++].Value = referenceLineId;
+                    cmd.Parameters[parameterIndex++].Value = (object?)reference.ContainerKind ?? DBNull.Value;
+                    cmd.Parameters[parameterIndex++].Value = (object?)reference.ContainerName ?? DBNull.Value;
+                    cmd.Parameters[parameterIndex++].Value = FoldedNameDbValue(reference.SymbolName, foldedNameCache);
+                    cmd.Parameters[parameterIndex++].Value = FoldedNameDbValue(reference.ContainerName, foldedNameCache);
+                    cmd.Parameters[parameterIndex++].Value = reference.IsSelfReference ? 1 : 0;
+                    cmd.Parameters[parameterIndex++].Value = reference.IsMutualRecursion ? 1 : 0;
+                }
 
-                if (j > i)
-                    sql.Append(", ");
-                var suffix = j - i;
-                sql.Append($@"(
-                    @fid{suffix}, @symbolName{suffix}, @referenceKind{suffix}, @line{suffix}, @columnNumber{suffix},
-                    @context{suffix}, @referenceLineId{suffix}, @containerKind{suffix}, @containerName{suffix},
-                    @symbolNameFolded{suffix}, @containerNameFolded{suffix}, @isSelfReference{suffix},
-                    @isMutualRecursion{suffix}
-                )");
-                cmd.Parameters.Add($"@fid{suffix}", SqliteType.Integer).Value = reference.FileId;
-                cmd.Parameters.Add($"@symbolName{suffix}", SqliteType.Text).Value = reference.SymbolName;
-                cmd.Parameters.Add($"@referenceKind{suffix}", SqliteType.Text).Value = reference.ReferenceKind;
-                cmd.Parameters.Add($"@line{suffix}", SqliteType.Integer).Value = reference.Line;
-                cmd.Parameters.Add($"@columnNumber{suffix}", SqliteType.Integer).Value = reference.Column;
-                cmd.Parameters.Add($"@context{suffix}", SqliteType.Text).Value = DBNull.Value;
-                cmd.Parameters.Add($"@referenceLineId{suffix}", SqliteType.Integer).Value = referenceLineId;
-                cmd.Parameters.Add($"@containerKind{suffix}", SqliteType.Text).Value = (object?)reference.ContainerKind ?? DBNull.Value;
-                cmd.Parameters.Add($"@containerName{suffix}", SqliteType.Text).Value = (object?)reference.ContainerName ?? DBNull.Value;
-                cmd.Parameters.Add($"@symbolNameFolded{suffix}", SqliteType.Text).Value = FoldedNameDbValue(reference.SymbolName, foldedNameCache);
-                cmd.Parameters.Add($"@containerNameFolded{suffix}", SqliteType.Text).Value = FoldedNameDbValue(reference.ContainerName, foldedNameCache);
-                cmd.Parameters.Add($"@isSelfReference{suffix}", SqliteType.Integer).Value = reference.IsSelfReference ? 1 : 0;
-                cmd.Parameters.Add($"@isMutualRecursion{suffix}", SqliteType.Integer).Value = reference.IsMutualRecursion ? 1 : 0;
+                cmd.ExecuteNonQuery();
             }
-
-            cmd.CommandText = sql.ToString();
-            cmd.ExecuteNonQuery();
+            finally
+            {
+                ReleaseCommand(cmd);
+            }
             transaction.Commit();
         }
 
@@ -2153,24 +2335,18 @@ public class DbWriter
         {
             CheckBatchCancellationAndReportProgress("upsert_reference_lines", i, rows.Length, cancellationToken);
             int batchEnd = Math.Min(i + rowsPerStatement, rows.Length);
-            using var cmd = _conn.CreateCommand();
-            var sql = CreateBatchSqlBuilder(batchEnd - i, estimatedCharsPerRow: 64);
-            sql.Append("INSERT INTO reference_lines (file_id, line, context) VALUES ");
-            for (int j = i; j < batchEnd; j++)
+            var statementRowCount = batchEnd - i;
+            var sql = ReferenceLineUpsertSqlCache.GetOrAdd(statementRowCount, static count => BuildReferenceLineUpsertSql(count));
+            var cmd = RentCommand(sql, c => AddReferenceLineParameters(c, statementRowCount, "@fid", "@line", "@context"));
+            try
             {
-                if (j > i)
-                    sql.Append(", ");
-                var suffix = j - i;
-                var (fileId, line, context) = rows[j];
-                sql.Append($"(@fid{suffix}, @line{suffix}, @context{suffix})");
-                cmd.Parameters.Add($"@fid{suffix}", SqliteType.Integer).Value = fileId;
-                cmd.Parameters.Add($"@line{suffix}", SqliteType.Integer).Value = line;
-                cmd.Parameters.Add($"@context{suffix}", SqliteType.Text).Value = context;
+                AssignReferenceLineParameterValues(cmd, rows, i, batchEnd);
+                cmd.ExecuteNonQuery();
             }
-
-            sql.Append(" ON CONFLICT(file_id, line, context) DO NOTHING");
-            cmd.CommandText = sql.ToString();
-            cmd.ExecuteNonQuery();
+            finally
+            {
+                ReleaseCommand(cmd);
+            }
         }
 
         var lineIds = new Dictionary<(long FileId, int Line, string Context), long>(rows.Length);
@@ -2179,40 +2355,28 @@ public class DbWriter
         {
             CheckBatchCancellationAndReportProgress("lookup_reference_lines", i, rows.Length, cancellationToken);
             int keyEnd = Math.Min(i + keysPerStatement, rows.Length);
-            using var cmd = _conn.CreateCommand();
-            var lookupRows = CreateBatchSqlBuilder(keyEnd - i, estimatedCharsPerRow: 48);
-            for (int j = i; j < keyEnd; j++)
+            var statementRowCount = keyEnd - i;
+            var sql = ReferenceLineLookupSqlCache.GetOrAdd(statementRowCount, static count => BuildReferenceLineLookupSql(count));
+            var cmd = RentCommand(
+                sql,
+                c => AddReferenceLineParameters(c, statementRowCount, "@lookupFid", "@lookupLine", "@lookupContext"));
+            try
             {
-                if (j > i)
-                    lookupRows.Append(", ");
-
-                var suffix = j - i;
-                var (fileId, line, context) = rows[j];
-                lookupRows.Append($"(@lookupFid{suffix}, @lookupLine{suffix}, @lookupContext{suffix})");
-                cmd.Parameters.Add($"@lookupFid{suffix}", SqliteType.Integer).Value = fileId;
-                cmd.Parameters.Add($"@lookupLine{suffix}", SqliteType.Integer).Value = line;
-                cmd.Parameters.Add($"@lookupContext{suffix}", SqliteType.Text).Value = context;
+                AssignReferenceLineParameterValues(cmd, rows, i, keyEnd);
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    var id = reader.GetInt64(0);
+                    var fileId = reader.GetInt64(1);
+                    var line = reader.GetInt32(2);
+                    var context = reader.GetString(3);
+                    var key = (fileId, line, context);
+                    lineIds[key] = id;
+                }
             }
-
-            cmd.CommandText = $@"
-                WITH lookup(file_id, line, context) AS (
-                    VALUES {lookupRows}
-                )
-                SELECT rl.id, rl.file_id, rl.line, rl.context
-                FROM reference_lines rl
-                JOIN lookup l
-                  ON l.file_id = rl.file_id
-                 AND l.line = rl.line
-                 AND l.context = rl.context";
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
+            finally
             {
-                var id = reader.GetInt64(0);
-                var fileId = reader.GetInt64(1);
-                var line = reader.GetInt32(2);
-                var context = reader.GetString(3);
-                var key = (fileId, line, context);
-                lineIds[key] = id;
+                ReleaseCommand(cmd);
             }
         }
 
@@ -2250,34 +2414,27 @@ public class DbWriter
         {
             CheckBatchCancellationAndReportProgress("insert_reference_lines", i, rows.Count, cancellationToken);
             int batchEnd = Math.Min(i + rowsPerStatement, rows.Count);
-            using var cmd = _conn.CreateCommand();
-            var sql = CreateBatchSqlBuilder(batchEnd - i, estimatedCharsPerRow: 64);
-            sql.Append("INSERT INTO reference_lines (file_id, line, context) VALUES ");
-            for (int j = i; j < batchEnd; j++)
+            var statementRowCount = batchEnd - i;
+            var sql = ReferenceLineInsertSqlCache.GetOrAdd(statementRowCount, static count => BuildReferenceLineInsertSql(count));
+            var cmd = RentCommand(sql, c => AddReferenceLineParameters(c, statementRowCount, "@fid", "@line", "@context"));
+            try
             {
-                if (j > i)
-                    sql.Append(", ");
-
-                var suffix = j - i;
-                var (fileId, line, context) = rows[j];
-                sql.Append($"(@fid{suffix}, @line{suffix}, @context{suffix})");
-                cmd.Parameters.Add($"@fid{suffix}", SqliteType.Integer).Value = fileId;
-                cmd.Parameters.Add($"@line{suffix}", SqliteType.Integer).Value = line;
-                cmd.Parameters.Add($"@context{suffix}", SqliteType.Text).Value = context;
+                AssignReferenceLineParameterValues(cmd, rows, i, batchEnd);
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    var id = reader.GetInt64(0);
+                    var fileId = reader.GetInt64(1);
+                    var line = reader.GetInt32(2);
+                    var context = reader.GetString(3);
+                    var key = (fileId, line, context);
+                    lineIds[key] = id;
+                    knownLineIds[key] = id;
+                }
             }
-
-            sql.Append(" RETURNING id, file_id, line, context");
-            cmd.CommandText = sql.ToString();
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
+            finally
             {
-                var id = reader.GetInt64(0);
-                var fileId = reader.GetInt64(1);
-                var line = reader.GetInt32(2);
-                var context = reader.GetString(3);
-                var key = (fileId, line, context);
-                lineIds[key] = id;
-                knownLineIds[key] = id;
+                ReleaseCommand(cmd);
             }
         }
 
