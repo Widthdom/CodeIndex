@@ -3778,8 +3778,26 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "typed_value");
     }
 
+    [Fact]
+    public void FortranStringLiteralMasking_ReusesLinesWithoutStringQuotes()
+    {
+        const string line = "subroutine run(value)";
 
+        var masked = SymbolExtractor.MaskFortranStringLiterals(line);
 
+        Assert.Same(line, masked);
+    }
+
+    [Fact]
+    public void FortranStringLiteralMasking_BlanksQuotedLiteralContent()
+    {
+        const string line = "'can''t'";
+
+        var masked = SymbolExtractor.MaskFortranStringLiterals(line);
+
+        Assert.NotSame(line, masked);
+        Assert.Equal(new string(' ', line.Length), masked);
+    }
 
     [Fact]
     public void Extract_Shell_DetectsFunctionsAndAliases()
