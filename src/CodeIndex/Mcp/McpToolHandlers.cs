@@ -6024,7 +6024,8 @@ public partial class McpServer
 
                 try
                 {
-                    var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectPath, filePath));
+                    var relativePath = FileIndexer.NormalizePathSeparators(
+                        FileIndexer.GetRelativePathFromDirectory(projectPath, filePath));
                     if (writer.HasFileAtPath(relativePath))
                     {
                         using var txn = writer.BeginTransaction(requestToken, "mcp index delete missing file");

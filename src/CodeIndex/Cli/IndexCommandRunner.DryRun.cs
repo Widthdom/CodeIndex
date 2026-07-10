@@ -112,7 +112,8 @@ public static partial class IndexCommandRunner
             }
 
             candidatePathsProcessed++;
-            var displayRelativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectPath, f));
+            var displayRelativePath = FileIndexer.NormalizePathSeparators(
+                FileIndexer.GetRelativePathFromDirectory(projectPath, f));
             var dbRelativePath = FileIndexer.NormalizeIndexPath(displayRelativePath);
             var pathFilter = dryIndexer.EvaluatePathFilter(f);
             RecordDryRunScanErrors(pathFilter.Errors);

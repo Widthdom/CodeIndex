@@ -159,9 +159,8 @@ internal static class SolutionProjectResolver
             var projectExpandedFiles = 0;
             foreach (var file in EnumerateFilesUsingIndexerPolicy(root, match.DirectoryPath, indexer, limits, budget: null, traversalDiagnostics))
             {
-                var relative = Path.GetRelativePath(root, file)
-                    .Replace(Path.DirectorySeparatorChar, '/')
-                    .Replace(Path.AltDirectorySeparatorChar, '/');
+                var relative = FileIndexer.NormalizePathSeparators(
+                    FileIndexer.GetRelativePathFromDirectory(root, file));
                 projectExpandedFiles++;
                 if (projectExpandedFiles > limits.MaxProjectExpansionFilesPerProject)
                     ThrowProjectExpansionPerProjectLimitExceeded(limits, requested, match);
