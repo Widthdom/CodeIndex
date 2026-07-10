@@ -8056,16 +8056,16 @@ public static partial class SymbolExtractor
         {
             var sameLineEndColumn = FindJavaScriptTypeScriptSameLineBraceEndColumn(line, classTokenStartColumn, lang);
             if (sameLineEndColumn >= declarationStartColumn)
-                return line[declarationStartColumn..(sameLineEndColumn + 1)].Trim();
+                return line.AsSpan(declarationStartColumn, sameLineEndColumn + 1 - declarationStartColumn).Trim().ToString();
         }
 
         if (bodyStartLine == null)
-            return line[declarationStartColumn..].Trim();
+            return line.AsSpan(declarationStartColumn).Trim().ToString();
 
         var bodyStartIndex = bodyStartLine.Value - 1;
         var bodyOpenBraceColumn = FindJavaScriptBodyOpenBraceIndex(lines, classTokenLineIndex, bodyStartIndex, lang, classTokenStartColumn);
         if (bodyOpenBraceColumn < 0)
-            return line[declarationStartColumn..].Trim();
+            return line.AsSpan(declarationStartColumn).Trim().ToString();
 
         var signatureBuilder = new System.Text.StringBuilder();
         for (int lineIndex = declarationStartIndex; lineIndex <= bodyStartIndex; lineIndex++)
@@ -8080,8 +8080,8 @@ public static partial class SymbolExtractor
             if (startColumn >= endExclusive)
                 continue;
 
-            var segment = sourceLine[startColumn..endExclusive].Trim();
-            if (segment.Length == 0)
+            var segment = sourceLine.AsSpan(startColumn, endExclusive - startColumn).Trim();
+            if (segment.IsEmpty)
                 continue;
 
             if (signatureBuilder.Length > 0)
@@ -8092,7 +8092,7 @@ public static partial class SymbolExtractor
 
         return signatureBuilder.Length > 0
             ? signatureBuilder.ToString()
-            : line[declarationStartColumn..].Trim();
+            : line.AsSpan(declarationStartColumn).Trim().ToString();
     }
 
     private static JavaScriptClassScanTarget CreateJavaScriptClassScanTarget(string[] lines, string lang, int startIndex, int startColumn, int? bodyStartLine, int? bodyEndLine, string containerKind, string containerName, bool isExported = false)
