@@ -111,8 +111,7 @@ public sealed class DocumentationDriftTests
 
         foreach (var relativePath in EnumerateDocumentationCommandReferenceFiles())
         {
-            var content = RepositoryTestPaths.ReadText(relativePath.Split('/'));
-            var lines = content.ReplaceLineEndings("\n").Split('\n');
+            var lines = RepositoryTestPaths.ReadNormalizedLines(relativePath.Split('/'));
             var inFencedCodeBlock = false;
 
             for (var lineNumber = 0; lineNumber < lines.Length; lineNumber++)

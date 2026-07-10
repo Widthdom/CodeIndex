@@ -22,6 +22,9 @@ internal static class RepositoryTestPaths
     internal static string ReadNormalizedText(params string[] relativeParts)
         => ReadText(relativeParts).ReplaceLineEndings("\n");
 
+    internal static string[] ReadNormalizedLines(params string[] relativeParts)
+        => ReadNormalizedText(relativeParts).Split('\n');
+
     internal static IReadOnlyList<(string FileName, string Content)> ReadNormalizedWorkflows()
     {
         var workflowsDirectory = Combine(".github", "workflows");
