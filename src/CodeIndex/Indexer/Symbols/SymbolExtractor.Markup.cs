@@ -743,13 +743,13 @@ public static partial class SymbolExtractor
 
     private static string NormalizeMarkdownAnchorTarget(string target)
     {
-        var normalized = target.Trim();
+        var normalized = target.AsSpan().Trim();
         if (normalized.Length >= 2 && normalized[0] == '<' && normalized[^1] == '>')
             normalized = normalized[1..^1].Trim();
 
         return normalized.StartsWith("#", StringComparison.Ordinal)
-            ? normalized[1..]
-            : normalized;
+            ? normalized[1..].ToString()
+            : normalized.ToString();
     }
 
     private static List<SymbolRecord> ExtractXmlSymbols(long fileId, string rawText, string[] lines)
