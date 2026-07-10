@@ -50,12 +50,57 @@ public partial class ReferenceExtractorTests
         Assert.Same(lines, masked);
     }
 
+    [Theory]
+    [InlineData("csharp", "var value = total / count;")]
+    [InlineData("csharp", "char value = 'x';")]
+    [InlineData("python", "value = 'literal'")]
+    [InlineData("python", "value = \"literal\"")]
+    [InlineData("rust", "let value = \"literal\";")]
+    [InlineData("rust", "let value = &'a input;")]
+    [InlineData("kotlin", "val value = \"literal\"")]
+    [InlineData("swift", "let value = \"literal\"")]
+    [InlineData("scala", "val value = \"literal\"")]
+    public void StructuralLineMasker_MaskLines_ReturnsOriginalArrayForMaskedLanguageWithoutStructuralDelimiter(
+        string language,
+        string line)
+    {
+        var lines = new[] { line };
+
+        var masked = StructuralLineMasker.MaskLines(language, lines);
+
+        Assert.Same(lines, masked);
+    }
+
     [Fact]
     public void StructuralLineMasker_MaskLines_ClonesForMaskedLanguage()
     {
         var lines = new[] { "var value = \"literal\";" };
 
         var masked = StructuralLineMasker.MaskLines("csharp", lines);
+
+        Assert.NotSame(lines, masked);
+    }
+
+    [Theory]
+    [InlineData("csharp", "/* comment */")]
+    [InlineData("python", "value = \"\"\"literal\"\"\"")]
+    [InlineData("python", "value = '''literal'''")]
+    [InlineData("rust", "let value = r#\"literal\"#;")]
+    [InlineData("rust", "/* comment */")]
+    [InlineData("javascript", "const value = `literal`;")]
+    [InlineData("kotlin", "val value = \"\"\"literal\"\"\"")]
+    [InlineData("kotlin", "/* comment */")]
+    [InlineData("swift", "let value = #\"literal\"#")]
+    [InlineData("swift", "let value = \"\"\"literal\"\"\"")]
+    [InlineData("swift", "/* comment */")]
+    [InlineData("scala", "val value = \"\"\"literal\"\"\"")]
+    [InlineData("scala", "/* comment */")]
+    [InlineData("perl", "=pod")]
+    public void StructuralLineMasker_MaskLines_ClonesForStructuralDelimiter(string language, string line)
+    {
+        var lines = new[] { line };
+
+        var masked = StructuralLineMasker.MaskLines(language, lines);
 
         Assert.NotSame(lines, masked);
     }

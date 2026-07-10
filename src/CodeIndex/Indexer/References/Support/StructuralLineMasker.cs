@@ -138,25 +138,177 @@ internal static class StructuralLineMasker
 
     private static bool MayContainStructuralMaskingDelimiter(string? lang, string[] lines)
     {
-        var isPerl = lang == "perl";
-        var supportsBacktickTemplates = lang is "javascript" or "typescript";
+        return lang switch
+        {
+            "csharp" => MayContainCSharpStructuralDelimiter(lines),
+            "python" => MayContainPythonTripleQuoteDelimiter(lines),
+            "rust" => MayContainRustStructuralDelimiter(lines),
+            "javascript" or "typescript" => MayContainJsTsStructuralDelimiter(lines),
+            "kotlin" or "scala" => MayContainTripleDoubleQuoteOrBlockComment(lines),
+            "swift" => MayContainSwiftStructuralDelimiter(lines),
+            "perl" => MayContainPerlPodDelimiter(lines),
+            _ => false,
+        };
+    }
+
+    private static bool MayContainCSharpStructuralDelimiter(string[] lines)
+    {
         foreach (var line in lines)
         {
             if (line.Length == 0)
                 continue;
 
-            if (isPerl)
-            {
-                var trimmed = line.AsSpan().TrimStart();
-                if (!trimmed.IsEmpty && trimmed[0] == '=')
-                    return true;
+            var span = line.AsSpan();
+            if (span.IndexOf('"') >= 0 || ContainsBlockCommentStart(span))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool MayContainPythonTripleQuoteDelimiter(string[] lines)
+    {
+        foreach (var line in lines)
+        {
+            if (line.Length == 0)
                 continue;
-            }
 
             var span = line.AsSpan();
-            if (span.IndexOfAny('"', '\'', '/') >= 0)
+            if (ContainsQuoteRun(span, '\'', 3) || ContainsQuoteRun(span, '"', 3))
                 return true;
-            if (supportsBacktickTemplates && span.IndexOf('`') >= 0)
+        }
+
+        return false;
+    }
+
+    private static bool MayContainRustStructuralDelimiter(string[] lines)
+    {
+        foreach (var line in lines)
+        {
+            if (line.Length == 0)
+                continue;
+
+            for (var i = 0; i < line.Length; i++)
+            {
+                if (i + 1 < line.Length && line[i] == '/' && line[i + 1] == '*')
+                    return true;
+                if (line[i] is 'b' or 'c' or 'r' && TryOpenRustRawString(line, i, out _, out _))
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool MayContainJsTsStructuralDelimiter(string[] lines)
+    {
+        foreach (var line in lines)
+        {
+            if (line.Length == 0)
+                continue;
+
+            var span = line.AsSpan();
+            if (span.IndexOfAny('"', '\'', '/') >= 0 || span.IndexOf('`') >= 0)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool MayContainTripleDoubleQuoteOrBlockComment(string[] lines)
+    {
+        foreach (var line in lines)
+        {
+            if (line.Length == 0)
+                continue;
+
+            var span = line.AsSpan();
+            if (ContainsQuoteRun(span, '"', 3) || ContainsBlockCommentStart(span))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool MayContainSwiftStructuralDelimiter(string[] lines)
+    {
+        foreach (var line in lines)
+        {
+            if (line.Length == 0)
+                continue;
+
+            var span = line.AsSpan();
+            if (ContainsBlockCommentStart(span)
+                || ContainsQuoteRun(span, '"', 3)
+                || ContainsHashPrefixedQuote(span))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool MayContainPerlPodDelimiter(string[] lines)
+    {
+        foreach (var line in lines)
+        {
+            if (line.Length == 0)
+                continue;
+
+            var trimmed = line.AsSpan().TrimStart();
+            if (!trimmed.IsEmpty && trimmed[0] == '=')
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool ContainsQuoteRun(ReadOnlySpan<char> span, char quote, int runLength)
+    {
+        for (var i = 0; i <= span.Length - runLength; i++)
+        {
+            if (span[i] != quote)
+                continue;
+
+            var matched = true;
+            for (var j = 1; j < runLength; j++)
+            {
+                if (span[i + j] != quote)
+                {
+                    matched = false;
+                    break;
+                }
+            }
+
+            if (matched)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool ContainsBlockCommentStart(ReadOnlySpan<char> span)
+    {
+        for (var i = 0; i + 1 < span.Length; i++)
+        {
+            if (span[i] == '/' && span[i + 1] == '*')
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool ContainsHashPrefixedQuote(ReadOnlySpan<char> span)
+    {
+        for (var i = 0; i + 1 < span.Length; i++)
+        {
+            if (span[i] != '#')
+                continue;
+
+            var hashEnd = i + 1;
+            while (hashEnd < span.Length && span[hashEnd] == '#')
+                hashEnd++;
+
+            if (hashEnd < span.Length && span[hashEnd] == '"')
                 return true;
         }
 
