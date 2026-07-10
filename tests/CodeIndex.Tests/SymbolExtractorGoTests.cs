@@ -116,13 +116,16 @@ public partial class SymbolExtractorTests
                 // ignored comment
             )
 
+               import (
+                   "unicode/utf8" )
+
             func main() {}
             """;
 
         var symbols = SymbolExtractor.Extract(1, "go", content);
         var imports = symbols.Where(s => s.Kind == "import").ToList();
 
-        Assert.Equal(6, imports.Count);
+        Assert.Equal(7, imports.Count);
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "demo");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "main");
         Assert.Contains(imports, s => s.Name == "\"bytes\"");
@@ -131,6 +134,7 @@ public partial class SymbolExtractorTests
         Assert.Contains(imports, s => s.Name == ". \"strings\"");
         Assert.Contains(imports, s => s.Name == "_ \"net/http/pprof\"");
         Assert.Contains(imports, s => s.Name == "alias2 \"example.com/project\"");
+        Assert.Contains(imports, s => s.Name == "\"unicode/utf8\"");
         Assert.DoesNotContain(imports, s => s.Name == "(");
         Assert.DoesNotContain(imports, s => s.Name.Contains("ERROR", StringComparison.Ordinal));
     }

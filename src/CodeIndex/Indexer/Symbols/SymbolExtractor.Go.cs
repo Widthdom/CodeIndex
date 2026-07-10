@@ -23,7 +23,7 @@ public static partial class SymbolExtractor
             return false;
         }
 
-        var trimmed = line.TrimStart();
+        var trimmed = line.AsSpan().TrimStart();
 
         if (TryAddGoDirectiveSymbol(fileId, line, lineIndex, symbols, extractionState, trimmed))
             return true;
@@ -48,13 +48,13 @@ public static partial class SymbolExtractor
             {
                 var blockImportText = GetGoPrefixTrimmedEnd(trimmed, closingParenIndex);
                 if (blockImportText.Length > 0)
-                    TryAddGoImportSymbol(fileId, line, lineIndex, symbols, extractionState, blockImportText);
+                    TryAddGoImportSymbol(fileId, line, lineIndex, symbols, extractionState, blockImportText.ToString());
 
                 inImportBlock = false;
                 return true;
             }
 
-            return TryAddGoImportSymbol(fileId, line, lineIndex, symbols, extractionState, trimmed);
+            return TryAddGoImportSymbol(fileId, line, lineIndex, symbols, extractionState, trimmed.ToString());
         }
 
         if (trimmed.StartsWith("import", StringComparison.Ordinal))
@@ -70,20 +70,20 @@ public static partial class SymbolExtractor
                     {
                         var blockImportText = GetGoPrefixTrimmedEnd(blockRemainder, closingParenIndex);
                         if (blockImportText.Length > 0)
-                            TryAddGoImportSymbol(fileId, line, lineIndex, symbols, extractionState, blockImportText);
+                            TryAddGoImportSymbol(fileId, line, lineIndex, symbols, extractionState, blockImportText.ToString());
 
                         inImportBlock = false;
                         return true;
                     }
 
-                    TryAddGoImportSymbol(fileId, line, lineIndex, symbols, extractionState, blockRemainder);
+                    TryAddGoImportSymbol(fileId, line, lineIndex, symbols, extractionState, blockRemainder.ToString());
                 }
 
                 inImportBlock = true;
                 return true;
             }
 
-            return TryAddGoImportSymbol(fileId, line, lineIndex, symbols, extractionState, afterImport);
+            return TryAddGoImportSymbol(fileId, line, lineIndex, symbols, extractionState, afterImport.ToString());
         }
 
         return false;
@@ -422,7 +422,7 @@ public static partial class SymbolExtractor
         int lineIndex,
         List<SymbolRecord> symbols,
         SymbolExtractionState extractionState,
-        string trimmed)
+        ReadOnlySpan<char> trimmed)
     {
         if (!trimmed.StartsWith("//go:build", StringComparison.Ordinal)
             && !trimmed.StartsWith("//go:test", StringComparison.Ordinal))
@@ -430,7 +430,7 @@ public static partial class SymbolExtractor
             return false;
         }
 
-        var name = trimmed.AsSpan(2).Trim().ToString();
+        var name = trimmed[2..].Trim().ToString();
         if (HasGoSymbol(symbols, fileId, lineIndex + 1, "annotation", name))
             return true;
 
@@ -452,7 +452,7 @@ public static partial class SymbolExtractor
                 StartLine = lineIndex + 1,
                 StartColumn = startColumn,
                 EndLine = lineIndex + 1,
-                Signature = trimmed,
+                Signature = trimmed.ToString(),
             },
             rawLine);
         return true;
@@ -1230,7 +1230,7 @@ public static partial class SymbolExtractor
         return index < trimmed.Length && trimmed[index] == '(';
     }
 
-    private static string GetGoDeclarationRemainder(string trimmed, int prefixLength)
+    private static ReadOnlySpan<char> GetGoDeclarationRemainder(ReadOnlySpan<char> trimmed, int prefixLength)
     {
         var index = prefixLength;
         while (index < trimmed.Length && char.IsWhiteSpace(trimmed[index]))
@@ -1239,11 +1239,17 @@ public static partial class SymbolExtractor
         return trimmed[index..];
     }
 
-    private static string GetGoPrefixTrimmedEnd(string text, int endExclusive)
+    private static string GetGoDeclarationRemainder(string trimmed, int prefixLength)
+        => GetGoDeclarationRemainder(trimmed.AsSpan(), prefixLength).ToString();
+
+    private static ReadOnlySpan<char> GetGoPrefixTrimmedEnd(ReadOnlySpan<char> text, int endExclusive)
     {
         while (endExclusive > 0 && char.IsWhiteSpace(text[endExclusive - 1]))
             endExclusive--;
 
         return text[..endExclusive];
     }
+
+    private static string GetGoPrefixTrimmedEnd(string text, int endExclusive)
+        => GetGoPrefixTrimmedEnd(text.AsSpan(), endExclusive).ToString();
 }
