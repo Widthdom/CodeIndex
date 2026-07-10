@@ -2329,9 +2329,9 @@ public static partial class SymbolExtractor
             return false;
         }
 
-        var startLineSlice = startLine[startColumn..];
+        var startLineSlice = startLine.AsSpan(startColumn);
         var trimmedStartLine = startLineSlice.TrimStart();
-        if (trimmedStartLine.Length == 0
+        if (trimmedStartLine.IsEmpty
             || !trimmedStartLine.StartsWith("export", StringComparison.Ordinal))
         {
             startColumnText = -1;
@@ -2385,7 +2385,7 @@ public static partial class SymbolExtractor
             if (!clause.StartsWith("export", StringComparison.Ordinal))
                 break;
 
-            var clauseRemainder = SkipJavaScriptTypeScriptTypeOnlyExportModifier(clause["export".Length..].TrimStart());
+            var clauseRemainder = SkipJavaScriptTypeScriptTypeOnlyExportModifier(clause.AsSpan("export".Length).TrimStart());
             if (clauseRemainder.Length == 0 || clauseRemainder[0] != '*')
                 break;
 
@@ -2431,9 +2431,9 @@ public static partial class SymbolExtractor
             return false;
         }
 
-        var startLineSlice = startLine[startColumn..];
+        var startLineSlice = startLine.AsSpan(startColumn);
         var trimmedStartLine = startLineSlice.TrimStart();
-        if (trimmedStartLine.Length == 0
+        if (trimmedStartLine.IsEmpty
             || !trimmedStartLine.StartsWith("export", StringComparison.Ordinal))
         {
             startColumnText = -1;
@@ -2447,7 +2447,7 @@ public static partial class SymbolExtractor
             {
                 // Valid same-line named re-export.
             }
-            else if (exportRemainder.StartsWith("type", StringComparison.Ordinal))
+            else if (IsJavaScriptTypeScriptKeywordAt(exportRemainder, 0, "type"))
             {
                 var typeRemainder = exportRemainder["type".Length..].TrimStart();
                 if (typeRemainder.Length > 0 && typeRemainder[0] != '{')
@@ -2540,9 +2540,9 @@ public static partial class SymbolExtractor
             return false;
         }
 
-        var startLineSlice = startLine[startColumn..];
+        var startLineSlice = startLine.AsSpan(startColumn);
         var trimmedStartLine = startLineSlice.TrimStart();
-        if (trimmedStartLine.Length == 0
+        if (trimmedStartLine.IsEmpty
             || !trimmedStartLine.StartsWith("export", StringComparison.Ordinal))
         {
             startColumnText = -1;
@@ -6158,10 +6158,13 @@ public static partial class SymbolExtractor
     }
 
     private static bool IsJavaScriptTypeScriptKeywordAt(string text, int index, string keyword)
+        => IsJavaScriptTypeScriptKeywordAt(text.AsSpan(), index, keyword);
+
+    private static bool IsJavaScriptTypeScriptKeywordAt(ReadOnlySpan<char> text, int index, string keyword)
     {
         if (index < 0
             || index + keyword.Length > text.Length
-            || !text.AsSpan(index, keyword.Length).SequenceEqual(keyword.AsSpan()))
+            || !text[index..(index + keyword.Length)].SequenceEqual(keyword.AsSpan()))
         {
             return false;
         }
@@ -6178,7 +6181,7 @@ public static partial class SymbolExtractor
         return !(char.IsLetterOrDigit(after) || after is '_' or '$');
     }
 
-    private static string SkipJavaScriptTypeScriptTypeOnlyExportModifier(string exportRemainder)
+    private static ReadOnlySpan<char> SkipJavaScriptTypeScriptTypeOnlyExportModifier(ReadOnlySpan<char> exportRemainder)
     {
         if (IsJavaScriptTypeScriptKeywordAt(exportRemainder, 0, "type"))
             return exportRemainder["type".Length..].TrimStart();
