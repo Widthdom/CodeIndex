@@ -11,6 +11,190 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.37.0] - 2026-07-10
+
+#### Added
+
+- **Dogfood audits now cover process launch trust boundaries (#4305)** - `dogfood-risk-patterns` includes child queries for `ProcessStartInfo`, `Process.Start`, `ArgumentList`, shell execution, cwd selection, stdout/stderr redirection, process waits/termination, shared launch/environment policies, and broad plugin/hook trust-discovery terms.
+- **Bulk search triage now has smaller count summaries (#4308)** - `search --named-query ... --format count --summary-only --json` returns per-query counts, file counts, and freshness without result snippets, while recipe compact summary mode routes `--format compact --summary-only --json` to the existing count-summary shape.
+- **Local dogfood findings can now be recorded from the CLI (#4310)** - `cdidx suggestions add` stores draft suggestions locally with category, language, agent, context, title, and evidence paths before any GitHub issue is created, and JSON output reports whether the record was newly created or deduplicated.
+- **Audit recipe metadata now exposes context-aware classifiers (#4312)** — recipe list and recipe run JSON include `classifiers` for source origin, guard evidence, secret origin, parser guards, process launch boundaries, cancellation intent, Task `.Result` intent, and active test skip governance. `cdidx recipes --help` also documents the supported `list` alias.
+- **Filesystem boundary audits can now use a built-in mutation recipe (#4318)** — `search --recipe filesystem-mutation-boundaries` groups path normalization, long-path, temp-path, symlink/reparse, watcher, POSIX mode, and path-filter evidence for filesystem boundary reviews.
+- **Search now supports token-boundary exact code phrases (#4323)** — `cdidx search --token-boundary` and MCP `search` `tokenBoundary: true` match exact code phrases while rejecting matches inside longer identifiers, such as `new HttpClientHandler` for `new HttpClient`.
+- **Added a concurrency and shared-state audit recipe (#4348)** - `search --recipe concurrency-state-audit` now groups lock scopes, cancellation registration callbacks, shared caches, lazy initialization, ambient `AsyncLocal` state, background workers, completion signals, memory-order primitives, channels, blocking collections, and timer lifetimes into focused child queries.
+
+#### Changed
+
+- **Bulk indexing paths now use the prefix-based relative-path helper** - Dry-run scans, solution project expansion, and MCP missing-file cleanup avoid the heavier `Path.GetRelativePath` path when files are already under the indexed project root.
+- **Catch union type scans now split spans directly** — C-style catch clauses avoid copying the full type expression before top-level pipe splitting.
+- **CLI indexing diagnostics reuse the relative-path prefix fast path** - Watch batch samples, scan diagnostics, and git-exclude setup now avoid full relative-path computation when paths are already under the project root.
+- **C++ template specialization checks avoid trim allocations** — template-prefix checks now trim signatures and preceding lines as spans during symbol extraction.
+- **C# cross-line scanning avoids an extra string copy for delimiter-free lines** — the secondary delimiter blanking step now reuses sanitized lines that contain no string, char, or escape delimiters.
+- **C# doc cref normalization now trims with spans** — XML documentation reference parsing avoids intermediate strings while removing prefixes, parameter lists, and generic braces.
+- **C# field declarator expansion reduces segment overhead** — comma-split segment lists now pre-size from declaration length and trailing empty checks avoid trim allocation.
+- **C# field declarator initializer stripping uses spans** — multi-declarator field expansion now trims and strips initializer segments before creating final symbol strings.
+- **C# generic argument mapping now splits spans directly** — implemented interface generic arguments no longer allocate a temporary list substring before top-level comma splitting.
+- **C# generic invocation segment normalization skips duplicate escaped-name copies** — escaped type arguments are sliced directly to their normalized identifier text.
+- **C# callable parameter shape scans parameter lists with spans** — the shared comma splitter now accepts spans, and callable contract matching avoids copying the whole parameter list before normalizing each parameter.
+- **C# reference comma clauses scan with spans** — base lists, generic parameter clauses, where constraints, and callable parameter lists now avoid copying the whole comma-delimited clause before segment extraction.
+- **C# type-reference extraction now avoids more collection growth** — static-interface lookups, implemented-interface lists, and primary-constructor container ranges start with small capacities, and non-C# files skip the primary-constructor range list entirely.
+- **C# wrapped modifier signatures avoid name-line substring trims** — constructor signatures rebuilt from modifier-only lines now append the trimmed name line from a span.
+- **CSS at-rule prefix checks avoid trim allocations** — `@font-face` and `@media` symbol extraction now checks trimmed prefixes with spans.
+- **CSS nested selector checks avoid trim allocations** — nested qualified-rule filtering now tests the leading `@` prefix with spans.
+- **Fortran and Swift declarator expansion scans segments with spans** — comma-delimited declarator lists no longer allocate a full substring for each segment before extracting names and Swift enum raw values.
+- **Fortran string masking now reuses quote-free lines** — Fortran symbol range detection no longer copies every scanned line before checking whether it contains a string literal.
+- **F# union-case scanning avoids eager remainder trim allocations** — symbol extraction now inspects type-declaration remainders as spans before parsing inline union cases.
+- **Full-scan byte accounting** - Track already-read file sizes by scan index instead of by path string so large full scans avoid a per-file dictionary lookup while stamping read-byte metadata.
+- **Generic invocation argument extraction now reuses its slice** — C#, Java, and Kotlin generic invocation references avoid creating the same argument substring twice.
+- **Update indexing parses git name-status output without per-line split arrays** - `--commits` and ref-diff update paths now share a span-based parser for large changed-file lists.
+- **Go import scanning avoids eager trim allocations** — symbol extraction now keeps Go import/directive candidate lines as spans until an import symbol must be parsed.
+- **Go interface body scanning avoids per-line trim allocations** — symbol extraction now keeps interface header and body candidates as spans until a symbol needs the candidate text.
+- **Go reference comma lists scan with spans** — type switch cases, generic type argument lists, type parameter constraints, and function parameter lists avoid copying full comma-delimited lists before segment trimming.
+- **Go type kind detection avoids regex scans** — struct and interface type declarations now use a bounded keyword scanner instead of per-symbol regex checks.
+- **Hardlink duplicate tracking now skips files with a single link** - Full scans and update mode use the filesystem link count to avoid storing identities for files that cannot have hardlink duplicates, reducing hash-set overhead in large repositories while preserving duplicate detection.
+- **HTML raw-text masking skips plain markup copies** — markup symbol extraction now reuses source text when no comments, declarations, processing instructions, or raw-text/RCDATA elements need masking.
+- **Java generic bound extraction now scans headers with spans** — class/interface/record generic bounds avoid copying the header, parameter clause, and bound list before top-level keyword and `&` scans.
+- **Java reference comma lists scan with spans** — keyword type lists, `throws` clauses, module `provides` implementations, and generic parameter clauses avoid full-list copies before segment parsing.
+- **Java type-list terminator scans now accept spans** — keyword type lists avoid rescanning the full line with an absolute start offset before splitting references.
+- **JavaScript and TypeScript symbol extraction now reuses unmodified sanitized lines** — supplemental JS/TS scanners now avoid allocating a replacement line array when lexical sanitization leaves every line unchanged.
+- **JavaScript tagged-template filtering now reuses unchanged for-of scan lines** — the secondary scan buffer used to suppress `of` hits inside `for (... of ...)` headers now allocates replacement lines only where strings, regex literals, or line comments actually need masking.
+- **JavaScript/TypeScript assignment kind checks avoid trim helper allocations** — lambda, class, anonymous function, and generic-arrow probes now reuse whitespace indexes instead of rebuilding RHS slices.
+- **JavaScript/TypeScript CommonJS bracket export names avoid substring trims** — bracketed export names now trim the raw slice with spans before materializing the symbol name.
+- **JavaScript/TypeScript export clause builders avoid substring trims** — star, named re-export, and local named export scans now append trimmed line slices from spans.
+- **JavaScript/TypeScript export clause scanning avoids eager trim allocations** — symbol extraction now checks star and local named export prefixes with spans before building export clauses.
+- **JavaScript/TypeScript export specifier names avoid trim allocations** — quoted export specifier normalization now works over trimmed spans and only materializes when the symbol name changes.
+- **JavaScript/TypeScript function assignment detection avoids trim/substr loops** — symbol extraction now routes whole-RHS checks through the existing index-based scanner.
+- **JavaScript/TypeScript generic arrow detection avoids RHS substring allocation** — generic parameter and arrow checks now walk the original assignment text by index.
+- **JavaScript/TypeScript method signatures avoid substring trims** — bare method and class-field arrow signatures now trim source slices with spans before creating the final signature string.
+- **JavaScript/TypeScript object literal keys avoid substring trims** — quoted, numeric, and computed literal object keys now trim raw key slices with spans before materializing symbol names.
+- **JavaScript/TypeScript synthetic class signatures avoid substring trims** — class expression signatures now append trimmed source slices from spans while preserving the compact signature shape.
+- **JavaScript and TypeScript template masking avoids unchanged line copies** — reference extraction now reuses JavaScript and TypeScript source lines that do not need template literal, template-hole comment, or continued string masking after structural masking is triggered.
+- **JavaScript/TypeScript statement signatures avoid substring trims** — statement and dynamic import signatures now trim raw line slices with spans before materializing the signature.
+- **Kotlin and Scala structural masking avoids unchanged line copies** — reference extraction now reuses Kotlin and Scala source lines that do not need triple-string or block-comment masking after structural masking is triggered.
+- **Kotlin reference comma clauses scan with spans** — generic parameter clauses and base type lists avoid copying the full comma-delimited clause before segment parsing.
+- **Large LF-only source files with angle brackets now stay on the fast content-normalization path** - Indexing avoids a character-by-character normalization pass for ordinary source files that contain `<` or `>` while still detecting conflict markers.
+- **Single-line symbol and reference extraction inputs avoid the general line-splitting path** - Indexing now reuses a direct one-line array for files without line breaks across symbol and reference extraction.
+- **Lua long-bracket masking now reuses unchanged line arrays** — Lua reference extraction now allocates a replacement line array only when long comments or long strings actually mask content.
+- **Markdown anchor normalization avoids eager trim allocations** — symbol extraction now normalizes local link targets with spans before emitting reference symbols.
+- **Markdown heading parsing avoids eager trim allocations** — symbol extraction now trims ATX and Setext heading text with spans before storing the heading name.
+- **Markup symbol extraction reuses normalized content** - HTML and XAML symbol extraction now avoid rebuilding full-file text from line arrays during indexing.
+- **MCP index diagnostics** - Use the prefix-aware relative path helper for MCP indexing failures and byte-count diagnostics so large index runs avoid `Path.GetRelativePath` when paths are already under the project root.
+- **Perl POD masking avoids per-line trim allocations** — reference extraction now detects indented POD directives with span-based leading-whitespace scanning.
+- **Python decorator scanning avoids eager trim allocations** — symbol extraction now checks decorator lines as spans before normalizing property decorators.
+- **Python import spec parsing avoids eager trim allocations** — symbol extraction now keeps import-name lists as spans until individual import symbols are emitted.
+- **Python triple-string masking avoids unchanged line copies** — reference extraction now reuses Python source lines that do not need triple-string or f-string structural masking after structural masking is triggered.
+- **Razor reference masking skips plain markup copies** — Razor/Blazor reference extraction now bypasses per-line masking work when a file contains no Razor markers or HTML comments.
+- **Java and Razor reference helpers now pre-size lazy lists** — Java constructor candidate scans and Razor `@implements` collection avoid default list growth during large reference extraction runs.
+- **Large-file reference extraction seeds reference list capacity conservatively** - Reference extraction now avoids repeated list growth for long source files while keeping small files on the allocation-light path.
+- **Large-file reference extraction seeds duplicate tracking capacity** - Reference extraction now gives the per-file `seen` set a conservative initial capacity for long files to reduce rehashing.
+- **Reference splitter buffers now start with small capacities** — shared comma/pipe/ampersand and C/Go splitters reduce list growth while preserving the single-segment fast paths.
+- **Indexing reuses the already-normalized project root during symbol extraction** - Full scans and update mode avoid recomputing `Path.GetFullPath` for every indexed file before symbol extraction.
+- **Ruby range scanning avoids eager trim allocations** — symbol extraction now checks masked Ruby body lines as spans before running block-token regex matching.
+- **Ruby require symbol normalization avoids trim allocations** — require-line detection and require path cleanup now use spans before materializing the final symbol name.
+- **Rust reference comma lists scan with spans** — multiline derive attributes, grouped `use` bodies, tuple struct fields, and tuple enum variants avoid copying the full comma-delimited list before segment processing.
+- **Rust structural masking avoids unchanged line copies** — reference extraction now reuses Rust source lines that do not need raw string or block comment masking after structural masking is triggered.
+- **Full-scan collection growth now starts with conservative capacity hints** - File, language, and directory tracking collections avoid the earliest resize steps during repository scans while keeping small-project overhead bounded.
+- **Scan path comparison** - Derive root-relative path segments by slicing normalized full paths instead of calling `Path.GetRelativePath` during symlink-aware directory traversal.
+- **Successful full-scan file acceptance now avoids unnecessary relative-path work** - Indexing no longer computes a project-relative path on the common accepted-file path, reducing per-file overhead in large repositories without changing scan results.
+- **Solidity comment and string masking now reuses unmodified lines** — Solidity symbol and reference extraction no longer allocates a new line array or per-line builder when files do not contain comments or strings that need masking.
+- **Project resolver paths** - Reuse normalized workspace roots and the prefix-aware relative path helper when resolving project info, project globs, and traversal diagnostics.
+- **SQL definition leaf lookups now pre-size local caches** — SQL reference extraction gives definition leaf pattern and line-span buckets bounded initial capacities, reducing dictionary and list growth in large SQL indexes.
+- **SQL qualified-name parsing now pre-sizes segment buffers** — SQL reference resolution starts common segment lists with a small capacity to reduce list growth while indexing large SQL-heavy workspaces.
+- **SQL symbol extraction now avoids synthetic line-array copies when no masking is needed** — indexing large SQL files now reuses the original line array unless comments or string literals actually require masking for supplemental symbol extraction.
+- **Structural masking now skips more files that only contain ordinary literals** — symbol and reference extraction now use language-specific prechecks before cloning line arrays, avoiding unnecessary work for Python, Rust, Kotlin, Swift, Scala, and C# files that do not contain structural multiline string or block-comment delimiters.
+- **Supplemental symbol passes reuse source text** - GraphQL input-field extraction and SQL CTE extraction now avoid rebuilding full-file text from line arrays during indexing.
+- **Swift structural masking avoids unchanged line copies** — reference extraction now reuses Swift source lines that do not need multiline string, raw string, or block-comment masking after structural masking is triggered.
+- **Swift word probes now compare spans** — Swift reference extraction avoids allocating a substring when checking keyword-like word boundaries.
+- **Large-file symbol extraction seeds duplicate tracking state** - Generic symbol extraction and Rust, shell, JavaScript, and TypeScript supplemental passes now give duplicate-tracking collections conservative initial capacity for long files.
+- **Single-character symbol prechecks now use char scans** - HTML, GraphQL, C#, Dart, JavaScript, and TypeScript symbol extraction now check one-character markers without routing through string comparison scans.
+- **Large-file symbol extraction seeds symbol list capacity conservatively** - JSON, YAML, XAML, and Lisp symbol extraction now avoid repeated list growth for long files while preserving the allocation-light path for small or symbol-free files.
+- **Generic symbol extraction now reuses the pattern-cache lookup** - Pattern-based language extraction avoids a second dictionary lookup after deciding that the language has built-in symbol patterns.
+- **Symbol prechecks coalesce repeated line scans** - C# type-body detection and JavaScript/TypeScript private-scope detection now check their marker sets in one pass over large files.
+- **Type-list terminator scans now accept spans** — C# `where` clauses and Java `throws` clauses no longer need to copy the trailing line text before finding list terminators.
+- **TypeScript alias scans now pre-size hot collections** — namespace aliases, type aliases, local declaration maps, and parameter shadow ranges use small initial capacities to reduce growth work during large TypeScript/JavaScript indexing runs.
+- **TypeScript bare-method normalization skips no-op copies** — scanner normalization now reuses plain method-header text when there is no generic span or return-type brace rewrite to apply.
+- **TypeScript reference comma lists scan with spans** — generic constraints, type parameter defaults, function parameters, where clauses, and shared comma-separated type lists avoid copying the full list before segment processing.
+- **TypeScript template-hole matching avoids throwaway reference collections** - Nested template literals encountered while matching `${...}` braces now use a skip-only path during reference extraction.
+- **Update byte accounting** - Snapshot update targets and track already-read file sizes by target index instead of by path string, avoiding per-file dictionary lookups when stamping update read-byte metadata.
+- **Update target paths** - Materialize absolute, relative, display, and index paths for update targets once, then reuse them through C# prepass, indexing, and byte-accounting paths.
+- **XAML binding argument name checks avoid string allocations** — Path, Property, and ElementName comparisons now use trimmed spans during XML symbol extraction.
+- **XAML binding normalization trims entry values with spans** — binding kind, content, key, and path suffix normalization now avoid eager trimmed-string copies while indexing markup-heavy files.
+- **XAML markup argument splitting avoids substring trims** — top-level markup arguments now trim spans before materializing each argument string.
+- **XAML markup payload normalization avoids leading-trim slices** — binding and markup-extension payloads now skip leading whitespace by index before slicing arguments.
+- **XAML markup scanners now accept spans** — binding and markup extension normalization can scan top-level payloads, equals signs, and matching braces without first creating trimmed whole-string copies.
+- **XAML markup value normalization trims brace slices with spans** — markup-extension content and suffix slices now trim before materializing strings.
+- **XAML type argument expansion trims constructor slices with spans** — nested type constructor prefix, payload, and suffix slices now trim before materializing strings.
+- **XAML type argument splitting avoids substring trims** — top-level type arguments now trim spans before creating each argument string.
+- **.NET async and cancellation audits now classify more liveness boundaries (#4298)** - `dotnet-risk-patterns` adds focused child queries for cancellation source ownership, registration callbacks, `Task.Run`, `Task.Delay`, `WaitForExit`, `SemaphoreSlim`, `TaskCompletionSource`, and `HttpListener` so cancellation and sync-over-async triage can keep raw concurrency searches tied to recipe evidence.
+- **Audit recipes now expose parser and materialization guard evidence (#4300)** — JSON, XML, stream, and eager materialization audit queries now include additional guard-evidence metadata and broader JSON serialization/option and stream ownership coverage.
+- **`map` and `hotspots` now point to the large-file decomposition plan when it is available (#4306)** — compact/JSON output includes a `decomposition_plan` object and human hotspot output emits a short hint when `docs/large-file-decomposition-plan.md` exists, while the plan now records the current oversized production and partial-class family baseline.
+- **Language capability summaries are more automation-friendly (#4316)** — `cdidx languages` now accepts `--format count`, `--summary-only`, and `--capability all|none|missing-any`, and `.cdidxignore` / `.gitignore` unknown-extension groups are classified as repository metadata with ignore-configuration guidance.
+
+#### Fixed
+
+- **Broad-catch and raw diagnostic recipes now expose #4297 triage classifiers** — `raw-diagnostic-echo`, `exception-message-classifier`, `empty-catch-review`, `broad-exception-catch`, and `suppressed-cleanup-diagnostics` now include classifier metadata for broad catch boundaries and diagnostic redaction so user-visible raw exception paths can be separated from documented cleanup, probe, worker, and sanitizer boundaries.
+- **Credential redaction now covers bearer, GitHub token, API token, access token, and Authorization-name variants (#4299)** — GitHub API error diagnostics and shared diagnostic redaction now use the same sensitive-name classifier, and HTTP MCP bearer authentication rejects malformed, duplicated, comma-separated, or oversized authorization headers without echoing supplied token values.
+- **Nullable contract audits can group `return null` hits by enclosing return type (#4301)** - `search` and `audit` grouped counts now accept `return-type` and `nullable-return-type`, and JSON output exposes the enclosing symbol `return_type`.
+- **SQLite query-policy audits now expose safe policy evidence (#4302)** - `sqlite-query-policy-surfaces` now includes info-level queries for shared command creation, typed parameter helpers, identifier quoting, and PRAGMA helper usage so audits can separate policy-compliant command construction from raw risky SQL surfaces.
+- **String-comparison audit recipes now classify comparison domains (#4303)** — the built-in recipe now separates path case-sensitivity signals, protocol tokens, CLI options, symbol names, environment names, persisted DB keys, human text, and docs/help text so review results can apply the right comparison rules.
+- **MCP tools/list now advertises bounded discovery controls (#4304)** — `tools/list` accepts `limit` and `cursor`, reports pagination and response-control metadata, and the materialization audit recipe now covers `StringBuilder` and Query/MCP `ToList()` accumulation paths.
+- **Impact JSON now collapses partial definition families (#4309)** — `impact` keeps the full definition counts but emits one representative row per logical partial type, with explicit `definition_output_count` and `definition_result_scope` metadata.
+- **Lightweight JSON discovery is clearer (#4311)** - `definition --json` now omits source `content` by default with explicit omission metadata, `definition` / `excerpt` / `inspect` / `impact` accept `--max-json-bytes`, excerpt JSON points to `--no-semantic-tokens` when semantic tokens are present, and impact JSON caps emitted definition rows by `--limit` while preserving definition counts.
+- `status --explain` now covers the emitted `data_dir_mode` and `unknown_extension_file_count` fields, and `report --redact-paths --json` is accepted while preserving report JSON path redaction.
+- **Audit recipe output now classifies Task `.Result` intent (#4314)** — recipe JSON rows can include `audit_classifications`, count/query payloads can include `classifier_counts`, and unsupported-option errors now carry stable `E010_USAGE_ERROR` codes while keeping remediation hints.
+- **Name-based navigation now handles exact `--name` lookups and partial types more predictably (#4315)** — `symbols --name` defaults to exact-name matching, `goto` returns a representative location for one logical partial type, and `impact --exact-name` is accepted.
+- **Discovery summary-only JSON now separates intentional omission from truncation (#4317)** — `files`, `symbols`, `db schema`, and related bounded discovery payloads no longer mark summary-only output as row-limit truncation; map issue-draft summaries, map section aliases/listing, `symbols --compact`, `hotspots --rank-by` guidance, completion aliases, batch `languages`/`recipes`, `help-all`, and `status --explain index_matches_workspace --json` now have clearer discovery ergonomics.
+- `suggestions export --format markdown --json` now returns a structured JSON usage error instead of writing Markdown to stdout, and callers/callees help now documents the JSON Lines output contract alongside references.
+- `validate-config --json` now distinguishes a missing config file from a validated config with explicit `status`, `reason`, `config_file_found`, and `validated` fields, and `status --explain index_matches_workspace --json` now explains the emitted freshness field.
+- **Timestamp and timezone boundaries now use explicit UTC/offset contracts (#4321)** - database timestamp readers, indexed-head status JSON, GitHub rate-limit retry details, and suggestion-store freshness filtering now normalize local, UTC, and offsetless inputs consistently; `search --recipe timestamp-timezone-boundaries` was added to audit wall-clock, cache-expiry, support JSON, API timestamp, and monotonic elapsed-time surfaces separately.
+- **Dependency summaries now fail fast for overly broad workspace scans and suppress more generic symbols (#4322)** — broad `deps --json --summary-only` requests on large indexes now ask for narrowing filters before materializing the graph, and common names such as `Error`, `Language`, `Version`, `Dispose`, and `Flush` are treated as dependency noise.
+- **DbDebug unsafe diagnostics now document and test bounded raw previews (#4324)** — `CDIDX_DEBUG=unsafe` with `--debug-unsafe` remains explicitly opt-in, and raw string previews are capped by a tested diagnostic contract instead of allowing unbounded text output.
+- **Regex audit recipes now separate timeout and generated-pattern evidence (#4326)** — `risky-code` and `dotnet-risk-patterns` now classify timeout policy references, `TimeSpan` timeout evidence, registry-backed factories, `GeneratedRegex`, culture options, non-backtracking options, and explicit no-timeout cases apart from raw unbounded regex calls.
+- **Text encoding boundaries are now covered by a built-in audit recipe (#4327)** — `text-encoding-boundaries` finds UTF-8 policy, BOM detection, StreamReader/StreamWriter ownership, default/code-page encodings, and Unicode normalization decisions in production source scope.
+- `import --json` now reports consistent `status`, `archive_path`, `mode`, `dry_run`, and `validation_phases` fields for check, dry-run, and write modes, and invalid archives include a stable `root_cause`.
+- **GitHub rate-limit retry windows are now bounded (#4329)** — `Retry-After` and `x-ratelimit-reset` values for suggestion submission are normalized to UTC, clamped to the current time through one hour in the future, and invalid reset timestamps fall back to the one-minute retry window instead of throwing or persisting an excessive pause.
+- **Memory allocation boundaries are now covered by a built-in audit recipe (#4330)** — `memory-allocation-boundaries` finds ArrayPool ownership, return/clearing policy, SensitiveBufferPolicy usage, stackalloc buffers, and MemoryMarshal boundaries in production source scope.
+- `--profile --slow-query-ms 0` now emits redacted, bounded SQL text in profile JSON with truncation metadata instead of full raw SQL strings.
+- **Generated-code boundaries now include `.Generated.cs` files (#4334)** — `.Generated.cs` files are treated as generated code, generated-code visibility is documented as the existing `--include-generated` boundary, and dependency metadata guidance points audits toward structured package symbols and dependency references.
+- **Git-range partial updates preserve sparse skip-worktree rows (#4335)** — `--changed-between` / `--commits` no longer treat missing skip-worktree paths from sparse checkouts, partial clones, or manual `git update-index --skip-worktree` as real deletes during dry-run or partial update, while rename/delete paths still project and purge normally.
+- **Missing checkpoint restores now use a checkpoint-specific error code (#4337)** - `cdidx db restore <name> --json` returns `E016_CHECKPOINT_NOT_FOUND` when the named checkpoint is absent, while hyphenated checkpoint names remain accepted for dry-run and write paths.
+- **SQLite maintenance JSON diagnostics are more consistent (#4338)** - `status --db <corrupt.db> --json` now returns the structured `E008_DB_ERROR` JSON envelope, and real `vacuum --json` output includes `wal_checkpoint_timing_note` to explain WAL size measurements before connection cleanup.
+- **Nullable contract audits can be triaged by subsystem (#4339)** - `search` and `audit` grouped counts now accept `subsystem`, with JSON `subsystem` values for CLI, MCP, LSP, database, and extractor paths.
+- **Hook status JSON now includes sanitized diagnostic paths (#4340)** - `cdidx hooks status --json` keeps the existing path fields for compatibility while adding `diagnostic_*` path fields for log-safe hook state reporting, and quiet indexing failures stay terse for hook execution.
+- Fixed CLI argument footguns where `search --query "--trace"` could be consumed as a trace flag, `files --generated` was rejected instead of acting as a generated-file alias, and `inspect --fields outline` did not expand to the outline field set.
+- **GitHub issue reporting now uses one request-header path (#4343)** — issue creation and duplicate preflight both apply the shared GitHub API headers, add bearer authentication only when a token is present, and leave public duplicate preflight requests unauthenticated when no token is configured.
+- **Unused summary output now has a compact JSON mode (#4344)** — `unused --json --summary-only` returns count and summary metadata without row payloads or bucket taxonomy details, and compact count JSON now reports omitted sections.
+- `upgrade --check-only --json --channel latest` now reports `selected_channel: "latest"`, invalid channel usage lists the same `stable|latest|prerelease` values advertised by help, and prerelease metadata failures no longer exit successfully.
+- **Shell completions now include the current command surface (#4347)** — generated bash, zsh, fish, and PowerShell completions list newer top-level commands such as `hooks`, `workspace`, `config`, `export`, `import`, and `lsp`, and expose bounded subcommand candidates for `hooks`, `workspace`, `config`, and `db`.
+- **Search guard count JSON now uses the same result unit as base counts (#4349)** - `search --format count --json` with `--require-before`, `--require-after`, `--reject-before`, or `--reject-after` collapses guarded line matches back to search result chunks before counting, and `query_context` now reports active guard filters with `guard_window` and `guard_scope`.
+- **`find --all` scan caps are now controllable and compact context is explicit (#4350)** — `find --all` accepts `--line-scan-limit <n>` to raise or lower the bounded indexed-line scan cap, reports the effective value in count JSON, and rejects compact output combined with context flags instead of silently dropping context.
+- **`index --watch` no longer self-triggers on CodeIndex data files (#4351)** - Watch mode now ignores the workspace `.cdidx` data directory, resolved CodeIndex data directories, and explicit database SQLite/lock sidecars before queuing change batches.
+- **`status --check` now honors indexed symlink policy (#4352)** — indexes built with `--follow-symlinks all` persist that policy so workspace freshness checks and generated repair commands preserve the same symlink-visible file set instead of reporting false missing files.
+- **`deps --summary-only --format json-graph` now fails before graph materialization (#4353)** — the CLI rejects the ambiguous graph-summary combination up front and points callers to `deps --json --summary-only` or full `json-graph` output.
+- **`batch` child commands now honor explicit `--db` values (#4354)** - Query commands run through `cdidx batch --json-summary` use a child command's explicit database for both query data and project-root metadata instead of mixing it with the parent batch database.
+- **MCP stdio framing is now explicit and regression-tested (#4355)** - `cdidx mcp` documents that stdio uses one UTF-8 JSON-RPC object per LF-delimited line rather than LSP `Content-Length` framing, and tests keep lifecycle diagnostics on stderr so stdout stays protocol-only.
+- **`index --watch` overflow rescans now report full-rescan counters (#4356)** - Rescan watch events now include `rescan_scope`, `rescan_completed`, and scan/skip/purge counters so `updated: 0` no longer hides that a full workspace rescan completed.
+- **`diff --json --detailed` now reports operational metadata drift (#4357)** — detailed database diffs include `metadata_drift` rows for project root, symlink policy, freshness HEAD stamps, path case-sensitivity, last-index-run diagnostics, and writer-version metadata.
+- **`workspace status --json` now reports active workspace state (#4358)** — workspace status JSON includes `active_workspace_status`, matching `workspace current --json` and marking active manifest members as `missing` or `stale` when the manifest no longer matches the saved active state.
+- **Workspace JSON commands now report invalid manifests as structured errors (#4359)** — `workspace list --json` and `workspace status --json` now return a parseable `workspace_manifest_invalid` error when `members` has an invalid shape instead of falling through to the generic crash message.
+
+#### Security
+
+- **XML parser security boundaries now have explicit regression coverage (#4345)** — tests now pin DTD parse rejection, external entity handling, malformed MSBuild XML, and dependency-manifest entity rejection.
+
+#### Documentation
+
+- **Documented the oversized test/docs split plan and active skip classifications (#4307)** — Added a bilingual maintenance plan covering large test-file split boundaries, large-document split rules, active `Skip =` categories, and the current dogfood baseline, with `TESTING_GUIDE.md` pointing contributors to it.
+- **Documented platform, terminal color, and completion notification boundaries (#4333)** — added an audit note for CI/headless/MCP terminal behavior and representative notification tests covering auto suppression, disabled notifications, bounded BEL output, and OSC 9 message sanitization.
+- **AI protocol boundary guidance now summarizes MCP, HTTP MCP, LSP, and limit behavior (#4336)** - The user guide now calls out framing differences, stderr/stdout ownership, HTTP auth and body limits, MCP pagination, graph offset clamps, and rate-limit/status observability in one place.
+- **Destructive filesystem operation audits document the recipe runner (#4341)** — the developer guide now includes the built-in filesystem mutation recipe alongside the direct `File.Delete`, `Directory.Delete`, and `File.Move` count checks.
+- **LSP optional-method and completion contracts are now documented and tested (#4360)** - `cdidx lsp` help and tests now make clear that unsupported optional methods are not advertised and return `-32601`, while completion is symbol-index-backed and returns an empty list for unmatched positions.
+
+#### Internal
+
+- **Centralized timing-sensitive test polling (#4325)** — shared test helpers now cover synchronous bounded polling, short stability observations, and filesystem cleanup retry waits so timing-sensitive tests avoid scattered fixed sleeps.
+- Release workflow contract tests now pin the audited token, secret, trusted publishing, attestation, and container publishing boundaries.
+
 ### [1.36.3] - 2026-07-06
 
 #### Changed
@@ -5563,6 +5747,190 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.37.0] - 2026-07-10
+
+#### 追加
+
+- **dogfood audit が process launch の trust boundary を扱うようになりました (#4305)** - `dogfood-risk-patterns` は `ProcessStartInfo`、`Process.Start`、`ArgumentList`、shell execution、cwd 選択、stdout/stderr redirection、process wait/termination、共有 launch/environment policy、広めの plugin/hook trust-discovery 用語の child query を含むようになりました。
+- **bulk search triage の count summary を小さく取得できるようになりました (#4308)** - `search --named-query ... --format count --summary-only --json` は result snippet なしで query ごとの count、file count、freshness を返します。recipe の compact summary mode では `--format compact --summary-only --json` が既存の count-summary 形式に流れるようになりました。
+- **local dogfood finding を CLI から記録できるようになりました (#4310)** - `cdidx suggestions add` は GitHub Issue を作る前に、category、language、agent、context、title、evidence path 付きの draft suggestion をローカル保存します。JSON 出力は新規作成か重複排除かを返します。
+- **audit recipe metadata が context-aware classifier を公開するようになりました (#4312)** — recipe list と recipe run の JSON は source origin、guard evidence、secret origin、parser guard、process launch boundary、cancellation intent、Task `.Result` intent、active test skip governance の `classifiers` を含みます。`cdidx recipes --help` も対応済みの `list` alias を記載するようになりました。
+- **filesystem 境界監査で組み込み mutation recipe を使えるようになりました (#4318)** — `search --recipe filesystem-mutation-boundaries` が path normalization、long-path、temp-path、symlink/reparse、watcher、POSIX mode、path-filter の証跡を filesystem boundary review 向けにまとめます。
+- **検索で token-boundary 付きの exact code phrase を扱えるようになりました (#4323)** — `cdidx search --token-boundary` と MCP `search` の `tokenBoundary: true` は exact な code phrase を検索しつつ、`new HttpClient` に対する `new HttpClientHandler` のような長い identifier 内の一致を除外します。
+- **concurrency と shared-state の audit recipe を追加しました (#4348)** - `search --recipe concurrency-state-audit` は lock scope、cancellation registration callback、shared cache、lazy initialization、ambient `AsyncLocal` state、background worker、completion signal、memory-order primitive、channel、blocking collection、timer lifetime を focused child query として分類します。
+
+#### 変更
+
+- **bulk indexing 経路で prefix ベースの relative-path helper を使うようになりました** - dry-run scan、solution project expansion、MCP の missing-file cleanup で、対象ファイルが project root 配下にある通常ケースでは重い `Path.GetRelativePath` 経路を避けます。
+- **catch union type scan が span を直接分割するようになりました** — C-style catch clause で、top-level pipe 分割前に型式全体をコピーしないようにしました。
+- **CLI indexing diagnostics が relative path prefix fast path を再利用するようになりました** - watch batch sample、scan diagnostic、git-exclude setup は project root 配下の path で full relative-path 計算を避けます。
+- **C++ template specialization 判定で trim allocation を避けるようになりました** — symbol 抽出時の template prefix 判定は、signature と直前行を span として trim します。
+- **C# の cross-line scan で delimiter のない行の追加コピーを避けるようになりました** — 二段目の delimiter 空白化は、文字列・char・escape delimiter を含まないサニタイズ済み行を再利用します。
+- **C# doc cref 正規化が span で trim するようになりました** — XML documentation reference 解析で、prefix、parameter list、generic brace を除去する途中の一時文字列を作らないようにしました。
+- **C# field declarator 展開の segment overhead を削減しました** — comma split の segment list は宣言長から初期容量を決め、trailing empty 判定では trim allocation を避けます。
+- **C# field declarator initializer stripping を span 化しました** — multi-declarator field 展開は、最終 symbol 文字列を作る前に segment の trim と initializer 除去を span 上で行います。
+- **C# generic argument mapping が span を直接分割するようになりました** — implemented interface の generic argument 解析で、top-level comma 分割前の一時的な list 文字列コピーを行わないようにしました。
+- **C# generic invocation segment 正規化で escaped name の重複コピーを避けるようになりました** — escaped type argument は正規化済み identifier 範囲を直接切り出します。
+- **C# callable parameter shape が parameter list を span 走査するようになりました** — 共有 comma splitter が span を受け取り、callable contract 照合で各 parameter 正規化前の list 全体コピーを避けます。
+- **C# reference の comma clause を span 走査するようになりました** — base list、generic parameter clause、where constraint、callable parameter list で segment 抽出前の clause 全体コピーを避けます。
+- **C# type-reference extraction が collection 拡張をさらに避けるようになりました** — static-interface lookup、implemented-interface list、primary-constructor container range に小さな初期容量を持たせ、非 C# file では primary-constructor range list 自体を作らないようにしました。
+- **C# wrapped modifier signature で name line の substring trim を避けるようになりました** — modifier-only 行から復元する constructor signature は、trim 済み name line を span から append します。
+- **CSS at-rule 接頭辞判定で trim 割り当てを避けるようになりました** — `@font-face` と `@media` のシンボル抽出は、trim 済み接頭辞を span で確認します。
+- **CSS nested selector 判定で trim 割り当てを避けるようになりました** — nested qualified-rule のフィルタは、先頭の `@` 接頭辞を span で確認します。
+- **Fortran と Swift の declarator 展開で segment を span 走査するようになりました** — comma 区切りの declarator list から名前や Swift enum raw value を取り出す前に、segment 全体の substring を作らないようにしました。
+- **Fortran の文字列マスキングで quote のない行を再利用するようになりました** — Fortran のシンボル範囲判定は、文字列リテラルがあるか確認する前に全 scan 行をコピーしなくなりました。
+- **F# union case 走査でremainderの早期trim割り当てを避けるようになりました** — シンボル抽出は、inline union case を解析する前に type declaration remainder を span として確認します。
+- **フルスキャンのバイト集計** - 読み取り済みファイルサイズをパス文字列ではなくスキャン順インデックスで記録し、大規模フルスキャンの read-byte metadata 書き込みでファイルごとの辞書 lookup を避けるようにしました。
+- **generic invocation argument 抽出で slice を再利用するようになりました** — C#、Java、Kotlin の generic invocation 参照抽出で、同じ argument 部分文字列を2回作らないようにしました。
+- **update indexing が git name-status 出力を行ごとの split 配列なしで解析するようになりました** - `--commits` と ref-diff update path は、大きな changed-file list 向けの span-based parser を共有します。
+- **Go import 走査で早期 trim 割り当てを避けるようになりました** — シンボル抽出は、Go の import/directive 候補行を import symbol の解析が必要になるまで span のまま扱います。
+- **Go interface body 走査で行ごとの trim 割り当てを避けるようになりました** — シンボル抽出は、symbol 追加に候補文字列が必要になるまで interface header と body 候補を span のまま扱います。
+- **Go reference の comma list を span 走査するようになりました** — type switch case、generic type argument list、type parameter constraint、function parameter list で segment trim 前の list 全体コピーを避けます。
+- **Go type kind 判定で regex scan を避けるようになりました** — struct と interface の type declaration は、symbol ごとの regex 判定ではなく境界付き keyword scanner で分類します。
+- **hardlink 重複 tracking が link count 1 のファイルを記録しないようになりました** - full scan と update mode で filesystem の link count を使い、hardlink 重複が起こり得ないファイルの identity 登録を避けて、巨大リポジトリでの HashSet overhead を減らします。
+- **HTML raw-text マスキングで plain markup のコピーを避けるようになりました** — markup シンボル抽出は、comment、declaration、processing instruction、raw-text/RCDATA 要素のマスクが不要な場合に元テキストを再利用します。
+- **Java generic bound 抽出が header を span で走査するようになりました** — class/interface/record の generic bound 解析で、top-level keyword と `&` の走査前に header、parameter clause、bound list をコピーしないようにしました。
+- **Java reference の comma list を span 走査するようになりました** — keyword type list、`throws` clause、module `provides` implementation、generic parameter clause で segment 解析前の list 全体コピーを避けます。
+- **Java type-list terminator scan が span 入力を扱うようになりました** — keyword type list の参照分割前に、絶対 offset 付きで行全体を再走査しないようにしました。
+- **JavaScript / TypeScript シンボル抽出で未変更の sanitized 行を再利用するようになりました** — JS/TS の補助 scanner は、字句 sanitization 後に全行が変わらない場合、新しい行配列を割り当てなくなりました。
+- **JavaScript のタグ付き template フィルタで未変更の for-of scan 行を再利用するようになりました** — `for (... of ...)` ヘッダ内の `of` ヒットを抑制する二次 scan buffer は、文字列・regex リテラル・行コメントのマスクが実際に必要な行だけを置換します。
+- **JavaScript/TypeScript assignment kind 判定で trim helper の割り当てを避けるようになりました** — lambda、class、anonymous function、generic-arrow の検査は、右辺 slice を作り直さず whitespace index を再利用します。
+- **JavaScript/TypeScript CommonJS bracket export 名で substring trim を避けるようになりました** — bracket export 名は、symbol name を作る前に raw slice を span で trim します。
+- **JavaScript/TypeScript export clause builder で substring trim を避けるようになりました** — star export、named re-export、local named export の走査は、trim 済み line slice を span から append します。
+- **JavaScript/TypeScript export clause 走査で早期trim割り当てを避けるようになりました** — シンボル抽出は、export clause を構築する前に star export と local named export の接頭辞を span で確認します。
+- **JavaScript/TypeScript export specifier 名で trim allocation を避けるようになりました** — quoted export specifier の正規化は trim 済み span 上で行い、symbol 名が変わる場合だけ文字列化します。
+- **JavaScript/TypeScript function assignment 判定で trim/substr ループを避けるようになりました** — シンボル抽出は、右辺全体の判定も既存の index ベース走査へ集約します。
+- **JavaScript/TypeScript generic arrow 判定で右辺 substring 割り当てを避けるようになりました** — generic parameter と arrow の検査は、元の assignment text を index で走査します。
+- **JavaScript/TypeScript method signature で substring trim を避けるようになりました** — bare method と class-field arrow の signature は、最終文字列を作る前に source slice を span で trim します。
+- **JavaScript/TypeScript object literal key で substring trim を避けるようになりました** — quoted、numeric、computed literal object key は、symbol 名を作る前に raw key slice を span で trim します。
+- **JavaScript/TypeScript synthetic class signature で substring trim を避けるようになりました** — class expression の signature は、短い signature 形式を保ったまま trim 済み source slice を span から append します。
+- **JavaScript/TypeScript テンプレートマスキングで未変更行のコピーを避けるようになりました** — 参照抽出は、構造マスキング開始後も template literal、template hole comment、継続文字列のマスクが不要な JavaScript/TypeScript 行を再利用します。
+- **JavaScript/TypeScript statement signature で substring trim を避けるようになりました** — statement と dynamic import の signature は、文字列化する前に raw line slice を span で trim します。
+- **Kotlin/Scala 構造マスキングで未変更行のコピーを避けるようになりました** — 参照抽出は、構造マスキング開始後も triple string や block comment のマスクが不要な Kotlin/Scala 行を再利用します。
+- **Kotlin reference の comma clause を span 走査するようになりました** — generic parameter clause と base type list で segment 解析前の clause 全体コピーを避けます。
+- **山括弧を含む大きな LF-only ソースファイルが content normalization の高速経路に残るようになりました** - `<` や `>` を含む通常のソースファイルで文字単位の normalization pass を避けつつ、conflict marker 検出は維持します。
+- **単一行の symbol / reference 抽出入力が汎用 line splitting 経路を避けるようになりました** - 改行を含まないファイルの indexing では、symbol / reference extraction 全体で直接 1 行配列を使います。
+- **Lua の long bracket マスキングで未変更の行配列を再利用するようになりました** — Lua の参照抽出は、long comment や long string が実際に内容をマスクする場合だけ置換用の行配列を割り当てます。
+- **Markdown anchor 正規化で早期trim割り当てを避けるようになりました** — シンボル抽出は、reference symbol を出力する前に local link target を span で正規化します。
+- **Markdown heading 解析で早期trim割り当てを避けるようになりました** — シンボル抽出は、ATX/Setext heading text を span で整えてから heading 名を保存します。
+- **markup symbol extraction が正規化済み content を再利用するようになりました** - HTML と XAML の symbol extraction は、indexing 中に line 配列からファイル全体の文字列を再構築しないようになりました。
+- **MCP index 診断** - MCP indexing の失敗・バイト計測診断で prefix-aware な relative path helper を使い、project root 配下の path では `Path.GetRelativePath` を避けるようにしました。
+- **Perl POD マスキングで行ごとの trim 割り当てを避けるようになりました** — 参照抽出は、span ベースの先頭空白走査でインデント付き POD directive を検出します。
+- **Python decorator 走査で早期trim割り当てを避けるようになりました** — シンボル抽出は、property decorator を正規化する前に decorator 行を span として確認します。
+- **Python import spec 解析で早期trim割り当てを避けるようになりました** — シンボル抽出は、個々の import symbol を出力するまで import 名リストを span のまま扱います。
+- **Python triple string マスキングで未変更行のコピーを避けるようになりました** — 参照抽出は、構造マスキング開始後も triple string や f-string 構造マスクが不要な Python 行を再利用します。
+- **Razor 参照マスキングで plain markup のコピーを避けるようになりました** — Razor/Blazor の参照抽出は、Razor marker や HTML comment がないファイルでは行ごとのマスキング処理を省略します。
+- **Java と Razor reference helper が lazy list の初期容量を指定するようになりました** — Java constructor candidate scan と Razor `@implements` collection で、大規模 reference extraction 時の既定 list 拡張を避けます。
+- **大きなファイルの reference extraction が reference list capacity を控えめに先取りするようになりました** - 長い source file では list growth の繰り返しを避け、小さいファイルは従来の軽い allocation 経路を維持します。
+- **大きなファイルの reference extraction が duplicate tracking capacity を先取りするようになりました** - 長いファイルでは per-file の `seen` set に控えめな初期容量を与え、rehash を減らします。
+- **reference splitter buffer が小さな初期容量を持つようになりました** — shared comma/pipe/ampersand と C/Go splitter で、single-segment fast path を保ちながら list 拡張を減らしました。
+- **symbol extraction で正規化済み project root を再利用するようになりました** - full scan と update mode で、各ファイルの symbol extraction 前に `Path.GetFullPath` を繰り返し計算しないようにしました。
+- **Ruby range 走査で早期trim割り当てを避けるようになりました** — シンボル抽出は、block token 正規表現を実行する前にマスク済みRuby本文行を span として確認します。
+- **Ruby require symbol 正規化で trim allocation を避けるようになりました** — require 行判定と require path の整形は、最終 symbol 名を作る前に span で処理します。
+- **Rust reference の comma list を span 走査するようになりました** — multiline derive attribute、grouped `use` body、tuple struct field、tuple enum variant で segment 処理前の list 全体コピーを避けます。
+- **Rust 構造マスキングで未変更行のコピーを避けるようになりました** — 参照抽出は、構造マスキング開始後も raw string や block comment のマスクが不要な Rust 行を再利用します。
+- **full-scan の collection growth に保守的な初期容量を設定しました** - ファイル、言語、ディレクトリ追跡 collection が、リポジトリ走査時の初期 resize を避けつつ、小規模プロジェクトの余分な確保を抑えます。
+- **scan path comparison** - symlink-aware な directory traversal 中に、正規化済み full path の slice で root-relative segment を得るようにし、`Path.GetRelativePath` 呼び出しを避けました。
+- **full-scan で受理された通常ファイルの不要な relative-path 計算を避けるようになりました** - 走査結果を変えずに、巨大リポジトリでファイルごとに積み上がる project-relative path 計算を成功経路から外しました。
+- **Solidity のコメント・文字列マスキングで未変更行を再利用するようになりました** — Solidity のシンボル抽出と参照抽出は、マスク対象のコメントや文字列がないファイルで新しい行配列や行ごとの builder を割り当てなくなりました。
+- **project resolver の path 処理** - project info・project glob・traversal diagnostic の生成で正規化済み workspace root と prefix-aware な relative path helper を再利用するようにしました。
+- **SQL definition leaf lookup が local cache の初期容量を指定するようになりました** — SQL reference extraction で definition leaf pattern と line-span bucket に上限付きの初期容量を持たせ、大規模 SQL index 時の dictionary/list 拡張を減らしました。
+- **SQL qualified-name parsing が segment buffer の初期容量を指定するようになりました** — SQL reference resolution で一般的な segment list を小さな容量から開始し、SQL の多い大規模 workspace を index する際の list 拡張を減らしました。
+- **SQL シンボル抽出でマスク不要時の synthetic 行配列コピーを避けるようになりました** — 大きな SQL ファイルの indexing では、補助シンボル抽出でコメントや文字列リテラルのマスクが実際に必要な場合だけ行配列をコピーします。
+- **通常リテラルだけのファイルでは構造マスキングをより多くスキップするようになりました** — シンボル抽出と参照抽出は行配列を clone する前に言語別の事前判定を行い、構造的な複数行文字列やブロックコメントの区切りを含まない Python / Rust / Kotlin / Swift / Scala / C# ファイルで不要な処理を避けます。
+- **補助 symbol pass が source text を再利用するようになりました** - GraphQL input field 抽出と SQL CTE 抽出は、indexing 中に line 配列からファイル全体の文字列を再構築しないようになりました。
+- **Swift 構造マスキングで未変更行のコピーを避けるようになりました** — 参照抽出は、構造マスキング開始後も multiline string、raw string、block comment のマスクが不要な Swift 行を再利用します。
+- **Swift word probe が span 比較を使うようになりました** — Swift reference extraction で keyword 風の word boundary を確認するときに、一時 substring を作らないようにしました。
+- **大きなファイルの symbol extraction が duplicate tracking state を先取りするようになりました** - 汎用 symbol extraction と Rust、shell、JavaScript、TypeScript の補助パスは、長いファイルで duplicate tracking 用 collection に控えめな初期容量を与えます。
+- **1文字の symbol precheck が char scan を使うようになりました** - HTML、GraphQL、C#、Dart、JavaScript、TypeScript の symbol extraction は、1文字 marker の確認で string comparison scan を経由しないようになりました。
+- **大きなファイルの symbol extraction が symbol list capacity を控えめに先取りするようになりました** - JSON、YAML、XAML、Lisp の symbol extraction は長いファイルで list growth の繰り返しを避け、小さいファイルや symbol のないファイルでは従来の軽い allocation 経路を維持します。
+- **generic symbol extraction が pattern cache lookup を再利用するようになりました** - pattern ベースの言語抽出で、組み込み symbol pattern を持つと判定した後の二重 dictionary lookup を避けます。
+- **symbol precheck が重複する line scan をまとめるようになりました** - C# type-body 検出と JavaScript/TypeScript private-scope 検出は、長いファイル上の marker 集合確認を1回の走査で行います。
+- **type-list terminator が span 入力を扱うようになりました** — C# `where` clause と Java `throws` clause で list terminator 探索前に行末部分をコピーしないようにしました。
+- **TypeScript alias scan が高頻度 collection の初期容量を指定するようになりました** — namespace alias、type alias、local declaration map、parameter shadow range に小さな初期容量を持たせ、大規模 TypeScript/JavaScript index 時の拡張処理を減らしました。
+- **TypeScript の bare method 正規化で no-op コピーを避けるようになりました** — generic span や return type の brace 置換が不要な method header は、scanner 正規化で元の文字列を再利用します。
+- **TypeScript reference の comma list を span 走査するようになりました** — generic constraint、type parameter default、function parameter、where clause、共通 comma-separated type list で segment 処理前の list 全体コピーを避けます。
+- **TypeScript template hole matching が使い捨て reference collection を避けるようになりました** - reference extraction 中に `${...}` の brace を対応付ける際、nested template literal は skip 専用経路で処理します。
+- **更新モードのバイト集計** - 更新対象をスナップショットし、読み取り済みファイルサイズをパス文字列ではなく対象インデックスで記録して、更新時の read-byte metadata 書き込みでファイルごとの辞書 lookup を避けるようにしました。
+- **更新対象パス** - 更新対象の absolute / relative / display / index path を一度だけ具体化し、C# prepass・indexing・バイト集計の各経路で再利用するようにしました。
+- **XAML binding argument 名判定で string allocation を避けるようになりました** — XML symbol 抽出時の Path、Property、ElementName 比較は trim 済み span で行います。
+- **XAML binding 正規化で入力値を span trim するようになりました** — markup の多いファイルのインデックス時に、binding kind、content、key、path suffix の eager な trim 済み文字列化を避けます。
+- **XAML markup argument split で substring trim を避けるようになりました** — top-level markup argument は、各 argument 文字列を作る前に span として trim します。
+- **XAML markup payload 正規化で leading trim slice を避けるようになりました** — binding と markup extension の payload は、argument slice 前に index で先頭空白をスキップします。
+- **XAML markup scanner が span 入力を扱うようになりました** — binding と markup extension の正規化で、trim 済み文字列全体を先に作らずに top-level payload、equals、対応 brace を走査できます。
+- **XAML markup value 正規化で brace slice を span trim するようになりました** — markup extension の content と suffix は、文字列化する前に span として trim します。
+- **XAML type argument 展開で constructor slice を span trim するようになりました** — nested type constructor の prefix、payload、suffix は文字列化する前に span として trim します。
+- **XAML type argument split で substring trim を避けるようになりました** — top-level type argument は、各 argument 文字列を作る前に span として trim します。
+- **.NET の async / cancellation 監査がより多くの liveness 境界を分類できるようになりました (#4298)** - `dotnet-risk-patterns` は cancellation source の所有権、registration callback、`Task.Run`、`Task.Delay`、`WaitForExit`、`SemaphoreSlim`、`TaskCompletionSource`、`HttpListener` 向けの child query を追加し、cancellation と sync-over-async の triage で raw concurrency search と recipe evidence を結び付けやすくしました。
+- **audit recipe が parser / materialization の guard evidence を表示するようになりました (#4300)** — JSON、XML、stream、eager materialization の audit query に guard evidence metadata を追加し、JSON serialization / option と stream ownership のカバレッジを広げました。
+- **`map` と `hotspots` が利用可能な巨大ファイル分割計画を示すようになりました (#4306)** — `docs/large-file-decomposition-plan.md` が存在する場合、compact/JSON 出力に `decomposition_plan` object を含め、human hotspot output では短い hint を出します。計画文書にも現在の oversized production file と partial-class family baseline を記録しました。
+- **言語 capability summary を自動化で扱いやすくしました (#4316)** — `cdidx languages` は `--format count`、`--summary-only`、`--capability all|none|missing-any` を受け付け、`.cdidxignore` / `.gitignore` の unknown-extension group は repository metadata として ignore-configuration guidance を返すようになりました。
+
+#### 修正
+
+- **broad catch と raw diagnostic recipe が #4297 の triage classifier を公開するようになりました** — `raw-diagnostic-echo`、`exception-message-classifier`、`empty-catch-review`、`broad-exception-catch`、`suppressed-cleanup-diagnostics` は broad catch boundary と diagnostic redaction の classifier metadata を含むようになり、user-visible な raw exception path と、文書化された cleanup、probe、worker、sanitizer boundary を切り分けられます。
+- **credential redaction が bearer、GitHub token、API token、access token、Authorization 系の名前を扱うようになりました (#4299)** — GitHub API error 診断と共通診断 redaction が同じ sensitive-name classifier を使い、HTTP MCP bearer 認証は不正形式、重複、カンマ区切り、過大な authorization header を、渡された token 値を反映せずに拒否します。
+- **nullable contract 監査で `return null` の hit を囲む戻り値型別に集計できるようになりました (#4301)** - `search` と `audit` の grouped count が `return-type` と `nullable-return-type` を受け付け、JSON 出力に囲むシンボルの `return_type` を含めるようになりました。
+- **SQLite query-policy audit で安全な policy evidence を確認できるようになりました (#4302)** - `sqlite-query-policy-surfaces` は共有 command 作成、typed parameter helper、identifier quoting、PRAGMA helper の info レベル query を含むようになり、policy に沿った command 構築と raw な危険SQL surface を分けて監査できます。
+- **string comparison 監査レシピが比較ドメインを分類するようになりました (#4303)** — 組み込みレシピが path case-sensitivity signal、protocol token、CLI option、symbol name、environment name、persisted DB key、human text、docs/help text を分けるため、レビュー結果に適切な比較ルールを適用できます。
+- **MCP tools/list が bounded discovery control を明示するようになりました (#4304)** — `tools/list` は `limit` と `cursor` を受け取り、pagination と response-control metadata を返します。materialization audit recipe でも `StringBuilder` と Query/MCP の `ToList()` 蓄積経路を検出できるようになりました。
+- **`impact` JSON が partial 定義ファミリーを畳むようになりました (#4309)** — `impact` は元の定義件数を保持しつつ、論理的に同一の partial 型は代表行だけを出力し、`definition_output_count` と `definition_result_scope` メタデータを明示します。
+- **軽量 JSON の発見性を改善しました (#4311)** - `definition --json` は既定でソース `content` を省略し、明示的な省略 metadata を返します。`definition` / `excerpt` / `inspect` / `impact` は `--max-json-bytes` を受け付け、excerpt JSON は semantic tokens を含む場合に `--no-semantic-tokens` を案内し、impact JSON は definition 件数 metadata を残したまま出力する definition 行を `--limit` で上限化します。
+- `status --explain` は出力済みの `data_dir_mode` と `unknown_extension_file_count` を説明するようになり、`report --redact-paths --json` は report JSON のパス匿名化を維持したまま受理されるようになりました。
+- **audit recipe output が Task `.Result` intent を分類するようになりました (#4314)** — recipe JSON row は `audit_classifications` を含められ、count / query payload は `classifier_counts` を含められるようになりました。unsupported option error は remediation hint を維持しつつ安定した `E010_USAGE_ERROR` code も持ちます。
+- **名前ベースのナビゲーションが exact な `--name` 検索と partial 型をより予測可能に扱うようになりました (#4315)** — `symbols --name` は exact-name 一致を既定にし、`goto` は単一の論理 partial 型なら代表位置を返し、`impact --exact-name` を受け付けます。
+- **Discovery summary-only JSON で意図的な省略と truncation を分離しました (#4317)** — `files`、`symbols`、`db schema`、関連する bounded discovery payload は summary-only 出力を row-limit truncation として扱わず、map issue-draft summary、map section alias/list、`symbols --compact`、`hotspots --rank-by` の案内、completion alias、batch の `languages`/`recipes`、`help-all`、`status --explain index_matches_workspace --json` の discovery ergonomics を改善しました。
+- `suggestions export --format markdown --json` は Markdown を stdout に書かず構造化 JSON usage error を返すようになり、callers/callees の help は references と同じ JSON Lines 出力契約を記載するようになりました。
+- `validate-config --json` は config file 未検出と検証済み config を `status`、`reason`、`config_file_found`、`validated` で明示的に区別するようになり、`status --explain index_matches_workspace --json` は出力済み freshness field の説明を返すようになりました。
+- **timestamp と timezone の境界で UTC/offset 契約を明示しました (#4321)** - database timestamp reader、indexed-head status JSON、GitHub rate-limit retry detail、suggestion store の freshness filter は local、UTC、offsetless input を一貫して正規化します。`search --recipe timestamp-timezone-boundaries` を追加し、wall-clock、cache expiry、support JSON、API timestamp、monotonic elapsed-time の各 surface を分けて audit できるようにしました。
+- **広すぎる dependency summary が早期に失敗し、より多くの汎用シンボルをノイズ扱いするようになりました (#4322)** — 大きな index での広範な `deps --json --summary-only` はグラフを materialize する前に絞り込みを要求し、`Error`、`Language`、`Version`、`Dispose`、`Flush` などの一般名を dependency noise として扱います。
+- **DbDebug の unsafe diagnostics が raw preview の上限を文書化・テストするようになりました (#4324)** — `CDIDX_DEBUG=unsafe` と `--debug-unsafe` の明示 opt-in は維持したまま、raw string preview は無制限の text 出力ではなく、テスト済みの診断契約で上限を持つようになりました。
+- **regex 監査レシピが timeout と generated pattern の evidence を分離するようになりました (#4326)** — `risky-code` と `dotnet-risk-patterns` は timeout policy reference、`TimeSpan` timeout evidence、registry-backed factory、`GeneratedRegex`、culture option、non-backtracking option、明示的な no-timeout case を raw unbounded regex call と分けて分類します。
+- **テキストエンコーディング境界を built-in audit recipe で検出できるようになりました (#4327)** — `text-encoding-boundaries` は production source scope で UTF-8 policy、BOM detection、StreamReader/StreamWriter ownership、default/code-page encoding、Unicode normalization 判断を検出します。
+- `import --json` は check / dry-run / write mode で一貫した `status`、`archive_path`、`mode`、`dry_run`、`validation_phases` を報告し、invalid archive には安定した `root_cause` を含めるようになりました。
+- **GitHub rate-limit の retry window を上限付きにしました (#4329)** — suggestion submission の `Retry-After` と `x-ratelimit-reset` は UTC に正規化され、現在時刻から 1 時間後までに制限されます。無効な reset timestamp は例外や過大な停止時刻の永続化ではなく、1 分の retry window へ fallback します。
+- **メモリ割り当て境界を built-in audit recipe で検出できるようになりました (#4330)** — `memory-allocation-boundaries` は production source scope で ArrayPool ownership、return/clearing policy、SensitiveBufferPolicy usage、stackalloc buffer、MemoryMarshal boundary を検出します。
+- `--profile --slow-query-ms 0` は profile JSON に生 SQL 全文ではなく、匿名化・上限付き SQL text と truncation metadata を出力するようになりました。
+- **生成コード境界に `.Generated.cs` を含めました (#4334)** — `.Generated.cs` を生成コードとして扱い、生成コードの可視化は既存の `--include-generated` 境界であることを明文化し、dependency metadata の案内では package symbol と dependency reference を使う監査経路を明示しました。
+- **Git range の partial update が sparse skip-worktree row を保持するようになりました (#4335)** — `--changed-between` / `--commits` は sparse checkout、partial clone、手動 `git update-index --skip-worktree` により欠落している path を dry-run や partial update で実削除扱いしなくなりました。一方、rename/delete の path は従来通り projection / purge の対象になります。
+- **存在しない checkpoint の restore が checkpoint 専用 error code を返すようになりました (#4337)** - `cdidx db restore <name> --json` は指定 checkpoint が存在しない場合に `E016_CHECKPOINT_NOT_FOUND` を返します。hyphen を含む checkpoint 名は dry-run と write path のどちらでも引き続き利用できます。
+- **SQLite maintenance の JSON diagnostics をより一貫させました (#4338)** - `status --db <corrupt.db> --json` は構造化された `E008_DB_ERROR` JSON envelope を返すようになり、実行系 `vacuum --json` には connection cleanup 前の WAL size 計測を説明する `wal_checkpoint_timing_note` が含まれます。
+- **nullable contract 監査を subsystem 別に triage できるようになりました (#4339)** - `search` と `audit` の grouped count が `subsystem` を受け付け、CLI、MCP、LSP、database、extractor の各 path を JSON の `subsystem` 値で分けられるようになりました。
+- **hook status JSON がサニタイズ済み診断 path を含むようになりました (#4340)** - `cdidx hooks status --json` は互換性のため既存の path field を維持しつつ、ログに出しやすい hook 状態報告用の `diagnostic_*` path field を追加し、quiet indexing の失敗出力も hook 実行向けに簡潔なまま保ちます。
+- `search --query "--trace"` が trace フラグとして消費される問題、`files --generated` が生成ファイル用の別名として扱われず拒否される問題、`inspect --fields outline` が outline 用フィールド集合に展開されない問題を修正しました。
+- **GitHub issue reporting の request header 経路を共通化しました (#4343)** — Issue 作成と duplicate preflight はどちらも共通の GitHub API header を設定し、token がある場合だけ bearer authentication を追加します。token 未設定の public duplicate preflight request は unauthenticated のまま送信します。
+- **`unused` summary 出力にコンパクトな JSON モードを追加しました (#4344)** — `unused --json --summary-only` は行データや bucket taxonomy 詳細を含めずに件数と summary メタデータを返し、compact count JSON は省略したセクションを報告します。
+- `upgrade --check-only --json --channel latest` は `selected_channel: "latest"` を報告し、invalid channel の usage は help と同じ `stable|latest|prerelease` 値を示し、prerelease metadata failure は成功終了しないようになりました。
+- **シェル補完が現在のコマンド面を含むようになりました (#4347)** — 生成される bash / zsh / fish / PowerShell 補完は `hooks`、`workspace`、`config`、`export`、`import`、`lsp` などの新しいトップレベルコマンドを列挙し、`hooks`、`workspace`、`config`、`db` のサブコマンド候補も範囲を絞って提示します。
+- **search guard の count JSON が base count と同じ result unit を使うようになりました (#4349)** - `--require-before`、`--require-after`、`--reject-before`、`--reject-after` を指定した `search --format count --json` は、guard 済みの行一致を検索結果 chunk 単位へ戻してから数えます。また `query_context` は有効な guard filters と `guard_window`、`guard_scope` を報告します。
+- **`find --all` の走査 cap を制御でき、compact context の扱いが明示されました (#4350)** — `find --all` は `--line-scan-limit <n>` で有界な index 済み行走査 cap を上げ下げできるようになり、count JSON に有効値を返します。また compact output と context フラグの併用は、context を silent に捨てず usage error として拒否します。
+- **`index --watch` が CodeIndex data file で自己トリガーしないようになりました (#4351)** - watch mode は変更バッチに積む前に、workspace `.cdidx` data directory、解決済みの CodeIndex data directory、明示 DB の SQLite/lock sidecar を無視します。
+- **`status --check` が index 時の symlink policy を尊重するようになりました (#4352)** — `--follow-symlinks all` で作成した index はその policy を保存し、workspace freshness check と生成される repair command が同じ symlink 可視ファイル集合を維持するため、誤った missing file を報告しません。
+- **`deps --summary-only --format json-graph` がグラフ materialize 前に失敗するようになりました (#4353)** — CLI は曖昧な graph summary の組み合わせを事前に拒否し、`deps --json --summary-only` または完全な `json-graph` 出力へ誘導します。
+- **`batch` の子コマンドが明示された `--db` を尊重するよう修正 (#4354)** - `cdidx batch --json-summary` 経由のクエリコマンドは、親 batch の DB と混在させず、子コマンドで明示された DB からクエリデータと project-root metadata の両方を取得します。
+- **MCP stdio framing を明示し、回帰テストで固定しました (#4355)** - `cdidx mcp` は stdio で LSP の `Content-Length` framing ではなく LF 区切りの UTF-8 JSON-RPC object を 1 行ずつ使うことを明記し、lifecycle diagnostic が stderr に留まり stdout が protocol 専用であることをテストで固定します。
+- **`index --watch` の overflow rescan が full-rescan counter を報告するようになりました (#4356)** - rescan watch event に `rescan_scope`、`rescan_completed`、scan/skip/purge counter を追加し、`updated: 0` でも workspace 全体の rescan 完了を判別できるようにしました。
+- **`diff --json --detailed` が運用メタデータ差分を報告するようになりました (#4357)** — detailed database diff は project root、symlink policy、freshness HEAD stamp、path case-sensitivity、last-index-run diagnostics、writer-version metadata の差分を `metadata_drift` として含めます。
+- **`workspace status --json` が active workspace state を報告するようになりました (#4358)** — workspace status JSON は `workspace current --json` と同じ形式の `active_workspace_status` を含み、保存済み active state と manifest が一致しない active member を `missing` または `stale` として示します。
+- **workspace JSON command が invalid manifest を構造化エラーとして返すようになりました (#4359)** — `workspace list --json` と `workspace status --json` は、`members` の形が不正な場合に汎用 crash message へ落ちず、parse 可能な `workspace_manifest_invalid` error を返します。
+
+#### セキュリティ
+
+- **XML parser security boundary の明示的な回帰テストを追加しました (#4345)** — DTD parse 拒否、外部 entity の扱い、malformed MSBuild XML、dependency manifest の entity 拒否をテストで固定しました。
+
+#### ドキュメント
+
+- **巨大テスト/ドキュメントの分割計画と active skip 分類を文書化しました (#4307)** — 大きな test file の分割境界、巨大ドキュメントの分割ルール、active `Skip =` category、現在の dogfood baseline を扱うバイリンガルな保守計画を追加し、`TESTING_GUIDE.md` から参照できるようにしました。
+- **platform、terminal color、completion notification の境界を文書化しました (#4333)** — CI / headless / MCP での terminal 挙動に関する audit note を追加し、auto 抑制、通知無効化、上限付き BEL 出力、OSC 9 message sanitization を代表テストで固定しました。
+- **AI protocol boundary guidance で MCP、HTTP MCP、LSP、limit behavior をまとめました (#4336)** - user guide で framing の違い、stderr / stdout の役割、HTTP auth と body limit、MCP pagination、graph offset clamp、rate-limit / status の可観測性を 1 箇所で確認できるようにしました。
+- **破壊的 filesystem 操作監査に recipe 実行手順を追記しました (#4341)** — developer guide は直接の `File.Delete`、`Directory.Delete`、`File.Move` count check と併せて、組み込み filesystem mutation recipe を案内します。
+- **LSP optional method と completion の契約を文書化しテストしました (#4360)** - `cdidx lsp` の help とテストで、未対応 optional method は advertise せず `-32601` を返すこと、completion は symbol index ベースで一致しない位置では空リストを返すことを明確にしました。
+
+#### 内部変更
+
+- **タイミングに敏感なテストのポーリングを共通化しました (#4325)** — 同期の bounded polling、短時間の安定性観測、filesystem cleanup retry の待機を共有テストヘルパーに寄せ、タイミングに敏感なテストで固定 sleep が散らばらないようにしました。
+- release workflow の contract test は、監査済みの token、secret、trusted publishing、attestation、container publishing 境界を固定するようになりました。
+
 ### [1.36.3] - 2026-07-06
 
 #### 変更
@@ -11097,7 +11465,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.36.3...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.37.0...HEAD
+[1.37.0]: https://github.com/Widthdom/CodeIndex/compare/v1.36.3...v1.37.0
 [1.36.3]: https://github.com/Widthdom/CodeIndex/compare/v1.36.2...v1.36.3
 [1.36.2]: https://github.com/Widthdom/CodeIndex/compare/v1.36.1...v1.36.2
 [1.36.1]: https://github.com/Widthdom/CodeIndex/compare/v1.36.0...v1.36.1
