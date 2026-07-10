@@ -668,14 +668,14 @@ public static partial class SymbolExtractor
         level = 0;
         headingText = string.Empty;
 
-        var trimmedHeading = currentLine.Trim();
-        if (trimmedHeading.Length == 0)
+        var trimmedHeading = currentLine.AsSpan().Trim();
+        if (trimmedHeading.IsEmpty)
             return false;
 
         if (TryParseMarkdownHeading(currentLine, out _, out _))
             return false;
 
-        var trimmedUnderline = nextLine.Trim();
+        var trimmedUnderline = nextLine.AsSpan().Trim();
         if (trimmedUnderline.Length < 3)
             return false;
 
@@ -690,7 +690,7 @@ public static partial class SymbolExtractor
         }
 
         level = underlineChar == '=' ? 1 : 2;
-        headingText = trimmedHeading;
+        headingText = trimmedHeading.ToString();
         return true;
     }
 
@@ -723,18 +723,22 @@ public static partial class SymbolExtractor
         if (index >= line.Length)
             return false;
 
-        headingText = line[index..].Trim();
-        if (headingText.Length == 0)
+        var headingSpan = line.AsSpan(index).Trim();
+        if (headingSpan.IsEmpty)
             return false;
 
-        var closingHashesStart = headingText.Length;
-        while (closingHashesStart > 0 && headingText[closingHashesStart - 1] == '#')
+        var closingHashesStart = headingSpan.Length;
+        while (closingHashesStart > 0 && headingSpan[closingHashesStart - 1] == '#')
             closingHashesStart--;
 
-        if (closingHashesStart < headingText.Length && closingHashesStart > 0 && char.IsWhiteSpace(headingText[closingHashesStart - 1]))
-            headingText = headingText[..(closingHashesStart - 1)].TrimEnd();
+        if (closingHashesStart < headingSpan.Length && closingHashesStart > 0 && char.IsWhiteSpace(headingSpan[closingHashesStart - 1]))
+            headingSpan = headingSpan[..(closingHashesStart - 1)].TrimEnd();
 
-        return headingText.Length > 0;
+        if (headingSpan.IsEmpty)
+            return false;
+
+        headingText = headingSpan.ToString();
+        return true;
     }
 
     private static string NormalizeMarkdownAnchorTarget(string target)
