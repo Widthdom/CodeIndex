@@ -77,10 +77,10 @@ public class PackagesLockTests
     [Fact]
     public void RestoreSurfaces_UseLockedModeExactCacheKeysAndDockerRidRestore()
     {
-        var dotnetWorkflow = RepositoryTestPaths.ReadWorkflow("dotnet.yml").ReplaceLineEndings("\n");
-        var releaseWorkflow = RepositoryTestPaths.ReadWorkflow("release.yml").ReplaceLineEndings("\n");
-        var codeqlWorkflow = RepositoryTestPaths.ReadWorkflow("codeql.yml").ReplaceLineEndings("\n");
-        var mutationWorkflow = RepositoryTestPaths.ReadWorkflow("mutation-testing.yml").ReplaceLineEndings("\n");
+        var dotnetWorkflow = RepositoryTestPaths.ReadNormalizedWorkflow("dotnet.yml");
+        var releaseWorkflow = RepositoryTestPaths.ReadNormalizedWorkflow("release.yml");
+        var codeqlWorkflow = RepositoryTestPaths.ReadNormalizedWorkflow("codeql.yml");
+        var mutationWorkflow = RepositoryTestPaths.ReadNormalizedWorkflow("mutation-testing.yml");
         var dockerfile = RepositoryTestPaths.ReadText("Dockerfile").ReplaceLineEndings("\n");
 
         Assert.Contains("dotnet restore CodeIndex.sln --locked-mode", dotnetWorkflow, StringComparison.Ordinal);

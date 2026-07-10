@@ -74,6 +74,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - `DocumentationStatusContractTests.cs`, `DocumentationDriftTests.cs`
   Checked-in documentation contract tests. They use `RepositoryTestPaths` to keep status fields, workflow references, documented `cdidx` command examples, release/changelog workflow snippets, and representative English/Japanese guide sections synchronized.
   `DocumentationStatusContractTests.cs` includes readiness, maintenance, and MCP status fields so status JSON support contracts stay visible in the user and agent guides.
+  Workflow tests that compare multiline YAML snippets should use `RepositoryTestPaths.ReadNormalizedWorkflow(...)` so line-ending normalization stays centralized across CI, release, package-lock, and mutation workflow contracts.
 - `IndexCommandRunnerTests.Run_CancelDuringFreshIndex_ReturnsInterruptedJson`, `Run_CancelDuringDryRunScan_ReturnsInterruptedJson`, and `Run_CancelBeforeFreshScan_ReturnsInterruptedJson`
   exercise the same in-process cancellation paths used after Ctrl-C/SIGINT wiring, including scan-time cancellation, so interrupted index runs keep returning the canonical JSON error contract.
 - `IndexCommandRunnerTests.SymbolExtractionWorker_LegacyEnvironmentHooksAreIgnored_Issue3398`
@@ -358,6 +359,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `DocumentationStatusContractTests.cs`、`DocumentationDriftTests.cs`
   checked-in documentation の契約テスト。`RepositoryTestPaths` を使って、status field、workflow 参照、文書化された `cdidx` コマンド例、release/changelog workflow の snippet、代表的な英日 guide セクションの同期を維持します。
   `DocumentationStatusContractTests.cs` は readiness、maintenance、MCP status field も含め、status JSON support contract が user guide と agent guide に残るようにします。
+  複数行の YAML snippet を比較する workflow test は `RepositoryTestPaths.ReadNormalizedWorkflow(...)` を使い、CI、release、package-lock、mutation workflow contract 間の line-ending normalization を一か所に集約します。
 - `IndexCommandRunnerTests.Run_CancelDuringFreshIndex_ReturnsInterruptedJson`、`Run_CancelDuringDryRunScan_ReturnsInterruptedJson`、`Run_CancelBeforeFreshScan_ReturnsInterruptedJson`
   Ctrl-C/SIGINT 配線後に使われる in-process cancellation 経路を、scan 中のキャンセルも含めて検証し、interrupted index run が標準の JSON error contract を返し続けることを固定する。
 - `IndexCommandRunnerTests.SymbolExtractionWorker_LegacyEnvironmentHooksAreIgnored_Issue3398`

@@ -16,6 +16,9 @@ internal static class RepositoryTestPaths
 
     internal static string ReadWorkflow(string fileName) => ReadText(".github", "workflows", fileName);
 
+    internal static string ReadNormalizedWorkflow(string fileName)
+        => ReadWorkflow(fileName).ReplaceLineEndings("\n");
+
     private static string LocateRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);

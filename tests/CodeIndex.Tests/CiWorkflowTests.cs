@@ -14,7 +14,7 @@ public class CiWorkflowTests
     public void DotnetWorkflow_RunsTestsWithRunsettingsBlameRetryAndArtifacts()
     {
         var workflow = RepositoryTestPaths.ReadWorkflow("dotnet.yml");
-        var normalizedWorkflow = workflow.ReplaceLineEndings("\n");
+        var normalizedWorkflow = RepositoryTestPaths.ReadNormalizedWorkflow("dotnet.yml");
         var testScript = RepositoryTestPaths.ReadText(".github", "scripts", "run-dotnet-tests.ps1");
         var normalizedTestScript = testScript.ReplaceLineEndings("\n");
 
@@ -115,8 +115,8 @@ public class CiWorkflowTests
     [Fact]
     public void WindowsTestHostSetup_IsSharedAcrossDotnetAndReleaseWorkflows()
     {
-        var dotnetWorkflow = RepositoryTestPaths.ReadWorkflow("dotnet.yml").ReplaceLineEndings("\n");
-        var releaseWorkflow = RepositoryTestPaths.ReadWorkflow("release.yml").ReplaceLineEndings("\n");
+        var dotnetWorkflow = RepositoryTestPaths.ReadNormalizedWorkflow("dotnet.yml");
+        var releaseWorkflow = RepositoryTestPaths.ReadNormalizedWorkflow("release.yml");
         var setupScript = RepositoryTestPaths.ReadText(".github", "scripts", "configure-windows-test-host.ps1");
         const string expectedStep =
             "- name: Configure Windows test host\n" +
