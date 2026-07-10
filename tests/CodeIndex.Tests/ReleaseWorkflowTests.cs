@@ -839,7 +839,7 @@ public partial class ReleaseWorkflowTests
     [Fact]
     public void ReleaseWorkflow_SecretAndTokenScopesStayOfficialAndMinimal_Issue4331()
     {
-        var workflow = RepositoryTestPaths.ReadNormalizedWorkflow("release.yml");
+        var workflow = RepositoryTestPaths.ReadNormalizedReleaseWorkflow();
 
         AssertContainsAll(
             workflow,
