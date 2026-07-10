@@ -198,21 +198,15 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "python", content, symbols);
 
         Assert.Equal(9, references.Count(reference => reference.ReferenceKind == "decorator"));
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "bare_decorator"
-            && reference.ReferenceKind == "decorator");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "parametrized"
-            && reference.ReferenceKind == "decorator");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "staticmethod"
-            && reference.ReferenceKind == "decorator");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "pytest.fixture"
-            && reference.ReferenceKind == "decorator");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "pytest.mark.parametrize"
-            && reference.ReferenceKind == "decorator");
+        AssertReferencesContain(
+            references,
+            "decorator",
+            null,
+            "bare_decorator",
+            "parametrized",
+            "staticmethod",
+            "pytest.fixture",
+            "pytest.mark.parametrize");
         Assert.Contains(references, reference =>
             reference.SymbolName == "parametrized"
             && reference.ReferenceKind == "call");

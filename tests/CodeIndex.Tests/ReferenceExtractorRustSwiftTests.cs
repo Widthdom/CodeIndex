@@ -69,24 +69,7 @@ public partial class ReferenceExtractorTests
 
         var callReferences = references.Where(reference => reference.ReferenceKind == "call").ToList();
         Assert.Equal(6, callReferences.Count);
-        Assert.Contains(callReferences, reference =>
-            reference.SymbolName == "std::println"
-            && reference.ContainerName == "main");
-        Assert.Contains(callReferences, reference =>
-            reference.SymbolName == "vec"
-            && reference.ContainerName == "main");
-        Assert.Contains(callReferences, reference =>
-            reference.SymbolName == "format"
-            && reference.ContainerName == "main");
-        Assert.Contains(callReferences, reference =>
-            reference.SymbolName == "my_macro"
-            && reference.ContainerName == "main");
-        Assert.Contains(callReferences, reference =>
-            reference.SymbolName == "dbg"
-            && reference.ContainerName == "main");
-        Assert.Contains(callReferences, reference =>
-            reference.SymbolName == "helper"
-            && reference.ContainerName == "main");
+        AssertReferencesContain(callReferences, "call", "main", "std::println", "vec", "format", "my_macro", "dbg", "helper");
         Assert.DoesNotContain(callReferences, reference => reference.SymbolName == "macro_rules");
     }
 
@@ -105,12 +88,7 @@ public partial class ReferenceExtractorTests
 
         var callReferences = references.Where(reference => reference.ReferenceKind == "call").ToList();
         Assert.Equal(2, callReferences.Count);
-        Assert.Contains(callReferences, reference =>
-            reference.SymbolName == "type"
-            && reference.ContainerName == "main");
-        Assert.Contains(callReferences, reference =>
-            reference.SymbolName == "crate::type"
-            && reference.ContainerName == "main");
+        AssertReferencesContain(callReferences, "call", "main", "type", "crate::type");
     }
 
     [Fact]
