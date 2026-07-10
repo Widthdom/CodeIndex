@@ -3538,9 +3538,13 @@ public static partial class SymbolExtractor
                                         line.Length))
                                 : line.Length;
                             var nameLineContent = sameLineEndColumn >= absoluteStartColumn
-                                ? line[nameLineStartColumn..nameLineEndExclusive]
-                                : line[nameLineStartColumn..];
-                            signature = (csharpWrappedModifierPrefix + " " + nameLineContent.TrimStart()).Trim();
+                                ? line.AsSpan(nameLineStartColumn, nameLineEndExclusive - nameLineStartColumn)
+                                : line.AsSpan(nameLineStartColumn);
+                            var signatureBuilder = new StringBuilder(csharpWrappedModifierPrefix.Length + 1 + nameLineContent.Length);
+                            signatureBuilder.Append(csharpWrappedModifierPrefix);
+                            signatureBuilder.Append(' ');
+                            signatureBuilder.Append(nameLineContent.TrimStart());
+                            signature = signatureBuilder.ToString().Trim();
                         }
                         else if (lang == "csharp"
                             && pattern.Kind == "function"
