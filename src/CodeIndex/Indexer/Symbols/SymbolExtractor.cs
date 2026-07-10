@@ -9802,7 +9802,7 @@ public static partial class SymbolExtractor
         if (!signature.Contains(name + "<", StringComparison.Ordinal))
             return false;
 
-        var trimmedSignature = signature.TrimStart();
+        var trimmedSignature = signature.AsSpan().TrimStart();
         if (trimmedSignature.StartsWith("template", StringComparison.Ordinal)
             || trimmedSignature.StartsWith("export template", StringComparison.Ordinal))
         {
@@ -9811,8 +9811,8 @@ public static partial class SymbolExtractor
 
         for (var previousLineIndex = lineIndex - 1; previousLineIndex >= 0; previousLineIndex--)
         {
-            var previous = lines[previousLineIndex].Trim();
-            if (previous.Length == 0)
+            var previous = lines[previousLineIndex].AsSpan().Trim();
+            if (previous.IsEmpty)
                 continue;
             return previous.StartsWith("template", StringComparison.Ordinal)
                 || previous.StartsWith("export template", StringComparison.Ordinal);
