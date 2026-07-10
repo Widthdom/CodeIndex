@@ -11136,20 +11136,20 @@ public static partial class SymbolExtractor
         if (!methodCapture.HeaderInfo.HasBody)
         {
             if (methodCapture.HeaderEndLineIndex == startIndex && methodCapture.HeaderEndColumn >= startColumn)
-                return lines[startIndex][startColumn..(methodCapture.HeaderEndColumn + 1)].Trim();
+                return lines[startIndex].AsSpan(startColumn, methodCapture.HeaderEndColumn + 1 - startColumn).Trim().ToString();
 
             if (methodCapture.HeaderInfo.HeaderEndColumn != null
                 && methodCapture.HeaderInfo.HeaderEndColumn.Value >= 0
                 && methodCapture.HeaderInfo.HeaderEndColumn.Value < methodCapture.SourceHeader.Length)
             {
-                return methodCapture.SourceHeader[..(methodCapture.HeaderInfo.HeaderEndColumn.Value + 1)].Trim();
+                return methodCapture.SourceHeader.AsSpan(0, methodCapture.HeaderInfo.HeaderEndColumn.Value + 1).Trim().ToString();
             }
 
             return methodCapture.SourceHeader.Trim();
         }
 
         if (bodyEndLine == startIndex + 1 && sameLineMethodEndColumn >= startColumn)
-            return lines[startIndex][startColumn..(sameLineMethodEndColumn + 1)].Trim();
+            return lines[startIndex].AsSpan(startColumn, sameLineMethodEndColumn + 1 - startColumn).Trim().ToString();
 
         if (methodCapture.HeaderInfo.BodyStartColumn < 0
             || methodCapture.HeaderInfo.BodyStartColumn >= methodCapture.SourceHeader.Length)
@@ -11157,7 +11157,7 @@ public static partial class SymbolExtractor
             return methodCapture.SourceHeader.Trim();
         }
 
-        return methodCapture.SourceHeader[..(methodCapture.HeaderInfo.BodyStartColumn + 1)].Trim();
+        return methodCapture.SourceHeader.AsSpan(0, methodCapture.HeaderInfo.BodyStartColumn + 1).Trim().ToString();
     }
 
     // Build a signature string for a class-field arrow function. Same shape as the method-header
@@ -11174,7 +11174,7 @@ public static partial class SymbolExtractor
         JavaScriptTypeScriptMethodHeaderCapture arrowCapture)
     {
         if (bodyEndLine == startIndex + 1 && sameLineArrowEndColumn >= startColumn)
-            return lines[startIndex][startColumn..(sameLineArrowEndColumn + 1)].Trim();
+            return lines[startIndex].AsSpan(startColumn, sameLineArrowEndColumn + 1 - startColumn).Trim().ToString();
 
         // For expression-body arrow fields that span multiple lines, include the full source up
         // to and including the last expression char (before `;`) so the signature reflects the
@@ -11185,7 +11185,7 @@ public static partial class SymbolExtractor
             && expressionEnd >= 0
             && expressionEnd + 1 <= arrowCapture.SourceHeader.Length)
         {
-            return arrowCapture.SourceHeader[..(expressionEnd + 1)].Trim();
+            return arrowCapture.SourceHeader.AsSpan(0, expressionEnd + 1).Trim().ToString();
         }
 
         if (arrowCapture.HeaderInfo.BodyStartColumn < 0
@@ -11194,7 +11194,7 @@ public static partial class SymbolExtractor
             return arrowCapture.SourceHeader.Trim();
         }
 
-        return arrowCapture.SourceHeader[..(arrowCapture.HeaderInfo.BodyStartColumn + 1)].Trim();
+        return arrowCapture.SourceHeader.AsSpan(0, arrowCapture.HeaderInfo.BodyStartColumn + 1).Trim().ToString();
     }
 
     private static string? GetJavaScriptTypeScriptBareMethodReturnType(string sourceHeader, JavaScriptTypeScriptMethodHeaderInfo methodHeader, string? lang)
