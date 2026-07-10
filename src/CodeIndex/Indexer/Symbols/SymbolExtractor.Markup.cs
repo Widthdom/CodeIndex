@@ -2069,19 +2069,19 @@ public static partial class SymbolExtractor
 
     private static string NormalizeXamlBindingPath(string value, bool allowPropertyArgument)
     {
-        value = value.Trim();
-        if (value.Length == 0)
-            return value;
+        var trimmed = value.AsSpan().Trim();
+        if (trimmed.IsEmpty)
+            return "";
 
-        var payloadStart = FindTopLevelMarkupPayloadStart(value);
+        var payloadStart = FindTopLevelMarkupPayloadStart(trimmed);
         if (payloadStart < 0)
-            return value;
+            return trimmed.ToString();
 
-        var payloadStartIndex = SkipXamlMarkupWhitespace(value, payloadStart + 1);
-        if (payloadStartIndex >= value.Length)
-            return value;
+        var payloadStartIndex = SkipXamlMarkupWhitespace(trimmed, payloadStart + 1);
+        if (payloadStartIndex >= trimmed.Length)
+            return trimmed.ToString();
 
-        var payload = value[payloadStartIndex..];
+        var payload = trimmed[payloadStartIndex..].ToString();
         string? fallback = null;
         foreach (var argument in SplitTopLevelMarkupArguments(payload))
         {
@@ -2107,27 +2107,27 @@ public static partial class SymbolExtractor
             fallback ??= normalized;
         }
 
-        return fallback ?? value;
+        return fallback ?? trimmed.ToString();
     }
 
     private static string NormalizeXamlBindingArgument(string value)
     {
-        value = value.Trim();
-        if (value.Length == 0)
-            return value;
+        var trimmed = value.AsSpan().Trim();
+        if (trimmed.IsEmpty)
+            return "";
 
-        var equalsIndex = IndexOfTopLevelEquals(value);
+        var equalsIndex = IndexOfTopLevelEquals(trimmed);
         if (equalsIndex >= 0)
         {
-            var name = value.AsSpan(0, equalsIndex).Trim();
-            var normalized = value.AsSpan(equalsIndex + 1).Trim();
+            var name = trimmed[..equalsIndex].Trim();
+            var normalized = trimmed[(equalsIndex + 1)..].Trim();
             if (name.Equals("Path", StringComparison.OrdinalIgnoreCase))
                 return NormalizeXamlBindingPathValue(normalized.ToString());
             if (!normalized.IsEmpty)
                 return NormalizeXamlMarkupValue(normalized.ToString());
         }
 
-        return NormalizeXamlBindingPathValue(value);
+        return NormalizeXamlBindingPathValue(trimmed.ToString());
     }
 
     private static string NormalizeXamlBindingPathValue(string value)
@@ -2146,34 +2146,34 @@ public static partial class SymbolExtractor
 
     private static string NormalizeXamlMarkupValue(string value)
     {
-        value = value.Trim();
-        if (value.Length == 0 || value[0] != '{')
-            return value;
+        var trimmed = value.AsSpan().Trim();
+        if (trimmed.IsEmpty || trimmed[0] != '{')
+            return trimmed.ToString();
 
-        var closingBraceIndex = FindMatchingBrace(value, 0);
+        var closingBraceIndex = FindMatchingBrace(trimmed, 0);
         if (closingBraceIndex < 0)
-            return value;
+            return trimmed.ToString();
 
-        var normalized = NormalizeXamlMarkupExtensionContent(value.AsSpan(1, closingBraceIndex - 1).Trim().ToString());
-        var suffix = value.AsSpan(closingBraceIndex + 1).Trim();
+        var normalized = NormalizeXamlMarkupExtensionContent(trimmed.Slice(1, closingBraceIndex - 1).Trim().ToString());
+        var suffix = trimmed[(closingBraceIndex + 1)..].Trim();
         return suffix.IsEmpty ? normalized : string.Concat(normalized, suffix.ToString());
     }
 
     private static string NormalizeXamlMarkupExtensionContent(string value)
     {
-        value = value.Trim();
-        if (value.Length == 0)
-            return value;
+        var trimmed = value.AsSpan().Trim();
+        if (trimmed.IsEmpty)
+            return "";
 
-        var payloadStart = FindTopLevelMarkupPayloadStart(value);
+        var payloadStart = FindTopLevelMarkupPayloadStart(trimmed);
         if (payloadStart < 0)
-            return value;
+            return trimmed.ToString();
 
-        var payloadStartIndex = SkipXamlMarkupWhitespace(value, payloadStart + 1);
-        if (payloadStartIndex >= value.Length)
-            return value;
+        var payloadStartIndex = SkipXamlMarkupWhitespace(trimmed, payloadStart + 1);
+        if (payloadStartIndex >= trimmed.Length)
+            return trimmed.ToString();
 
-        var payload = value[payloadStartIndex..];
+        var payload = trimmed[payloadStartIndex..].ToString();
         foreach (var argument in SplitTopLevelMarkupArguments(payload))
         {
             var normalized = NormalizeXamlMarkupArgument(argument);
@@ -2181,16 +2181,16 @@ public static partial class SymbolExtractor
                 return normalized;
         }
 
-        return value;
+        return trimmed.ToString();
     }
 
     private static IEnumerable<string> NormalizeXamlTypeArgumentsValue(string value)
     {
-        value = value.Trim();
-        if (value.Length == 0)
+        var trimmed = value.AsSpan().Trim();
+        if (trimmed.IsEmpty)
             yield break;
 
-        foreach (var argument in SplitTopLevelTypeArguments(value))
+        foreach (var argument in SplitTopLevelTypeArguments(trimmed.ToString()))
         {
             var normalized = NormalizeXamlMarkupArgument(argument);
             if (normalized.Length > 0)
@@ -2251,18 +2251,20 @@ public static partial class SymbolExtractor
 
     private static string NormalizeXamlMarkupArgument(string value)
     {
-        value = value.Trim();
-        if (value.Length == 0)
-            return value;
+        var trimmed = value.AsSpan().Trim();
+        if (trimmed.IsEmpty)
+            return "";
 
-        var equalsIndex = IndexOfTopLevelEquals(value);
+        var equalsIndex = IndexOfTopLevelEquals(trimmed);
         if (equalsIndex >= 0)
-            return NormalizeXamlMarkupValue(value[(equalsIndex + 1)..]);
+            return NormalizeXamlMarkupValue(trimmed[(equalsIndex + 1)..].ToString());
 
-        return NormalizeXamlMarkupValue(value);
+        return NormalizeXamlMarkupValue(trimmed.ToString());
     }
 
-    private static int FindTopLevelMarkupPayloadStart(string value)
+    private static int FindTopLevelMarkupPayloadStart(string value) => FindTopLevelMarkupPayloadStart(value.AsSpan());
+
+    private static int FindTopLevelMarkupPayloadStart(ReadOnlySpan<char> value)
     {
         var braceDepth = 0;
         for (var i = 0; i < value.Length; i++)
@@ -2286,7 +2288,9 @@ public static partial class SymbolExtractor
         return -1;
     }
 
-    private static int SkipXamlMarkupWhitespace(string value, int start)
+    private static int SkipXamlMarkupWhitespace(string value, int start) => SkipXamlMarkupWhitespace(value.AsSpan(), start);
+
+    private static int SkipXamlMarkupWhitespace(ReadOnlySpan<char> value, int start)
     {
         start = Math.Clamp(start, 0, value.Length);
         while (start < value.Length && char.IsWhiteSpace(value[start]))
@@ -2381,7 +2385,9 @@ public static partial class SymbolExtractor
         return -1;
     }
 
-    private static int IndexOfTopLevelEquals(string value)
+    private static int IndexOfTopLevelEquals(string value) => IndexOfTopLevelEquals(value.AsSpan());
+
+    private static int IndexOfTopLevelEquals(ReadOnlySpan<char> value)
     {
         var braceDepth = 0;
         for (var i = 0; i < value.Length; i++)
@@ -2505,7 +2511,9 @@ public static partial class SymbolExtractor
             yield return tail.ToString();
     }
 
-    private static int FindMatchingBrace(string value, int startIndex)
+    private static int FindMatchingBrace(string value, int startIndex) => FindMatchingBrace(value.AsSpan(), startIndex);
+
+    private static int FindMatchingBrace(ReadOnlySpan<char> value, int startIndex)
     {
         var braceDepth = 0;
         for (var i = startIndex; i < value.Length; i++)
