@@ -18,7 +18,11 @@ internal static class RepositoryTestPaths
 
     internal static string ReadReleaseWorkflow() => ReadWorkflow("release.yml");
 
+    internal static string ReadDotnetWorkflow() => ReadWorkflow("dotnet.yml");
+
     internal static string ReadNormalizedReleaseWorkflow() => ReadNormalizedWorkflow("release.yml");
+
+    internal static string ReadNormalizedDotnetWorkflow() => ReadNormalizedWorkflow("dotnet.yml");
 
     internal static string ReadNormalizedWorkflow(string fileName)
         => ReadNormalizedText(".github", "workflows", fileName);

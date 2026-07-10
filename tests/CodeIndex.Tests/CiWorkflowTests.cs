@@ -13,7 +13,7 @@ public class CiWorkflowTests
     [Fact]
     public void DotnetWorkflow_RunsTestsWithRunsettingsBlameRetryAndArtifacts()
     {
-        var workflow = RepositoryTestPaths.ReadNormalizedWorkflow("dotnet.yml");
+        var workflow = RepositoryTestPaths.ReadNormalizedDotnetWorkflow();
         var testScript = RepositoryTestPaths.ReadText(".github", "scripts", "run-dotnet-tests.ps1");
 
         AssertContainsAll(
