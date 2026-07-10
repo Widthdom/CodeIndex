@@ -12,6 +12,16 @@ namespace CodeIndex.Tests;
 public partial class SymbolExtractorTests
 {
     [Fact]
+    public void SanitizeCSharpLinesForCrossLineScan_PlainLineReusesSourceText()
+    {
+        var line = new string("public sealed class PlainLine { }".ToCharArray());
+
+        var sanitized = SymbolExtractor.SanitizeCSharpLinesForCrossLineScan([line]);
+
+        Assert.Same(line, sanitized[0]);
+    }
+
+    [Fact]
     public void Extract_CsharpFileScopedNamespace_DoesNotEnterMemberHeaderMerge()
     {
         const string content = """

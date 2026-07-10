@@ -280,6 +280,14 @@ public static partial class SymbolExtractor
 
     private static CSharpLexedLine LexCSharpLine(string line, CSharpLexState state)
     {
+        if (state.Mode == CSharpLexMode.Code
+            && state.InterpolationReturnMode == CSharpLexMode.Code
+            && state.InterpolationBraceDepth == 0
+            && line.AsSpan().IndexOfAny('/', '"', '\'') < 0)
+        {
+            return new CSharpLexedLine(line, state);
+        }
+
         var sanitized = new char[line.Length];
         var i = 0;
 
@@ -1778,7 +1786,8 @@ public static partial class SymbolExtractor
             return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
 
         var isPropertyHeaderPrefix = CSharpPropertyHeaderPrefixRegex.IsMatch(matchLine);
-        var isMethodHeaderPrefix = CSharpMethodHeaderPrefixRegex.IsMatch(matchLine);
+        var isMethodHeaderPrefix = !isPropertyHeaderPrefix
+            && CSharpMethodHeaderPrefixRegex.IsMatch(matchLine);
         if (!isPropertyHeaderPrefix
             && isMethodHeaderPrefix
             && matchLine.IndexOf('(') >= 0
@@ -2017,7 +2026,19 @@ public static partial class SymbolExtractor
     }
 
     private static bool IsCSharpConfirmedMemberOrMethodPrefix(string line)
-        => CSharpConfirmedMemberPrefixRegex.IsMatch(line) || CSharpConfirmedMethodPrefixRegex.IsMatch(line);
+    {
+        var openBraceIndex = line.IndexOf('{');
+        if (openBraceIndex < 0)
+            return false;
+
+        var prefixEnd = openBraceIndex - 1;
+        while (prefixEnd >= 0 && char.IsWhiteSpace(line[prefixEnd]))
+            prefixEnd--;
+
+        return prefixEnd >= 0 && line[prefixEnd] == ')'
+            ? CSharpConfirmedMethodPrefixRegex.IsMatch(line)
+            : CSharpConfirmedMemberPrefixRegex.IsMatch(line);
+    }
 
     // Prefer the raw line's `{` column (to preserve original positioning for body slicing),
     // falling back to the sanitized line only when the raw line hides the brace in a string
@@ -3394,12 +3415,11 @@ public static partial class SymbolExtractor
             return line;
         }
 
-        var builder = new StringBuilder(line.Length);
+        StringBuilder? builder = null;
         var angleDepth = 0;
         var tupleDepth = 0;
-        var map = new int[line.Length + 1];
+        int[]? map = null;
         var mapLength = 0;
-        var collapsed = false;
 
         for (int i = 0; i < line.Length; i++)
         {
@@ -3407,70 +3427,112 @@ public static partial class SymbolExtractor
             if (ch == '<' && LooksLikeRecordGenericAngleStart(line, i))
             {
                 angleDepth++;
-                map[mapLength++] = i;
-                builder.Append(ch);
+                if (builder != null)
+                {
+                    map![mapLength++] = i;
+                    builder.Append(ch);
+                }
                 continue;
             }
 
             if (ch == '>' && angleDepth > 0)
             {
                 angleDepth--;
-                map[mapLength++] = i;
-                builder.Append(ch);
+                if (builder != null)
+                {
+                    map![mapLength++] = i;
+                    builder.Append(ch);
+                }
                 continue;
             }
 
             if (angleDepth > 0 && ch == '(')
             {
                 tupleDepth++;
-                map[mapLength++] = i;
-                builder.Append(ch);
+                if (builder != null)
+                {
+                    map![mapLength++] = i;
+                    builder.Append(ch);
+                }
                 continue;
             }
 
             if (angleDepth > 0 && ch == ')' && tupleDepth > 0)
             {
                 tupleDepth--;
-                map[mapLength++] = i;
-                builder.Append(ch);
+                if (builder != null)
+                {
+                    map![mapLength++] = i;
+                    builder.Append(ch);
+                }
                 continue;
             }
 
             if (angleDepth > 0 && char.IsWhiteSpace(ch))
             {
-                collapsed = true;
                 int whitespaceEnd = i + 1;
                 while (whitespaceEnd < line.Length && char.IsWhiteSpace(line[whitespaceEnd]))
                     whitespaceEnd++;
 
-                if (tupleDepth > 0 && ShouldPreserveCSharpTupleElementWhitespace(line, i, whitespaceEnd))
+                var preserveWhitespace = tupleDepth > 0
+                    && ShouldPreserveCSharpTupleElementWhitespace(line, i, whitespaceEnd);
+                if (preserveWhitespace && whitespaceEnd == i + 1)
                 {
-                    if (builder.Length == 0 || builder[builder.Length - 1] != ' ')
+                    if (builder != null && (builder.Length == 0 || builder[builder.Length - 1] != ' '))
                     {
-                        map[mapLength++] = i;
+                        map![mapLength++] = i;
                         builder.Append(' ');
                     }
+
+                    i = whitespaceEnd - 1;
+                    continue;
+                }
+
+                if (builder == null)
+                    InitializeCSharpGenericWhitespaceBuffers(line, i, out builder, out map, out mapLength);
+
+                if (preserveWhitespace && (builder.Length == 0 || builder[builder.Length - 1] != ' '))
+                {
+                    map![mapLength++] = i;
+                    builder.Append(' ');
                 }
 
                 i = whitespaceEnd - 1;
                 continue;
             }
 
-            map[mapLength++] = i;
-            builder.Append(ch);
+            if (builder != null)
+            {
+                map![mapLength++] = i;
+                builder.Append(ch);
+            }
         }
 
-        if (!collapsed)
+        if (builder == null)
         {
             collapsedToRaw = null;
             return line;
         }
 
-        map[mapLength] = line.Length;
+        map![mapLength] = line.Length;
         if (mapLength + 1 != map.Length)
             Array.Resize(ref map, mapLength + 1);
         collapsedToRaw = map;
         return builder.ToString();
+    }
+
+    private static void InitializeCSharpGenericWhitespaceBuffers(
+        string line,
+        int prefixLength,
+        out StringBuilder builder,
+        out int[] map,
+        out int mapLength)
+    {
+        builder = new StringBuilder(line.Length).Append(line, 0, prefixLength);
+        map = new int[line.Length + 1];
+        for (var index = 0; index < prefixLength; index++)
+            map[index] = index;
+        mapLength = prefixLength;
     }
 
     private static bool ShouldPreserveCSharpTupleElementWhitespace(string line, int whitespaceStart, int whitespaceEnd)
