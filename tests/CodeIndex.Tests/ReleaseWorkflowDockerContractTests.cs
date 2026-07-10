@@ -21,7 +21,7 @@ public partial class ReleaseWorkflowTests
     [Fact]
     public void ReleaseWorkflow_DockerfileLocksRuntimePackagesAndRidMapping()
     {
-        var dockerfile = RepositoryTestPaths.ReadText("Dockerfile").ReplaceLineEndings("\n");
+        var dockerfile = RepositoryTestPaths.ReadNormalizedText("Dockerfile");
 
         Assert.Equal(2, dockerfile.Split('\n').Count(line => line.Contains("amd64) rid=\"linux-musl-x64\" ;;", StringComparison.Ordinal)));
         Assert.Equal(2, dockerfile.Split('\n').Count(line => line.Contains("arm64) rid=\"linux-musl-arm64\" ;;", StringComparison.Ordinal)));

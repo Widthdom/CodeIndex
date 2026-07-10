@@ -81,7 +81,7 @@ public class PackagesLockTests
         var releaseWorkflow = RepositoryTestPaths.ReadNormalizedWorkflow("release.yml");
         var codeqlWorkflow = RepositoryTestPaths.ReadNormalizedWorkflow("codeql.yml");
         var mutationWorkflow = RepositoryTestPaths.ReadNormalizedWorkflow("mutation-testing.yml");
-        var dockerfile = RepositoryTestPaths.ReadText("Dockerfile").ReplaceLineEndings("\n");
+        var dockerfile = RepositoryTestPaths.ReadNormalizedText("Dockerfile");
 
         Assert.Contains("dotnet restore CodeIndex.sln --locked-mode", dotnetWorkflow, StringComparison.Ordinal);
         Assert.Contains("dotnet restore CodeIndex.sln --locked-mode", releaseWorkflow, StringComparison.Ordinal);
