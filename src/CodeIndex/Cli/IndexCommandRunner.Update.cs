@@ -607,7 +607,9 @@ public static partial class IndexCommandRunner
                         continue;
                     }
 
-                    if (FileIndexer.TryGetFileIdentity(absPath, out var identity) && !visitedFileIdentities.Add(identity))
+                    if (FileIndexer.TryGetFileIdentity(absPath, out var identity, out var linkCount)
+                        && linkCount > 1
+                        && !visitedFileIdentities.Add(identity))
                     {
                         var message = "Skipped hardlinked file because the same file content was already indexed from another path.";
                         warnings++;

@@ -121,7 +121,9 @@ public partial class FileIndexer
             return false;
         }
 
-        if (TryGetFileIdentity(file, out var identity) && !scanState.VisitedFileIdentities.Add(identity))
+        if (TryGetFileIdentity(file, out var identity, out var linkCount)
+            && linkCount > 1
+            && !scanState.VisitedFileIdentities.Add(identity))
         {
             var relativeFile = ToRelativePath(file);
             scanState.Errors.Add(new ScanError(
