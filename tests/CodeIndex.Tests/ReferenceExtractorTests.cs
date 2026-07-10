@@ -5692,6 +5692,33 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void MaskRazorCommentLines_ReusesPlainMarkupLineArrays()
+    {
+        string[] lines =
+        [
+            "<div>",
+            "  <span>Visible</span>",
+            "</div>",
+        ];
+
+        var masked = LanguageReferenceExtractionSupport.MaskRazorCommentLines(lines);
+
+        Assert.Same(lines, masked);
+    }
+
+    [Fact]
+    public void MaskRazorCommentLines_MasksHtmlCommentsWhenPresent()
+    {
+        string[] lines = ["<div><!-- hidden --><span>Visible</span></div>"];
+
+        var masked = LanguageReferenceExtractionSupport.MaskRazorCommentLines(lines);
+
+        Assert.NotSame(lines, masked);
+        Assert.DoesNotContain("hidden", masked[0], StringComparison.Ordinal);
+        Assert.Contains("<span>Visible</span>", masked[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Extract_VbDetailedReferences_CapturesTypePositionsAddressOfAndHandles()
     {
         const string content = """
