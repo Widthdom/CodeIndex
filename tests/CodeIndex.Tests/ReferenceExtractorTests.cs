@@ -44,6 +44,19 @@ public partial class ReferenceExtractorTests
         Assert.All(symbolNames, symbolName => Assert.Contains(symbolName, actualNames));
     }
 
+    private static void AssertReferencesDoNotContain(
+        IEnumerable<ReferenceRecord> references,
+        string referenceKind,
+        params string[] symbolNames)
+    {
+        var actualNames = references
+            .Where(reference => reference.ReferenceKind == referenceKind)
+            .Select(reference => reference.SymbolName)
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.All(symbolNames, symbolName => Assert.DoesNotContain(symbolName, actualNames));
+    }
+
     private static (List<SymbolRecord> Symbols, List<ReferenceRecord> References) ExtractSymbolsAndReferences(
         string lang,
         string content,

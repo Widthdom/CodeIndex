@@ -70,7 +70,7 @@ public partial class ReferenceExtractorTests
         var callReferences = references.Where(reference => reference.ReferenceKind == "call").ToList();
         Assert.Equal(6, callReferences.Count);
         AssertReferencesContain(callReferences, "call", "main", "std::println", "vec", "format", "my_macro", "dbg", "helper");
-        Assert.DoesNotContain(callReferences, reference => reference.SymbolName == "macro_rules");
+        AssertReferencesDoNotContain(callReferences, "call", "macro_rules");
     }
 
     [Fact]
