@@ -10012,18 +10012,18 @@ public static partial class SymbolExtractor
 
     private static string NormalizeRubySymbolName(string name, string matchLine)
     {
-        if (!matchLine.TrimStart().StartsWith("require", StringComparison.Ordinal))
+        if (!matchLine.AsSpan().TrimStart().StartsWith("require", StringComparison.Ordinal))
             return name;
 
-        var trimmed = name.Trim();
+        var trimmed = name.AsSpan().Trim();
         if (trimmed.Length >= 2
             && ((trimmed[0] == '\'' && trimmed[^1] == '\'')
                 || (trimmed[0] == '"' && trimmed[^1] == '"')))
         {
-            return trimmed[1..^1];
+            return trimmed[1..^1].ToString();
         }
 
-        return trimmed;
+        return trimmed.Length == name.Length ? name : trimmed.ToString();
     }
 
     private static string NormalizeSmalltalkSelectorName(string name)
