@@ -13,10 +13,8 @@ public class CiWorkflowTests
     [Fact]
     public void DotnetWorkflow_RunsTestsWithRunsettingsBlameRetryAndArtifacts()
     {
-        var workflow = RepositoryTestPaths.ReadWorkflow("dotnet.yml");
-        var normalizedWorkflow = RepositoryTestPaths.ReadNormalizedWorkflow("dotnet.yml");
+        var workflow = RepositoryTestPaths.ReadNormalizedWorkflow("dotnet.yml");
         var testScript = RepositoryTestPaths.ReadText(".github", "scripts", "run-dotnet-tests.ps1");
-        var normalizedTestScript = testScript.ReplaceLineEndings("\n");
 
         AssertContainsAll(
             testScript,
@@ -25,7 +23,7 @@ public class CiWorkflowTests
             testScript,
             "--results-directory\", \"./TestResults");
         AssertContainsAll(
-            normalizedWorkflow,
+            workflow,
             "include:\n          - os: ubuntu-24.04\n            test-framework: net8.0\n            primary_lane: true",
             "- name: Set up .NET SDKs\n        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0\n        with:\n          dotnet-version: |\n            8.0.413\n            9.0.301",
             "- name: Restore dependencies\n        if: matrix.primary_lane\n        run: dotnet restore CodeIndex.sln --locked-mode",
@@ -41,14 +39,14 @@ public class CiWorkflowTests
             "key: ${{ runner.os }}-dotnet-nuget-${{ hashFiles('**/packages.lock.json', 'global.json') }}",
             "primary_lane: true");
         AssertContainsAll(
-            normalizedWorkflow,
+            workflow,
             "- name: Audit NuGet package vulnerabilities\n        if: matrix.primary_lane",
             "- name: Verify Release test build\n        if: matrix.primary_lane\n        run: dotnet build tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework ${{ matrix.test-framework }} --no-restore -p:UseSharedCompilation=false",
             "- name: Verify developer task wrapper\n        if: matrix.primary_lane\n        run: make lint",
             "- name: Build\n        if: ${{ !matrix.primary_lane }}",
             "run: |\n          ./.github/scripts/run-dotnet-tests.ps1 `\n            -Framework \"${{ matrix.test-framework }}\" `\n            -CollectCoverage \"${{ matrix.primary_lane }}\"");
         AssertDoesNotContainAny(
-            normalizedWorkflow,
+            workflow,
             "- name: Verify Release solution build",
             "dotnet build CodeIndex.sln --configuration Release --no-restore",
             "- name: Verify formatting");
@@ -94,7 +92,7 @@ public class CiWorkflowTests
             "TestResults/**/*.dump",
             "if: always() && matrix.primary_lane");
         AssertContainsAll(
-            normalizedWorkflow,
+            workflow,
             "- name: Upload test results\n        if: always() && (steps.test.outputs.summarize == 'true' || failure())",
             "- name: Publish\n        if: matrix.primary_lane",
             "- name: Upload build artifact\n        if: matrix.primary_lane");
@@ -106,10 +104,10 @@ public class CiWorkflowTests
             "always() && matrix.os == 'ubuntu-24.04' && matrix.test-framework == 'net8.0'",
             "always() && !(matrix.os == 'windows-2022' && matrix.test-framework == 'net9.0')");
         AssertDoesNotContainAny(
-            normalizedWorkflow,
+            workflow,
             "if: always()\n        run: dotnet run --project tools/CodeIndex.TestTelemetry",
             "- name: Upload test results\n        if: always()\n");
-        Assert.Contains("function Invoke-TestRun", normalizedTestScript);
+        Assert.Contains("function Invoke-TestRun", testScript);
     }
 
     [Fact]
