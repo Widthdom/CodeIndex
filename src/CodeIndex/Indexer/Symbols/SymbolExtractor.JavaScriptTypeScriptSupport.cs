@@ -5417,39 +5417,45 @@ public static partial class SymbolExtractor
 
     private static bool StartsJavaScriptTypeScriptArrowFunctionAssignmentValue(string rhs)
     {
-        rhs = TrimJavaScriptTypeScriptStart(rhs);
-        while (rhs.Length > 0)
+        var index = SkipJavaScriptTypeScriptWhitespace(rhs, 0);
+        while (index < rhs.Length)
         {
-            if (StartsJavaScriptTypeScriptGenericArrowAssignmentValue(rhs)
-                || JavaScriptTypeScriptArrowAssignmentValueRegex.IsMatch(rhs))
+            if (StartsJavaScriptTypeScriptArrowFunctionAssignmentValue(rhs, index))
             {
                 return true;
             }
 
-            if (rhs[0] != '(')
+            if (rhs[index] != '(')
                 return false;
 
-            rhs = TrimJavaScriptTypeScriptStart(rhs, 1);
+            index = SkipJavaScriptTypeScriptWhitespace(rhs, index + 1);
         }
 
         return false;
     }
 
+    private static bool StartsJavaScriptTypeScriptArrowFunctionAssignmentValue(string rhs, int startColumn)
+    {
+        var index = SkipJavaScriptTypeScriptWhitespace(rhs, Math.Max(0, startColumn));
+        return StartsJavaScriptTypeScriptGenericArrowAssignmentValue(rhs, index)
+            || StartsJavaScriptTypeScriptArrowAssignmentValue(rhs, index);
+    }
+
     private static bool StartsJavaScriptTypeScriptLambdaAssignmentValue(string rhs)
     {
-        rhs = TrimJavaScriptTypeScriptStart(rhs);
-        while (rhs.Length > 0)
+        var index = SkipJavaScriptTypeScriptWhitespace(rhs, 0);
+        while (index < rhs.Length)
         {
-            if (StartsJavaScriptTypeScriptArrowFunctionAssignmentValue(rhs)
-                || StartsJavaScriptTypeScriptAnonymousFunctionAssignmentValue(rhs))
+            if (StartsJavaScriptTypeScriptArrowFunctionAssignmentValue(rhs, index)
+                || StartsJavaScriptTypeScriptAnonymousFunctionAssignmentValue(rhs, index))
             {
                 return true;
             }
 
-            if (rhs[0] != '(')
+            if (rhs[index] != '(')
                 return false;
 
-            rhs = TrimJavaScriptTypeScriptStart(rhs, 1);
+            index = SkipJavaScriptTypeScriptWhitespace(rhs, index + 1);
         }
 
         return false;
@@ -5457,53 +5463,47 @@ public static partial class SymbolExtractor
 
     private static bool StartsJavaScriptTypeScriptClassAssignmentValue(string rhs)
     {
-        rhs = TrimJavaScriptTypeScriptStart(rhs);
-        while (rhs.Length > 0)
+        var index = SkipJavaScriptTypeScriptWhitespace(rhs, 0);
+        while (index < rhs.Length)
         {
-            if (IsJavaScriptTypeScriptKeywordAt(rhs, 0, "class"))
+            if (IsJavaScriptTypeScriptKeywordAt(rhs, index, "class"))
                 return true;
 
-            if (rhs[0] != '(')
+            if (rhs[index] != '(')
                 return false;
 
-            rhs = TrimJavaScriptTypeScriptStart(rhs, 1);
+            index = SkipJavaScriptTypeScriptWhitespace(rhs, index + 1);
         }
 
         return false;
     }
 
     private static bool StartsJavaScriptTypeScriptAnonymousFunctionAssignmentValue(string rhs)
-    {
-        rhs = TrimJavaScriptTypeScriptStart(rhs);
-        if (IsJavaScriptTypeScriptKeywordAt(rhs, 0, "async"))
-            rhs = TrimJavaScriptTypeScriptStart(rhs, "async".Length);
+        => StartsJavaScriptTypeScriptAnonymousFunctionAssignmentValue(rhs, 0);
 
-        if (!IsJavaScriptTypeScriptKeywordAt(rhs, 0, "function"))
+    private static bool StartsJavaScriptTypeScriptAnonymousFunctionAssignmentValue(string rhs, int startColumn)
+    {
+        var index = SkipJavaScriptTypeScriptWhitespace(rhs, Math.Max(0, startColumn));
+        if (IsJavaScriptTypeScriptKeywordAt(rhs, index, "async"))
+            index = SkipJavaScriptTypeScriptWhitespace(rhs, index + "async".Length);
+
+        if (!IsJavaScriptTypeScriptKeywordAt(rhs, index, "function"))
             return false;
 
-        rhs = TrimJavaScriptTypeScriptStart(rhs, "function".Length);
-        if (rhs.StartsWith('*'))
-            rhs = TrimJavaScriptTypeScriptStart(rhs, 1);
+        index = SkipJavaScriptTypeScriptWhitespace(rhs, index + "function".Length);
+        if (index < rhs.Length && rhs[index] == '*')
+            index = SkipJavaScriptTypeScriptWhitespace(rhs, index + 1);
 
-        return rhs.StartsWith('(');
-    }
-
-    private static bool StartsJavaScriptTypeScriptAsyncFunctionAssignmentValue(string rhs)
-    {
-        if (!IsJavaScriptTypeScriptKeywordAt(rhs, 0, "async"))
-            return false;
-
-        var asyncRemainder = TrimJavaScriptTypeScriptStart(rhs, "async".Length);
-        return IsJavaScriptTypeScriptKeywordAt(asyncRemainder, 0, "function");
+        return index < rhs.Length && rhs[index] == '(';
     }
 
     private static bool StartsJavaScriptTypeScriptPotentialGenericArrowAssignmentValue(string rhs)
     {
-        rhs = TrimJavaScriptTypeScriptStart(rhs);
-        if (IsJavaScriptTypeScriptKeywordAt(rhs, 0, "async"))
-            rhs = TrimJavaScriptTypeScriptStart(rhs, "async".Length);
+        var index = SkipJavaScriptTypeScriptWhitespace(rhs, 0);
+        if (IsJavaScriptTypeScriptKeywordAt(rhs, index, "async"))
+            index = SkipJavaScriptTypeScriptWhitespace(rhs, index + "async".Length);
 
-        return rhs.Length > 0 && rhs[0] == '<';
+        return index < rhs.Length && rhs[index] == '<';
     }
 
     private static string CollectJavaScriptTypeScriptAssignedRhsHeader(string[] sanitizedLines, int startLineIndex, int startColumn)
