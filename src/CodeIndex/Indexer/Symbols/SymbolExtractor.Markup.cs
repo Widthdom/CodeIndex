@@ -1465,8 +1465,8 @@ public static partial class SymbolExtractor
             if (equalsIndex < 0)
                 continue;
 
-            var argumentName = argument[..equalsIndex].Trim();
-            if (!string.Equals(argumentName, "ElementName", StringComparison.OrdinalIgnoreCase))
+            var argumentName = argument.AsSpan(0, equalsIndex).Trim();
+            if (!argumentName.Equals("ElementName", StringComparison.OrdinalIgnoreCase))
                 continue;
 
             var value = NormalizeXamlElementReferenceValue(argument[(equalsIndex + 1)..]);
@@ -2087,9 +2087,9 @@ public static partial class SymbolExtractor
             var equalsIndex = IndexOfTopLevelEquals(argument);
             if (equalsIndex >= 0)
             {
-                var argumentName = argument[..equalsIndex].Trim();
-                if (string.Equals(argumentName, "Path", StringComparison.OrdinalIgnoreCase)
-                    || (allowPropertyArgument && string.Equals(argumentName, "Property", StringComparison.OrdinalIgnoreCase)))
+                var argumentName = argument.AsSpan(0, equalsIndex).Trim();
+                if (argumentName.Equals("Path", StringComparison.OrdinalIgnoreCase)
+                    || (allowPropertyArgument && argumentName.Equals("Property", StringComparison.OrdinalIgnoreCase)))
                 {
                     var pathValue = NormalizeXamlBindingPathValue(argument[(equalsIndex + 1)..]);
                     if (pathValue.Length > 0)
@@ -2118,12 +2118,12 @@ public static partial class SymbolExtractor
         var equalsIndex = IndexOfTopLevelEquals(value);
         if (equalsIndex >= 0)
         {
-            var name = value[..equalsIndex].Trim();
-            var normalized = value[(equalsIndex + 1)..].Trim();
-            if (string.Equals(name, "Path", StringComparison.OrdinalIgnoreCase))
-                return NormalizeXamlBindingPathValue(normalized);
-            if (normalized.Length > 0)
-                return NormalizeXamlMarkupValue(normalized);
+            var name = value.AsSpan(0, equalsIndex).Trim();
+            var normalized = value.AsSpan(equalsIndex + 1).Trim();
+            if (name.Equals("Path", StringComparison.OrdinalIgnoreCase))
+                return NormalizeXamlBindingPathValue(normalized.ToString());
+            if (!normalized.IsEmpty)
+                return NormalizeXamlMarkupValue(normalized.ToString());
         }
 
         return NormalizeXamlBindingPathValue(value);
