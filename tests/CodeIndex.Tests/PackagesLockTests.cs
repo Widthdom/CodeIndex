@@ -77,7 +77,7 @@ public class PackagesLockTests
     [Fact]
     public void RestoreSurfaces_UseLockedModeExactCacheKeysAndDockerRidRestore()
     {
-        var dotnetWorkflow = RepositoryTestPaths.ReadNormalizedWorkflow("dotnet.yml");
+        var dotnetWorkflow = RepositoryTestPaths.ReadNormalizedDotnetWorkflow();
         var releaseWorkflow = RepositoryTestPaths.ReadNormalizedWorkflow("release.yml");
         var codeqlWorkflow = RepositoryTestPaths.ReadNormalizedWorkflow("codeql.yml");
         var mutationWorkflow = RepositoryTestPaths.ReadNormalizedWorkflow("mutation-testing.yml");
