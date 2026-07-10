@@ -34,9 +34,7 @@ public partial class ReferenceExtractorTests
         AssertReferencesContain(references, "type_reference", "scheme", "Environment");
         AssertReferencesContain(references, "type_reference", "value", "MyWrapper");
         AssertReferencesContain(references, "type_reference", "qualifiedCount", "State");
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName is "IBOutlet" or "NSManaged"
-            && reference.ReferenceKind == "type_reference");
+        AssertReferencesDoNotContain(references, "type_reference", "IBOutlet", "NSManaged");
     }
 
     [Fact]
