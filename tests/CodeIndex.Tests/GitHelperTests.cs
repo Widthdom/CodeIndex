@@ -413,6 +413,27 @@ public class GitHelperTests : IDisposable
     }
 
     [ExternalProcessFact]
+    public void GetChangedFilesBetweenRefs_IncludesOldAndNewPathsForRename()
+    {
+        var repoDir = CreateGitRepo();
+
+        File.WriteAllText(Path.Combine(repoDir, "old.txt"), "v1\n");
+        RunGit(repoDir, "add", "old.txt");
+        RunGit(repoDir, "commit", "-m", "initial");
+        var oldRef = RunGit(repoDir, "rev-parse", "HEAD").Trim();
+
+        File.Move(Path.Combine(repoDir, "old.txt"), Path.Combine(repoDir, "new.txt"));
+        File.AppendAllText(Path.Combine(repoDir, "new.txt"), "v2\n");
+        RunGit(repoDir, "add", "-A");
+        RunGit(repoDir, "commit", "-m", "rename file");
+
+        var changedFiles = GitHelper.GetChangedFilesBetweenRefs(repoDir, oldRef, "HEAD");
+
+        Assert.Contains("old.txt", changedFiles);
+        Assert.Contains("new.txt", changedFiles);
+    }
+
+    [ExternalProcessFact]
     public async Task GetChangedFilesFromCommit_DrainsLargeStderrWithoutDeadlock()
     {
         if (OperatingSystem.IsWindows())
