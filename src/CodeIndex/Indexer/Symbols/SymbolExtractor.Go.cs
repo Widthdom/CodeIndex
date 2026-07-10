@@ -107,9 +107,9 @@ public static partial class SymbolExtractor
             return true;
 
         var name = match.Groups["name"].ValueSpan.Trim().ToString();
-        var kind = Regex.IsMatch(normalizedTypeText, @"\bstruct\b")
+        var kind = ContainsGoTypeKeyword(normalizedTypeText, "struct")
             ? "struct"
-            : Regex.IsMatch(normalizedTypeText, @"\binterface\b")
+            : ContainsGoTypeKeyword(normalizedTypeText, "interface")
                 ? "protocol"
                 : "class";
         if (HasGoSymbol(symbols, fileId, lineIndex + 1, kind, name))
@@ -155,6 +155,26 @@ public static partial class SymbolExtractor
 
         return true;
     }
+
+    private static bool ContainsGoTypeKeyword(string text, string keyword)
+    {
+        var index = text.IndexOf(keyword, StringComparison.Ordinal);
+        while (index >= 0)
+        {
+            var beforeIsBoundary = index == 0 || !IsGoIdentifierPart(text[index - 1]);
+            var afterIndex = index + keyword.Length;
+            var afterIsBoundary = afterIndex >= text.Length || !IsGoIdentifierPart(text[afterIndex]);
+            if (beforeIsBoundary && afterIsBoundary)
+                return true;
+
+            index = text.IndexOf(keyword, afterIndex, StringComparison.Ordinal);
+        }
+
+        return false;
+    }
+
+    private static bool IsGoIdentifierPart(char ch)
+        => ch == '_' || char.IsLetterOrDigit(ch);
 
     private static bool TryAddGoValueSymbol(
         long fileId,
