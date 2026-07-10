@@ -2550,7 +2550,9 @@ public static partial class ReferenceExtractor
         return tokens;
     }
 
-    internal static List<(int Start, int Length)> SplitTopLevelCommaSpans(string text)
+    internal static List<(int Start, int Length)> SplitTopLevelCommaSpans(string text) => SplitTopLevelCommaSpans(text.AsSpan());
+
+    internal static List<(int Start, int Length)> SplitTopLevelCommaSpans(ReadOnlySpan<char> text)
     {
         if (text.IndexOf(',') < 0)
             return [(0, text.Length)];

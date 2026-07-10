@@ -347,14 +347,14 @@ public static partial class ReferenceExtractor
         if (parameterEnd == parameterStart)
             return string.Empty;
 
-        var parameterList = signature!.Substring(parameterStart, parameterEnd - parameterStart);
+        var parameterList = signature.AsSpan(parameterStart, parameterEnd - parameterStart);
         var parameterShape = new StringBuilder(parameterList.Length);
         foreach (var span in SplitTopLevelCommaSpans(parameterList))
         {
             if (parameterShape.Length > 0)
                 parameterShape.Append(',');
 
-            parameterShape.Append(NormalizeCSharpParameterTypeShape(parameterList.Substring(span.Start, span.Length)));
+            parameterShape.Append(NormalizeCSharpParameterTypeShape(parameterList.Slice(span.Start, span.Length).ToString()));
         }
 
         return parameterShape.ToString();
