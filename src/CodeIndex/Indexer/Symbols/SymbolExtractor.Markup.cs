@@ -2639,7 +2639,7 @@ public static partial class SymbolExtractor
         }
     }
 
-    private static string MaskHtmlRawTextRegions(string text)
+    internal static string MaskHtmlRawTextRegions(string text)
     {
         // Walk `text` character by character, masking the body of raw-text /
         // RCDATA elements (`<script>` / `<style>` / `<textarea>` / `<title>`)
@@ -2664,6 +2664,9 @@ public static partial class SymbolExtractor
         // あった。state machine は symbol extractor と同じ引用符処理を共有して
         // 開始タグの境界を一致させ、開始タグが未終端の場合は EOF までマスクする
         // （仕様上、未閉鎖 raw-text 要素は EOF か `</name>` まで本体を飲むため）。
+        if (!MayContainHtmlRawTextMaskTarget(text))
+            return text;
+
         var chars = text.ToCharArray();
         var i = 0;
         while (i < chars.Length)
@@ -2818,6 +2821,24 @@ public static partial class SymbolExtractor
             i++;
         }
         return new string(chars);
+    }
+
+    private static bool MayContainHtmlRawTextMaskTarget(string text)
+    {
+        for (var index = text.IndexOf('<'); index >= 0; index = text.IndexOf('<', index + 1))
+        {
+            if (index + 1 >= text.Length)
+                continue;
+
+            var next = text[index + 1];
+            if (next is '!' or '?')
+                return true;
+
+            if (TryMatchHtmlRawTextOpenerName(text, index) != null)
+                return true;
+        }
+
+        return false;
     }
 
     private static string? TryMatchHtmlRawTextOpenerName(string text, int start)

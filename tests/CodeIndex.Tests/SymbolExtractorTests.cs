@@ -12720,6 +12720,28 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void MaskHtmlRawTextRegions_ReusesPlainMarkup()
+    {
+        const string content = "<main><custom-card id=\"real\"></custom-card></main>";
+
+        var masked = SymbolExtractor.MaskHtmlRawTextRegions(content);
+
+        Assert.Same(content, masked);
+    }
+
+    [Fact]
+    public void MaskHtmlRawTextRegions_MasksRawTextWhenPresent()
+    {
+        const string content = "<script><custom-card id=\"fake\"></custom-card></script><section id=\"real\"></section>";
+
+        var masked = SymbolExtractor.MaskHtmlRawTextRegions(content);
+
+        Assert.NotSame(content, masked);
+        Assert.DoesNotContain("custom-card", masked, StringComparison.Ordinal);
+        Assert.Contains("<section id=\"real\"></section>", masked, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Extract_Html_StillCapturesExternalScriptSrcEvenWhenBodyHasRawText()
     {
         // The masker must preserve the <script src="..."> opening tag so external
