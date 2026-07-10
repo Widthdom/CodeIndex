@@ -320,8 +320,8 @@ internal static class SqlNameResolver
         if (TryParseSimpleUnquotedSqlName(trimmed, out var simpleParts))
             return simpleParts;
 
-        var segments = new List<string>();
-        var caseSensitiveSegments = new List<bool>();
+        var segments = new List<string>(4);
+        var caseSensitiveSegments = new List<bool>(4);
         var current = new StringBuilder(trimmed.Length);
         char quote = '\0';
         var currentHasCaseSensitiveQuote = false;
@@ -474,8 +474,8 @@ internal static class SqlNameResolver
     {
         match = default;
 
-        var segments = new List<string>();
-        var caseSensitiveSegments = new List<bool>();
+        var segments = new List<string>(4);
+        var caseSensitiveSegments = new List<bool>(4);
         var index = startIndex;
         var leafStartIndex = startIndex;
         var leafEndIndexExclusive = startIndex;
@@ -590,7 +590,7 @@ internal static class SqlNameResolver
         out QualifiedNameMatch match)
     {
         match = default;
-        var segments = new List<(string Name, bool HasCaseSensitiveQuote, int StartIndex, int EndIndexExclusive)>();
+        var segments = new List<(string Name, bool HasCaseSensitiveQuote, int StartIndex, int EndIndexExclusive)>(4);
         var index = startIndex;
         while (true)
         {
