@@ -2021,10 +2021,11 @@ public static partial class SymbolExtractor
         if (payloadStart < 0)
             return "";
 
-        var payload = content[(payloadStart + 1)..].TrimStart();
-        if (payload.Length == 0)
+        var payloadStartIndex = SkipXamlMarkupWhitespace(content, payloadStart + 1);
+        if (payloadStartIndex >= content.Length)
             return "";
 
+        var payload = content[payloadStartIndex..];
         foreach (var argument in SplitTopLevelMarkupArguments(payload))
         {
             var normalized = NormalizeXamlMarkupArgument(argument);
@@ -2075,10 +2076,11 @@ public static partial class SymbolExtractor
         if (payloadStart < 0)
             return value;
 
-        var payload = value[(payloadStart + 1)..].TrimStart();
-        if (payload.Length == 0)
+        var payloadStartIndex = SkipXamlMarkupWhitespace(value, payloadStart + 1);
+        if (payloadStartIndex >= value.Length)
             return value;
 
+        var payload = value[payloadStartIndex..];
         string? fallback = null;
         foreach (var argument in SplitTopLevelMarkupArguments(payload))
         {
@@ -2166,10 +2168,11 @@ public static partial class SymbolExtractor
         if (payloadStart < 0)
             return value;
 
-        var payload = value[(payloadStart + 1)..].TrimStart();
-        if (payload.Length == 0)
+        var payloadStartIndex = SkipXamlMarkupWhitespace(value, payloadStart + 1);
+        if (payloadStartIndex >= value.Length)
             return value;
 
+        var payload = value[payloadStartIndex..];
         foreach (var argument in SplitTopLevelMarkupArguments(payload))
         {
             var normalized = NormalizeXamlMarkupArgument(argument);
@@ -2280,6 +2283,15 @@ public static partial class SymbolExtractor
         }
 
         return -1;
+    }
+
+    private static int SkipXamlMarkupWhitespace(string value, int start)
+    {
+        start = Math.Clamp(start, 0, value.Length);
+        while (start < value.Length && char.IsWhiteSpace(value[start]))
+            start++;
+
+        return start;
     }
 
     private static int FindTopLevelTypeConstructorStart(string value)
