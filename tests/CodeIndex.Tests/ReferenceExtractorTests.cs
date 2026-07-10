@@ -236,6 +236,29 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void StructuralLineMasker_MaskLines_PerlPodReusesNonPodLines()
+    {
+        var lines = new[]
+        {
+            "call_real();",
+            "  =pod",
+            "  Phantom::call();",
+            "  =cut",
+            "call_after();",
+        };
+
+        var masked = StructuralLineMasker.MaskLines("perl", lines);
+
+        Assert.NotSame(lines, masked);
+        Assert.Same(lines[0], masked[0]);
+        Assert.NotSame(lines[1], masked[1]);
+        Assert.NotSame(lines[2], masked[2]);
+        Assert.NotSame(lines[3], masked[3]);
+        Assert.Same(lines[4], masked[4]);
+        Assert.DoesNotContain("Phantom", masked[2], StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Extract_CancelledToken_ThrowsBeforeWork()
     {
         using var cancellation = new CancellationTokenSource();

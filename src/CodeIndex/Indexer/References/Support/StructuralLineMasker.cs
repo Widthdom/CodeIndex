@@ -322,18 +322,19 @@ internal static class StructuralLineMasker
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
-            var trimmed = line.TrimStart();
-            if (trimmed.Length == 0)
+            var firstNonWhitespace = GetFirstNonWhitespaceIndex(line);
+            if (firstNonWhitespace == line.Length)
             {
                 if (inPod)
                     lines[i] = new string(' ', line.Length);
                 continue;
             }
 
+            var trimmed = line.AsSpan(firstNonWhitespace);
             if (IsPerlPodDirectiveLine(trimmed))
             {
                 lines[i] = new string(' ', line.Length);
-                inPod = !string.Equals(trimmed, "=cut", StringComparison.Ordinal);
+                inPod = !trimmed.StartsWith("=cut", StringComparison.Ordinal);
                 continue;
             }
 
@@ -342,11 +343,22 @@ internal static class StructuralLineMasker
         }
     }
 
-    private static bool IsPerlPodDirectiveLine(string trimmedLine)
+    private static int GetFirstNonWhitespaceIndex(string line)
+    {
+        for (var i = 0; i < line.Length; i++)
+        {
+            if (!char.IsWhiteSpace(line[i]))
+                return i;
+        }
+
+        return line.Length;
+    }
+
+    private static bool IsPerlPodDirectiveLine(ReadOnlySpan<char> trimmedLine)
     {
         return trimmedLine.StartsWith("=", StringComparison.Ordinal)
             && trimmedLine.Length > 1
-            && (trimmedLine[1] == 'c' && trimmedLine.Length >= 4 && string.Equals(trimmedLine[..4], "=cut", StringComparison.Ordinal)
+            && (trimmedLine[1] == 'c' && trimmedLine.Length >= 4 && trimmedLine.StartsWith("=cut", StringComparison.Ordinal)
                 || char.IsLetter(trimmedLine[1]));
     }
 
