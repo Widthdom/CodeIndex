@@ -2048,16 +2048,25 @@ public static partial class SymbolExtractor
 
     private static string[] BuildJavaScriptTypeScriptSanitizedLines(string[] lines)
     {
-        var sanitizedLines = new string[lines.Length];
+        string[]? sanitizedLines = null;
         var lexState = new JavaScriptLexState();
         for (int i = 0; i < lines.Length; i++)
         {
             var lexedLine = LexJavaScriptLine(lines[i], lexState);
-            sanitizedLines[i] = lexedLine.SanitizedLine;
+            if (sanitizedLines != null)
+            {
+                sanitizedLines[i] = lexedLine.SanitizedLine;
+            }
+            else if (!ReferenceEquals(lexedLine.SanitizedLine, lines[i]))
+            {
+                sanitizedLines = (string[])lines.Clone();
+                sanitizedLines[i] = lexedLine.SanitizedLine;
+            }
+
             lexState = lexedLine.EndState;
         }
 
-        return sanitizedLines;
+        return sanitizedLines ?? lines;
     }
 
     private static void ExtractJavaScriptTypeScriptReExportSymbols(long fileId, string lang, string[] rawLines, string[] sanitizedLines, List<SymbolRecord> symbols)
