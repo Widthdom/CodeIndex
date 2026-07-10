@@ -726,7 +726,7 @@ internal static partial class LanguageReferenceExtractionSupport
             if (!match.Success || !line.TrimStart().StartsWith("@implements", StringComparison.Ordinal))
                 continue;
 
-            result ??= new List<string>();
+            result ??= new List<string>(2);
             result.Add(match.Groups["type"].Value);
         }
 

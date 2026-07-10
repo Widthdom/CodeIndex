@@ -277,7 +277,7 @@ internal static class JavaReferenceExtractor
                 continue;
             if (symbol.StartLine > lineNumber)
                 continue;
-            (candidates ??= new List<SymbolRecord>()).Add(symbol);
+            (candidates ??= new List<SymbolRecord>(4)).Add(symbol);
         }
 
         if (candidates == null)
