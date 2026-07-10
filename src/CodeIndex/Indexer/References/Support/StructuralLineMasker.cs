@@ -1408,7 +1408,8 @@ internal static class StructuralLineMasker
             if (line.Length == 0)
                 continue;
 
-            var masked = line.ToCharArray();
+            char[]? masked = null;
+            char[] GetMaskedLine() => masked ??= line.ToCharArray();
             var pos = 0;
 
             while (pos < line.Length)
@@ -1421,7 +1422,7 @@ internal static class StructuralLineMasker
                         // extraction cannot mistake it for real tokens.
                         // ネストされた `/*` 自体も空白化し、後段の参照抽出が
                         // 実トークンと誤認しないようにする。
-                        ReplaceWithSpaces(masked, pos, 2);
+                        ReplaceWithSpaces(GetMaskedLine(), pos, 2);
                         blockCommentDepth++;
                         pos += 2;
                         continue;
@@ -1435,7 +1436,7 @@ internal static class StructuralLineMasker
                         // `*/` の閉じも本文と同様に空白化し、ネストされた
                         // コメント内の疑似参照が下流の単純な comment stripper
                         // をすり抜けないようにする。
-                        ReplaceWithSpaces(masked, pos, 2);
+                        ReplaceWithSpaces(GetMaskedLine(), pos, 2);
                         blockCommentDepth--;
                         pos += 2;
                         continue;
@@ -1447,7 +1448,7 @@ internal static class StructuralLineMasker
                     // Rust の block comment はネスト可能だが下流の comment
                     // 除去はネスト非対応。本文を空白化し、外側閉じに
                     // 巻き込まれた識別子が疑似参照として残らないようにする。
-                    masked[pos] = ' ';
+                    GetMaskedLine()[pos] = ' ';
                     pos++;
                     continue;
                 }
@@ -1456,13 +1457,13 @@ internal static class StructuralLineMasker
                 {
                     if (line[pos] == '"' && HasHashRun(line, pos + 1, hashCount))
                     {
-                        ReplaceWithSpaces(masked, pos, 1 + hashCount);
+                        ReplaceWithSpaces(GetMaskedLine(), pos, 1 + hashCount);
                         pos += 1 + hashCount;
                         hashCount = -1;
                         continue;
                     }
 
-                    masked[pos] = ' ';
+                    GetMaskedLine()[pos] = ' ';
                     pos++;
                     continue;
                 }
@@ -1480,7 +1481,7 @@ internal static class StructuralLineMasker
                     // `/* r#" */` が本物の raw string 開始と誤認され、次の `"#` まで
                     // 以降のソースを丸ごとマスクしてしまう。ネストコメント本文の空白化と
                     // 連続させるため `/*` 自体も空白化する。
-                    ReplaceWithSpaces(masked, pos, 2);
+                    ReplaceWithSpaces(GetMaskedLine(), pos, 2);
                     blockCommentDepth = 1;
                     pos += 2;
                     continue;
@@ -1501,7 +1502,7 @@ internal static class StructuralLineMasker
 
                 if (TryOpenRustRawString(line, pos, out var openingLength, out var hashes))
                 {
-                    ReplaceWithSpaces(masked, pos, openingLength);
+                    ReplaceWithSpaces(GetMaskedLine(), pos, openingLength);
                     pos += openingLength;
                     hashCount = hashes;
                     continue;
@@ -1518,7 +1519,8 @@ internal static class StructuralLineMasker
                 pos++;
             }
 
-            lines[i] = new string(masked);
+            if (masked is not null)
+                lines[i] = new string(masked);
         }
     }
 
