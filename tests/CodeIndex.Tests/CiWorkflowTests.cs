@@ -153,6 +153,7 @@ public class CiWorkflowTests
     {
         var workflows = RepositoryTestPaths.ReadNormalizedWorkflows();
         var allWorkflows = string.Join("\n", workflows.Select(static workflow => workflow.Content));
+        var stepBlocks = ReadStepBlocks(workflows);
 
         AssertContainsAll(allWorkflows, "ubuntu-24.04", "windows-2022", "macos-14");
 
@@ -167,7 +168,7 @@ public class CiWorkflowTests
                 "macos-latest");
         }
 
-        var continueOnErrorBlocks = FindStepBlocks(workflows, "continue-on-error: true").ToArray();
+        var continueOnErrorBlocks = FindStepBlocks(stepBlocks, "continue-on-error: true").ToArray();
         var continueOnErrorBlock = Assert.Single(continueOnErrorBlocks);
         Assert.Equal("dotnet.yml", continueOnErrorBlock.FileName);
         AssertContainsAll(
@@ -177,17 +178,17 @@ public class CiWorkflowTests
             "if: failure()",
             "actions/upload-artifact@");
 
-        foreach (var uploadBlock in FindStepBlocks(workflows, "actions/upload-artifact@"))
+        foreach (var uploadBlock in FindStepBlocks(stepBlocks, "actions/upload-artifact@"))
         {
             AssertContainsAll(uploadBlock.Text, StringComparison.Ordinal, "retention-days:");
         }
 
-        foreach (var downloadBlock in FindStepBlocks(workflows, "actions/download-artifact@"))
+        foreach (var downloadBlock in FindStepBlocks(stepBlocks, "actions/download-artifact@"))
         {
             AssertContainsAll(downloadBlock.Text, StringComparison.Ordinal, "pattern:", "path:");
         }
 
-        foreach (var cacheBlock in FindStepBlocks(workflows, "actions/cache@"))
+        foreach (var cacheBlock in FindStepBlocks(stepBlocks, "actions/cache@"))
         {
             AssertContainsAll(
                 cacheBlock.Text,
@@ -318,19 +319,23 @@ public class CiWorkflowTests
             Assert.DoesNotContain(excluded, text, comparisonType);
     }
 
-    private static IEnumerable<(string FileName, string Text)> FindStepBlocks(
-        IEnumerable<(string FileName, string Content)> workflows,
-        string requiredText)
+    private static IReadOnlyList<(string FileName, string Text)> ReadStepBlocks(
+        IEnumerable<(string FileName, string Content)> workflows)
     {
+        var blocks = new List<(string FileName, string Text)>();
         foreach (var workflow in workflows)
         {
             foreach (Match block in StepBlockPattern.Matches(workflow.Content))
-            {
-                if (block.Value.Contains(requiredText, StringComparison.Ordinal))
-                    yield return (workflow.FileName, block.Value);
-            }
+                blocks.Add((workflow.FileName, block.Value));
         }
+
+        return blocks;
     }
+
+    private static IEnumerable<(string FileName, string Text)> FindStepBlocks(
+        IEnumerable<(string FileName, string Text)> stepBlocks,
+        string requiredText)
+        => stepBlocks.Where(block => block.Text.Contains(requiredText, StringComparison.Ordinal));
 
     private static void AssertTopLevelContentsPermissionStaysReadOnly(string fileName, string workflow)
     {
