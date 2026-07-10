@@ -210,22 +210,10 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, reference =>
             reference.SymbolName == "parametrized"
             && reference.ReferenceKind == "call");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "target_func"
-            && reference.ReferenceKind == "reference"
-            && reference.Context == "@functools.wraps(target_func)");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "memoize"
-            && reference.ReferenceKind == "call"
-            && reference.Context == "@cache_with(timeout=30)(memoize(target_func))");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "target_func"
-            && reference.ReferenceKind == "reference"
-            && reference.Context == "@cache_with(timeout=30)(memoize(target_func))");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "make_factory"
-            && reference.ReferenceKind == "call"
-            && reference.Context == "@cache_with(factory=make_factory())");
+        AssertReferencesContainInContext(references, "reference", "@functools.wraps(target_func)", "target_func");
+        AssertReferencesContainInContext(references, "call", "@cache_with(timeout=30)(memoize(target_func))", "memoize");
+        AssertReferencesContainInContext(references, "reference", "@cache_with(timeout=30)(memoize(target_func))", "target_func");
+        AssertReferencesContainInContext(references, "call", "@cache_with(factory=make_factory())", "make_factory");
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "DEFAULT_TIMEOUT"
             && reference.ReferenceKind == "call");

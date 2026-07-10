@@ -30,6 +30,20 @@ public partial class ReferenceExtractorTests
         Assert.All(symbolNames, symbolName => Assert.Contains(symbolName, actualNames));
     }
 
+    private static void AssertReferencesContainInContext(
+        IEnumerable<ReferenceRecord> references,
+        string referenceKind,
+        string context,
+        params string[] symbolNames)
+    {
+        var actualNames = references
+            .Where(reference => reference.ReferenceKind == referenceKind && reference.Context == context)
+            .Select(reference => reference.SymbolName)
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.All(symbolNames, symbolName => Assert.Contains(symbolName, actualNames));
+    }
+
     private static (List<SymbolRecord> Symbols, List<ReferenceRecord> References) ExtractSymbolsAndReferences(
         string lang,
         string content,
