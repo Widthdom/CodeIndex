@@ -80,7 +80,7 @@ public static partial class SymbolExtractor
             // the comma is at an unexpected position — bail out.
             // returnType は末尾が `,` なので最後のセグメントは空のはず。そうで
             // なければ想定外の位置にある `,` なので展開を諦める。
-            if (segments[^1].Trim().Length != 0)
+            if (!string.IsNullOrWhiteSpace(segments[^1]))
                 return null;
             segments.RemoveAt(segments.Count - 1);
             if (segments.Count < 1)
@@ -294,7 +294,7 @@ public static partial class SymbolExtractor
 
     private static List<string> SplitCSharpTopLevelComma(string text)
     {
-        var result = new List<string>(2);
+        var result = new List<string>(Math.Max(2, Math.Min(32, text.Length / 16 + 1)));
         var segment = new StringBuilder(text.Length);
         int angle = 0, paren = 0, bracket = 0, brace = 0;
         foreach (var ch in text)
