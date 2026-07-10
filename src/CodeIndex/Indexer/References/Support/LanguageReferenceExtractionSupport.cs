@@ -1992,7 +1992,7 @@ internal static partial class LanguageReferenceExtractionSupport
 
     private static List<(int Start, int Length)> SplitTopLevelCArgumentSpans(string text)
     {
-        var spans = new List<(int Start, int Length)>();
+        var spans = new List<(int Start, int Length)>(4);
         int parenDepth = 0;
         int squareDepth = 0;
         int braceDepth = 0;

@@ -1781,7 +1781,10 @@ public static partial class ReferenceExtractor
 
     private static List<(int Start, int Length)> SplitTopLevelPipeSpans(ReadOnlySpan<char> text)
     {
-        var spans = new List<(int Start, int Length)>();
+        if (text.IndexOf('|') < 0)
+            return [(0, text.Length)];
+
+        var spans = new List<(int Start, int Length)>(4);
         var angleDepth = 0;
         var parenDepth = 0;
         var squareDepth = 0;
@@ -2567,7 +2570,7 @@ public static partial class ReferenceExtractor
         if (text.IndexOf(',') < 0)
             return [(0, text.Length)];
 
-        var spans = new List<(int Start, int Length)>();
+        var spans = new List<(int Start, int Length)>(4);
         int angleDepth = 0;
         int parenDepth = 0;
         int squareDepth = 0;
@@ -2666,7 +2669,7 @@ public static partial class ReferenceExtractor
         if (text.IndexOf('&') < 0)
             return [(0, text.Length)];
 
-        var spans = new List<(int Start, int Length)>();
+        var spans = new List<(int Start, int Length)>(4);
         int angleDepth = 0;
         int parenDepth = 0;
         int squareDepth = 0;

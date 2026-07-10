@@ -547,7 +547,7 @@ internal static partial class LanguageReferenceExtractionSupport
 
     private static List<(int Start, int Length)> SplitGoTypeSetTermSpans(string line)
     {
-        var spans = new List<(int Start, int Length)>();
+        var spans = new List<(int Start, int Length)>(4);
         var termStart = 0;
         var squareDepth = 0;
         var parenDepth = 0;
@@ -1032,7 +1032,7 @@ internal static partial class LanguageReferenceExtractionSupport
 
     private static List<(int Start, int Length)> SplitGoInlineStructFieldSpans(string body)
     {
-        var spans = new List<(int Start, int Length)>();
+        var spans = new List<(int Start, int Length)>(4);
         var fieldStart = 0;
         var squareDepth = 0;
         var parenDepth = 0;
