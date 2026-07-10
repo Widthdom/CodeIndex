@@ -773,7 +773,7 @@ internal static class JavaReferenceExtractor
         int listEnd = ReferenceExtractor.FindJavaTypeListTerminator(line, listStart);
         if (listEnd < 0)
             listEnd = line.Length;
-        var typeList = line.Substring(listStart, listEnd - listStart);
+        var typeList = line.AsSpan(listStart, listEnd - listStart);
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(typeList))
         {
             var leading = ReferenceExtractor.CountLeadingWhitespace(typeList, segmentStart, segmentLength);
@@ -783,12 +783,12 @@ internal static class JavaReferenceExtractor
             if (trimmedLength == 0)
                 continue;
             var absoluteStart = listStart + segmentStart + leading;
-            var rawSegment = typeList.Substring(segmentStart + leading, trimmedLength);
+            var rawSegment = typeList.Slice(segmentStart + leading, trimmedLength);
             ReferenceExtractor.AddTypeExpressionSegments(
                 references,
                 seen,
                 fileId,
-                rawSegment,
+                rawSegment.ToString(),
                 absoluteStart,
                 context,
                 lineNumber,
@@ -999,16 +999,17 @@ internal static class JavaReferenceExtractor
     private static IReadOnlySet<string> CollectGenericParameterNames(string parameterClauseText)
     {
         HashSet<string>? names = null;
-        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(parameterClauseText))
+        var parameterClause = parameterClauseText.AsSpan();
+        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(parameterClause))
         {
-            var parameterLeading = ReferenceExtractor.CountLeadingWhitespace(parameterClauseText, segmentStart, segmentLength);
+            var parameterLeading = ReferenceExtractor.CountLeadingWhitespace(parameterClause, segmentStart, segmentLength);
             var parameterLength = segmentLength - parameterLeading;
-            while (parameterLength > 0 && char.IsWhiteSpace(parameterClauseText[segmentStart + parameterLeading + parameterLength - 1]))
+            while (parameterLength > 0 && char.IsWhiteSpace(parameterClause[segmentStart + parameterLeading + parameterLength - 1]))
                 parameterLength--;
             if (parameterLength == 0)
                 continue;
 
-            var rawParameter = parameterClauseText.Substring(segmentStart + parameterLeading, parameterLength);
+            var rawParameter = parameterClause.Slice(segmentStart + parameterLeading, parameterLength).ToString();
             int extendsIndex = ReferenceExtractor.FindTopLevelKeyword(rawParameter, "extends");
             var nameFragment = extendsIndex >= 0 ? rawParameter.Substring(0, extendsIndex) : rawParameter;
             if (TryReadGenericParameterName(nameFragment, out var name))
@@ -1068,7 +1069,7 @@ internal static class JavaReferenceExtractor
         int listEnd = ReferenceExtractor.FindTypeListTerminator(line.Substring(listStart), allowArrow: false);
         if (listEnd < 0)
             listEnd = line.Length - listStart;
-        var typeList = line.Substring(listStart, listEnd);
+        var typeList = line.AsSpan(listStart, listEnd);
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(typeList))
         {
             var leading = ReferenceExtractor.CountLeadingWhitespace(typeList, segmentStart, segmentLength);
@@ -1078,12 +1079,12 @@ internal static class JavaReferenceExtractor
             if (trimmedLength == 0)
                 continue;
             var absoluteStart = listStart + segmentStart + leading;
-            var rawSegment = typeList.Substring(segmentStart + leading, trimmedLength);
+            var rawSegment = typeList.Slice(segmentStart + leading, trimmedLength);
             ReferenceExtractor.AddTypeExpressionSegments(
                 references,
                 seen,
                 fileId,
-                rawSegment,
+                rawSegment.ToString(),
                 absoluteStart,
                 context,
                 lineNumber,
@@ -1180,16 +1181,17 @@ internal static class JavaReferenceExtractor
                 "java");
 
             var implementationsGroup = match.Groups["implementations"];
-            foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(implementationsGroup.Value))
+            var implementations = implementationsGroup.ValueSpan;
+            foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(implementations))
             {
-                var segmentLeading = ReferenceExtractor.CountLeadingWhitespace(implementationsGroup.Value, segmentStart, segmentLength);
+                var segmentLeading = ReferenceExtractor.CountLeadingWhitespace(implementations, segmentStart, segmentLength);
                 var rawSegmentLength = segmentLength - segmentLeading;
-                while (rawSegmentLength > 0 && char.IsWhiteSpace(implementationsGroup.Value[segmentStart + segmentLeading + rawSegmentLength - 1]))
+                while (rawSegmentLength > 0 && char.IsWhiteSpace(implementations[segmentStart + segmentLeading + rawSegmentLength - 1]))
                     rawSegmentLength--;
                 if (rawSegmentLength == 0)
                     continue;
 
-                var rawSegment = implementationsGroup.Value.Substring(segmentStart + segmentLeading, rawSegmentLength);
+                var rawSegment = implementations.Slice(segmentStart + segmentLeading, rawSegmentLength);
                 var absoluteStart = implementationsGroup.Index
                     + segmentStart
                     + segmentLeading;
@@ -1197,7 +1199,7 @@ internal static class JavaReferenceExtractor
                     references,
                     seen,
                     fileId,
-                    rawSegment,
+                    rawSegment.ToString(),
                     absoluteStart,
                     context,
                     lineNumber,
