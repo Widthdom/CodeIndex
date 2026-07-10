@@ -5606,7 +5606,7 @@ public partial class McpServer
         {
             try
             {
-                var relative = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, path));
+                var relative = FileIndexer.NormalizePathSeparators(FileIndexer.GetRelativePathFromDirectory(projectRoot, path));
                 return relative == "."
                     || relative.StartsWith("../", StringComparison.Ordinal)
                     || Path.IsPathRooted(relative)
@@ -6369,7 +6369,7 @@ public partial class McpServer
 
     private static IndexFileFailure BuildIndexFileFailure(string projectPath, string filePath, Exception ex, string stage)
     {
-        var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectPath, filePath));
+        var relativePath = FileIndexer.NormalizePathSeparators(FileIndexer.GetRelativePathFromDirectory(projectPath, filePath));
         var message = BuildSanitizedIndexFileFailureMessage(stage, ex.GetType().Name, out var messageTruncated);
         return new IndexFileFailure(relativePath, stage, ex.GetType().Name, message, messageTruncated);
     }
@@ -6420,7 +6420,7 @@ public partial class McpServer
     {
         try
         {
-            var relative = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, path));
+            var relative = FileIndexer.NormalizePathSeparators(FileIndexer.GetRelativePathFromDirectory(projectRoot, path));
             if (!string.IsNullOrWhiteSpace(relative)
                 && relative != "."
                 && !relative.StartsWith("../", StringComparison.Ordinal)
