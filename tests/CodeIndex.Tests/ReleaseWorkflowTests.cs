@@ -1063,7 +1063,7 @@ public partial class ReleaseWorkflowTests
         AssertDoesNotContainAny(project, "Microsoft.NET.ILLink.Tasks\" Version=\"10.");
     }
 
-    private static string ReadReleaseWorkflow() => RepositoryTestPaths.ReadWorkflow("release.yml");
+    private static string ReadReleaseWorkflow() => RepositoryTestPaths.ReadReleaseWorkflow();
 
     private static int CountOccurrences(string text, string value)
     {
