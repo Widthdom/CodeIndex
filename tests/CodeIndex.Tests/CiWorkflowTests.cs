@@ -125,8 +125,8 @@ public class CiWorkflowTests
     [Fact]
     public void WindowsTestHostSetup_IsSharedAcrossDotnetAndReleaseWorkflows()
     {
-        var dotnetWorkflow = RepositoryTestPaths.ReadNormalizedWorkflow("dotnet.yml");
-        var releaseWorkflow = RepositoryTestPaths.ReadNormalizedWorkflow("release.yml");
+        var dotnetWorkflow = RepositoryTestPaths.ReadNormalizedDotnetWorkflow();
+        var releaseWorkflow = RepositoryTestPaths.ReadNormalizedReleaseWorkflow();
         var setupScript = RepositoryTestPaths.ReadText(".github", "scripts", "configure-windows-test-host.ps1");
         const string expectedStep =
             "- name: Configure Windows test host\n" +
