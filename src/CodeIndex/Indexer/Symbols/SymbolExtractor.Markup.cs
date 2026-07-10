@@ -2492,16 +2492,16 @@ public static partial class SymbolExtractor
             }
             if (braceDepth == 0 && parenDepth == 0 && angleDepth == 0 && ch == ',')
             {
-                var segment = value[start..i].Trim();
-                if (segment.Length > 0)
-                    yield return segment;
+                var segment = value.AsSpan(start, i - start).Trim();
+                if (!segment.IsEmpty)
+                    yield return segment.ToString();
                 start = i + 1;
             }
         }
 
-        var tail = value[start..].Trim();
-        if (tail.Length > 0)
-            yield return tail;
+        var tail = value.AsSpan(start).Trim();
+        if (!tail.IsEmpty)
+            yield return tail.ToString();
     }
 
     private static int FindMatchingBrace(string value, int startIndex)
