@@ -142,10 +142,10 @@ internal static class TypedLanguageReferenceExtractor
             return;
 
         paramEnd = Math.Min(paramEnd, expression.Length);
-        var parameterList = expression.Substring(paramStart, paramEnd - paramStart);
+        var parameterList = expression.AsSpan(paramStart, paramEnd - paramStart);
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(parameterList))
         {
-            var fragment = parameterList.Substring(segmentStart, segmentLength);
+            var fragment = parameterList.Slice(segmentStart, segmentLength).ToString();
             var colonIndex = FindTopLevelChar(fragment, ':');
             if (colonIndex < 0)
                 continue;
@@ -190,7 +190,7 @@ internal static class TypedLanguageReferenceExtractor
             return;
 
         listEnd = Math.Min(listEnd, line.Length);
-        var typeList = line.Substring(listStart, listEnd - listStart);
+        var typeList = line.AsSpan(listStart, listEnd - listStart);
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(typeList))
         {
             var leading = CountLeadingWhitespace(typeList, segmentStart, segmentLength);
@@ -199,7 +199,7 @@ internal static class TypedLanguageReferenceExtractor
             if (length <= 0)
                 continue;
 
-            var expression = typeList.Substring(segmentStart + leading, length);
+            var expression = typeList.Slice(segmentStart + leading, length).ToString();
             if (trimTopLevelCallArguments)
                 expression = TrimTopLevelCallArguments(expression);
             if (expression.Length == 0)
@@ -373,10 +373,10 @@ internal static class TypedLanguageReferenceExtractor
             if (clauseEnd <= clauseStart)
                 clauseEnd = line.Length;
 
-            var clause = line.Substring(clauseStart, clauseEnd - clauseStart);
+            var clause = line.AsSpan(clauseStart, clauseEnd - clauseStart);
             foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(clause))
             {
-                var fragment = clause.Substring(segmentStart, segmentLength);
+                var fragment = clause.Slice(segmentStart, segmentLength).ToString();
                 var colonIndex = FindTopLevelChar(fragment, ':');
                 if (colonIndex < 0)
                     continue;
@@ -424,10 +424,10 @@ internal static class TypedLanguageReferenceExtractor
         if (genericCloseIndex <= genericOpenIndex)
             return;
 
-        var clause = line.Substring(genericOpenIndex + 1, genericCloseIndex - genericOpenIndex - 1);
+        var clause = line.AsSpan(genericOpenIndex + 1, genericCloseIndex - genericOpenIndex - 1);
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(clause))
         {
-            var fragment = clause.Substring(segmentStart, segmentLength);
+            var fragment = clause.Slice(segmentStart, segmentLength).ToString();
             var colonIndex = FindTopLevelChar(fragment, ':');
             if (colonIndex < 0)
                 continue;
@@ -708,7 +708,9 @@ internal static class TypedLanguageReferenceExtractor
         return text.Length - 1;
     }
 
-    private static int CountLeadingWhitespace(string text, int start, int length)
+    private static int CountLeadingWhitespace(string text, int start, int length) => CountLeadingWhitespace(text.AsSpan(), start, length);
+
+    private static int CountLeadingWhitespace(ReadOnlySpan<char> text, int start, int length)
     {
         var end = Math.Min(text.Length, start + length);
         var count = 0;
@@ -717,7 +719,9 @@ internal static class TypedLanguageReferenceExtractor
         return count;
     }
 
-    private static int CountTrailingWhitespace(string text, int start, int length)
+    private static int CountTrailingWhitespace(string text, int start, int length) => CountTrailingWhitespace(text.AsSpan(), start, length);
+
+    private static int CountTrailingWhitespace(ReadOnlySpan<char> text, int start, int length)
     {
         var end = Math.Min(text.Length, start + length);
         var count = 0;

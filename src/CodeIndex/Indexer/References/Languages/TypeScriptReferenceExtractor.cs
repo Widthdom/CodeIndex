@@ -1641,10 +1641,10 @@ internal static class TypeScriptReferenceExtractor
                 continue;
 
             var clauseStart = index + 1;
-            var clause = preparedLine.Substring(clauseStart, closeIndex - clauseStart);
+            var clause = preparedLine.AsSpan(clauseStart, closeIndex - clauseStart);
             foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(clause))
             {
-                var fragment = clause.Substring(segmentStart, segmentLength);
+                var fragment = clause.Slice(segmentStart, segmentLength).ToString();
                 foreach (var extendsIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(fragment, "extends"))
                 {
                     var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(fragment, extendsIndex + "extends".Length);
@@ -1795,10 +1795,10 @@ internal static class TypeScriptReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        var parameterList = line.Substring(listStart, listEnd - listStart);
+        var parameterList = line.AsSpan(listStart, listEnd - listStart);
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(parameterList))
         {
-            var fragment = parameterList.Substring(segmentStart, segmentLength);
+            var fragment = parameterList.Slice(segmentStart, segmentLength).ToString();
             var equalsIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(fragment, '=');
             if (equalsIndex < 0)
                 continue;
