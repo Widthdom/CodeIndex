@@ -1323,6 +1323,7 @@ public static partial class IndexCommandRunner
     }
 
     private sealed record FullScanFileWorkItem(
+        int FileIndex,
         string FilePath,
         string RelativePath,
         FileRecord? Record,
@@ -1339,6 +1340,7 @@ public static partial class IndexCommandRunner
         Exception? Exception)
     {
         public static FullScanFileWorkItem Success(
+            int fileIndex,
             string filePath,
             string relativePath,
             FileRecord record,
@@ -1354,6 +1356,7 @@ public static partial class IndexCommandRunner
             bool generatedSuppressionChecked)
         {
             return new FullScanFileWorkItem(
+                fileIndex,
                 filePath,
                 relativePath,
                 record,
@@ -1371,6 +1374,7 @@ public static partial class IndexCommandRunner
         }
 
         public static FullScanFileWorkItem Precomputed(
+            int fileIndex,
             string filePath,
             string relativePath,
             FileRecord record,
@@ -1383,6 +1387,7 @@ public static partial class IndexCommandRunner
             bool generatedSuppressionChecked = false)
         {
             return new FullScanFileWorkItem(
+                fileIndex,
                 filePath,
                 relativePath,
                 record,
@@ -1400,10 +1405,10 @@ public static partial class IndexCommandRunner
         }
 
         public static FullScanFileWorkItem Failure(string filePath, string relativePath, Exception exception)
-            => new(filePath, relativePath, null, null, null, null, null, null, null, null, null, null, false, exception);
+            => new(-1, filePath, relativePath, null, null, null, null, null, null, null, null, null, null, false, exception);
 
         public static FullScanFileWorkItem Skipped(string filePath, string relativePath, string warning)
-            => new(filePath, relativePath, null, null, null, null, warning, null, null, null, null, null, false, null);
+            => new(-1, filePath, relativePath, null, null, null, null, warning, null, null, null, null, null, false, null);
     }
 
     private sealed record FoldOnlyRemediation(

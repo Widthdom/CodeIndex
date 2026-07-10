@@ -898,15 +898,49 @@ public static partial class IndexCommandRunner
                     indexedTarget.GeneratedExtractionSuppressed));
             }
         }
-        var knownReadableFileSizes = new Dictionary<string, long>(files.Count, StringComparer.Ordinal);
+        var knownReadableFileSizes = new long[files.Count];
+        var knownReadableFileSizeKnown = new bool[files.Count];
+        var knownReadableFileCount = 0;
         long knownReadableBytesRead = 0;
-        void RememberReadableFileSize(string path, long size)
+        void RememberReadableFileSize(int fileIndex, long size)
         {
-            if (knownReadableFileSizes.TryGetValue(path, out var priorSize))
+            if (knownReadableFileSizeKnown[fileIndex])
+            {
+                var priorSize = knownReadableFileSizes[fileIndex];
                 knownReadableBytesRead += size - priorSize;
+            }
             else
+            {
+                knownReadableFileSizeKnown[fileIndex] = true;
+                knownReadableFileCount++;
                 knownReadableBytesRead += size;
-            knownReadableFileSizes[path] = size;
+            }
+            knownReadableFileSizes[fileIndex] = size;
+        }
+        FileByteReadSummary MeasureRemainingReadableFileBytes()
+        {
+            long total = knownReadableBytesRead;
+            long skipped = 0;
+            for (var fileIndex = 0; fileIndex < files.Count; fileIndex++)
+            {
+                if (knownReadableFileSizeKnown[fileIndex])
+                    continue;
+
+                var path = files[fileIndex];
+                try
+                {
+                    var info = new FileInfo(path);
+                    if (info.Exists)
+                        total += info.Length;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+                {
+                    skipped++;
+                    RecordIndexRunDiagnostic(indexRunDiagnostics, "file_size_bytes_skipped", FormatDiagnosticPath(projectRoot, path), ex);
+                }
+            }
+
+            return new FileByteReadSummary(total, skipped);
         }
         var errorList = discovery.ErrorList;
         var warningList = discovery.WarningList;
@@ -1388,7 +1422,7 @@ public static partial class IndexCommandRunner
 
             skipped++;
             processed++;
-            RememberReadableFileSize(target.FilePath, existingFile.Value.Size);
+            RememberReadableFileSize(fileIndex, existingFile.Value.Size);
             if (!string.IsNullOrWhiteSpace(language))
             {
                 skippedSymbolExtractorLanguages ??= new HashSet<string>(StringComparer.Ordinal);
@@ -1522,6 +1556,7 @@ public static partial class IndexCommandRunner
                                             generatedSuppressionIssue);
                                         extractionResults.Add(
                                             FullScanFileWorkItem.Precomputed(
+                                                fileIndex,
                                                 filePath,
                                                 displayRelativePath,
                                                 record,
@@ -1558,7 +1593,7 @@ public static partial class IndexCommandRunner
                                             ? [issue]
                                             : AppendIssue([symbolRegexTimeoutIssue], issue);
                                         extractionResults.Add(
-                                            FullScanFileWorkItem.Precomputed(filePath, displayRelativePath, record, issue.Message, [], [], [], capIssues),
+                                            FullScanFileWorkItem.Precomputed(fileIndex, filePath, displayRelativePath, record, issue.Message, [], [], [], capIssues),
                                             extractionCancellationToken);
                                         continue;
                                     }
@@ -1610,6 +1645,7 @@ public static partial class IndexCommandRunner
                                 extractionResults.Add(
                                     parallelizeExtraction
                                         ? FullScanFileWorkItem.Precomputed(
+                                            fileIndex,
                                             filePath,
                                             displayRelativePath,
                                             record,
@@ -1621,6 +1657,7 @@ public static partial class IndexCommandRunner
                                             generatedSuppressionIssue,
                                             generatedSuppressionChecked: true)
                                         : FullScanFileWorkItem.Success(
+                                            fileIndex,
                                             filePath,
                                             displayRelativePath,
                                             record,
@@ -1646,7 +1683,7 @@ public static partial class IndexCommandRunner
                                 var issue = BuildNullByteIssue(ex);
                                 var sanitizedMessage = CommandErrorWriter.FormatSanitizedExceptionMessage(ex);
                                 extractionResults.Add(
-                                    FullScanFileWorkItem.Precomputed(filePath, displayRelativePath, record, sanitizedMessage, [], [], [], [issue]),
+                                    FullScanFileWorkItem.Precomputed(fileIndex, filePath, displayRelativePath, record, sanitizedMessage, [], [], [], [issue]),
                                     extractionCancellationToken);
                             }
                             catch (FileIndexer.FileTooLargeSkippedException ex)
@@ -1661,7 +1698,7 @@ public static partial class IndexCommandRunner
                                     Message = sanitizedMessage,
                                 };
                                 extractionResults.Add(
-                                    FullScanFileWorkItem.Precomputed(filePath, displayRelativePath, record, sanitizedMessage, [], [], [], [issue]),
+                                    FullScanFileWorkItem.Precomputed(fileIndex, filePath, displayRelativePath, record, sanitizedMessage, [], [], [], [issue]),
                                     extractionCancellationToken);
                             }
                             catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
@@ -1761,7 +1798,7 @@ public static partial class IndexCommandRunner
                         }
 
                         var record = item.Record!;
-                        RememberReadableFileSize(item.FilePath, record.Size);
+                        RememberReadableFileSize(item.FileIndex, record.Size);
                         if (item.Warning != null && !options.Json && !options.Quiet)
                         {
                             PauseIndexSpinnerForConsoleWrite();
@@ -2279,9 +2316,9 @@ public static partial class IndexCommandRunner
             if (options.MemoryTrace)
                 memorySamples.Add(CaptureMemorySample("finalize", stopwatch));
             var memoryTimelineForStamp = BuildMemoryTimeline(memorySamples);
-            var bytesRead = knownReadableFileSizes.Count == files.Count
+            var bytesRead = knownReadableFileCount == files.Count
                 ? new FileByteReadSummary(knownReadableBytesRead, 0)
-                : MeasureReadableFileBytes(files, projectRoot, indexRunDiagnostics, knownReadableFileSizes);
+                : MeasureRemainingReadableFileBytes();
             StampLastIndexRunMetadata(
                 writer,
                 options.Rebuild ? "rebuild" : "incremental",
