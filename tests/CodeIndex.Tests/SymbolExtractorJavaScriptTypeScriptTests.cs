@@ -14,6 +14,38 @@ namespace CodeIndex.Tests;
 
 public partial class SymbolExtractorTests
 {
+    [Fact]
+    public void TypeScriptBareMethodMatchInput_ReusesPlainBodyHeaders()
+    {
+        const string input = "run() {";
+
+        var normalized = SymbolExtractor.NormalizeTypeScriptBareMethodMatchInput(input);
+
+        Assert.Same(input, normalized);
+    }
+
+    [Fact]
+    public void TypeScriptBareMethodMatchInput_BlanksGenericSpan()
+    {
+        const string input = "run<T>(value: T) {";
+
+        var normalized = SymbolExtractor.NormalizeTypeScriptBareMethodMatchInput(input);
+
+        Assert.NotSame(input, normalized);
+        Assert.Equal("run   (value: T) {", normalized);
+    }
+
+    [Fact]
+    public void TypeScriptBareMethodMatchInput_RewritesReturnTypeBraces()
+    {
+        const string input = "make(): { value: string } {";
+
+        var normalized = SymbolExtractor.NormalizeTypeScriptBareMethodMatchInput(input);
+
+        Assert.NotSame(input, normalized);
+        Assert.Equal("make(): ( value: string ) {", normalized);
+    }
+
     [Theory]
     [InlineData("javascript")]
     [InlineData("typescript")]

@@ -9649,7 +9649,7 @@ public static partial class SymbolExtractor
         return -1;
     }
 
-    private static string NormalizeTypeScriptBareMethodMatchInput(string input)
+    internal static string NormalizeTypeScriptBareMethodMatchInput(string input)
     {
         if (!input.Contains('<', StringComparison.Ordinal) && !input.Contains('{', StringComparison.Ordinal))
             return input;
@@ -9657,9 +9657,10 @@ public static partial class SymbolExtractor
         if (!TryParseJavaScriptTypeScriptMethodHeader(input, 0, "typescript", out var methodHeader))
             return input;
 
-        var chars = input.ToCharArray();
+        char[]? chars = null;
         if (methodHeader.GenericStartColumn != null && methodHeader.GenericEndColumn != null)
         {
+            chars = input.ToCharArray();
             for (int replaceIndex = methodHeader.GenericStartColumn.Value; replaceIndex <= methodHeader.GenericEndColumn.Value; replaceIndex++)
                 chars[replaceIndex] = ' ';
         }
@@ -9668,14 +9669,15 @@ public static partial class SymbolExtractor
         {
             for (int replaceIndex = methodHeader.ReturnTypeStartColumn.Value; replaceIndex <= methodHeader.ReturnTypeEndColumn.Value; replaceIndex++)
             {
-                if (chars[replaceIndex] == '{')
-                    chars[replaceIndex] = '(';
-                else if (chars[replaceIndex] == '}')
-                    chars[replaceIndex] = ')';
+                var ch = chars is null ? input[replaceIndex] : chars[replaceIndex];
+                if (ch == '{')
+                    (chars ??= input.ToCharArray())[replaceIndex] = '(';
+                else if (ch == '}')
+                    (chars ??= input.ToCharArray())[replaceIndex] = ')';
             }
         }
 
-        return new string(chars);
+        return chars is null ? input : new string(chars);
     }
 
     // Class-field arrow like `handleClick = () => { ... }` is not matched by the method-header
