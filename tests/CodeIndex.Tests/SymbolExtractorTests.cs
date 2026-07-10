@@ -232,6 +232,27 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void CSharpCrossLineScanDelimiterBlanking_ReusesLinesWithoutDelimiters()
+    {
+        const string line = "public void Run() { return; }";
+
+        var sanitized = SymbolExtractor.BlankCSharpStringDelimitersForCrossLineScan(line);
+
+        Assert.Same(line, sanitized);
+    }
+
+    [Fact]
+    public void CSharpCrossLineScanDelimiterBlanking_BlanksOnlyDelimitersAndEscapes()
+    {
+        const string line = "abc\"\\'def";
+
+        var sanitized = SymbolExtractor.BlankCSharpStringDelimitersForCrossLineScan(line);
+
+        Assert.NotSame(line, sanitized);
+        Assert.Equal("abc   def", sanitized);
+    }
+
+    [Fact]
     public void Extract_BuiltInSymbolRegexes_AdversarialLongLinesDoNotThrow()
     {
         var typeScriptLine = "export const Component = React.memo<" + new string('A', 20000) + new string('<', 2000) + new string('>', 2000) + ">(value);";
