@@ -217,6 +217,25 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void StructuralLineMasker_MaskLines_PythonTripleStringsReuseUnchangedLinesUntilMaskNeeded()
+    {
+        var lines = new[]
+        {
+            "def run():",
+            "    value = \"\"\"literal\"\"\"",
+            "    call_real()",
+        };
+
+        var masked = StructuralLineMasker.MaskLines("python", lines);
+
+        Assert.NotSame(lines, masked);
+        Assert.Same(lines[0], masked[0]);
+        Assert.NotSame(lines[1], masked[1]);
+        Assert.Same(lines[2], masked[2]);
+        Assert.DoesNotContain("literal", masked[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Extract_CancelledToken_ThrowsBeforeWork()
     {
         using var cancellation = new CancellationTokenSource();

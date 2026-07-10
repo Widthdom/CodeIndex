@@ -829,7 +829,8 @@ internal static class StructuralLineMasker
             if (line.Length == 0)
                 continue;
 
-            var masked = line.ToCharArray();
+            char[]? masked = null;
+            char[] GetMaskedLine() => masked ??= line.ToCharArray();
             var pos = 0;
 
             while (pos < line.Length)
@@ -882,7 +883,7 @@ internal static class StructuralLineMasker
                                     // 空白化し、閉じ三重で抜ける。
                                     if (!innerHoleTripleRaw && line[pos] == '\\' && pos + 1 < line.Length)
                                     {
-                                        ReplaceWithSpaces(masked, pos, 2);
+                                        ReplaceWithSpaces(GetMaskedLine(), pos, 2);
                                         pos += 2;
                                         continue;
                                     }
@@ -892,14 +893,14 @@ internal static class StructuralLineMasker
                                         && line[pos + 1] == innerHoleTripleChar
                                         && line[pos + 2] == innerHoleTripleChar)
                                     {
-                                        ReplaceWithSpaces(masked, pos, 3);
+                                        ReplaceWithSpaces(GetMaskedLine(), pos, 3);
                                         pos += 3;
                                         innerHoleTripleChar = '\0';
                                         innerHoleTripleRaw = false;
                                         continue;
                                     }
 
-                                    masked[pos] = ' ';
+                                    GetMaskedLine()[pos] = ' ';
                                     pos++;
                                     continue;
                                 }
@@ -914,7 +915,7 @@ internal static class StructuralLineMasker
                                     // 見なし、閉じ三重で内側ホール走査に戻る。
                                     // SkipPythonSingleLineString は同一行の対を探すだけなので、
                                     // 三重を先に検出する必要がある。
-                                    ReplaceWithSpaces(masked, pos, innerPrefixLen + 3);
+                                    ReplaceWithSpaces(GetMaskedLine(), pos, innerPrefixLen + 3);
                                     pos += innerPrefixLen + 3;
                                     innerHoleTripleChar = innerQuote;
                                     innerHoleTripleRaw = innerRawFlag;
@@ -941,7 +942,7 @@ internal static class StructuralLineMasker
                                 {
                                     if (nestedTripleHoleDepth == 0)
                                     {
-                                        masked[pos] = ' ';
+                                        GetMaskedLine()[pos] = ' ';
                                         nestedTripleHoleDepth = -1;
                                         pos++;
                                         continue;
@@ -958,7 +959,7 @@ internal static class StructuralLineMasker
 
                             if (!nestedTripleRaw && line[pos] == '\\' && pos + 1 < line.Length)
                             {
-                                ReplaceWithSpaces(masked, pos, 2);
+                                ReplaceWithSpaces(GetMaskedLine(), pos, 2);
                                 pos += 2;
                                 continue;
                             }
@@ -968,7 +969,7 @@ internal static class StructuralLineMasker
                                 && line[pos + 1] == nestedTripleChar
                                 && line[pos + 2] == nestedTripleChar)
                             {
-                                ReplaceWithSpaces(masked, pos, 3);
+                                ReplaceWithSpaces(GetMaskedLine(), pos, 3);
                                 pos += 3;
                                 nestedTripleChar = '\0';
                                 nestedTripleRaw = false;
@@ -983,28 +984,28 @@ internal static class StructuralLineMasker
                                 // `{{` / `}}` は literal brace のエスケープ。両方空白化。
                                 if (pos + 1 < line.Length && line[pos] == '{' && line[pos + 1] == '{')
                                 {
-                                    ReplaceWithSpaces(masked, pos, 2);
+                                    ReplaceWithSpaces(GetMaskedLine(), pos, 2);
                                     pos += 2;
                                     continue;
                                 }
 
                                 if (pos + 1 < line.Length && line[pos] == '}' && line[pos + 1] == '}')
                                 {
-                                    ReplaceWithSpaces(masked, pos, 2);
+                                    ReplaceWithSpaces(GetMaskedLine(), pos, 2);
                                     pos += 2;
                                     continue;
                                 }
 
                                 if (line[pos] == '{')
                                 {
-                                    masked[pos] = ' ';
+                                    GetMaskedLine()[pos] = ' ';
                                     nestedTripleHoleDepth = 0;
                                     pos++;
                                     continue;
                                 }
                             }
 
-                            masked[pos] = ' ';
+                            GetMaskedLine()[pos] = ' ';
                             pos++;
                             continue;
                         }
@@ -1027,7 +1028,7 @@ internal static class StructuralLineMasker
                                 {
                                     if (!nestedSingleFStringInnerTripleRaw && line[pos] == '\\' && pos + 1 < line.Length)
                                     {
-                                        ReplaceWithSpaces(masked, pos, 2);
+                                        ReplaceWithSpaces(GetMaskedLine(), pos, 2);
                                         pos += 2;
                                         continue;
                                     }
@@ -1037,21 +1038,21 @@ internal static class StructuralLineMasker
                                         && line[pos + 1] == nestedSingleFStringInnerTripleChar
                                         && line[pos + 2] == nestedSingleFStringInnerTripleChar)
                                     {
-                                        ReplaceWithSpaces(masked, pos, 3);
+                                        ReplaceWithSpaces(GetMaskedLine(), pos, 3);
                                         pos += 3;
                                         nestedSingleFStringInnerTripleChar = '\0';
                                         nestedSingleFStringInnerTripleRaw = false;
                                         continue;
                                     }
 
-                                    masked[pos] = ' ';
+                                    GetMaskedLine()[pos] = ' ';
                                     pos++;
                                     continue;
                                 }
 
                                 if (TryOpenPythonTripleString(line, pos, out var nestedSingleInnerPrefixLen, out var nestedSingleInnerQuote, out var nestedSingleInnerRawFlag, out _))
                                 {
-                                    ReplaceWithSpaces(masked, pos, nestedSingleInnerPrefixLen + 3);
+                                    ReplaceWithSpaces(GetMaskedLine(), pos, nestedSingleInnerPrefixLen + 3);
                                     pos += nestedSingleInnerPrefixLen + 3;
                                     nestedSingleFStringInnerTripleChar = nestedSingleInnerQuote;
                                     nestedSingleFStringInnerTripleRaw = nestedSingleInnerRawFlag;
@@ -1078,7 +1079,7 @@ internal static class StructuralLineMasker
                                 {
                                     if (nestedSingleFStringInnerHoleDepth == 0)
                                     {
-                                        masked[pos] = ' ';
+                                        GetMaskedLine()[pos] = ' ';
                                         nestedSingleFStringInnerHoleDepth = -1;
                                         pos++;
                                         continue;
@@ -1095,14 +1096,14 @@ internal static class StructuralLineMasker
 
                             if (!nestedSingleFStringRaw && line[pos] == '\\' && pos + 1 < line.Length)
                             {
-                                ReplaceWithSpaces(masked, pos, 2);
+                                ReplaceWithSpaces(GetMaskedLine(), pos, 2);
                                 pos += 2;
                                 continue;
                             }
 
                             if (line[pos] == nestedSingleFStringQuote)
                             {
-                                masked[pos] = ' ';
+                                GetMaskedLine()[pos] = ' ';
                                 nestedSingleFStringQuote = '\0';
                                 nestedSingleFStringRaw = false;
                                 pos++;
@@ -1111,34 +1112,34 @@ internal static class StructuralLineMasker
 
                             if (pos + 1 < line.Length && line[pos] == '{' && line[pos + 1] == '{')
                             {
-                                ReplaceWithSpaces(masked, pos, 2);
+                                ReplaceWithSpaces(GetMaskedLine(), pos, 2);
                                 pos += 2;
                                 continue;
                             }
 
                             if (pos + 1 < line.Length && line[pos] == '}' && line[pos + 1] == '}')
                             {
-                                ReplaceWithSpaces(masked, pos, 2);
+                                ReplaceWithSpaces(GetMaskedLine(), pos, 2);
                                 pos += 2;
                                 continue;
                             }
 
                             if (line[pos] == '{')
                             {
-                                masked[pos] = ' ';
+                                GetMaskedLine()[pos] = ' ';
                                 nestedSingleFStringInnerHoleDepth = 0;
                                 pos++;
                                 continue;
                             }
 
-                            masked[pos] = ' ';
+                            GetMaskedLine()[pos] = ' ';
                             pos++;
                             continue;
                         }
 
                         if (TryOpenPythonTripleString(line, pos, out var nestedPrefixLen, out var nestedQuote, out var nestedRawFlag, out var nestedFFlag))
                         {
-                            ReplaceWithSpaces(masked, pos, nestedPrefixLen + 3);
+                            ReplaceWithSpaces(GetMaskedLine(), pos, nestedPrefixLen + 3);
                             pos += nestedPrefixLen + 3;
                             nestedTripleChar = nestedQuote;
                             nestedTripleRaw = nestedRawFlag;
@@ -1160,7 +1161,7 @@ internal static class StructuralLineMasker
                             // StringLiteralRegex に式本体ごと消されないよう quote と prefix を
                             // マスクし、内側 `{expr}`（および内側ホールで開いた三重引用符
                             // 文字列）が複数行にまたがっても追跡できるよう状態を保持する。
-                            ReplaceWithSpaces(masked, pos, nestedSinglePrefixLen + 1);
+                            ReplaceWithSpaces(GetMaskedLine(), pos, nestedSinglePrefixLen + 1);
                             pos += nestedSinglePrefixLen + 1;
                             nestedSingleFStringQuote = nestedSingleQuote;
                             nestedSingleFStringRaw = nestedSingleRaw;
@@ -1198,7 +1199,7 @@ internal static class StructuralLineMasker
                                 // delimiter noise to regex extraction.
                                 // 閉じ `}` は文字列境界としてマスクし、regex 抽出に
                                 // ホール本体と混在させない。
-                                masked[pos] = ' ';
+                                GetMaskedLine()[pos] = ' ';
                                 holeBraceDepth = -1;
                                 pos++;
                                 continue;
@@ -1215,7 +1216,7 @@ internal static class StructuralLineMasker
 
                     if (!isRaw && line[pos] == '\\' && pos + 1 < line.Length)
                     {
-                        ReplaceWithSpaces(masked, pos, 2);
+                        ReplaceWithSpaces(GetMaskedLine(), pos, 2);
                         pos += 2;
                         continue;
                     }
@@ -1225,7 +1226,7 @@ internal static class StructuralLineMasker
                         && line[pos + 1] == tripleChar
                         && line[pos + 2] == tripleChar)
                     {
-                        ReplaceWithSpaces(masked, pos, 3);
+                        ReplaceWithSpaces(GetMaskedLine(), pos, 3);
                         pos += 3;
                         tripleChar = '\0';
                         isRaw = false;
@@ -1239,14 +1240,14 @@ internal static class StructuralLineMasker
                         // `{{` / `}}` は literal brace のエスケープ。両方マスク。
                         if (pos + 1 < line.Length && line[pos] == '{' && line[pos + 1] == '{')
                         {
-                            ReplaceWithSpaces(masked, pos, 2);
+                            ReplaceWithSpaces(GetMaskedLine(), pos, 2);
                             pos += 2;
                             continue;
                         }
 
                         if (pos + 1 < line.Length && line[pos] == '}' && line[pos + 1] == '}')
                         {
-                            ReplaceWithSpaces(masked, pos, 2);
+                            ReplaceWithSpaces(GetMaskedLine(), pos, 2);
                             pos += 2;
                             continue;
                         }
@@ -1256,14 +1257,14 @@ internal static class StructuralLineMasker
                             // Mask the opening `{` so brace balance matches the closing
                             // `}` we also mask; the expression contents are left alone.
                             // 開き `{` をマスクしつつ、式本体は残す。
-                            masked[pos] = ' ';
+                            GetMaskedLine()[pos] = ' ';
                             holeBraceDepth = 0;
                             pos++;
                             continue;
                         }
                     }
 
-                    masked[pos] = ' ';
+                    GetMaskedLine()[pos] = ' ';
                     pos++;
                     continue;
                 }
@@ -1275,7 +1276,7 @@ internal static class StructuralLineMasker
 
                 if (TryOpenPythonTripleString(line, pos, out var prefixLen, out var openingChar, out var rawFlag, out var fFlag))
                 {
-                    ReplaceWithSpaces(masked, pos, prefixLen + 3);
+                    ReplaceWithSpaces(GetMaskedLine(), pos, prefixLen + 3);
                     pos += prefixLen + 3;
                     tripleChar = openingChar;
                     isRaw = rawFlag;
@@ -1292,7 +1293,8 @@ internal static class StructuralLineMasker
                 pos++;
             }
 
-            lines[i] = new string(masked);
+            if (masked is not null)
+                lines[i] = new string(masked);
         }
     }
 
