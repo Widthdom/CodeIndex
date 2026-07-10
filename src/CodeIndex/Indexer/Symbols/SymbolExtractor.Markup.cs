@@ -2041,29 +2041,30 @@ public static partial class SymbolExtractor
 
     private static string NormalizeXamlKeyValue(string value)
     {
-        value = value.Trim();
-        if (value.Length < 2 || value[0] != '{' || value[^1] != '}')
-            return value;
+        var trimmed = value.AsSpan().Trim();
+        if (trimmed.Length < 2 || trimmed[0] != '{' || trimmed[^1] != '}')
+            return trimmed.ToString();
 
-        return NormalizeXamlMarkupExtensionContent(value[1..^1].Trim());
+        return NormalizeXamlMarkupExtensionContent(trimmed[1..^1].Trim().ToString());
     }
 
     private static string NormalizeXamlBindingValue(string kind, string content)
     {
-        kind = kind.Trim();
-        content = content.Trim();
-        if (content.Length == 0)
-            return content;
+        var kindSpan = kind.AsSpan().Trim();
+        var contentSpan = content.AsSpan().Trim();
+        if (contentSpan.IsEmpty)
+            return "";
 
-        var isTemplateBinding = kind.Equals("TemplateBinding", StringComparison.OrdinalIgnoreCase);
-        var payload = kind.Equals("x:Bind", StringComparison.OrdinalIgnoreCase)
-            ? $"x:Bind {content}"
+        var contentText = contentSpan.ToString();
+        var isTemplateBinding = kindSpan.Equals("TemplateBinding", StringComparison.OrdinalIgnoreCase);
+        var payload = kindSpan.Equals("x:Bind", StringComparison.OrdinalIgnoreCase)
+            ? $"x:Bind {contentText}"
             : isTemplateBinding
-                ? $"TemplateBinding {content}"
-                : $"Binding {content}";
+                ? $"TemplateBinding {contentText}"
+                : $"Binding {contentText}";
 
         var firstPath = NormalizeXamlBindingPath(payload, isTemplateBinding);
-        return firstPath.Length > 0 ? firstPath : content;
+        return firstPath.Length > 0 ? firstPath : contentText;
     }
 
     private static string NormalizeXamlBindingPath(string value, bool allowPropertyArgument)
@@ -2131,16 +2132,16 @@ public static partial class SymbolExtractor
 
     private static string NormalizeXamlBindingPathValue(string value)
     {
-        value = value.Trim();
-        if (value.Length == 0)
-            return value;
+        var trimmed = value.AsSpan().Trim();
+        if (trimmed.IsEmpty)
+            return "";
 
-        value = NormalizeXamlMarkupValue(value);
+        value = NormalizeXamlMarkupValue(trimmed.ToString());
         var lastDot = value.LastIndexOf('.');
         if (lastDot >= 0 && lastDot + 1 < value.Length)
-            value = value[(lastDot + 1)..];
+            return value.AsSpan(lastDot + 1).Trim().ToString();
 
-        return value.Trim();
+        return value.AsSpan().Trim().ToString();
     }
 
     private static string NormalizeXamlMarkupValue(string value)
