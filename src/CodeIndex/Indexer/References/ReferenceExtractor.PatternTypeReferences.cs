@@ -1340,6 +1340,37 @@ public static partial class ReferenceExtractor
         return text.Length - 1;
     }
 
+    private static int SkipTypeScriptTemplateLiteralForMatching(string text, int start)
+    {
+        int i = start + 1;
+        while (i < text.Length)
+        {
+            char c = text[i];
+            if (c == '\\' && i + 1 < text.Length)
+            {
+                i += 2;
+                continue;
+            }
+
+            if (c == '`')
+                return i;
+
+            if (c == '$' && i + 1 < text.Length && text[i + 1] == '{')
+            {
+                int holeEnd = FindMatchingTypeScriptTemplateHoleEnd(text, i + 2);
+                if (holeEnd < 0)
+                    return text.Length - 1;
+
+                i = holeEnd + 1;
+                continue;
+            }
+
+            i++;
+        }
+
+        return text.Length - 1;
+    }
+
     private static int FindMatchingTypeScriptTemplateHoleEnd(string text, int start)
     {
         int braceDepth = 1;
@@ -1355,7 +1386,7 @@ public static partial class ReferenceExtractor
 
             if (c == '`')
             {
-                i = SkipTypeScriptTemplateLiteral(text, i, new List<ReferenceRecord>(), new HashSet<string>(), 0, 0, string.Empty, 0, null);
+                i = SkipTypeScriptTemplateLiteralForMatching(text, i);
                 continue;
             }
 
