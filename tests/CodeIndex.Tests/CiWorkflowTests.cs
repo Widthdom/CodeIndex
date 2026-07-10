@@ -26,21 +26,10 @@ public class CiWorkflowTests
             "--results-directory\", \"./TestResults");
         AssertContainsAll(
             normalizedWorkflow,
-            "- name: Select CI lane\n        id: lane");
-        AssertContainsAll(
-            workflow,
-            "\"primary_lane=$primaryLaneText\" | Out-File -FilePath $env:GITHUB_OUTPUT");
-        Assert.True(
-            normalizedWorkflow.IndexOf("- name: Select CI lane\n        id: lane", StringComparison.Ordinal)
-            < normalizedWorkflow.IndexOf("- name: Set up .NET SDKs", StringComparison.Ordinal));
-        AssertContainsAll(
-            normalizedWorkflow,
+            "include:\n          - os: ubuntu-24.04\n            test-framework: net8.0\n            primary_lane: true",
             "- name: Set up .NET SDKs\n        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0\n        with:\n          dotnet-version: |\n            8.0.413\n            9.0.301",
-            "- name: Restore dependencies\n        if: steps.lane.outputs.primary_lane == 'true'\n        run: dotnet restore CodeIndex.sln --locked-mode",
-            "- name: Restore test dependencies\n        if: steps.lane.outputs.primary_lane != 'true'\n        run: dotnet restore tests/CodeIndex.Tests/CodeIndex.Tests.csproj -p:RestoreTargetFrameworks=${{ matrix.test-framework }} --locked-mode");
-        Assert.True(
-            normalizedWorkflow.IndexOf("- name: Select CI lane\n        id: lane", StringComparison.Ordinal)
-            < normalizedWorkflow.IndexOf("- name: Restore dependencies", StringComparison.Ordinal));
+            "- name: Restore dependencies\n        if: matrix.primary_lane\n        run: dotnet restore CodeIndex.sln --locked-mode",
+            "- name: Restore test dependencies\n        if: ${{ !matrix.primary_lane }}\n        run: dotnet restore tests/CodeIndex.Tests/CodeIndex.Tests.csproj -p:RestoreTargetFrameworks=${{ matrix.test-framework }} --locked-mode");
         AssertDoesNotContainAny(
             workflow,
             "collect_coverage",
@@ -50,15 +39,14 @@ public class CiWorkflowTests
         AssertContainsAll(
             workflow,
             "key: ${{ runner.os }}-dotnet-nuget-${{ hashFiles('**/packages.lock.json', 'global.json') }}",
-            "\"${{ matrix.os }}\" -eq \"ubuntu-24.04\" -and \"${{ matrix.test-framework }}\" -eq \"net8.0\"");
+            "primary_lane: true");
         AssertContainsAll(
             normalizedWorkflow,
-            "exclude:\n          - os: windows-2022\n            test-framework: net9.0\n          - os: macos-14\n            test-framework: net9.0",
-            "- name: Audit NuGet package vulnerabilities\n        if: steps.lane.outputs.primary_lane == 'true'",
-            "- name: Verify Release test build\n        if: steps.lane.outputs.primary_lane == 'true'\n        run: dotnet build tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework ${{ matrix.test-framework }} --no-restore -p:UseSharedCompilation=false",
-            "- name: Verify developer task wrapper\n        if: steps.lane.outputs.primary_lane == 'true'\n        run: make lint",
-            "- name: Build\n        if: steps.lane.outputs.primary_lane != 'true'",
-            "run: |\n          ./.github/scripts/run-dotnet-tests.ps1 `\n            -Framework \"${{ matrix.test-framework }}\" `\n            -CollectCoverage \"${{ steps.lane.outputs.primary_lane }}\"");
+            "- name: Audit NuGet package vulnerabilities\n        if: matrix.primary_lane",
+            "- name: Verify Release test build\n        if: matrix.primary_lane\n        run: dotnet build tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework ${{ matrix.test-framework }} --no-restore -p:UseSharedCompilation=false",
+            "- name: Verify developer task wrapper\n        if: matrix.primary_lane\n        run: make lint",
+            "- name: Build\n        if: ${{ !matrix.primary_lane }}",
+            "run: |\n          ./.github/scripts/run-dotnet-tests.ps1 `\n            -Framework \"${{ matrix.test-framework }}\" `\n            -CollectCoverage \"${{ matrix.primary_lane }}\"");
         AssertDoesNotContainAny(
             normalizedWorkflow,
             "- name: Verify Release solution build",
@@ -104,12 +92,12 @@ public class CiWorkflowTests
             "TestResults/**/*.xml",
             "TestResults/**/*.dmp",
             "TestResults/**/*.dump",
-            "if: always() && steps.lane.outputs.primary_lane == 'true'");
+            "if: always() && matrix.primary_lane");
         AssertContainsAll(
             normalizedWorkflow,
             "- name: Upload test results\n        if: always() && (steps.test.outputs.summarize == 'true' || failure())",
-            "- name: Publish\n        if: steps.lane.outputs.primary_lane == 'true'",
-            "- name: Upload build artifact\n        if: steps.lane.outputs.primary_lane == 'true'");
+            "- name: Publish\n        if: matrix.primary_lane",
+            "- name: Upload build artifact\n        if: matrix.primary_lane");
         AssertDoesNotContainAny(
             workflow,
             "tools/CodeIndex.TestTelemetry --configuration Release --no-build",
