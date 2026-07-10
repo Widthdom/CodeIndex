@@ -2348,7 +2348,9 @@ public static partial class ReferenceExtractor
         return i;
     }
 
-    internal static int SkipJavaAnnotation(string text, int start)
+    internal static int SkipJavaAnnotation(string text, int start) => SkipJavaAnnotation(text.AsSpan(), start);
+
+    internal static int SkipJavaAnnotation(ReadOnlySpan<char> text, int start)
     {
         int i = start + 1;
         var annotationStart = i;
@@ -2367,9 +2369,10 @@ public static partial class ReferenceExtractor
 
         if (i < text.Length && text[i] == '`')
         {
-            var closeIndex = text.IndexOf('`', i + 1);
-            if (closeIndex < 0)
+            var closeOffset = text[(i + 1)..].IndexOf('`');
+            if (closeOffset < 0)
                 return start;
+            var closeIndex = i + 1 + closeOffset;
             i = closeIndex + 1;
         }
         else
@@ -2656,7 +2659,9 @@ public static partial class ReferenceExtractor
         return (0, text.Length);
     }
 
-    internal static List<(int Start, int Length)> SplitTopLevelAmpersandSpans(string text)
+    internal static List<(int Start, int Length)> SplitTopLevelAmpersandSpans(string text) => SplitTopLevelAmpersandSpans(text.AsSpan());
+
+    internal static List<(int Start, int Length)> SplitTopLevelAmpersandSpans(ReadOnlySpan<char> text)
     {
         if (text.IndexOf('&') < 0)
             return [(0, text.Length)];
@@ -2776,8 +2781,11 @@ public static partial class ReferenceExtractor
         return -1;
     }
 
-    internal static int FindTopLevelKeyword(string text, string keyword)
+    internal static int FindTopLevelKeyword(string text, string keyword) => FindTopLevelKeyword(text.AsSpan(), keyword);
+
+    internal static int FindTopLevelKeyword(ReadOnlySpan<char> text, string keyword)
     {
+        var keywordSpan = keyword.AsSpan();
         int angleDepth = 0;
         int parenDepth = 0;
         int squareDepth = 0;
@@ -2817,9 +2825,9 @@ public static partial class ReferenceExtractor
                 continue;
             if (i > 0 && IsJavaIdentifierPart(text[i - 1]))
                 continue;
-            if (i + keyword.Length > text.Length || string.CompareOrdinal(text, i, keyword, 0, keyword.Length) != 0)
+            if (i + keywordSpan.Length > text.Length || !text.Slice(i, keywordSpan.Length).SequenceEqual(keywordSpan))
                 continue;
-            int after = i + keyword.Length;
+            int after = i + keywordSpan.Length;
             if (after < text.Length && IsJavaIdentifierPart(text[after]))
                 continue;
             return i;

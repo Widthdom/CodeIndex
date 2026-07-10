@@ -911,7 +911,7 @@ internal static class JavaReferenceExtractor
         if (keywordIndex < 0 || nameIndex < 0 || nameIndex >= tokens.Count)
             return;
 
-        var nameToken = line.Substring(tokens[nameIndex].Start, tokens[nameIndex].Length);
+        var nameToken = line.AsSpan(tokens[nameIndex].Start, tokens[nameIndex].Length);
         EmitGenericBoundReferencesFromHeader(
             nameToken,
             tokens[nameIndex].Start,
@@ -924,7 +924,7 @@ internal static class JavaReferenceExtractor
     }
 
     private static void EmitGenericBoundReferencesFromHeader(
-        string header,
+        ReadOnlySpan<char> header,
         int headerStartInLine,
         List<ReferenceRecord> references,
         HashSet<string> seen,
@@ -941,7 +941,7 @@ internal static class JavaReferenceExtractor
         if (closeAngle < 0)
             return;
 
-        var parameterClauseText = header.Substring(openAngle + 1, closeAngle - openAngle - 1);
+        var parameterClauseText = header.Slice(openAngle + 1, closeAngle - openAngle - 1);
         var genericParameterNames = CollectGenericParameterNames(parameterClauseText);
 
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(parameterClauseText))
@@ -953,7 +953,7 @@ internal static class JavaReferenceExtractor
             if (parameterLength == 0)
                 continue;
 
-            var rawParameter = parameterClauseText.Substring(segmentStart + parameterLeading, parameterLength);
+            var rawParameter = parameterClauseText.Slice(segmentStart + parameterLeading, parameterLength);
             int extendsIndex = ReferenceExtractor.FindTopLevelKeyword(rawParameter, "extends");
             if (extendsIndex < 0)
                 continue;
@@ -966,7 +966,7 @@ internal static class JavaReferenceExtractor
             if (boundsLength == 0)
                 continue;
 
-            var boundsText = rawParameter.Substring(boundsStart + boundsLeading, boundsLength);
+            var boundsText = rawParameter.Slice(boundsStart + boundsLeading, boundsLength);
             foreach (var (boundStart, boundLength) in ReferenceExtractor.SplitTopLevelAmpersandSpans(boundsText))
             {
                 var boundLeading = ReferenceExtractor.CountLeadingWhitespace(boundsText, boundStart, boundLength);
@@ -976,7 +976,7 @@ internal static class JavaReferenceExtractor
                 if (rawBoundLength == 0)
                     continue;
 
-                var rawBound = boundsText.Substring(boundStart + boundLeading, rawBoundLength);
+                var rawBound = boundsText.Slice(boundStart + boundLeading, rawBoundLength).ToString();
                 var absoluteStart = headerStartInLine + openAngle + 1 + segmentStart + extendsIndex + "extends".Length + boundStart + boundLeading;
                 ReferenceExtractor.AddTypeExpressionSegments(
                     references,
@@ -996,10 +996,9 @@ internal static class JavaReferenceExtractor
     private static bool IsNamedTypeKeyword(ReadOnlySpan<char> token) =>
         token is "class" or "interface" or "enum" or "record";
 
-    private static IReadOnlySet<string> CollectGenericParameterNames(string parameterClauseText)
+    private static IReadOnlySet<string> CollectGenericParameterNames(ReadOnlySpan<char> parameterClause)
     {
         HashSet<string>? names = null;
-        var parameterClause = parameterClauseText.AsSpan();
         foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(parameterClause))
         {
             var parameterLeading = ReferenceExtractor.CountLeadingWhitespace(parameterClause, segmentStart, segmentLength);
@@ -1009,9 +1008,9 @@ internal static class JavaReferenceExtractor
             if (parameterLength == 0)
                 continue;
 
-            var rawParameter = parameterClause.Slice(segmentStart + parameterLeading, parameterLength).ToString();
+            var rawParameter = parameterClause.Slice(segmentStart + parameterLeading, parameterLength);
             int extendsIndex = ReferenceExtractor.FindTopLevelKeyword(rawParameter, "extends");
-            var nameFragment = extendsIndex >= 0 ? rawParameter.Substring(0, extendsIndex) : rawParameter;
+            var nameFragment = extendsIndex >= 0 ? rawParameter[..extendsIndex] : rawParameter;
             if (TryReadGenericParameterName(nameFragment, out var name))
                 (names ??= new HashSet<string>(StringComparer.Ordinal)).Add(name);
         }
@@ -1019,7 +1018,7 @@ internal static class JavaReferenceExtractor
         return names ?? EmptyGenericParameterNames;
     }
 
-    private static bool TryReadGenericParameterName(string text, out string name)
+    private static bool TryReadGenericParameterName(ReadOnlySpan<char> text, out string name)
     {
         name = string.Empty;
         int i = 0;
@@ -1045,7 +1044,7 @@ internal static class JavaReferenceExtractor
         while (i < text.Length && ReferenceExtractor.IsJavaIdentifierPart(text[i]))
             i++;
 
-        name = text.Substring(start, i - start);
+        name = text.Slice(start, i - start).ToString();
         return name.Length > 0;
     }
 
