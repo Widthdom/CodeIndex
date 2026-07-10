@@ -2222,14 +2222,14 @@ public static partial class SymbolExtractor
             yield break;
         }
 
-        var prefix = value[..payloadStart].Trim();
-        if (prefix.Length > 0)
-            yield return prefix;
+        var prefix = value.AsSpan(0, payloadStart).Trim();
+        if (!prefix.IsEmpty)
+            yield return prefix.ToString();
 
-        var payload = value[(payloadStart + 1)..payloadEnd].Trim();
-        if (payload.Length > 0)
+        var payload = value.AsSpan(payloadStart + 1, payloadEnd - payloadStart - 1).Trim();
+        if (!payload.IsEmpty)
         {
-            foreach (var nestedArgument in SplitTopLevelTypeArguments(payload))
+            foreach (var nestedArgument in SplitTopLevelTypeArguments(payload.ToString()))
             {
                 var nestedNormalized = NormalizeXamlMarkupArgument(nestedArgument);
                 if (nestedNormalized.Length == 0)
@@ -2240,10 +2240,10 @@ public static partial class SymbolExtractor
             }
         }
 
-        var suffix = value[(payloadEnd + 1)..].Trim();
-        if (suffix.Length > 0)
+        var suffix = value.AsSpan(payloadEnd + 1).Trim();
+        if (!suffix.IsEmpty)
         {
-            foreach (var expanded in ExpandXamlTypeArgument(suffix))
+            foreach (var expanded in ExpandXamlTypeArgument(suffix.ToString()))
                 yield return expanded;
         }
     }
