@@ -450,7 +450,7 @@ public static partial class ReferenceExtractor
             if (rawSegmentLength == 0)
                 continue;
 
-            var rawSegment = baseList.Substring(segmentStart + segmentLeading, rawSegmentLength);
+            var rawSegment = baseList.AsSpan(segmentStart + segmentLeading, rawSegmentLength);
             if (rawSegment.Contains('('))
                 continue;
 
@@ -459,7 +459,7 @@ public static partial class ReferenceExtractor
                 references,
                 seen,
                 fileId,
-                rawSegment,
+                rawSegment.ToString(),
                 absoluteStart,
                 context,
                 lineNumber,
@@ -511,10 +511,10 @@ public static partial class ReferenceExtractor
         if (genericClose <= genericOpen)
             return names;
 
-        var clause = line.Substring(genericOpen + 1, genericClose - genericOpen - 1);
+        var clause = line.AsSpan(genericOpen + 1, genericClose - genericOpen - 1);
         foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(clause))
         {
-            var fragment = clause.Substring(segmentStart, segmentLength);
+            var fragment = clause.Slice(segmentStart, segmentLength);
             if (TryReadCSharpGenericParameterName(fragment, out var name))
                 names.Add(name);
         }
@@ -522,7 +522,7 @@ public static partial class ReferenceExtractor
         return names;
     }
 
-    private static bool TryReadCSharpGenericParameterName(string fragment, out string name)
+    private static bool TryReadCSharpGenericParameterName(ReadOnlySpan<char> fragment, out string name)
     {
         name = string.Empty;
         var index = 0;
@@ -551,7 +551,7 @@ public static partial class ReferenceExtractor
             while (index < fragment.Length && IsTypeExpressionIdentifierPart("csharp", fragment[index]))
                 index++;
 
-            var token = NormalizeCSharpIdentifier(fragment.Substring(tokenStart, index - tokenStart));
+            var token = NormalizeCSharpIdentifier(fragment.Slice(tokenStart, index - tokenStart).ToString());
             if (token is "in" or "out")
                 continue;
 
@@ -780,7 +780,7 @@ public static partial class ReferenceExtractor
         if (listLength <= 0)
             return;
 
-        var constraintList = line.Substring(listStart, listLength);
+        var constraintList = line.AsSpan(listStart, listLength);
         foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(constraintList))
         {
             var segmentLeading = CountLeadingWhitespace(constraintList, segmentStart, segmentLength);
@@ -790,7 +790,7 @@ public static partial class ReferenceExtractor
             if (rawSegmentLength == 0)
                 continue;
 
-            var rawSegment = constraintList.Substring(segmentStart + segmentLeading, rawSegmentLength);
+            var rawSegment = constraintList.Slice(segmentStart + segmentLeading, rawSegmentLength);
             if (rawSegment.Contains('('))
                 continue;
 
@@ -799,7 +799,7 @@ public static partial class ReferenceExtractor
                 references,
                 seen,
                 fileId,
-                rawSegment,
+                rawSegment.ToString(),
                 absoluteStart,
                 context,
                 lineNumber,
@@ -1115,10 +1115,10 @@ public static partial class ReferenceExtractor
         if (paramEnd <= paramStart)
             return;
 
-        var parameterList = line.Substring(paramStart, paramEnd - paramStart);
+        var parameterList = line.AsSpan(paramStart, paramEnd - paramStart);
         foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(parameterList))
         {
-            var fragment = parameterList.Substring(segmentStart, segmentLength);
+            var fragment = parameterList.Slice(segmentStart, segmentLength).ToString();
             if (!TryGetParameterTypeRelativeSpan(fragment, language, out var typeRelativeStart, out var typeRelativeLength))
                 continue;
 
@@ -2385,7 +2385,9 @@ public static partial class ReferenceExtractor
         return i - 1;
     }
 
-    internal static int FindMatchingChar(string text, int openIndex, char open, char close)
+    internal static int FindMatchingChar(string text, int openIndex, char open, char close) => FindMatchingChar(text.AsSpan(), openIndex, open, close);
+
+    internal static int FindMatchingChar(ReadOnlySpan<char> text, int openIndex, char open, char close)
     {
         int depth = 0;
         for (int i = openIndex; i < text.Length; i++)
@@ -2700,7 +2702,9 @@ public static partial class ReferenceExtractor
         return spans;
     }
 
-    internal static int CountLeadingWhitespace(string text, int start, int length)
+    internal static int CountLeadingWhitespace(string text, int start, int length) => CountLeadingWhitespace(text.AsSpan(), start, length);
+
+    internal static int CountLeadingWhitespace(ReadOnlySpan<char> text, int start, int length)
     {
         int count = 0;
         while (count < length && char.IsWhiteSpace(text[start + count]))
