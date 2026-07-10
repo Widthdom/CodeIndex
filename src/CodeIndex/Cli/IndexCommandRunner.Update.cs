@@ -776,7 +776,7 @@ public static partial class IndexCommandRunner
                         record.Lang,
                         content,
                         absPath,
-                        Path.GetFullPath(options.ProjectPath!),
+                        projectRoot,
                         record.Path,
                         currentUpdatePath,
                         true,
